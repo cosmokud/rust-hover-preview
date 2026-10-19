@@ -564,3 +564,238 @@ fn a_press_on_the_pages_find_next_row_takes_the_page_to_the_next_place() {
         "the command found the next place the selection appears"
     );
 }
+
+/// A wheel turned with `Ctrl` over a pinned page steps through the sizes the tray's own `Text Size`
+/// offers, one per notch, and a size the configuration left between two of them steps to the next one
+/// in the direction the wheel was turned: the same sizes at both doors, and nothing past either end
+/// of the list (see `text_size_after_notches`).
+#[test]
+fn a_ctrl_wheel_steps_through_the_sizes_the_tray_offers() {
+    assert_eq!(
+        text_size_after_notches(125, 1),
+        150,
+        "one notch up is the next size the tray lists"
+    );
+    assert_eq!(
+        text_size_after_notches(150, -1),
+        125,
+        "and one notch down is the one below it"
+    );
+    assert_eq!(
+        text_size_after_notches(100, 2),
+        125,
+        "a turn of two notches is two steps"
+    );
+    assert_eq!(
+        text_size_after_notches(133, 1),
+        150,
+        "a size between two steps goes to the next one up"
+    );
+    assert_eq!(
+        text_size_after_notches(133, -1),
+        125,
+        "and to the next one down the other way"
+    );
+    assert_eq!(
+        text_size_after_notches(400, 3),
+        400,
+        "the largest size has nowhere larger to go"
+    );
+    assert_eq!(
+        text_size_after_notches(70, -3),
+        70,
+        "and neither has the smallest"
+    );
+}
+
+/// A `Ctrl` and a wheel draws a pinned page again at the next size, in the box it already has, and
+/// the size is the pin's own rather than the file's or the configuration's: the page keeps its place
+/// in the document and what is selected in it, and nothing is drawn at all where the wheel has
+/// nowhere left to go (see `step_pinned_text_size`).
+#[test]
+fn a_control_wheel_draws_a_pinned_page_again_at_another_size() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _pin = PinPutBack::take();
+    let _media = TextPagePutBack::put();
+    stand_pin(Some(PinnedPreview::for_test()));
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-text-selection");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a-page-to-zoom.txt");
+    std::fs::write(
+        &path,
+        (0..40).map(|n| format!("line {n}\n")).collect::<String>(),
+    )
+    .expect("a written page");
+
+    let options = TextPreviewOptions {
+        font_scale_percent: 125,
+        ..current_text_options()
+    };
+    let Some(page) = load_text_preview(&path, 240, 80, 96, options) else {
+        panic!("a page of text was not loaded")
+    };
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+
+    // Where the reader was: a place in the document with a word of it selected.
+    let selected = text_preview::Selection {
+        anchor: (3, 0),
+        caret: (5, 4),
+    };
+    let (before_height, before_width) = {
+        let mut slot = CURRENT_MEDIA.lock().expect("the media slot");
+        let media = slot.as_mut().expect("the page the test put there");
+        let state = media
+            .text_state
+            .as_mut()
+            .expect("a pinned page keeps state");
+        state.first_line = 8;
+        state.selection = Some(selected);
+
+        (
+            state.lines.first().expect("a line of the page").height,
+            state.width,
+        )
+    };
+
+    let hwnd = HWND(0x1000 as *mut _);
+    unsafe { step_pinned_text_size(hwnd, 1) };
+
+    let (percent, height, first_line, selection, width) = {
+        let slot = CURRENT_MEDIA.lock().expect("the media slot");
+        let media = slot.as_ref().expect("the page");
+        let state = media
+            .text_state
+            .as_ref()
+            .expect("a pinned page keeps state");
+
+        (
+            state.options.font_scale_percent,
+            state.lines.first().expect("a line of the page").height,
+            state.first_line,
+            state.selection,
+            state.width,
+        )
+    };
+
+    assert_eq!(
+        percent, 150,
+        "the page is drawn at the next size the tray lists"
+    );
+    assert!(
+        height > before_height,
+        "and it is drawn larger: the glyphs are the size that changed rather than the box"
+    );
+    assert_eq!(
+        width, before_width,
+        "the page keeps the box it was drawn in, because a pin's box is the user's"
+    );
+    assert_eq!(
+        (first_line, selection),
+        (8, Some(selected)),
+        "and where the reader was and what they had selected are kept, reflowed into it"
+    );
+
+    // The other way is the size it came from, and the size is held for as long as the pin lives.
+    let size_now = || {
+        CURRENT_MEDIA.lock().ok().and_then(|slot| {
+            slot.as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| state.options.font_scale_percent)
+        })
+    };
+
+    unsafe { step_pinned_text_size(hwnd, -1) };
+    assert_eq!(
+        size_now(),
+        Some(125),
+        "a notch the other way is the size it was drawn at before"
+    );
+
+    // And nothing is drawn where the wheel has nowhere to go.
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        if let Some(state) = slot.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.options.font_scale_percent = 400;
+        }
+    }
+    unsafe { step_pinned_text_size(hwnd, 1) };
+    assert_eq!(
+        size_now(),
+        Some(400),
+        "the largest size is where the scale stops"
+    );
+}
+
+/// The size a reader put a page to is the reader's own, so it survives the page being laid out
+/// again: a window given another box re-renders the page, and what that render reads is the
+/// configuration rather than the pin — which is exactly the value the carried size replaces (see
+/// `keep_text_place`).
+///
+/// Without this the size is a setting that lasts until the first resize, which is the one thing a
+/// reader who has just chosen it is most likely to do.
+#[test]
+fn a_resize_keeps_the_size_the_reader_put_the_page_to() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _pin = PinPutBack::take();
+    let _media = TextPagePutBack::put();
+    // A page keeps its state because a pin is what draws it in full mode, and the state is the
+    // whole of what a size and a place are carried on (see `load_text_preview`).
+    stand_pin(Some(PinnedPreview::for_test()));
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-text-selection");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a-page-put-to-a-size.txt");
+    std::fs::write(
+        &path,
+        (0..40).map(|n| format!("line {n}\n")).collect::<String>(),
+    )
+    .expect("a written page");
+
+    // The page as the reader left it: drawn at a size of their own, at a place in the document.
+    let sized = TextPreviewOptions {
+        font_scale_percent: 200,
+        ..current_text_options()
+    };
+    let Some(page) = load_text_preview(&path, 240, 120, 96, sized) else {
+        panic!("a page of text was not loaded")
+    };
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        if let Some(state) = slot.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.first_line = 4;
+        }
+    }
+
+    // A relayout answers with a page read at the configuration's size, which is the road a box
+    // change takes (see `relayout_pinned_media` and `pin_media_load`).
+    let Some(relaid) = load_text_preview(&path, 320, 160, 96, current_text_options()) else {
+        panic!("the page was not laid out again")
+    };
+    assert_ne!(
+        relaid
+            .text_state
+            .as_ref()
+            .map(|state| state.options.font_scale_percent),
+        Some(200),
+        "the relayout read the configuration rather than the pin, which is the value to carry over"
+    );
+
+    let kept = keep_text_place(relaid);
+    let state = kept.text_state.as_ref().expect("a pinned page keeps state");
+    assert_eq!(
+        state.options.font_scale_percent, 200,
+        "the size the reader chose is carried onto the page laid out again"
+    );
+    assert_eq!(
+        state.first_line, 4,
+        "and so is the place in the document, which is what the same carry is for"
+    );
+}

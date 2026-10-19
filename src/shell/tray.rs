@@ -28,7 +28,11 @@ mod menus;
 mod submenus;
 
 pub(crate) use commands::toggle_pin_always_on_top;
+// The sizes the tray's `Text → Font Size` submenu offers, which is also what a `Ctrl` and a wheel over
+// a pinned page step through: one list of sizes for the whole app rather than a copy per door (see
+// `text_size_after_notches`).
 pub use event_loop::run_tray;
+pub(crate) use ids::FONT_SIZE_CHOICES;
 
 // What the tests read through this module: the ids and tables each menu is built from, and the
 // names the submenus and commands answer a click with.
@@ -54,7 +58,7 @@ use commands::{audio_seek_at, avoid_mode_at, bitmap_scale_at, timing_delay_at};
 use ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
     BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, CODEC_COMMANDS, DDS_BACKGROUND_CHOICES,
-    DISK_CACHE_SIZE_CHOICES_MB, DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES, FONT_SIZE_CHOICES,
+    DISK_CACHE_SIZE_CHOICES_MB, DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES,
     HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_ANIMATED_SCALE_BASE,
     ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_SHUFFLE,
     ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE, ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE,
