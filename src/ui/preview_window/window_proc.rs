@@ -252,6 +252,16 @@ pub(super) unsafe extern "system" fn window_proc(
             // A key this window *does* answer is left as the same command a caption button leaves,
             // rather than acted on here, because that is where the walk is answered (see `ask_pin`
             // and `pin_command_request`).
+            // A key that reaches the window puts the card's menu away before it is answered: the
+            // panel is drawn over the card, and a hand that has gone back to the keyboard has left
+            // it. Escape — a close everywhere else — is the menu's while it is up, as it is the
+            // bubble's own, so it puts the panel away rather than the pin under it (see
+            // `close_pin_menu` and `pin_bubble`).
+            let menu_was_up = close_pin_menu(hwnd);
+            if menu_was_up && wparam.0 as i32 == VK_ESCAPE.0 as i32 {
+                return LRESULT(0);
+            }
+
             if let Some(command) = pinned_key_message_command(msg, wparam.0 as i32, lparam.0) {
                 ask_pin(command);
             }

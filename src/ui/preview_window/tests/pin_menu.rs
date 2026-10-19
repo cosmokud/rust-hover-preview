@@ -628,6 +628,107 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
     );
 }
 
+/// A page's own commands belong to the page that was under the right-click rather than to the
+/// panel: a walk that takes the pin from a page of text to a picture leaves the panel standing
+/// over a file whose `Select All` and `Copy` are not there to be answered, so the panel holds the
+/// rows every kind holds and a press on the first of them is that row's (see `PinMenuPage::over`).
+#[test]
+fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _put_back = PutBack(take_pin_for_a_test());
+    // A picture under a panel a right-click in the text of a page opened.
+    let _kind = MediaKindPutBack::put(MediaType::StaticImage);
+    stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
+
+    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 20, 20, PinMenuPage::Text) };
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("the menu is up")
+    };
+    let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "Next File",
+            "Previous File",
+            "",
+            "Minimize to Bubble",
+            "Minimize to Taskbar",
+            "",
+            "To Bubble",
+            "To Taskbar",
+            "Close",
+        ],
+        "a picture's panel holds the window's rows and none of the page's"
+    );
+
+    // And a press where the page's `Select All` stood is the row drawn there now.
+    take_pin_command();
+    let (x, y) = menu_row_point(&paint, 0);
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on the panel's first row is the menu's own"
+    );
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::Next),
+        "and it is the row the picture's own menu holds there"
+    );
+}
+
+/// A key that reaches a pinned window puts the card's menu away before it is answered: the panel
+/// is drawn over the card, and a hand that has gone back to the keyboard has left it. Escape — a
+/// close everywhere else — is the menu's while it is up, as it is the bubble's own, so it puts the
+/// panel away rather than the pin under it (see `close_pin_menu` and `pin_bubble`).
+#[test]
+fn a_key_puts_the_menu_away_and_escape_leaves_the_pin_standing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _kind = MediaKindPutBack::put(MediaType::StaticImage);
+    stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
+
+    let hwnd = HWND(0x1000 as *mut _);
+    let open = || {
+        with_pin(|pin| {
+            pin.menu.open = true;
+            pin.menu.point = on_screen((20, 20));
+        });
+        take_pin_command();
+    };
+
+    // An arrow with the panel up is the walk it always was, and the panel goes with it.
+    open();
+    unsafe { window_proc(hwnd, WM_KEYDOWN, WPARAM(VK_RIGHT.0 as usize), LPARAM(0)) };
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::Next),
+        "the arrow walks the folder as it always does"
+    );
+    assert!(
+        pinned_menu_geometry().is_none(),
+        "and the panel is put away rather than carried along"
+    );
+
+    // Escape is the menu's while it is up: the panel goes, and the close it is everywhere else is
+    // left for the next Escape there is no menu to answer.
+    open();
+    unsafe { window_proc(hwnd, WM_KEYDOWN, WPARAM(VK_ESCAPE.0 as usize), LPARAM(0)) };
+    assert!(
+        pinned_menu_geometry().is_none(),
+        "Escape puts the panel away"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the pin it was standing over is left standing"
+    );
+}
+
 /// A press on a row a pinned window's menu shares with the bubble's leaves the ask that row
 /// leaves there: the two walks and the close the same; `To Bubble`, which only a pin still
 /// standing has, putting this pin away into the bubble it leaves on the desktop; and `To Taskbar`
