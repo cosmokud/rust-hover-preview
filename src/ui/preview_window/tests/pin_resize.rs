@@ -215,6 +215,15 @@ fn a_maximized_pin_walks_its_files_against_the_room_and_not_the_last_box() {
                 image::ExtendedColorType::Rgb8,
             )
             .expect("a written picture");
+            // The picture's own box, held where the measure would leave it: what a swap lays
+            // out is the answer to a measure read off the preview thread, and a test has no
+            // thread to wait for (see `picture_box`).
+            hold_box(
+                &path,
+                &file_version(&path),
+                &MeasureScope::File,
+                Some((*width, *height)),
+            );
             path
         })
         .collect();
@@ -333,6 +342,15 @@ fn a_maximized_pin_fits_a_file_smaller_than_the_room_to_the_room() {
     )
     .expect("a written picture");
 
+    // And the box the picture is measured at, held where the measure would leave it (see
+    // `picture_box`).
+    hold_box(
+        &path,
+        &file_version(&path),
+        &MeasureScope::File,
+        Some((400, 300)),
+    );
+
     let space = PinSwapSpace {
         current: room_bounds_as_region(room),
         bound: None,
@@ -389,6 +407,15 @@ fn a_window_the_hand_sized_is_put_back_to_the_size_the_setting_asks_for() {
         image::ExtendedColorType::Rgb8,
     )
     .expect("a written picture");
+
+    // And the picture's own box, held where the measure read off the preview thread would leave
+    // it (see `picture_box`).
+    hold_box(
+        &path,
+        &file_version(&path),
+        &MeasureScope::File,
+        Some((400, 300)),
+    );
 
     // A pin showing that picture, with its window pulled by hand to a size of its own: a box in the
     // corner of the screen it stands on, the bound such a drag leaves behind written down with it

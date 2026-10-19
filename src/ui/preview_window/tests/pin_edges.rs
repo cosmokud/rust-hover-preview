@@ -173,6 +173,25 @@ fn a_text_file_picked_into_a_pin_is_laid_out_in_the_room_and_not_fitted_into_the
         right: 1920,
         bottom: 1080,
     };
+
+    // The page's box, held where the measure a hover takes off the preview thread would leave
+    // it: what a swap lays out is an answer rather than the wait for one (see `text_box`).
+    let (cap_width, cap_height) = text_box_room(bounds);
+    let options = current_text_options();
+    let page = text_preview::measure(&path, cap_width, cap_height, 96, options);
+    hold_box(
+        &path,
+        &file_version(&path),
+        &MeasureScope::Room {
+            cap_width,
+            cap_height,
+            dpi: 96,
+            theme: options.theme,
+            font_scale_percent: options.font_scale_percent,
+        },
+        page,
+    );
+
     let space = |bound| PinSwapSpace {
         current: (760, 440, 1160, 640),
         bound,

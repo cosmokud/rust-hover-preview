@@ -322,10 +322,79 @@ fn a_box_follows_the_content_rather_than_the_name() {
         picture_dimensions(&path).is_some(),
         "the fixture is a picture the header reader can measure"
     );
+    // A picture's header is read off the preview thread, so what the hover is answered with
+    // before the read lands is the wait for it (see `picture_box`).
+    assert_eq!(
+        media_dimensions(&path, bounds(), TEST_DPI),
+        Some((
+            crate::readers::office_preview::WAITING_BOX,
+            crate::readers::office_preview::WAITING_BOX
+        )),
+        "a box no read has answered for yet is the wait for it"
+    );
+    hold_box(
+        &path,
+        &file_version(&path),
+        &MeasureScope::File,
+        picture_dimensions(&path),
+    );
     assert_eq!(
         media_dimensions(&path, bounds(), TEST_DPI),
         picture_dimensions(&path),
         "so the box is the picture's rather than the text measure's nothing"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// A page of text is read off the preview thread, and the hover is laid out as the wait for it.
+///
+/// The spinner a hover shows is due on a tick that already has a box to draw at the hand, so a page
+/// measured on that thread is a hover with nothing at the hand until the read is done — and on a
+/// file of one long line that read is the whole of the syntax highlight, seconds of it, so the
+/// spinner the 250 ms setting asks for arrives only as the page is about to be placed. What the
+/// hover is given instead is the wait, and the answer the read lands with is what replaces it (see
+/// `text_box`).
+#[test]
+fn a_page_of_text_is_laid_out_as_the_wait_until_its_read_lands() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-text-wait");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("long.txt");
+    std::fs::write(&path, "word ".repeat(200_000)).expect("a written file");
+
+    let hover = HoverFacts::read(&path);
+    let wait = crate::readers::office_preview::WAITING_BOX;
+
+    assert_eq!(
+        media_dimensions_of(&hover, &path, bounds(), TEST_DPI),
+        Some((wait, wait)),
+        "the box of a page no read has answered for is the wait for it"
+    );
+    assert!(
+        measure_waiting(&path),
+        "and the read it waits for is running"
+    );
+
+    // The number the read answers with is the box the same question is given once it has: the wait
+    // is a placeholder rather than a refusal, so what a hover of this file is laid out at is the
+    // page, from the room the page was measured in.
+    let mut waited = 0;
+    while measure_waiting(&path) && waited < 500 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        waited += 1;
+    }
+    assert!(
+        !measure_waiting(&path),
+        "the read of a page this size is answered in five seconds"
+    );
+    let page = media_dimensions_of(&hover, &path, bounds(), TEST_DPI).expect("a page, measured");
+    assert!(
+        page.0 > wait && page.1 > wait,
+        "the wait is replaced by the page's own box rather than left standing: {page:?}"
     );
 
     let _ = std::fs::remove_dir_all(&folder);

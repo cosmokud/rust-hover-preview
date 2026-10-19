@@ -466,3 +466,40 @@ fn a_wrapped_line_is_numbered_once() {
         "the line after it carries its own number"
     );
 }
+
+/// A window is kept as long as the document is, and answered for a request longer than that.
+///
+/// The table a window is kept in can only answer a request a held window *covers*, and what a
+/// window covers is what it holds: a request for more lines than the document has is styled at the
+/// document's own length, and one kept at the length it was *asked* for covers nothing — every
+/// later request styled the same lines again, which on a file whose lines take a while to style is
+/// the whole of that work paid again per question (see `styled_window`). The window a hover asks
+/// for is the rows the display has room for, which on a short file is more lines than there are,
+/// so that is the request this asks twice.
+#[test]
+fn a_window_kept_for_a_short_document_answers_a_request_longer_than_it() {
+    let dir = scratch("window-cache");
+    let source = dir.join("short.txt");
+    fs::write(&source, "one\ntwo\nthree\n").expect("a text file");
+
+    let options = options();
+    let document = super::document::document(&source, options).expect("a document");
+    let theme = crate::text::text_theme::loaded(options.theme).expect("a theme");
+
+    let asked =
+        super::document::styled_window(&document.key, &document, theme, 0, 500).expect("a window");
+    let asked_again =
+        super::document::styled_window(&document.key, &document, theme, 0, 500).expect("a window");
+
+    assert_eq!(
+        asked.lines.len(),
+        3,
+        "a window holds no more lines than the document has"
+    );
+    assert!(
+        std::sync::Arc::ptr_eq(&asked, &asked_again),
+        "the same window asked for twice was styled twice: a window of {} lines does not cover a \
+         request for 500",
+        asked.lines.len()
+    );
+}

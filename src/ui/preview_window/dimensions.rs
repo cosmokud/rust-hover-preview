@@ -32,6 +32,24 @@ pub(super) fn design_dimensions(path: &Path) -> Option<(u32, u32)> {
     project_image::dimensions(path).or_else(|| eps_image::dimensions(path))
 }
 
+/// The box a design document is placed at, read off the preview thread: what a document is
+/// measured from is its own header or the picture its format keeps of the whole thing, and both
+/// are reads of the file rather than of its directory entry (see `measured_off_the_tick`).
+///
+/// The measure itself is `design_dimensions`, which the loader also asks for the source size of
+/// the picture it is about to draw: that one has to have an answer, so it is not asked through
+/// this (see `load_media`).
+pub(super) fn design_box(path: &Path) -> Option<(u32, u32)> {
+    let source = path.to_path_buf();
+
+    measured_off_the_tick(
+        path,
+        MeasureScope::File,
+        (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
+        move || design_dimensions(&source),
+    )
+}
+
 /// The box a comic is placed at: the first plate's own size, and nothing at all for a container
 /// with no plate in it.
 ///
@@ -463,7 +481,7 @@ pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Opt
     // design document, and the two questions further down would report a size for another
     // kind than the one the tray was asked to switch.
     if previewed_as(path, PreviewType::Design) {
-        return design_dimensions(path);
+        return design_box(path);
     }
 
     // An SVG is measured from the document rather than from a header: the size it asks
@@ -516,7 +534,7 @@ pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Opt
         return None;
     }
 
-    picture_dimensions(path)
+    picture_box(path)
 }
 
 /// The box for one of the kinds a file's content answered with — see `content_type`.
@@ -549,7 +567,7 @@ pub(super) fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Opt
         PreviewType::Libre => libre_box(path),
         PreviewType::Magick => magick_box(path),
         PreviewType::Calibre => calibre_box(path),
-        PreviewType::Design => design_dimensions(path),
+        PreviewType::Design => design_box(path),
         PreviewType::Vector => {
             if svg_preview::is_svg_file(path) {
                 webview_preview::can_draw().then(|| svg_box(path)).flatten()
@@ -560,7 +578,7 @@ pub(super) fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Opt
         PreviewType::Fonts => webview_preview::can_draw()
             .then(|| font_box(path))
             .flatten(),
-        PreviewType::Images => picture_dimensions(path),
+        PreviewType::Images => picture_box(path),
     }
 }
 
@@ -664,6 +682,21 @@ pub(super) fn magick_box(path: &Path) -> Option<(u32, u32)> {
 /// Windows keeps for the picture formats this app's decoder has no reader for.
 pub(super) fn picture_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     image_dimensions_with_header_check(path)
+}
+
+/// The box a picture is placed at, read off the preview thread: a header is a read of the file
+/// like any other, and a file on a volume that has stopped answering is a hover that would
+/// otherwise stand with no spinner and no preview until it is answered — for a picture the same
+/// as for the page of text beside it (see `measured_off_the_tick`).
+pub(super) fn picture_box(path: &Path) -> Option<(u32, u32)> {
+    let source = path.to_path_buf();
+
+    measured_off_the_tick(
+        path,
+        MeasureScope::File,
+        (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
+        move || picture_dimensions(&source),
+    )
 }
 
 /// Whether this hover is the wait for a page rather than a preview of one: an Office
@@ -870,11 +903,29 @@ pub(super) fn audio_box_room(bounds: ScreenBounds, scale: PreviewScale, dpi: u32
 }
 
 /// The box a page of text asks for: as many lines and columns as the room its own setting
-/// gives it holds, at the font size its DPI gives them.
+/// gives it holds, at the font size its DPI gives them — read off the preview thread, because
+/// reading the page is what a hover on a large file waits for (see `measured_off_the_tick`).
+///
+/// The room it is measured against is part of what the box is held under rather than something
+/// this side keeps: a page wrapped to a narrower room takes more rows, so a box held for another
+/// room is a page laid out to the wrong one (see `MeasureScope`).
 pub(super) fn text_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
     let (cap_width, cap_height) = text_box_room(bounds);
+    let options = current_text_options();
+    let source = path.to_path_buf();
 
-    text_preview::measure(path, cap_width, cap_height, dpi, current_text_options())
+    measured_off_the_tick(
+        path,
+        MeasureScope::Room {
+            cap_width,
+            cap_height,
+            dpi,
+            theme: options.theme,
+            font_scale_percent: options.font_scale_percent,
+        },
+        (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
+        move || text_preview::measure(&source, cap_width, cap_height, dpi, options),
+    )
 }
 
 /// And the box a listing asks for, which is the same shape of question asked of an archive's
@@ -949,6 +1000,15 @@ pub(super) fn text_preview_layout(
     place: impl FnOnce((u32, u32)) -> Option<PreviewLayout>,
 ) -> (PreviewLayout, Option<(u32, u32)>) {
     if !hover.is_text() {
+        return (layout, None);
+    }
+
+    // A read of this file is running, and the wait for it is what this side has: there is nothing
+    // to wrap yet — how many rows the page takes is what the read is being taken for — and asking
+    // here would be a second read of the same bytes on the thread that draws, which is the whole
+    // of what the read was moved off it for. The hover is laid out as the wait and replayed with
+    // the box when the answer lands, and this is asked again then (see `measured_off_the_tick`).
+    if measure_waiting(path) {
         return (layout, None);
     }
 
