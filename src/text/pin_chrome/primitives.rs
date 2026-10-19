@@ -677,13 +677,19 @@ pub(super) fn draw_chevron(
 /// An arrow leaving a box: the file handed to whatever the machine has filed it under.
 ///
 /// Drawn as the box and the arrow together rather than as a box with a mark in it, because the
-/// button's whole meaning is the leaving. The box is drawn in every side but the one the arrow
-/// goes out of, and the reading it has to carry is *leaving this thing* — a box drawn too small
-/// to read as a box with a big arrow on top of it is the upload mark, and a button that means
-/// "hand this to another program" must not be drawn as a button that means "send this away".
+/// button's whole meaning is the leaving. The box is drawn in every side but the top right
+/// corner, which is the one the arrow goes out of, and the reading it has to carry is *leaving
+/// this thing* — a box drawn too small to read as a box with a big arrow on top of it is the
+/// upload mark, and a button that means "hand this to another program" must not be drawn as a
+/// button that means "send this away".
 ///
-/// The tail starts at the middle of the box and crosses its open side to run out past the
-/// corner, so that the arrow is seen leaving rather than hovering over.
+/// The tail starts inside the box and runs out through the open corner, and the two lines that
+/// corner is made of are the arrow's head: the external-link mark rather than an arrowhead laid
+/// over a closed box. It is laid on the same glyph square as the window's own marks, its corner
+/// on the square's top row and the box's bottom on its bottom row, so the mark stands as tall as
+/// the maximize box and the close cross at any display scale. The numbers below are Lucide's
+/// external-link on a 24-unit square, whose centrelines run from 3 to 21 and whose stroke reaches
+/// from 2 to 22: that is the square fitted inside this one, a stroke's half either way.
 pub(super) fn draw_open_with(
     buffer: &mut [u8],
     width: i32,
@@ -694,35 +700,44 @@ pub(super) fn draw_open_with(
     color: [u8; 3],
 ) {
     let edge = thickness.round().max(1.0);
-    let half = ((span as f32 / 2.0) - edge / 2.0).max(0.0);
-    let (middle_x, middle_y) = (center_x as f32 + 0.5, center_y as f32 + 0.5);
-    let point = |x: f32, y: f32| (middle_x + x * half, middle_y + y * half);
-    let open_at = |y: f32| (point(-1.0, y), point(1.0, y));
+    let half = (span / 2).max(1);
+    let reach = (2 * half + 1) as f32 - edge;
+    let scale = reach / 18.0;
+    let left = center_x as f32 - half as f32 + edge / 2.0;
+    let top = center_y as f32 - half as f32 + edge / 2.0;
+    let at = |x: f32, y: f32| (left + (x - 3.0) * scale, top + (y - 3.0) * scale);
 
-    // The file: a box with its top right corner left off, so that the corner the arrow goes
-    // out of is the one that is not drawn.
-    let (top_left, top_right) = open_at(-1.0);
-    let (bottom_left, bottom_right) = open_at(1.0);
-    stroke_segment(buffer, width, top_left, top_right, edge, color, 1.0);
-    stroke_segment(buffer, width, bottom_left, bottom_right, edge, color, 1.0);
-    stroke_segment(buffer, width, top_left, bottom_left, edge, color, 1.0);
-    stroke_segment(
-        buffer,
-        width,
-        top_right,
-        point(1.0, -1.0 / 3.0),
-        edge,
-        color,
-        1.0,
-    );
+    // The box: every side but the top right corner, which is the one the arrow leaves by. The
+    // corner arcs are the chords between their ends: a glyph this size has a pixel or two to
+    // round a corner in, and a chord is the same pixel or two.
+    let corners = [
+        (18.0, 13.0),
+        (18.0, 19.0),
+        (16.0, 21.0),
+        (5.0, 21.0),
+        (3.0, 19.0),
+        (3.0, 8.0),
+        (5.0, 6.0),
+        (11.0, 6.0),
+    ];
+    for pair in corners.windows(2) {
+        stroke_segment(
+            buffer,
+            width,
+            at(pair[0].0, pair[0].1),
+            at(pair[1].0, pair[1].1),
+            edge,
+            color,
+            1.0,
+        );
+    }
 
-    // The hand-off: a tail out of the middle of the file, through the open side and past the
-    // corner it goes out of, and the head it ends in — one stroke along the top of it and one
-    // along the side of it, which is the same pair a chevron is drawn in.
-    let tip = point(1.0, -1.0);
-    stroke_segment(buffer, width, point(-0.2, 0.2), tip, edge, color, 1.0);
-    stroke_segment(buffer, width, tip, point(1.0 / 3.0, -1.0), edge, color, 1.0);
-    stroke_segment(buffer, width, tip, point(1.0, -1.0 / 3.0), edge, color, 1.0);
+    // The hand-off: the tail from inside the box out through the open corner, and the corner it
+    // ends in — the same two lines a browser's own external-link is drawn from.
+    let tip = at(21.0, 3.0);
+    stroke_segment(buffer, width, at(10.0, 14.0), tip, edge, color, 1.0);
+    stroke_segment(buffer, width, at(15.0, 3.0), tip, edge, color, 1.0);
+    stroke_segment(buffer, width, tip, at(21.0, 9.0), edge, color, 1.0);
 }
 
 /// A ceiling bar and an upward-pointing arrow: always on top mark.
