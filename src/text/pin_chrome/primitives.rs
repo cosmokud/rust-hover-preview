@@ -696,6 +696,10 @@ pub(super) fn draw_open_with(
     color: [u8; 3],
 ) {
     let thick = thickness.round().max(1.0) as i32;
+    // A one-pixel diagonal is a chain of pixels that only touch at their corners, which reads
+    // as a dotted staircase. The shaft takes a pixel more at the smallest size so every row of
+    // it is a run and the eye reads one straight line; the head keeps the box lines' weight.
+    let shaft = thick.max(2);
     let half = (span / 2).max(1);
     let side = 2 * half + 1;
     let left = center_x - half;
@@ -765,8 +769,8 @@ pub(super) fn draw_open_with(
     let start_y = top + side / 2 + 1;
     for y in top..=start_y {
         let x = tip_x - (y - top);
-        let from = (x - (thick - 1) / 2).max(left);
-        let to = (from + thick).min(right);
+        let from = (x - (shaft - 1) / 2).max(left);
+        let to = (from + shaft).min(right);
         fill_box(
             buffer,
             width,
