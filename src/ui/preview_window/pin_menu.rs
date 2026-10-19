@@ -27,7 +27,9 @@ pub(super) struct PinMenu {
     /// Whether the panel is up.
     pub(super) open: bool,
     /// Which page of the menu the panel holds: the chrome's own rows, or the two commands a
-    /// pinned page of text stands above them (see `PinMenuPage`).
+    /// pinned page of text stands above them. It is what the right-click asked for rather than
+    /// what the panel holds — a walk off the page it was opened over leaves the panel up, and the
+    /// page it holds is read against what is on screen (see `PinMenuPage::over`).
     pub(super) page: PinMenuPage,
     /// Whether the End of File row's flyout is up beside the menu, rather than the menu
     /// holding its rows alone. Only one flyout is ever up: opening one puts
@@ -71,6 +73,19 @@ pub(super) enum PinMenuPage {
 }
 
 impl PinMenuPage {
+    /// The page of the menu a panel holds over `kind` of media: the one a right-click asked for,
+    /// where what is under it is still that page's own kind. A walk that takes the pin from a page
+    /// of text to another file leaves the panel up with the page's commands gone from under it —
+    /// a `Select All` over nothing to select — so the page is read against what is on screen
+    /// rather than written back on the walk, and every other kind holds the window's own rows
+    /// (see `pinned_menu_paint` and `shared_menu_press`).
+    fn over(self, kind: Option<MediaType>) -> Self {
+        match (self, kind) {
+            (PinMenuPage::Text, Some(MediaType::Text)) => PinMenuPage::Text,
+            _ => PinMenuPage::Chrome,
+        }
+    }
+
     /// How many of the panel's rows are the page's own, above the rows the pin shares with the
     /// bubble.
     fn own_rows(self) -> usize {
@@ -520,7 +535,8 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> PinMenuPaint {
         // A right-click in the text of a pinned page holds the page's own two commands above the
         // rows the pin shares with the bubble (see `PinMenuPage::Text`).
         false => {
-            let mut rows = match pin.menu.page {
+            let kind = current_media_type();
+            let mut rows = match pin.menu.page.over(kind) {
                 PinMenuPage::Chrome => Vec::new(),
                 PinMenuPage::Text => text_menu_rows(),
             };
@@ -903,6 +919,10 @@ unsafe fn shared_menu_press(hwnd: HWND, paint: &PinMenuPaint, x: i32, y: i32) ->
     let page = pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin.menu.page))
         .unwrap_or_default();
+    // The kind is read once for both the page's own rows and the ones the pin shares with the
+    // bubble, which are the same answer about what the panel is standing over.
+    let kind = current_media_type();
+    let page = page.over(kind);
 
     // The page's own rows stand above the ones the pin shares with the bubble, so a press on one
     // of them is the page's own and is answered before the shared rows are counted from the top
@@ -919,11 +939,7 @@ unsafe fn shared_menu_press(hwnd: HWND, paint: &PinMenuPaint, x: i32, y: i32) ->
     // rows (see `bubble_menu_rows`).
     let pressed = pressed_row
         .and_then(|index| index.checked_sub(page.own_rows()))
-        .and_then(|index| {
-            bubble_menu_rows(current_media_type(), true)
-                .get(index)
-                .copied()
-        });
+        .and_then(|index| bubble_menu_rows(kind, true).get(index).copied());
 
     match pressed {
         Some(row) => shared_menu_row_press(row, || {
