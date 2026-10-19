@@ -325,6 +325,15 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             // audio with the picture, for the whole gesture — and the release carries it onto
             // the relaunch, which the swap ends without a key (see `seek_press_hold` and
             // `settle_seek_hold_after_swap`).
+            //
+            // **And a film mpv draws is left where it is drawing, because nothing of it is ended.**
+            // The cover stands in the hole a player this app kills and begins again leaves, and the
+            // route's seek ends nothing: it is a command written down the pipe and answered while the
+            // film runs (see `seek_pinned_playback` and `mpv_ipc`). Parking one hides the window the
+            // film is playing in and paints the still over the band for the whole gesture, and then
+            // waits a swap bound out for a replacement that never comes. A drag refuses the same park
+            // the same way (see `begin_pin_drag`), and what is left below refuses the route for
+            // itself (see `gesture_press_freeze` and `seek_press_hold`).
             if current_media_type() == Some(MediaType::Video) {
                 let at = window_origin(hwnd)
                     .map(|origin| (origin.0, origin.1))
@@ -335,7 +344,11 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
                 // construction, and no blind toggle anywhere on the gesture.
                 // A press the kill road refuses — no player to kill, or one
                 // already dead — keeps the legacy hold.
-                park_pinned_player_for_seek(hwnd, at);
+                let mpv_is_drawing = pinned_media_owner()
+                    .is_some_and(|(path, _)| video_route(&path) == VideoRoute::Mpv);
+                if !mpv_is_drawing {
+                    park_pinned_player_for_seek(hwnd, at);
+                }
                 if gesture_press_freeze() {
                     kill_pinned_player_async();
                 } else {

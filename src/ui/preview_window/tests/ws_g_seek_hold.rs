@@ -443,7 +443,8 @@ fn the_seek_line(seconds: f64) -> String {
 }
 
 /// A seek on a pin whose player is mpv is a live seek and nothing else: the press tells the
-/// player nothing, and the film is left doing what it was doing.
+/// player nothing, and the film is left doing what it was doing — playing, in the window it was
+/// already drawing into, for the whole of the scrub and past the release.
 ///
 /// **The key is counted rather than read off the film, because where it lands is nowhere a test
 /// can see** (see `ffplay_window::pause_posts`): there is no player's window here to post one
@@ -503,6 +504,39 @@ fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state
              key to start it again"
         );
 
+        // Nothing of an mpv seek ends its player, so there is no hole for a cover to stand in and
+        // no replacement for one to wait for: the cover a seek press parks would hide the film's
+        // window and paint the still over the band for the whole gesture, over {what} that is
+        // still playing behind it. The route's press parks nothing at all (see
+        // `pinned_transport_press`).
+        assert!(
+            !pin_player_is_parked(),
+            "an mpv seek press leaves the film where it is drawing ({what})"
+        );
+
+        // And the scrub the hand makes tells the player no more than the press did: the step moves
+        // the aim under the hand, and the film keeps playing in the window it is already in until
+        // the release takes it to that second (see `pinned_transport_drag`).
+        let press_aim = aim;
+        assert!(
+            unsafe { pinned_transport_drag(HWND(0x1000 as *mut _), bar.width / 4) },
+            "a step along the bar is the track's while an aim stands ({what})"
+        );
+        let aim = the_seek_aim().expect("the second the step moved the aim to");
+        assert_ne!(
+            aim, press_aim,
+            "the step moves the aim under the hand ({what})"
+        );
+        assert!(
+            ffplay_window::pause_posts() == 0 && mpv_ipc::noted_lines().is_empty(),
+            "and the player is told nothing while the hand is down: no key for the film it would \
+             stop, and no second written down the pipe before the hand lets go ({what})"
+        );
+        assert!(
+            !pin_player_is_parked(),
+            "with the film still drawing where it was for the length of the scrub ({what})"
+        );
+
         assert!(
             unsafe { pinned_transport_release(HWND(0x1000 as *mut _), x, y, &window) },
             "and the release is the bar's own ({what})"
@@ -517,6 +551,11 @@ fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state
             restart_count(),
             0,
             "and no player is ended and begun again for it ({what})"
+        );
+        assert!(
+            !pin_player_is_parked() && park_record_owner().is_none(),
+            "and the release has no cover of its own to give up, so the bound a \
+             parked seek waits out is never begun ({what})"
         );
 
         let after = pin_state().and_then(|pinned| {
