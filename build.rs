@@ -9,6 +9,12 @@ fn main() {
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=assets/icon.ico");
 
+    // One target dir serves every checkout, and cargo's fingerprint for this package
+    // cannot tell two of them apart. The checkout's own path is in the environment
+    // (written by .githooks/post-checkout), so a build in another checkout changes
+    // this value and recompiles, instead of reusing a binary built from other sources.
+    println!("cargo:rerun-if-env-changed=RHP_WORKTREE");
+
     // A release build links over `rust-hover-preview.exe`, which Windows will
     // not allow while the app is up: the link fails with "Access is denied"
     // and the build has to be run again. Ending a running copy here, before
