@@ -75,14 +75,15 @@ pub(super) const ID_TRAY_ENGINE_OFFICE_LIBRE: u16 = 1009;
 pub(super) const ID_TRAY_VIDEO_ENGINE_FALLBACK: u16 = 1034;
 pub(super) const ID_TRAY_VIDEO_ENGINE_BASE: u16 = 1035;
 
-/// The engines the `Video` submenu lists, in the order it lists them: `Best` at the top, mpv
-/// below it since it is preferred to both of the others, and the hybrid —
-/// `Native (FFmpeg above 3.2MP)` — below the two plain ones.
+/// The engines the `Video` submenu lists, in the order it lists them: `Best` at the top, then the
+/// two players that take a film off this window's hands — mpv and FFmpeg's `ffplay` — then the
+/// engine Windows draws into the window, and the hybrid — `Native (FFmpeg above 3.2MP)` — below
+/// the two plain ones.
 pub(super) const VIDEO_ENGINE_CHOICES: [VideoEngine; 5] = [
     VideoEngine::Best,
     VideoEngine::Mpv,
-    VideoEngine::Native,
     VideoEngine::Ffmpeg,
+    VideoEngine::Native,
     VideoEngine::Hybrid,
 ];
 /// The `Background` submenu: one command per backdrop it offers, in the order it

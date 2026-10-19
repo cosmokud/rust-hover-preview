@@ -91,6 +91,11 @@ pub(super) const PIN_BUBBLE_DRAG_CARRY_MS: u64 = 2_000;
 /// the window back up — from a hand that was carrying it somewhere.
 pub(super) static PIN_BUBBLE_MOVED: AtomicBool = AtomicBool::new(false);
 
+/// Whether the bubble has been carried anywhere since it was put up: a restore from a bubble
+/// standing where the collapse left it puts the pin back at its own box, and one the hand has
+/// carried somewhere places the window beside it (see `restore_pin`).
+pub(super) static PIN_BUBBLE_CARRIED: AtomicBool = AtomicBool::new(false);
+
 /// Whether the press that is down landed on a bubble already holding the keyboard: the first
 /// click focuses, the second restores (see `pin_bubble_proc`).
 pub(super) static BUBBLE_PRESS_FOCUSED: AtomicBool = AtomicBool::new(false);
@@ -921,11 +926,13 @@ pub(super) fn restore_pin() {
         // one the next collapse is answered with (see `PinTransport::drag_held`).
         pin.bubble_run = false;
 
-        // The window goes back up where a preview of it would have been put at the pointer the
-        // bubble was clicked with, rather than where it stood when it was collapsed: the bubble is
-        // the bit of the pin the hand is on, and what the hand gets back is a window placed beside
-        // it the way this app places everything else (see `placed_pin_box`).
-        if !from_taskbar {
+        // The window goes back up where it went down while the bubble is the one the collapse
+        // left standing: a pin put back up is the window that went down, and placing it beside a
+        // bubble that has not moved would be a window that walks sideways with every collapse and
+        // restore until it runs out of screen (see `PIN_BUBBLE_CARRIED`). A bubble the hand has
+        // carried somewhere is the place the hand asked for, so the window is placed beside it the
+        // way this app places everything else (see `placed_pin_box`).
+        if !from_taskbar && PIN_BUBBLE_CARRIED.load(Ordering::Acquire) {
             if let Some(window) = placed_pin_box(pin, &DESKTOPS) {
                 pin.content =
                     content_box_of(window, pin.dpi, pin.transport_bar, pin.overlay, pin.caption);
@@ -1297,6 +1304,10 @@ pub(super) fn hide_pin_bubble() {
 /// to go. It is painted before it is shown, for the reason every other layered window of this app's
 /// is: what one shows between two paints is the surface it already has.
 pub(super) unsafe fn show_pin_bubble(anchor: ScreenRegion) {
+    // A bubble that goes up is one the hand has not carried anywhere yet: a restore from it puts
+    // the window back where the collapse left it (see `restore_pin`).
+    PIN_BUBBLE_CARRIED.store(false, Ordering::Release);
+
     // A bubble that goes up goes up without a menu, whatever the one before it held.
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
         *menu = None;
@@ -2004,6 +2015,7 @@ pub(super) unsafe fn drag_pin_bubble(hwnd: HWND) {
     let slop = (logical_px(96, PIN_DRAG_SLOP_PIXELS)).max(2);
     if (x - press.0).abs() + (y - press.1).abs() > slop {
         PIN_BUBBLE_MOVED.store(true, Ordering::Release);
+        PIN_BUBBLE_CARRIED.store(true, Ordering::Release);
     }
     if !PIN_BUBBLE_MOVED.load(Ordering::Acquire) {
         return;
