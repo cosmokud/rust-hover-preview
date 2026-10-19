@@ -726,6 +726,13 @@ pub(super) fn draw_open_with(
 }
 
 /// A ceiling bar and an upward-pointing arrow: always on top mark.
+///
+/// The mark is drawn to the glyph square the window's own marks beside it are drawn in: its
+/// ceiling is that square's top row and its stem ends on the square's bottom row, so the pin
+/// stands as tall as the maximize box and the close cross at whatever scale the display is at.
+/// The bar and the stem are laid down in whole pixels rather than as strokes, because the rows
+/// they end on are the whole of what "level with the buttons beside it" means, and a stroke
+/// centred on the square's boundary would spend half its coverage on the row beyond it.
 pub(crate) fn draw_pin_top(
     buffer: &mut [u8],
     width: i32,
@@ -736,36 +743,60 @@ pub(crate) fn draw_pin_top(
     color: [u8; 3],
 ) {
     let edge = thickness.round().max(1.0);
-    let half = ((span as f32 / 2.0) - edge / 2.0).max(0.0);
+    let thick = edge as i32;
+    let half = (span / 2).max(1);
+    let square = RECT {
+        left: center_x - half,
+        top: center_y - half,
+        right: center_x + half + 1,
+        bottom: center_y + half + 1,
+    };
+
+    // The ceiling: the square's own top border, as wide as the square.
+    fill_box(
+        buffer,
+        width,
+        RECT {
+            left: square.left,
+            top: square.top,
+            right: square.right,
+            bottom: (square.top + thick).min(square.bottom),
+        },
+        color,
+        1.0,
+    );
+
+    // The stem down to the square's bottom row, as wide as the bar is thick.
+    let stem_left = center_x - thick / 2;
+    fill_box(
+        buffer,
+        width,
+        RECT {
+            left: stem_left.max(square.left),
+            top: (square.top + thick + 1).min(square.bottom),
+            right: (stem_left + thick).min(square.right),
+            bottom: square.bottom,
+        },
+        color,
+        1.0,
+    );
+
+    // The head: two arms from the top of the stem out to the arrow's own width, which is the
+    // square less the margin the arms have to keep from its sides to stay clear of them.
     let (middle_x, middle_y) = (center_x as f32 + 0.5, center_y as f32 + 0.5);
-    let point = |x: f32, y: f32| (middle_x + x * half, middle_y + y * half);
-
-    // Top horizontal bar
-    stroke_segment(
-        buffer,
-        width,
-        point(-0.80, -0.80),
-        point(0.80, -0.80),
-        edge,
-        color,
-        1.0,
-    );
-
-    // Arrow pointing up toward the bar
-    let tip = point(0.0, -0.44);
-    stroke_segment(buffer, width, tip, point(-0.48, 0.0), edge, color, 1.0);
-    stroke_segment(buffer, width, tip, point(0.48, 0.0), edge, color, 1.0);
-
-    // Vertical stem of the arrow
-    stroke_segment(
-        buffer,
-        width,
-        point(0.0, -0.25),
-        point(0.0, 0.80),
-        edge,
-        color,
-        1.0,
-    );
+    let tip = (middle_x, (square.top + thick + 1) as f32 + 0.5);
+    let arm = (half - thick - 1).max(1) as f32;
+    for side in [-1.0, 1.0] {
+        stroke_segment(
+            buffer,
+            width,
+            tip,
+            (middle_x + side * arm, middle_y),
+            edge,
+            color,
+            1.0,
+        );
+    }
 }
 
 /// A list of rows above a chevron pointing down: the file handed to a program named out loud.
