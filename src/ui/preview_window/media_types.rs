@@ -591,6 +591,15 @@ impl TextPreviewState {
         (self.first_line as i64 + lines).clamp(0, self.max_first_line() as i64) as usize
     }
 
+    /// A screenful of the page: the document lines the box shows, less one, so that the line the
+    /// reader was on when a page turned is still on it (see `scrolled_by`).
+    ///
+    /// `shortcut:` a screenful is counted in document lines, so a page of wrapped lines carries
+    /// more than a boxful of them; upgrade by measuring the painted lines the frame holds.
+    pub(super) fn page_lines(&self) -> i64 {
+        self.visible_lines.saturating_sub(1).max(1) as i64
+    }
+
     pub(super) fn can_scroll(&self) -> bool {
         self.max_first_line() > 0
     }
