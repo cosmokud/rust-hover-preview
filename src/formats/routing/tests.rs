@@ -42,25 +42,19 @@ fn shipped_lists(config: &AppConfig) -> Vec<(PreviewType, Vec<PathBuf>)> {
     let mut lists: Vec<(PreviewType, Vec<PathBuf>)> = Vec::new();
 
     for list in crate::formats::lists::LISTS {
-        let kind = KIND_OF_SECTION
-            .iter()
-            .find(|(section, key, _)| *section == list.section && *key == list.key)
-            .map(|(_, _, kind)| *kind)
-            .unwrap_or_else(|| {
-                panic!(
-                    "`[{}] {}` is a list this test does not name, so nothing here says what \
-                     kind its names belong to",
-                    list.section, list.key
-                )
-            });
+        let kind = kind_of_section(list);
 
         // An extension is reached by a name carrying it, `preview.tar.gz` included — the
         // archive row's compound entry is reached the only way it can be, by a name that ends
-        // in it. A name row has no extension at all and is reached by the name itself.
+        // in it. A name row has no extension at all and is reached by the name itself, and by
+        // the dotted one as well, since a `.env` and an `env` are one entry to the rule that
+        // reads it.
         let paths = match list.entries {
-            crate::formats::lists::Entries::Name => {
-                list.entries(config).iter().map(PathBuf::from).collect()
-            }
+            crate::formats::lists::Entries::Name => list
+                .entries(config)
+                .iter()
+                .flat_map(|name| [PathBuf::from(name), PathBuf::from(format!(".{name}"))])
+                .collect(),
             _ => list
                 .entries(config)
                 .iter()
@@ -77,12 +71,57 @@ fn shipped_lists(config: &AppConfig) -> Vec<(PreviewType, Vec<PathBuf>)> {
     lists
 }
 
+/// The kind a row's names belong to, or a panic where this test has no answer for it: a list
+/// added to the table without being named here is a list nothing says the kind of.
+fn kind_of_section(list: &crate::formats::lists::List) -> PreviewType {
+    KIND_OF_SECTION
+        .iter()
+        .find(|(section, key, _)| *section == list.section && *key == list.key)
+        .map(|(_, _, kind)| *kind)
+        .unwrap_or_else(|| {
+            panic!(
+                "`[{}] {}` is a list this test does not name, so nothing here says what \
+                 kind its names belong to",
+                list.section, list.key
+            )
+        })
+}
+
+/// The kinds whose own lists claim `path`, asked of each row the way the row itself reads a
+/// name.
+///
+/// The rows are asked rather than their paths compared, because two lists can reach one file
+/// under two names of their own: a `[text] names` entry and an extension list are two lookups
+/// for the same file, and the archive row's `tar.gz` reaches a name whose extension the listing
+/// list carries. Both are overlaps this table owes an answer for, and neither is a pair of equal
+/// paths.
+fn kinds_claiming(path: &Path, config: &AppConfig) -> Vec<PreviewType> {
+    let mut kinds: Vec<PreviewType> = Vec::new();
+
+    for list in crate::formats::lists::LISTS {
+        if list.claims(path, config) {
+            let kind = kind_of_section(list);
+
+            if !kinds.contains(&kind) {
+                kinds.push(kind);
+            }
+        }
+    }
+
+    kinds
+}
+
 /// The names two lists hold, and the kind the order gives each of them.
 ///
 /// Each is a name that is deliberately in two lists, and the winner is the kind asked
 /// first. Nothing else may be in two lists: a name that reaches two kinds is a file whose
 /// preview depends on the order rather than on the name, which is the thing this table
 /// exists to keep written down and small.
+///
+/// What is written down here is the *name's* answer. A file of one of these names may be
+/// settled by its own bytes before the order is ever asked — a `.ts` source, a `.vhd` of VHDL,
+/// a `.dif` that is a spreadsheet — and that half belongs to `content_type`, which every
+/// caller that draws a file asks of it (see `routing::resolve` and `probe::GUARDS`).
 const SHARED: &[(&str, PreviewType)] = &[
     // A `.ts` and an `.mts` are a transport stream in the video list and TypeScript in the
     // text lists, and the content settles which: a file of either name that is not a
@@ -90,28 +129,31 @@ const SHARED: &[(&str, PreviewType)] = &[
     ("preview.ts", PreviewType::Text),
     ("preview.mts", PreviewType::Text),
     // A `.dif` is a DV stream in the video list and a Data Interchange Format spreadsheet
-    // in the render engine's list. The video list is asked first, so the stream wins: a
-    // spreadsheet of that name is previewed as the video it is not.
+    // in the render engine's list. The video list is asked first, so the name is the
+    // stream's — and the spreadsheet is the formats table's rather than the order's: a
+    // `.dif` whose head reads as the text its records are written in is the render
+    // engine's before the order is asked at all (see `spreadsheet_or_dv_stream`).
     ("preview.dif", PreviewType::Videos),
-    // A `.cdr` is a drawing the render engine draws and a CorelDRAW container the design
-    // list reads a thumbnail out of. The engine is asked first, because what a thumbnail
-    // shows of a drawing is not a preview of it.
-    ("preview.cdr", PreviewType::Libre),
     // A `.vhd` is a Virtual PC disk image the listing engine opens and VHDL source the
-    // text lists read, and nothing in the app had ever written the pair down: the two
-    // lists were asked in an order that settled it and no test said which. It is the
-    // listing engine's, because that list is asked first — a name that is a language more
-    // often than it is a disk image is the reading the order gets wrong, and moving it is
-    // a line in this table rather than a reordering of the lists.
+    // text lists read, and the listing engine's is the name's answer, because that list is
+    // asked first. The language is the reading the order gets wrong and it is the common
+    // one, so the file's own head is what settles it: a `.vhd` that reads as text is a page
+    // of text, and one that is the disk image it is spelled like — a header of `conectix`, a
+    // fixed image's raw data — keeps the listing (see `vhdl_source_or_disk_image`).
     ("preview.vhd", PreviewType::Peazip),
     // A `.mpc` is a Musepack sound and the persistent cache ImageMagick keeps for itself,
     // and the two are told apart from the front of the file: an image cache opens with the
     // `id=ImageMagick` the converter's own reader answers for (see the signature that names
     // `miff`), and a Musepack file with its own `MPCK` or `MP+`. A name-level answer is
     // what this table settles, and it is the sound's, because the sound list is asked
-    // first — a file of neither shape is the one the order gets wrong, and that is a file
-    // neither reader could draw.
+    // first — and a file whose bytes named the converter is the converter's whatever the
+    // order says (see `HoverFacts::is_audio`).
     ("preview.mpc", PreviewType::Audio),
+    // A `.tar.gz` is a whole file's name to the archive list, which reads its dotted entry
+    // for what it is, and a `gz` stream to the listing list, which reads the extension the
+    // name ends in. The archive list is asked first, which is what keeps a tarball out of
+    // the engine's hands (see `peazip_formats::is_peazip_file`).
+    ("preview.tar.gz", PreviewType::Archives),
 ];
 
 /// Every name this app ships reaches the kind its list is written for, and a name two
@@ -134,11 +176,11 @@ fn every_shipped_name_reaches_the_kind_its_list_is_written_for() {
                 .and_then(|name| name.to_str())
                 .expect("a file name");
 
-            let owners = lists.iter().filter(|(_, held)| held.contains(path)).count();
+            let owners = kinds_claiming(path, &config);
 
             let expected = match SHARED.iter().find(|(shared, _)| *shared == name) {
                 Some((_, winner)) => *winner,
-                None if owners > 1 => {
+                None if owners.len() > 1 => {
                     unexpected.push(format!(
                         "{name}: {kind:?} list and another list both claim it, and it is not \
                          written down in SHARED"
@@ -178,6 +220,24 @@ fn every_shipped_name_reaches_the_kind_its_list_is_written_for() {
         unexpected.is_empty(),
         "names reached a kind their list is not written for:\n  {}",
         unexpected.join("\n  ")
+    );
+
+    // And every name written down in the table is still one two lists hold. An entry whose name
+    // has left one of the two is an exception nothing would notice the table no longer needs —
+    // it asserts the same kind the order already gives — and the table is meant to be as small
+    // as the overlaps it records. It is how a `.cdr` entry outlived the list that carried the
+    // second name.
+    let stale: Vec<String> = SHARED
+        .iter()
+        .map(|(shared, _)| (*shared, kinds_claiming(Path::new(shared), &config)))
+        .filter(|(_, owners)| owners.len() < 2)
+        .map(|(shared, owners)| format!("{shared}: only {owners:?} claims it now"))
+        .collect();
+
+    assert!(
+        stale.is_empty(),
+        "names in SHARED that are no longer in two lists:\n  {}",
+        stale.join("\n  ")
     );
 }
 
