@@ -315,36 +315,17 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             update_pin_transport(|transport| {
                 transport.seeking = aim;
             });
-            // Parked at seek-start, so the relaunch the release makes runs behind a cover: the
-            // old player is retired at relaunch with the hole transparent and the replacement up
-            // later, which is the desktop flash. Only a player of this app's is parked — the
-            // engine's draws into this app's own surface and has no window to put away, and a
-            // cover over one is a frozen frame nothing ends. Only an aimed second arms the
-            // gesture at all: a press with no second to seek to parks nothing and holds nothing
-            // (see `seek_press_arms`). The film is held with the same gesture hold as a drag —
-            // audio with the picture, for the whole gesture — and the release carries it onto
-            // the relaunch, which the swap ends without a key (see `seek_press_hold` and
-            // `settle_seek_hold_after_swap`).
+            // **The hand takes the bar and the film plays on**, which is the whole of what a press
+            // on the track does to the player. The end belongs to the release, where the second is
+            // known: FFmpeg's player is taken to one by being ended and begun again, and there is no
+            // reason for that end to happen while the hand is still choosing — a player stopped at
+            // the press is a film that stops the moment the hand lands on the track and stays
+            // stopped for the whole of the drag, which is a pause rather than a seek. So the cover,
+            // the end and the relaunch are the release's own (see `pinned_transport_release`), and a
+            // film mpv draws is ended at neither end of the gesture (see `mpv_ipc`).
             if current_media_type() == Some(MediaType::Video) {
-                let at = window_origin(hwnd)
-                    .map(|origin| (origin.0, origin.1))
-                    .or_else(|| pinned_content().map(|content| (content.0, content.1)))
-                    .unwrap_or((0, 0));
-                // The kill road freezes the clock before the park reads the
-                // frame, and kills only after the cover stands: silence by
-                // construction, and no blind toggle anywhere on the gesture.
-                // A press the kill road refuses — no player to kill, or one
-                // already dead — keeps the legacy hold.
-                park_pinned_player_for_seek(hwnd, at);
-                if gesture_press_freeze() {
-                    kill_pinned_player_async();
-                } else {
-                    seek_press_hold();
-                }
-                // A newer gesture supersedes whatever relaunch is still in flight behind the
-                // cover: the bump kills it before it can publish. After the hold rather than
-                // before it — the key is posted to the live player, and there is no window
-                // to post one through once it has gone.
+                // A newer gesture supersedes whatever relaunch is still in flight: the bump kills
+                // it before it can publish a player this gesture is not waiting for.
                 bump_pinned_generation();
             }
         }
@@ -468,11 +449,23 @@ pub(super) unsafe fn pinned_transport_release(
     }
 
     // A drag of the bar: the file is taken to the second the hand stopped at, which is the one
-    // moment an FFmpeg player is ended and begun again (see `seek_pinned_playback`). The relaunch
-    // runs behind the press's cover carrying the seek's hold, and the swap bound is re-armed onto
-    // it: the scrub's ticks spent the stamp the press took, and without this the first tick after
-    // the release swaps onto whatever window merely exists (see `rearm_seek_cover_for_relaunch`).
+    // moment an FFmpeg player is ended and begun again (see `seek_pinned_playback`). The film was
+    // playing under the hand until this moment — the press ends nothing (see
+    // `pinned_transport_press`) — so the cover is raised here, over the frame the hand let go on,
+    // and the player ends behind it with the replacement begun on the next line.
     if let Some(seconds) = seeking {
+        // The aim is put back into the transport before any road below can paint from it: letting go
+        // of the pointer above re-entered `pin_capture_lost`, and that road takes the aim with it —
+        // a capture taken away is a drag abandoned. A cover is painted *from* the transport, so
+        // without this the strip under the still stood at the second the ended player's own clock
+        // had reached, which is where the thumb was before the drag, and that is the strip handed to
+        // the compositor until the relaunch rebases the clock: the frame that flashes at the release,
+        // for as long as the kill and the spawn take. Nothing is left standing by it either, because
+        // every road that takes a file somewhere clears the aim itself (`begun` and `sought`).
+        if current_media_type() == Some(MediaType::Video) {
+            update_pin_transport(|transport| transport.seeking = Some(seconds));
+        }
+
         // The kill road owns the gesture's one relaunch, at the aimed second
         // rather than the press's: the take inside `relaunch_gesture_end_at`
         // makes it the only one across the capture-lost re-entered above and
@@ -480,13 +473,27 @@ pub(super) unsafe fn pinned_transport_release(
         if kill_road {
             if let Some((_, content, _, _)) = pinned_playback_state() {
                 relaunch_gesture_end_at(content, Some(seconds));
-                rearm_seek_cover_for_relaunch();
             }
         } else if let Some((path, content, _, _)) = pinned_playback_state() {
+            // The cover, the end and the relaunch, in the order a park owns: the frame is read and
+            // painted flat before the window is hidden and before the player is killed, and the
+            // player taking its place is begun last (see `park_pinned_player_for_seek`). Only the
+            // roads that end a player raise the cover: a film the media engine draws is told where
+            // to go and gets there itself, and mpv's is a command written down its pipe and answered
+            // while the film runs (see `seek_pinned_playback` and `mpv_ipc`).
+            if current_media_type() == Some(MediaType::Video)
+                && video_route(&path) != VideoRoute::Mpv
+            {
+                let at = window_origin(hwnd)
+                    .map(|origin| (origin.0, origin.1))
+                    .or_else(|| pinned_content().map(|content| (content.0, content.1)))
+                    .unwrap_or((0, 0));
+                park_pinned_player_for_seek(hwnd, at);
+                kill_pinned_player_async();
+            }
             seek_pinned_playback(&path, content, seconds);
-            rearm_seek_cover_for_relaunch();
             // A relaunch that never came up leaves no swap to disarm the
-            // dead interval: the press's snapshot goes with it instead.
+            // dead interval: a snapshot some other road left standing goes with it.
             disarm_gesture_if_no_relaunch();
         }
     }

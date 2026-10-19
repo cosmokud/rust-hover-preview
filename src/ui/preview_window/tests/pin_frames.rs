@@ -2726,8 +2726,8 @@ fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
 ///
 /// The seekbar seek flashes desktop because the seek relaunch runs with no park cover: the
 /// old player is parked for retirement at relaunch with the hole transparent and the
-/// replacement up later. Parking the stale frame at seek-start puts the relaunch behind a
-/// cover for its single swap — while the film keeps playing (no hold: a scrub is not a drag
+/// replacement up later. Parking the stale frame when the seek is released puts the relaunch
+/// behind a cover for its single swap — while the film keeps playing (no hold: a scrub is not a drag
 /// and pausing it is the defect rather than the fix), and with no resume render asked (the
 /// playhead is moving, so a frame rendered at the second the hand started from is a frame of
 /// the wrong second).
@@ -2775,8 +2775,8 @@ fn a_seek_parks_the_stale_frame_it_is_about_to_replace() {
     let hwnd = HWND(0x1000 as *mut _);
     assert!(
         park_pinned_player_for_seek(hwnd, (100, 80)),
-        "a seek parks the stale frame at seek-start, so the relaunch the release makes runs \
-         behind a cover rather than through a transparent hole"
+        "a seek parks the stale frame at its release, so the relaunch runs behind a cover rather than \
+         through a transparent hole"
     );
     assert_eq!(
         park_trace(),
@@ -2810,11 +2810,11 @@ fn a_seek_parks_the_stale_frame_it_is_about_to_replace() {
         "aiming moves only the second under the hand: no relaunch, no hold, cover standing"
     );
 
-    // A second press over the standing seek cover extends rather than re-captures.
+    // A second seek's release over the standing cover extends rather than re-captures.
     clear_park_trace();
     assert!(
         park_pinned_player_for_seek(hwnd, (100, 80)),
-        "a second seek press extends the standing cover"
+        "a second seek's release extends the standing cover"
     );
     assert_eq!(
         park_trace(),
@@ -2832,14 +2832,27 @@ fn a_seek_parks_the_stale_frame_it_is_about_to_replace() {
     }
 }
 
-/// WS-F R1, scrub: a seek's cover waits for its relaunch rather than spending its bound.
+/// Mark the park standing as one whose player has not been begun behind it yet, which is what the
+/// kill road writes and the only press that parks before its relaunch is made (see
+/// `park_pinned_player_for_gesture`).
+fn stand_a_cover_waiting_on_its_relaunch() {
+    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
+        if let Some(swap) = held.as_mut() {
+            swap.awaiting_relaunch = true;
+        }
+    }
+}
+
+/// WS-F R1, waiting: a cover whose relaunch has not been begun waits rather than spending its
+/// bound.
 ///
-/// A scrub aims without relaunching, and a slow hand holds past the swap bound — so the bound
-/// cannot run from the press. Until the release relaunches behind the cover there is nothing to
-/// swap to: the settle holds even with a window standing in the band, stamps no budget, and
-/// drains once the relaunch is begun.
+/// A cover is raised before the player behind it is begun — the kill road parks, and its release
+/// makes that player — so a tick arriving in between has nothing to swap to: the settle holds even
+/// with a window standing in the band, stamps no budget, and drains once the relaunch is begun. A
+/// seek's cover is not one of these: it is raised at the release, where the relaunch begins on the
+/// next line (see `park_pinned_player_for_seek`).
 #[test]
-fn a_seek_cover_waits_for_its_relaunch_rather_than_spending_its_bound() {
+fn a_cover_whose_relaunch_has_not_begun_waits_rather_than_spending_its_bound() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
     clear_park_swap_arm();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
@@ -2857,37 +2870,36 @@ fn a_seek_cover_waits_for_its_relaunch_rather_than_spending_its_bound() {
     let hwnd = HWND(0x1000 as *mut _);
     assert!(
         park_pinned_player_for_seek(hwnd, (100, 80)),
-        "a seek parks its cover at seek-start"
+        "a cover over the player, raised the way every park raises one"
     );
-    // The scrub itself, which is what this test is about: the hold below is a tick *mid-scrub*, so
-    // the aim the press stored has to be standing. A cover with no scrub in flight is a cover whose
-    // release has already come, and the tick does not hold that one (see
-    // `cover_relaunch_is_still_possible`).
+    stand_a_cover_waiting_on_its_relaunch();
+    // The aim stands as well, so that whatever the arm below decides, it decides it for a cover
+    // whose wait can still be satisfied (see `cover_relaunch_is_still_possible`).
     update_pin_transport(|transport| transport.seeking = Some(90.0));
     assert!(
         seek_cover_is_waiting(),
-        "which waits for the release's relaunch: no player has been begun behind it yet"
+        "which waits for that relaunch: no player has been begun behind it yet"
     );
 
     let window = RecordedPinWindow::new(0x1000);
     assert!(
         !settle_pinned_park_where(&window, true),
-        "so a tick mid-scrub holds even with a window standing in the band: there is nothing to \
+        "so a tick mid-wait holds even with a window standing in the band: there is nothing to \
          swap to, and swapping to the player the cover stands over would spend the cover before \
          the relaunch it was parked for"
     );
     assert!(
         pin_player_is_parked() && window.calls().is_empty(),
-        "and the hold asks nothing of any window and paints nothing: a scrub held past the bound \
-         must neither spend it nor show the player it is still aiming over"
+        "and the hold asks nothing of any window and paints nothing: a cover waiting on its \
+         relaunch must neither spend the bound nor show the player it is still standing over"
     );
     assert!(
         PIN_PARK_SWAP
             .lock()
             .is_ok_and(|held| held.as_ref().is_some_and(|swap| swap.since.is_none())),
-        "with the bound left unstamped: it runs from the relaunch, not from the press"
+        "with the bound left unstamped: it runs from the relaunch, not from the park"
     );
-    // The release's relaunch, stood in for, and the bound spent waiting for its window.
+    // That relaunch, stood in for, and the bound spent waiting for its window.
     VIDEO_PID.store(4243, Ordering::SeqCst);
     assert!(
         !seek_cover_is_waiting(),
@@ -2922,13 +2934,13 @@ fn a_seek_cover_waits_for_its_relaunch_rather_than_spending_its_bound() {
     }
 }
 
-/// WS-F R1, abandon: a seek's cover ended without a relaunch is handed back, not held.
+/// WS-F R1, abandon: a cover ended before its relaunch has begun is handed back, not held.
 ///
-/// A scrub that never releases — a capture stolen mid-aim, a move let go of over it — begins
-/// no player behind the cover, so the settle would hold it for ever. Both ends hand the band
-/// back to the player the cover stands over instead.
+/// Both ends of a wait can come first — a capture stolen, a move let go of — and neither begins a
+/// player behind the cover, so the settle would hold it for ever. Both hand the band back to the
+/// player the cover stands over instead.
 #[test]
-fn a_seek_cover_ended_without_a_relaunch_is_handed_back() {
+fn a_cover_ended_before_its_relaunch_is_handed_back() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
     clear_park_swap_arm();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
@@ -2946,17 +2958,18 @@ fn a_seek_cover_ended_without_a_relaunch_is_handed_back() {
     let hwnd = HWND(0x1000 as *mut _);
     assert!(
         park_pinned_player_for_seek(hwnd, (100, 80)),
-        "a seek parks its cover at seek-start"
+        "a cover over the player, raised the way every park raises one"
     );
+    stand_a_cover_waiting_on_its_relaunch();
     update_pin_transport(|transport| transport.seeking = Some(90.0));
 
-    // The capture stolen mid-aim: the aim goes with it, and the cover with the aim.
+    // The capture stolen mid-wait: the aim goes with it, and the cover with the aim.
     let stolen = RecordedPinWindow::new(0x1000);
     pin_capture_lost(&stolen);
     assert!(
         !pin_player_is_parked(),
-        "a seek abandoned mid-aim never relaunches, so the cover is handed back rather than held \
-         for a player that is never begun"
+        "a cover abandoned before its player is begun never gets one, so it is handed back rather \
+         than held for a relaunch that is never made"
     );
     assert_eq!(
         stolen.calls(),
@@ -2967,7 +2980,7 @@ fn a_seek_cover_ended_without_a_relaunch_is_handed_back() {
         "to the player it covers, at the band it stands in, painted through in the same tick"
     );
 
-    // The move let go of over a scrub: a gesture that relaunches nothing ends the wait the same
+    // The move let go of over a cover: a gesture that relaunches nothing ends the wait the same
     // way. A resize always relaunches below the cover and needs no such end.
     let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
     pin.path = PathBuf::from("handed-back-by-a-move.mkv");
@@ -2976,8 +2989,9 @@ fn a_seek_cover_ended_without_a_relaunch_is_handed_back() {
     forget_pin_park_swap();
     assert!(
         park_pinned_player_for_seek(hwnd, (100, 80)),
-        "and the cover stands again over the next seek"
+        "and the cover stands again over the next one"
     );
+    stand_a_cover_waiting_on_its_relaunch();
     update_pin_transport(|transport| transport.seeking = Some(95.0));
     with_pin(|pin| {
         pin.dragging = Some(PinDrag {
@@ -2996,7 +3010,7 @@ fn a_seek_cover_ended_without_a_relaunch_is_handed_back() {
     );
     assert!(
         !pin_player_is_parked(),
-        "which hands a waiting seek cover back: a move relaunches nothing, so nothing is coming \
+        "which hands a waiting cover back: a move relaunches nothing, so nothing is coming \
          for the settle to swap to"
     );
     assert!(
