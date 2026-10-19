@@ -33,6 +33,7 @@ impl TextPagePutBack {
             }],
             selection: None,
             selecting: false,
+            last_press: None,
         });
         if let Ok(mut slot) = CURRENT_MEDIA.lock() {
             *slot = Some(media);
@@ -76,12 +77,84 @@ fn selection_now() -> Option<text_preview::Selection> {
     })
 }
 
+/// Whether the page's text state is holding a drag open now.
+fn selecting_now() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| state.selecting)
+        })
+        .unwrap_or(false)
+}
+
 /// A pin a menu can be placed against: a picture with room on the screen beside it for the whole
 /// panel (see `pin_chrome::menu_popup_from_point`).
 fn a_pin_whose_menu_fits_the_screen() -> PinnedPreview {
     let mut pin = PinnedPreview::for_test();
     pin.content = (100, 100, 500, 420);
     pin
+}
+
+/// A second press on the page, inside the time and box the machine reads a double click in, takes
+/// the word under the hand rather than leaving the empty selection a single press makes — and the
+/// word stays whole, because what a double click took is not the far end of a drag (see
+/// `begin_text_selection`).
+#[test]
+fn a_second_press_on_a_word_takes_the_whole_of_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _media = TextPagePutBack::put();
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(state) = media.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.lines = vec![text_preview::FrameLine {
+                top: 0,
+                height: 20,
+                runs: vec![text_preview::FrameRun {
+                    x: 0,
+                    width: 110,
+                    text: "hello world".to_string(),
+                }],
+            }];
+        }
+    }
+
+    // The middle of the `l` at index 2, which is the third ten-pixel cell of the run.
+    assert!(
+        begin_text_selection(25, 10),
+        "a press on the page is the page's"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(text_preview::Selection {
+            anchor: (0, 3),
+            caret: (0, 3),
+        }),
+        "a first press is an empty selection where it landed"
+    );
+
+    // The same point again, well inside the double click time any machine is set to.
+    assert!(
+        begin_text_selection(25, 10),
+        "a second press is the page's too"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(text_preview::Selection {
+            anchor: (0, 0),
+            caret: (0, 5),
+        }),
+        "and the second of the pair takes the word under the hand"
+    );
+    assert!(
+        !selecting_now(),
+        "the word is the selection the hand asked for rather than the start of a drag"
+    );
 }
 
 /// A press with Shift held keeps the anchor the selection already has and moves its far end,

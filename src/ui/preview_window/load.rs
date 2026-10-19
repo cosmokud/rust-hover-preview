@@ -609,6 +609,7 @@ pub(super) fn load_text_preview(
         lines: frame.lines,
         selection: None,
         selecting: false,
+        last_press: None,
     });
 
     let frame = ImageFrame::new(frame.pixels, frame.width, frame.height, 0);

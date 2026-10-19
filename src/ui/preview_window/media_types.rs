@@ -575,6 +575,9 @@ pub(super) struct TextPreviewState {
     /// What is selected in the frame on screen, and whether a drag is extending it.
     pub(super) selection: Option<text_preview::Selection>,
     pub(super) selecting: bool,
+    /// When and where the pointer last pressed on the page, which is what the press after it is
+    /// read against as a double click (see `begin_text_selection`).
+    pub(super) last_press: Option<(Instant, (i32, i32))>,
 }
 
 impl TextPreviewState {
