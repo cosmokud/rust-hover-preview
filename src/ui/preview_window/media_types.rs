@@ -569,10 +569,11 @@ pub(super) struct TextPreviewState {
     pub(super) scrollbar: Option<text_preview::ScrollBar>,
     /// Whether the pointer is currently dragging the thumb.
     pub(super) dragging: bool,
-    /// The painted lines, which is what a press is turned back into a place in the
-    /// text against, and what a selection is copied from.
+    /// The painted lines, each carrying the document line it belongs to, which is what a press is
+    /// turned back into a place in the document against.
     pub(super) lines: Vec<text_preview::FrameLine>,
-    /// What is selected in the frame on screen, and whether a drag is extending it.
+    /// What is selected in the page, as places in its own document, and whether a drag is
+    /// extending it.
     pub(super) selection: Option<text_preview::Selection>,
     pub(super) selecting: bool,
     /// When and where the pointer last pressed on the page, which is what the press after it is

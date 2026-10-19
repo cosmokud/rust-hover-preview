@@ -37,6 +37,12 @@ pub(super) struct LaidLine {
     pub(super) top: i32,
     pub(super) height: i32,
     block: LineBlock,
+    /// The document line this one drawn line belongs to, and the character of that line its
+    /// first run starts at: what a point on the frame is turned back into, and what a selection
+    /// is measured in. A document line too long for the box is drawn as several of these, and
+    /// which part of the line each of them holds is not something its position says (see
+    /// `Selection`).
+    pub(super) source: (usize, usize),
 }
 
 pub(super) struct LaidOut {
@@ -195,6 +201,9 @@ pub(super) fn layout(
                 top: body.y,
                 height: note_height,
                 block: LineBlock::Plain,
+                // The note stands where the lines it hides begin, so a press on it is a press on
+                // the line under it rather than on nothing at all.
+                source: (first_line + body.emitted, 0),
             });
             body.y += note_height;
             body.content_right = body.content_right.max(padding + width);
@@ -343,7 +352,7 @@ fn lay_out_body(
             let visual_lines = visual_lines_of(line, metrics, left, right, max_lines);
 
             let mut placed = false;
-            for runs in visual_lines {
+            for (source_char, runs) in visual_lines {
                 if y + height > bottom {
                     break;
                 }
@@ -361,6 +370,7 @@ fn lay_out_body(
                     top: y,
                     height,
                     block: line.block,
+                    source: (index, source_char),
                 });
                 y += height;
                 placed = true;
@@ -392,7 +402,8 @@ fn lay_out_body(
 }
 
 /// One document line as the frame draws it inside its text column: the visual
-/// lines it takes, left to right, wrapped at the page edge.
+/// lines it takes, left to right, wrapped at the page edge, each with the
+/// character of the document line it starts at.
 ///
 /// A line wider than the column continues on the next one. Nothing in a text
 /// preview scrolls sideways, so a line that ran past the edge would put whatever it
@@ -413,7 +424,7 @@ fn visual_lines_of(
     left: i32,
     right: i32,
     max_lines: usize,
-) -> Vec<Vec<LaidRun>> {
+) -> Vec<(usize, Vec<LaidRun>)> {
     let indent = left + metrics.indent(line.indent);
     let text_right = match line.block {
         LineBlock::Quote => right - metrics.quote_bar - 4,
@@ -473,25 +484,39 @@ fn for_each_token(line: &DocLine, mut visit: impl FnMut(Token) -> bool) {
 }
 
 /// One document line's visual lines, wrapped at the page edge and at most
-/// `max_lines` of them. A word wider than the page — a URL, a hash — is cut rather
-/// than allowed to run off it, and a space that lands at a wrap point is dropped
-/// instead of starting a line.
+/// `max_lines` of them, each with the character of the document line it starts at.
+/// A word wider than the page — a URL, a hash — is cut rather than allowed to run
+/// off it, and a space that lands at a wrap point is dropped instead of starting a
+/// line.
+///
+/// What the offsets are for is a selection: a copy is taken from the document
+/// rather than from what was drawn, so a wrap point has to say where the next
+/// visual line picks the document line up — a dropped space is still a character of
+/// it — and not how wide the frame is (see `Selection`).
 fn wrap_line(
     line: &DocLine,
     left: i32,
     limit: i32,
     max_lines: usize,
     metrics: &TextMetrics,
-) -> Vec<Vec<LaidRun>> {
-    let mut lines: Vec<Vec<LaidRun>> = Vec::new();
+) -> Vec<(usize, Vec<LaidRun>)> {
+    let mut lines: Vec<(usize, Vec<LaidRun>)> = Vec::new();
     let mut runs: Vec<LaidRun> = Vec::new();
     let mut x = left;
+    // Characters of the document line laid out so far, and where the visual line
+    // being built starts among them.
+    let mut emitted = 0usize;
+    let mut line_from = 0usize;
 
     for_each_token(line, |token| {
+        let count = token.text.chars().count();
         let advance = metrics.advance[(token.style.level as usize).min(SIZE_LEVELS - 1)].max(1);
-        let width = token.text.chars().count() as i32 * advance;
+        let width = count as i32 * advance;
 
         if token.space {
+            // A space at a wrap point is dropped rather than starting a line, and
+            // the character it is stays part of the line it was dropped from.
+            emitted += count;
             if runs.is_empty() || x + width > limit {
                 return true;
             }
@@ -511,7 +536,8 @@ fn wrap_line(
             if lines.len() + 1 == max_lines {
                 return false;
             }
-            lines.push(std::mem::take(&mut runs));
+            lines.push((line_from, std::mem::take(&mut runs)));
+            line_from = emitted;
             x = left;
         }
 
@@ -525,6 +551,7 @@ fn wrap_line(
                 width,
             });
             x += width;
+            emitted += count;
             return true;
         }
 
@@ -546,12 +573,14 @@ fn wrap_line(
             });
             x += chunk;
             offset += take;
+            emitted += take;
 
             if offset < characters.len() {
                 if lines.len() + 1 == max_lines {
                     return false;
                 }
-                lines.push(std::mem::take(&mut runs));
+                lines.push((line_from, std::mem::take(&mut runs)));
+                line_from = emitted;
                 x = left;
             }
         }
@@ -560,11 +589,11 @@ fn wrap_line(
     });
 
     if !runs.is_empty() {
-        lines.push(runs);
+        lines.push((line_from, runs));
     }
     if lines.is_empty() {
         // An empty line still takes a line's worth of space.
-        lines.push(Vec::new());
+        lines.push((0, Vec::new()));
     }
 
     lines
@@ -648,39 +677,43 @@ pub fn scroll_line_at_track_y(
 
 // ------------------------------------------------------------------ painting
 
-/// The part of a line's selection that falls inside one of its runs, as character
-/// offsets within that run, or `None` when the selection does not touch it.
+/// The part of a run a selection covers, as character offsets within the run, or
+/// `None` when it does not touch it.
 ///
 /// A line is painted run by run — one per token, which is where the colors change —
-/// so a selection, which is measured in the line's characters, has to be mapped
-/// back onto the run it lands in. `run_start` is how many characters of the line
-/// come before this run.
+/// so a selection, which is measured in the document's characters, has to be mapped
+/// back onto the run it lands in. `source` is the document place the painted line
+/// begins at and `run_start` is how many characters of that painted line come
+/// before this run, so the run's own characters are the document's
+/// `[source.1 + run_start, ...)` — which is also what tells a wrapped line's second
+/// half from its first, and what keeps a selection measured on one of them from
+/// covering the other (see `Selection`).
 fn selected_part(
-    line_index: usize,
+    source: (usize, usize),
     run_start: usize,
     run_characters: usize,
     selection: Selection,
 ) -> Option<(usize, usize)> {
     let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
-    if line_index < start_line || line_index > end_line || run_characters == 0 {
+    let (line, base) = source;
+    if line < start_line || line > end_line || run_characters == 0 {
         return None;
     }
 
-    let line_from = if line_index == start_line {
-        start_char
+    let run_from = base + run_start;
+    let run_to = run_from + run_characters;
+    let from = if line == start_line {
+        start_char.max(run_from)
     } else {
-        0
+        run_from
     };
-    let line_to = if line_index == end_line {
-        end_char
+    let to = if line == end_line {
+        end_char.min(run_to)
     } else {
-        usize::MAX
+        run_to
     };
 
-    let from = line_from.saturating_sub(run_start).min(run_characters);
-    let to = line_to.saturating_sub(run_start).min(run_characters);
-
-    (from < to).then_some((from, to))
+    (from < to).then(|| (from - run_from, to - run_from))
 }
 
 /// Paint the background, the block decorations, the text and a selection, and the
@@ -754,13 +787,13 @@ pub(super) unsafe fn paint(
 
     let mut painter = RunPainter::new(surface, metrics.scale);
 
-    for (line_index, line) in laid_out.lines.iter().enumerate() {
+    for line in &laid_out.lines {
         let mut run_start = 0usize;
 
         for run in &line.runs {
             let run_characters = run.text.chars().count();
             let selected_part = selection.and_then(|selection| {
-                selected_part(line_index, run_start, run_characters, selection)
+                selected_part(line.source, run_start, run_characters, selection)
             });
             run_start += run_characters;
 

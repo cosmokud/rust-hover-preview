@@ -30,6 +30,7 @@ impl TextPagePutBack {
                 top: 0,
                 height: 20,
                 runs: Vec::new(),
+                source: (0, 0),
             }],
             selection: None,
             selecting: false,
@@ -120,6 +121,7 @@ fn a_second_press_on_a_word_takes_the_whole_of_it() {
                     width: 110,
                     text: "hello world".to_string(),
                 }],
+                source: (0, 0),
             }];
         }
     }
@@ -184,59 +186,55 @@ fn a_press_with_shift_extends_the_selection_it_already_has() {
     );
 }
 
-/// A scroll keeps what is selected with the text it covers: the frame is scrolled by whole lines,
-/// so both ends move by the same number of them rather than the highlight being dropped (see
-/// `selection_scrolled`).
-#[test]
-fn a_scroll_moves_a_selection_with_the_text_it_covers() {
-    let held = text_preview::Selection {
-        anchor: (4, 1),
-        caret: (7, 2),
-    };
+/// A page of a real file, loaded the way a pin loads one: a copy is taken of the document rather
+/// than of the frame, so a test asking for one has to have a document to read it out of (see
+/// `text_of`). The pin a full-mode page is read from is stood up by the caller.
+fn a_page_of(text: &str, name: &str, width: u32, height: u32) -> Option<MediaData> {
+    let folder = std::env::temp_dir().join("rust-hover-preview-text-selection");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join(name);
+    std::fs::write(&path, text).expect("a written page");
 
-    assert_eq!(
-        selection_scrolled(held, 3),
-        text_preview::Selection {
-            anchor: (1, 1),
-            caret: (4, 2),
-        },
-        "a frame scrolled three lines on leaves the same text three lines higher"
+    load_text_preview(&path, width, height, 96, current_text_options())
+}
+
+/// A copy with nothing selected is the whole page rather than the frame the box shows: the pin's
+/// own `Copy` row asks for the page, and a page longer than its box has more in it than the frame
+/// holds (see `text_preview_clipboard_text`).
+#[test]
+fn a_copy_with_nothing_selected_is_the_whole_page() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _pin = PinPutBack::take();
+    let _media = TextPagePutBack::put();
+    stand_pin(Some(PinnedPreview::for_test()));
+
+    let Some(page) = a_page_of(
+        "one\ntwo\nthree\nfour\n",
+        "a-page-of-four-lines.txt",
+        200,
+        40,
+    ) else {
+        panic!("a page of text was not loaded")
+    };
+    let shown = page
+        .text_state
+        .as_ref()
+        .expect("a pinned page keeps state")
+        .visible_lines;
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+
+    assert!(
+        shown < 4,
+        "the box shows less of the page than the page has, so a copy of the frame would be short"
     );
     assert_eq!(
-        selection_scrolled(held, -2),
-        text_preview::Selection {
-            anchor: (6, 1),
-            caret: (9, 2),
-        },
-        "and one scrolled back up two leaves it two lines lower"
-    );
-    assert_eq!(
-        selection_scrolled(
-            text_preview::Selection {
-                anchor: (1, 0),
-                caret: (2, 1),
-            },
-            4,
-        ),
-        text_preview::Selection {
-            anchor: (0, 0),
-            caret: (0, 1),
-        },
-        "a range the scroll takes past the top is held at the first line rather than lost"
-    );
-    assert_eq!(
-        selection_scrolled(
-            text_preview::Selection {
-                anchor: (0, 0),
-                caret: (usize::MAX, usize::MAX),
-            },
-            5,
-        ),
-        text_preview::Selection {
-            anchor: (0, 0),
-            caret: (usize::MAX - 5, usize::MAX),
-        },
-        "a selection of everything keeps reaching past what the frame shows"
+        text_preview_clipboard_text().as_deref(),
+        Some("one\r\ntwo\r\nthree\r\nfour"),
+        "the copy is the whole document rather than the lines the box holds"
     );
 }
 
