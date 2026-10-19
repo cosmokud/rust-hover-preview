@@ -507,6 +507,12 @@ pub(super) fn cached_video_source_pixels(path: &Path) -> Option<u64> {
 /// Give up every probed geometry: the engine choice moved, and a geometry read by FFprobe is not
 /// the geometry a media-engine preview wants (or the reverse), so the next hover probes again.
 ///
+/// It is given up where the choice is *read* rather than where it is written in the tray: a row
+/// moved while a preview is up is not one that reaches it, so the geometry that preview is being
+/// placed by has to stand until the next one begins (see `latch_engines_for_the_preview`). The
+/// rows that reach it for settings that are not an engine — a film's subtitles — still give it
+/// up on the click.
+///
 /// It is `pub` because the tray reaches it through the re-export `preview_window` makes, and a
 /// re-export cannot be wider than what it names.
 pub fn forget_video_geometry() {
@@ -593,10 +599,11 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // pin read, and names the subtitle streams in that same pass. So the header runs and the other
     // two legs do not.
     let native = {
-        let (choice, fallback) = CONFIG
-            .lock()
-            .map(|config| (config.video_engine, config.video_engine_fallback))
-            .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK));
+        // The choice the preview being probed for was built under rather than the setting of
+        // now, which is the same read `video_route` makes: a probe run under one engine and a
+        // preview placed by another is a geometry neither of them wants (see
+        // `video_engine_in_effect`).
+        let (choice, fallback) = crate::config::config::video_engine_in_effect();
         !probe_runs_ffmpeg(choice, fallback, VideoEngine::Ffmpeg.installed(), || {
             named_for_the_media_engine(path)
         })

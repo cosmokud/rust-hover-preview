@@ -147,6 +147,11 @@ fn forgets_a_page_it_cannot_read() {
         config.office_engine = crate::config::config::OfficeEngine::MicrosoftOffice;
     }
 
+    // And a choice is read where a preview is begun rather than off the setting of now, so
+    // the roads below are asked under the one pinned above only where it is read here too
+    // (see `engines_in_effect`).
+    crate::config::config::latch_engines();
+
     let source = document("held.xlsx");
 
     // A picture that can be read is a page, and its own size is what the layout

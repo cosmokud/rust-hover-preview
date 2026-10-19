@@ -3,7 +3,7 @@
 //!
 //! The path is the one this app has always named this module by — renaming it would touch a
 //! hundred import sites to answer a lint about the name itself — so it stays, and what changed
-//! is what is behind it. The five modules below are the pieces the configuration is made of,
+//! is what is behind it. The six modules below are the pieces the configuration is made of,
 //! and this one is the whole of it as far as anything outside can tell: every name a reader,
 //! an engine or a tray row uses is re-exported here, and none of them can tell which file it
 //! came from.
@@ -13,17 +13,21 @@
 //! - [`setting_types`] — the shapes a setting's value can take, and the word each is written as.
 //! - [`app_config`] — the configuration itself: [`AppConfig`], its fields, and the values a
 //!   fresh one starts at.
+//! - [`engines_in_effect`] — the video and Office engines the file on screen was built under,
+//!   read where a preview begins and kept for the whole of it.
 //! - [`settings_io`] — the file: where it is, how it is read, and how it is written.
 //! - [`ini_mapping`] — the file's shape, field by field: what is written, whether the file says
 //!   what the app is using, and the read that puts one into the other.
 
 mod app_config;
 mod defaults;
+mod engines_in_effect;
 mod ini_mapping;
 mod setting_types;
 mod settings_io;
 
 pub use app_config::AppConfig;
+pub use engines_in_effect::{latch_engines, office_engine_in_effect, video_engine_in_effect};
 // Every name below is part of the path the app has always reached this module by, whether
 // a reader, an engine or a tray row uses it today or not. A `pub use` in a binary crate's
 // private module is a re-export the lint would call unused the moment nothing happens to
