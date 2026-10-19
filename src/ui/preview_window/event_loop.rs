@@ -3535,13 +3535,11 @@ pub fn run_preview_window() {
                             );
                         }
                         // A page is the one kind a box is *laid out* for rather than scaled into, so
-                        // the box it has just been given is the box it is drawn for now — before the
-                        // window is put up around it, and ahead of the answer the load above will
-                        // bring (see `relayout_text_for_the_box`). Nothing at all happens here for any
-                        // other kind: what every one of them has is the frame it was decoded with,
-                        // which the paint below draws scaled into the new box, and that is the
-                        // softness its kind settles by being drawn again rather than a page's
-                        // reflow.
+                        // the box it has just been given is the box it is drawn for now — ahead of the
+                        // window being put up around it, and ahead of the answer the load above will
+                        // bring. It is the kind that answers that, and it answers for no other, which
+                        // leaves every other kind drawn into the new box from the frame in hand (see
+                        // `relayout_text_for_the_box`).
                         relayout_text_for_the_box(content);
                         show_pinned_window(hwnd);
                         place_pinned_siblings();

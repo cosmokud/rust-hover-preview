@@ -190,13 +190,10 @@ pub(super) fn load_media_of_kind(
                 // A page is drawn at the size its reader has put it to, where there is a reader to
                 // have put it to one: the configuration's size is what a page nobody has sized is
                 // drawn at (see `load_media`).
-                let options = match text_font_scale_percent {
-                    Some(percent) => TextPreviewOptions {
-                        font_scale_percent: percent,
-                        ..current_text_options()
-                    },
-                    None => current_text_options(),
-                };
+                let mut options = current_text_options();
+                if let Some(percent) = text_font_scale_percent {
+                    options.font_scale_percent = percent;
+                }
 
                 load_text_preview(path, max_width, max_height, dpi, options)
             }

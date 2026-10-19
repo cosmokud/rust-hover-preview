@@ -849,9 +849,21 @@ fn the_page_now() -> ((u32, u32), (u32, u32), i32, u32, usize, usize) {
     )
 }
 
+/// The last line of the file the page on screen reaches: a box that is wider fits more of a page
+/// whose lines wrap, because where each of them ends is the box's answer rather than the file's.
+fn the_page_reaches_now() -> usize {
+    let slot = CURRENT_MEDIA.lock().expect("the media slot");
+
+    slot.as_ref()
+        .and_then(|media| media.text_state.as_ref())
+        .and_then(|state| state.lines.last().map(|line| line.source.0))
+        .expect("a line of the page")
+}
+
 /// A page of text under a hand is *laid out* for the box the hand is dragging it to: the same letters
-/// at the same size, reflowed into a wider or a taller box — where every other kind of preview is the
-/// frame it was decoded with, sampled into that box (see `relayout_text_for_the_box`).
+/// at the same size, reflowed into a wider or a taller box — more lines of them where the box is
+/// taller, and more of the document where it is wider and the lines wrap — where every other kind of
+/// preview is the frame it was decoded with, sampled into that box (see `relayout_text_for_the_box`).
 ///
 /// A resize is the one road a box changes on with a frame of its own to draw per pointer move, and a
 /// page is the one kind a box *holds* rather than shapes: the font is a size the reader has put the
@@ -873,7 +885,11 @@ fn a_page_is_drawn_again_for_the_box_the_hand_took_it_to_and_a_picture_is_not() 
     let path = folder.join("a-page-a-hand-resizes.txt");
     std::fs::write(
         &path,
-        (0..60).map(|n| format!("line {n}\n")).collect::<String>(),
+        // Lines long enough to wrap in the boxes below, so that how much of the document is in the
+        // window is a question about the width of the box as well as its height.
+        (0..60)
+            .map(|n| format!("line {n} {}\n", "of a page a hand resizes ".repeat(6)))
+            .collect::<String>(),
     )
     .expect("a written page");
 
@@ -944,6 +960,39 @@ fn a_page_is_drawn_again_for_the_box_the_hand_took_it_to_and_a_picture_is_not() 
         (taller_line_height, size, first_line),
         (line_height, 125, 6),
         "and they are the size the reader put the page to, at the place in the document they were at"
+    );
+
+    // And a wider box wraps each of those long lines into fewer lines of its own, so more of the
+    // document is in the window at the same size of letters: what the width of the box changes is
+    // where a line ends, which is the half of a page's layout the height cannot show.
+    let reached = the_page_reaches_now();
+    let wide = a_hand_pulls(edge(false, false, true, false), 400, 0);
+    let (w, h) = (
+        (wide.2 - wide.0).max(1) as u32,
+        (wide.3 - wide.1).max(1) as u32,
+    );
+    assert!(
+        w > 320,
+        "the box is wider than the one the bottom edge was pulled out of: {w} pixels"
+    );
+    let ((drawn_w, drawn_h), (frame_w, frame_h), wider_line_height, size, first_line, _) =
+        the_page_now();
+    let wider_reached = the_page_reaches_now();
+    assert_eq!(
+        ((drawn_w, drawn_h), (frame_w, frame_h)),
+        ((w, h), (w, h)),
+        "a wider box is the page drawn again for it, row for row"
+    );
+    assert!(
+        wider_reached > reached,
+        "and it holds more of the document than the same box unwrapped would: {} against \
+         {reached} lines of the file",
+        wider_reached
+    );
+    assert_eq!(
+        (wider_line_height, size, first_line),
+        (line_height, 125, 6),
+        "with the letters and the place in the document untouched by the width"
     );
 
     // The guard: the same drag on a picture leaves the frame the decoder answered with alone — the
