@@ -920,6 +920,50 @@ fn what_is_on_screen_is_settled_by_the_engine_as_well_as_by_the_media() {
     );
 }
 
+/// The tray's `Text → Render HTML` switch, stood where a test asks and put back when the guard is
+/// dropped (the house pattern: `PagePutBack`).
+struct RenderHtml(bool);
+
+impl RenderHtml {
+    fn stood_at(asked: bool) -> Self {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = config.render_html;
+        config.render_html = asked;
+
+        RenderHtml(was)
+    }
+}
+
+impl Drop for RenderHtml {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.render_html = self.0;
+        }
+    }
+}
+
+/// A page of HTML the switch does not hand to the engine is a page this app draws, so a pin taken
+/// up over one keeps the text frame the hover laid out rather than being given the engine's own
+/// kind: nothing would be behind that, because the browser is never asked for the file.
+///
+/// It is the switch that makes a page the engine's — a name alone is not, which is the rule the
+/// hover's own handover already followed (`HoverFacts::html_drawn_by_the_engine`) — so the pin's
+/// read of the file has to ask it as well.
+#[test]
+fn a_page_of_html_the_switch_leaves_as_markup_stays_a_page_of_text_in_a_pin() {
+    let _switch = RenderHtml::stood_at(false);
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-keys");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a page nobody asked the engine to draw.html");
+    std::fs::write(&path, "<!DOCTYPE html><p>raw</p>").expect("a written page");
+
+    assert!(
+        pinned_engine_media(&path).is_none(),
+        "a page left as markup is drawn by this app, so the pin keeps the frame it was taken up on"
+    );
+}
+
 /// A page of text put where the page's own keys are answered against it, with the flag the preview
 /// loop publishes about it stood up as well: which key takes the page is a question about the media
 /// the pin holds *and* about what the loop last said was on screen, so a test of it needs both (see
