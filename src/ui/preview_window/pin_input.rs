@@ -454,6 +454,18 @@ pub(super) unsafe fn pinned_transport_release(
     // `pinned_transport_press`) — so the cover is raised here, over the frame the hand let go on,
     // and the player ends behind it with the replacement begun on the next line.
     if let Some(seconds) = seeking {
+        // The aim is put back into the transport before any road below can paint from it: letting go
+        // of the pointer above re-entered `pin_capture_lost`, and that road takes the aim with it —
+        // a capture taken away is a drag abandoned. A cover is painted *from* the transport, so
+        // without this the strip under the still stood at the second the ended player's own clock
+        // had reached, which is where the thumb was before the drag, and that is the strip handed to
+        // the compositor until the relaunch rebases the clock: the frame that flashes at the release,
+        // for as long as the kill and the spawn take. Nothing is left standing by it either, because
+        // every road that takes a file somewhere clears the aim itself (`begun` and `sought`).
+        if current_media_type() == Some(MediaType::Video) {
+            update_pin_transport(|transport| transport.seeking = Some(seconds));
+        }
+
         // The kill road owns the gesture's one relaunch, at the aimed second
         // rather than the press's: the take inside `relaunch_gesture_end_at`
         // makes it the only one across the capture-lost re-entered above and
