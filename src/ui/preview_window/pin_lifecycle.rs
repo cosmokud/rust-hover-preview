@@ -533,8 +533,11 @@ pub(super) fn end_pin_beside_the_state() {
 
     // A drag on the bubble is a drag on a window that is going away, and the latch that says
     // one is in progress is what tells a click on it from a drag; left standing, the next
-    // bubble treats a press as the end of a drag that began before it existed.
+    // bubble treats a press as the end of a drag that began before it existed. And the latch
+    // that says the bubble has been carried somewhere, which the next bubble starts without
+    // (see `restore_pin`).
     PIN_BUBBLE_MOVED.store(false, Ordering::Release);
+    PIN_BUBBLE_CARRIED.store(false, Ordering::Release);
     if let Ok(mut drag) = PIN_BUBBLE_DRAG.lock() {
         *drag = None;
     }

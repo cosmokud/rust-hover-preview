@@ -1,4 +1,8 @@
 use super::*;
+use windows::core::w;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
+};
 
 /// A SPACE with a focused bubble holds a film or a sound, and nothing else.
 #[test]
@@ -300,4 +304,73 @@ fn the_pause_switch_carries_the_check_of_the_kind_it_stands_for() {
         page.iter().all(|row| row.label != "Pause on Minimize"),
         "a page's bubble has no playback for a minimize to hold"
     );
+}
+
+/// A pin put back up out of a bubble the hand never carried comes back at its own box: the same
+/// place and the same size it went down at.
+///
+/// The fault this is a regression test for: every restore placed the window beside the bubble, and
+/// the bubble stands on the minimize button of the window the restore has just brought back — so a
+/// pin cycled through the bubble with nothing moved walked sideways by most of its own width on
+/// every click, shrank as it ran out of room, and ended up against the edge of the screen.
+#[test]
+fn a_pin_restored_from_a_bubble_that_was_never_carried_comes_back_at_its_own_box() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let previous_carried = PIN_BUBBLE_CARRIED.load(Ordering::Acquire);
+
+    // A bubble standing where the pin's own box is not: a restore that placed the window beside it
+    // would have to leave a different box behind.
+    // Safety: a window of this test's own, created and destroyed under the one-at-a-time lock.
+    let bubble = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            700,
+            500,
+            120,
+            120,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the bubble")
+    };
+    PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
+
+    let left_at = (100, 80, 420, 320);
+    let mut pin = overlay_pin(left_at, PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    PIN_BUBBLE_CARRIED.store(false, Ordering::Release);
+
+    restore_pin();
+
+    let restored = pin_state().and_then(|pinned| {
+        pinned
+            .pin()
+            .map(|pin| (pin.collapsed, pin.content, pin.window_size()))
+    });
+    assert_eq!(
+        restored,
+        Some((false, left_at, (320, 240))),
+        "a window placed beside the bubble would be a different box, and a pin put back up is the \
+         window that went down"
+    );
+
+    // Safety: the window is this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(bubble);
+    }
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    PIN_BUBBLE_CARRIED.store(previous_carried, Ordering::Release);
+    stand_pin(previous_pin);
 }
