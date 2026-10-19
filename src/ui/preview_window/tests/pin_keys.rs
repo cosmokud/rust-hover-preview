@@ -964,6 +964,38 @@ fn a_page_of_html_the_switch_leaves_as_markup_stays_a_page_of_text_in_a_pin() {
     );
 }
 
+/// A drawing under a name no vector list claims is a drawing this app replays: the layout measures
+/// it with `vector_box` and the loader draws it with the replaying half of the kind. A pin taken up
+/// over it therefore keeps that picture rather than being given the engine's own kind, which nothing
+/// is behind — the browser is never asked for the file.
+///
+/// Which half of the vector kind a file falls in is a question of the name, and the name is what was
+/// not asked here: a drawing is not a document because its bytes name one (`HoverFacts::svg_document`).
+#[test]
+fn a_drawing_under_a_name_no_vector_list_claims_is_replayed_in_a_pin() {
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-keys");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a drawing under a name of its own.dat");
+
+    // The front of an enhanced metafile: the record type every one opens with, the size it declares
+    // for itself, and the two marks that tell it from the older metafile (see `content_type`).
+    let mut metafile = vec![0x01, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00];
+    metafile.resize(40, 0);
+    metafile.extend_from_slice(b" EMF");
+    metafile.extend_from_slice(&[0x00, 0x00, 0x01, 0x00]);
+    std::fs::write(&path, &metafile).expect("a written drawing");
+
+    assert_eq!(
+        HoverFacts::read(&path).routed_kind(),
+        Some(PreviewType::Vector),
+        "the fixture is a drawing by its own bytes rather than by its name"
+    );
+    assert!(
+        pinned_engine_media(&path).is_none(),
+        "a drawing the drawing layer replays has no engine window to be given to a pin"
+    );
+}
+
 /// A page of text put where the page's own keys are answered against it, with the flag the preview
 /// loop publishes about it stood up as well: which key takes the page is a question about the media
 /// the pin holds *and* about what the loop last said was on screen, so a test of it needs both (see
