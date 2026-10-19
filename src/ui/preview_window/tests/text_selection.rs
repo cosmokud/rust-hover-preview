@@ -799,3 +799,176 @@ fn a_resize_keeps_the_size_the_reader_put_the_page_to() {
         "and so is the place in the document, which is what the same carry is for"
     );
 }
+
+/// The box a pin comes out at when the hand at the pointer drags one of its edges from where it
+/// stands: the press that drag came out of is placed under the pointer, and the drag is applied the
+/// way a pointer move applies it (see `apply_pin_drag`).
+fn a_hand_pulls(edge_: PinResize, dx: i32, dy: i32) -> ScreenRegion {
+    let at = cursor_screen_point().expect("the pointer is somewhere on the desktop");
+    let window = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .expect("a pin up");
+
+    with_pin(|pin| {
+        pin.dragging = Some(PinDrag {
+            from: (at.0 - dx, at.1 - dy),
+            window,
+            action: PinDragAction::Resize(edge_),
+            delivered: true,
+            carried: (i32::MIN, i32::MIN),
+        });
+    });
+    unsafe { apply_pin_drag(HWND(0x1000 as *mut _)) };
+
+    let after = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+        .expect("a pin up");
+    with_pin(|pin| pin.dragging = None);
+    after
+}
+
+/// What the pin's own media holds now: the box the page on screen was drawn for, the frame that came
+/// out of drawing it, and the four facts about it a resize is asked to leave alone — the size of a
+/// line, the size the reader put the page to, the place in the document they were at, and how many
+/// lines of it the box holds (see `TextPreviewState`).
+fn the_page_now() -> ((u32, u32), (u32, u32), i32, u32, usize, usize) {
+    let slot = CURRENT_MEDIA.lock().expect("the media slot");
+    let media = slot.as_ref().expect("the page the test put there");
+    let state = media
+        .text_state
+        .as_ref()
+        .expect("a pinned page keeps state");
+
+    (
+        (state.width, state.height),
+        (media.frames[0].width, media.frames[0].height),
+        state.lines.first().expect("a line of the page").height,
+        state.options.font_scale_percent,
+        state.first_line,
+        state.visible_lines,
+    )
+}
+
+/// A page of text under a hand is *laid out* for the box the hand is dragging it to: the same letters
+/// at the same size, reflowed into a wider or a taller box — where every other kind of preview is the
+/// frame it was decoded with, sampled into that box (see `relayout_text_for_the_box`).
+///
+/// A resize is the one road a box changes on with a frame of its own to draw per pointer move, and a
+/// page is the one kind a box *holds* rather than shapes: the font is a size the reader has put the
+/// page to, and what the box decides is how many lines of it are on screen and how long each of them
+/// may be before it wraps. A page left as the frame it was drawn as is that page pulled out of shape,
+/// which is what a picture in a box of another shape *is* — and that is the second half below: the road
+/// a page is given must not be one a picture is drawn on, or a resize would be drawing pixels of its
+/// own over the ones the file answered with.
+#[test]
+fn a_page_is_drawn_again_for_the_box_the_hand_took_it_to_and_a_picture_is_not() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _pin = PinPutBack::take();
+    let _media = TextPagePutBack::put();
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-text-selection");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a-page-a-hand-resizes.txt");
+    std::fs::write(
+        &path,
+        (0..60).map(|n| format!("line {n}\n")).collect::<String>(),
+    )
+    .expect("a written page");
+
+    // A pin standing in a box of the page's own size, in the room the app reads a box against, with
+    // the chrome a page is given: bands above and below its media rather than drawn over it, and no
+    // shape for a box to keep, which is how a page is framed rather than fitted (see `pin_frame`).
+    let room = work_area_at(100, 100);
+    let box_ = (
+        room.left + 200,
+        room.top + 200,
+        room.left + 440,
+        room.top + 320,
+    );
+    let mut pin = PinnedPreview::for_test();
+    pin.content = box_;
+    pin.frame = PinFrame::Free;
+    pin.overlay = false;
+    pin.zoom = None;
+    stand_pin(Some(pin));
+
+    // The page as the reader has it: at a size of their own and at a place in the document, both of
+    // which a resize is asked to leave alone.
+    let options = TextPreviewOptions {
+        font_scale_percent: 125,
+        ..current_text_options()
+    };
+    let Some(page) = load_text_preview(&path, 240, 120, 96, options) else {
+        panic!("a page of text was not loaded")
+    };
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        if let Some(state) = slot.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.first_line = 6;
+        }
+    }
+
+    let (_, _, line_height, _, _, lines_on_screen) = the_page_now();
+
+    // The hand pulls the right edge of the box out: the edge under the hand is the one that moves, and
+    // the page is drawn again for the box it comes out at — the frame is that box's own size, so what
+    // the pin composes into it is the page row for row rather than a page sampled to fit.
+    assert_eq!(
+        a_hand_pulls(edge(false, false, true, false), 80, 0),
+        (box_.0, box_.1, box_.2 + 80, box_.3),
+        "the edge under the hand is the edge that moved"
+    );
+    assert_eq!(
+        the_page_now(),
+        ((320, 120), (320, 120), line_height, 125, 6, lines_on_screen),
+        "a wider box is the same page at the same size and the same place in the document, drawn \
+         again for the box the hand has taken it to"
+    );
+
+    // And pulling the bottom edge down holds more of those lines rather than larger ones: what a
+    // taller box buys is more of the page, which is the whole of what a page in a window is.
+    assert_eq!(
+        a_hand_pulls(edge(false, false, false, true), 0, 180),
+        (box_.0, box_.1, box_.2 + 80, box_.3 + 180)
+    );
+    let (_, _, taller_line_height, size, first_line, taller_lines) = the_page_now();
+    assert!(
+        taller_lines > lines_on_screen,
+        "a taller box holds more lines of the page: {taller_lines} against {lines_on_screen}"
+    );
+    assert_eq!(
+        (taller_line_height, size, first_line),
+        (line_height, 125, 6),
+        "and they are the size the reader put the page to, at the place in the document they were at"
+    );
+
+    // The guard: the same drag on a picture leaves the frame the decoder answered with alone — the
+    // paint samples it into the band the box has become, which is what every other kind of preview is
+    // and what this road was made a page's own to keep (see `compose_media_into_band`).
+    let mut pin = PinnedPreview::for_test();
+    pin.content = box_;
+    stand_pin(Some(pin));
+
+    let mut picture = create_loading_media(240, 120);
+    picture.media_type = MediaType::StaticImage;
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(picture);
+    }
+
+    assert_ne!(
+        a_hand_pulls(edge(false, false, true, false), 80, 0),
+        box_,
+        "the box of a picture is the one the hand dragged too"
+    );
+    let slot = CURRENT_MEDIA.lock().expect("the media slot");
+    let picture = slot.as_ref().expect("the picture the test put there");
+    assert_eq!(
+        (picture.frames[0].width, picture.frames[0].height),
+        (240, 120),
+        "a picture under a hand is the frame it was decoded as, and only a page is drawn again"
+    );
+}
