@@ -648,3 +648,63 @@ fn puts_the_spinner_up_once_the_load_has_run_for_the_delay() {
     showing.spinner_shown = true;
     assert!(!showing.spinner_due());
 }
+
+/// The mark a hover that comes to nothing ends as is the cross a failed file is shown as, in the
+/// box the wait had, and it comes down three seconds after it goes up.
+///
+/// Both halves of that are the point. A wait that ends by vanishing is a preview the hand is still
+/// waiting for, and a mark that never goes is a window standing over a file the user has moved on
+/// from. It is asked of the frame the window holds rather than of a clock beside it, which is what
+/// keeps a *pin's* own cross — the same media, put up by a pin that is closed by its own button
+/// and by nothing else — from being taken down by a hover's clock.
+#[test]
+fn a_hover_that_comes_to_nothing_ends_as_a_mark_that_goes_after_three_seconds() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    assert!(
+        !failure_mark_due(),
+        "a window holding nothing is no mark to take down"
+    );
+
+    // The mark a failed hover stands as, built the way the wait's box builds it: the cross of a
+    // file that could not be drawn, at the size the wait had, carrying the time it went up.
+    let mut mark = unplayable_media((office_preview::WAITING_BOX, office_preview::WAITING_BOX));
+    mark.loading_start = Some(Instant::now());
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(mark);
+    }
+    assert!(
+        !failure_mark_due(),
+        "a mark that has only just gone up is still being read"
+    );
+
+    // A pin's cross is the same frame with no clock behind it, and it stands until the pin does:
+    // nothing else in the app takes a pin down.
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.loading_start = None;
+        }
+    }
+    assert!(
+        !failure_mark_due(),
+        "a mark nothing put a clock behind is never due, whichever window is holding it"
+    );
+
+    // And the wait's own, three seconds on.
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.loading_start = Some(Instant::now() - Duration::from_millis(FAILURE_MARK_MS));
+        }
+    }
+    assert!(
+        failure_mark_due(),
+        "the answer has been read by then, so the mark goes"
+    );
+
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}

@@ -1283,6 +1283,92 @@ pub(super) unsafe fn show_loading_spinner(hwnd: HWND, pl: &PendingLoad) {
         return;
     }
 
+    show_at_the_wait(
+        hwnd,
+        pl,
+        create_loading_media(pl.spinner_side, pl.spinner_side),
+    );
+}
+
+/// How long the mark a hover that came to nothing ends as stands before it goes: long enough to be
+/// read by a hand that is not looking at the corner of the screen, and short enough not to sit over
+/// the file it says nothing about.
+pub(super) const FAILURE_MARK_MS: u64 = 3000;
+
+/// Whether the mark a hover that came to nothing ended as has stood its three seconds and is to come
+/// down.
+///
+/// Asked of the frame the window holds rather than of a clock the loop keeps, which is what makes it
+/// safe to ask anywhere: a mark is the media of a hover that answered nothing, so a window that has
+/// since become a pin's or shown a file is not a mark and is not taken down by a mark's clock. The
+/// time is the mark's own `loading_start`, which is the one thing a kind that cannot load keeps
+/// there — a pinned file's own cross carries none, and the two are otherwise the same frame (see
+/// `show_failure_mark` and `unplayable_media`).
+pub(super) fn failure_mark_due() -> bool {
+    let Ok(media) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+
+    media
+        .as_ref()
+        .filter(|media| matches!(media.media_type, MediaType::Unplayable))
+        .and_then(|media| media.loading_start)
+        .is_some_and(|up_at| up_at.elapsed() >= Duration::from_millis(FAILURE_MARK_MS))
+}
+
+/// The answer a hover whose wait ended with nothing is left with, in the box the wait had: the cross
+/// a pin shows for a file that could not be drawn (see `unplayable_media`), standing where the arc
+/// stood and taken down after `FAILURE_MARK_MS` (see `failure_mark_due`).
+///
+/// A wait that ends by vanishing cannot be told from one still going, which over a file this app can
+/// read nothing of is a spinner that blinks out and a hand left waiting for a preview that is never
+/// coming. The mark is the answer a pin gives to the same failure, so the two read as one thing, and
+/// what it says is that the file was tried rather than that it is on its way. It stands where the
+/// wait stood rather than following the hand as the arc did: a hand that moves along the item is a
+/// hand reading the answer, and an answer carried around is a badge rather than a word.
+///
+/// Answers whether the mark is up: a hover the pointer has left is answered as it was before there
+/// was a mark to show.
+pub(super) unsafe fn show_failure_mark(hwnd: HWND, pl: &PendingLoad) -> bool {
+    let hidden = HIDDEN_EPOCH.lock().ok();
+    if !hover_still_wanted(&hidden, pl) || !pointer_on_the_hovered_item() {
+        return false;
+    }
+
+    let mut mark = unplayable_media((pl.spinner_side, pl.spinner_side));
+    // The clock the mark is taken down by rides on the frame it is: what is on screen is what says
+    // how long it has been there, so a mark a pin has taken the place of is a mark that has gone.
+    mark.loading_start = Some(Instant::now());
+    show_at_the_wait(hwnd, pl, mark);
+
+    true
+}
+
+/// The end of a hover whose wait answered nothing: the mark every failed file ends as, in the box
+/// the wait had, or the window taken down where there is no hover left to answer.
+///
+/// The file the wait was for goes first — cancelled, since nothing on screen will be handed the
+/// frame it was making, and cleared, so the mark is what the window holds rather than the frame
+/// that failed (see `cancel_background_work`).
+pub(super) unsafe fn take_the_wait_as_failed(hwnd: HWND, pending_load: &mut Option<PendingLoad>) {
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(ref mut existing) = *current {
+            existing.cancel_background_work();
+        }
+        *current = None;
+    }
+
+    if !pending_load
+        .take()
+        .is_some_and(|pl| show_failure_mark(hwnd, &pl))
+    {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+}
+
+/// Put a wait's own box on screen holding the frame it is given — the arc while the file is still
+/// coming, the mark once it never will.
+unsafe fn show_at_the_wait(hwnd: HWND, pl: &PendingLoad, media: MediaData) {
     let (x, y) = pl.spinner_pos;
     let side = pl.spinner_side as i32;
 
@@ -1297,9 +1383,8 @@ pub(super) unsafe fn show_loading_spinner(hwnd: HWND, pl: &PendingLoad) {
         let _ = MoveWindow(hwnd, x, y, side, side, false);
     }
 
-    let loading = create_loading_media(pl.spinner_side, pl.spinner_side);
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
-        *current = Some(loading);
+        *current = Some(media);
     }
 
     if visible {

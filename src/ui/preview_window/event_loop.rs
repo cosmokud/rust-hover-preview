@@ -1935,16 +1935,12 @@ pub fn run_preview_window() {
                             page_render_pending = requested;
                         }
                         None => {
-                            // Loading failed, hide window
-                            let _ = ShowWindow(hwnd, SW_HIDE);
+                            // Loading failed, which is the answer the mark is for: the wait the
+                            // file was in ends as the cross every failed file ends as, in the box
+                            // the wait had, rather than by vanishing (see
+                            // `take_the_wait_as_failed`).
+                            take_the_wait_as_failed(hwnd, &mut pending_load);
                             clear_pointer_hold();
-                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                if let Some(ref mut existing) = *current {
-                                    existing.cancel_background_work();
-                                }
-                                *current = None;
-                            }
-                            pending_load = None;
                             pending_load_cancel = None;
                         }
                     }
@@ -2018,6 +2014,16 @@ pub fn run_preview_window() {
                 if pl.spinner_due() {
                     pl.spinner_shown = true;
                     show_loading_spinner(hwnd, pl);
+                }
+            }
+
+            // And the mark a hover that came to nothing ended as comes down after its own three
+            // seconds: it is an answer about a file rather than a preview of it, so nothing moves
+            // it along and nothing else would ever take it down (see `failure_mark_due`).
+            if failure_mark_due() {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                    *current = None;
                 }
             }
 
@@ -2671,22 +2677,17 @@ pub fn run_preview_window() {
                         latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
                     } else {
                         // The reader has nothing for this file, which is not a wait that can be
-                        // answered: the spinner comes down rather than standing over nothing
-                        // until the pointer moves, the way it does for an engine that cannot
-                        // draw the file it was asked for.
+                        // answered: the wait ends as the mark every failed file ends as rather
+                        // than the spinner standing over nothing until the pointer moves (see
+                        // `take_the_wait_as_failed`).
                         let waiting_on_it = pending_load
                             .as_ref()
                             .is_some_and(|pl| pl.path == measured_path);
 
                         if waiting_on_it {
-                            pending_load = None;
-                            pending_load_cancel = None;
-                            let _ = ShowWindow(hwnd, SW_HIDE);
+                            take_the_wait_as_failed(hwnd, &mut pending_load);
                             clear_pointer_hold();
-
-                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                *current = None;
-                            }
+                            pending_load_cancel = None;
                         }
                     }
                 }
@@ -4093,13 +4094,13 @@ pub fn run_preview_window() {
             // there for good (see `awaiting_engine`).
             if waited && awaiting_engine {
                 page_render_pending = None;
-                pending_load = None;
+                // The cap is the loop giving up rather than the engine answering, so the wait
+                // ends as the mark every failure ends as: a page still coming is the file the
+                // next hover reads, and what the hand is left with is an answer about this one
+                // (see `take_the_wait_as_failed`).
+                take_the_wait_as_failed(hwnd, &mut pending_load);
                 if let Some(cancel) = pending_load_cancel.take() {
                     cancel.store(true, Ordering::Release);
-                }
-                let _ = ShowWindow(hwnd, SW_HIDE);
-                if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                    *current = None;
                 }
             }
 
