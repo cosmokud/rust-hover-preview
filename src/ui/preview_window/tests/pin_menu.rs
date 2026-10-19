@@ -579,7 +579,7 @@ fn a_right_click_asks_for_the_page_its_row_of_the_window_holds() {
     );
 }
 
-/// A right-click in the text of a pinned page opens the window's own menu with the page's own two
+/// A right-click in the text of a pinned page opens the window's own menu with the page's own
 /// commands above the rows the pin shares with a bubble, in the same panel and the same design
 /// (see `PinMenuPage` and `bubble_menu_rows`).
 #[test]
@@ -603,6 +603,7 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
         [
             "Select All",
             "Copy",
+            "Find Next",
             "",
             "Next File",
             "Previous File",
@@ -616,7 +617,7 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
         "the page's own commands stand above the rows the pin shares with a bubble"
     );
     assert!(
-        matches!(paint.rows[2].mark, pin_chrome::MenuMark::Separator),
+        matches!(paint.rows[3].mark, pin_chrome::MenuMark::Separator),
         "and the rule between the two groups is drawn where the page's own rows end"
     );
     assert!(

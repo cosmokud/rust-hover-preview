@@ -254,3 +254,98 @@ fn a_double_click_takes_the_run_of_the_character_under_the_hand() {
         "and neither has a page with no lines"
     );
 }
+
+/// A find is read of the document rather than of the frame, and it searches from just after what is
+/// selected to the end of the document and then from the beginning back to where it started: the
+/// next occurrence is found wherever it is, the occurrence the selection already names is not the
+/// answer, and a word that appears once has no next one at all (see `find_next`).
+#[test]
+fn a_find_walks_the_document_from_just_after_what_is_selected() {
+    let dir = scratch("find");
+    let source = dir.join("find.txt");
+    fs::write(&source, "alpha beta\ngamma alpha\ndelta alpha\nepsilon\n").expect("a written page");
+
+    let at = |line: usize, from: usize| Selection {
+        anchor: (line, from),
+        caret: (line, from + 5),
+    };
+
+    assert_eq!(
+        find_next(&source, options(), at(0, 0)),
+        Some(at(1, 6)),
+        "the next `alpha` is the one two lines down"
+    );
+    assert_eq!(
+        find_next(&source, options(), at(1, 6)),
+        Some(at(2, 6)),
+        "and the one after that is the next one again"
+    );
+    assert_eq!(
+        find_next(&source, options(), at(2, 6)),
+        Some(at(0, 0)),
+        "and from the last of them the document wraps round to the first"
+    );
+    assert_eq!(
+        find_next(
+            &source,
+            options(),
+            Selection {
+                anchor: (1, 6),
+                caret: (1, 11)
+            }
+        ),
+        Some(at(2, 6)),
+        "the occurrence the selection names is where the search starts, not what it finds"
+    );
+    assert_eq!(
+        find_next(
+            &source,
+            options(),
+            Selection {
+                anchor: (3, 0),
+                caret: (3, 7)
+            }
+        ),
+        None,
+        "a word that appears once in the document has no next one, and no page to go to"
+    );
+    assert_eq!(
+        find_next(
+            &source,
+            options(),
+            Selection {
+                anchor: (0, 0),
+                caret: (0, 0)
+            }
+        ),
+        None,
+        "and neither has nothing at all selected, which is nothing to look for"
+    );
+
+    // The search is exact: `alpha` is looked for as it is written, and a run of letters the document
+    // holds once is nowhere to be found at all.
+    assert_eq!(
+        find_next(
+            &source,
+            options(),
+            Selection {
+                anchor: (0, 0),
+                caret: (0, 5)
+            }
+        ),
+        Some(at(1, 6)),
+        "`alpha` is looked for as it is written"
+    );
+    assert_eq!(
+        find_next(
+            &source,
+            options(),
+            Selection {
+                anchor: (1, 1),
+                caret: (1, 5)
+            }
+        ),
+        None,
+        "and `amma`, which the document writes once, has no next one"
+    );
+}

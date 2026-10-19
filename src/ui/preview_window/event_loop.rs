@@ -631,6 +631,7 @@ pub fn run_preview_window() {
                     || pin_held_pick.is_some();
 
                 if let Some(walk) = pin_command_request(
+                    hwnd,
                     &mut pin_request,
                     &mut pin_walk_wait,
                     &mut audio_started,
@@ -2034,14 +2035,6 @@ pub fn run_preview_window() {
                         scroll_text_preview(hwnd, first_line);
                     }
                 }
-            }
-
-            // And a key the pin's own window was given takes the page the same way, without a hand
-            // on it: which key asks for which line is answered where the file in the window is
-            // known, and the page is drawn here with the wheel's own scroll (see
-            // `scroll_pinned_text` and `take_text_scroll`).
-            if let Some(first_line) = take_text_scroll() {
-                scroll_text_preview(hwnd, first_line);
             }
 
             // And a selection drag carried past the edge of the box keeps selecting: the page is

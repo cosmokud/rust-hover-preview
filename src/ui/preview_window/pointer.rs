@@ -216,14 +216,6 @@ pub(super) static TEXT_PREVIEW_SCROLLABLE: AtomicBool = AtomicBool::new(false);
 /// so the check for it stays an atomic read.
 pub(super) static TEXT_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
 
-/// A line the pin's own keys have asked the page on screen to be taken to, waiting for the tick
-/// that draws it: a key is answered where the file in the window is known
-/// (see `pin_command_request`), and a page is drawn where the wheel's own scroll draws it.
-static PIN_TEXT_SCROLL: AtomicUsize = AtomicUsize::new(PIN_TEXT_SCROLL_NONE);
-
-/// No line asked for, which is a number no page has a line of.
-const PIN_TEXT_SCROLL_NONE: usize = usize::MAX;
-
 /// Whether what is on screen is a wait rather than a preview: the spinner a
 /// document's page is being rendered behind.
 ///
@@ -632,53 +624,33 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
     render_layered_preview(hwnd);
 }
 
-/// Take the page on screen where one of the pin's own keys asks it to go, answering whether the
-/// pin holds a page at all — which is what tells an up arrow meant for the page from one meant for
-/// the folder (see `pin_command_request`).
+/// The line one of the pin's own page keys asks the page on screen to be taken to, or nothing at
+/// all when the pin holds no page — which is what tells an up arrow meant for the page from one
+/// meant for the folder (see `pin_command_request`).
 ///
 /// The page is asked for its own numbers rather than told where it is: what a screenful is is the
 /// box the page is drawn in, and where its ends are is what it can reach (see
-/// `TextPreviewState::page_lines`). Nothing is drawn here — the line is left for the tick that
-/// draws the wheel's own scroll, which is the same tick (see `take_text_scroll`).
-pub(super) fn scroll_pinned_text(command: PinCommand) -> bool {
+/// `TextPreviewState::page_lines`). Nothing is drawn here: the line is handed back to the tick that
+/// answered the key, which draws it the way it draws the wheel's own scroll.
+pub(super) fn text_scroll_line(command: PinCommand) -> Option<usize> {
     // What the last paint said was on screen is asked before the media is, and it is the whole
     // answer to whether there is a page: a pin whose page is being replaced this tick is still a pin
     // holding one — and a page whose turn of the page walked the folder would be the up arrow the
     // page took with it coming out as another file.
     if !TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
-        return false;
+        return None;
     }
 
-    let Ok(media) = CURRENT_MEDIA.lock() else {
-        return false;
-    };
-    let Some(state) = media.as_ref().and_then(|media| media.text_state.as_ref()) else {
-        return false;
-    };
+    let media = CURRENT_MEDIA.lock().ok()?;
+    let state = media.as_ref().and_then(|media| media.text_state.as_ref())?;
 
     let step = state.page_lines();
-    let line = match command {
-        PinCommand::PageBack => state.scrolled_by(-step),
-        PinCommand::PageOn => state.scrolled_by(step),
-        PinCommand::PageTop => 0,
-        PinCommand::PageBottom => state.max_first_line(),
-        _ => return false,
-    };
-
-    ask_text_scroll(line);
-    true
-}
-
-/// Ask for the page on screen to be taken to `line`, which the next tick draws.
-fn ask_text_scroll(line: usize) {
-    PIN_TEXT_SCROLL.store(line, Ordering::Release);
-}
-
-/// The line the pin's own keys asked for since this was last called, if any.
-pub(super) fn take_text_scroll() -> Option<usize> {
-    match PIN_TEXT_SCROLL.swap(PIN_TEXT_SCROLL_NONE, Ordering::AcqRel) {
-        PIN_TEXT_SCROLL_NONE => None,
-        line => Some(line),
+    match command {
+        PinCommand::PageBack => Some(state.scrolled_by(-step)),
+        PinCommand::PageOn => Some(state.scrolled_by(step)),
+        PinCommand::PageTop => Some(0),
+        PinCommand::PageBottom => Some(state.max_first_line()),
+        _ => None,
     }
 }
 

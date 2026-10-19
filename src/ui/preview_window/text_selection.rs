@@ -294,6 +294,65 @@ pub(super) fn has_text_document() -> bool {
 pub(super) const ID_TEXT_PREVIEW_SELECT_ALL: usize = 1;
 pub(super) const ID_TEXT_PREVIEW_COPY: usize = 2;
 
+/// Lines a found occurrence is put below the top of a page that was not already showing it: enough
+/// of the page above it that a reader arrives at what they looked for rather than at a frame that
+/// begins with it (see `find_next_in_text_preview`).
+const FIND_LEAD_LINES: usize = 2;
+
+/// Take the pinned page to the next place its own selection appears, and select it: `F3`, and the
+/// page's own `Find Next` row, are the same command (see `find_next`).
+///
+/// A find with nothing to look for, or with nowhere left to look, leaves the page exactly as it is.
+/// The reader asked for the occurrence after this one, and a page that jumped back to the top of the
+/// document for nothing would be a find that lost their place.
+pub(super) unsafe fn find_next_in_text_preview(hwnd: HWND) {
+    let Some((path, options, selection, first_line, visible, max_first_line)) =
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media.as_ref().and_then(|media| {
+                media.text_state.as_ref().map(|state| {
+                    (
+                        state.path.clone(),
+                        state.options,
+                        state.selection,
+                        state.first_line,
+                        state.visible_lines,
+                        state.max_first_line(),
+                    )
+                })
+            })
+        })
+    else {
+        return;
+    };
+
+    let Some(selection) = selection.filter(|selection| !selection.is_empty()) else {
+        return;
+    };
+    let Some(found) = text_preview::find_next(&path, options, selection) else {
+        return;
+    };
+
+    // Written before the page is asked to draw itself, because what a draw draws is the state as it
+    // stands: the frame that comes back carries the occurrence already (see `scroll_text_preview`).
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(state) = media.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.selection = Some(found);
+        }
+    }
+
+    // A page that is already showing the line stays where it is: the page does not move for a find
+    // that landed on it, and what moved is the selection.
+    if (first_line..first_line + visible).contains(&found.anchor.0) {
+        repaint_text_preview(hwnd);
+    } else {
+        // The lead is what a reader arrives at what they looked for with rather than at a frame that
+        // begins with it, and it is given up for a box too short to hold it as well as the line.
+        let lead = FIND_LEAD_LINES.min(visible.saturating_sub(1));
+        let line = found.anchor.0.saturating_sub(lead).min(max_first_line);
+        scroll_text_preview(hwnd, line);
+    }
+}
+
 /// Show the preview's context menu at a point in window coordinates and act on
 /// what it returns.
 ///
