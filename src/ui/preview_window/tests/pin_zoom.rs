@@ -1623,3 +1623,87 @@ fn a_page_is_a_picture_the_wheel_zooms_and_a_card_or_an_engines_window_is_not() 
     }
     stand_pin(previous_pin);
 }
+
+/// A page of text that fits the box it is drawn in is still a page a reader can resize: `Ctrl` and a
+/// wheel over a pin is the page's own size, and a page with no scroll left to give Explorer is the
+/// one a reader most has a reason to enlarge (see `text_size_keep_alive_try`).
+///
+/// A page that *does* scroll is reached by the scroll's own region, which is the branch the page's
+/// own tests cover (see `text_scroll_keep_alive_try`); what is asked here is only that the second
+/// region answers for a pin whose page has nothing to scroll, and that it answers for a page rather
+/// than for whatever a pin happens to show.
+#[test]
+fn a_short_page_is_still_a_page_a_ctrl_wheel_resizes() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_regions = POINTER_HOLD_REGIONS
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    let previous_holding = TEXT_PREVIEW_HOLDING.swap(true, Ordering::AcqRel);
+
+    let content = (100, 100, 500, 400);
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+
+    // A page of two lines in a box that holds far more than two: it cannot scroll, which is the
+    // whole of what this test is about.
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-zoom");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a-page-that-fits.txt");
+    std::fs::write(
+        &path,
+        "one line
+another
+",
+    )
+    .expect("a written page");
+    let Some(page) = load_text_preview(&path, 400, 300, 96, current_text_options()) else {
+        panic!("a page of text was not loaded")
+    };
+    assert!(
+        !page
+            .text_state
+            .as_ref()
+            .map(|state| state.can_scroll())
+            .unwrap_or(true),
+        "the page fits the box it was loaded in, so it has no scroll of its own"
+    );
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+
+    // What the loop publishes for a pin: the window's own box, which is what the hook reads.
+    if let Ok(mut held) = POINTER_HOLD_REGIONS.lock() {
+        *held = Some(vec![content]);
+    }
+
+    assert!(
+        text_size_keep_alive_try().is_some(),
+        "a pin whose page fits its box publishes a region the size's own wheel reads"
+    );
+    assert!(
+        text_scroll_keep_alive_try().is_none(),
+        "and the scroll's own region is not it: a page that cannot scroll has nothing to give"
+    );
+
+    // And the region is a page's, not a pin's: a pinned picture is zoomed by a `Ctrl` and a wheel
+    // rather than resized, and the window it publishes is the same box (see
+    // `pin_zoom_keep_alive_try`).
+    TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
+    assert!(
+        text_size_keep_alive_try().is_none(),
+        "a pin that is not showing a page is not a page to resize"
+    );
+
+    TEXT_PREVIEW_HOLDING.store(previous_holding, Ordering::Release);
+    if let Ok(mut held) = POINTER_HOLD_REGIONS.lock() {
+        *held = previous_regions;
+    }
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    stand_pin(previous_pin);
+}

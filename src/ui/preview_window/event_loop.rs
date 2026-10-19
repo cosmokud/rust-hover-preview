@@ -2042,6 +2042,14 @@ pub fn run_preview_window() {
             // edge it came back with (see `step_text_drag_selection`).
             step_text_drag_selection(hwnd);
 
+            // And a notch turned with `Ctrl` held over a pinned page is that page's own size: the
+            // page is laid out again at the step the notches have reached, in the box it already has
+            // (see `step_pinned_text_size`).
+            let size_delta = wheel_input::take_text_size_delta();
+            if size_delta != 0 {
+                step_pinned_text_size(hwnd, size_delta.signum());
+            }
+
             // And a notch over a pinned picture is the picture being zoomed: the same hook swallowed it
             // and left the count here. What the notches come to is written down as the size the picture
             // is *going* to rather than the size it is given the instant they are counted, and the

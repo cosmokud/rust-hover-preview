@@ -570,7 +570,7 @@ pub(super) const ID_TRAY_FONT_110: u16 = 1097;
 /// largest first — with the id each size carries. A size a hand-edited `config.ini` asks
 /// for that is not one of these is shown with nothing marked rather than rounded to the
 /// nearest.
-pub(super) const FONT_SIZE_CHOICES: [(u32, u16); 12] = [
+pub(crate) const FONT_SIZE_CHOICES: [(u32, u16); 12] = [
     (400, ID_TRAY_FONT_400),
     (300, ID_TRAY_FONT_300),
     (250, ID_TRAY_FONT_250),

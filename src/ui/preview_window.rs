@@ -283,6 +283,7 @@ pub(crate) use pointer::publish_pointer_item_box;
 #[allow(unused_imports)]
 pub(crate) use pointer::text_preview_scrollable;
 pub(crate) use pointer::text_scroll_keep_alive_try;
+pub(crate) use pointer::text_size_keep_alive_try;
 pub(crate) use pointer::AvoidRegion;
 pub(crate) use requests::hide_preview;
 pub(crate) use requests::is_preview_window;
