@@ -522,10 +522,10 @@ pub(super) fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, second
                 update_pin_transport(|transport| {
                     transport.sought(seconds);
                     transport.started = Some((Instant::now(), seconds));
-                    // The gesture's claim is taken back here rather than left to the swap: the
-                    // press on this road posts no key and so claims nothing (see
-                    // `seek_press_hold`), and a claim standing after a gesture is one the *next*
-                    // film to be dragged is answered with (see `PinTransport::drag_held`).
+                    // The gesture's claim is taken back here rather than left to the swap: a press
+                    // on the bar claims nothing — it takes the aim and tells the player nothing (see
+                    // `pinned_transport_press`) — and a claim standing after a gesture is one the
+                    // *next* film to be dragged is answered with (see `PinTransport::drag_held`).
                     transport.drag_held = false;
                 });
                 // And the clock a *pass* is measured by is moved with the bar, because a seek
@@ -536,6 +536,15 @@ pub(super) fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, second
                 // the film back to zero (see `rebase_video_loop_clock_to`).
                 video_hw::rebase_video_loop_clock_to(VIDEO_PID.load(Ordering::SeqCst), seconds);
             } else {
+                // **A pipe this app could not write to is the relaunch road after all**, and a player
+                // ended with no cover over the band is a hole in the desktop shaped like a film. The
+                // cover is raised here, where the end is decided, and the settle hands the band to the
+                // player that replaces this one (see `park_pinned_player_for_seek`).
+                let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+                let origin = window_origin(hwnd)
+                    .map(|origin| (origin.0, origin.1))
+                    .unwrap_or((content.0, content.1));
+                park_pinned_player_for_seek(hwnd, origin);
                 restart_pinned_player(path, content, seconds, pinned_is_held());
             }
         }
@@ -1251,7 +1260,8 @@ pub(super) enum ParkArm {
     /// player, so this cover's end begins the relaunch behind it.
     Gesture,
     /// A scrub taken from the transport bar, and a change of box that is not a resize's own road:
-    /// the end relaunches, and the swap ends the gesture's hold without a key.
+    /// the release raised it over the player it was about to end, and its end is the replacement's
+    /// window rather than the one it is standing over.
     Seek,
     /// A resize's drag, on either road. Its end is the relayout, so nothing else may run this
     /// road's press a second time over the cover it left standing.
@@ -1267,8 +1277,8 @@ pub(super) enum ParkArm {
 /// relaunch begun afterwards is a *fact* rather than a guess (see `player_replaced_since`).
 /// `replacing` is what a resize's park already knows: a move has no relaunch behind it, so the
 /// player standing in the band when the drag ends is the player that was playing all along, while a
-/// resize ends in one that has decoded nothing yet. `awaiting_relaunch` is what a seek's cover
-/// does not know yet: no relaunch has been begun behind it — the release makes it — so there is
+/// resize ends in one that has decoded nothing yet. `awaiting_relaunch` is what a resize's cover
+/// does not know yet: no relaunch has been begun behind it — its drag's end makes it — so there is
 /// nothing to swap to and no bound to spend until one is (see `park_swap_arm_for_the_band`).
 /// `owner` is the road that wrote the record, and a road that extends a standing cover does not
 /// write it (see [`ParkArm`]). `since` is left unset until the loop first asks for the band back —
@@ -1719,14 +1729,16 @@ pub(super) fn park_pinned_player_for_gesture(hwnd: HWND, at: (i32, i32), resizin
 
 /// Put a pinned video's player away for a seek taken from the transport bar.
 ///
-/// The same cover a drag is given, with the same hold: the press holds the
-/// film (see `seek_press_hold`), the aim moves silently under the cover, and
-/// the release relaunches once carrying that hold. No resume frame, because
-/// the playhead is moving and a frame rendered at the second the hand started
-/// from is a frame of the wrong second. The relaunch the release makes runs
-/// behind this cover and the settle swaps it once (see `settle_pinned_park`).
+/// The same cover a file step is given, raised at the same moment in a seek's life: the player that
+/// has been playing under the hand is ended here — where the second the hand chose is known and
+/// there is nothing left to aim — and the player taking its place has no window and no decoded
+/// frame for the length of a file open and a seek. No resume frame, because the playhead is moving
+/// and a frame rendered at the second the hand started from is a frame of the wrong second. The
+/// relaunch begins on the next line, which is why the record waits for no release to make one, and
+/// the settle hands the band to the player replacing this one (see `settle_pinned_park` and
+/// `park_swap_arm`).
 pub(super) fn park_pinned_player_for_seek(hwnd: HWND, at: (i32, i32)) -> bool {
-    park_pinned_player_inner(hwnd, at, true, false, true, ParkArm::Seek)
+    park_pinned_player_inner(hwnd, at, true, false, false, ParkArm::Seek)
 }
 
 /// Put a pinned video's player away for a file step.
@@ -1964,101 +1976,24 @@ pub(super) fn drain_pin_box_request() {
 }
 
 /// Whether a press on the seekbar arms the gesture: only an aimed second does.
-/// A press with no second to seek to (an unknown length) parks nothing and
-/// holds nothing, or the cover stands over a playing film with no relaunch
-/// coming to end it.
+///
+/// A press with no second to seek to has nothing to move and nothing to take the file to, so the
+/// bar claims nothing at all and the pointer is given back rather than held for a release with no
+/// aim in it to answer (see `pinned_transport_press`).
 pub(super) fn seek_press_arms(seeking: Option<f64>) -> bool {
     seeking.is_some()
-}
-
-/// Hold a pinned film for a seek taken from the transport bar: the same
-/// gesture hold as a drag, taken at the press rather than on the tick after
-/// it.
-///
-/// A seeking player is a held player: audio and video both, for the whole
-/// gesture — the cover the press parks is over a silent player, and the
-/// relaunch the release makes carries the hold behind it (see
-/// `PinTransport::begun`). A press over a paused film holds nothing, and a
-/// second press while the aim is still held posts no second key: the pause is
-/// a toggle, and a toggle per press is an unpause (see
-/// `video_drag_hold_decision`).
-///
-/// Scrub steps never come through here — the drag only moves the aim — so one
-/// press is one key for the whole gesture.
-pub(super) fn seek_press_hold() {
-    let Some((path, _, transport, _)) = pinned_playback_state() else {
-        return;
-    };
-
-    // **A seek press tells an mpv player nothing, and it is the same refusal the drag makes.** The
-    // key this would post is a *toggle*, and mpv reads it as one: a seek on a playing film would
-    // stop it, and a seek on a film the user had paused would start it — neither of which is what
-    // moving the playhead means. mpv needs no key to be held for a seek at all: it is taken to the
-    // second while it runs and keeps its own play state (see `seek_pinned_playback` and
-    // `video_drag_hold_apply`, whose mpv gate this is).
-    if video_route(&path) == VideoRoute::Mpv {
-        return;
-    }
-
-    if video_drag_hold_decision(true, pin_is_playing(&transport), transport.drag_held)
-        != VideoDragHold::Hold
-    {
-        return;
-    }
-
-    if video_key_pause() {
-        seek_press_hold_apply(pin_playhead(&transport).unwrap_or(0.0));
-    }
-}
-
-/// Record the hold a seek press's key has posted: the same write as a drag's,
-/// with the aim the press stored kept standing across it.
-///
-/// `held` clears `seeking`, and without the restore the scrub's own guard
-/// (`pinned_transport_drag` answers only while an aim is standing) refuses
-/// every step and the release finds nothing to take the file to — the cover
-/// the press parked stranded over a held film. So the aim is read back out of
-/// the same write rather than left to whatever `held` does with it, which
-/// keeps `held` the same answer for every other caller.
-pub(super) fn seek_press_hold_apply(at: f64) {
-    update_pin_transport(|state| {
-        let aim = state.seeking;
-        state.held(at);
-        state.seeking = aim;
-        state.drag_held = true;
-    });
-}
-
-/// Spend the stamp a scrub's ticks kept, so the swap bound runs from the
-/// release's relaunch rather than from the press.
-///
-/// The stamp is taken by the first tick that finds the park standing, and a
-/// scrub holds the cover past the bound without relaunching anything — so
-/// without this the first tick after the release finds the bound already
-/// spent and swaps onto whatever window merely exists: published within
-/// milliseconds of being begun, and empty until the file is open and the
-/// first frame decoded. The wait the bound buys is the new player's decode,
-/// and only a stamp taken at the relaunch buys it.
-pub(super) fn rearm_seek_cover_for_relaunch() {
-    let mut held = PIN_PARK_SWAP
-        .lock()
-        .unwrap_or_else(|swap| swap.into_inner());
-    if let Some(swap) = held.as_mut() {
-        if swap.awaiting_relaunch {
-            swap.since = None;
-        }
-    }
 }
 
 /// What a park begins: a fresh park over a live window, or an extend over a standing one.
 ///
 /// `replacing` is whether a relaunch is behind the cover, and `prepare` whether a frame for
 /// that relaunch is wanted off the gesture's own time: a resize's is, a seek's is not, and a
-/// move has no relaunch at all. `awaiting` is whether that relaunch is still to come: a seek
-/// parks before its release relaunches, so until one is begun there is nothing to swap to and
-/// no bound to spend (see `park_swap_arm_for_the_band`). `owner` is the road, and it is written
-/// only where the record is written: **an extend leaves it exactly as it found it**, which is the
-/// whole of what a press must not do to a cover it did not begin (see [`ParkArm`]).
+/// move has no relaunch at all. `awaiting` is whether that relaunch is still to come: a press on
+/// the kill road ends the player and relaunches at its release, so until one is begun there is
+/// nothing to swap to and no bound to spend (see `park_swap_arm_for_the_band`). `owner` is the
+/// road, and it is written only where the record is written: **an extend leaves it exactly as it
+/// found it**, which is the whole of what a press must not do to a cover it did not begin (see
+/// [`ParkArm`]).
 fn park_pinned_player_inner(
     hwnd: HWND,
     at: (i32, i32),
