@@ -992,7 +992,7 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
-    if pinned_content_is_the_pins(x, y) {
+    if pinned_content_is_the_pins() {
         // A picture the wheel has taken inside its window is carried by the hand rather than the
         // window: the press that would move the window moves what is inside it instead. A pair of
         // presses is left to the window's own road whatever the picture is doing — a double-click is

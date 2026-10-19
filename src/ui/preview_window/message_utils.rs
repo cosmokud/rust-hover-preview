@@ -82,25 +82,18 @@ pub(super) fn pin_point_is_volume_button(x: i32, y: i32) -> bool {
 ///
 /// It is the pin's for every kind and every part of the frame — a hand on the picture carries the
 /// window the way a hand on a title bar does, which is what a window's body is for — with one
-/// exception: a text preview has business of its own under the pointer, and the two places that
-/// business is in are the scrollbar (a drag of the thumb) and the text itself (a selection). What
-/// is left of a page is its margins — above the first line, below the last, and the gutters
-/// either side of the column — and the margins are a handle, as the caption is.
-pub(super) fn pinned_content_is_the_pins(x: i32, y: i32) -> bool {
-    let (media_x, media_y) = media_point(x, y);
-    if text_scroll_drag_target(media_x, media_y).is_some() {
-        return false;
-    }
-
-    let Ok(media) = CURRENT_MEDIA.lock() else {
-        return true;
-    };
-    let Some(media) = media.as_ref() else {
-        return true;
-    };
-    let Some(state) = media.text_state.as_ref() else {
-        return true;
-    };
-
-    !text_preview::point_is_on_text(&state.lines, media_x, media_y)
+/// exception: a page of text is worked in from edge to edge, so the whole of its frame is the
+/// page's. The text is what a drag selects and the margins around it are where a caret at a line's
+/// own end goes, while the scrollbar is the page's own drag; none of it is a handle that carries
+/// the window (see `pinned_press`).
+pub(super) fn pinned_content_is_the_pins() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .map(|media| {
+            media
+                .as_ref()
+                .map(|media| media.text_state.is_none())
+                .unwrap_or(true)
+        })
+        .unwrap_or(true)
 }

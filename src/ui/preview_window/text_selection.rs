@@ -19,14 +19,36 @@ pub(super) fn begin_text_selection(x: i32, y: i32) -> bool {
     }
 
     // A press with no drag behind it is an empty selection, which is what clears
-    // whatever was selected before.
+    // whatever was selected before; a press with Shift held moves the far end of what is
+    // already selected instead, so a range can be grown a click at a time.
     let at = text_preview::position_in(&state.lines, x, y);
     state.selection = Some(text_preview::Selection {
-        anchor: at,
+        anchor: anchor_for_press(state.selection, shift_is_down(), at),
         caret: at,
     });
     state.selecting = true;
     true
+}
+
+/// Where a press on a text preview anchors its selection: a plain press anchors where it landed,
+/// and a press with Shift held keeps the anchor the selection already has, which is the editor's
+/// own way of growing a range without dragging.
+pub(super) fn anchor_for_press(
+    selection: Option<text_preview::Selection>,
+    shift: bool,
+    at: (usize, usize),
+) -> (usize, usize) {
+    match selection {
+        Some(selection) if shift => selection.anchor,
+        _ => at,
+    }
+}
+
+/// Whether either Shift is held, asked the way Ctrl+C and Ctrl+A are rather than from a message:
+/// a pinned preview is never sent its own keystrokes, so a modifier is a question about the
+/// keyboard at the moment of the press (see `text_preview_copy_requested`).
+fn shift_is_down() -> bool {
+    unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000 != 0 }
 }
 
 /// Move the end of a selection to a point. Answers whether a drag is running, so

@@ -354,7 +354,7 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     // A point that leaves the panel room: the panel's own top-left is the
     // point itself, the moment the press has landed.
     let (x, y) = on_screen((20, 20));
-    unsafe { open_pin_menu(hwnd, x, y) };
+    unsafe { open_pin_menu(hwnd, x, y, PinMenuPage::Chrome) };
     let Some(paint) = pinned_menu_geometry() else {
         panic!("a menu that is up is painted");
     };
@@ -412,7 +412,7 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     // A second right-click moves the panel to the new point, and the menu
     // stays up.
     let (x, y) = on_screen((30, 40));
-    unsafe { open_pin_menu(hwnd, x, y) };
+    unsafe { open_pin_menu(hwnd, x, y, PinMenuPage::Chrome) };
     let Some(paint) = pinned_menu_geometry() else {
         panic!("the menu is still up");
     };
@@ -427,7 +427,14 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     // display's own work area and not the card's box, which is what lets a menu
     // taller than the card keep every one of its rows (see `pin_menu_window`).
     let screen = work_area_at(x, y);
-    unsafe { open_pin_menu(hwnd, screen.right - 2, screen.bottom - 2) };
+    unsafe {
+        open_pin_menu(
+            hwnd,
+            screen.right - 2,
+            screen.bottom - 2,
+            PinMenuPage::Chrome,
+        )
+    };
     let Some(paint) = pinned_menu_geometry() else {
         panic!("the menu is still up");
     };
@@ -456,7 +463,7 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
     // pin's own three facts rather than by the media's kind (see `pin_shows_an_audio_card`).
     stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
 
-    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 20, 20) };
+    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 20, 20, PinMenuPage::Chrome) };
     let Some(paint) = pinned_menu_geometry() else {
         panic!("a pin that is not a sound opens the window's own menu")
     };
@@ -481,13 +488,13 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
     );
 }
 
-/// A right-click opens the window's own menu everywhere on a sound's card, on the body and the
-/// title bar of a picture, and on the title bar of a pinned page — and it opens nothing on the
-/// text of the page, which keeps the `Select All` / `Copy` menu it holds on a hover, nor on the
+/// Which page of its own menu a right-click asks a pinned window for: the window's rows on a
+/// sound's card, on the body and the title bar of a picture, and on the title bar of a pinned
+/// page; the page's own two commands over the text of a pinned page; and nothing at all on the
 /// transport bar of a film, which is the player's own strip along the bottom (see
-/// `pin_right_click_opens_menu`).
+/// `pin_right_click_page`).
 #[test]
-fn a_right_click_opens_the_menu_where_the_window_has_one() {
+fn a_right_click_asks_for_the_page_its_row_of_the_window_holds() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -498,12 +505,14 @@ fn a_right_click_opens_the_menu_where_the_window_has_one() {
     // A sound's card is all of it: no caption above the card and no bar under it, so
     // every row of the window is the menu's.
     stand_pin(Some(sound_pin()));
-    assert!(
-        pin_right_click_opens_menu(0),
+    assert_eq!(
+        pin_right_click_page(0),
+        Some(PinMenuPage::Chrome),
         "the first row of a sound's card is the menu's"
     );
-    assert!(
-        pin_right_click_opens_menu(200),
+    assert_eq!(
+        pin_right_click_page(200),
+        Some(PinMenuPage::Chrome),
         "and so is a row well down it"
     );
 
@@ -512,12 +521,14 @@ fn a_right_click_opens_the_menu_where_the_window_has_one() {
     let picture = PinnedPreview::for_test();
     let caption = picture.caption;
     stand_pin(Some(picture));
-    assert!(
-        pin_right_click_opens_menu(0),
+    assert_eq!(
+        pin_right_click_page(0),
+        Some(PinMenuPage::Chrome),
         "the title bar of a picture is the menu's"
     );
-    assert!(
-        pin_right_click_opens_menu(caption + 1),
+    assert_eq!(
+        pin_right_click_page(caption + 1),
+        Some(PinMenuPage::Chrome),
         "and the picture under it too"
     );
 
@@ -528,37 +539,89 @@ fn a_right_click_opens_the_menu_where_the_window_has_one() {
     film.transport_live = true;
     stand_pin(Some(film));
     let bar = pinned_transport_geometry().expect("a film's window carries a transport bar");
-    assert!(
-        !pin_right_click_opens_menu(bar.top),
+    assert_eq!(
+        pin_right_click_page(bar.top),
+        None,
         "the bar's own first row is the player's"
     );
-    assert!(
-        !pin_right_click_opens_menu(bar.top + bar.height - 1),
+    assert_eq!(
+        pin_right_click_page(bar.top + bar.height - 1),
+        None,
         "and so is its last"
     );
-    assert!(
-        pin_right_click_opens_menu(bar.top - 1),
+    assert_eq!(
+        pin_right_click_page(bar.top - 1),
+        Some(PinMenuPage::Chrome),
         "while the row above the bar is the window's"
     );
 
-    // A page of text, with a text preview on screen: the text is the page's own menu's and the
-    // title bar above it is the window's.
+    // A page of text, with a text preview on screen: the text asks for the page's own page —
+    // its two commands above the window's rows — and the title bar above it for the window's.
     let _page = TextHoldingPutBack::put(true);
     let mut page = PinnedPreview::for_test();
     page.caption = pinned_caption_height(96, Some(MediaType::Text));
     let caption = page.caption;
     stand_pin(Some(page));
-    assert!(
-        pin_right_click_opens_menu(caption - 1),
+    assert_eq!(
+        pin_right_click_page(caption - 1),
+        Some(PinMenuPage::Chrome),
         "the title bar of a pinned page is the menu's"
     );
-    assert!(
-        !pin_right_click_opens_menu(caption),
-        "and the text under it is the page's own menu's"
+    assert_eq!(
+        pin_right_click_page(caption),
+        Some(PinMenuPage::Text),
+        "and the text under it asks for the page's own rows above them"
+    );
+    assert_eq!(
+        pin_right_click_page(caption + 40),
+        Some(PinMenuPage::Text),
+        "wherever in the text the hand is"
+    );
+}
+
+/// A right-click in the text of a pinned page opens the window's own menu with the page's own two
+/// commands above the rows the pin shares with a bubble, in the same panel and the same design
+/// (see `PinMenuPage` and `bubble_menu_rows`).
+#[test]
+fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _kind = MediaKindPutBack::put(MediaType::Text);
+    let _page = TextHoldingPutBack::put(true);
+    stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
+
+    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 20, 20, PinMenuPage::Text) };
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("a right-click in the text of a pinned page opens the window's own menu")
+    };
+    let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "Select All",
+            "Copy",
+            "",
+            "Next File",
+            "Previous File",
+            "",
+            "Minimize to Bubble",
+            "Minimize to Taskbar",
+            "",
+            "To Taskbar",
+            "Close",
+        ],
+        "the page's own commands stand above the rows the pin shares with a bubble"
     );
     assert!(
-        !pin_right_click_opens_menu(caption + 40),
-        "wherever in the text the hand is"
+        matches!(paint.rows[2].mark, pin_chrome::MenuMark::Separator),
+        "and the rule between the two groups is drawn where the page's own rows end"
+    );
+    assert!(
+        paint.flyout.is_none(),
+        "no row of it opens a panel beside it"
     );
 }
 
@@ -974,7 +1037,7 @@ fn the_flyout_opens_right_of_the_menu_unless_the_screens_right_edge_says_otherwi
 
     // With the screen open to the right of it, the flyout is placed right of the menu it
     // came from.
-    unsafe { open_pin_menu(hwnd, 120, 120) };
+    unsafe { open_pin_menu(hwnd, 120, 120, PinMenuPage::Chrome) };
     let paint = pinned_menu_geometry().expect("the menu is up");
     let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
     assert!(
@@ -995,7 +1058,7 @@ fn the_flyout_opens_right_of_the_menu_unless_the_screens_right_edge_says_otherwi
 
     // Asked for at the screen's own right edge, it flips to the menu's left — the standard
     // Windows behaviour — with the menu itself left where the click put it.
-    unsafe { open_pin_menu(hwnd, screen.right - 2, screen.top + 20) };
+    unsafe { open_pin_menu(hwnd, screen.right - 2, screen.top + 20, PinMenuPage::Chrome) };
     let paint = pinned_menu_geometry().expect("the menu is up");
     let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
     assert!(
@@ -2061,7 +2124,7 @@ fn closing_the_menu_from_the_window_side_puts_both_panels_away() {
     stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     let hwnd = HWND(0x1000 as *mut _);
-    unsafe { open_pin_menu(hwnd, 20, 20) };
+    unsafe { open_pin_menu(hwnd, 20, 20, PinMenuPage::Chrome) };
     assert!(pin_menu_is_open(), "the menu is up");
     assert!(pinned_menu_geometry().is_some(), "both panels are painted");
 
@@ -2094,7 +2157,7 @@ fn a_point_off_both_panels_is_outside_and_one_on_a_row_is_not() {
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
-    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 120, 120) };
+    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 120, 120, PinMenuPage::Chrome) };
     let paint = pinned_menu_geometry().expect("the menu is up");
 
     // The middle of the Shuffle row, which is a row the menu holds.

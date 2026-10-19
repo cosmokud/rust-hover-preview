@@ -584,10 +584,24 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
         return;
     }
 
-    // A selection is a range of the frame that is on screen, so it is dropped
-    // rather than left pointing at lines that have moved.
+    // What is selected is kept with the text it covers: a frame is scrolled by whole lines, so
+    // the same text sits as many lines higher in the frame that comes back, and the highlight
+    // moves with it rather than being dropped. The shift is exact because a preview that keeps a
+    // selection is one in full mode, whose frame is never pulled back to fill itself (see
+    // `text_preview::render_scrolled`).
+    let selection = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .and_then(|state| state.selection)
+        })
+        .map(|selection| selection_scrolled(selection, first_line as isize - current as isize));
+
     let Some(frame) =
-        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, None)
+        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
     else {
         return;
     };
@@ -609,11 +623,34 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
             state.visible_lines = frame.visible_lines;
             state.scrollbar = frame.scrollbar;
             state.lines = frame.lines;
-            state.selection = None;
+            state.selection = selection;
         }
     }
 
     render_layered_preview(hwnd);
+}
+
+/// A selection moved with the text it covers: scrolling the frame by `shift` lines — positive
+/// when the document moves up — leaves the same text `shift` lines higher in the frame, so both
+/// ends of the selection move with it. A line that the scroll takes past the top is held at the
+/// first one, which is what keeps a range reaching above the frame covering what it still can.
+pub(super) fn selection_scrolled(
+    selection: text_preview::Selection,
+    shift: isize,
+) -> text_preview::Selection {
+    let moved = |(line, character): (usize, usize)| {
+        let line = match shift {
+            shift if shift >= 0 => line.saturating_sub(shift as usize),
+            shift => line.saturating_add(shift.unsigned_abs()),
+        };
+
+        (line, character)
+    };
+
+    text_preview::Selection {
+        anchor: moved(selection.anchor),
+        caret: moved(selection.caret),
+    }
 }
 
 /// Repaint the text preview where it is, with whatever is selected in it now.

@@ -384,12 +384,12 @@ pub(super) unsafe extern "system" fn window_proc(
                     close_pin_menu(hwnd);
                     return LRESULT(0);
                 }
-                // And a row the menu is not for — a film's transport bar, the text
-                // of a pinned page — is left under the hand rather than answered
-                // here: what is there is the player's own strip or the page's own
-                // menu (see `pin_right_click_opens_menu`).
-                if pin_right_click_opens_menu(y) {
-                    open_pin_menu(hwnd, menu_x, menu_y);
+                // And a row the menu is not for — a film's transport bar — is left under the hand
+                // rather than answered here: what is there is the player's own strip (see
+                // `pin_right_click_page`). A right-click in the text of a pinned page is the
+                // window's own, with the page's two commands above its rows.
+                if let Some(page) = pin_right_click_page(y) {
+                    open_pin_menu(hwnd, menu_x, menu_y, page);
                 }
                 return LRESULT(0);
             }
@@ -409,14 +409,11 @@ pub(super) unsafe extern "system" fn window_proc(
             // The menu is the preview's own, so it opens where it was asked for,
             // and the press that asks for it does not dismiss the preview.
             let (x, y) = message_point(lparam);
-            // The page's own `Select All` / `Copy` menu is for the text under the hand, and
-            // opens on the release rather than the press: where the press already put the
-            // window's own menu up — on the title bar above the text — this one stays down,
-            // because two panels for one right-click is one too many (see
-            // `pin_right_click_opens_menu`).
-            if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire)
-                && !(pinned() && pin_right_click_opens_menu(y))
-            {
+            // A page's own `Select All` / `Copy` menu is for a text preview with no window
+            // around it, and opens on the release rather than the press: a pinned page asks
+            // the window's own menu for the same rows and the ones under them, and that menu
+            // is already up from the press (see `pin_right_click_page`).
+            if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) && !pinned() {
                 show_text_preview_menu(hwnd, x, y);
             }
             LRESULT(0)
