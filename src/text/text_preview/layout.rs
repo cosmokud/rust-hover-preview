@@ -25,6 +25,25 @@ use windows::Win32::Foundation::RECT;
 const SCROLLBAR_MIN_THUMB_PIXELS: i32 = 24;
 /// Narrow files still get a window wide enough to look like one.
 const MIN_CONTENT_CHARS: i32 = 16;
+/// Room between the line numbers and the text they are numbers for, in logical
+/// pixels: the numbers are right-aligned against it, so it is also what keeps a
+/// five-digit line from touching the code it numbers.
+const GUTTER_GAP_PIXELS: i32 = 8;
+
+/// The column a document's own line numbers are drawn in.
+///
+/// It is as wide as the widest number the document can show, so that the text
+/// column does not move as a page is scrolled from line 9 to line 10.
+pub(super) fn gutter_width(lines: usize, metrics: &TextMetrics) -> i32 {
+    let digits = lines.max(1).to_string().len() as i32;
+
+    digits * metrics.advance[BODY_LEVEL as usize].max(1) + gutter_gap(metrics)
+}
+
+/// The room `GUTTER_GAP_PIXELS` names, at the display the page is drawn on.
+fn gutter_gap(metrics: &TextMetrics) -> i32 {
+    scaled(GUTTER_GAP_PIXELS, metrics.scale).max(1)
+}
 pub(super) struct LaidRun {
     pub(super) text: String,
     style: TextStyle,
@@ -43,6 +62,10 @@ pub(super) struct LaidLine {
     /// which part of the line each of them holds is not something its position says (see
     /// `Selection`).
     pub(super) source: (usize, usize),
+    /// Whether this is one of the document's own lines rather than the note a frame adds at its
+    /// bottom: only the document's own carry a number, and only their first painted part does (see
+    /// `paint`).
+    pub(super) own_line: bool,
 }
 
 pub(super) struct LaidOut {
@@ -54,6 +77,9 @@ pub(super) struct LaidOut {
     pub(super) first_line: usize,
     /// Document lines the frame shows.
     pub(super) visible_lines: usize,
+    /// The column kept clear at the left for the document's own line numbers, or zero for a page
+    /// that is not read by them (see `gutter_width`).
+    pub(super) gutter: i32,
 }
 
 /// The lines that fit above the box's bottom edge, before anything is said about
@@ -125,6 +151,15 @@ pub(super) fn layout(
         0
     };
 
+    // A pinned page of a file drawn through a syntax definition keeps a column for its own line
+    // numbers: a reader refers to a line of code by its number, where prose and NFO art are read
+    // rather than cited — and the column is width the text does not have.
+    let gutter = if full_mode && doc.wants_line_numbers() {
+        gutter_width(scrollable_lines, metrics)
+    } else {
+        0
+    };
+
     // The frame starts where it was asked to, kept inside the lines there are: a
     // request past the end of the document is the last line of it, never a box
     // with nothing in it.
@@ -136,6 +171,7 @@ pub(super) fn layout(
         first_line,
         (box_width, box_height),
         scrollbar_space,
+        gutter,
         note_height,
     );
 
@@ -155,6 +191,7 @@ pub(super) fn layout(
             first_line,
             box_width,
             scrollbar_space,
+            gutter,
             bottom - body.y,
         );
 
@@ -167,6 +204,7 @@ pub(super) fn layout(
                 first_line,
                 (box_width, box_height),
                 scrollbar_space,
+                gutter,
                 note_height,
             );
         }
@@ -195,18 +233,20 @@ pub(super) fn layout(
                 runs: vec![LaidRun {
                     text,
                     style,
-                    x: padding,
+                    x: padding + gutter,
                     width,
                 }],
                 top: body.y,
                 height: note_height,
                 block: LineBlock::Plain,
                 // The note stands where the lines it hides begin, so a press on it is a press on
-                // the line under it rather than on nothing at all.
+                // the line under it rather than on nothing at all — and it is not that line, so it
+                // carries no number of its own (see `own_line`).
                 source: (first_line + body.emitted, 0),
+                own_line: false,
             });
             body.y += note_height;
-            body.content_right = body.content_right.max(padding + width);
+            body.content_right = body.content_right.max(padding + gutter + width);
         }
     }
 
@@ -216,6 +256,7 @@ pub(super) fn layout(
         height: (body.y + padding).clamp(1, box_height.max(1) as i32) as u32,
         first_line,
         visible_lines: body.emitted,
+        gutter,
     }
 }
 
@@ -236,6 +277,7 @@ fn body_bottom(box_height: u32, padding: i32, reserve: i32) -> i32 {
 ///
 /// The walk is bounded by the room itself: every line takes at least the smallest
 /// line height of the box, so no more than that many can be added.
+#[allow(clippy::too_many_arguments)] // Each one is a number about the box the page is laid out in.
 fn pulled_back_first_line(
     document: &CachedDocument,
     theme: &LoadedTheme,
@@ -243,6 +285,7 @@ fn pulled_back_first_line(
     first_line: usize,
     box_width: u32,
     scrollbar_space: i32,
+    gutter: i32,
     room: i32,
 ) -> usize {
     if first_line == 0 || room <= 0 {
@@ -264,7 +307,7 @@ fn pulled_back_first_line(
         return first_line;
     };
 
-    let left = padding;
+    let left = padding + gutter;
     let right = (box_width.max(1) as i32 - padding - scrollbar_space).max(left + 1);
     let mut start = first_line;
     let mut room = room;
@@ -297,6 +340,7 @@ fn pulled_back_first_line(
 /// Only the window that will be drawn is styled: the request to [`styled_window`]
 /// is sized from the box, so a file that is a hundred pages long has a screenful
 /// highlighted and nothing else.
+#[allow(clippy::too_many_arguments)] // Each one is a number about the box the page is laid out in.
 fn lay_out_body(
     document: &CachedDocument,
     theme: &LoadedTheme,
@@ -304,13 +348,14 @@ fn lay_out_body(
     first_line: usize,
     box_size: (u32, u32),
     scrollbar_space: i32,
+    gutter: i32,
     reserve: i32,
 ) -> BodyLayout {
     let doc = &document.doc;
     let (box_width, box_height) = box_size;
     let padding = metrics.padding;
     let box_width = box_width.max(1) as i32;
-    let left = padding;
+    let left = padding + gutter;
     let right = (box_width - padding - scrollbar_space).max(left + 1);
     let bottom = body_bottom(box_height, padding, reserve);
     let body_advance = metrics.advance[BODY_LEVEL as usize].max(1);
@@ -371,6 +416,7 @@ fn lay_out_body(
                     height,
                     block: line.block,
                     source: (index, source_char),
+                    own_line: true,
                 });
                 y += height;
                 placed = true;
@@ -786,6 +832,40 @@ pub(super) unsafe fn paint(
     }
 
     let mut painter = RunPainter::new(surface, metrics.scale);
+
+    // The numbers of the document's own lines, drawn in the column kept clear for them: a page that
+    // keeps no column draws none, a painted line that is the wrapped tail of its line draws none,
+    // and the note a frame adds at its bottom is not one of the document's lines and draws none
+    // either (see `gutter_width`, `own_line` and `source`).
+    if laid_out.gutter > 0 {
+        let advance = metrics.advance[BODY_LEVEL as usize].max(1);
+        let right = metrics.padding + laid_out.gutter - gutter_gap(metrics);
+        let mut style = plain_style(BODY_LEVEL);
+        style.foreground = blend(rgb(theme.foreground()), rgb(theme.background()), 0.45);
+
+        for line in &laid_out.lines {
+            if !line.own_line || line.source.1 != 0 {
+                continue;
+            }
+
+            let number = (line.source.0 + 1).to_string();
+            let width = number.chars().count() as i32 * advance;
+            let x = (right - width).max(metrics.padding);
+            painter.draw(
+                &number,
+                x,
+                RECT {
+                    left: x,
+                    top: line.top,
+                    right: x + width,
+                    bottom: line.top + line.height,
+                },
+                &style,
+                style.foreground,
+                page,
+            );
+        }
+    }
 
     for line in &laid_out.lines {
         let mut run_start = 0usize;

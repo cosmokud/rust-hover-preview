@@ -349,3 +349,120 @@ fn a_find_walks_the_document_from_just_after_what_is_selected() {
         "and `amma`, which the document writes once, has no next one"
     );
 }
+
+/// One pixel of a painted frame, in the frame's own bytes: four to a pixel, blue first.
+fn frame_pixel(frame: &TextFrame, x: u32, y: u32) -> [u8; 4] {
+    let at = ((y * frame.width + x) * 4) as usize;
+    let pixel = &frame.pixels[at..at + 4];
+
+    [pixel[0], pixel[1], pixel[2], pixel[3]]
+}
+
+/// A pinned page of a file drawn through a syntax definition keeps a column down its left for the
+/// document's own line numbers; the same file hovered does not, and neither does a page of prose,
+/// because a line of code is cited by its number where prose is read rather than cited (see
+/// `gutter_width` and `wants_line_numbers`).
+#[test]
+fn a_pinned_page_of_code_keeps_a_column_for_its_line_numbers() {
+    let dir = scratch("gutter");
+    let source = dir.join("numbered.rs");
+    fs::write(&source, "fn main() {\n    let answer = 42;\n}\n").expect("a source file");
+
+    let prose = dir.join("prose.txt");
+    fs::write(&prose, "a page of prose\nwith two lines\n").expect("a page of prose");
+
+    let pinned = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+    let hover = TextPreviewOptions {
+        full_mode: false,
+        ..options()
+    };
+
+    let text_column = |path: &Path, options: TextPreviewOptions| {
+        render_scrolled(path, 0, 400, 300, 96, options, None)
+            .expect("a page")
+            .lines
+            .first()
+            .and_then(|line| line.runs.first().map(|run| run.x))
+            .expect("a painted line of text")
+    };
+
+    assert!(
+        text_column(&source, pinned) > text_column(&source, hover),
+        "a pinned page of code keeps a column for its numbers that the same file hovered does not"
+    );
+    assert_eq!(
+        text_column(&prose, pinned),
+        text_column(&prose, hover),
+        "a page of prose is read rather than cited, so it is numbered no more than a hover is"
+    );
+}
+
+/// A number is drawn once per document line rather than once per painted line: a line too long for
+/// the box is painted as several lines, and only the first of them carries the number, while the
+/// line after it carries its own (see `paint` and `own_line`).
+#[test]
+fn a_wrapped_line_is_numbered_once() {
+    let dir = scratch("gutter-wrap");
+    let source = dir.join("wrapped.rs");
+    let long = "let value = compute_something(with, arguments, that, run, past, the, edge);";
+    fs::write(&source, format!("// a comment\n{long}\n\nfn tail() {{}}\n")).expect("a source file");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+    let frame = render_scrolled(&source, 0, 200, 400, 96, options, None).expect("a page");
+
+    let column = frame
+        .lines
+        .first()
+        .and_then(|line| line.runs.first().map(|run| run.x))
+        .expect("a painted line of text");
+    let background = frame_pixel(&frame, 1, 1);
+    let ink_in_the_column = |line: &FrameLine| {
+        let mut ink = 0;
+        for y in line.top..line.top + line.height {
+            for x in 0..column {
+                if frame_pixel(&frame, x as u32, y as u32) != background {
+                    ink += 1;
+                }
+            }
+        }
+
+        ink
+    };
+
+    let wrapped: Vec<&FrameLine> = frame
+        .lines
+        .iter()
+        .filter(|line| line.source.0 == 1)
+        .collect();
+    assert!(
+        wrapped.len() > 1,
+        "the line is wider than the box, so it is painted as several lines"
+    );
+    assert!(
+        ink_in_the_column(wrapped[0]) > 0,
+        "the first of them carries the number of the line"
+    );
+    for tail in &wrapped[1..] {
+        assert_eq!(
+            ink_in_the_column(tail),
+            0,
+            "and a wrapped tail carries none, because the line has one number"
+        );
+    }
+
+    let next = frame
+        .lines
+        .iter()
+        .find(|line| line.source.0 == 2)
+        .expect("the line after the wrapped one");
+    assert!(
+        ink_in_the_column(next) > 0,
+        "the line after it carries its own number"
+    );
+}
