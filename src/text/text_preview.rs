@@ -19,10 +19,15 @@ mod layout;
 mod markdown;
 mod source;
 
+pub use document::{find_next, text_of};
 pub use frame::{
-    frame_text, measure, point_is_on_text, position_in, render_scrolled, text_in, FrameLine,
-    ScrollBar, Selection, TextPreviewOptions,
+    measure, position_in, render_scrolled, word_in, FrameLine, ScrollBar, Selection,
+    TextPreviewOptions,
 };
+// A run is what a line is made of, and it is named only by the tests that build lines of their
+// own rather than painting a document.
+#[cfg(test)]
+pub use frame::FrameRun;
 pub use layout::scroll_line_at_track_y;
 
 #[cfg(test)]

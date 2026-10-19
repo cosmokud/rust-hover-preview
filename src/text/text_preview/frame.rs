@@ -62,39 +62,20 @@ pub struct FrameLine {
     pub top: i32,
     pub height: i32,
     pub runs: Vec<FrameRun>,
-}
-
-/// Whether a point in frame coordinates is over painted text: inside a line's own band, and
-/// inside that line's column.
-///
-/// It is what tells the text of a page from the rest of it. Everything a frame paints text into
-/// answers yes — including the gaps between the words and the tail of a line that ended early,
-/// which is where a caret goes when a hand aims at the end of a line — and what is left is the
-/// page's margins: above the first line, below the last, and the gutters either side of the
-/// column. Those are a handle rather than a place in the text (see `pinned_content_is_the_pins`).
-pub fn point_is_on_text(lines: &[FrameLine], x: i32, y: i32) -> bool {
-    lines.iter().any(|line| {
-        if y < line.top || y >= line.top + line.height {
-            return false;
-        }
-
-        let Some(first) = line.runs.first() else {
-            return false;
-        };
-        let left = first.x;
-        let right = line
-            .runs
-            .iter()
-            .map(|run| run.x + run.width)
-            .max()
-            .unwrap_or(left);
-
-        x >= left && x < right
-    })
+    /// The document line this painted line belongs to, and the character of that
+    /// line its first run starts at: what a point on the frame is turned back into,
+    /// and what a selection is measured against (see `Selection`).
+    pub source: (usize, usize),
 }
 
 /// A range of a text preview a reader has selected: where the drag started and
-/// where it is now, both as (frame line, character).
+/// where it is now, both as (document line, character).
+///
+/// The place is the document's own rather than the frame's, which is what makes a
+/// selection outlive the box it was made in: a page drawn again — scrolled, resized,
+/// wrapped at another width — draws the same text somewhere else, and a selection
+/// that named a line of the frame would name whatever moved into that line instead
+/// (see `keep_text_place`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Selection {
     pub anchor: (usize, usize),
@@ -138,22 +119,22 @@ pub struct TextFrame {
     pub lines: Vec<FrameLine>,
 }
 
-/// Where a point falls in painted lines: the line under it and the character
-/// within that line.
-///
-/// A point between two lines takes the nearer one, and a point past the end of a
-/// line takes the nearest end of it, so a drag that runs off the text still selects
-/// the line it was on rather than losing it.
-pub fn position_in(lines: &[FrameLine], x: i32, y: i32) -> (usize, usize) {
-    let Some((line_index, line)) = lines.iter().enumerate().min_by_key(|(_, line)| {
+/// The line of painted text nearest a point, by its middle.
+fn nearest_line(lines: &[FrameLine], y: i32) -> Option<(usize, &FrameLine)> {
+    lines.iter().enumerate().min_by_key(|(_, line)| {
         let middle = line.top + line.height / 2;
         (middle - y).abs()
-    }) else {
-        return (0, 0);
-    };
+    })
+}
 
+/// Where a point falls inside one painted line: the character boundary nearest it, which is the
+/// caret a press places, and the character whose cell the point is actually in, which is the one a
+/// word is taken around. The two differ in the right half of a cell, where the caret sits after a
+/// character the point is still on.
+fn point_in_line(line: &FrameLine, x: i32) -> (usize, usize) {
     let mut characters = 0usize;
-    let mut closest = 0usize;
+    let mut caret = 0usize;
+    let mut character = 0usize;
     let mut closest_distance = i32::MAX;
 
     for run in &line.runs {
@@ -162,68 +143,95 @@ pub fn position_in(lines: &[FrameLine], x: i32, y: i32) -> (usize, usize) {
             continue;
         }
         let advance = (run.width as f32 / count as f32).max(1.0);
-        let within = (((x - run.x) as f32 / advance).round() as i32).clamp(0, count);
-        let edge = run.x + (within as f32 * advance).round() as i32;
+        let within = (x - run.x) as f32 / advance;
+        let boundary = (within.round() as i32).clamp(0, count);
+        let edge = run.x + (boundary as f32 * advance).round() as i32;
         let distance = (edge - x).abs();
         if distance < closest_distance {
             closest_distance = distance;
-            closest = characters + within as usize;
+            caret = characters + boundary as usize;
+            character = characters + (within.floor() as i32).clamp(0, count - 1) as usize;
         }
         characters += count as usize;
     }
 
-    (line_index, closest)
+    (caret, character)
 }
 
-/// The text of painted lines, either everything they show or the part a selection
-/// covers, as it will be pasted: the lines it touches, each cut to the part that
-/// was selected, joined with Windows line endings.
+/// Where a point falls in a text preview: the document line under it and the
+/// character within that line.
 ///
-/// What painted lines hold is what the frame shows, so a copy is the part of the
-/// file that was on screen — a line that wrapped is copied as the lines it took.
-pub fn text_in(lines: &[FrameLine], selection: Selection) -> String {
-    let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
-    let mut selected: Vec<String> = Vec::new();
+/// A point between two lines takes the nearer one, and a point past the end of a
+/// line takes the nearest end of it, so a drag that runs off the text still selects
+/// the line it was on rather than losing it. What comes back is a place in the
+/// document, so a point on a wrapped tail names the character it is drawn under
+/// rather than the line of the frame it happens to be (see `FrameLine::source`).
+pub fn position_in(lines: &[FrameLine], x: i32, y: i32) -> (usize, usize) {
+    let Some((_, line)) = nearest_line(lines, y) else {
+        return (0, 0);
+    };
 
-    for (index, line) in lines.iter().enumerate() {
-        if index < start_line || index > end_line {
-            continue;
-        }
-
-        let from = if index == start_line { start_char } else { 0 };
-        let to = if index == end_line {
-            end_char
-        } else {
-            usize::MAX
-        };
-        let mut characters = String::new();
-        let mut position = 0usize;
-
-        for run in &line.runs {
-            for character in run.text.chars() {
-                if position >= from && position < to {
-                    characters.push(character);
-                }
-                position += 1;
-            }
-        }
-
-        selected.push(characters);
-    }
-
-    selected.join("\r\n")
+    (line.source.0, line.source.1 + point_in_line(line, x).0)
 }
 
-/// Everything the painted lines show, which is what a Copy with nothing selected
-/// takes.
-pub fn frame_text(lines: &[FrameLine]) -> String {
-    text_in(
-        lines,
-        Selection {
+/// The kind of character a double click takes a run of: a word is letters, digits and the
+/// underscore, a gap is space, and everything else — a bracket, a punctuation mark — is a run of
+/// its own, so a double click takes the whole `->` or `==` and not just one of its marks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunKind {
+    Word,
+    Space,
+    Other,
+}
+
+fn run_kind(character: char) -> RunKind {
+    if character.is_alphanumeric() || character == '_' {
+        RunKind::Word
+    } else if character.is_whitespace() {
+        RunKind::Space
+    } else {
+        RunKind::Other
+    }
+}
+
+/// The word a point on painted lines is in, as the range a double click selects: the run of the
+/// point's own kind of character, taken from the character the point is on rather than from the
+/// caret beside it, so a press on the right half of a letter still takes the word that letter is
+/// in.
+///
+/// A line with nothing on it has no word to take, and the range comes back empty there.
+pub fn word_in(lines: &[FrameLine], x: i32, y: i32) -> Selection {
+    let Some((_, line)) = nearest_line(lines, y) else {
+        return Selection {
             anchor: (0, 0),
-            caret: (usize::MAX, usize::MAX),
-        },
-    )
+            caret: (0, 0),
+        };
+    };
+
+    let (_, at) = point_in_line(line, x);
+    let characters: Vec<char> = line.runs.iter().flat_map(|run| run.text.chars()).collect();
+    let Some(&character) = characters.get(at) else {
+        return Selection {
+            anchor: line.source,
+            caret: line.source,
+        };
+    };
+
+    let kind = run_kind(character);
+    let before = characters[..at]
+        .iter()
+        .rev()
+        .take_while(|character| run_kind(**character) == kind)
+        .count();
+    let after = characters[at + 1..]
+        .iter()
+        .take_while(|character| run_kind(**character) == kind)
+        .count();
+
+    Selection {
+        anchor: (line.source.0, line.source.1 + at - before),
+        caret: (line.source.0, line.source.1 + at + 1 + after),
+    }
 }
 
 /// The size the preview of `path` wants inside `max_width` x `max_height`.
@@ -359,6 +367,7 @@ pub fn render_scrolled(
         .map(|line| FrameLine {
             top: line.top,
             height: line.height,
+            source: line.source,
             runs: line
                 .runs
                 .iter()

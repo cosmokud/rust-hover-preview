@@ -25,6 +25,25 @@ use windows::Win32::Foundation::RECT;
 const SCROLLBAR_MIN_THUMB_PIXELS: i32 = 24;
 /// Narrow files still get a window wide enough to look like one.
 const MIN_CONTENT_CHARS: i32 = 16;
+/// Room between the line numbers and the text they are numbers for, in logical
+/// pixels: the numbers are right-aligned against it, so it is also what keeps a
+/// five-digit line from touching the code it numbers.
+const GUTTER_GAP_PIXELS: i32 = 8;
+
+/// The column a document's own line numbers are drawn in.
+///
+/// It is as wide as the widest number the document can show, so that the text
+/// column does not move as a page is scrolled from line 9 to line 10.
+pub(super) fn gutter_width(lines: usize, metrics: &TextMetrics) -> i32 {
+    let digits = lines.max(1).to_string().len() as i32;
+
+    digits * metrics.advance[BODY_LEVEL as usize].max(1) + gutter_gap(metrics)
+}
+
+/// The room `GUTTER_GAP_PIXELS` names, at the display the page is drawn on.
+fn gutter_gap(metrics: &TextMetrics) -> i32 {
+    scaled(GUTTER_GAP_PIXELS, metrics.scale).max(1)
+}
 pub(super) struct LaidRun {
     pub(super) text: String,
     style: TextStyle,
@@ -37,6 +56,16 @@ pub(super) struct LaidLine {
     pub(super) top: i32,
     pub(super) height: i32,
     block: LineBlock,
+    /// The document line this one drawn line belongs to, and the character of that line its
+    /// first run starts at: what a point on the frame is turned back into, and what a selection
+    /// is measured in. A document line too long for the box is drawn as several of these, and
+    /// which part of the line each of them holds is not something its position says (see
+    /// `Selection`).
+    pub(super) source: (usize, usize),
+    /// Whether this is one of the document's own lines rather than the note a frame adds at its
+    /// bottom: only the document's own carry a number, and only their first painted part does (see
+    /// `paint`).
+    pub(super) own_line: bool,
 }
 
 pub(super) struct LaidOut {
@@ -48,6 +77,9 @@ pub(super) struct LaidOut {
     pub(super) first_line: usize,
     /// Document lines the frame shows.
     pub(super) visible_lines: usize,
+    /// The column kept clear at the left for the document's own line numbers, or zero for a page
+    /// that is not read by them (see `gutter_width`).
+    pub(super) gutter: i32,
 }
 
 /// The lines that fit above the box's bottom edge, before anything is said about
@@ -119,6 +151,15 @@ pub(super) fn layout(
         0
     };
 
+    // A pinned page of a file drawn through a syntax definition keeps a column for its own line
+    // numbers: a reader refers to a line of code by its number, where prose and NFO art are read
+    // rather than cited — and the column is width the text does not have.
+    let gutter = if full_mode && doc.wants_line_numbers() {
+        gutter_width(scrollable_lines, metrics)
+    } else {
+        0
+    };
+
     // The frame starts where it was asked to, kept inside the lines there are: a
     // request past the end of the document is the last line of it, never a box
     // with nothing in it.
@@ -130,6 +171,7 @@ pub(super) fn layout(
         first_line,
         (box_width, box_height),
         scrollbar_space,
+        gutter,
         note_height,
     );
 
@@ -149,6 +191,7 @@ pub(super) fn layout(
             first_line,
             box_width,
             scrollbar_space,
+            gutter,
             bottom - body.y,
         );
 
@@ -161,6 +204,7 @@ pub(super) fn layout(
                 first_line,
                 (box_width, box_height),
                 scrollbar_space,
+                gutter,
                 note_height,
             );
         }
@@ -189,15 +233,20 @@ pub(super) fn layout(
                 runs: vec![LaidRun {
                     text,
                     style,
-                    x: padding,
+                    x: padding + gutter,
                     width,
                 }],
                 top: body.y,
                 height: note_height,
                 block: LineBlock::Plain,
+                // The note stands where the lines it hides begin, so a press on it is a press on
+                // the line under it rather than on nothing at all — and it is not that line, so it
+                // carries no number of its own (see `own_line`).
+                source: (first_line + body.emitted, 0),
+                own_line: false,
             });
             body.y += note_height;
-            body.content_right = body.content_right.max(padding + width);
+            body.content_right = body.content_right.max(padding + gutter + width);
         }
     }
 
@@ -207,6 +256,7 @@ pub(super) fn layout(
         height: (body.y + padding).clamp(1, box_height.max(1) as i32) as u32,
         first_line,
         visible_lines: body.emitted,
+        gutter,
     }
 }
 
@@ -227,6 +277,7 @@ fn body_bottom(box_height: u32, padding: i32, reserve: i32) -> i32 {
 ///
 /// The walk is bounded by the room itself: every line takes at least the smallest
 /// line height of the box, so no more than that many can be added.
+#[allow(clippy::too_many_arguments)] // Each one is a number about the box the page is laid out in.
 fn pulled_back_first_line(
     document: &CachedDocument,
     theme: &LoadedTheme,
@@ -234,6 +285,7 @@ fn pulled_back_first_line(
     first_line: usize,
     box_width: u32,
     scrollbar_space: i32,
+    gutter: i32,
     room: i32,
 ) -> usize {
     if first_line == 0 || room <= 0 {
@@ -255,7 +307,7 @@ fn pulled_back_first_line(
         return first_line;
     };
 
-    let left = padding;
+    let left = padding + gutter;
     let right = (box_width.max(1) as i32 - padding - scrollbar_space).max(left + 1);
     let mut start = first_line;
     let mut room = room;
@@ -288,6 +340,7 @@ fn pulled_back_first_line(
 /// Only the window that will be drawn is styled: the request to [`styled_window`]
 /// is sized from the box, so a file that is a hundred pages long has a screenful
 /// highlighted and nothing else.
+#[allow(clippy::too_many_arguments)] // Each one is a number about the box the page is laid out in.
 fn lay_out_body(
     document: &CachedDocument,
     theme: &LoadedTheme,
@@ -295,13 +348,14 @@ fn lay_out_body(
     first_line: usize,
     box_size: (u32, u32),
     scrollbar_space: i32,
+    gutter: i32,
     reserve: i32,
 ) -> BodyLayout {
     let doc = &document.doc;
     let (box_width, box_height) = box_size;
     let padding = metrics.padding;
     let box_width = box_width.max(1) as i32;
-    let left = padding;
+    let left = padding + gutter;
     let right = (box_width - padding - scrollbar_space).max(left + 1);
     let bottom = body_bottom(box_height, padding, reserve);
     let body_advance = metrics.advance[BODY_LEVEL as usize].max(1);
@@ -343,7 +397,7 @@ fn lay_out_body(
             let visual_lines = visual_lines_of(line, metrics, left, right, max_lines);
 
             let mut placed = false;
-            for runs in visual_lines {
+            for (source_char, runs) in visual_lines {
                 if y + height > bottom {
                     break;
                 }
@@ -361,6 +415,8 @@ fn lay_out_body(
                     top: y,
                     height,
                     block: line.block,
+                    source: (index, source_char),
+                    own_line: true,
                 });
                 y += height;
                 placed = true;
@@ -392,7 +448,8 @@ fn lay_out_body(
 }
 
 /// One document line as the frame draws it inside its text column: the visual
-/// lines it takes, left to right, wrapped at the page edge.
+/// lines it takes, left to right, wrapped at the page edge, each with the
+/// character of the document line it starts at.
 ///
 /// A line wider than the column continues on the next one. Nothing in a text
 /// preview scrolls sideways, so a line that ran past the edge would put whatever it
@@ -413,7 +470,7 @@ fn visual_lines_of(
     left: i32,
     right: i32,
     max_lines: usize,
-) -> Vec<Vec<LaidRun>> {
+) -> Vec<(usize, Vec<LaidRun>)> {
     let indent = left + metrics.indent(line.indent);
     let text_right = match line.block {
         LineBlock::Quote => right - metrics.quote_bar - 4,
@@ -473,25 +530,39 @@ fn for_each_token(line: &DocLine, mut visit: impl FnMut(Token) -> bool) {
 }
 
 /// One document line's visual lines, wrapped at the page edge and at most
-/// `max_lines` of them. A word wider than the page — a URL, a hash — is cut rather
-/// than allowed to run off it, and a space that lands at a wrap point is dropped
-/// instead of starting a line.
+/// `max_lines` of them, each with the character of the document line it starts at.
+/// A word wider than the page — a URL, a hash — is cut rather than allowed to run
+/// off it, and a space that lands at a wrap point is dropped instead of starting a
+/// line.
+///
+/// What the offsets are for is a selection: a copy is taken from the document
+/// rather than from what was drawn, so a wrap point has to say where the next
+/// visual line picks the document line up — a dropped space is still a character of
+/// it — and not how wide the frame is (see `Selection`).
 fn wrap_line(
     line: &DocLine,
     left: i32,
     limit: i32,
     max_lines: usize,
     metrics: &TextMetrics,
-) -> Vec<Vec<LaidRun>> {
-    let mut lines: Vec<Vec<LaidRun>> = Vec::new();
+) -> Vec<(usize, Vec<LaidRun>)> {
+    let mut lines: Vec<(usize, Vec<LaidRun>)> = Vec::new();
     let mut runs: Vec<LaidRun> = Vec::new();
     let mut x = left;
+    // Characters of the document line laid out so far, and where the visual line
+    // being built starts among them.
+    let mut emitted = 0usize;
+    let mut line_from = 0usize;
 
     for_each_token(line, |token| {
+        let count = token.text.chars().count();
         let advance = metrics.advance[(token.style.level as usize).min(SIZE_LEVELS - 1)].max(1);
-        let width = token.text.chars().count() as i32 * advance;
+        let width = count as i32 * advance;
 
         if token.space {
+            // A space at a wrap point is dropped rather than starting a line, and
+            // the character it is stays part of the line it was dropped from.
+            emitted += count;
             if runs.is_empty() || x + width > limit {
                 return true;
             }
@@ -511,7 +582,8 @@ fn wrap_line(
             if lines.len() + 1 == max_lines {
                 return false;
             }
-            lines.push(std::mem::take(&mut runs));
+            lines.push((line_from, std::mem::take(&mut runs)));
+            line_from = emitted;
             x = left;
         }
 
@@ -525,6 +597,7 @@ fn wrap_line(
                 width,
             });
             x += width;
+            emitted += count;
             return true;
         }
 
@@ -546,12 +619,14 @@ fn wrap_line(
             });
             x += chunk;
             offset += take;
+            emitted += take;
 
             if offset < characters.len() {
                 if lines.len() + 1 == max_lines {
                     return false;
                 }
-                lines.push(std::mem::take(&mut runs));
+                lines.push((line_from, std::mem::take(&mut runs)));
+                line_from = emitted;
                 x = left;
             }
         }
@@ -560,11 +635,11 @@ fn wrap_line(
     });
 
     if !runs.is_empty() {
-        lines.push(runs);
+        lines.push((line_from, runs));
     }
     if lines.is_empty() {
         // An empty line still takes a line's worth of space.
-        lines.push(Vec::new());
+        lines.push((0, Vec::new()));
     }
 
     lines
@@ -648,39 +723,43 @@ pub fn scroll_line_at_track_y(
 
 // ------------------------------------------------------------------ painting
 
-/// The part of a line's selection that falls inside one of its runs, as character
-/// offsets within that run, or `None` when the selection does not touch it.
+/// The part of a run a selection covers, as character offsets within the run, or
+/// `None` when it does not touch it.
 ///
 /// A line is painted run by run — one per token, which is where the colors change —
-/// so a selection, which is measured in the line's characters, has to be mapped
-/// back onto the run it lands in. `run_start` is how many characters of the line
-/// come before this run.
+/// so a selection, which is measured in the document's characters, has to be mapped
+/// back onto the run it lands in. `source` is the document place the painted line
+/// begins at and `run_start` is how many characters of that painted line come
+/// before this run, so the run's own characters are the document's
+/// `[source.1 + run_start, ...)` — which is also what tells a wrapped line's second
+/// half from its first, and what keeps a selection measured on one of them from
+/// covering the other (see `Selection`).
 fn selected_part(
-    line_index: usize,
+    source: (usize, usize),
     run_start: usize,
     run_characters: usize,
     selection: Selection,
 ) -> Option<(usize, usize)> {
     let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
-    if line_index < start_line || line_index > end_line || run_characters == 0 {
+    let (line, base) = source;
+    if line < start_line || line > end_line || run_characters == 0 {
         return None;
     }
 
-    let line_from = if line_index == start_line {
-        start_char
+    let run_from = base + run_start;
+    let run_to = run_from + run_characters;
+    let from = if line == start_line {
+        start_char.max(run_from)
     } else {
-        0
+        run_from
     };
-    let line_to = if line_index == end_line {
-        end_char
+    let to = if line == end_line {
+        end_char.min(run_to)
     } else {
-        usize::MAX
+        run_to
     };
 
-    let from = line_from.saturating_sub(run_start).min(run_characters);
-    let to = line_to.saturating_sub(run_start).min(run_characters);
-
-    (from < to).then_some((from, to))
+    (from < to).then(|| (from - run_from, to - run_from))
 }
 
 /// Paint the background, the block decorations, the text and a selection, and the
@@ -754,13 +833,47 @@ pub(super) unsafe fn paint(
 
     let mut painter = RunPainter::new(surface, metrics.scale);
 
-    for (line_index, line) in laid_out.lines.iter().enumerate() {
+    // The numbers of the document's own lines, drawn in the column kept clear for them: a page that
+    // keeps no column draws none, a painted line that is the wrapped tail of its line draws none,
+    // and the note a frame adds at its bottom is not one of the document's lines and draws none
+    // either (see `gutter_width`, `own_line` and `source`).
+    if laid_out.gutter > 0 {
+        let advance = metrics.advance[BODY_LEVEL as usize].max(1);
+        let right = metrics.padding + laid_out.gutter - gutter_gap(metrics);
+        let mut style = plain_style(BODY_LEVEL);
+        style.foreground = blend(rgb(theme.foreground()), rgb(theme.background()), 0.45);
+
+        for line in &laid_out.lines {
+            if !line.own_line || line.source.1 != 0 {
+                continue;
+            }
+
+            let number = (line.source.0 + 1).to_string();
+            let width = number.chars().count() as i32 * advance;
+            let x = (right - width).max(metrics.padding);
+            painter.draw(
+                &number,
+                x,
+                RECT {
+                    left: x,
+                    top: line.top,
+                    right: x + width,
+                    bottom: line.top + line.height,
+                },
+                &style,
+                style.foreground,
+                page,
+            );
+        }
+    }
+
+    for line in &laid_out.lines {
         let mut run_start = 0usize;
 
         for run in &line.runs {
             let run_characters = run.text.chars().count();
             let selected_part = selection.and_then(|selection| {
-                selected_part(line_index, run_start, run_characters, selection)
+                selected_part(line.source, run_start, run_characters, selection)
             });
             run_start += run_characters;
 

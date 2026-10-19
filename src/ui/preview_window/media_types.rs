@@ -569,12 +569,21 @@ pub(super) struct TextPreviewState {
     pub(super) scrollbar: Option<text_preview::ScrollBar>,
     /// Whether the pointer is currently dragging the thumb.
     pub(super) dragging: bool,
-    /// The painted lines, which is what a press is turned back into a place in the
-    /// text against, and what a selection is copied from.
+    /// The painted lines, each carrying the document line it belongs to, which is what a press is
+    /// turned back into a place in the document against.
     pub(super) lines: Vec<text_preview::FrameLine>,
-    /// What is selected in the frame on screen, and whether a drag is extending it.
+    /// What is selected in the page, as places in its own document, and whether a drag is
+    /// extending it.
     pub(super) selection: Option<text_preview::Selection>,
     pub(super) selecting: bool,
+    /// When and where the pointer last pressed on the page, which is what the press after it is
+    /// read against as a double click (see `begin_text_selection`).
+    pub(super) last_press: Option<(Instant, (i32, i32))>,
+    /// Where the pointer last was while a drag was growing a selection, in the frame's own
+    /// coordinates, or nothing while no drag is running. A drag carried past the edge of the box is
+    /// one the page has to follow, and where the pointer is is the whole of what says so (see
+    /// `text_drag_step`).
+    pub(super) drag_pointer: Option<(i32, i32)>,
 }
 
 impl TextPreviewState {
@@ -585,6 +594,15 @@ impl TextPreviewState {
     /// The line a scroll of `lines` from here lands on, kept inside the document.
     pub(super) fn scrolled_by(&self, lines: i64) -> usize {
         (self.first_line as i64 + lines).clamp(0, self.max_first_line() as i64) as usize
+    }
+
+    /// A screenful of the page: the document lines the box shows, less one, so that the line the
+    /// reader was on when a page turned is still on it (see `scrolled_by`).
+    ///
+    /// `shortcut:` a screenful is counted in document lines, so a page of wrapped lines carries
+    /// more than a boxful of them; upgrade by measuring the painted lines the frame holds.
+    pub(super) fn page_lines(&self) -> i64 {
+        self.visible_lines.saturating_sub(1).max(1) as i64
     }
 
     pub(super) fn can_scroll(&self) -> bool {

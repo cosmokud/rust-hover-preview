@@ -217,6 +217,24 @@ pub(crate) enum PinCommand {
     /// Refused for every kind but a video FFmpeg plays, because it is the only player this app
     /// begins again on its own and the only one whose track this app therefore has to know.
     NextSubtitle,
+    /// Take a pinned page of text back a screenful — and, where the window holds no page, the
+    /// previous file, which is what an up arrow has always meant to every other kind of pin.
+    ///
+    /// Which of the two it is, is the file in the window's answer rather than the key's, the way a
+    /// Space is a hold of a video, a sound, or nothing at all (see `pin_command_request`).
+    PageBack,
+    /// The same, a screenful on, and the next file where there is no page to move.
+    PageOn,
+    /// The beginning of the page in the window, for a window that holds one, and nothing at all for
+    /// one that does not: a picture has no beginning to go back to.
+    PageTop,
+    /// The last screenful of it, the same way.
+    PageBottom,
+    /// Take a pinned page to the next place its own selection appears, and select it: what a
+    /// reader does with a word they are looking for again (see `find_next`).
+    ///
+    /// Nothing at all to a pin that holds no page, or that holds one with nothing selected.
+    FindNext,
 }
 
 // The commands the window procedure has left for the preview loop are a field of the pin's own

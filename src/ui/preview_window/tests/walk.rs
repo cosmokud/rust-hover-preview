@@ -1592,15 +1592,18 @@ fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
         let mut offset = 0.0;
         let mut paused = None;
         ask_pin(PinCommand::Next);
-        pin_command_request(
-            &mut request,
-            &mut wait,
-            &mut started,
-            &mut offset,
-            &mut paused,
-            true,
-            anchor,
-        );
+        unsafe {
+            pin_command_request(
+                HWND(0x1000 as *mut _),
+                &mut request,
+                &mut wait,
+                &mut started,
+                &mut offset,
+                &mut paused,
+                true,
+                anchor,
+            );
+        }
         assert!(
             request.is_none(),
             "a walk press asks the planner, not for an end"

@@ -433,7 +433,7 @@ fn a_pin_that_claims_the_keyboard_and_does_not_have_it_asks_for_it_back() {
     );
 }
 
-/// The arrows on a pinned window walk the pin's own folder and nothing else, on every press.
+/// The arrows on a pinned window are the pin's own, and none of them is ever a seek.
 ///
 /// The mapping itself is asserted above this one; what is asserted here is the property the
 /// whole fault turns on. There is no key-driven seek anywhere in this app — a seek is what the
@@ -443,13 +443,15 @@ fn a_pin_that_claims_the_keyboard_and_does_not_have_it_asks_for_it_back() {
 /// second" a statement about *which window* got the key rather than about what the key means,
 /// and it is why a loop is given by beginning the file again rather than by posting an arrow at
 /// it (see `video_launch::rewind_launch_seconds`).
+///
+/// The two arrows that are a page of text's own are commands of this app's like the walks are: a
+/// walk is what they come to in a window with no page behind them, and that is asked where the
+/// file in the window is known rather than here (see `scroll_pinned_text`).
 #[test]
-fn an_arrow_on_a_pinned_window_is_always_a_walk_of_its_own_folder() {
+fn an_arrow_on_a_pinned_window_is_never_a_seek() {
     for (vk, expected, name) in [
         (VK_LEFT.0 as i32, PinCommand::Previous, "left"),
-        (VK_UP.0 as i32, PinCommand::Previous, "up"),
         (VK_RIGHT.0 as i32, PinCommand::Next, "right"),
-        (VK_DOWN.0 as i32, PinCommand::Next, "down"),
     ] {
         assert_eq!(
             pinned_key_command(vk),
@@ -459,17 +461,15 @@ fn an_arrow_on_a_pinned_window_is_always_a_walk_of_its_own_folder() {
         );
     }
 
-    let walks = [PinCommand::Previous, PinCommand::Next];
-    for vk in [
-        VK_LEFT.0 as i32,
-        VK_RIGHT.0 as i32,
-        VK_UP.0 as i32,
-        VK_DOWN.0 as i32,
+    for (vk, expected, name) in [
+        (VK_UP.0 as i32, PinCommand::PageBack, "up"),
+        (VK_DOWN.0 as i32, PinCommand::PageOn, "down"),
     ] {
-        assert!(
-            walks.contains(&pinned_key_command(vk).expect("an arrow is always a walk")),
-            "an arrow must never map to anything that is not one of the two walks, whatever \
-                 state the pin is in"
+        assert_eq!(
+            pinned_key_command(vk),
+            Some(expected),
+            "{name} is the page's own command, which is a walk of the folder to a pin that \
+                 holds no page"
         );
     }
 }
