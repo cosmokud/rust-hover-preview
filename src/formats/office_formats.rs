@@ -95,8 +95,8 @@ pub fn app_installed(path: &Path) -> bool {
 }
 
 impl OfficeEngine {
-    /// Which engine is asked for this document's page under `config`, or `None` for a name
-    /// the Office list does not claim, which is nobody's to draw.
+    /// Which engine is asked for this document's page under `config` and `engine`, or `None`
+    /// for a name the Office list does not claim, which is nobody's to draw.
     ///
     /// The render engine is the answer where the tray has chosen it for every Office
     /// document, and where an engine is installed to be asked; without one there is nothing
@@ -105,18 +105,17 @@ impl OfficeEngine {
     /// the format is the answer where it is installed, and the render engine is the fallback
     /// for a family this machine has no application for.
     ///
-    /// The configuration is passed in rather than read here so that the question can be asked
-    /// of a file under any setting — the way `PreviewType::enabled_in` is — and so that what
-    /// is answered does not depend on when it is asked; see `page_engine` for the answer the
-    /// app goes by.
-    pub fn for_document(config: &AppConfig, path: &Path) -> Option<Self> {
+    /// The choice and the configuration are passed in rather than read here so that the
+    /// question can be asked of a file under any of them — the way `PreviewType::enabled_in`
+    /// is — and so that what is answered does not depend on when it is asked; see
+    /// `page_engine` for the answer the app goes by, and `engines_in_effect` for the choice
+    /// it hands in.
+    pub fn for_document(config: &AppConfig, engine: OfficeEngine, path: &Path) -> Option<Self> {
         if !crate::formats::lists::OFFICE.claims(path, config) {
             return None;
         }
 
-        if config.office_engine == Self::LibreOffice
-            && crate::engines::libreoffice_render::available()
-        {
+        if engine == Self::LibreOffice && crate::engines::libreoffice_render::available() {
             return Some(Self::LibreOffice);
         }
 
@@ -138,11 +137,19 @@ impl OfficeEngine {
 /// and a document is never drawn by both engines at once. What a caller does with an answer
 /// it does not like is nothing: where the render engine is the engine, a page it has not
 /// drawn yet is the wait a hover is in, not a reason to ask the application as well.
+///
+/// **The choice is the one the document on screen was drawn by, not the tray's of now** (see
+/// `engines_in_effect`): a row moved while a document is up is one the next document is
+/// drawn by, and asking the engine that has just been left behind for a page the engine now
+/// chosen has already drawn is a page nobody can read — the page in hand is keyed by the
+/// engine that drew it (see `document_cache`).
 pub fn page_engine(path: &Path) -> Option<OfficeEngine> {
+    let engine = crate::config::config::office_engine_in_effect();
+
     CONFIG
         .lock()
         .ok()
-        .and_then(|config| OfficeEngine::for_document(&config, path))
+        .and_then(|config| OfficeEngine::for_document(&config, engine, path))
 }
 
 /// The box a document's page is measured by when nothing else can measure it, by
@@ -240,9 +247,9 @@ mod tests {
     ///
     /// The machine's own answers are what the expectations are written from — whether an
     /// application or the render engine is installed is not something a test can decide — but
-    /// the rule is one of this app's, and it is what this asserts. The configuration is built
-    /// here rather than taken from the app's own, so that what a developer's `config.ini`
-    /// holds cannot decide what this test expects.
+    /// the rule is one of this app's, and it is what this asserts. The configuration and the
+    /// choice are both built here rather than taken from the app's own, so that what a
+    /// developer's `config.ini` holds cannot decide what this test expects.
     #[test]
     fn asks_the_engine_the_setting_names_where_it_is_installed() {
         let folder = std::env::temp_dir()
@@ -260,8 +267,10 @@ mod tests {
         };
         let engine_installed = crate::engines::libreoffice_render::available();
 
+        let started_at = AppConfig::default();
+
         assert_eq!(
-            OfficeEngine::for_document(&AppConfig::default(), &document),
+            OfficeEngine::for_document(&started_at, started_at.office_engine, &document),
             Some(machine_says),
             "the setting the app starts at asks the application, and the render engine only \
              where the application that owns the format is not here"
@@ -273,7 +282,7 @@ mod tests {
         };
 
         assert_eq!(
-            OfficeEngine::for_document(&chosen, &document),
+            OfficeEngine::for_document(&chosen, chosen.office_engine, &document),
             Some(if engine_installed {
                 OfficeEngine::LibreOffice
             } else {
@@ -288,7 +297,7 @@ mod tests {
         std::fs::write(&unclaimed, b"PK\x03\x04\x00\x00\x00\x00").expect("a written file");
 
         assert_eq!(
-            OfficeEngine::for_document(&chosen, &unclaimed),
+            OfficeEngine::for_document(&chosen, chosen.office_engine, &unclaimed),
             None,
             "while a name the Office list does not claim is nobody's to draw, whichever engine \
              the setting names"

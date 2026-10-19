@@ -286,6 +286,11 @@ mod tests {
             config.office_engine = OfficeEngine::MicrosoftOffice;
         }
 
+        // And a choice is read where a preview is begun rather than off the setting of now,
+        // so the question below is asked under the one pinned above only where it is read
+        // here too (see `engines_in_effect`).
+        crate::config::config::latch_engines();
+
         let folder = std::env::temp_dir().join("rust-hover-preview-office-engine-choice");
         std::fs::create_dir_all(&folder).expect("a test folder");
 

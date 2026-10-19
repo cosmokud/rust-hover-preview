@@ -466,6 +466,11 @@ fn an_office_document_is_asked_of_one_engine_and_not_the_other() {
         );
     }
 
+    // And the choice those questions are asked under is the one a preview was begun with
+    // rather than the setting of now, so pinning it above is pinning the answer only where
+    // this read follows it (see `engines_in_effect`).
+    crate::config::config::latch_engines();
+
     let folder = std::env::temp_dir().join("rust-hover-preview-office-engines");
     std::fs::create_dir_all(&folder).expect("a test folder");
 
