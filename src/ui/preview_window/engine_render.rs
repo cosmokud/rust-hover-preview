@@ -100,12 +100,18 @@ pub(super) fn engine_kind_of(path: &Path) -> Option<PreviewType> {
 
         // Where the bytes named nothing, the name's answer is what the browser draws, and it is
         // the router's — so a file whose name is a specimen's and whose bytes are nothing in
-        // particular is a specimen, and a file no list claims is nothing at all.
+        // particular is a specimen, and a file no list claims is nothing at all. A page of HTML
+        // is the one of the three the configuration decides as well as the name: the router says
+        // a page is a page whatever the tray asks, so the switch is what turns that answer into
+        // the engine's — with it off the file is this app's own text preview, and the pin it was
+        // taken up into keeps the frame that preview laid out.
         crate::formats::content_type::Content::Unknown => match hover.route.drawn_by {
             crate::formats::routing::DrawnBy::WebView(web) => match web {
                 crate::formats::routing::WebPage::Svg => Some(PreviewType::Vector),
                 crate::formats::routing::WebPage::FontSpecimen => Some(PreviewType::Fonts),
-                crate::formats::routing::WebPage::Html => Some(PreviewType::Text),
+                crate::formats::routing::WebPage::Html => hover
+                    .html_drawn_by_the_engine()
+                    .then_some(PreviewType::Text),
             },
             _ => None,
         },
