@@ -448,9 +448,10 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     );
 }
 
-/// A right-click on a pin that is not showing a sound's card opens the window's own menu: the
-/// same rows a bubble's menu holds, and no panel beside it, because nothing on it is a setting a
-/// flyout hangs off (see `bubble_menu_rows` and `pinned_menu_paint`).
+/// A right-click on a pin that is not showing a sound's card opens the window's own menu from its
+/// title bar: the same rows a bubble's menu holds, settings and all, and no panel beside it,
+/// because nothing on it is a setting a flyout hangs off (see `bubble_menu_rows` and
+/// `pinned_menu_paint`).
 #[test]
 fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -489,11 +490,50 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
     );
 }
 
+/// And a right-click out on the media opens the same panel without the rows that write a setting:
+/// the actions on the file and the ways out, which is the menu a picture's own body is answered
+/// with (see `PinMenuPage::Body`).
+#[test]
+fn a_right_click_on_the_media_holds_no_setting_rows() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _kind = MediaKindPutBack::put(MediaType::StaticImage);
+    stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
+
+    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 20, 20, PinMenuPage::Body) };
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("a right-click on the media opens the window's own menu")
+    };
+    let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "Next File",
+            "Previous File",
+            "",
+            "To Bubble",
+            "To Taskbar",
+            "Close",
+        ],
+        "the media's menu acts on the file and writes no setting"
+    );
+    let marks_a_setting = paint.rows.iter().any(|row| {
+        matches!(
+            row.mark,
+            pin_chrome::MenuMark::Check(_) | pin_chrome::MenuMark::Bullet
+        )
+    });
+    assert!(!marks_a_setting, "nothing on it carries a setting's mark");
+}
+
 /// Which page of its own menu a right-click asks a pinned window for: the window's rows on a
-/// sound's card, on the body and the title bar of a picture, and on the title bar of a pinned
-/// page; the page's own two commands over the text of a pinned page; and nothing at all on the
-/// transport bar of a film, which is the player's own strip along the bottom (see
-/// `pin_right_click_page`).
+/// sound's card and on the title bar of a picture; the window's rows without the settings on the
+/// body of a picture and on the media of a film; the page's own commands over the text of a
+/// pinned page; and nothing at all on the transport bar of a film, which is the player's own
+/// strip along the bottom (see `pin_right_click_page`).
 #[test]
 fn a_right_click_asks_for_the_page_its_row_of_the_window_holds() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -517,20 +557,20 @@ fn a_right_click_asks_for_the_page_its_row_of_the_window_holds() {
         "and so is a row well down it"
     );
 
-    // A picture: the title bar above its media is the window's, and so is the picture under it,
-    // which is the window's own to draw.
+    // A picture: the title bar above its media is the window's, with the settings on it, and the
+    // picture under it is the window's to draw without them.
     let picture = PinnedPreview::for_test();
     let caption = picture.caption;
     stand_pin(Some(picture));
     assert_eq!(
         pin_right_click_page(0),
         Some(PinMenuPage::Chrome),
-        "the title bar of a picture is the menu's"
+        "the title bar of a picture is the menu's, settings and all"
     );
     assert_eq!(
         pin_right_click_page(caption + 1),
-        Some(PinMenuPage::Chrome),
-        "and the picture under it too"
+        Some(PinMenuPage::Body),
+        "and the picture under it asks for the rows without the settings"
     );
 
     // A film's transport bar, which is the strip along the bottom of its window: the bar's own,
@@ -552,8 +592,8 @@ fn a_right_click_asks_for_the_page_its_row_of_the_window_holds() {
     );
     assert_eq!(
         pin_right_click_page(bar.top - 1),
-        Some(PinMenuPage::Chrome),
-        "while the row above the bar is the window's"
+        Some(PinMenuPage::Body),
+        "while the row above the bar is the window's own, without its settings"
     );
 
     // A page of text, with a text preview on screen: the text asks for the page's own page —
@@ -609,14 +649,12 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
             "Next File",
             "Previous File",
             "",
-            "Minimize to Bubble",
-            "Minimize to Taskbar",
-            "",
             "To Bubble",
             "To Taskbar",
             "Close",
         ],
-        "the page's own commands stand above the rows the pin shares with a bubble"
+        "the page's own commands stand above the rows the pin shares with a bubble, and the\
+         settings are the title bar's rather than the text's"
     );
     assert!(
         matches!(paint.rows[3].mark, pin_chrome::MenuMark::Separator),
@@ -654,14 +692,11 @@ fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
             "Next File",
             "Previous File",
             "",
-            "Minimize to Bubble",
-            "Minimize to Taskbar",
-            "",
             "To Bubble",
             "To Taskbar",
             "Close",
         ],
-        "a picture's panel holds the window's rows and none of the page's"
+        "a picture's panel holds the rows the media asks for and none of the page's"
     );
 
     // And a press where the page's `Select All` stood is the row drawn there now.
@@ -2065,7 +2100,7 @@ fn the_same_ask_puts_the_bubbles_menu_away() {
     // in the slot the loop's tick reads it from — a window nobody has to put on a screen
     // for a menu to be stood up in a slot (see `open_bubble_menu`).
     let _bubble = BubblePutBack::put(HWND(0x2000 as *mut _));
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true);
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
         *menu = Some(BubbleMenu {
@@ -2116,7 +2151,7 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
     // tick reads it from, the way the dismiss test above stands it (see `open_bubble_menu`).
     let hwnd = HWND(0x2000 as *mut _);
     let _bubble = BubblePutBack::put(hwnd);
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true);
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
         *menu = Some(BubbleMenu {
@@ -2130,7 +2165,7 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
     // The middle of the switch's own band, named by what the row says rather than by the number
     // it happens to sit at.
     let index = row_at(
-        &bubble_menu_chrome_rows(Some(MediaType::Audio), true, false),
+        &bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true),
         "Pause on Minimize",
     );
     let (x, y) = bubble_row_point(index);
@@ -2185,7 +2220,7 @@ fn a_press_on_the_bubbles_minimize_pick_writes_the_setting() {
     // stands it (see `open_bubble_menu`).
     let hwnd = HWND(0x2000 as *mut _);
     let _bubble = BubblePutBack::put(hwnd);
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true);
     let index = row_at(&rows, "Minimize to Taskbar");
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {

@@ -64,7 +64,7 @@ fn only_a_click_on_an_already_focused_bubble_puts_the_window_back() {
 fn the_bubble_menu_holds_only_what_has_playback() {
     for kind in [MediaType::Video, MediaType::NativeVideo, MediaType::Audio] {
         assert_eq!(
-            bubble_menu_rows(Some(kind), false),
+            bubble_menu_rows(Some(kind), false, true),
             vec![
                 BubbleMenuRow::Toggle,
                 BubbleMenuRow::NextFile,
@@ -84,7 +84,7 @@ fn the_bubble_menu_holds_only_what_has_playback() {
 
     for kind in [Some(MediaType::StaticImage), Some(MediaType::Text), None] {
         assert_eq!(
-            bubble_menu_rows(kind, false),
+            bubble_menu_rows(kind, false, true),
             vec![
                 BubbleMenuRow::NextFile,
                 BubbleMenuRow::PreviousFile,
@@ -166,7 +166,7 @@ fn the_bubble_menu_names_what_each_row_will_do() {
 /// them — the panel the chrome paints cannot disagree with the rows the press answers.
 #[test]
 fn the_painted_menu_carries_the_rows_the_press_answers() {
-    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false)
+    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true)
         .iter()
         .map(|row| row.label.clone())
         .collect();
@@ -188,7 +188,7 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         "a playing sound's menu pauses first"
     );
 
-    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Video), false, false)
+    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Video), false, false, true)
         .iter()
         .map(|row| row.label.clone())
         .collect();
@@ -210,7 +210,7 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         "a held film's menu lets it go"
     );
 
-    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Text), true, false)
+    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Text), true, false, true)
         .iter()
         .map(|row| row.label.clone())
         .collect();
@@ -234,7 +234,7 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
 /// row could open, and there is no Seek row here — so Close, the last row, stands unmarked.
 #[test]
 fn the_bubble_menu_points_no_arrow_at_any_row() {
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true);
     let popup = bubble_menu_popup((0, 44), 500, 500, 96, &rows);
     assert_eq!(
         popup.arrow,
@@ -250,7 +250,7 @@ fn the_bubble_menu_points_no_arrow_at_any_row() {
 fn exactly_one_of_the_two_minimize_picks_carries_the_disc() {
     let _target = PinMinimizeToPutBack::put(PinMinimizeTo::Taskbar);
 
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Text), false, false);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Text), false, false, true);
     let marked: Vec<&str> = rows
         .iter()
         .filter(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet))
@@ -263,7 +263,7 @@ fn exactly_one_of_the_two_minimize_picks_carries_the_disc() {
     );
 
     let _target = PinMinimizeToPutBack::put(PinMinimizeTo::Bubble);
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Text), false, false);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Text), false, false, true);
     let marked: Vec<&str> = rows
         .iter()
         .filter(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet))
@@ -286,7 +286,7 @@ fn the_pause_switch_carries_the_check_of_the_kind_it_stands_for() {
         .unwrap_or_else(|e| e.into_inner());
     let _switches = PausePreviewSettings::stood_at(false, true);
 
-    let film = bubble_menu_chrome_rows(Some(MediaType::Video), false, false);
+    let film = bubble_menu_chrome_rows(Some(MediaType::Video), false, false, true);
     let row = film
         .iter()
         .position(|row| row.label == "Pause on Minimize")
@@ -296,7 +296,7 @@ fn the_pause_switch_carries_the_check_of_the_kind_it_stands_for() {
         "the video's switch is off, so the film's row is unchecked"
     );
 
-    let sound = bubble_menu_chrome_rows(Some(MediaType::Audio), false, false);
+    let sound = bubble_menu_chrome_rows(Some(MediaType::Audio), false, false, true);
     let row = sound
         .iter()
         .position(|row| row.label == "Pause on Minimize")
@@ -306,7 +306,7 @@ fn the_pause_switch_carries_the_check_of_the_kind_it_stands_for() {
         "the audio's switch is on, so the sound's row is checked"
     );
 
-    let page = bubble_menu_chrome_rows(Some(MediaType::Text), false, false);
+    let page = bubble_menu_chrome_rows(Some(MediaType::Text), false, false, true);
     assert!(
         page.iter().all(|row| row.label != "Pause on Minimize"),
         "a page's bubble has no playback for a minimize to hold"
