@@ -22,12 +22,14 @@
 //! resized even though it has no scroll to give (see `text_size_keep_alive_try`).
 //!
 //! And it is the same hook that has to *stop* there, because a region is a box on the
-//! screen and not a claim on what is in front of it: a hover preview stands over
-//! everything and is a window nothing can be above, but a pin can be behind another
+//! screen and not a claim on what is in front of it: a pin can be behind another
 //! program — that is what `Pin Mode → Always On Top` off means — and a notch turned
 //! while the user is working in that program is that program's. So a notch belongs to
-//! this app only while a hover is up or while the pin is the window the user is in,
-//! which is the keyboard hook's own question (see `key_input::pin_owns_foreground`).
+//! this app only while the preview is the surface the pointer is standing on, which is
+//! the question the preview thread answers once a tick and publishes here: a pin raised
+//! over the listing the user is working in is exactly that surface, with the keyboard
+//! still in the listing behind it (see `publish_preview_under_the_pointer`), and a pin
+//! behind another program is not (see `key_input::pin_owns_foreground`).
 
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
@@ -55,6 +57,47 @@ static PIN_TEXT_SIZE_DELTA: AtomicI32 = AtomicI32::new(0);
 
 /// Thread running the hook's message pump, published so shutdown can wake it.
 static WHEEL_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+/// Whether the preview on screen is the surface the pointer is standing on, published by the
+/// preview thread once a tick.
+///
+/// It is what makes a pin *scrollable the moment it is raised*: a notch over a preview used to be
+/// this app's only while the pin was the window the keyboard was in — Always On Top, or the window
+/// the user had clicked into — so a pin raised over the listing they were working in took no notch
+/// and had to be clicked once before it would scroll. The pointer is over the pin the whole time;
+/// the keyboard is in the listing behind it, which is the point of the raise (see
+/// `Pin Mode → Update Preview → Move To Top`).
+///
+/// It is published rather than asked here because a `WH_MOUSE_LL` callback may not walk the
+/// desktop to find out what is in front — the same reason the pin's key owners are published by
+/// the same tick (see `key_input::publish_pin_key_owner`). One tick of staleness is all it can be
+/// wrong by, and a notch is turned by a hand that is not moving.
+static PREVIEW_UNDER_POINTER: AtomicU32 = AtomicU32::new(0);
+
+/// Whether the preview on screen is the surface the pointer is standing on, as the preview thread
+/// last saw it (see `PREVIEW_UNDER_POINTER`).
+fn preview_is_under_the_pointer() -> bool {
+    PREVIEW_UNDER_POINTER.load(Ordering::Acquire) != 0
+}
+
+/// Publish what the pointer is on, from the tick that is allowed to ask the desktop (see
+/// `PREVIEW_UNDER_POINTER`).
+pub(crate) fn publish_preview_under_the_pointer(under: bool) {
+    PREVIEW_UNDER_POINTER.store(u32::from(under), Ordering::Release);
+}
+
+/// Whether a notch inside a region this app published is this app's to take (see
+/// `wheel_hook_proc`).
+///
+/// Two questions and either one is enough. The keyboard's is the older of the two: a pin that is
+/// Always On Top, or one the user has clicked into, is a preview standing over the pointer wherever
+/// the keyboard is, and a hover — no pin up — is a window nothing can be above. The pointer's is
+/// the one that made a raised pin scrollable without a click: the preview is what the pointer is
+/// standing on, which the preview thread read off the desktop once a tick (see
+/// `preview_is_under_the_pointer`).
+fn preview_takes_the_wheel() -> bool {
+    crate::shell::key_input::pin_owns_foreground() || preview_is_under_the_pointer()
+}
 
 /// Number of wheel messages seen so far, counted across the whole desktop.
 pub fn wheel_tick_count() -> u64 {
@@ -123,11 +166,11 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         let notches = (info.mouseData >> 16) as u16 as i16 as i32;
 
         if let Some(region) = crate::ui::preview_window::text_scroll_keep_alive_try() {
-            // The box the preview published is asked first and the window the user is in second,
-            // and in that order: the answer to the second is a call neither every wheel message on
-            // the desktop nor a notch that was never ours should be paying for (see
-            // `pin_owns_foreground`).
-            if point_in_region(info.pt, region) && crate::shell::key_input::pin_owns_foreground() {
+            // The box the preview published is asked first, and what owns the wheel second: in that
+            // order, so that the second — a few calls into Windows — is a cost neither every wheel
+            // message on the desktop nor a notch that is outside every preview pays (see
+            // `preview_takes_the_wheel`).
+            if point_in_region(info.pt, region) && preview_takes_the_wheel() {
                 // The wheel is the preview's, not Explorer's: count it for the
                 // preview thread and swallow the message so the list behind the
                 // preview does not move as well. `Ctrl` held makes it the page's own size rather
@@ -150,21 +193,19 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // `text_size_keep_alive_try`).
         if wparam.0 == WM_MOUSEWHEEL as usize && control_is_down() {
             if let Some(region) = crate::ui::preview_window::text_size_keep_alive_try() {
-                if point_in_region(info.pt, region)
-                    && crate::shell::key_input::pin_owns_foreground()
-                {
+                if point_in_region(info.pt, region) && preview_takes_the_wheel() {
                     PIN_TEXT_SIZE_DELTA.fetch_add(notches, Ordering::AcqRel);
                     return LRESULT(1);
                 }
             }
         }
 
-        // And the same answer for a pinned picture, which is a window the keyboard is
-        // not in for the same reason: a hover the user pinned is a window nobody has
-        // pressed, so Explorer would take the notch and scroll the list under it — and the whole
-        // of what a pin does not get for free is the other half of that: a pin the user has not
-        // pressed is a window nobody is in, so a notch over one that is behind another program is
-        // that program's.
+        // And the same answer for a pinned picture, which is a window the keyboard is not in for
+        // the same reason: a hover the user pinned is a window nobody has pressed, so Explorer
+        // would take the notch and scroll the list under it — and the whole of what a pin does not
+        // get for free is the other half of that: a pin raised over the listing is still a window
+        // the keyboard is not in, and it is the surface the pointer is on all the same (see
+        // `preview_takes_the_wheel`). One that is behind another program is that program's.
         //
         // The loop that reads the count is woken here as well, because the count is an
         // atomic and nothing else: a notch turned while that loop is in its own wait for a
@@ -172,7 +213,7 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // 144 Hz display and the whole of what makes a zoom start unevenly (see
         // `wake_for_a_wheel_notch`).
         if let Some(region) = crate::ui::preview_window::pin_zoom_keep_alive_try() {
-            if point_in_region(info.pt, region) && crate::shell::key_input::pin_owns_foreground() {
+            if point_in_region(info.pt, region) && preview_takes_the_wheel() {
                 if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
                     PIN_ZOOM_DELTA.fetch_add(notches, Ordering::AcqRel);
                     crate::ui::preview_window::wake_for_a_wheel_notch();
