@@ -1141,6 +1141,20 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
     put_pin_at_the_front(hwnd);
 }
 
+/// Whether a raise has already been answered by Windows, and the band need not be taken for it.
+///
+/// A window of this app's own — a picture pin — is put at the front by the press that lands on it, so
+/// a raise asked for by that press is a second answer to a question already answered. Every other
+/// ask has the question open: a pick and a preview update both arrive with the listing in front, and
+/// the band is the only way this process can put the pin over it (see `put_pin_at_the_front`).
+///
+/// The kinds still standing in the preview's window answer no even when they hold the foreground: the
+/// band-and-back is what their press has always asked for, and a raise that stopped asking it while
+/// their window happened to hold the foreground would be a pin left behind by the click after it.
+pub(super) fn raise_is_already_answered(its_own: bool, foreground: HWND, hwnd: HWND) -> bool {
+    its_own && foreground == hwnd
+}
+
 /// Put a pinned window at the front of the band it is allowed to stand in, without taking the
 /// keyboard and without moving it.
 ///
@@ -1168,13 +1182,17 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
 /// What stands in the pin's band is somebody else's window and is brought along with it, so the
 /// raise is a whole preview rather than a caption over whatever happened to be behind it.
 pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
-    // **A pin that is a window is raised by Windows.** The press that asks for this has already
-    // activated the window it landed on, and a window Windows has activated is the one in front of
-    // the ordinary band: taking the topmost band and giving it back would be a second answer to a
-    // question already answered, and the band it took is a flicker the user sees. What is left of
-    // this road — the band kept for a pin that owes the front, and the band-and-back for one that
-    // does not — belongs to the kinds still standing in the preview's window (see `pin_real_window`).
-    if pin_is_its_own_window() {
+    // **A pin that is a window and already holds the foreground is in front.** The press that asks
+    // for this has activated the window it landed on, and a window Windows has activated is the one
+    // in front of the ordinary band: taking the topmost band and giving it back would be a second
+    // answer to a question already answered, and the band it took is a flicker the user sees.
+    //
+    // A pin that is a window and does *not* hold the foreground is the case this whole road exists
+    // for, and it is the ordinary one: a pick or a preview update arrives while the user is clicking
+    // in the listing, so the listing is the foreground window and the pin is what is to be brought in
+    // front of it (see `raise_pinned_preview`). Asking about the foreground rather than about the kind
+    // of window is what makes both roads right with one question.
+    if raise_is_already_answered(pin_is_its_own_window(), GetForegroundWindow(), hwnd) {
         return;
     }
     // A pin that owes the front *holds* the topmost band rather than taking it and giving it back:
