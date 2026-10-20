@@ -1017,6 +1017,20 @@ pub(super) const PIN_RAISE_GRACE: Duration = Duration::from_millis(250);
 /// keyboard and without moving it: what a preview update owes the user when the pin was behind the
 /// listing they picked the file in (see `Pin Mode → Update Preview → Move To Top`).
 ///
+/// The switch is read here rather than in the raise itself, because a press on the pin owes the
+/// raise whatever the switch says about updates (see `put_pin_at_the_front`). A pin that is put away
+/// has no window to raise and is left alone, and so is one whose row is switched off.
+pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
+    if pin_is_collapsed() || !pin_update_move_to_top() {
+        return;
+    }
+
+    put_pin_at_the_front(hwnd);
+}
+
+/// Put a pinned window at the front of the band it is allowed to stand in, without taking the
+/// keyboard and without moving it.
+///
 /// **`HWND_TOP` cannot do this, and asking for it is a call that answers nothing.** Windows will not
 /// let a window of a process that is not in the foreground stand over the window that is: the pick
 /// arrives while the user is clicking in the listing, so the listing's window is the foreground one
@@ -1027,17 +1041,20 @@ pub(super) const PIN_RAISE_GRACE: Duration = Duration::from_millis(250);
 /// that is not Always On Top belongs in, reached in a way the foreground window cannot refuse. A
 /// pin that *is* Always On Top keeps the band it is in and its raise is the one call.
 ///
+/// **A press is the other caller, and the refusal above is the whole of why it is.** A press on the
+/// pin asks Windows for the foreground, and Windows refuses that to a process whose windows another
+/// window in front has put it behind — which is exactly the press that matters: the first one after
+/// the user has clicked anything else. The keyboard still arrives (`SetFocus` is refused only while
+/// the window is `WS_EX_NOACTIVATE`, see `pin_take_focus`), so the pin reads as focused while the
+/// window it is in stays behind the one that was pressed before it, and the press looks unanswered.
+/// The band-and-back raise is not refused, so it is what answers a press.
+///
 /// The keyboard is left where the user is working, which is the half of a keyboard walk a raise that
 /// took the focus would break, and the window is left where they put it: neither call moves it.
 ///
 /// What stands in the pin's band is somebody else's window and is brought along with it, so the
-/// raise is a whole preview rather than a caption over whatever happened to be behind it. A pin
-/// that is put away has no window to raise and is left alone; so is one whose row is switched off.
-pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
-    if pin_is_collapsed() || !pin_update_move_to_top() {
-        return;
-    }
-
+/// raise is a whole preview rather than a caption over whatever happened to be behind it.
+pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
     // A pin that owes the front *holds* the topmost band rather than taking it and giving it back:
     // the band is the half of this that the listing's activation cannot undo, and it is kept until
     // the user's own press gives it back (see `pin_holds_the_front`, `lower_pinned_preview`). What
