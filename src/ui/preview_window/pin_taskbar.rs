@@ -443,11 +443,13 @@ unsafe fn handle_taskbar_restore() {
         if !preview_hwnd.is_invalid() {
             // A press on the pin's stand-in is the user asking for the pin, and it owes no band for
             // it: the window the hand is in is the window Windows activates, and an activated window
-            // is already the one in front. A band owed here would be one this app then had to give
-            // back on its own, and a restore the user asked for would come back as a window in the
-            // topmost band with `Always On Top` off (see `band_place` and `PIN_FRONT_OWED`).
+            // is already the one in front (see `band_place`). What it is owed is itself — a pin the
+            // Shell hid with the rest of the desktop is a window that is not on the screen, and a
+            // window that is not on the screen is put up by its paint and not by a raise: what a
+            // layered window shows between two paints is the surface it already holds, stretched
+            // into whatever box it is given (see `show_pinned_window`).
+            show_pinned_window(preview_hwnd);
             let _ = SetForegroundWindow(preview_hwnd);
-            let _ = SetWindowPos(preview_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             place_pinned_siblings();
         }
     }
