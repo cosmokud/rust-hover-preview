@@ -110,14 +110,18 @@ pub fn press_pinned_preview() {
 }
 
 /// Note that the press above named no file, and put the pin back behind the window the press was
-/// made in: what a press that picked a folder or a gap owes, and what undoes the raise the press
-/// began. A pick that lands after this one still raises the pin again.
-pub fn pin_press_was_not_a_pick() {
+/// made in — `window`, the frame of the one under the point — which is what a press that picked a
+/// folder, a file no kind previews, or a gap owes, and what undoes the raise the press began. The
+/// frame rather than the foreground, because the click that made the press activates the listing
+/// after this loop reads it: the foreground is still the window the user came from, and that is a
+/// window the pin is already behind (see `PinUpdateWatch::press_frame`). A pick that lands after
+/// this one still raises the pin again.
+pub fn pin_press_was_not_a_pick(window: isize) {
     if !pinned() {
         return;
     }
 
-    send_preview(PreviewMessage::PinNoPick);
+    send_preview(PreviewMessage::PinNoPick { window });
 }
 
 /// Show a preview of the file the pointer hovers, opened from the cursor it was hovered

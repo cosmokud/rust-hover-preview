@@ -24,6 +24,18 @@ pub(super) fn pin_update_settings() -> (bool, bool) {
         .unwrap_or((DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER))
 }
 
+/// The frame of the window a press was made in: what a press that named no file puts the pin behind,
+/// as a handle because the answer names a window without this app's own types. Zero where the shell
+/// describes no window at all, which is no place to go behind.
+///
+/// That window and not the foreground one, which is still the window the user came from while the
+/// click that made the press has not been dispatched yet (see `pin_press_was_not_a_pick`).
+fn press_frame(pointer: &PointerTick) -> isize {
+    item_window_of(pointer.window)
+        .map(|window| window.frame)
+        .unwrap_or_default()
+}
+
 /// What the hook watches while a preview is pinned, so that the tray's `Pin Mode … Update Preview`
 /// can show the pin the file the user picks next.
 ///
@@ -337,7 +349,7 @@ impl PinUpdateWatch {
                     true
                 }
                 Some(Some(_)) | None => {
-                    pin_press_was_not_a_pick();
+                    pin_press_was_not_a_pick(press_frame(&pointer));
                     false
                 }
                 Some(None) => false,
@@ -463,7 +475,7 @@ impl PinUpdateWatch {
                             // no file is at the point — so it picked nothing the pin can show, and
                             // the raise the press made is given back.
                             if path.is_dir() {
-                                pin_press_was_not_a_pick();
+                                pin_press_was_not_a_pick(press_frame(&pointer));
                             }
                             let offered = self.offer(&path, &showing);
                             self.answer_click(&path, &showing, clicked, now, pointer.point);
@@ -961,7 +973,7 @@ impl PinUpdateWatch {
             // own `is_dir` there — and a stale folder read over a file that was just picked must
             // not undo the pick (see `PinUpdateWatch::answer_click`).
             if path.is_dir() && self.pending.is_some() {
-                pin_press_was_not_a_pick();
+                pin_press_was_not_a_pick(press_frame(pointer));
             }
             self.offer(&path, showing);
         }

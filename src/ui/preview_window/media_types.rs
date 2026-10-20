@@ -81,11 +81,15 @@ pub enum PreviewMessage {
     /// answer is a [`PinUpdate`](Self::PinUpdate); a press that names no file is put back behind
     /// the listing by [`PinNoPick`](Self::PinNoPick) (see `press_pinned_preview`).
     PinPress,
-    /// A press that was read as a pick named no file — a folder in the tree, the gap between the
-    /// rows, the toolbar above them — and the pin goes back behind the window the press was made
-    /// in. What the press above raised is undone here; a pick that lands after it still raises the
-    /// pin again (see `pin_press_was_not_a_pick`).
-    PinNoPick,
+    /// A press that was read as a pick named no file — a folder, a file no kind previews, the gap
+    /// between the rows, the toolbar above them — and the pin goes back behind the window the press
+    /// was made in, which is the frame `window` names: the foreground is still the window the user
+    /// came from where the click has not been dispatched yet. What the press above raised is undone
+    /// here; a pick that lands after it still raises the pin again (see
+    /// `pin_press_was_not_a_pick`).
+    PinNoPick {
+        window: isize,
+    },
     /// Whether the pin key is watched was changed in the tray, or previews themselves
     /// were turned off. A pin on screen is ended here rather than left as a window
     /// nothing would ever take down again.
