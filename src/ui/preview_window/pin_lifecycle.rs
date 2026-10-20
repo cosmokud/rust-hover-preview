@@ -294,6 +294,18 @@ pub(crate) fn band_place() -> HWND {
     }
 }
 
+/// Whether a pin being shown owes the topmost band and back to reach the front, because `HWND_TOP` is
+/// no way to reach it for a process that does not hold the foreground (see `show_pinned_window`).
+///
+/// It is a question, and it is asked as one, because the answer is three facts about the pin rather
+/// than the call itself: a pin that is Always On Top is going to the band above anyway, a pin that is
+/// already on the screen is left exactly where the user's own clicks put it, and only the kinds still
+/// standing in the preview's window keep the plain raise they have always had — the hover's window is
+/// the one a press lands on for those, so the press is what has already brought it forward.
+pub(super) fn showing_owes_the_band(on_the_screen: bool) -> bool {
+    pin_is_its_own_window() && !pin_always_on_top() && !on_the_screen
+}
+
 /// The pin owes the front: a pick, a take-up or a restore asked for it, and no press that named no
 /// file and no window change away from the listing has given it back since.
 ///
@@ -1052,15 +1064,44 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // stands over; and it is asked for of a window that was *off* the screen only, since one that
     // is on it is to be left exactly where the user's own clicks put it.
     if !pin_always_on_top() && !on_the_screen {
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_TOP,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        // **A window that does not come with the foreground is put in front the one way Windows lets
+        // it be:** the topmost band, given straight back. `HWND_TOP` is asked for below and does
+        // nothing at all for a process that does not hold the foreground — the call reports success
+        // and the window stays where it was — which is a pin taken up with a *key* appearing behind
+        // Explorer while the same pin taken up with a *click* appeared in front of it: the click had
+        // already made its own window the foreground one, and the key had not. Nothing is left in the
+        // band: it is taken and given back in the same breath, so `Pin Mode → Always On Top` is still
+        // the only thing that keeps a pin over other programs (see `pin_holds_the_front`).
+        if showing_owes_the_band(on_the_screen) {
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        } else {
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
     }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 
