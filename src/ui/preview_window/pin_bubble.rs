@@ -1364,6 +1364,10 @@ pub(super) unsafe fn hide_pinned_windows() {
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
 
+    // A pin standing in a window of its own goes down with the preview's: it is the pin's other
+    // window, and one left on the screen is a picture of a pin that has been put away.
+    pin_real_window::hide_real_pin_window();
+
     let video = VIDEO_HWND.load(Ordering::SeqCst);
     if video != 0 {
         let _ = ShowWindow(HWND(video as *mut _), SW_HIDE);

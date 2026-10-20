@@ -465,6 +465,10 @@ pub(super) fn pin_screen_is_settled(media: Option<MediaType>, engine_draws: bool
 /// longer existed. Every reason but `Reason::Hung` is this road, and the bubble is taken down
 /// here because the loop's own take-down does not know about it.
 pub(super) fn end_pin_state(reason: Reason) -> PreviewMessage {
+    // The pin that has ended is no pin, and the window it stood in is the next pin's question to ask
+    // (see `pin_stands_in_its_own_window`).
+    pin_stands_in_its_own_window(false);
+
     let owed = end_pin(reason, &Win32PinWindow);
 
     debug_assert_eq!(
@@ -486,7 +490,7 @@ pub(super) struct Win32PinWindow;
 
 impl PinWindow for Win32PinWindow {
     fn hwnd(&self) -> isize {
-        PREVIEW_HWND.load(Ordering::SeqCst)
+        pinned_window().0 as isize
     }
 
     fn pointer(&self) -> Option<(i32, i32)> {
@@ -934,8 +938,38 @@ pub(super) fn pinned_window_box() -> Option<(ScreenRegion, i32, i32)> {
 /// they paint through is read rather than carried down from a window procedure
 /// that is not on either road.
 pub(super) fn pinned_window() -> HWND {
+    if pin_is_its_own_window() {
+        if let Some(hwnd) = pin_real_window::real_pin_window() {
+            return hwnd;
+        }
+    }
+
     HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _)
 }
+
+/// Whether the pin on the screen is drawn the whole way by this app, and so stands in a window of its
+/// own: a window Windows activates on a press, lists in Alt+Tab and gives a taskbar button to.
+///
+/// Asked of the kind rather than of the setting, because it is what the kind can be: the preview's
+/// window is a tool window that never takes the focus, and a picture is the one kind with nothing of
+/// anybody else's standing in its band (see `MediaType::is_a_picture_of_its_own`).
+pub(super) fn pin_is_its_own_window() -> bool {
+    pinned() && PIN_IS_ITS_OWN_WINDOW.load(Ordering::SeqCst)
+}
+
+/// Whether the pin that is up stands in a window of its own, written where the pin is taken up and
+/// cleared where it ends.
+///
+/// It is a decision taken once, at the take-up, rather than a question asked of the media every time
+/// a road wants the window: what is under the pin when it ends is not what it was taken up on, and the
+/// window a pin stood in is the pin's own fact rather than the media's.
+pub(super) fn pin_stands_in_its_own_window(its_own: bool) {
+    PIN_IS_ITS_OWN_WINDOW.store(its_own, Ordering::SeqCst);
+}
+
+/// The pin that is up stands in a window of its own: written at the take-up from the kind the pin was
+/// taken up on (see `MediaType::is_a_picture_of_its_own`).
+static PIN_IS_ITS_OWN_WINDOW: AtomicBool = AtomicBool::new(false);
 
 /// Put a pinned window up at the box its state says, painted before it is shown: what a layered
 /// window shows between one paint and the next is the surface it already has, stretched into
@@ -952,6 +986,32 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
 
     let Some((window, width, height)) = pinned_window_box() else {
         return;
+    };
+
+    // **The window is asked for, not taken from the caller.** A pin this app draws itself stands in a
+    // window of its own — Windows activates it on a press and lists it in Alt+Tab — and the preview's
+    // window is put down in the same breath, because two windows holding the same picture is one
+    // picture too many: what the hand sees between one frame and the next is the old surface of the
+    // window that has gone, stretched into the box it had.
+    //
+    // Every caller passes the preview's window, which is why it is no longer read: the answer is the
+    // state's, and it is the same answer every other road asks for (see `pinned_window`).
+    let hwnd = if pin_is_its_own_window() {
+        let Some(hwnd) = pin_real_window::real_pin_window_at(window) else {
+            return;
+        };
+        let preview = PREVIEW_HWND.load(Ordering::SeqCst);
+        if preview != 0 {
+            let _ = ShowWindow(HWND(preview as *mut _), SW_HIDE);
+        }
+
+        // The name on the button the window brings is the file's own, so that the Shell's label
+        // beside the hover says which file the window is of (see `pin_taskbar_title`).
+        pin_taskbar::set_pin_taskbar_title(hwnd);
+        hwnd
+    } else {
+        pin_real_window::hide_real_pin_window();
+        hwnd
     };
 
     // Whether the pin's window is on the screen as this is asked, which is what tells a pin standing
@@ -1064,6 +1124,15 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
 /// What stands in the pin's band is somebody else's window and is brought along with it, so the
 /// raise is a whole preview rather than a caption over whatever happened to be behind it.
 pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
+    // **A pin that is a window is raised by Windows.** The press that asks for this has already
+    // activated the window it landed on, and a window Windows has activated is the one in front of
+    // the ordinary band: taking the topmost band and giving it back would be a second answer to a
+    // question already answered, and the band it took is a flicker the user sees. What is left of
+    // this road — the band kept for a pin that owes the front, and the band-and-back for one that
+    // does not — belongs to the kinds still standing in the preview's window (see `pin_real_window`).
+    if pin_is_its_own_window() {
+        return;
+    }
     // A pin that owes the front *holds* the topmost band rather than taking it and giving it back:
     // the band is the half of this that the listing's activation cannot undo, and it is kept until
     // the user's own press gives it back (see `pin_holds_the_front`, `lower_pinned_preview`). What
