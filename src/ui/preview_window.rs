@@ -226,11 +226,11 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     EnumWindows, FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
-    GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
+    GetTopWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
     IsWindowVisible, LoadCursorW, MoveWindow, MsgWaitForMultipleObjectsEx, PeekMessageW,
     PostMessageW, RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowPos, ShowWindow, ShowWindowAsync, TrackPopupMenu, TranslateMessage,
-    UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_HWNDPREV, GW_OWNER,
+    UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER,
     HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
     IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
     PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT,

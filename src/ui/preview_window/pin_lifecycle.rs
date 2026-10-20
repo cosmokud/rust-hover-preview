@@ -1119,7 +1119,19 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
     }
 
     let topmost = window_holds_the_topmost_band(hwnd);
-    if !topmost && (window.is_invalid() || !pin_stands_over(hwnd, window)) {
+
+    // A topmost window — the taskbar, a tooltip, another app's own band window — is not a place to
+    // go behind: a pin put under the taskbar is a pin over every ordinary window, which is the
+    // listing it was meant to go behind. The window to go behind is then the front-most ordinary
+    // one, which is the window the user is working in.
+    let pressed_topmost = !window.is_invalid() && window_holds_the_topmost_band(window);
+    let place = if pressed_topmost {
+        front_ordinary_window(hwnd)
+    } else {
+        window
+    };
+
+    if !topmost && !pressed_topmost && (place.is_invalid() || !pin_stands_over(hwnd, place)) {
         // Already behind it, or with no window to go behind at all: there is no band to give back,
         // and asking for the front of the ordinary one would be the pin coming back over the
         // listing by the road this is meant to take it away by.
@@ -1140,10 +1152,10 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
         );
     }
 
-    if !window.is_invalid() {
+    if !place.is_invalid() {
         let _ = SetWindowPos(
             hwnd,
-            window,
+            place,
             0,
             0,
             0,
@@ -1273,6 +1285,32 @@ pub(super) unsafe fn pin_stands_over(hwnd: HWND, window: HWND) -> bool {
     }
 
     false
+}
+
+/// The front-most window a pin belongs behind: the first visible window in the z-order that is
+/// neither this app's own, nor topmost, nor the desktop.
+///
+/// What a press in a topmost window — the taskbar, a tooltip, another app's band window — has to
+/// go behind. A pin put under such a window is still over every ordinary one, and the ordinary one
+/// the user is looking at is the listing it was taken behind.
+unsafe fn front_ordinary_window(except: HWND) -> HWND {
+    let mut window = GetTopWindow(HWND(ptr::null_mut())).unwrap_or_default();
+    let mut seen = 0;
+    while !window.is_invalid() && seen < 200 {
+        if window != except
+            && !foreground_is_ours(window)
+            && IsWindowVisible(window).as_bool()
+            && !window_holds_the_topmost_band(window)
+            && !foreground_is_the_desktop(window)
+        {
+            return window;
+        }
+
+        window = GetWindow(window, GW_HWNDNEXT).unwrap_or_default();
+        seen += 1;
+    }
+
+    HWND(ptr::null_mut())
 }
 
 /// Whether the window in front belongs to this app: the pin, the menu it opens, the page the engine
