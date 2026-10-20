@@ -53,6 +53,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "pin_nav_others",
             "pin_nav_video",
             "pin_update_enabled",
+            "pin_update_move_to_top",
             "pin_update_on_hover",
             "preview_enabled",
             "run_at_startup",

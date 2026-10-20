@@ -267,6 +267,15 @@ pub(super) fn pin_update_enabled() -> bool {
         .unwrap_or(DEFAULT_PIN_UPDATE_ENABLED)
 }
 
+/// Whether an update also brings the pin in front of what it was behind, as the configuration has
+/// it (see `Pin Mode → Update Preview → Move To Top` and `raise_pinned_preview`).
+pub(super) fn pin_update_move_to_top() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(DEFAULT_PIN_UPDATE_MOVE_TO_TOP)
+}
+
 /// Whether a pin collapsed into its bubble holds the video it is playing where it is, as the
 /// configuration has it (see `Pin Mode → Pause on Minimize`). It is read by the tick that
 /// keeps a collapsed pin's playback in step with the bubble, so a switch thrown while the pin
@@ -928,6 +937,36 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     if !pin_always_on_top() {
         show_pin_taskbar();
     }
+}
+
+/// Put a pinned window at the top of the band it is allowed to stand in, without taking the
+/// keyboard and without moving it: what a preview update owes the user when the pin was behind the
+/// listing they picked the file in (see `Pin Mode → Update Preview → Move To Top`).
+///
+/// `HWND_TOP` is the whole of the raise, and not a band of its own: a pin that is Always On Top
+/// stays in the topmost band and comes forward inside it, and one that is not is put above the
+/// ordinary windows and no further — a pick is not what overrules that setting. `SWP_NOACTIVATE`
+/// keeps the keyboard where the user is working, which is the half of a keyboard walk a raise that
+/// took the focus would break.
+///
+/// What stands in the pin's band is somebody else's window and is brought along with it, so the
+/// raise is a whole preview rather than a caption over whatever happened to be behind it. A pin
+/// that is put away has no window to raise and is left alone; so is one whose row is switched off.
+pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
+    if pin_is_collapsed() || !pin_update_move_to_top() {
+        return;
+    }
+
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOP,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+    place_pinned_siblings();
 }
 
 /// Put the thing a pin leaves a band open for where that band is: the player's own window, or

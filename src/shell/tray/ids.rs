@@ -375,6 +375,10 @@ pub(super) const ID_TRAY_PIN_NAV_AUDIO_CATEGORY: u16 = 1675;
 pub(super) const ID_TRAY_PIN_NAV_OTHERS_ALL: u16 = 1676;
 pub(super) const ID_TRAY_PIN_NAV_OTHERS_CATEGORY: u16 = 1677;
 pub(super) const ID_TRAY_PIN_ALWAYS_ON_TOP: u16 = 1678;
+/// The `Pin Mode → Update Preview → Move To Top` row: whether an update also brings a pin that was
+/// behind in front of the window covering it. It sits past every id the app hands out, beside the
+/// pin's other rows, where no click on it is read as another submenu's item.
+pub(super) const ID_TRAY_PIN_UPDATE_TOP: u16 = 1679;
 /// The row above `Run at Startup`, which is in the menu only while a newer release is
 /// waiting: it puts the installer `updates` fetched on, and the app ends itself as the
 /// installer takes over rather than being the copy that has to be terminated.

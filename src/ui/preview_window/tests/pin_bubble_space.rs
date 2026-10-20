@@ -592,3 +592,106 @@ fn a_pin_brought_back_by_its_key_leaves_the_keyboard_in_the_listing() {
     }
     stand_pin(previous_pin);
 }
+
+/// A preview update brings a pin in front of whatever was standing over it, without taking the
+/// keyboard; with `Pin Mode → Update Preview → Move To Top` off it leaves the pin where the user's
+/// own clicks put it.
+///
+/// The z-order is read off the desktop's own list because that is the one part of a raise nothing
+/// records: what the call was asked for is a place among other windows, and a window put behind the
+/// listing it is following is the whole of the fault this row answers (see `raise_pinned_preview`).
+#[test]
+fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    // Safety: both windows are this test's own, opened where no display is. The second is made
+    // after the pin's, which is what puts it in front, and it is still there after each raise, so
+    // that a pin which did not come forward is a pin still under it.
+    let (pin_hwnd, in_front) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+        let in_front = a_window_of_the_tests_own();
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(in_front, SW_SHOWNOACTIVATE);
+        assert!(
+            stands_over(in_front, pin_hwnd),
+            "the window opened after the pin's is the one in front of it"
+        );
+        (pin_hwnd, in_front)
+    };
+
+    // A pin that is up and on the screen, with `Always On Top` off: an ordinary window, which is
+    // the one that can be standing behind the listing the user picks a file in.
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // Safety: the raise under test, asked of a window this test made.
+    unsafe { raise_pinned_preview(pin_hwnd) };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "an update puts the pin above the window that was standing over it: the file the user \
+         picked is the one they are looking at next"
+    );
+    assert_ne!(
+        unsafe { GetForegroundWindow() },
+        pin_hwnd,
+        "the pin is raised without taking the keyboard: the pick it answers may be one made with \
+         the arrows in the listing, and a raise that took the focus would end that walk"
+    );
+
+    // The row switched off: the window in front is put back there, and the update leaves it alone.
+    unsafe {
+        let _ = SetWindowPos(
+            in_front,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "the window in front is the one the setting off leaves the pin behind"
+    );
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_update_move_to_top = false;
+    }
+
+    // Safety: the raise under test, asked of a window this test made.
+    unsafe { raise_pinned_preview(pin_hwnd) };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "with the row off a preview update is a file swapped into the pin where it stands, and the \
+         window stays where the user's own clicks put it"
+    );
+    // Safety: both windows are this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(in_front);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}

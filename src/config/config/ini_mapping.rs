@@ -122,6 +122,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "pin_update_move_to_top",
+            Some(self.pin_update_move_to_top.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "pin_nav_video",
             Some(self.pin_nav_video.as_str().to_string()),
         );
@@ -656,6 +661,10 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_update_on_hover") {
             self.pin_update_on_hover = value;
+        }
+        // And whether an update also brings the pin in front of what it was behind.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_update_move_to_top") {
+            self.pin_update_move_to_top = value;
         }
         // The per-anchor answers, read the same way. A file holding only the retired single
         // key seeds all three with it, so a user who picked one walk keeps it; a value

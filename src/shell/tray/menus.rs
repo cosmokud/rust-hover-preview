@@ -27,10 +27,10 @@ use super::ids::{
     ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
     ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER,
-    ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD,
-    ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
-    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
-    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_STARTUP, ID_TRAY_TEXT_SCALE_BASE,
+    ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW,
+    ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME,
+    ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS,
+    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_STARTUP, ID_TRAY_TEXT_SCALE_BASE,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
     ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN,
@@ -69,13 +69,13 @@ use crate::config::config::{
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
     DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
-    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
-    DEFAULT_PREVIEW_SCALE, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
-    DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
-    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
-    DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_LOOP, DEFAULT_VIDEO_SCALE,
-    DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
+    DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_PREVIEW_SCALE, DEFAULT_REMEMBER_AUDIO_VOLUME,
+    DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+    DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE,
+    DEFAULT_TICK_MS, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND,
+    DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_LOOP,
+    DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
     DEFAULT_ZOOM_BACKGROUND, VOLUME_CHOICES,
 };
 use crate::config::theme_files;
@@ -136,6 +136,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         pin_minimize_to,
         pin_update,
         pin_update_on_hover,
+        pin_update_move_to_top,
         pin_nav_video,
         pin_nav_audio,
         pin_nav_others,
@@ -149,6 +150,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                 c.pin_minimize_to,
                 c.pin_update_enabled,
                 c.pin_update_on_hover,
+                c.pin_update_move_to_top,
                 c.pin_nav_video,
                 c.pin_nav_audio,
                 c.pin_nav_others,
@@ -161,6 +163,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_PIN_MINIMIZE_TO,
             DEFAULT_PIN_UPDATE_ENABLED,
             DEFAULT_PIN_UPDATE_ON_HOVER,
+            DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
             DEFAULT_PIN_NAV_VIDEO,
             DEFAULT_PIN_NAV_AUDIO,
             DEFAULT_PIN_NAV_OTHERS,
@@ -197,13 +200,15 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // The `Update Preview` submenu: whether a pin that is up is shown the file the user picks
-    // next — the one the pointer clicks, or the one the keyboard selects — and whether the
-    // pointer's own hover is one of the ways it is told about one. A pin is a window to read
-    // or to watch, so both are off the pin's own row rather than part of it.
+    // next — the one the pointer clicks, or the one the keyboard selects — whether the
+    // pointer's own hover is one of the ways it is told about one, and whether being told brings it
+    // in front of what it was behind. A pin is a window to read or to watch, so all three are off
+    // the pin's own row rather than part of it.
     //
-    // The second row is greyed while the first is off, because it says nothing then: a pin
-    // that follows nothing does not follow a hover either, and a row that could be ticked
-    // without effect would be a setting a user cannot tell from one that does nothing.
+    // The two rows below the first are greyed while it is off, because they say nothing then: a
+    // pin that follows nothing does not follow a hover either, and one that follows nothing has no
+    // update to come forward for. A row that could be ticked without effect would be a setting a
+    // user cannot tell from one that does nothing.
     let update_menu = CreatePopupMenu().unwrap();
     append_labeled_item(
         update_menu,
@@ -229,6 +234,24 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         hover_flags,
         ID_TRAY_PIN_UPDATE_HOVER as usize,
         w!("On Hover"),
+    );
+    // And the raise, parted from the pair above by a separator of its own: how the file is chosen
+    // is settled by the two above, and this is what the window does once one is chosen.
+    let mut move_to_top_flags = MF_STRING
+        | if pin_update_move_to_top {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    if !pin_update {
+        move_to_top_flags |= MF_GRAYED;
+    }
+    let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let _ = AppendMenuW(
+        update_menu,
+        move_to_top_flags,
+        ID_TRAY_PIN_UPDATE_TOP as usize,
+        w!("Move To Top"),
     );
     let _ = AppendMenuW(
         pin_menu,

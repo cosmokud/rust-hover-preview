@@ -979,6 +979,12 @@ pub const DEFAULT_PIN_UPDATE_ENABLED: bool = true;
 /// pointer crossed over a listing — or parked over another file — leaves it where it is.
 pub const DEFAULT_PIN_UPDATE_ON_HOVER: bool = false;
 
+/// Whether a preview update also brings the pin in front of what it was behind, which it does
+/// unless the configuration says otherwise: the file the user picks in a listing is the file they
+/// are looking at next, and a pin standing behind the listing it is following is a window they
+/// would have to find and click before they could see it.
+pub const DEFAULT_PIN_UPDATE_MOVE_TO_TOP: bool = true;
+
 /// Whether a double-click on a pinned window puts it in the middle of the screen it stands on:
 /// the window's own size kept and its place moved, which for a window fitted to the screen is the
 /// place it already stands in — a fit is the whole of the work area's height, so the middle of
