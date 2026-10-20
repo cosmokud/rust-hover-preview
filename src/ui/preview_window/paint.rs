@@ -390,7 +390,10 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // is at the other end of it (see `PinChrome`). The palette both strips are drawn in is read
     // once for the paint, and not at all where neither is drawn. The caption, across the window's
     // first rows.
-    let palette = if paint.caption || (paint.transport_height > 0 && paint.bar) {
+    let palette = if paint.caption
+        || (paint.transport_height > 0 && paint.bar)
+        || (!paint.overlay && caption_height > 0)
+    {
         pin_chrome::ChromePalette::current()
     } else {
         None
@@ -422,6 +425,29 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     copy_surface_rows_into(surface, out, width as u32, 0);
                 }
             });
+        }
+    } else if !paint.overlay && caption_height > 0 {
+        // The rows a caption leaves behind are the window's own however it went: a window too
+        // narrow to hold one, or a chrome that has been asked to leave it off. A kind that draws
+        // its chrome over its media has the media under them and owes nothing; a page is drawn
+        // between them, so those rows would be left as the surface's own emptiness — a hole across
+        // the top of the window, with the desktop showing through it and a press falling through
+        // it, since a layered window is hit-tested by the shape of its pixels. What fills them is
+        // the bar the caption draws on, so a caption with nothing left in it is the bar and
+        // nothing else (see `caption_fits` and `pinned_band_rows`).
+        //
+        // shortcut: the rows stay the caption's rather than becoming the page's, so a caption that
+        // goes away leaves a band of bar and not a window 30 pixels shorter; upgrade if the box a
+        // pin is given should follow its caption going and coming back.
+        if let Some(palette) = palette.as_ref() {
+            let bar = palette.background;
+            let stride = width.max(1) as usize * 4;
+            let strip = (caption_height as usize * stride).min(out.len());
+            for row in out[..strip].chunks_exact_mut(stride) {
+                for pixel in row.chunks_exact_mut(4) {
+                    pixel.copy_from_slice(&[bar[2], bar[1], bar[0], 255]);
+                }
+            }
         }
     }
 
