@@ -1042,10 +1042,9 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         // played part of the bar is drawn in.
         //
         // The pin beside them says something of its own — whether the window is kept on top — so
-        // it says it in the ink the numbers on the facts line are read in, and takes the accent
-        // under the hand like the two beside it. The accent is what every lit button wears: a pin
-        // kept on top in it would say nothing but that the hand is near, and a press that turned
-        // it off would show nothing at all until the hand left the mark.
+        // it says it in the ink the numbers on the facts line are read in, and under the hand a
+        // darker one: the accent is what a button with no state of its own wears there, and a pin
+        // kept on top that took it would say nothing but that the hand is near.
         //
         // They are the one thing on the card that comes and goes: a button twice the
         // margin's own side stands in the name's own rows, so a hand near the window's
@@ -1062,12 +1061,14 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
                 fill_rect(surface, button.drawn, page_color);
 
                 let lit = chrome.hovered == Some(control) || chrome.pressed == Some(control);
-                let color = if lit {
-                    accent
-                } else if control == CardControl::AlwaysOnTop && chrome.always_on_top {
-                    number
-                } else {
-                    foreground
+                let on_top = control == CardControl::AlwaysOnTop && chrome.always_on_top;
+                let color = match (on_top, lit) {
+                    (false, false) => foreground,
+                    (false, true) => accent,
+                    (true, false) => number,
+                    // Darkened toward black rather than toward the page, which is darker on a dark
+                    // theme and washed out on a light one.
+                    (true, true) => blend(number, [0, 0, 0], 0.25),
                 };
                 paint_window_button(surface, button.drawn, control, color, scale);
             }
