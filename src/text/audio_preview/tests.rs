@@ -1874,6 +1874,8 @@ fn the_pin_says_it_is_on_top_in_the_ink_the_numbers_are_read_in() {
     let page = scrolled(&pinned(), width, 0);
     let boxes = page.boxes.as_ref().expect("a card that carries controls");
 
+    use crate::text::text_paint::luminance;
+
     for theme in [TextTheme::Dark, TextTheme::Light] {
         let options = AudioPreviewOptions { theme, ..options() };
         let loaded = text_theme::loaded(theme).expect("the bundled theme");
@@ -1923,8 +1925,9 @@ fn the_pin_says_it_is_on_top_in_the_ink_the_numbers_are_read_in() {
         let pin = boxes.always_on_top.drawn;
         let close = boxes.close.drawn;
         let on = ink_in(true, None, pin);
+        let on_hovered = ink_in(true, Some(CardControl::AlwaysOnTop), pin);
         let off = ink_in(false, None, pin);
-        let pin_hovered = ink_in(false, Some(CardControl::AlwaysOnTop), pin);
+        let off_hovered = ink_in(false, Some(CardControl::AlwaysOnTop), pin);
         let close_hovered = ink_in(false, Some(CardControl::Close), close);
 
         let numbers = {
@@ -1949,17 +1952,29 @@ fn the_pin_says_it_is_on_top_in_the_ink_the_numbers_are_read_in() {
             "{theme:?}: so the two states are told apart at rest"
         );
         assert_eq!(
-            pin_hovered, close_hovered,
-            "{theme:?}: a pin under the hand wears the accent the close wears"
-        );
-        assert_eq!(
-            ink_in(true, Some(CardControl::AlwaysOnTop), pin),
-            pin_hovered,
-            "{theme:?}: whether it is kept on top or not"
+            off_hovered, close_hovered,
+            "{theme:?}: an off pin under the hand wears the accent the close wears"
         );
         assert_ne!(
-            on, pin_hovered,
-            "{theme:?}: and it is not the accent at rest"
+            on, on_hovered,
+            "{theme:?}: a hand on a pin kept on top is seen on it"
+        );
+        assert_ne!(
+            off, off_hovered,
+            "{theme:?}: and a hand on one that is not is seen on it too"
+        );
+        assert_ne!(
+            on_hovered, off_hovered,
+            "{theme:?}: the two states are told apart while the hand is on the pin"
+        );
+        assert_ne!(
+            on, off_hovered,
+            "{theme:?}: and the accent is not the pin at rest"
+        );
+        assert!(
+            luminance([on_hovered[2], on_hovered[1], on_hovered[0]])
+                < luminance([on[2], on[1], on[0]]),
+            "{theme:?}: and the hand darkens the pin it holds rather than lighting it"
         );
     }
 }
