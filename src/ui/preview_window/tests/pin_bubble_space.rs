@@ -657,15 +657,19 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
         config.pin_update_move_to_top = true;
     }
 
-    // An update is a pick's raise: the pin owes the front from it until a press gives the band
-    // back, which is the band the listing's own activation cannot take it out of.
+    // An update is a pick's raise: the pin is put at the front of the ordinary band, and that is
+    // all it is — with `Always On Top` off the band itself is not this app's to hold.
     PIN_FRONT_OWED.store(false, Ordering::SeqCst);
     arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { settle_z_order() };
     assert!(
-        pin_holds_the_front(),
-        "an update raises the pin into the front it owes, so the window the file was picked in \
-         cannot be put over it by being activated"
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "an update raises the pin over the window the file was picked in"
+    );
+    assert!(
+        !pin_holds_the_front(),
+        "and it holds no band for it: the topmost one is the setting's, and this pin's is off"
     );
     assert_ne!(
         unsafe { GetForegroundWindow() },
@@ -768,10 +772,14 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
     PIN_FRONT_OWED.store(false, Ordering::SeqCst);
     arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { settle_z_order() };
     assert!(
-        pin_holds_the_front(),
-        "a pick puts the pin into the front it owes, so the listing's activation cannot put it \
-         under the pick it is answering"
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a pick puts the pin at the front of the ordinary band, over the listing it is answering"
+    );
+    assert!(
+        !pin_holds_the_front(),
+        "and it holds no band for it: the topmost one is the setting's, and this pin's is off"
     );
 
     unsafe { lower_pinned_preview(pin_hwnd, in_front) };
@@ -798,9 +806,10 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
     // left behind for good.
     arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { settle_z_order() };
     assert!(
-        pin_holds_the_front(),
-        "a later pick raises the pin again, and owes the front again"
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a later pick raises the pin again"
     );
 
     // A press that names no file gives the band back once more, which is the whole of the cycle a
@@ -907,10 +916,8 @@ fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
          the listing covers every program on the desktop"
     );
 
-    // And with the front owed the film is put under the pin too: the pin is topmost, so the film
-    // lands in that band directly below it.
-    arm_pin_to_the_front();
-    assert!(pin_holds_the_front(), "a pick owes the front again");
+    // A pin that owes no band still stands over its film: the place below the pin is what takes
+    // the film out of the topmost band, whether the band above it is the pin's or nobody's.
     assert_eq!(
         player_insert_after(),
         pin_hwnd,
@@ -1029,21 +1036,28 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
         config.pin_update_move_to_top = true;
     }
 
-    // A pick raises the pin and arms it to answer for the front over the next moments.
+    // A pick raises the pin, and with `Always On Top` off that raise is the whole of it: there is
+    // no band of this app's for the listing's activation to be kept out of, so there is nothing for
+    // a grace to keep.
     PIN_FRONT_OWED.store(false, Ordering::SeqCst);
     arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pin_hwnd) };
     unsafe { settle_z_order() };
     assert!(
-        pin_holds_the_front(),
-        "a pick's raise is the pin owing the front, which is what the grace is a grace for"
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a pick's raise puts the pin at the front of the ordinary band"
+    );
+    assert!(
+        !pin_holds_the_front(),
+        "and it holds no band for it: the topmost one is the setting's, and this pin's is off"
     );
 
     let mut deadline = Some(Instant::now() + PIN_RAISE_GRACE);
     unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
     assert!(
-        deadline.is_some(),
-        "while the front is still owed the grace is kept"
+        deadline.is_none(),
+        "a pin that holds no band is not raised again by the grace: the raise was one pair of \
+         calls, and the window the user activates after it is the one in front"
     );
 
     // The press that names no file is the pin giving the band back. The grace it began goes with
