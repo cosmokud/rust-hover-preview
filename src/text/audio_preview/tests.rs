@@ -1687,6 +1687,11 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
         rgb(theme.style_for_scopes(&["support.function"]).foreground),
         page_color,
     );
+    // And the ink the facts line reads its numbers in, which is what the pin says it is on in.
+    let number = readable(
+        rgb(theme.style_for_scopes(&["constant.numeric"]).foreground),
+        page_color,
+    );
 
     let resting = render(&pinned(), width, height, 96, options()).expect("a painted card");
     let hovered = render(
@@ -1733,8 +1738,8 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
         );
     }
     assert!(
-        holds(&resting, boxes.always_on_top.drawn, ink(accent)),
-        "an active always_on_top button is drawn in the accent: {:?}",
+        holds(&resting, boxes.always_on_top.drawn, ink(number)),
+        "an active always_on_top button is drawn in the numbers' ink: {:?}",
         boxes.always_on_top.drawn
     );
 
@@ -1861,94 +1866,100 @@ fn the_pin_stands_the_height_of_the_cross_beside_it() {
     }
 }
 
-/// The pin's mark says whether the window is kept on top even while the hand is on it: "on" and
-/// "under the hand" are two inks, and so are "off" and "under the hand" — which is what makes a
-/// press that turns the pin off seen at once rather than only when the pointer leaves the mark.
-/// An off pin is otherwise the ink its two neighbours are drawn in.
+/// The pin says whether the window is kept on top in the ink the card reads its own numbers in,
+/// and wears the accent under the hand exactly as the two buttons beside it do.
 #[test]
-fn the_pin_says_whether_it_is_on_while_the_hand_is_on_it() {
+fn the_pin_says_it_is_on_top_in_the_ink_the_numbers_are_read_in() {
     let (width, height) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
     let page = scrolled(&pinned(), width, 0);
     let boxes = page.boxes.as_ref().expect("a card that carries controls");
-    let drawn = boxes.always_on_top.drawn;
 
-    let theme = text_theme::loaded(options().theme).expect("the bundled theme");
-    let clear = {
-        let color = rgb(theme.background());
-        [color[2], color[1], color[0], 255]
-    };
-    let pixel = |painted: &(Vec<u8>, u32, u32), x: i32, y: i32| -> [u8; 4] {
-        let index = (y as usize * width as usize + x as usize) * 4;
-        [
-            painted.0[index],
-            painted.0[index + 1],
-            painted.0[index + 2],
-            painted.0[index + 3],
-        ]
-    };
-
-    // The mark's own ink, read off the middle of its ceiling: its topmost row, which is as wide
-    // as the mark and laid down whole rather than stroked.
-    let ink_of = |always_on_top: bool, hovered: Option<CardControl>| -> [u8; 4] {
-        let card = Card {
-            controls: Some(CardChrome {
-                playing: false,
-                volume: 40,
-                hovered,
-                pressed: None,
-                window_buttons: true,
-                always_on_top,
-            }),
-            ..card()
+    for theme in [TextTheme::Dark, TextTheme::Light] {
+        let options = AudioPreviewOptions { theme, ..options() };
+        let loaded = text_theme::loaded(theme).expect("the bundled theme");
+        let clear = {
+            let color = rgb(loaded.background());
+            [color[2], color[1], color[0], 255]
         };
-        let painted = render(&card, width, height, 96, options()).expect("a painted card");
-        let top = (drawn.top..drawn.bottom)
-            .find(|&y| (drawn.left..drawn.right).any(|x| pixel(&painted, x, y) != clear))
-            .expect("a drawn pin");
-
-        pixel(&painted, (drawn.left + drawn.right) / 2, top)
-    };
-
-    let on = ink_of(true, None);
-    let on_hovered = ink_of(true, Some(CardControl::AlwaysOnTop));
-    let off = ink_of(false, None);
-    let off_hovered = ink_of(false, Some(CardControl::AlwaysOnTop));
-
-    // The ink the close beside it is drawn in, taken from the pixel of its mark furthest from the
-    // page so that a stroke's softened edge is not what stands for its ink.
-    let close = {
-        let card = Card {
-            controls: Some(CardChrome {
-                playing: false,
-                volume: 40,
-                hovered: None,
-                pressed: None,
-                window_buttons: true,
-                always_on_top: false,
-            }),
-            ..card()
+        let pixel = |painted: &(Vec<u8>, u32, u32), x: i32, y: i32| -> [u8; 4] {
+            let index = (y as usize * width as usize + x as usize) * 4;
+            [
+                painted.0[index],
+                painted.0[index + 1],
+                painted.0[index + 2],
+                painted.0[index + 3],
+            ]
         };
-        let painted = render(&card, width, height, 96, options()).expect("a painted card");
-        let rect = boxes.close.drawn;
         let distance = |color: [u8; 4]| {
             (0..3)
                 .map(|channel| (color[channel] as i32 - clear[channel] as i32).abs())
                 .sum::<i32>()
         };
 
-        (rect.left..rect.right)
-            .flat_map(|x| (rect.top..rect.bottom).map(move |y| (x, y)))
-            .map(|(x, y)| pixel(&painted, x, y))
-            .max_by_key(|color| distance(*color))
-            .expect("a drawn close")
-    };
+        // A mark's ink, taken from the pixel of its box furthest from the page: a stroked mark is
+        // softened at every edge, and what stands for its ink is the middle of a stroke rather
+        // than one of those.
+        let ink_in = |always_on_top: bool, hovered: Option<CardControl>, rect: RECT| -> [u8; 4] {
+            let card = Card {
+                controls: Some(CardChrome {
+                    playing: false,
+                    volume: 40,
+                    hovered,
+                    pressed: None,
+                    window_buttons: true,
+                    always_on_top,
+                }),
+                ..card()
+            };
+            let painted = render(&card, width, height, 96, options).expect("a painted card");
 
-    assert_ne!(on, off, "the two states are told apart at rest");
-    assert_eq!(off, close, "an off pin is drawn in the close's own ink");
-    assert_ne!(on, on_hovered, "a hand on an on pin is seen on it");
-    assert_ne!(off, off_hovered, "and a hand on an off pin is seen too");
-    assert_ne!(
-        on_hovered, off_hovered,
-        "the two states are told apart while the hand is on the pin"
-    );
+            (rect.left..rect.right)
+                .flat_map(|x| (rect.top..rect.bottom).map(move |y| (x, y)))
+                .map(|(x, y)| pixel(&painted, x, y))
+                .max_by_key(|color| distance(*color))
+                .expect("a drawn mark")
+        };
+
+        let pin = boxes.always_on_top.drawn;
+        let close = boxes.close.drawn;
+        let on = ink_in(true, None, pin);
+        let off = ink_in(false, None, pin);
+        let pin_hovered = ink_in(false, Some(CardControl::AlwaysOnTop), pin);
+        let close_hovered = ink_in(false, Some(CardControl::Close), close);
+
+        let numbers = {
+            let ink = readable(
+                rgb(loaded.style_for_scopes(&["constant.numeric"]).foreground),
+                rgb(loaded.background()),
+            );
+            [ink[2], ink[1], ink[0], 255]
+        };
+
+        assert_eq!(
+            on, numbers,
+            "{theme:?}: a pin kept on top is read in the numbers' ink"
+        );
+        assert_eq!(
+            off,
+            ink_in(false, None, close),
+            "{theme:?}: and one that is not in the ink of the close beside it"
+        );
+        assert_ne!(
+            on, off,
+            "{theme:?}: so the two states are told apart at rest"
+        );
+        assert_eq!(
+            pin_hovered, close_hovered,
+            "{theme:?}: a pin under the hand wears the accent the close wears"
+        );
+        assert_eq!(
+            ink_in(true, Some(CardControl::AlwaysOnTop), pin),
+            pin_hovered,
+            "{theme:?}: whether it is kept on top or not"
+        );
+        assert_ne!(
+            on, pin_hovered,
+            "{theme:?}: and it is not the accent at rest"
+        );
+    }
 }

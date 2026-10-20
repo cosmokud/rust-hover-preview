@@ -849,6 +849,10 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
     let page_color = rgb(theme.background());
     let foreground = rgb(theme.foreground());
     let rule_color = blend(page_color, foreground, 0.18);
+    let number = readable(
+        rgb(theme.style_for_scopes(&["constant.numeric"]).foreground),
+        page_color,
+    );
     let accent = readable(
         rgb(theme.style_for_scopes(&["support.function"]).foreground),
         page_color,
@@ -1032,19 +1036,16 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
 
         // The two window buttons in the top corner, painted last of all and painted as
         // nothing but their marks: no wash under them and no box around them in any
-        // state, the ink being the only thing that changes. The minimize and the close are
-        // the card's own foreground at rest, which is the ink the row's glyphs are painted
-        // in, and the accent, the color the played part of the bar is drawn in, while the
-        // pointer is on one or holding it.
+        // state, the ink being the only thing that changes. At rest it is the card's
+        // own foreground, which is the ink the row's glyphs are painted in, and while
+        // the pointer is on one or holding it it is the accent, which is the color the
+        // played part of the bar is drawn in.
         //
-        // The pin beside them is the one button whose mark says something of its own — whether
-        // the window is kept on top — so its ink carries the state as well as the hand: the
-        // accent while it is on, the same ink the other two are drawn in while it is not, and
-        // under the hand the accent either way, softer while it is on so that the press turning
-        // it off brightens the mark rather than leaving it as it was. Walking the accent toward
-        // the card's own ink instead would leave the two under-the-hand inks nearly one color on
-        // a dark theme, and a press that turns the pin off would show nothing at all until the
-        // hand leaves the mark.
+        // The pin beside them says something of its own — whether the window is kept on top — so
+        // it says it in the ink the numbers on the facts line are read in, and takes the accent
+        // under the hand like the two beside it. The accent is what every lit button wears: a pin
+        // kept on top in it would say nothing but that the hand is near, and a press that turned
+        // it off would show nothing at all until the hand left the mark.
         //
         // They are the one thing on the card that comes and goes: a button twice the
         // margin's own side stands in the name's own rows, so a hand near the window's
@@ -1061,15 +1062,12 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
                 fill_rect(surface, button.drawn, page_color);
 
                 let lit = chrome.hovered == Some(control) || chrome.pressed == Some(control);
-                let color = match control {
-                    CardControl::AlwaysOnTop => match (chrome.always_on_top, lit) {
-                        (true, false) => accent,
-                        (true, true) => blend(accent, page_color, 0.35),
-                        (false, false) => foreground,
-                        (false, true) => accent,
-                    },
-                    _ if lit => accent,
-                    _ => foreground,
+                let color = if lit {
+                    accent
+                } else if control == CardControl::AlwaysOnTop && chrome.always_on_top {
+                    number
+                } else {
+                    foreground
                 };
                 paint_window_button(surface, button.drawn, control, color, scale);
             }
