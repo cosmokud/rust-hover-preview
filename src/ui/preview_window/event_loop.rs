@@ -3505,6 +3505,11 @@ pub fn run_preview_window() {
                         }
 
                         let _ = ShowWindow(hwnd, SW_HIDE);
+                        // The pin's own window, where it stands in one, goes down with it. The flag
+                        // that said which window the pin was in is cleared by the end of the pin,
+                        // which happened before this message arrived - so the hide is asked of the
+                        // handle itself rather than of the pin's state (see `hide_real_pin_window`).
+                        pin_real_window::hide_real_pin_window();
                         clear_pointer_hold();
 
                         // A document the engine is playing goes with the preview: its

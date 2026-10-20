@@ -30,7 +30,12 @@ pub(crate) fn pin_is_focused() -> bool {
 
     // Safety: asks the keyboard for the window that holds it, and names this thread's own
     // window. Neither is a dereference and neither can fail.
-    unsafe { GetFocus() == HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _) }
+    //
+    // The window asked about is the one the pin stands in, which is the pin's own for a picture: a run
+    // that compared against the preview's window answered "the pin does not hold the keyboard" for
+    // every press on a picture, so the pin asked for the keyboard again on every press and its own
+    // window was never the one the answer was written from (see `pinned_window`).
+    unsafe { GetFocus() == pinned_window() }
 }
 
 /// Give the pin the keyboard, from a press that asked for it: a press on the window itself, or one
