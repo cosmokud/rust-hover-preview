@@ -648,6 +648,15 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
         "an update puts the pin above the window that was standing over it: the file the user \
          picked is the one they are looking at next"
     );
+    // Safety: the raise left `Always On Top` as it found it, which is the half of the raise that is
+    // not about the window's place: the band it ends in is the one the setting names.
+    let raised_style = unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32;
+    assert_eq!(
+        raised_style & WS_EX_TOPMOST.0,
+        0,
+        "a pin that is not Always On Top is raised through the topmost band rather than into it, \
+         and left behind the windows that really are topmost"
+    );
     assert_ne!(
         unsafe { GetForegroundWindow() },
         pin_hwnd,
