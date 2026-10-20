@@ -3452,3 +3452,63 @@ fn the_painted_surface(hwnd: HWND, width: i32, height: i32) -> Vec<u8> {
         .expect("the surface the paint wrote");
     unsafe { std::slice::from_raw_parts(bits, width as usize * height as usize * 4) }.to_vec()
 }
+
+/// A resize paints its picture into a surface with a row of slack in it, and stands the window a row
+/// higher for every row it pushes the picture down into it (see `the_slack_a_resize_paints_with`).
+///
+/// The two halves of that are the whole of it, and both are asserted here: the picture lands on the
+/// box the pointer asked for on **every** paint of the drag, and the window itself changes place on
+/// every one of them. The first is what keeps the drag smooth — a step that moved the window and took
+/// the picture with it is a picture a pixel off, or shivering, for as long as the drag gives the window
+/// less than it had. The second is what keeps the ghost away: a window whose only change is a size
+/// leaves the strip it gives up standing, and a window that moves has the desk under the place it has
+/// left drawn again.
+#[test]
+fn a_resize_paints_a_row_of_slack_so_the_window_moves_and_the_picture_does_not() {
+    // A box 800 by 600 standing at 100,100. What the window is asked for, paint after paint.
+    let (x, y, height) = (100, 100, 600);
+
+    let mut places = Vec::new();
+    let mut landed = Vec::new();
+    for _ in 0..6 {
+        let (padding, slack) = paint::the_slack_a_resize_paints_with(true);
+        assert_eq!(
+            slack, 1,
+            "a resize's surface is one row taller than the pin"
+        );
+
+        let place = (x, y - padding);
+        places.push(place);
+        // The picture's own top and bottom on the screen: the window's place plus where it stands in
+        // the surface, which is the row the paint gave it.
+        landed.push((place.1 + padding, place.1 + padding + height));
+    }
+
+    for (top, bottom) in &landed {
+        assert_eq!(
+            (*top, *bottom),
+            (y, y + height),
+            "the picture was not on the box the pointer asked for"
+        );
+    }
+    for pair in places.windows(2) {
+        assert_ne!(
+            pair[0], pair[1],
+            "the window stood still from one paint to the next, which leaves the strip it gave up"
+        );
+        assert_eq!(
+            (pair[0].1 - pair[1].1).abs(),
+            1,
+            "the window moved by more than the row of slack it carries"
+        );
+    }
+
+    // And a paint that is not a resize has no slack in it at all: the window stands on its own box,
+    // where the pin says it does.
+    assert_eq!(
+        paint::the_slack_a_resize_paints_with(false),
+        (0, 0),
+        "a paint that is not a resize asks the surface for nothing"
+    );
+    assert_eq!(paint::the_slack_a_resize_paints_with(false), (0, 0));
+}
