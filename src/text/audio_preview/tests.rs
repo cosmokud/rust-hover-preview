@@ -1860,3 +1860,63 @@ fn the_pin_stands_the_height_of_the_cross_beside_it() {
         );
     }
 }
+
+/// The pin's mark says whether the window is kept on top even while the hand is on it: "on" and
+/// "under the hand" are two inks, and so are "off" and "under the hand" — which is what makes a
+/// press that turns the pin off seen at once rather than only when the pointer leaves the mark.
+#[test]
+fn the_pin_says_whether_it_is_on_while_the_hand_is_on_it() {
+    let (width, height) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+    let page = scrolled(&pinned(), width, 0);
+    let boxes = page.boxes.as_ref().expect("a card that carries controls");
+    let drawn = boxes.always_on_top.drawn;
+
+    let theme = text_theme::loaded(options().theme).expect("the bundled theme");
+    let clear = {
+        let color = rgb(theme.background());
+        [color[2], color[1], color[0], 255]
+    };
+    let pixel = |painted: &(Vec<u8>, u32, u32), x: i32, y: i32| -> [u8; 4] {
+        let index = (y as usize * width as usize + x as usize) * 4;
+        [
+            painted.0[index],
+            painted.0[index + 1],
+            painted.0[index + 2],
+            painted.0[index + 3],
+        ]
+    };
+
+    // The mark's own ink, read off the middle of its ceiling: its topmost row, which is as wide
+    // as the mark and laid down whole rather than stroked.
+    let ink_of = |always_on_top: bool, hovered: Option<CardControl>| -> [u8; 4] {
+        let card = Card {
+            controls: Some(CardChrome {
+                playing: false,
+                volume: 40,
+                hovered,
+                pressed: None,
+                window_buttons: true,
+                always_on_top,
+            }),
+            ..card()
+        };
+        let painted = render(&card, width, height, 96, options()).expect("a painted card");
+        let top = (drawn.top..drawn.bottom)
+            .find(|&y| (drawn.left..drawn.right).any(|x| pixel(&painted, x, y) != clear))
+            .expect("a drawn pin");
+
+        pixel(&painted, (drawn.left + drawn.right) / 2, top)
+    };
+
+    let on = ink_of(true, None);
+    let on_hovered = ink_of(true, Some(CardControl::AlwaysOnTop));
+    let off = ink_of(false, None);
+    let off_hovered = ink_of(false, Some(CardControl::AlwaysOnTop));
+
+    assert_ne!(on, on_hovered, "a hand on an on pin is seen on it");
+    assert_ne!(off, off_hovered, "and a hand on an off pin is seen too");
+    assert_ne!(
+        on_hovered, off_hovered,
+        "the two states are told apart while the hand is on the pin"
+    );
+}
