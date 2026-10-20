@@ -591,7 +591,19 @@ fn render_video_resume_frame(path: &Path, at: f64, width: u32, height: u32, park
 /// listing that window is standing on, rather than being taken as a click on something that
 /// is not a listing at all (see `click_is_over_a_listing`).
 pub fn is_preview_window(handle: isize) -> bool {
-    handle != 0 && handle == PREVIEW_HWND.load(Ordering::Acquire)
+    if handle == 0 {
+        return false;
+    }
+
+    // A picture pin stands in a window of its own, and a press on it is a press on the pin: the hook
+    // asks this to tell a click on something that is not a listing from a click on this app's own
+    // preview (see `click_is_over_a_listing`), and a window of the app's own that it did not know
+    // would be read as the desktop behind it.
+    if handle == PREVIEW_HWND.load(Ordering::Acquire) {
+        return true;
+    }
+
+    pin_real_window::real_pin_window().is_some_and(|hwnd| hwnd.0 as isize == handle)
 }
 
 pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
@@ -601,6 +613,9 @@ pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
 
     unsafe {
         let candidates = [
+            pin_real_window::real_pin_window()
+                .map(|hwnd| hwnd.0 as isize)
+                .unwrap_or(0),
             PREVIEW_HWND.load(Ordering::SeqCst),
             VIDEO_HWND.load(Ordering::SeqCst),
         ];
@@ -637,11 +652,23 @@ pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
 /// moved (see `PinUpdateWatch::note_pin_box`). The window is read whether or not it is visible,
 /// because a pin that has collapsed into its bubble has hidden its window rather than moved it.
 pub fn preview_window_rect() -> Option<(i32, i32, i32, i32)> {
+    // A picture pin stands in a window of its own, and that is the window whose box the hook watches
+    // for a pin moving under a hand that has not moved.
+    if let Some(hwnd) = pin_real_window::real_pin_window() {
+        if pin_is_its_own_window() {
+            return window_rect_of(hwnd.0 as isize);
+        }
+    }
+
     let value = PREVIEW_HWND.load(Ordering::SeqCst);
     if value == 0 {
         return None;
     }
+    window_rect_of(value)
+}
 
+/// The box of a window of this app's own, or nothing where it has no area.
+fn window_rect_of(value: isize) -> Option<(i32, i32, i32, i32)> {
     unsafe {
         let mut rect = RECT::default();
         if GetWindowRect(HWND(value as *mut _), &mut rect).is_ok()

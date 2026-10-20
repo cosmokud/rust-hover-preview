@@ -87,7 +87,7 @@ fn taskbar_title_for(path: Option<&Path>) -> Vec<u16> {
 /// Write the name the button is to say, and remember none of it: the title is asked for from the
 /// pin's own state every time it is written, so a file stepped onto while the stand-in is up is a
 /// file the button names after the step (see `refresh_pin_taskbar_title`).
-unsafe fn set_pin_taskbar_title(hwnd: HWND) {
+pub(super) unsafe fn set_pin_taskbar_title(hwnd: HWND) {
     let title = pin_taskbar_title();
     let _ = SetWindowTextW(hwnd, PCWSTR(title.as_ptr()));
 }
@@ -302,6 +302,13 @@ fn stand_in_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
 /// into the bubble.
 fn a_button_is_owed() -> bool {
     if !pinned() {
+        return false;
+    }
+
+    // A pin standing in a window of its own holds a taskbar button of its own, named after its file
+    // and drawn by the Shell from the window itself: a stand-in beside it would be a second button for
+    // one pin, and a hover of a picture of a picture (see `pin_real_window`).
+    if pin_is_its_own_window() {
         return false;
     }
 

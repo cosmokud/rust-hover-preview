@@ -333,6 +333,8 @@ pub fn run_preview_window() {
         // own, a film in its band, a page the engine draws in one — kept the same way and reset
         // with it (see `settle_pinned_press`).
         let mut pin_press_seen: u64 = 0;
+        let mut band_state_seen: Option<(u8, u8, u8, String)> = None;
+        let mut windows_seen = String::new();
         // Static-tick throttle state (see `STATIC_WAIT_MS`): whether the media on
         // screen was dynamic the last time it was fully looked at, when that look
         // was, and which generation it was for. A swap bumps `current_generation`,
@@ -1555,6 +1557,8 @@ pub fn run_preview_window() {
                         }
 
                         let _ = ShowWindow(hwnd, SW_HIDE);
+                        // The pin's own window, where it stands in one, goes down with it.
+                        pin_real_window::hide_real_pin_window();
                         clear_pointer_hold();
                         webview_preview::hide();
 
@@ -3220,6 +3224,44 @@ pub fn run_preview_window() {
                 );
             }
 
+            if pinned() {
+                let picture = crate::shell::explorer_hook::describe_windows([
+                    std::process::id(),
+                    webview_preview::browser_pid(),
+                    VIDEO_PID.load(Ordering::SeqCst),
+                ]);
+                if picture != windows_seen {
+                    crate::shell::explorer_hook::note_windows(&format!(
+                        "PINNED box {:?} shown {} band {} aot {}",
+                        pinned_window_box(),
+                        IsWindowVisible(hwnd).as_bool() as u8,
+                        window_holds_the_topmost_band(hwnd) as u8,
+                        pin_always_on_top() as u8,
+                    ));
+                    crate::shell::explorer_hook::note_windows(&picture);
+                    windows_seen = picture;
+                }
+            }
+
+            if pinned() {
+                let state = (
+                    pin_always_on_top() as u8,
+                    window_holds_the_topmost_band(hwnd) as u8,
+                    IsWindowVisible(hwnd).as_bool() as u8,
+                    crate::shell::explorer_hook::window_class_of(GetForegroundWindow()),
+                );
+                if band_state_seen.as_ref() != Some(&state) {
+                    crate::shell::explorer_hook::note_pin_click!(
+                        "BAND aot {} band {} shown {} fg {}",
+                        state.0,
+                        state.1,
+                        state.2,
+                        state.3,
+                    );
+                    band_state_seen = Some(state);
+                }
+            }
+
             // The pin's request, if it made one, is the newest thing that happened and speaks
             // for what is on screen: a key that was pressed, a button that was clicked, or the
             // media behind the pin having come apart. It is put to the same machinery a hover
@@ -3611,6 +3653,15 @@ pub fn run_preview_window() {
                             .ok()
                             .and_then(|media| media.as_ref().map(|media| media.media_type));
 
+                        // Whether this pin stands in a window of its own is decided here, from the
+                        // kind it was taken up on, and never asked of the media again: a picture is
+                        // drawn the whole way by this app, so the window it is in can be a window
+                        // Windows activates and lists — and every other kind still stands in the
+                        // preview's (see `MediaType::is_a_picture_of_its_own`).
+                        pin_stands_in_its_own_window(
+                            kind.is_some_and(|kind| kind.is_a_picture_of_its_own()),
+                        );
+
                         // The pin is published as up inside this, after the state it publishes
                         // is written (see `pin_window::install`).
                         install(pin);
@@ -3638,7 +3689,14 @@ pub fn run_preview_window() {
                         // name being renamed, so it may take the focus but is not given it until
                         // the hand presses it (see `pin_set_focusable`). The pin holds no keyboard
                         // at all until then, so there is nothing here to clear.
-                        pin_set_focusable(hwnd, true);
+                        //
+                        // **And a pin that stands in a window of its own leaves the preview's alone.**
+                        // The hover's window must never be activatable — it appears under a pointer
+                        // that may be inside a name being renamed — and the pin's own window was made
+                        // with the styles that let Windows activate it (see `pin_real_window`).
+                        if !pin_is_its_own_window() {
+                            pin_set_focusable(hwnd, true);
+                        }
 
                         // **A player adopted without its film's copied subtitles is begun
                         // again here**, where the copy is ready now and the adopted player is
@@ -3711,7 +3769,7 @@ pub fn run_preview_window() {
 
                         show_pinned_window(hwnd);
                         place_pinned_siblings();
-                        publish_pointer_hold(hwnd);
+                        publish_pointer_hold(pinned_window());
                     }
                     // The pinned window was given another box — maximized, restored, resized,
                     // or put back on a display that changed: the media is laid out again at the
