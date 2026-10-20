@@ -849,6 +849,10 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
     let page_color = rgb(theme.background());
     let foreground = rgb(theme.foreground());
     let rule_color = blend(page_color, foreground, 0.18);
+    let number = readable(
+        rgb(theme.style_for_scopes(&["constant.numeric"]).foreground),
+        page_color,
+    );
     let accent = readable(
         rgb(theme.style_for_scopes(&["support.function"]).foreground),
         page_color,
@@ -1037,6 +1041,11 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         // the pointer is on one or holding it it is the accent, which is the color the
         // played part of the bar is drawn in.
         //
+        // The pin beside them says something of its own — whether the window is kept on top — so
+        // it says it in the ink the numbers on the facts line are read in, and under the hand a
+        // brighter one: the accent is what a button with no state of its own wears there, and a pin
+        // kept on top that took it would say nothing but that the hand is near.
+        //
         // They are the one thing on the card that comes and goes: a button twice the
         // margin's own side stands in the name's own rows, so a hand near the window's
         // top border or near the buttons themselves is what asks for them (see
@@ -1052,16 +1061,14 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
                 fill_rect(surface, button.drawn, page_color);
 
                 let lit = chrome.hovered == Some(control) || chrome.pressed == Some(control);
-                let color = if lit {
-                    accent
-                } else if control == CardControl::AlwaysOnTop {
-                    if chrome.always_on_top {
-                        accent
-                    } else {
-                        blend(foreground, page_color, 0.45)
-                    }
-                } else {
-                    foreground
+                let on_top = control == CardControl::AlwaysOnTop && chrome.always_on_top;
+                let color = match (on_top, lit) {
+                    (false, false) => foreground,
+                    (false, true) => accent,
+                    (true, false) => number,
+                    // Lit a step further toward white: the mark keeps the ink its state is read in
+                    // and is the brightest thing in that corner while the hand is on it.
+                    (true, true) => blend(number, [255, 255, 255], 0.35),
                 };
                 paint_window_button(surface, button.drawn, control, color, scale);
             }
