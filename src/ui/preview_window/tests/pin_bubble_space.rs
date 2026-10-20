@@ -952,6 +952,44 @@ fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
     stand_pin(previous_pin);
 }
 
+/// A window of the player is a window of this preview, though its process is not this app's.
+///
+/// **The failure this pins down is the pin going behind its own film.** The foreground watch asks
+/// whether the window in front is one of ours to decide whether the user has gone to work
+/// somewhere else, and it asked it of the process id. A film is drawn by ffplay or mpv, so the very
+/// window the pin's media band is made of answered "somebody else's" — and the pin was put behind
+/// it the moment that window came up, which is the preview going out of the topmost band with a
+/// picture left over it: a pin taken up on a video appearing behind Explorer, and a press that
+/// picked a file blinking under the listing while the new film's window was being raised.
+#[test]
+fn a_window_of_the_player_is_a_window_of_the_preview() {
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+
+    // No window's process is "nobody's": a pid of nothing is what a failed ask leaves, and it must
+    // never read as the preview's own.
+    assert!(!pid_is_the_previews(0), "a pid of nothing is no answer");
+
+    assert!(
+        pid_is_the_previews(std::process::id()),
+        "this app's own windows are the preview being used, which is what the watch is about"
+    );
+
+    let player = 4242;
+    VIDEO_PID.store(player, Ordering::SeqCst);
+    assert!(
+        pid_is_the_previews(player),
+        "and so is the player's window: the film is the pin's media band, not a program the user \
+         went to work in"
+    );
+    assert!(
+        !pid_is_the_previews(player + 1),
+        "while another program in front still is somebody else's, which is the whole of what the \
+         watch demotes the pin for"
+    );
+
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+}
+
 /// A pick's raise is a pin owing the front, and the grace that follows it answers while the front
 /// is still owed: the press that names no file gives the band back, and the grace is dropped rather
 /// than putting the pin back over the listing that press just took it behind.
