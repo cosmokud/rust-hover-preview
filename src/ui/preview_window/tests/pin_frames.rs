@@ -3032,29 +3032,24 @@ fn a_cover_ended_before_its_relaunch_is_handed_back() {
     }
 }
 
-/// The band of a film mpv draws has the pin's own pixel in it, and every other band a pinned window
-/// leaves for somebody else stays theirs.
+/// The band of a film has the pin's own pixel in it, whatever player draws it, and every other band
+/// a pinned window leaves for somebody else stays theirs.
 ///
-/// A band left transparent is a band Windows hands to whatever stands behind the window, which is
-/// the whole of what a film a player of this app's is owed. mpv's film is the pin's own drag handle
-/// — the user asked for a hand on the picture to carry the window, the chrome and the film as one
-/// thing — so its band is the pin's. FFmpeg's player keeps the clicks it has always kept, and this
-/// fails if that answer changes.
+/// A band left transparent is a band Windows hands to whatever stands behind the window, and what
+/// stands behind a film's is the player's own window: a hole there is a press the pin never sees,
+/// a picture that cannot carry the window, and a player handed a pointer it spends on itself —
+/// FFmpeg's fullscreen toggle is a double click — so every film's band is the pin's. The page of a
+/// document stands over the pin rather than behind it and keeps its own clicks either way, and a
+/// kind this app draws holds no band of somebody else's at all.
 ///
 /// The hover preview is not asked about here because it cannot reach this decision at all: it is
 /// painted by `render_layered_preview_at`, which has no band and no band fill in it, and this gate
 /// is read from one place — `render_pinned_preview_at`.
 #[test]
-fn only_a_film_mpv_draws_has_a_band_the_pin_wins_the_point_of() {
+fn every_film_has_a_band_the_pin_wins_the_point_of() {
     assert!(
-        film_band_is_hit_testable(MediaType::Video, MPV_IMAGE_NAME, false),
-        "a pin whose player is mpv is pressed on through its own film, which is the handle the \
-         user asked for"
-    );
-    assert!(
-        !film_band_is_hit_testable(MediaType::Video, FFPLAY_IMAGE_NAME, false),
-        "FFmpeg's player keeps the band it always had: a press there falls through the pin exactly \
-         as it did before mpv was a route, and nothing here may change that"
+        film_band_is_hit_testable(MediaType::Video, false),
+        "a film is a picture the pin is carried by whichever player draws it — mpv's or          FFmpeg's — so a press on it is the pin's and not the player's window's"
     );
 
     for (kind, what) in [
@@ -3076,15 +3071,14 @@ fn only_a_film_mpv_draws_has_a_band_the_pin_wins_the_point_of() {
         ),
     ] {
         assert!(
-            !film_band_is_hit_testable(kind, MPV_IMAGE_NAME, false),
+            !film_band_is_hit_testable(kind, false),
             "{what} is left exactly as it was, whatever player was last begun"
         );
     }
 
     assert!(
-        !film_band_is_hit_testable(MediaType::Video, MPV_IMAGE_NAME, true),
-        "and a band a park has painted flat is left alone: what stands in it is the parked film \
-         rather than a hole to be closed"
+        !film_band_is_hit_testable(MediaType::Video, true),
+        "and a band a park has painted flat is left alone: what stands in it is the parked film          rather than a hole to be closed"
     );
 }
 
