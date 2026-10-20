@@ -486,7 +486,7 @@ pub fn run_preview_window() {
                         // left in hand for the next press either way.
                         if pending_load.is_none() {
                             if let Some(path) = pin_bubble_pick.take() {
-                                restore_pin();
+                                restore_pin(&Win32PinWindow, PinRestore::Key);
                                 pin_swap_requested = Some(path);
                                 // A file picked in the listing is not a step of the walk, so
                                 // nothing is stepped over on its account: it is a file the user

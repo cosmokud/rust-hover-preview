@@ -1,7 +1,9 @@
 use super::*;
 use windows::core::w;
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
+    CreateWindowExW, DestroyWindow, GetWindow, IsWindowVisible, ShowWindow, GW_HWNDPREV,
+    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WS_POPUP,
 };
 
 /// A SPACE with a focused bubble holds a film or a sound, and nothing else.
@@ -356,7 +358,7 @@ fn a_pin_restored_from_a_bubble_that_was_never_carried_comes_back_at_its_own_box
     stand_pin(Some(pin));
     PIN_BUBBLE_CARRIED.store(false, Ordering::Release);
 
-    restore_pin();
+    restore_pin(&a_restored_window(), PinRestore::Pressed);
 
     let restored = pin_state().and_then(|pinned| {
         pinned
@@ -377,5 +379,216 @@ fn a_pin_restored_from_a_bubble_that_was_never_carried_comes_back_at_its_own_box
     }
     PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
     PIN_BUBBLE_CARRIED.store(previous_carried, Ordering::Release);
+    stand_pin(previous_pin);
+}
+
+/// Whether `above` stands over `below` in the z-order right now: an ask of the desktop rather than a
+/// reading of what this app meant to ask for.
+///
+/// Safety: both handles are windows of this test's or of this app's own, and the question is a
+/// measurement of them rather than a change.
+unsafe fn stands_over(above: HWND, below: HWND) -> bool {
+    let mut walk = GetWindow(below, GW_HWNDPREV);
+    while let Ok(window) = walk {
+        if window == above {
+            return true;
+        }
+        if window.is_invalid() {
+            break;
+        }
+        walk = GetWindow(window, GW_HWNDPREV);
+    }
+
+    false
+}
+
+/// The offset this file's windows stand at: no display is there, so a run of the suite is no window
+/// of the user's and no place the hand can land in.
+const NOWHERE: i32 = -32000;
+
+/// A window of the test's own, opened where no display is.
+///
+/// Safety: the window is the caller's to destroy.
+unsafe fn a_window_of_the_tests_own() -> HWND {
+    CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("STATIC"),
+        w!(""),
+        WS_POPUP,
+        NOWHERE,
+        NOWHERE,
+        320,
+        240,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("a window of the test's own")
+}
+
+/// The pin put away into its bubble, with its own window on the desktop and a window of the test's
+/// opened over it — the arrangement a restore is asked in, with `Pin Mode → Always On Top` off.
+///
+/// The second window is made after the pin's, which is what puts it in front, and it is still there
+/// after the restore, so that a window which came back where a hidden one sits is a window that came
+/// back underneath it.
+///
+/// The caller holds the pin tests' lock and puts back every global written here: the handle the pin
+/// is drawn by, the bubble's, the one saying a bubble was carried, the setting, and the pin itself.
+///
+/// Safety: both windows are the caller's to destroy.
+unsafe fn a_pin_put_away_into_its_bubble() -> (HWND, HWND) {
+    let pin_hwnd = a_window_of_the_tests_own();
+    PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+    let in_front = a_window_of_the_tests_own();
+    let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    let _ = ShowWindow(in_front, SW_SHOWNOACTIVATE);
+    assert!(
+        stands_over(in_front, pin_hwnd),
+        "the window opened after the pin's is the one in front of it"
+    );
+
+    // The setting the user's own report is under: a pin that is not Always On Top.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+
+    // A pin put away into its bubble: collapsed, its own window gone from the screen, and no stand-in
+    // for it but the bubble this test holds no window for.
+    PIN_BUBBLE_HWND.store(0, Ordering::SeqCst);
+    PIN_BUBBLE_CARRIED.store(false, Ordering::Release);
+    let mut pin = overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    );
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    // What the collapse into a bubble leaves: the window off the screen, and nothing standing in for
+    // it but the bubble.
+    let _ = ShowWindow(pin_hwnd, SW_HIDE);
+    assert!(
+        !IsWindowVisible(pin_hwnd).as_bool(),
+        "a pin put away into its bubble has no window on the screen"
+    );
+
+    (pin_hwnd, in_front)
+}
+
+/// A pin brought back out of its bubble comes back in front of the windows that were opened over it,
+/// and takes the keyboard with it, with `Pin Mode → Always On Top` off.
+///
+/// The fault this is a regression test for: a click on the bubble brought the window back *behind*
+/// whatever the user had been working in. What a restore asked of the window was a place — `HWND_TOP`
+/// for one that was off the screen, and `HWND_NOTOPMOST`, which asks for the place a window already
+/// has, for one that was not — and a place is all it got: an ordinary window that is raised is a
+/// window the next activation is free to stand over, and the window the hide left in front is the one
+/// Windows activated. A press on the bubble is the one thing that says which window the user means, so
+/// the window the restore answers it with is the one that comes to the front and the one that holds
+/// the caret, the way a press on the window itself leaves it (see `restore_pin`, `pin_take_focus`).
+#[test]
+fn a_pin_brought_back_by_a_press_on_its_bubble_comes_back_in_front_and_takes_the_keyboard() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let previous_carried = PIN_BUBBLE_CARRIED.load(Ordering::Acquire);
+    let before = pin_always_on_top();
+
+    // Safety: the windows are this test's own, made and destroyed under the one-at-a-time lock, and
+    // the pin is stood up under it too.
+    let (pin_hwnd, in_front) = unsafe { a_pin_put_away_into_its_bubble() };
+
+    // What is asked of the pin's window is recorded rather than done: a window put in front of the
+    // user is not something a test may do to their desktop. The window the desktop answers for is the
+    // one this test made, because the restore asks about the handle the app holds.
+    let window = RecordedPinWindow::new(pin_hwnd.0 as isize);
+    restore_pin(&window, PinRestore::Pressed);
+
+    assert!(
+        !pin_is_collapsed(),
+        "the restore is what puts the pin back up"
+    );
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a pin the bubble brought back is put above the windows the user had in front of it: what a \
+         hide leaves behind is a place at the bottom of the z-order, and a showing that asks for the \
+         place a window already has is a pin that comes back behind everything"
+    );
+    assert_eq!(
+        window.calls(),
+        vec![
+            PinWindowCall::SetFocusable { focusable: true },
+            PinWindowCall::SetForeground,
+            PinWindowCall::SetFocus,
+        ],
+        "the window the press brought back is made focusable again — the collapse made it \
+         non-activating — and is then brought to the front and given the caret"
+    );
+
+    // Safety: both windows are this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(in_front);
+        let _ = DestroyWindow(pin_hwnd);
+        close_pin_taskbar();
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    PIN_BUBBLE_CARRIED.store(previous_carried, Ordering::Release);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    stand_pin(previous_pin);
+}
+
+/// A pin brought back by its key while the listing holds the keyboard leaves the keyboard where the
+/// user is working: only a press on this app's own stand-in asks for the front and the caret.
+///
+/// The key is pressed over the listing the file is picked in, and the file is what it asks for — a
+/// window that took the caret with it would take the listing the user was stepping through with it
+/// (see `PinRestore::Key`).
+#[test]
+fn a_pin_brought_back_by_its_key_leaves_the_keyboard_in_the_listing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let previous_carried = PIN_BUBBLE_CARRIED.load(Ordering::Acquire);
+    let before = pin_always_on_top();
+
+    // Safety: the windows are this test's own, made and destroyed under the one-at-a-time lock, and
+    // the pin is stood up under it too.
+    let (pin_hwnd, in_front) = unsafe { a_pin_put_away_into_its_bubble() };
+
+    let window = RecordedPinWindow::new(pin_hwnd.0 as isize);
+    restore_pin(&window, PinRestore::Key);
+
+    assert!(!pin_is_collapsed(), "the key is what puts the pin back up");
+    assert_eq!(
+        window.calls(),
+        Vec::new(),
+        "a pin brought back by its key asks nothing of the window: the listing keeps the keyboard"
+    );
+
+    // Safety: both windows are this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(in_front);
+        let _ = DestroyWindow(pin_hwnd);
+        close_pin_taskbar();
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    PIN_BUBBLE_CARRIED.store(previous_carried, Ordering::Release);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
     stand_pin(previous_pin);
 }

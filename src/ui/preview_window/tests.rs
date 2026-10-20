@@ -31,6 +31,13 @@ fn a_window_at(box_: ScreenRegion) -> RecordedPinWindow {
     RecordedPinWindow::with(0x1000, Some((box_.0, box_.1)), Some(box_))
 }
 
+/// The window a restore is handed in a test, which records what is asked of it instead of asking
+/// it: what a press on a stand-in owes the window it brings back — the front and the caret — is not
+/// something a run of the suite may take from the user's desktop.
+fn a_restored_window() -> RecordedPinWindow {
+    RecordedPinWindow::new(PREVIEW_HWND.load(Ordering::SeqCst))
+}
+
 /// A lock the tests that publish the pointer's own state take, so that one of them
 /// runs at a time: the item box and the hold regions are one set for the whole
 /// process, so two of these tests at once is one test's box answering another test's

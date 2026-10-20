@@ -563,7 +563,7 @@ pub(super) unsafe fn pin_command_request(
             None
         }
         Some(PinCommand::Restore) => {
-            restore_pin();
+            restore_pin(&Win32PinWindow, PinRestore::Pressed);
             None
         }
         Some(PinCommand::Maximize) => {
