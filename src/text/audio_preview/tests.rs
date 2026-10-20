@@ -1864,6 +1864,7 @@ fn the_pin_stands_the_height_of_the_cross_beside_it() {
 /// The pin's mark says whether the window is kept on top even while the hand is on it: "on" and
 /// "under the hand" are two inks, and so are "off" and "under the hand" — which is what makes a
 /// press that turns the pin off seen at once rather than only when the pointer leaves the mark.
+/// An off pin is otherwise the ink its two neighbours are drawn in.
 #[test]
 fn the_pin_says_whether_it_is_on_while_the_hand_is_on_it() {
     let (width, height) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
@@ -1913,6 +1914,37 @@ fn the_pin_says_whether_it_is_on_while_the_hand_is_on_it() {
     let off = ink_of(false, None);
     let off_hovered = ink_of(false, Some(CardControl::AlwaysOnTop));
 
+    // The ink the close beside it is drawn in, taken from the pixel of its mark furthest from the
+    // page so that a stroke's softened edge is not what stands for its ink.
+    let close = {
+        let card = Card {
+            controls: Some(CardChrome {
+                playing: false,
+                volume: 40,
+                hovered: None,
+                pressed: None,
+                window_buttons: true,
+                always_on_top: false,
+            }),
+            ..card()
+        };
+        let painted = render(&card, width, height, 96, options()).expect("a painted card");
+        let rect = boxes.close.drawn;
+        let distance = |color: [u8; 4]| {
+            (0..3)
+                .map(|channel| (color[channel] as i32 - clear[channel] as i32).abs())
+                .sum::<i32>()
+        };
+
+        (rect.left..rect.right)
+            .flat_map(|x| (rect.top..rect.bottom).map(move |y| (x, y)))
+            .map(|(x, y)| pixel(&painted, x, y))
+            .max_by_key(|color| distance(*color))
+            .expect("a drawn close")
+    };
+
+    assert_ne!(on, off, "the two states are told apart at rest");
+    assert_eq!(off, close, "an off pin is drawn in the close's own ink");
     assert_ne!(on, on_hovered, "a hand on an on pin is seen on it");
     assert_ne!(off, off_hovered, "and a hand on an off pin is seen too");
     assert_ne!(

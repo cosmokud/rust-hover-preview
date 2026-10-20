@@ -1039,11 +1039,12 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         //
         // The pin beside them is the one button whose mark says something of its own — whether
         // the window is kept on top — so its ink carries the state as well as the hand: the
-        // accent while it is on, an ink dim enough to read as off while it is not, and while the
-        // pointer is on it or holding it those same two taken one step further apart, the accent
-        // softer and the dim ink at full strength. Walking the accent toward the card's own ink
-        // instead leaves the two under-the-hand inks nearly one color on a dark theme, and a
-        // press that turns the pin off then shows nothing at all until the hand leaves the mark.
+        // accent while it is on, the same ink the other two are drawn in while it is not, and
+        // under the hand the accent either way, softer while it is on so that the press turning
+        // it off brightens the mark rather than leaving it as it was. Walking the accent toward
+        // the card's own ink instead would leave the two under-the-hand inks nearly one color on
+        // a dark theme, and a press that turns the pin off would show nothing at all until the
+        // hand leaves the mark.
         //
         // They are the one thing on the card that comes and goes: a button twice the
         // margin's own side stands in the name's own rows, so a hand near the window's
@@ -1064,8 +1065,8 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
                     CardControl::AlwaysOnTop => match (chrome.always_on_top, lit) {
                         (true, false) => accent,
                         (true, true) => blend(accent, page_color, 0.35),
-                        (false, false) => blend(foreground, page_color, 0.45),
-                        (false, true) => foreground,
+                        (false, false) => foreground,
+                        (false, true) => accent,
                     },
                     _ if lit => accent,
                     _ => foreground,
