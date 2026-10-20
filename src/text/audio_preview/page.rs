@@ -1043,7 +1043,7 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         //
         // The pin beside them says something of its own — whether the window is kept on top — so
         // it says it in the ink the numbers on the facts line are read in, and under the hand a
-        // darker one: the accent is what a button with no state of its own wears there, and a pin
+        // brighter one: the accent is what a button with no state of its own wears there, and a pin
         // kept on top that took it would say nothing but that the hand is near.
         //
         // They are the one thing on the card that comes and goes: a button twice the
@@ -1066,9 +1066,9 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
                     (false, false) => foreground,
                     (false, true) => accent,
                     (true, false) => number,
-                    // Darkened toward black rather than toward the page, which is darker on a dark
-                    // theme and washed out on a light one.
-                    (true, true) => blend(number, [0, 0, 0], 0.25),
+                    // Lit a step further toward white: the mark keeps the ink its state is read in
+                    // and is the brightest thing in that corner while the hand is on it.
+                    (true, true) => blend(number, [255, 255, 255], 0.35),
                 };
                 paint_window_button(surface, button.drawn, control, color, scale);
             }
