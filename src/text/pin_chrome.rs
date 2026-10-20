@@ -43,7 +43,7 @@ pub(crate) use menu::{
     menu_row_at, paint_menu_popup, MenuArrow, MenuMark, MenuPopup, MenuRow, MENU_SHADOW_PIXELS,
 };
 pub(crate) use primitives::{
-    draw_pin_top, fill_disc, fill_ring, stroke_segment, surface_pixels, ChromePalette,
+    fill_disc, fill_ring, stroke_segment, surface_pixels, ChromePalette,
 };
 pub(crate) use transport::{
     paint_card_control, paint_transport, paint_volume_popup, transport_part_at, transport_share_at,

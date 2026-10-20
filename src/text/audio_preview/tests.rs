@@ -1797,3 +1797,66 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
         "and the close is two strokes crossing, more than one row of them"
     );
 }
+
+/// The pin stands the height of the cross beside it, at every size a card is drawn at: its
+/// ceiling is painted on the cross's own first row and its stem ends on the cross's own last
+/// row, rather than a size larger and centred a row beyond them on either end.
+#[test]
+fn the_pin_stands_the_height_of_the_cross_beside_it() {
+    for (dpi, options) in [
+        (96, options()),
+        (96, options_at(200)),
+        (144, options()),
+        (192, options()),
+    ] {
+        let (width, height) =
+            measure(&pinned(), 4096, 2160, dpi, options).expect("a measured card");
+        let dc = unsafe { CreateCompatibleDC(None) };
+        let metrics = TextMetrics::new(dc, dpi, options.font_scale_percent).expect("metrics");
+        let theme = text_theme::loaded(options.theme).expect("the bundled theme");
+        let page = build_page(
+            &pinned(),
+            theme,
+            &metrics,
+            width,
+            height,
+            options.mark_offset_y,
+        );
+        unsafe {
+            let _ = DeleteDC(dc);
+        }
+        let boxes = page.boxes.as_ref().expect("a card that carries controls");
+        let painted = render(&pinned(), width, height, dpi, options).expect("a painted card");
+
+        // The page's own color, which every pixel of a drawn box is cleared to before a mark is
+        // painted in it: a mark is whatever rows of the box are left holding something else.
+        let clear = {
+            let color = rgb(theme.background());
+            [color[2], color[1], color[0], 255]
+        };
+        let rows_of_ink = |box_: RECT| -> Vec<i32> {
+            (box_.top..box_.bottom)
+                .filter(|&y| {
+                    (box_.left..box_.right).any(|x| {
+                        let index = (y as usize * width as usize + x as usize) * 4;
+                        painted.0[index..index + 4] != clear
+                    })
+                })
+                .collect()
+        };
+
+        let pin = rows_of_ink(boxes.always_on_top.drawn);
+        let cross = rows_of_ink(boxes.close.drawn);
+        assert!(
+            !pin.is_empty() && !cross.is_empty(),
+            "both marks are drawn at {dpi} dpi and {}% text",
+            options.font_scale_percent
+        );
+        assert_eq!(
+            (pin.first(), pin.last()),
+            (cross.first(), cross.last()),
+            "the pin stands the cross's own rows at {dpi} dpi and {}% text",
+            options.font_scale_percent
+        );
+    }
+}
