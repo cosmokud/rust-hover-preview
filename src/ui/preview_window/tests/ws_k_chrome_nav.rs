@@ -1717,6 +1717,29 @@ fn a_maximize_remembers_its_box_and_a_restore_gives_it_back() {
 /// be a window property and not a flag.
 #[test]
 fn the_player_window_is_mouse_transparent() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let previous_front = PIN_FRONT_OWED.load(std::sync::atomic::Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+    // A pin a pick raised, which is the state the film is topmost in.
+    stand_pin(Some(overlay_pin((100, 80, 420, 320), PinChrome::always())));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+    PIN_FRONT_OWED.store(false, std::sync::atomic::Ordering::SeqCst);
+    arm_pin_to_the_front();
+    assert!(
+        pin_holds_the_front(),
+        "a pin a pick raised owes the front, which is the band the film is asserted into"
+    );
+
     let style = player_ex_style_for(0);
 
     assert_eq!(
@@ -1758,6 +1781,13 @@ fn the_player_window_is_mouse_transparent() {
         0x0004_0000isize,
         "and a style the player was created with is not dropped"
     );
+
+    PIN_FRONT_OWED.store(previous_front, std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
 }
 
 /// A box change on the mpv route is a move and not a relaunch: mpv rescales itself in the window

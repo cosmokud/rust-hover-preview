@@ -153,7 +153,7 @@ pub(super) fn player_ex_style_for(current: isize) -> isize {
         | WS_EX_NOACTIVATE.0 as isize
         | WS_EX_TOOLWINDOW.0 as isize
         | WS_EX_TRANSPARENT.0 as isize;
-    if !pinned() || pin_always_on_top() {
+    if !pinned() || pin_holds_the_front() {
         style |= WS_EX_TOPMOST.0 as isize;
     } else {
         style &= !(WS_EX_TOPMOST.0 as isize);

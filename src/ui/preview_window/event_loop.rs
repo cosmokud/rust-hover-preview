@@ -403,15 +403,25 @@ pub fn run_preview_window() {
                 // Re-assert layered window style after DWM restart.
                 // DWM is reinitialized during resume and the layered window's
                 // per-pixel alpha composition surface may need a fresh anchor.
+                //
+                // The band is re-asserted as the window's own rather than as the topmost one for
+                // every window: a hover is topmost, and a pin is topmost while it holds the front
+                // (see `pin_holds_the_front`) — a pin owed nothing is an ordinary window, and this
+                // is the one road to the band that does not go through the pin's own raise.
+                let banded = !pinned() || pin_holds_the_front();
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                 SetWindowLongPtrW(
                     hwnd,
                     GWL_EXSTYLE,
-                    ex_style | WS_EX_LAYERED.0 as isize | WS_EX_TOPMOST.0 as isize,
+                    if banded {
+                        ex_style | WS_EX_LAYERED.0 as isize | WS_EX_TOPMOST.0 as isize
+                    } else {
+                        (ex_style | WS_EX_LAYERED.0 as isize) & !(WS_EX_TOPMOST.0 as isize)
+                    },
                 );
                 let _ = SetWindowPos(
                     hwnd,
-                    HWND_TOPMOST,
+                    if banded { HWND_TOPMOST } else { HWND_NOTOPMOST },
                     0,
                     0,
                     0,
@@ -2241,10 +2251,17 @@ pub fn run_preview_window() {
                     // way its own close button takes it.
                     PreviewMessage::PinChanged => {
                         if pinned() {
+                            // A pin that is Always On Top owes the front to the setting, and one
+                            // whose row is off never owed it: the flag is what either setting
+                            // leaves behind otherwise, and it would be a pin holding a band its
+                            // own setting does not name.
+                            if pin_always_on_top() || !pin_update_move_to_top() {
+                                PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+                            }
                             if !pin_enabled() {
                                 pin_request = Some(end_pin_state(Reason::SwitchedOff));
                             } else {
-                                let insert_after = if pin_always_on_top() {
+                                let insert_after = if pin_holds_the_front() {
                                     HWND_TOPMOST
                                 } else {
                                     HWND_NOTOPMOST
@@ -2309,10 +2326,11 @@ pub fn run_preview_window() {
                         // would have to find before they could see it (see
                         // `Pin Mode → Update Preview → Move To Top`). The raise happens here rather
                         // than at the install so the pin answers the pick at once, with the wait
-                        // for the file drawn in it where the read is not instant — and it is owed
-                        // the front for a moment after, because the click that made the pick
-                        // reaches the listing after it reaches this loop (see
-                        // `PIN_RAISE_GRACE`).
+                        // for the file drawn in it where the read is not instant — and the front it
+                        // answers with is the pin's to hold rather than to take and give back,
+                        // because the click that made the pick activates the listing after this
+                        // loop reads it (see `PIN_FRONT_OWED`).
+                        arm_pin_to_the_front();
                         raise_pinned_preview(hwnd);
                         pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
                         pin_lower_deadline = None;
@@ -2320,9 +2338,11 @@ pub fn run_preview_window() {
                     PreviewMessage::PinPress => {
                         // The click that made the press activates the listing, and that is the
                         // listing being put over the pin — before the shell has said which file
-                        // was picked, and before any `PinUpdate` can answer for it. The pin comes
-                        // forward here so the listing is covered for that wait, and the pick's
-                        // answer comes forward again when it lands.
+                        // was picked, and before any `PinUpdate` can answer for it. The pin owes
+                        // the front from here, and holds the band the activation of the listing
+                        // cannot undo (see `PIN_FRONT_OWED`); the pick's answer comes forward
+                        // again when it lands.
+                        arm_pin_to_the_front();
                         raise_pinned_preview(hwnd);
                         pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
                         pin_lower_deadline = None;
@@ -3102,9 +3122,10 @@ pub fn run_preview_window() {
 
                         // The pin has just been put up with the file the user picked, and what the
                         // click that picked it did to the z-order may have landed while the file
-                        // was being read: the grace the pick began is begun again here, where the
+                        // was being read: the front the pin owes is owed again here, where the
                         // window that is to stand over the listing is what is on screen (see
-                        // `PIN_RAISE_GRACE`).
+                        // `PIN_FRONT_OWED`).
+                        arm_pin_to_the_front();
                         pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
                         pin_lower_deadline = None;
 
@@ -3139,6 +3160,31 @@ pub fn run_preview_window() {
                     pin_lower_deadline = None;
                 } else {
                     lower_pinned_preview(hwnd, GetForegroundWindow());
+                }
+            }
+
+            // A pin that owes the front owes it while the window it follows is the one the user is
+            // in. Another program in front is the user working elsewhere, so the band goes back to
+            // the ordinary one and the pin goes below that program — the desktop included, except
+            // that the desktop is the bottom of the desktop's own list and the pin keeps the place
+            // it stands in rather than going under the wallpaper (see `pin_holds_the_front` and
+            // `foreground_is_the_desktop`). Without this, a pin that holds the band would stay over
+            // every other program until the next press that named no file, which is one click too
+            // late — and with `Always On Top` off that band is not the setting's to keep. A pick's
+            // grace is left alone: the click it answers may not have activated the listing yet, and
+            // the window in front at that moment is the one the user is coming *from*.
+            if pin_raise_deadline.is_none() && !pin_always_on_top() && pin_holds_the_front() {
+                let foreground = GetForegroundWindow();
+                if !foreground.is_invalid()
+                    && !foreground_is_ours(foreground)
+                    && !crate::shell::explorer_hook::is_foreground_explorer()
+                {
+                    if foreground_is_the_desktop(foreground) {
+                        lower_pinned_preview(hwnd, HWND(ptr::null_mut()));
+                    } else {
+                        lower_pinned_preview(hwnd, foreground);
+                        pin_lower_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
+                    }
                 }
             }
 
@@ -3535,6 +3581,12 @@ pub fn run_preview_window() {
                         // The pin is published as up inside this, after the state it publishes
                         // is written (see `pin_window::install`).
                         install(pin);
+
+                        // A pin that is taken up owes the front from the moment it is up: the
+                        // click that picks the next file activates the listing, and a pin in the
+                        // ordinary band is that window over it for a frame however fast the pick
+                        // is answered (see `PIN_FRONT_OWED`).
+                        arm_pin_to_the_front();
 
                         // The button a collapsed pin left says which file the pin is of, and the
                         // file has just changed: a stand-in already up is not shown again by the
