@@ -1122,11 +1122,13 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
 /// in — and it goes under the pin rather than staying where it was: a window left over the listing
 /// is the pin's picture floating over it with no caption, and one the band is being taken from is
 /// the same window over the listing the pin just went behind. A film is moved by the placement that
-/// already inserts it below the pin (see `band_window_insert_after`), and is taken out of the topmost
+/// already inserts it below the pin (see `player_insert_after`), and is taken out of the topmost
 /// band first where it holds one; a page is put there here as well, because the engine's own
-/// placement is a message away and the listing must not be seen through the band for the length of
-/// it — both ask the one question (see `band_window_insert_after`). The next raise puts both where
-/// the band asks for them again (see `place_pinned_siblings`).
+/// placement is a message away and a page left in front of the listing for the length of it is the
+/// picture floating over the window the pin went behind. **A page is put in front of the pin rather
+/// than behind it**, so the window it goes under is the same one the pin went under and not the pin
+/// itself (see `Host::put_window`). The next raise puts both where the band asks for them again
+/// (see `place_pinned_siblings`).
 pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
     if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
         return;
@@ -1225,15 +1227,22 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                     );
                 }
-                let _ = SetWindowPos(
-                    page,
-                    hwnd,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
+                // Below the same window the pin went below, and asked for after it: inserting a
+                // window directly below `place` puts it directly above the pin, which is where a
+                // page stands. Below the *pin* would be the page blended through the band's hole —
+                // the black a browser's surface pays for standing behind a layered window (see
+                // `Host::put_window`).
+                if !place.is_invalid() {
+                    let _ = SetWindowPos(
+                        page,
+                        place,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
             }
         }
         _ => {}
@@ -1398,9 +1407,9 @@ pub(super) fn place_pinned_siblings() {
         // may have just been raised over the window that was covering the page as well, and a page
         // left behind would be a caption standing over the listing it was following.
         //
-        // What the page is put *under* is the pin's own window, so the pin's chrome stays over the
-        // picture and the band's hole is what the page is seen through (see
-        // `band_window_insert_after`).
+        // What the ask puts the page in is the band the pin now holds, and in front of the pin
+        // rather than behind it: a browser's surface behind the band's hole is a resize that goes
+        // black and stutters (see `Host::put_window`).
         Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
             if let Some((path, _)) = pinned_media_owner() {
                 webview_preview::raise(
@@ -1666,7 +1675,7 @@ pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
             } else {
                 let _ = SetWindowPos(
                     hwnd,
-                    band_window_insert_after(),
+                    player_insert_after(),
                     content.0,
                     content.1,
                     (content.2 - content.0).max(1),
