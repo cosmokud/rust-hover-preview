@@ -1049,11 +1049,11 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
     unsafe {
         let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
         if !hwnd.is_invalid() {
-            // A pin the hand asked for owes the front, and it owes it as a band rather than as a
-            // raise: the window comes back over the listing it follows, and the next press there
-            // picks a file rather than covering it for the frame the listing is activated (see
+            // A pin the hand asked for owes no band for it: this restore takes the focus below, and
+            // the window the hand is in is the window Windows activates — an activated window is
+            // already the one in front, and one that also held the topmost band would be a pin with
+            // `Always On Top` off standing over the user's work (see `band_place` and
             // `PIN_FRONT_OWED`).
-            arm_pin_to_the_front();
             show_pinned_window(hwnd);
             // A window the hand pressed its stand-in for is a window the hand is in, so it is the one
             // in front and the one holding the keyboard — and with `Pin Mode → Always On Top` off

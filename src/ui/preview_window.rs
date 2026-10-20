@@ -268,6 +268,7 @@ pub(crate) use image_cache::trim_image_cache;
 pub(crate) use media_types::PreviewMessage;
 pub(crate) use pin_bubble::PIN_BUBBLE_HWND;
 pub(crate) use pin_drag::publish_pin_media_press;
+pub(crate) use pin_lifecycle::band_place;
 pub(crate) use pin_lifecycle::pin_always_on_top;
 pub(crate) use pin_lifecycle::pin_holds_the_front;
 pub(crate) use pin_lifecycle::PinCommand;
