@@ -461,6 +461,14 @@ pub fn run_preview_window() {
             crate::shell::key_input::publish_pin_always_on_top(
                 pin_keys_owner != 0 && pin_always_on_top(),
             );
+            // And whether the preview is the surface the pointer is standing on, which is what the
+            // wheel asks instead of the keyboard's question once a pin is raised over the listing
+            // the user is working in: the pointer is over the pin while the keyboard stays behind
+            // it, and a notch turned there is the pin's either way (see
+            // `wheel_input::publish_preview_under_the_pointer`).
+            crate::shell::wheel_input::publish_preview_under_the_pointer(
+                cursor_preview_hover().any(),
+            );
 
             // The key is drained whether or not it is watched, so that a press made while the
             // feature was off is not acted on when it comes back on.
