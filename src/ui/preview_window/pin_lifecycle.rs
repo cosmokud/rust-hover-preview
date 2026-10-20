@@ -1410,7 +1410,15 @@ pub(super) unsafe fn keep_pin_at_the_front(
     // A pin that no longer owes the front has given it back: a press that named no file is the
     // pin's own answer, and a raise here would be the grace putting it back over the listing the
     // press just took it behind — the pin fighting the hand that moved it.
-    if !pin_holds_the_front() {
+    //
+    // **The debt is what is asked, not the band.** A pick arms `PIN_FRONT_OWED` and a press that names
+    // no file clears it, and that flag is the whole of the promise this grace is; the band is the
+    // setting's and answers "no" with `Always On Top` off, which is every pin this grace exists for.
+    // Asked of the band, the grace ended on its first tick and the click that made the pick — reaching
+    // the listing *after* the raise, and activating it — was left to undo the pin's answer: the pin
+    // went back behind the listing it had just been raised over, which is the fault the user reported
+    // twice ("we have the same problem just like in fake windows").
+    if !PIN_FRONT_OWED.load(Ordering::SeqCst) {
         *deadline = None;
         return;
     }

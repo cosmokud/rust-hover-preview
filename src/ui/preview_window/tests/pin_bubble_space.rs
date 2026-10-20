@@ -1052,13 +1052,39 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
         "and it holds no band for it: the topmost one is the setting's, and this pin's is off"
     );
 
+    // **The click that made the pick activates the listing after the raise.** That is the listing
+    // being put back over the pin, and the grace is the pin's answer for as long as that can still
+    // happen - with `Always On Top` off as much as on, because the debt a pick arms is what the grace
+    // asks and the band is the setting's (see `keep_pin_at_the_front`). Asked of the band, the grace
+    // ended on its first tick and every pick made after the user had clicked anything was a pin left
+    // behind the listing.
     let mut deadline = Some(Instant::now() + PIN_RAISE_GRACE);
     unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
     assert!(
-        deadline.is_none(),
-        "a pin that holds no band is not raised again by the grace: the raise was one pair of \
-         calls, and the window the user activates after it is the one in front"
+        deadline.is_some(),
+        "a pick's grace keeps answering while the debt stands, with `Always On Top` off"
     );
+
+    // What the click does: the window it activates comes over the pin. The grace answers it with the
+    // raise, so the pin the user just picked a file for is the one they are looking at.
+    let activated = unsafe { a_window_of_the_tests_own() };
+    unsafe {
+        let _ = ShowWindow(activated, SW_SHOWNOACTIVATE);
+    };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(activated, pin_hwnd) },
+        "the window opened after the pin is the one the click left in front of it"
+    );
+    unsafe { keep_pin_at_the_front(pin_hwnd, activated, &mut deadline, Instant::now()) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, activated) },
+        "the grace raises the pin back over the window the click activated"
+    );
+    unsafe {
+        let _ = DestroyWindow(activated);
+    };
 
     // The press that names no file is the pin giving the band back. The grace it began goes with
     // it: asked again, it is dropped rather than raising the pin over the listing.

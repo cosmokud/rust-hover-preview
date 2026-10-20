@@ -567,7 +567,9 @@ pub fn run_preview_window() {
                 // And a press on any of the preview's windows is the preview being asked for: the
                 // window comes forward whether or not Windows granted it the foreground, and
                 // whichever of its windows took the press (see `settle_pinned_press`).
-                settle_pinned_press(hwnd, &mut pin_press_seen);
+                // The pin's own window, for the same reason the raise above asks for it: the handle
+                // this loop holds is the hover's (see `pinned_window`).
+                settle_pinned_press(pinned_window(), &mut pin_press_seen);
 
                 // And a drag that press began carried on, and let go of, from what the hook
                 // publishes rather than from a message — which is the only end it can have, the
@@ -2339,7 +2341,11 @@ pub fn run_preview_window() {
                         // because the click that made the pick activates the listing after this
                         // loop reads it (see `PIN_FRONT_OWED`).
                         arm_pin_to_the_front();
-                        raise_pinned_preview(hwnd);
+                        // The window raised is the pin's own, which for a picture is not the handle
+                        // this loop holds: the loop's window is the hover's, and a raise that moved it
+                        // moved a window nobody can see while the pin stayed behind the listing (see
+                        // `pinned_window`).
+                        raise_pinned_preview(pinned_window());
                         pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
                     }
                     PreviewMessage::PinPress => {
@@ -2350,7 +2356,7 @@ pub fn run_preview_window() {
                         // cannot undo (see `PIN_FRONT_OWED`); the pick's answer comes forward
                         // again when it lands.
                         arm_pin_to_the_front();
-                        raise_pinned_preview(hwnd);
+                        raise_pinned_preview(pinned_window());
                         pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
                     }
                     PreviewMessage::PinNoPick { window } => {
@@ -3169,7 +3175,7 @@ pub fn run_preview_window() {
             // window the listing is in is activated after it — which is that window being put
             // over the pin again (see `PIN_RAISE_GRACE`).
             keep_pin_at_the_front(
-                hwnd,
+                pinned_window(),
                 GetForegroundWindow(),
                 &mut pin_raise_deadline,
                 Instant::now(),
@@ -3192,9 +3198,9 @@ pub fn run_preview_window() {
                     && !crate::shell::explorer_hook::is_foreground_explorer()
                 {
                     if foreground_is_the_desktop(foreground) {
-                        lower_pinned_preview(hwnd, HWND(ptr::null_mut()));
+                        lower_pinned_preview(pinned_window(), HWND(ptr::null_mut()));
                     } else {
-                        lower_pinned_preview(hwnd, foreground);
+                        lower_pinned_preview(pinned_window(), foreground);
                     }
                 }
             }
