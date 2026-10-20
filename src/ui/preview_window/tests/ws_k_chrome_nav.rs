@@ -1727,17 +1727,15 @@ fn the_player_window_is_mouse_transparent() {
         .lock()
         .map(|config| config.pin_update_move_to_top)
         .unwrap_or(true);
-    // A pin a pick raised, which is the state the film is topmost in.
+    // A pin that is Always On Top, which is the state the film is topmost in.
     stand_pin(Some(overlay_pin((100, 80, 420, 320), PinChrome::always())));
     if let Ok(mut config) = CONFIG.lock() {
-        config.pin_always_on_top = false;
+        config.pin_always_on_top = true;
         config.pin_update_move_to_top = true;
     }
-    PIN_FRONT_OWED.store(false, std::sync::atomic::Ordering::SeqCst);
-    arm_pin_to_the_front();
     assert!(
         pin_holds_the_front(),
-        "a pin a pick raised owes the front, which is the band the film is asserted into"
+        "a pin that is Always On Top holds the band, and that is the band the film is asserted into"
     );
 
     let style = player_ex_style_for(0);

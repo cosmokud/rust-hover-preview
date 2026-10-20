@@ -257,29 +257,21 @@ pub fn pin_always_on_top() -> bool {
         .unwrap_or(DEFAULT_PIN_ALWAYS_ON_TOP)
 }
 
-/// Whether the pin is standing in the front band — the topmost one — as both of its roads to it
-/// agree: the setting's own band, or the one a pin that is not Always On Top keeps while it owes the
-/// front to the listing it follows (see `PIN_FRONT_OWED`).
+/// Whether the pin's window belongs in the topmost band: the band `Always On Top` asks for, and
+/// no other.
 ///
-/// **The second is what answers a click that picks a file.** The click activates the listing, and
-/// activation is Windows putting that window at the front of the ordinary band — over every
-/// ordinary window, and the pin is one of those. There is no raise fast enough to undo that for the
-/// frame it lasts, which is the flash a pin in the ordinary band answers a pick with: the topmost
-/// band is not subject to it, because a topmost window stands over the foreground one by
-/// definition. So a pin that follows the listing holds that band from the moment it is taken up,
-/// and gives it back at the first press that names no file or window change that leaves the
-/// listing (see `lower_pinned_preview`). The price is the one `Always On Top` pays for the same
-/// band — the taskbar and every other topmost window are under the pin while it stands there — and
-/// it is paid only for as long as the pin owes the front.
+/// **There is no other band for it to stand in, and nothing to remember.** A pin that is not
+/// Always On Top is an ordinary window: Windows raises the window a click activated, and that
+/// window is then in front of the pin, which is the whole of what "not on top" means on this
+/// desktop. This app used to keep a record of a pin that "owed the front" so a preview it had just
+/// updated stayed over the listing, and every release rule that record needed was one more way to
+/// get it wrong — a pin still holding the topmost band after a resize, a restore, or `Win+D` is a
+/// window over every program the user works in, with the setting that says it must not be.
 ///
-/// A pin that is put away holds no band, and one whose `Move To Top` row is off was never raised by
-/// an update: neither is asked here beyond the setting's own answer.
+/// The band is the setting's. What this app asks for on the user's own press is a raise within the
+/// ordinary band, and it asks for it one press at a time (see `put_pin_at_the_front`).
 pub(crate) fn pin_holds_the_front() -> bool {
-    pinned()
-        && (pin_always_on_top()
-            || (PIN_FRONT_OWED.load(Ordering::SeqCst)
-                && pin_update_move_to_top()
-                && !pin_is_collapsed()))
+    pinned() && pin_always_on_top()
 }
 
 /// The band a window of this app's is placed in when it is placed for reasons of its own — a
@@ -976,9 +968,10 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // that owes neither. The second is no raise — `HWND_NOTOPMOST` asks for the place a window
     // already has, and a pin the user can see is standing in it — but it *is* the one thing that
     // takes the topmost band off a window the Shell had been drawing as a hover's.
+    let place = band_place();
     let _ = SetWindowPos(
         hwnd,
-        band_place(),
+        place,
         window.0,
         window.1,
         width,

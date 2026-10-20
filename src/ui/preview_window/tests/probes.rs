@@ -1599,8 +1599,8 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
 }
 
 /// A player's window is asserted the styles **with** the topmost bit, and the click-through style
-/// besides. The film is topmost for as long as the pin owes the front, which is the state a pick
-/// leaves the pin in (see `pin_holds_the_front`).
+/// besides. The film is topmost for as long as the pin is Always On Top, because a pin's band is the
+/// band its film stands in (see `pin_holds_the_front`).
 ///
 /// Topmost is what keeps a film above every ordinary window — Explorer, and whatever else the user
 /// brings up — which is the whole of why a band painted over a film is not a band over a film nobody
@@ -1623,14 +1623,12 @@ fn a_players_window_is_asserted_topmost() {
         .unwrap_or(true);
     stand_pin(Some(overlay_pin((100, 80, 420, 320), PinChrome::always())));
     if let Ok(mut config) = CONFIG.lock() {
-        config.pin_always_on_top = false;
+        config.pin_always_on_top = true;
         config.pin_update_move_to_top = true;
     }
-    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
-    arm_pin_to_the_front();
     assert!(
         pin_holds_the_front(),
-        "a pin a pick raised owes the front, which is the band the film is asserted into"
+        "a pin that is Always On Top holds the band, and that is the band the film is asserted into"
     );
 
     let a_style_the_player_needs = 0x0004_0000isize;
@@ -1792,6 +1790,12 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
     let previous_image = video_process_image();
     let previous_pin = take_pin_for_a_test();
+    let always_on_top = pin_always_on_top();
+    // The pair the re-raise is about is a Topmost one: a pin with the setting off puts its film
+    // *below* itself, so there is nothing to put the pin back over (see `place_player_window`).
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
 
     let content = (100, 80, 420, 320);
     let player = unsafe { stand_a_player_window(content) };
@@ -1916,6 +1920,9 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
     stand_pin(previous_pin);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+    }
 }
 
 /// The answer the chrome block's raise is asked against: whether the player's window is standing

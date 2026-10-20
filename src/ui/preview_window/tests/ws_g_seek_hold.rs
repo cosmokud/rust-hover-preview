@@ -689,8 +689,12 @@ fn an_mpv_seek_whose_pipe_is_gone_raises_the_cover_before_it_ends_the_player() {
              decided rather than over a film that was still playing ({what})"
         );
         assert!(
-            mpv_ipc::noted_lines().is_empty(),
-            "nothing is written down a pipe that is not there ({what})"
+            mpv_ipc::noted_lines()
+                .iter()
+                .all(|line| line.contains("ontop")),
+            "nothing is written down a pipe that is not there: the only line the relaunch leaves \
+             is its own ask about the topmost band, which every player begun for a pin is asked \
+             ({what})"
         );
     }
 
