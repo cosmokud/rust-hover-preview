@@ -59,11 +59,11 @@ use crate::formats::video_formats::is_video_file;
 use crate::shell::wheel_input;
 use crate::ui::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
-    note_engine_page_drag, pinned, pinned_path, pointer_item_box, pointer_item_holds,
-    preview_pointer_hold, preview_screen_rect, preview_stall_ms, preview_window_rect,
-    publish_pin_media_press, publish_pointer_item_box, request_pin_end, request_pin_menu_dismiss,
-    show_preview, show_preview_keyboard, take_pin_resumed, update_pinned_preview,
-    PreviewCursorHover,
+    note_engine_page_drag, pin_press_was_not_a_pick, pinned, pinned_path, pointer_item_box,
+    pointer_item_holds, press_pinned_preview, preview_pointer_hold, preview_screen_rect,
+    preview_stall_ms, preview_window_rect, publish_pin_media_press, publish_pointer_item_box,
+    request_pin_end, request_pin_menu_dismiss, show_preview, show_preview_keyboard,
+    take_pin_resumed, update_pinned_preview, PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;

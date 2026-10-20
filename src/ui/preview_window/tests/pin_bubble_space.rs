@@ -718,6 +718,116 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
     stand_pin(previous_pin);
 }
 
+/// A press that names no file gives the front back: the pin a pick raised is put behind the window
+/// the press was made in, which is what a click on the tree, the toolbar or the gap between the
+/// rows is answered with (see `lower_pinned_preview`), and a pin that is Always On Top keeps the
+/// band it is in.
+///
+/// The z-order is read off the desktop's own list for the same reason the raise test reads it
+/// there: what the call was asked for is a place among other windows, and a pin left standing over
+/// the listing it was clicked in is the fault this answers.
+#[test]
+fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    // Safety: both windows are this test's own, opened where no display is. The second is made
+    // after the pin's, which is what puts it in front — the listing, in the arrangement the press
+    // is read in.
+    let (pin_hwnd, in_front) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+        let in_front = a_window_of_the_tests_own();
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(in_front, SW_SHOWNOACTIVATE);
+        (pin_hwnd, in_front)
+    };
+
+    // A pin that is up and on the screen, with `Always On Top` off.
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The pick raises the pin first, as an update does, and the press that follows names no file.
+    unsafe { raise_pinned_preview(pin_hwnd) };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "an update puts the pin above the listing the file was picked in"
+    );
+    unsafe { lower_pinned_preview(pin_hwnd, in_front) };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "the pin goes back behind the window the press was made in, which is what a click that \
+         picked no file is answered with"
+    );
+    // Safety: the lower left `Always On Top` as it found it, which is the half of it that is not
+    // about the window's place.
+    let lowered_style = unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32;
+    assert_eq!(
+        lowered_style & WS_EX_TOPMOST.0,
+        0,
+        "a pin put back is still in the ordinary band, not the topmost one"
+    );
+
+    // The next pick brings it forward again, so a press that named no file is not a pin left
+    // behind for good.
+    unsafe { raise_pinned_preview(pin_hwnd) };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a later pick raises the pin again"
+    );
+
+    // `Always On Top` keeps its own band: a pin there is not the listing's to put behind.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    unsafe { raise_pinned_preview(pin_hwnd) };
+    let topmost_style = unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32;
+    assert_ne!(
+        topmost_style & WS_EX_TOPMOST.0,
+        0,
+        "a pin that is Always On Top is raised into the topmost band"
+    );
+    unsafe { lower_pinned_preview(pin_hwnd, in_front) };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a pin that is Always On Top is left where it stands"
+    );
+    let still_topmost = unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32;
+    assert_ne!(
+        still_topmost & WS_EX_TOPMOST.0,
+        0,
+        "and a press that picks no file does not take its band away from it"
+    );
+
+    // Safety: both windows are this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(in_front);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
 /// The raise a pick makes is asked for again on the ticks right after it, because the click that
 /// made the pick reaches the listing's window after it reaches this app: the listing is activated
 /// then, which is that window being put back over the pin. A pin that has been covered within the

@@ -246,6 +246,11 @@ pub fn run_preview_window() {
         // pick: the click reaches the listing's window after it reaches this loop, and the listing
         // is activated then — over the pin (see `PIN_RAISE_GRACE` and `keep_pin_at_the_front`).
         let mut pin_raise_deadline: Option<Instant> = None;
+        // Until when a pin that answered a press put itself back behind the window the press was
+        // made in: the listing is activated by the click that made the press, and this loop can read
+        // the foreground before that activation has been dispatched — so the ask is repeated for the
+        // same moment the raise is, and only one of the two is ever armed (see `PIN_RAISE_GRACE`).
+        let mut pin_lower_deadline: Option<Instant> = None;
         // The file picked in Explorer while the pin is a bubble: held rather than shown, because a
         // pin that is a bubble has no window to show anything in, and what the user is doing
         // behind it is walking through files. The key is what brings the window back up on it
@@ -2310,6 +2315,27 @@ pub fn run_preview_window() {
                         // `PIN_RAISE_GRACE`).
                         raise_pinned_preview(hwnd);
                         pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
+                        pin_lower_deadline = None;
+                    }
+                    PreviewMessage::PinPress => {
+                        // The click that made the press activates the listing, and that is the
+                        // listing being put over the pin — before the shell has said which file
+                        // was picked, and before any `PinUpdate` can answer for it. The pin comes
+                        // forward here so the listing is covered for that wait, and the pick's
+                        // answer comes forward again when it lands.
+                        raise_pinned_preview(hwnd);
+                        pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
+                        pin_lower_deadline = None;
+                    }
+                    PreviewMessage::PinNoPick => {
+                        // A press that named no file was a click on the folder tree, the gap
+                        // between the rows, or the toolbar above them: the user's own click put
+                        // the listing in front and the pin belongs behind it. The grace a pick
+                        // began is ended with the raise it was holding up, so what the press
+                        // above came forward for is given back at once.
+                        pin_raise_deadline = None;
+                        lower_pinned_preview(hwnd, GetForegroundWindow());
+                        pin_lower_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
                     }
                     PreviewMessage::OfficeRenderReady {
                         path,
@@ -3080,6 +3106,7 @@ pub fn run_preview_window() {
                         // window that is to stand over the listing is what is on screen (see
                         // `PIN_RAISE_GRACE`).
                         pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
+                        pin_lower_deadline = None;
 
                         // And the band a step's cover is holding, where this install came out of
                         // a hold: the park's own settle ran earlier in this tick, before the pin
@@ -3103,6 +3130,17 @@ pub fn run_preview_window() {
                 &mut pin_raise_deadline,
                 Instant::now(),
             );
+
+            // And the other half of the same moment: a press that named no file is answered by the
+            // window it was made in coming back over the pin, and this loop may have read the
+            // foreground before that window was activated (see `pin_lower_deadline`).
+            if let Some(until) = pin_lower_deadline {
+                if Instant::now() >= until {
+                    pin_lower_deadline = None;
+                } else {
+                    lower_pinned_preview(hwnd, GetForegroundWindow());
+                }
+            }
 
             // The pin's request, if it made one, is the newest thing that happened and speaks
             // for what is on screen: a key that was pressed, a button that was clicked, or the
@@ -3662,6 +3700,7 @@ pub fn run_preview_window() {
                     // which is answered above: it is not a hover, so nothing here has a layout
                     // to make for it (see `PreviewMessage::PinUpdate`).
                     PreviewMessage::PinUpdate(_) => {}
+                    PreviewMessage::PinPress | PreviewMessage::PinNoPick => {}
                     // And what the planner answered, which is the pin's own walk and its
                     // hand-off name rather than a hover — taken where a pin is acted on, not
                     // here (see `PreviewMessage::PinAnswered`).

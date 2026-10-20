@@ -1003,6 +1003,69 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
     place_pinned_siblings();
 }
 
+/// Put a pinned window back where the user's own clicks had it: behind the window the press was
+/// made in, which the raise a press or a pick makes had put it in front of.
+///
+/// The foreground window is the place asked for rather than a band: `HWND_NOTOPMOST` would put the
+/// pin at the top of the ordinary band, which is where the window it is to go behind already is,
+/// so the place is the one directly below that window. `window` is handed in rather than read here
+/// for the same reason `keep_pin_at_the_front` takes it — the caller knows the moment the press was
+/// read, and a test can name a window of its own.
+///
+/// A pin that is Always On Top has no ordinary band to go back to and keeps the one it is in, and
+/// one whose `Move To Top` row is off was never raised by an update: both are left alone. So is a
+/// pin that already stands behind the window, and one whose window is the pin itself.
+pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
+    if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
+        return;
+    }
+
+    if window.is_invalid() || window == hwnd || !pin_stands_over(hwnd, window) {
+        return;
+    }
+
+    let _ = SetWindowPos(
+        hwnd,
+        window,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+
+    // What stands in the pin's band is somebody else's window — a film, or a page the engine draws
+    // in — and it goes under the pin rather than staying where it was: a window left over the
+    // listing is the pin's picture floating over it with no caption, and one a raise had put at the
+    // front of the band is the same window over the listing the pin just went behind. A film is
+    // moved by the placement that already inserts it below the pin (see `player_insert_after`); a
+    // page is the engine's window and its placement takes a band rather than a window to go under,
+    // so it is put there here. The next raise puts both where the band asks for them again (see
+    // `place_pinned_siblings`).
+    let kind = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.media_type));
+    match kind {
+        Some(MediaType::Video) => place_pinned_siblings(),
+        Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
+            let page = webview_preview::showing_hwnd();
+            if page != 0 {
+                let _ = SetWindowPos(
+                    HWND(page as *mut _),
+                    hwnd,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Answer, on each tick of the grace a pick began, for the front of the pin's band: raise the pin
 /// again if the click that made the pick has since brought the window the user is working in over
 /// it (see `PIN_RAISE_GRACE`).

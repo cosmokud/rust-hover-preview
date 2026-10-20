@@ -312,6 +312,33 @@ impl PinUpdateWatch {
             resolver.forget_window_views();
         }
 
+        // A press on the listing is answered before the shell has said which file it picked: the
+        // click activates the listing, and that activation is the listing being put over the pin
+        // for as long as naming the file takes (see `PreviewMessage::PinPress`). What the press is
+        // *on* is what tells the two kinds apart, and it is read from the item under the point
+        // rather than from the file it names: the item is there the moment the click lands, while
+        // the path is the half the shell is still catching up with. An item is a press that picked
+        // something — a file, or a folder the selection's own answer puts the pin back behind (see
+        // `PinUpdateWatch::follow_selection`) — and anything else, the tree, the toolbar, the header
+        // or the gap between the rows, is a press that picked no file at all.
+        //
+        // A press on this app's own window is left out: it is the pin being used rather than the
+        // listing under it being picked, and what the pin stands over is not changed by it.
+        if pick && !over_our_own {
+            let on_an_item = uia_item_from_point(resolver, pointer.point, false).is_some();
+            if on_an_item {
+                press_pinned_preview();
+            } else {
+                pin_press_was_not_a_pick();
+            }
+            note_pin_click!(
+                "press answer  item {}  at {},{}",
+                on_an_item as u8,
+                pointer.point.x,
+                pointer.point.y,
+            );
+        }
+
         // A pick is already a press that landed on a listing — that is what `press_is_a_listing`
         // asked above — so this is the two ways a listing under the pointer is read, and neither
         // of them asks again whether there is one. A hover is not a pick and is asked for
@@ -320,6 +347,12 @@ impl PinUpdateWatch {
             self.probed = true;
 
             if let Some(path) = get_file_under_cursor(resolver, &pointer) {
+                // A folder is an item the press picked and not a file the pin has anything to show
+                // for: the click picked nothing, and the pin goes back behind the listing the click
+                // put in front (see `PreviewMessage::PinNoPick`).
+                if pick && path.is_dir() {
+                    pin_press_was_not_a_pick();
+                }
                 // What was resolved is answered whatever it turned out to be — a file nothing can
                 // be shown for is one of them — so there is nothing here left to ask about again.
                 let offered = self.offer(&path, &showing);
@@ -420,6 +453,12 @@ impl PinUpdateWatch {
 
                     match get_file_under_cursor(resolver, &pointer) {
                         Some(path) => {
+                            // The click is answered with a folder — the item it landed on is one, and
+                            // no file is at the point — so it picked nothing the pin can show, and
+                            // the raise the press made is given back.
+                            if path.is_dir() {
+                                pin_press_was_not_a_pick();
+                            }
                             let offered = self.offer(&path, &showing);
                             self.answer_click(&path, &showing, clicked, now, pointer.point);
                             trace_click(
@@ -909,6 +948,15 @@ impl PinUpdateWatch {
         let selected = selected_file_in_view(resolver, pointer);
 
         if let Some(path) = self.note_selection(place, selected, clicked) {
+            // A folder the listing holds selected is not a file the pin can show, and a click
+            // that selected one picked no file: the pin goes back behind the listing the click
+            // put in front. A held click is what the demote waits for, because a press the point
+            // answered has been answered already — by the file it resolved, or by the folder's
+            // own `is_dir` there — and a stale folder read over a file that was just picked must
+            // not undo the pick (see `PinUpdateWatch::answer_click`).
+            if path.is_dir() && self.pending.is_some() {
+                pin_press_was_not_a_pick();
+            }
             self.offer(&path, showing);
         }
     }
