@@ -45,6 +45,75 @@ fn a_resize_keeps_the_shape_of_what_is_pinned() {
     );
 }
 
+/// A corner dragged against the room the media is kept inside moves the box with the hand the whole
+/// way, a pixel at a time, and stops at the room's edge rather than jumping to it.
+///
+/// This is the shape of the bug it was written for: the two answers a shape has for a corner — one
+/// worked out from the width the hand asked for, one from the height — were compared *after* each had
+/// been cut to the room, so the nearer of the two could be the box at the room's edge one step and a
+/// box a hundred pixels inside it the next, with the hand moving a pixel. A corner pulled along the
+/// top of the screen therefore leapt back and forth between those two boxes for as long as the drag
+/// lasted, which is the snapping a corner does at the edge of a display and nowhere else.
+#[test]
+fn a_corner_dragged_against_the_room_stops_at_its_edge_and_never_jumps_to_it() {
+    // The pin of that bug, as the log of it had it: a media box 516 by 730 whose top right corner is
+    // pulled up and to the right until the room's own top and right are reached, which for this
+    // shape is the same box from both sides.
+    let press = (1092, 323, 1608, 1053);
+    let aspect = (press.2 - press.0) as f64 / (press.3 - press.1) as f64;
+    let space = |content| PinSpace {
+        content,
+        room: ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 1836,
+            bottom: 1400,
+        },
+        overlay: true,
+        transport: false,
+        caption: 0,
+    };
+
+    let mut previous = press;
+    for travel in 1..=400 {
+        // One pixel of hand on each edge, every step: the top going up and the right going right.
+        let (dx, dy) = (travel, -travel);
+        let content = resize_pinned_content(
+            space(press),
+            edge(false, true, true, false),
+            dx,
+            dy,
+            96,
+            PinFrame::Shaped,
+        );
+
+        assert!(
+            content.0 >= 0 && content.1 >= 0 && content.2 <= 1836 && content.3 <= 1400,
+            "the box {content:?} left the room the drag is kept inside"
+        );
+        assert!(
+            ((content.2 - content.0) as f64 / (content.3 - content.1) as f64 - aspect).abs() < 0.02,
+            "the box {content:?} is not the shape the media is"
+        );
+
+        let (was_width, was_height) = (previous.2 - previous.0, previous.3 - previous.1);
+        let (width, height) = (content.2 - content.0, content.3 - content.1);
+        assert!(
+            (width - was_width).abs() <= 2 && (height - was_height).abs() <= 2,
+            "a pixel of hand took the box from {previous:?} to {content:?}"
+        );
+
+        previous = content;
+    }
+
+    // And it does reach the room, which is the whole of what the drag was for.
+    assert_eq!(
+        (previous.1, previous.2),
+        (0, 1836),
+        "the corner stopped short of the room's own edge: {previous:?}"
+    );
+}
+
 /// A pin shown another file keeps the box it has: what the new file is given is the largest box
 /// of its own shape that the room can hold at the scale it is given, in the middle of it. So the
 /// window a swap comes out of stands where the window was and is no larger than the room,

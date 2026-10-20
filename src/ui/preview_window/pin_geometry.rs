@@ -739,7 +739,7 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         return;
     }
 
-    let window = match drag.action {
+    let asked = match drag.action {
         // Answered above and unreachable here: a pan never asks the window for a box.
         PinDragAction::Pan { .. } => return,
         PinDragAction::Move => (
@@ -760,7 +760,7 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             caption,
         ),
     };
-    let window = clamp_pinned_box(window, dpi, &DESKTOPS);
+    let window = clamp_pinned_box(asked, dpi, &DESKTOPS);
     let content = content_box_of(window, dpi, transport, overlay, caption);
 
     {
@@ -992,7 +992,9 @@ pub(super) struct PinSpace {
 /// line it was on — so a window pulled wider grows around its own middle rather than downwards. A
 /// corner nails down the corner opposite it, and the two answers the shape allows for a corner —
 /// one worked out from the width the hand asked for, one from the height — are compared, and the
-/// nearer of the two is the one taken.
+/// nearer of the two is the one taken. What the room then makes of that box it makes of it
+/// afterwards, by taking one share off both sides, so that the box a corner comes out with moves
+/// with the hand the whole way and never jumps at the room's edge.
 ///
 /// What a drag cannot do is take the media past the room, or below the size a hand can still take
 /// hold of (see `PIN_MIN_MEDIA_PIXELS`). A window bigger than the room it is on is a window whose
@@ -1079,17 +1081,37 @@ pub(super) fn resize_pinned_content(
             (true, false) => from_width(wanted.0 as f64),
             (false, true) => from_height(wanted.1 as f64),
             _ => {
-                let (by_width, by_height) =
-                    (from_width(wanted.0 as f64), from_height(wanted.1 as f64));
+                // The two answers the shape has for a corner are compared *before* the room has a
+                // say in either of them. Compared after, each of them has already been cut to the
+                // room in its own way — one to the width the room allows, one to the height — and
+                // the nearer of two boxes that were each squeezed differently is a box up to a
+                // hand's width from the one the nearest of the first pair was: a corner pulled
+                // along the top of the screen leapt between the box at the screen's edge and one a
+                // hundred pixels inside it, step after step, on a hand moving a pixel. Before they
+                // are cut, the two answers meet where they are equally near, which is where they
+                // are the same box, so the one the drag comes out with never jumps.
+                let (by_width, by_height) = (
+                    (wanted.0 as f64, wanted.0 as f64 / aspect),
+                    (wanted.1 as f64 * aspect, wanted.1 as f64),
+                );
                 let error = |(width, height): (f64, f64)| {
                     (width - wanted.0 as f64).powi(2) + (height - wanted.1 as f64).powi(2)
                 };
-
-                if error(by_width) <= error(by_height) {
+                let (width, height) = if error(by_width) <= error(by_height) {
                     by_width
                 } else {
                     by_height
-                }
+                };
+
+                // And the room is answered afterwards, by taking one share off both sides of the
+                // box rather than a bit off each of them: a box the room cannot hold at the shape
+                // the media is keeps that shape and stops growing at the room's edge, which is what
+                // the hand dragging towards the edge of the screen sees as the window stopping.
+                let share = (ceiling.0 as f64 / width.max(1.0))
+                    .min(ceiling.1 as f64 / height.max(1.0))
+                    .min(1.0);
+
+                (width * share, height * share)
             }
         };
 
