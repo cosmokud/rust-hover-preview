@@ -843,6 +843,115 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
     stand_pin(previous_pin);
 }
 
+/// A film goes under its pin, and holds the band only where there is no pin to go under it.
+///
+/// **The failure this pins down is a film that keeps the band its pin just gave back.** With
+/// `Always On Top` off, a press that named no file puts the pin behind the listing — and the film
+/// is a window of somebody else's, placed by this app again on the next tick whether or not
+/// anything asked. Asked whether the pin *holds the front*, that placement put the film back in the
+/// topmost band, so the pin went behind the listing while its picture stayed over every program on
+/// the desktop: the pin hid, the film did not.
+///
+/// What asks for the band is the pin's existence and its setting: a hover's film has nothing of
+/// this app's standing over it, and a pin that is Always On Top holds the band it always held. A pin
+/// in the ordinary band owes its film the place directly below itself — holding the front or having
+/// given it back, which is the pin's own business and moves no window of somebody else's.
+#[test]
+fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
+    use windows::Win32::UI::WindowsAndMessaging::{HWND_NOTOPMOST, HWND_TOPMOST};
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    let pin_hwnd = unsafe { a_window_of_the_tests_own() };
+    PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // No pin at all: a hover's film is the topmost band and nothing of this app's stands over it.
+    stand_pin(None);
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    assert_eq!(
+        player_insert_after(),
+        HWND_TOPMOST,
+        "a hover's film holds the band: there is no pin standing over it, and an ordinary window \
+         activated over the film is a picture with the desktop showing through the band"
+    );
+
+    // The pin up with the front given back, which is what a press that named no file leaves.
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    assert!(
+        !pin_holds_the_front(),
+        "the front is the press's to give back, and this is the state it leaves"
+    );
+    assert_eq!(
+        player_insert_after(),
+        pin_hwnd,
+        "a pin that has given the front back still stands over its film: the place below it is \
+         what takes the film out of the topmost band, and without it the picture of a pin behind \
+         the listing covers every program on the desktop"
+    );
+
+    // And with the front owed the film is put under the pin too: the pin is topmost, so the film
+    // lands in that band directly below it.
+    arm_pin_to_the_front();
+    assert!(pin_holds_the_front(), "a pick owes the front again");
+    assert_eq!(
+        player_insert_after(),
+        pin_hwnd,
+        "the film goes under the pin in either band: the caption and the transport bar are drawn \
+         into the band over it, and the press on the picture is the pin's"
+    );
+
+    // A pin with no window of its own yet has nothing for the film to go under.
+    PREVIEW_HWND.store(0, Ordering::SeqCst);
+    assert_eq!(
+        player_insert_after(),
+        HWND_NOTOPMOST,
+        "a film with no pin to go under is put in the ordinary band rather than over the desktop"
+    );
+    PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+
+    // `Always On Top` keeps the band it kept before any of this.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    assert_eq!(
+        player_insert_after(),
+        HWND_TOPMOST,
+        "a pin that is Always On Top holds its band whatever any press said, and its film holds \
+         the band under it"
+    );
+
+    // Safety: the window is this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
 /// A pick's raise is a pin owing the front, and the grace that follows it answers while the front
 /// is still owed: the press that names no file gives the band back, and the grace is dropped rather
 /// than putting the pin back over the listing that press just took it behind.
