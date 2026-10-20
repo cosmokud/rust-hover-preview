@@ -112,7 +112,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
     GetWindowRect, IsChild, IsIconic, IsWindow, IsWindowVisible, SystemParametersInfoW,
-    WindowFromPoint, GA_ROOT, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED,
+    WindowFromPoint, GA_ROOT, GA_ROOTOWNER, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
 };
 

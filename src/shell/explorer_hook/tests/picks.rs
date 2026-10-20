@@ -154,6 +154,36 @@ fn a_press_through_a_dismissed_popup_is_not_a_pick() {
     );
 }
 
+/// Every press in Explorer's own window is answered, whatever it named: the listing is answered for
+/// a press that picked no file as much as for one that did — a press on the path bar, a tab, the
+/// toolbar or a menu over the rows says the user is working in the listing, and the pin goes behind
+/// it. What is *not* answered is a press on this app's own window, which is the pin being used, a
+/// press in another program, which names no listing to answer for, and a press that destroyed the
+/// window it landed on, which names no place to go behind.
+#[test]
+fn a_press_in_explorer_is_answered_whatever_it_named() {
+    assert!(
+        press_is_answered(true, true, false, false),
+        "a press in Explorer's own window is answered"
+    );
+    assert!(
+        !press_is_answered(true, false, false, false),
+        "a press in another program names no listing and is left to the foreground watch"
+    );
+    assert!(
+        !press_is_answered(true, true, true, false),
+        "a press on the pin itself is the pin being used, not the listing picked"
+    );
+    assert!(
+        !press_is_answered(true, true, false, true),
+        "and a press that destroyed the window it landed on names no place to go behind"
+    );
+    assert!(
+        !press_is_answered(false, true, false, false),
+        "a tick with no press answers nothing"
+    );
+}
+
 /// A press that lands anywhere but the pin's own window is a press the pin window never
 /// sees: it is `WS_EX_NOACTIVATE` and holds no capture, so nothing its procedure is sent can
 /// answer for a hand on another app's window, the tray, or the pin's own bubble. The Explorer
