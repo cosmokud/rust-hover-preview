@@ -278,7 +278,7 @@ pub(super) unsafe fn pin_ask_keyboard_back(hwnd: HWND) -> bool {
         return false;
     }
 
-    pin_take_focus(hwnd);
+    pin_take_focus(hwnd, &Win32PinWindow);
     true
 }
 

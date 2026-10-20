@@ -2138,7 +2138,7 @@ fn a_play_on_a_collapsed_pins_bubble_begins_the_parked_sound_again() {
         "a player of this app's is ended by the hold"
     );
 
-    restore_pin();
+    restore_pin(&a_restored_window(), PinRestore::Pressed);
     let collapsed = pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin.collapsed))
         .expect("a pin is up");

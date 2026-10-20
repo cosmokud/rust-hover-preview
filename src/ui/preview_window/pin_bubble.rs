@@ -927,10 +927,27 @@ pub(super) fn pinned_minimize_box(pin: &PinnedPreview) -> ScreenRegion {
     )
 }
 
+/// What asked for a window to be brought back, which is what decides whether the window is owed the
+/// front as well as its place on the screen.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PinRestore {
+    /// A press on the stand-in this app leaves standing for the pin while it is away: the round
+    /// bubble, or the app's own taskbar button. Both are windows of this app's that the hand has
+    /// pressed, and the window put back is the window the hand is in.
+    Pressed,
+    /// The pin key, pressed over the listing the file was picked in. The user is working in the
+    /// listing, and the key picks the file rather than moving the keyboard out of it (see
+    /// `pin_bubble_pick`).
+    Key,
+}
+
 /// Put a collapsed pin back up: the bubble goes, the window comes back where it was, whatever
 /// stands in its media band — the player's window, the browser's — is put back with it, and what
 /// the collapse parked is started again by the tick this runs in (see `settle_bubble_playback`).
-pub(super) fn restore_pin() {
+///
+/// A window the hand pressed its stand-in for is a window the hand is in, so it is put in front and
+/// given the keyboard with the place it comes back to (see `PinRestore::Pressed`).
+pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
     // Whether the pin was put away into the taskbar is read before anything is hidden, because
     // hiding the stand-in is what takes the answer away. A pin restored from the taskbar goes
     // back exactly where it stood: there is no bubble on the desktop to place it beside, and the
@@ -974,6 +991,15 @@ pub(super) fn restore_pin() {
         let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
         if !hwnd.is_invalid() {
             show_pinned_window(hwnd);
+            // A window the hand pressed its stand-in for is a window the hand is in, so it is the one
+            // in front and the one holding the keyboard — and with `Pin Mode → Always On Top` off
+            // that is the difference between a window that comes back over what the user was working
+            // in and one that comes back underneath it: an ordinary window can be raised, but the
+            // window the hide above left in front is the one Windows activates, and an activated
+            // window stands over a raised one.
+            if asked_for == PinRestore::Pressed {
+                pin_take_focus(hwnd, window);
+            }
         }
     }
 

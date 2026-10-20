@@ -445,7 +445,7 @@ pub(super) unsafe fn settle_pinned_engine_press(hwnd: HWND, seen_presses: &mut u
 
     // A press on a pinned window is what makes the pin the window the user is in, whichever part
     // of it was pressed, and what it begins is the drag its place means.
-    pin_take_focus(hwnd);
+    pin_take_focus(hwnd, &Win32PinWindow);
     begin_pin_drag(
         hwnd,
         &Win32PinWindow,

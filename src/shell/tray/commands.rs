@@ -43,9 +43,9 @@ pub(crate) use toggles::toggle_pin_always_on_top;
 pub(super) use toggles::{
     toggle_check_for_updates, toggle_engine_persistent, toggle_normalize_video_volume,
     toggle_normalize_volume, toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video,
-    toggle_pin_update_enabled, toggle_pin_update_on_hover, toggle_preview_enabled,
-    toggle_preview_type, toggle_prioritize_keyboard, toggle_remember_audio_volume,
-    toggle_remember_video_volume, toggle_render_html, toggle_startup,
+    toggle_pin_update_enabled, toggle_pin_update_move_to_top, toggle_pin_update_on_hover,
+    toggle_preview_enabled, toggle_preview_type, toggle_prioritize_keyboard,
+    toggle_remember_audio_volume, toggle_remember_video_volume, toggle_render_html, toggle_startup,
     toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
     toggle_video_hw_accel, toggle_video_subtitles,
 };

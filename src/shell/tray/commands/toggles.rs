@@ -114,6 +114,16 @@ pub(in super::super) fn toggle_pin_update_on_hover() {
     }
 }
 
+/// Whether an update also brings the pin in front of what it was behind, which is read by the
+/// preview loop at the next pick and so changes nothing that is already on screen (see
+/// `pin_update_move_to_top`).
+pub(in super::super) fn toggle_pin_update_move_to_top() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_update_move_to_top = !config.pin_update_move_to_top;
+        config.save();
+    }
+}
+
 /// Whether a pin collapsed into its bubble holds the video it is playing is a setting rather than
 /// a view of one, and the side that acts on a change is the preview loop on its next tick: a film
 /// that is running because the switch was off is held the moment it is switched on, and one that
