@@ -26,10 +26,11 @@ use super::*;
 pub(super) struct PinMenu {
     /// Whether the panel is up.
     pub(super) open: bool,
-    /// Which page of the menu the panel holds: the chrome's own rows, or the two commands a
-    /// pinned page of text stands above them. It is what the right-click asked for rather than
-    /// what the panel holds — a walk off the page it was opened over leaves the panel up, and the
-    /// page it holds is read against what is on screen (see `PinMenuPage::over`).
+    /// Which page of the menu the panel holds: the chrome's own rows, those rows without the
+    /// settings where the right-click landed on the media, or the two commands a pinned page of
+    /// text stands above them. It is what the right-click asked for rather than what the panel
+    /// holds — a walk off the page it was opened over leaves the panel up, and the page it holds
+    /// is read against what is on screen (see `PinMenuPage::over`).
     pub(super) page: PinMenuPage,
     /// Whether the End of File row's flyout is up beside the menu, rather than the menu
     /// holding its rows alone. Only one flyout is ever up: opening one puts
@@ -60,14 +61,20 @@ pub(super) struct PinMenu {
     pub(super) seek_since: Option<Instant>,
 }
 
-/// Which page a right-click asks a pinned window's own menu for: the rows its chrome holds, or —
-/// over the text of a pinned page — those rows under the page's own two commands, so the text can
-/// be selected and copied without the window's menu being a page away.
+/// Which page a right-click asks a pinned window's own menu for: the rows its chrome holds, those
+/// same rows without the settings among them where the hand is out on the media, or — over the
+/// text of a pinned page — those rows under the page's own two commands, so the text can be
+/// selected and copied without the window's menu being a page away.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum PinMenuPage {
-    /// The window's own rows, which is what a right-click on the title bar asks for.
+    /// The window's own rows, settings and all, which is what a right-click on the title bar asks
+    /// for.
     #[default]
     Chrome,
+    /// The window's own rows out on the media, where the file is what the hand is on rather than
+    /// the window the settings belong to: the playback, the walk and the ways out, with nothing
+    /// in the panel that writes a setting.
+    Body,
     /// A pinned page's text, whose own `Select All` and `Copy` stand above the window's rows.
     Text,
 }
@@ -77,20 +84,27 @@ impl PinMenuPage {
     /// where what is under it is still that page's own kind. A walk that takes the pin from a page
     /// of text to another file leaves the panel up with the page's commands gone from under it —
     /// a `Select All` over nothing to select — so the page is read against what is on screen
-    /// rather than written back on the walk, and every other kind holds the window's own rows
-    /// (see `pinned_menu_paint` and `shared_menu_press`).
+    /// rather than written back on the walk, and a panel opened on the media stays the media's own
+    /// rows wherever the walk lands (see `pinned_menu_paint` and `shared_menu_press`).
     fn over(self, kind: Option<MediaType>) -> Self {
         match (self, kind) {
             (PinMenuPage::Text, Some(MediaType::Text)) => PinMenuPage::Text,
-            _ => PinMenuPage::Chrome,
+            (PinMenuPage::Chrome, _) => PinMenuPage::Chrome,
+            _ => PinMenuPage::Body,
         }
+    }
+
+    /// Whether the page holds the rows that write a setting, which only the panel opened from the
+    /// window's chrome does (see `bubble_menu_rows`).
+    fn settings(self) -> bool {
+        self == PinMenuPage::Chrome
     }
 
     /// How many of the panel's rows are the page's own, above the rows the pin shares with the
     /// bubble.
     fn own_rows(self) -> usize {
         match self {
-            PinMenuPage::Chrome => 0,
+            PinMenuPage::Chrome | PinMenuPage::Body => 0,
             PinMenuPage::Text => TEXT_MENU_ROWS.len(),
         }
     }
@@ -527,8 +541,9 @@ pub(super) fn pinned_menu_geometry() -> Option<PinMenuPaint> {
 fn pinned_menu_paint(pin: &PinnedPreview) -> PinMenuPaint {
     // The rows the pin's menu is the face of: a sound's card holds its own — the two ways out of
     // the pin, the playback of the file in it, and the settings it plays by — while every other
-    // kind holds the rows a bubble's menu holds, which is the same menu under the same press
-    // (see `bubble_menu_chrome_rows`).
+    // kind holds the rows a bubble's menu holds, which is the same menu under the same press, less
+    // the settings on a panel the right-click opened out on the media (see
+    // `bubble_menu_chrome_rows`).
     let card = pin_shows_an_audio_card(pin);
     let rows = match card {
         true => menu_rows(),
@@ -536,16 +551,24 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> PinMenuPaint {
         // rows the pin shares with the bubble (see `PinMenuPage::Text`).
         false => {
             let kind = current_media_type();
-            let mut rows = match pin.menu.page.over(kind) {
-                PinMenuPage::Chrome => Vec::new(),
+            let page = pin.menu.page.over(kind);
+            let mut rows = match page {
                 PinMenuPage::Text => text_menu_rows(),
+                PinMenuPage::Chrome | PinMenuPage::Body => Vec::new(),
             };
             rows.extend(bubble_menu_chrome_rows(
-                current_media_type(),
+                kind,
                 pin_media_is_playing(pin),
                 // The window's own menu is a pin still standing in it, so it holds the way out
-                // into the bubble a bubble's own menu has none of (see `bubble_menu_rows`).
+                // into the bubble a bubble's own menu has none of, and the maximize its caption
+                // carries (see `bubble_menu_rows`).
                 true,
+                // The settings are the chrome's rows: a right-click out on the media asks for
+                // the file rather than for the window it is drawn in (see `PinMenuPage`).
+                page.settings(),
+                // A window that is maximized is one the row offers to put back, the way the
+                // caption's own maximize button does (see `pin_restore_box`).
+                pin.restore.is_some(),
             ));
             rows
         }
@@ -939,7 +962,11 @@ unsafe fn shared_menu_press(hwnd: HWND, paint: &PinMenuPaint, x: i32, y: i32) ->
     // rows (see `bubble_menu_rows`).
     let pressed = pressed_row
         .and_then(|index| index.checked_sub(page.own_rows()))
-        .and_then(|index| bubble_menu_rows(kind, true).get(index).copied());
+        .and_then(|index| {
+            bubble_menu_rows(kind, true, page.settings())
+                .get(index)
+                .copied()
+        });
 
     match pressed {
         Some(row) => shared_menu_row_press(row, || {
@@ -994,6 +1021,10 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32, page: PinMenuPage
 /// Which page of the window's own menu, if any, a right-click in row `y` of a pinned window asks
 /// for, in the window's own coordinates.
 ///
+/// The caption across the top of it is the window's own strip, and the only one the settings are
+/// asked for from; the media under it is the file's, and the menu opened there holds the rows that
+/// act on the file alone (see `PinMenuPage`).
+///
 /// The question is a row's rather than a point's because the two strips that are not the menu's
 /// are as wide as the window: a kind that plays has the player's own bar along the bottom, where
 /// a right-click is the bar's (see `pinned_transport_geometry`).
@@ -1026,13 +1057,20 @@ pub(super) fn pin_right_click_page(y: i32) -> Option<PinMenuPage> {
         return None;
     }
 
+    // The strip of chrome across the top of the window is the one the settings are asked for
+    // from; everything under it is the media, and the menu there holds the rows that act on the
+    // file rather than the rows that write a setting (see `PinMenuPage`).
+    if y < pin.caption {
+        return Some(PinMenuPage::Chrome);
+    }
+
     // The text under the chrome: a right-click there is the page's own, with the window's rows
     // under its two commands rather than a menu of its own.
-    if y >= pin.caption && TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
+    if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
         return Some(PinMenuPage::Text);
     }
 
-    Some(PinMenuPage::Chrome)
+    Some(PinMenuPage::Body)
 }
 
 /// Whether the card's menu is up: what an outside press is answered against
