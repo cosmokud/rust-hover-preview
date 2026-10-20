@@ -1081,13 +1081,15 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
 /// Put a pinned window back where the user's own clicks had it: behind the window the press was
 /// made in, and out of the topmost band a pin that owes the front stands in.
 ///
-/// The foreground window is the place asked for rather than a band: `HWND_NOTOPMOST` would put the
-/// pin at the top of the ordinary band, which is where the window it is to go behind already is,
-/// so the place is the one directly below that window. `window` is handed in rather than read here
-/// for the same reason `keep_pin_at_the_front` takes it — the caller knows the moment the press was
-/// read, and a test can name a window of its own. An invalid window is no place at all: the band is
-/// still taken away, and the grace the caller begins asks again with the window that has the front
-/// (see `pin_lower_deadline`).
+/// The window the press was made in is handed in as the place to go behind, rather than a band:
+/// `HWND_NOTOPMOST` would put the pin at the top of the ordinary band, which is where the window it
+/// is to go behind already is, so the place is the one directly below the window the press landed
+/// in. That window and not the foreground one, which is still the window the user came from while
+/// the click that made the press has not been dispatched yet — and a pin put behind the window the
+/// user came from is a pin left over the one they are looking at. `window` is handed in rather than
+/// read here for the same reason `keep_pin_at_the_front` takes it: the caller knows the moment the
+/// press was read, and a test can name a window of its own. An invalid window is no place at all:
+/// the band is still taken away.
 ///
 /// **The band is left before the place is asked for.** A topmost window cannot be put under an
 /// ordinary one, so a pin that holds the topmost band is first put back in the ordinary band and
@@ -1097,7 +1099,7 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
 /// A pin that is Always On Top has no ordinary band to go back to and keeps the one it is in, and
 /// one whose `Move To Top` row is off was never raised by an update: both are left alone. So is a
 /// pin that already stands behind the window, and one whose window is the pin itself — a press on
-/// the pin is not a press in the listing, and the grace asks again once the click has landed.
+/// the pin is not a press in the listing.
 ///
 /// What stands in the pin's band is somebody else's window — a film, or a page the engine draws
 /// in — and it goes under the pin rather than staying where it was: a window left over the listing
