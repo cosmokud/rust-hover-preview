@@ -188,11 +188,17 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
 
     let (width, height) = (paint.width, paint.height);
     let caption_height = paint.caption_height;
-    let Some(bits) = ensure_layered_surface(hwnd.0 as isize, width as u32, height as u32) else {
+    let (padding, slack) = the_slack_a_resize_paints_with(paint.resizing);
+    let rows = height + slack;
+    let Some(bits) = ensure_layered_surface(hwnd.0 as isize, width as u32, rows as u32) else {
         return;
     };
-    let out = std::slice::from_raw_parts_mut(bits, width as usize * height as usize * 4);
-    out.fill(0);
+    let stride = width as usize * 4;
+    let whole = std::slice::from_raw_parts_mut(bits, stride * rows as usize);
+    whole.fill(0);
+    // The pin's own rows, which stand in the surface at the row the paint gave them: the rest of the
+    // surface is the slack, and it is left transparent (see `the_slack_a_resize_paints_with`).
+    let out = &mut whole[padding as usize * stride..(padding as usize + height as usize) * stride];
 
     // The media band. A frame of the band's own size is composed into it row for row; one that is
     // not — which is a window whose edge is under the hand — is sampled into it, so the band is
@@ -516,10 +522,16 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // over everything.
     paint_pin_tooltip(out, width, height, &paint, caption_height);
 
-    let dst_point = POINT { x, y };
+    // Where the window stands: one row higher for every row the picture is pushed down into the
+    // surface, so that the picture itself lands exactly on the box the pin gave this paint.
+    let place = (x, y - padding);
+    let dst_point = POINT {
+        x: place.0,
+        y: place.1,
+    };
     let size = SIZE {
         cx: width,
-        cy: height,
+        cy: rows,
     };
     let src_point = POINT { x: 0, y: 0 };
     let blend = BLENDFUNCTION {
@@ -547,6 +559,50 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // per painted frame is what made the 500 ms throttle suppress nothing.
 }
 
+/// How many rows of the surface stand above the pin's own picture, and how many rows the surface has
+/// more than the pin has: the row of slack a resize is painted with, and where the picture stands in
+/// it.
+///
+/// **The slack is the whole of the ghost.** A pinned window resized from its bottom right corner, or
+/// from its right edge or its bottom edge, leaves a frozen copy of itself standing in the strip it
+/// gives up. Every drag that is clean *moves* the window while it shrinks — the corners that drag its
+/// top left corner along — and a window that moves has the desk under the place it has left drawn
+/// again. A window whose only change is a *size*, standing where it stood, keeps the strip, because
+/// nothing has asked for the ground under it to be drawn.
+///
+/// So the paints of a resize are made to move as well, and made to move without being seen: the
+/// surface carries a row of slack, the picture stands on that row or under it from one paint to the
+/// next, and the window stands a row higher for every row the picture is pushed down. The window
+/// therefore changes place by a pixel on every paint of the drag — which is what puts the desk under
+/// the strip it gave up — while the picture lands on exactly the box the pointer asked for on every
+/// one of them. A step that moved the *window* instead was tried, and it is seen: the picture is a
+/// pixel off for as long as the drag gives the window less than it had, and a hand that jitters a
+/// pixel makes it a picture that shivers.
+///
+/// The slack costs nothing else: the surface is the same surface, one row taller, and the row that
+/// is not the picture's is left transparent. It is kept for the whole of a drag and given back with
+/// the last paint of it, which is the paint that puts the window back on the box it stands on.
+pub(super) fn the_slack_a_resize_paints_with(resizing: bool) -> (i32, i32) {
+    /// Which side of the slack the picture stood on last, so that the next paint of the drag stands
+    /// it on the other one.
+    static STANDING_ON: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+
+    if !resizing {
+        return (0, 0);
+    }
+
+    let Ok(mut on) = STANDING_ON.lock() else {
+        return (0, 0);
+    };
+    *on = !*on;
+
+    if *on {
+        (1, 1)
+    } else {
+        (0, 1)
+    }
+}
+
 /// Everything a repaint of a pinned window needs, taken in one look: what the caption says and
 /// how large the bands are.
 ///
@@ -556,6 +612,10 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
 pub(super) struct PinnedPaint {
     pub(super) width: i32,
     pub(super) height: i32,
+    /// Whether a resize is the drag in flight, which is the one thing that makes a paint of this
+    /// window a paint that may give part of it up — and so the one thing that asks the surface for a
+    /// row of slack (see `the_slack_a_resize_paints_with`).
+    pub(super) resizing: bool,
     pub(super) caption_height: i32,
     pub(super) transport_height: i32,
     /// How the media is drawn inside its band, or nothing for a kind the wheel does not zoom: what
@@ -632,6 +692,10 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
         PinnedPaint {
             width,
             height,
+            resizing: matches!(
+                pin.dragging.map(|drag| drag.action),
+                Some(PinDragAction::Resize(_))
+            ),
             caption_height: pin.caption,
             transport_height: pinned_transport_height(pin.dpi, pin.transport_bar),
             zoom: pin.zoom,
