@@ -472,10 +472,10 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
     assert_eq!(
         labels,
         [
-            "Maximize",
-            "",
             "Next File",
             "Previous File",
+            "",
+            "Maximize",
             "",
             "Minimize to Bubble",
             "Minimize to Taskbar",
@@ -484,7 +484,7 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
             "To Taskbar",
             "Close",
         ],
-        "the window's menu is the menu a bubble holds, opened on the caption's own maximize"
+        "the window's menu is the menu a bubble holds, opened on the walk and the caption's own"
     );
     assert!(
         paint.flyout.is_none(),
@@ -513,10 +513,10 @@ fn a_right_click_on_the_media_holds_no_setting_rows() {
     assert_eq!(
         labels,
         [
-            "Maximize",
-            "",
             "Next File",
             "Previous File",
+            "",
+            "Maximize",
             "",
             "To Bubble",
             "To Taskbar",
@@ -533,50 +533,52 @@ fn a_right_click_on_the_media_holds_no_setting_rows() {
     assert!(!marks_a_setting, "nothing on it carries a setting's mark");
 }
 
-/// A standing window's menu opens on the maximize its caption carries, named for what it will do:
-/// `Maximize` on a window at its own box and `Restore` on one that is maximized. The hold is under
-/// it where the kind behind it plays, and the rule stands below the two — while a bubble's own menu
-/// opens on the walk, a collapsed pin having no window to put up (see `bubble_menu_rows`).
+/// A standing window's menu opens on the walk, with the maximize its caption carries under the
+/// rule and named for what it will do: `Maximize` on a window at its own box and `Restore` on one
+/// that is maximized. The hold is glued under the maximize where the kind behind it plays — while a
+/// bubble's own menu opens on the hold, a collapsed pin having no window to maximize (see
+/// `bubble_menu_rows`).
 #[test]
-fn a_standing_menu_opens_on_the_maximize_its_caption_carries() {
+fn a_standing_menu_opens_on_the_walk_and_the_maximize_under_it() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    // A film still standing: the maximize, the hold under it, and the rule below the two.
+    // A film still standing: the walk, the maximize, and the hold glued under it.
     assert_eq!(
         bubble_menu_rows(Some(MediaType::Video), true, false),
         vec![
+            BubbleMenuRow::NextFile,
+            BubbleMenuRow::PreviousFile,
+            BubbleMenuRow::Separator,
             BubbleMenuRow::Maximize,
             BubbleMenuRow::Toggle,
             BubbleMenuRow::Separator,
-            BubbleMenuRow::NextFile,
-            BubbleMenuRow::PreviousFile,
-            BubbleMenuRow::Separator,
             BubbleMenuRow::ToBubble,
             BubbleMenuRow::ToTaskbar,
             BubbleMenuRow::Close,
         ],
-        "a film's menu opens on the maximize and the hold, and the walk is under their rule"
+        "a film's menu opens on the walk and the maximize, and the ways out are under their rule"
     );
 
-    // A kind with nothing to hold: the maximize alone above the rule.
+    // A kind with nothing to hold: the maximize alone under the walk's rule.
     assert_eq!(
         bubble_menu_rows(Some(MediaType::StaticImage), true, false),
         vec![
-            BubbleMenuRow::Maximize,
-            BubbleMenuRow::Separator,
             BubbleMenuRow::NextFile,
             BubbleMenuRow::PreviousFile,
+            BubbleMenuRow::Separator,
+            BubbleMenuRow::Maximize,
             BubbleMenuRow::Separator,
             BubbleMenuRow::ToBubble,
             BubbleMenuRow::ToTaskbar,
             BubbleMenuRow::Close,
         ],
-        "a picture's menu opens on the maximize, and the walk is under its rule"
+        "a picture's menu opens on the walk and the maximize"
     );
 
-    // And what that row says about a window that is already maximized: the way back.
+    // And what that row says about a window that is already maximized — the way back, which is the
+    // caption's own button's ask all the same.
     let _put_back = PutBack(take_pin_for_a_test());
     let _kind = MediaKindPutBack::put(MediaType::StaticImage);
     stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
@@ -586,9 +588,22 @@ fn a_standing_menu_opens_on_the_maximize_its_caption_carries() {
     let Some(paint) = pinned_menu_geometry() else {
         panic!("the menu is up")
     };
+    let restore = row_at(&paint.rows, "Restore");
+    assert!(
+        restore > row_at(&paint.rows, "Previous File"),
+        "a maximized window's own row stands under the walk, named the way its caption's glyph is"
+    );
+
+    take_pin_command();
+    let (x, y) = menu_row_point(&paint, restore);
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on the maximize row is the menu's own"
+    );
     assert_eq!(
-        paint.rows[0].label, "Restore",
-        "a maximized window's own row is the way back, the way its caption's glyph is"
+        take_pin_command(),
+        Some(PinCommand::Maximize),
+        "and it asks for exactly what the caption's own maximize button asks"
     );
 }
 
@@ -709,10 +724,10 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
             "Copy",
             "Find Next",
             "",
-            "Maximize",
-            "",
             "Next File",
             "Previous File",
+            "",
+            "Maximize",
             "",
             "To Bubble",
             "To Taskbar",
@@ -754,10 +769,10 @@ fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
     assert_eq!(
         labels,
         [
-            "Maximize",
-            "",
             "Next File",
             "Previous File",
+            "",
+            "Maximize",
             "",
             "To Bubble",
             "To Taskbar",
@@ -775,7 +790,7 @@ fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
     );
     assert_eq!(
         take_pin_command(),
-        Some(PinCommand::Maximize),
+        Some(PinCommand::Next),
         "and it is the row the picture's own menu holds there"
     );
 }
@@ -995,7 +1010,7 @@ fn a_press_on_a_row_over_the_title_bar_is_the_rows_own() {
     });
     take_pin_command();
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Maximize"));
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Next File"));
     assert!(
         y < caption,
         "the row this test presses lies in the window's own title bar"
@@ -1007,7 +1022,7 @@ fn a_press_on_a_row_over_the_title_bar_is_the_rows_own() {
     );
     assert_eq!(
         take_pin_command(),
-        Some(PinCommand::Maximize),
+        Some(PinCommand::Next),
         "the row the hand was on is the row that answered"
     );
     assert!(

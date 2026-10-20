@@ -139,8 +139,9 @@ pub(super) enum BubbleMenuRow {
     NextFile,
     /// The file before the one pinned.
     PreviousFile,
-    /// The rule under the top group, between the walk and the settings under it, between the
-    /// switch and the two picks below it, and between those picks and the ways out of the menu.
+    /// The rule under the walk, the one under the maximize and the hold where a window has them,
+    /// the one between the switch and the two picks below it, and the one between those picks and
+    /// the ways out of the menu.
     Separator,
     /// Whether a pin the minimize button puts away holds what it is playing where it stands: the
     /// switch the kind's own `Pin Mode` in the tray carries, on the bubble a minimize is what
@@ -163,17 +164,18 @@ pub(super) enum BubbleMenuRow {
     Close,
 }
 
-/// The rows the bubble's menu holds, from the top of the panel to the bottom: the maximize a
-/// standing window's caption offers, the playback of the file behind it, the walk of the folder it
-/// stands in, the switch that decides what a minimize holds back, the two places a minimize can put
-/// the pin, and the two ways out of any pin — with the third a pin still standing in its own window
-/// has. The maximize, the hold and the switch are rows only where the window or the kind has
-/// something to answer about; the two places are every menu's, because a minimize is a thing any
-/// pin has (see `bubble_space_toggles`, `bubble_pause_on_minimize` and `PinMinimizeTo`).
+/// The rows the bubble's menu holds, from the top of the panel to the bottom: the walk of the folder
+/// the file stands in, the maximize a standing window's caption offers with the playback of the file
+/// glued under it, the switch that decides what a minimize holds back, the two places a minimize can
+/// put the pin, and the two ways out of any pin — with the third a pin still standing in its own
+/// window has. The maximize, the hold and the switch are rows only where the window or the kind has
+/// something to answer about; the two places are every menu's, because a minimize is a thing any pin
+/// has (see `bubble_space_toggles`, `bubble_pause_on_minimize` and `PinMinimizeTo`).
 ///
 /// `standing` is whether the panel is a pinned window's own rather than a bubble's: a pin still
 /// standing in its own window has a caption to be maximized by and a bubble to be put away into
-/// now, and the bubble the other menu is drawn in has neither (see `BubbleMenuRow::Maximize` and
+/// now, and the bubble the other menu is drawn in has neither — so a bubble opens on the hold where
+/// the kind plays and on the walk otherwise (see `BubbleMenuRow::Maximize` and
 /// `BubbleMenuRow::ToBubble`).
 ///
 /// `settings` is whether the panel holds the three rows that write a setting — the switch and the
@@ -187,21 +189,24 @@ pub(super) fn bubble_menu_rows(
     settings: bool,
 ) -> Vec<BubbleMenuRow> {
     let mut rows = Vec::with_capacity(14);
-    // The top group is the window's own: the maximize, and the hold where the kind behind it plays.
-    // A bubble has neither — the pin is already away, so there is no window to put up and no bar
-    // of its own to hold — and its menu opens on the walk.
-    if standing {
-        rows.push(BubbleMenuRow::Maximize);
-    }
-    if bubble_space_toggles(kind) {
+    // The walk tops every standing window's menu, so the file after this one is one row off the top
+    // of it. A bubble has no caption to maximize and no window under the walk, so its hold opens
+    // the menu instead.
+    if !standing && bubble_space_toggles(kind) {
         rows.push(BubbleMenuRow::Toggle);
-    }
-    if standing {
-        rows.push(BubbleMenuRow::Separator);
     }
     rows.push(BubbleMenuRow::NextFile);
     rows.push(BubbleMenuRow::PreviousFile);
     rows.push(BubbleMenuRow::Separator);
+    // The window's own group under the walk: the maximize, with the hold glued under it where the
+    // kind behind it plays (see `BubbleMenuRow::Maximize`).
+    if standing {
+        rows.push(BubbleMenuRow::Maximize);
+        if bubble_space_toggles(kind) {
+            rows.push(BubbleMenuRow::Toggle);
+        }
+        rows.push(BubbleMenuRow::Separator);
+    }
     if settings {
         if bubble_pause_on_minimize(kind).is_some() {
             rows.push(BubbleMenuRow::PauseOnMinimize);
