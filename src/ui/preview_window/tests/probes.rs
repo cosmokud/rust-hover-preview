@@ -2028,3 +2028,22 @@ fn the_player_stands_over_the_pin_only_while_it_is_raised_over_it() {
     }
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
 }
+
+/// The rule a press on a document the engine draws is read by, without a desktop under it: a
+/// window the engine's own browser owns is the page, whatever the host's tree answers for.
+///
+/// The case that matters is the third one. A press on a picture was read as a press on somebody
+/// else's window because the browser's window is not a child of the host's in the tree the walk
+/// sees, and the pin was left where it was by a click that was meant to bring it forward.
+#[test]
+fn a_window_of_the_engines_browser_is_the_page() {
+    // The host window itself, and a window drawn inside it.
+    assert!(the_engines_window(true, false, 4242, 4242));
+    assert!(the_engines_window(false, true, 0, 4242));
+    // The browser's own window, which the host's tree does not answer for.
+    assert!(the_engines_window(false, false, 4242, 4242));
+    // Another program's window, a browser this app never started, and nothing at all.
+    assert!(!the_engines_window(false, false, 9001, 4242));
+    assert!(!the_engines_window(false, false, 4242, 0));
+    assert!(!the_engines_window(false, false, 0, 0));
+}

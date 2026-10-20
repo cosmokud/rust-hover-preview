@@ -514,19 +514,47 @@ pub(super) unsafe fn settle_pinned_press(hwnd: HWND, seen_presses: &mut u64) {
 /// levels down — so the question is whether the window under the point is the engine's or one
 /// inside it, exactly as `cursor_preview_hover` asks it: comparing the two handles alone never
 /// answers yes.
+///
+/// **A page is also the browser's window rather than the host's**, and a window of the browser's
+/// that the host's tree does not answer for is still the page standing under the pointer: the
+/// process that drew it is the one the host started, and nothing else on the desktop is. Asked of
+/// the tree alone, a press on a document's picture was read as a press on somebody else's window,
+/// and the pin was not raised by it (see `settle_pinned_press`).
 pub(super) fn engine_window_is_at(x: i32, y: i32) -> bool {
-    let engine = webview_preview::showing_hwnd();
-    if engine == 0 {
-        return false;
-    }
-
     unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{IsChild, WindowFromPoint};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowThreadProcessId, IsChild, WindowFromPoint,
+        };
 
         let under = WindowFromPoint(POINT { x, y });
-        !under.is_invalid()
-            && (under.0 as isize == engine || IsChild(HWND(engine as *mut _), under).as_bool())
+        if under.is_invalid() {
+            return false;
+        }
+
+        let engine = webview_preview::showing_hwnd();
+        let mut pid = 0u32;
+        let _ = GetWindowThreadProcessId(under, Some(&mut pid));
+
+        the_engines_window(
+            engine != 0 && under.0 as isize == engine,
+            engine != 0 && IsChild(HWND(engine as *mut _), under).as_bool(),
+            pid,
+            webview_preview::browser_pid(),
+        )
     }
+}
+
+/// The rule `engine_window_is_at` decides by, apart from the desktop it reads: a window is the
+/// page the engine draws where it *is* the host window, where it is a child of it, or where the
+/// process that owns it is the browser the host started — and never otherwise, an unknown
+/// browser process included.
+pub(super) fn the_engines_window(
+    is_host: bool,
+    is_child: bool,
+    pid: u32,
+    browser_pid: u32,
+) -> bool {
+    is_host || is_child || (browser_pid != 0 && pid == browser_pid)
 }
 
 /// Whether the left button is down, as the Explorer hook published it.
