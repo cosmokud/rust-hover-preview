@@ -1031,7 +1031,7 @@ fn a_play_on_a_collapsed_pins_bubble_gives_the_park_back_and_keeps_it() {
         "and holds it as a hold rather than as a park: there is nothing for a restore to give back"
     );
 
-    restore_pin();
+    restore_pin(&a_restored_window(), PinRestore::Pressed);
     assert!(
         !pin_state()
             .and_then(|pinned| pinned.pin().map(|pin| pin.collapsed))

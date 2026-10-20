@@ -337,7 +337,7 @@ pub(super) unsafe extern "system" fn window_proc(
             // than the file behind it — and once the keyboard is here, the keys the pin answers are
             // keys the listing behind it is not sent (see `pin_take_focus`).
             if pinned() && !pin_is_focused() {
-                pin_take_focus(hwnd);
+                pin_take_focus(hwnd, &Win32PinWindow);
             }
 
             // A press on a pinned window is the pin's before it is anything else's: the volume
