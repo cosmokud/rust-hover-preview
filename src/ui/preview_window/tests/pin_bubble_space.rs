@@ -106,57 +106,67 @@ fn the_bubble_menu_holds_only_what_has_playback() {
 #[test]
 fn the_bubble_menu_names_what_each_row_will_do() {
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::Toggle, true),
+        bubble_menu_row_label(BubbleMenuRow::Maximize, false, false),
+        "Maximize",
+        "the caption's maximize is named for what it will do"
+    );
+    assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::Maximize, false, true),
+        "Restore",
+        "and for the other way it will do it once the window is maximized"
+    );
+    assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::Toggle, true, false),
         "Pause",
         "a hold on playing media pauses it"
     );
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::Toggle, false),
+        bubble_menu_row_label(BubbleMenuRow::Toggle, false, false),
         "Play",
         "a hold on held media lets it go"
     );
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::NextFile, true),
+        bubble_menu_row_label(BubbleMenuRow::NextFile, true, false),
         "Next File",
         "the walk forward is the file after this one"
     );
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::PreviousFile, false),
+        bubble_menu_row_label(BubbleMenuRow::PreviousFile, false, false),
         "Previous File",
         "and the walk back the one before it"
     );
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::Separator, true),
+        bubble_menu_row_label(BubbleMenuRow::Separator, true, false),
         "",
         "a rule carries nothing: there is nothing on one to read"
     );
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::PauseOnMinimize, true),
+        bubble_menu_row_label(BubbleMenuRow::PauseOnMinimize, true, false),
         "Pause on Minimize",
         "the switch is spelled the way the tray spells it"
     );
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::MinimizeToBubble, true),
+        bubble_menu_row_label(BubbleMenuRow::MinimizeToBubble, true, false),
         "Minimize to Bubble",
         "the place a minimize can put the pin is named for it"
     );
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::MinimizeToTaskbar, false),
+        bubble_menu_row_label(BubbleMenuRow::MinimizeToTaskbar, false, false),
         "Minimize to Taskbar",
         "and so is the other"
     );
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::ToBubble, true),
+        bubble_menu_row_label(BubbleMenuRow::ToBubble, true, false),
         "To Bubble",
         "the bubble a pin still standing is put away into is named for it, the way the taskbar is"
     );
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::ToTaskbar, true),
+        bubble_menu_row_label(BubbleMenuRow::ToTaskbar, true, false),
         "To Taskbar",
         "the stand-in is the taskbar's, not the tray's"
     );
     assert_eq!(
-        bubble_menu_row_label(BubbleMenuRow::Close, false),
+        bubble_menu_row_label(BubbleMenuRow::Close, false, false),
         "Close",
         "the way out is a close"
     );
@@ -166,10 +176,11 @@ fn the_bubble_menu_names_what_each_row_will_do() {
 /// them — the panel the chrome paints cannot disagree with the rows the press answers.
 #[test]
 fn the_painted_menu_carries_the_rows_the_press_answers() {
-    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true)
-        .iter()
-        .map(|row| row.label.clone())
-        .collect();
+    let painted: Vec<String> =
+        bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false)
+            .iter()
+            .map(|row| row.label.clone())
+            .collect();
     assert_eq!(
         painted,
         vec![
@@ -188,10 +199,11 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         "a playing sound's menu pauses first"
     );
 
-    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Video), false, false, true)
-        .iter()
-        .map(|row| row.label.clone())
-        .collect();
+    let painted: Vec<String> =
+        bubble_menu_chrome_rows(Some(MediaType::Video), false, false, true, false)
+            .iter()
+            .map(|row| row.label.clone())
+            .collect();
     assert_eq!(
         painted,
         vec![
@@ -210,10 +222,11 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         "a held film's menu lets it go"
     );
 
-    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Text), true, false, true)
-        .iter()
-        .map(|row| row.label.clone())
-        .collect();
+    let painted: Vec<String> =
+        bubble_menu_chrome_rows(Some(MediaType::Text), true, false, true, false)
+            .iter()
+            .map(|row| row.label.clone())
+            .collect();
     assert_eq!(
         painted,
         vec![
@@ -234,7 +247,7 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
 /// row could open, and there is no Seek row here — so Close, the last row, stands unmarked.
 #[test]
 fn the_bubble_menu_points_no_arrow_at_any_row() {
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false);
     let popup = bubble_menu_popup((0, 44), 500, 500, 96, &rows);
     assert_eq!(
         popup.arrow,
@@ -250,7 +263,7 @@ fn the_bubble_menu_points_no_arrow_at_any_row() {
 fn exactly_one_of_the_two_minimize_picks_carries_the_disc() {
     let _target = PinMinimizeToPutBack::put(PinMinimizeTo::Taskbar);
 
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Text), false, false, true);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Text), false, false, true, false);
     let marked: Vec<&str> = rows
         .iter()
         .filter(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet))
@@ -263,7 +276,7 @@ fn exactly_one_of_the_two_minimize_picks_carries_the_disc() {
     );
 
     let _target = PinMinimizeToPutBack::put(PinMinimizeTo::Bubble);
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Text), false, false, true);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Text), false, false, true, false);
     let marked: Vec<&str> = rows
         .iter()
         .filter(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet))
@@ -286,7 +299,7 @@ fn the_pause_switch_carries_the_check_of_the_kind_it_stands_for() {
         .unwrap_or_else(|e| e.into_inner());
     let _switches = PausePreviewSettings::stood_at(false, true);
 
-    let film = bubble_menu_chrome_rows(Some(MediaType::Video), false, false, true);
+    let film = bubble_menu_chrome_rows(Some(MediaType::Video), false, false, true, false);
     let row = film
         .iter()
         .position(|row| row.label == "Pause on Minimize")
@@ -296,7 +309,7 @@ fn the_pause_switch_carries_the_check_of_the_kind_it_stands_for() {
         "the video's switch is off, so the film's row is unchecked"
     );
 
-    let sound = bubble_menu_chrome_rows(Some(MediaType::Audio), false, false, true);
+    let sound = bubble_menu_chrome_rows(Some(MediaType::Audio), false, false, true, false);
     let row = sound
         .iter()
         .position(|row| row.label == "Pause on Minimize")
@@ -306,7 +319,7 @@ fn the_pause_switch_carries_the_check_of_the_kind_it_stands_for() {
         "the audio's switch is on, so the sound's row is checked"
     );
 
-    let page = bubble_menu_chrome_rows(Some(MediaType::Text), false, false, true);
+    let page = bubble_menu_chrome_rows(Some(MediaType::Text), false, false, true, false);
     assert!(
         page.iter().all(|row| row.label != "Pause on Minimize"),
         "a page's bubble has no playback for a minimize to hold"
