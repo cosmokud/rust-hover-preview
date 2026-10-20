@@ -268,8 +268,17 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
 
     // PREVIEW_HWND is created once at startup and never cleared, so visibility
     // is what tells us whether the layered window is actually on screen.
-    let preview_visible =
-        preview_hwnd != 0 && unsafe { IsWindowVisible(HWND(preview_hwnd as *mut _)).as_bool() };
+    //
+    // **And a pin that is a window is the other surface this app draws.** A picture pin stands in a
+    // window of its own, with the preview's window put down — so a run that only asked the preview's
+    // window whether it is visible would answer "nothing of ours is on the screen" with the pin in
+    // front of the user, and the wheel would be left to Explorer over the pin's own picture (see
+    // `wheel_input::publish_preview_under_the_pointer`).
+    let pin_hwnd = pin_real_window::real_pin_window();
+    let pin_visible = pin_hwnd.is_some_and(|hwnd| unsafe { IsWindowVisible(hwnd).as_bool() });
+    let preview_visible = pin_visible
+        || (preview_hwnd != 0
+            && unsafe { IsWindowVisible(HWND(preview_hwnd as *mut _)).as_bool() });
     if !preview_visible && video_hwnd == 0 && video_pid == 0 && engine_hwnd == 0 {
         return PreviewCursorHover::NONE;
     }
@@ -288,7 +297,9 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
         }
 
         let hwnd_ptr = hwnd_under_cursor.0 as isize;
-        let image = preview_hwnd != 0 && hwnd_ptr == preview_hwnd;
+        // Either window this app draws a pinned preview in: the preview's own, which a hover and every
+        // kind still standing on it use, and the pin's own, which a picture uses (see `is_preview_window`).
+        let image = is_preview_window(hwnd_ptr);
         // A document is drawn by a browser inside the engine's window, so what the pointer
         // is over is a window of the browser's — a child of the engine's, one or two levels
         // down — and not the engine's own window at all. The engine's window is what the
