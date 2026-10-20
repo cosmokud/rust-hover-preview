@@ -242,6 +242,10 @@ pub fn run_preview_window() {
         // the answer lands, which is a tick of its own, so this outlives the tick the way the
         // replay flags above it do (see `PinPlan::Awaiting`).
         let mut pin_awaiting_box: Option<PathBuf> = None;
+        // Until when a pinned window owes the front of its band, because it has just answered a
+        // pick: the click reaches the listing's window after it reaches this loop, and the listing
+        // is activated then — over the pin (see `PIN_RAISE_GRACE` and `keep_pin_at_the_front`).
+        let mut pin_raise_deadline: Option<Instant> = None;
         // The file picked in Explorer while the pin is a bubble: held rather than shown, because a
         // pin that is a bubble has no window to show anything in, and what the user is doing
         // behind it is walking through files. The key is what brings the window back up on it
@@ -2292,8 +2296,12 @@ pub fn run_preview_window() {
                         // would have to find before they could see it (see
                         // `Pin Mode → Update Preview → Move To Top`). The raise happens here rather
                         // than at the install so the pin answers the pick at once, with the wait
-                        // for the file drawn in it where the read is not instant.
+                        // for the file drawn in it where the read is not instant — and it is owed
+                        // the front for a moment after, because the click that made the pick
+                        // reaches the listing after it reaches this loop (see
+                        // `PIN_RAISE_GRACE`).
                         raise_pinned_preview(hwnd);
+                        pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
                     }
                     PreviewMessage::OfficeRenderReady {
                         path,
@@ -3058,6 +3066,13 @@ pub fn run_preview_window() {
                     PinSwap::Ready(file) => {
                         install_pinned_media(install, file);
 
+                        // The pin has just been put up with the file the user picked, and what the
+                        // click that picked it did to the z-order may have landed while the file
+                        // was being read: the grace the pick began is begun again here, where the
+                        // window that is to stand over the listing is what is on screen (see
+                        // `PIN_RAISE_GRACE`).
+                        pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
+
                         // And the band a step's cover is holding, where this install came out of
                         // a hold: the park's own settle ran earlier in this tick, before the pin
                         // had the box it has just been given, so it is asked again now the file
@@ -3069,6 +3084,17 @@ pub fn run_preview_window() {
                     }
                 }
             }
+
+            // A pin that has just answered a pick keeps asking for the front of its band for a
+            // moment after it: the click is this loop's before it is the listing's, and the
+            // window the listing is in is activated after it — which is that window being put
+            // over the pin again (see `PIN_RAISE_GRACE`).
+            keep_pin_at_the_front(
+                hwnd,
+                GetForegroundWindow(),
+                &mut pin_raise_deadline,
+                Instant::now(),
+            );
 
             // The pin's request, if it made one, is the newest thing that happened and speaks
             // for what is on screen: a key that was pressed, a button that was clicked, or the
