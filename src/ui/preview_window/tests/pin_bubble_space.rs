@@ -695,3 +695,108 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
     }
     stand_pin(previous_pin);
 }
+
+/// The raise a pick makes is asked for again on the ticks right after it, because the click that
+/// made the pick reaches the listing's window after it reaches this app: the listing is activated
+/// then, which is that window being put back over the pin. A pin that has been covered within the
+/// grace is raised again, and one that is covered after it is not.
+///
+/// The window the user is working in is handed in rather than read, so the answer is asked of two
+/// windows this test made (see `keep_pin_at_the_front`).
+#[test]
+fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    // Safety: both windows are this test's own, opened where no display is.
+    let (pin_hwnd, in_front) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+        let in_front = a_window_of_the_tests_own();
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(in_front, SW_SHOWNOACTIVATE);
+        (pin_hwnd, in_front)
+    };
+
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // A pick raises the pin, and the click that made it then activates the listing — the window
+    // this test made, put back where the click puts it.
+    unsafe {
+        raise_pinned_preview(pin_hwnd);
+        let _ = SetWindowPos(
+            in_front,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    assert!(
+        !unsafe { pin_stands_over(pin_hwnd, in_front) },
+        "the listing's window is activated after the pick, which is it standing over the pin"
+    );
+
+    // Safety: the grace under test, asked of windows this test made.
+    let mut deadline = Some(Instant::now() + PIN_RAISE_GRACE);
+    unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
+    assert!(
+        unsafe { pin_stands_over(pin_hwnd, in_front) },
+        "while the grace lasts a pin covered by the click that picked its file is raised again"
+    );
+
+    // The same covering, now that the grace has run out: the pin is left where the user's own
+    // clicks put it.
+    unsafe {
+        let _ = SetWindowPos(
+            in_front,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    let mut deadline = Some(Instant::now());
+    unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "past the grace an update no longer answers for the front: the window stays where it is"
+    );
+    assert_eq!(
+        deadline, None,
+        "a grace that has run out is dropped rather than asked about on every tick after it"
+    );
+
+    // Safety: both windows are this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(in_front);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}

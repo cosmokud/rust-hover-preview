@@ -939,6 +939,22 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     }
 }
 
+/// How long after a pick a pin keeps answering for the front of its band.
+///
+/// The pick reaches the loop from the low-level hook *before* the listing's window has seen the
+/// click, and a window is activated after the click reaches it — activation being Windows putting
+/// that window at the front of the band the pin is in. So the raise a pick makes can be undone by
+/// the click that made it, and the pin owes the front for as long as that can still happen: every
+/// tick of the grace asks whether it still stands where it was put and raises it again if it does
+/// not (see `keep_pin_at_the_front`).
+///
+/// The tick a static pin wakes on is `STATIC_PIN_WAIT_MS`, so the grace has to be several of those
+/// rather than the few milliseconds an activation takes.
+///
+/// shortcut: a window activated later than this after a pick stays over the pin; upgrade if a
+/// listing is ever met that takes longer than this to answer a click.
+pub(super) const PIN_RAISE_GRACE: Duration = Duration::from_millis(250);
+
 /// Put a pinned window at the top of the band it is allowed to stand in, without taking the
 /// keyboard and without moving it: what a preview update owes the user when the pin was behind the
 /// listing they picked the file in (see `Pin Mode → Update Preview → Move To Top`).
@@ -969,6 +985,63 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
     place_pinned_siblings();
 }
 
+/// Answer, on each tick of the grace a pick began, for the front of the pin's band: raise the pin
+/// again if the click that made the pick has since brought the window the user is working in over
+/// it (see `PIN_RAISE_GRACE`).
+///
+/// Nothing is asked once the grace has run out, and nothing of a pin that already stands where it
+/// was put — a tick costs the walk from the window the user is working in up to the pin and no
+/// more, which is a handful of calls rather than a reorder of the desktop. `window` is that window,
+/// handed in rather than read here so the walk is asked of windows a test can make.
+pub(super) unsafe fn keep_pin_at_the_front(
+    hwnd: HWND,
+    window: HWND,
+    deadline: &mut Option<Instant>,
+    now: Instant,
+) {
+    let Some(until) = *deadline else {
+        return;
+    };
+
+    if now >= until {
+        *deadline = None;
+        return;
+    }
+
+    if !pin_stands_over(hwnd, window) {
+        raise_pinned_preview(hwnd);
+    }
+}
+
+/// Whether the pin stands over `window` in the z-order right now: whether walking up from that
+/// window reaches the pin. The question a pick's grace is answered with, and the same one the
+/// tests ask of two windows they made (see `keep_pin_at_the_front`).
+///
+/// It is asked rather than remembered because the answer is not this app's to keep: another window
+/// being activated is that window being put in front, and where the pin stands is read off the
+/// desktop rather than worked out from what this app last asked for. A pin that is put away, and one
+/// whose row is off, are owed nothing and answer yes.
+pub(super) unsafe fn pin_stands_over(hwnd: HWND, window: HWND) -> bool {
+    if pin_is_collapsed() || !pin_update_move_to_top() {
+        return true;
+    }
+
+    if window.is_invalid() || window == hwnd {
+        return true;
+    }
+
+    let mut above = window;
+    while !above.is_invalid() {
+        if above == hwnd {
+            return true;
+        }
+
+        above = GetWindow(above, GW_HWNDPREV).unwrap_or_default();
+    }
+
+    false
+}
+
 /// Put the thing a pin leaves a band open for where that band is: the player's own window, or
 /// the browser's, each of which is a window standing in the hole the pinned window leaves — so
 /// that the picture is theirs and the caption is this app's (see `render_pinned_preview_at`).
@@ -990,11 +1063,14 @@ pub(super) fn place_pinned_siblings() {
     match kind {
         Some(MediaType::Video) => ensure_pinned_sibling_box(content),
         // A document is the same kind of thing — a window of somebody else's standing in the pin's
-        // band — and it is *moved* rather than told again where it is, because a browser holding a
-        // page has no reason to put it anywhere else by itself (see `webview_preview::place`).
+        // band — and it is put back where it stands rather than asked for again: a page this
+        // engine holds is a window that moves with the box rather than a document to navigate to
+        // (see `webview_preview::raise`). The ask matters as much as the box does, because the pin
+        // may have just been raised over the window that was covering the page as well, and a page
+        // left behind would be a caption standing over the listing it was following.
         Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
             if let Some((path, _)) = pinned_media_owner() {
-                webview_preview::place(
+                webview_preview::raise(
                     &path,
                     webview_preview::Area {
                         x: content.0,
