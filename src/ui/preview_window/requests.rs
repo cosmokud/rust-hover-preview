@@ -92,6 +92,33 @@ pub fn update_pinned_preview(path: &Path) {
     send_preview(PreviewMessage::PinUpdate(path.to_path_buf()));
 }
 
+/// Note that the hand pressed the listing behind the pin, before the file the press picked is
+/// known.
+///
+/// The click activates the listing, which is that window being put over the pin, and the shell's
+/// answer for the file can be a tick or ten away — so the pin is put back in front of the listing
+/// here, where the press is, rather than after the answer (see `Pin Mode → Update Preview → Move
+/// To Top`). A press that names no file is put back behind the listing by
+/// [`pin_press_was_not_a_pick`], and a pick that lands raises the pin again.
+pub fn press_pinned_preview() {
+    if !pinned() {
+        return;
+    }
+
+    send_preview(PreviewMessage::PinPress);
+}
+
+/// Note that the press above named no file, and put the pin back behind the window the press was
+/// made in: what a press that picked a folder or a gap owes, and what undoes the raise the press
+/// began. A pick that lands after this one still raises the pin again.
+pub fn pin_press_was_not_a_pick() {
+    if !pinned() {
+        return;
+    }
+
+    send_preview(PreviewMessage::PinNoPick);
+}
+
 /// Show a preview of the file the pointer hovers, opened from the cursor it was hovered
 /// at.
 ///

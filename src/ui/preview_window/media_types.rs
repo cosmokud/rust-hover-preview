@@ -75,6 +75,17 @@ pub enum PreviewMessage {
     /// Preview`). The Explorer hook sends it — for a click, for a key, and — where the setting
     /// asks for it — for the pointer settling on another file (see `update_pinned_preview`).
     PinUpdate(PathBuf),
+    /// A press landed on the listing behind the pin, before the file it picked is known: the
+    /// click activates the listing, which puts it over the pin for as long as the shell takes to
+    /// answer for the file, so the pin comes forward here rather than after that answer. The
+    /// answer is a [`PinUpdate`](Self::PinUpdate); a press that names no file is put back behind
+    /// the listing by [`PinNoPick`](Self::PinNoPick) (see `press_pinned_preview`).
+    PinPress,
+    /// A press that was read as a pick named no file — a folder in the tree, the gap between the
+    /// rows, the toolbar above them — and the pin goes back behind the window the press was made
+    /// in. What the press above raised is undone here; a pick that lands after it still raises the
+    /// pin again (see `pin_press_was_not_a_pick`).
+    PinNoPick,
     /// Whether the pin key is watched was changed in the tray, or previews themselves
     /// were turned off. A pin on screen is ended here rather than left as a window
     /// nothing would ever take down again.
