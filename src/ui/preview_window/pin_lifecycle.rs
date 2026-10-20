@@ -959,11 +959,18 @@ pub(super) const PIN_RAISE_GRACE: Duration = Duration::from_millis(250);
 /// keyboard and without moving it: what a preview update owes the user when the pin was behind the
 /// listing they picked the file in (see `Pin Mode → Update Preview → Move To Top`).
 ///
-/// `HWND_TOP` is the whole of the raise, and not a band of its own: a pin that is Always On Top
-/// stays in the topmost band and comes forward inside it, and one that is not is put above the
-/// ordinary windows and no further — a pick is not what overrules that setting. `SWP_NOACTIVATE`
-/// keeps the keyboard where the user is working, which is the half of a keyboard walk a raise that
-/// took the focus would break.
+/// **`HWND_TOP` cannot do this, and asking for it is a call that answers nothing.** Windows will not
+/// let a window of a process that is not in the foreground stand over the window that is: the pick
+/// arrives while the user is clicking in the listing, so the listing's window is the foreground one
+/// and the place asked for is refused, leaving the pin exactly where it was. The topmost band is
+/// not subject to that — a topmost window stands over the foreground window by definition — so the
+/// raise is made there and given straight back. `HWND_NOTOPMOST` puts the window above every
+/// non-topmost window and behind the topmost ones, which is the front of exactly the band a pin
+/// that is not Always On Top belongs in, reached in a way the foreground window cannot refuse. A
+/// pin that *is* Always On Top keeps the band it is in and its raise is the one call.
+///
+/// The keyboard is left where the user is working, which is the half of a keyboard walk a raise that
+/// took the focus would break, and the window is left where they put it: neither call moves it.
 ///
 /// What stands in the pin's band is somebody else's window and is brought along with it, so the
 /// raise is a whole preview rather than a caption over whatever happened to be behind it. A pin
@@ -975,13 +982,24 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
 
     let _ = SetWindowPos(
         hwnd,
-        HWND_TOP,
+        HWND_TOPMOST,
         0,
         0,
         0,
         0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
     );
+    if !pin_always_on_top() {
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
     place_pinned_siblings();
 }
 
