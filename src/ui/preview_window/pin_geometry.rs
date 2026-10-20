@@ -832,7 +832,7 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // place in the z-order a carried window gets from its own `SetWindowPos`.
         let _ = SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            band_place(),
             0,
             0,
             0,

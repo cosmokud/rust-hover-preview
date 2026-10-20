@@ -3179,6 +3179,31 @@ pub fn run_preview_window() {
                 }
             }
 
+            // A pin that owes nothing and holds the topmost band is a window in the wrong band,
+            // whatever road put it there, and the band is given back here: with `Always On Top` off
+            // nothing else in this app gives it back on its own, so the pin would stand over every
+            // program the user worked in until the first press that happened to raise it — the one
+            // road that takes the band off a window — which is one click too late. `HWND_NOTOPMOST`
+            // is the whole repair: the window keeps the place it stands among the ordinary ones and
+            // lands in front of them, which is where a pin with the setting off belongs while the
+            // user is in it (see `band_place`, the same question asked where a window is placed).
+            if pinned()
+                && pin_raise_deadline.is_none()
+                && !pin_always_on_top()
+                && !pin_holds_the_front()
+                && window_holds_the_topmost_band(hwnd)
+            {
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND_NOTOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+
             // The pin's request, if it made one, is the newest thing that happened and speaks
             // for what is on screen: a key that was pressed, a button that was clicked, or the
             // media behind the pin having come apart. It is put to the same machinery a hover

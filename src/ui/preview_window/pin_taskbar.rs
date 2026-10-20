@@ -441,10 +441,11 @@ unsafe fn handle_taskbar_restore() {
     } else {
         let preview_hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
         if !preview_hwnd.is_invalid() {
-            // A press on the pin's stand-in is the user asking for the pin: it owes the front, and
-            // it owes it as a band rather than as a raise for the same reason a pick does (see
-            // `PIN_FRONT_OWED`).
-            arm_pin_to_the_front();
+            // A press on the pin's stand-in is the user asking for the pin, and it owes no band for
+            // it: the window the hand is in is the window Windows activates, and an activated window
+            // is already the one in front. A band owed here would be one this app then had to give
+            // back on its own, and a restore the user asked for would come back as a window in the
+            // topmost band with `Always On Top` off (see `band_place` and `PIN_FRONT_OWED`).
             let _ = SetForegroundWindow(preview_hwnd);
             let _ = SetWindowPos(preview_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             place_pinned_siblings();

@@ -282,6 +282,26 @@ pub(crate) fn pin_holds_the_front() -> bool {
                 && !pin_is_collapsed()))
 }
 
+/// The band a window of this app's is placed in when it is placed for reasons of its own — a
+/// spinner drawn into it, a box re-asserted under a hand, a window put back on the screen: the
+/// topmost one for a hover, and for a pin that is Always On Top or owes the front; the ordinary one
+/// for a pin that owes neither.
+///
+/// **Every placement is this question rather than a band of its own.** Placed any other way, a pin
+/// with `Always On Top` off was put in the topmost band by a resize or a spinner and stayed there:
+/// the band's own flag was never set by those roads, so nothing that gives the band back knew to
+/// look, and the window stood over every program the user worked in until a press happened to raise
+/// it — the one road that takes the band off a window (see `pin_holds_the_front` and
+/// `lower_pinned_preview`). The band is a decision, and a window is placed in the one the decision
+/// names.
+pub(crate) fn band_place() -> HWND {
+    if pin_holds_the_front() || !pinned() {
+        HWND_TOPMOST
+    } else {
+        HWND_NOTOPMOST
+    }
+}
+
 /// The pin owes the front: a pick, a take-up or a restore asked for it, and no press that named no
 /// file and no window change away from the listing has given it back since.
 ///
@@ -958,11 +978,7 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // takes the topmost band off a window the Shell had been drawing as a hover's.
     let _ = SetWindowPos(
         hwnd,
-        if pin_holds_the_front() {
-            HWND_TOPMOST
-        } else {
-            HWND_NOTOPMOST
-        },
+        band_place(),
         window.0,
         window.1,
         width,

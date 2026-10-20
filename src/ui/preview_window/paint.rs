@@ -1477,7 +1477,7 @@ unsafe fn show_at_the_wait(hwnd: HWND, pl: &PendingLoad, media: MediaData) {
     }
     let _ = SetWindowPos(
         hwnd,
-        HWND_TOPMOST,
+        band_place(),
         x,
         y,
         side,
