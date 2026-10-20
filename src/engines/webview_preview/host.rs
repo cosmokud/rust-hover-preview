@@ -12,8 +12,8 @@ use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW, KillTimer, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE, HWND_NOTOPMOST,
-    HWND_TOPMOST, MSG, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE, MSG,
+    SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
 };
 
 use super::api::{
@@ -354,16 +354,12 @@ impl Host {
     ///
     /// The placement never activates, whatever the document is: a hover is not a click, and a
     /// preview that appeared over a window being named would put the caret somewhere else
-    /// than where it was. The band is the pin's when a pin is showing the page, and the topmost
-    /// one everywhere else (see `pin_holds_the_front`).
+    /// than where it was. What it is put under is the pin's own window while a pin is up, and the
+    /// topmost band everywhere else — the same question a film's window is placed by, and asked of
+    /// the same place, because a page stands in the pin's band exactly as a film does (see
+    /// `band_window_insert_after`).
     pub(super) fn put_window(&self, area: Area) {
-        let insert_after = if crate::ui::preview_window::pinned()
-            && !crate::ui::preview_window::pin_holds_the_front()
-        {
-            HWND_NOTOPMOST
-        } else {
-            HWND_TOPMOST
-        };
+        let insert_after = crate::ui::preview_window::band_window_insert_after();
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,

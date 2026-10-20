@@ -1025,11 +1025,11 @@ pub(super) unsafe fn place_player_window(
     flags: SET_WINDOW_POS_FLAGS,
 ) {
     let (x, y, width, height) = box_;
-    let _ = SetWindowPos(hwnd, player_insert_after(), x, y, width, height, flags);
+    let _ = SetWindowPos(hwnd, band_window_insert_after(), x, y, width, height, flags);
 
     // A raise with no pin standing is a hover's, and there is nothing to put over it — and a pin
     // that does not hold the front is raised over nothing at all: the film was just put *below* it,
-    // which is the whole of the order that pair owes (see `player_insert_after`).
+    // which is the whole of the order that pair owes (see `band_window_insert_after`).
     let re_raise = order == PlayerOrder::Raise && pin_holds_the_front();
 
     #[cfg(test)]
@@ -1042,7 +1042,8 @@ pub(super) unsafe fn place_player_window(
     }
 }
 
-/// What a player's window is put under: the pin's own window while a pin is up and keeps the
+/// What a window of somebody else's standing in the pin's band is put under — a film a player draws,
+/// or the page the browser engine draws: the pin's own window while a pin is up and keeps the
 /// ordinary band, and the topmost band where there is no pin to go under or the pin is Always On
 /// Top.
 ///
@@ -1062,7 +1063,13 @@ pub(super) unsafe fn place_player_window(
 /// user's own clicks gave it. That an insert-after handle that is not topmost also takes the window
 /// *out* of the topmost band is the other half of it, and is what turns a film adopted from a
 /// hover — whose window wore that band for the preview's sake — into an ordinary window again.
-pub(super) fn player_insert_after() -> HWND {
+///
+/// **A page is asked the same question for the same reason**, and answered the same way: it stands
+/// in the pin's band, it is seen through the hole the band leaves for it, and it is drawn over by
+/// the caption. Asked for the front of the ordinary band instead, the page was placed over the pin
+/// — and a page whose box is the whole window, which is what a kind whose chrome is drawn over its
+/// media has, took the pin's own chrome with it (see `Host::put_window`).
+pub(crate) fn band_window_insert_after() -> HWND {
     // The band is the *hover's* to hold, and the setting's while the pin is Always On Top. What a
     // pin in the ordinary band keeps is the film under it, holding the front or having given it
     // back. Asked whether the pin holds the front instead, a demoted pin's film was put back in the

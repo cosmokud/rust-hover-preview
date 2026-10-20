@@ -884,7 +884,7 @@ fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
     stand_pin(None);
     PIN_FRONT_OWED.store(false, Ordering::SeqCst);
     assert_eq!(
-        player_insert_after(),
+        band_window_insert_after(),
         HWND_TOPMOST,
         "a hover's film holds the band: there is no pin standing over it, and an ordinary window \
          activated over the film is a picture with the desktop showing through the band"
@@ -900,7 +900,7 @@ fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
         "the front is the press's to give back, and this is the state it leaves"
     );
     assert_eq!(
-        player_insert_after(),
+        band_window_insert_after(),
         pin_hwnd,
         "a pin that has given the front back still stands over its film: the place below it is \
          what takes the film out of the topmost band, and without it the picture of a pin behind \
@@ -912,7 +912,7 @@ fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
     arm_pin_to_the_front();
     assert!(pin_holds_the_front(), "a pick owes the front again");
     assert_eq!(
-        player_insert_after(),
+        band_window_insert_after(),
         pin_hwnd,
         "the film goes under the pin in either band: the caption and the transport bar are drawn \
          into the band over it, and the press on the picture is the pin's"
@@ -921,7 +921,7 @@ fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
     // A pin with no window of its own yet has nothing for the film to go under.
     PREVIEW_HWND.store(0, Ordering::SeqCst);
     assert_eq!(
-        player_insert_after(),
+        band_window_insert_after(),
         HWND_NOTOPMOST,
         "a film with no pin to go under is put in the ordinary band rather than over the desktop"
     );
@@ -932,7 +932,7 @@ fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
         config.pin_always_on_top = true;
     }
     assert_eq!(
-        player_insert_after(),
+        band_window_insert_after(),
         HWND_TOPMOST,
         "a pin that is Always On Top holds its band whatever any press said, and its film holds \
          the band under it"

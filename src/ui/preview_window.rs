@@ -281,6 +281,7 @@ pub(crate) use pointer::pointer_item_box;
 pub(crate) use pointer::pointer_item_holds;
 pub(crate) use pointer::preview_pointer_hold;
 pub(crate) use pointer::publish_pointer_item_box;
+pub(crate) use video_playback::band_window_insert_after;
 // The one of these nothing asks for, kept reachable rather than dropped: a move is not a change.
 #[allow(unused_imports)]
 pub(crate) use pointer::text_preview_scrollable;
