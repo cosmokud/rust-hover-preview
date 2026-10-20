@@ -472,6 +472,8 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
     assert_eq!(
         labels,
         [
+            "Maximize",
+            "",
             "Next File",
             "Previous File",
             "",
@@ -482,7 +484,7 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
             "To Taskbar",
             "Close",
         ],
-        "the window's menu is the menu a bubble holds"
+        "the window's menu is the menu a bubble holds, opened on the caption's own maximize"
     );
     assert!(
         paint.flyout.is_none(),
@@ -511,6 +513,8 @@ fn a_right_click_on_the_media_holds_no_setting_rows() {
     assert_eq!(
         labels,
         [
+            "Maximize",
+            "",
             "Next File",
             "Previous File",
             "",
@@ -527,6 +531,65 @@ fn a_right_click_on_the_media_holds_no_setting_rows() {
         )
     });
     assert!(!marks_a_setting, "nothing on it carries a setting's mark");
+}
+
+/// A standing window's menu opens on the maximize its caption carries, named for what it will do:
+/// `Maximize` on a window at its own box and `Restore` on one that is maximized. The hold is under
+/// it where the kind behind it plays, and the rule stands below the two — while a bubble's own menu
+/// opens on the walk, a collapsed pin having no window to put up (see `bubble_menu_rows`).
+#[test]
+fn a_standing_menu_opens_on_the_maximize_its_caption_carries() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // A film still standing: the maximize, the hold under it, and the rule below the two.
+    assert_eq!(
+        bubble_menu_rows(Some(MediaType::Video), true, false),
+        vec![
+            BubbleMenuRow::Maximize,
+            BubbleMenuRow::Toggle,
+            BubbleMenuRow::Separator,
+            BubbleMenuRow::NextFile,
+            BubbleMenuRow::PreviousFile,
+            BubbleMenuRow::Separator,
+            BubbleMenuRow::ToBubble,
+            BubbleMenuRow::ToTaskbar,
+            BubbleMenuRow::Close,
+        ],
+        "a film's menu opens on the maximize and the hold, and the walk is under their rule"
+    );
+
+    // A kind with nothing to hold: the maximize alone above the rule.
+    assert_eq!(
+        bubble_menu_rows(Some(MediaType::StaticImage), true, false),
+        vec![
+            BubbleMenuRow::Maximize,
+            BubbleMenuRow::Separator,
+            BubbleMenuRow::NextFile,
+            BubbleMenuRow::PreviousFile,
+            BubbleMenuRow::Separator,
+            BubbleMenuRow::ToBubble,
+            BubbleMenuRow::ToTaskbar,
+            BubbleMenuRow::Close,
+        ],
+        "a picture's menu opens on the maximize, and the walk is under its rule"
+    );
+
+    // And what that row says about a window that is already maximized: the way back.
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _kind = MediaKindPutBack::put(MediaType::StaticImage);
+    stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
+    with_pin(|pin| pin.restore = Some((0, 0, 400, 300)));
+
+    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 20, 20, PinMenuPage::Chrome) };
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("the menu is up")
+    };
+    assert_eq!(
+        paint.rows[0].label, "Restore",
+        "a maximized window's own row is the way back, the way its caption's glyph is"
+    );
 }
 
 /// Which page of its own menu a right-click asks a pinned window for: the window's rows on a
@@ -646,6 +709,8 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
             "Copy",
             "Find Next",
             "",
+            "Maximize",
+            "",
             "Next File",
             "Previous File",
             "",
@@ -689,6 +754,8 @@ fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
     assert_eq!(
         labels,
         [
+            "Maximize",
+            "",
             "Next File",
             "Previous File",
             "",
@@ -708,7 +775,7 @@ fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
     );
     assert_eq!(
         take_pin_command(),
-        Some(PinCommand::Next),
+        Some(PinCommand::Maximize),
         "and it is the row the picture's own menu holds there"
     );
 }
@@ -882,8 +949,8 @@ fn the_switch_a_pin_shares_with_a_bubble_stays_up_with_its_mark() {
     });
     take_pin_command();
     let paint = pinned_menu_geometry().expect("the menu is up");
-    assert_eq!(
-        paint.rows[0].label, "Play",
+    assert!(
+        paint.rows.iter().any(|row| row.label == "Play"),
         "a held film's menu offers to set it going"
     );
     let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Pause on Minimize"));
@@ -928,7 +995,7 @@ fn a_press_on_a_row_over_the_title_bar_is_the_rows_own() {
     });
     take_pin_command();
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Next File"));
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Maximize"));
     assert!(
         y < caption,
         "the row this test presses lies in the window's own title bar"
@@ -940,7 +1007,7 @@ fn a_press_on_a_row_over_the_title_bar_is_the_rows_own() {
     );
     assert_eq!(
         take_pin_command(),
-        Some(PinCommand::Next),
+        Some(PinCommand::Maximize),
         "the row the hand was on is the row that answered"
     );
     assert!(
@@ -2100,7 +2167,7 @@ fn the_same_ask_puts_the_bubbles_menu_away() {
     // in the slot the loop's tick reads it from — a window nobody has to put on a screen
     // for a menu to be stood up in a slot (see `open_bubble_menu`).
     let _bubble = BubblePutBack::put(HWND(0x2000 as *mut _));
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false);
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
         *menu = Some(BubbleMenu {
@@ -2151,7 +2218,7 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
     // tick reads it from, the way the dismiss test above stands it (see `open_bubble_menu`).
     let hwnd = HWND(0x2000 as *mut _);
     let _bubble = BubblePutBack::put(hwnd);
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false);
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
         *menu = Some(BubbleMenu {
@@ -2165,7 +2232,7 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
     // The middle of the switch's own band, named by what the row says rather than by the number
     // it happens to sit at.
     let index = row_at(
-        &bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true),
+        &bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false),
         "Pause on Minimize",
     );
     let (x, y) = bubble_row_point(index);
@@ -2220,7 +2287,7 @@ fn a_press_on_the_bubbles_minimize_pick_writes_the_setting() {
     // stands it (see `open_bubble_menu`).
     let hwnd = HWND(0x2000 as *mut _);
     let _bubble = BubblePutBack::put(hwnd);
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false);
     let index = row_at(&rows, "Minimize to Taskbar");
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {

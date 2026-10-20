@@ -560,11 +560,15 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> PinMenuPaint {
                 kind,
                 pin_media_is_playing(pin),
                 // The window's own menu is a pin still standing in it, so it holds the way out
-                // into the bubble a bubble's own menu has none of (see `bubble_menu_rows`).
+                // into the bubble a bubble's own menu has none of, and the maximize its caption
+                // carries (see `bubble_menu_rows`).
                 true,
                 // The settings are the chrome's rows: a right-click out on the media asks for
                 // the file rather than for the window it is drawn in (see `PinMenuPage`).
                 page.settings(),
+                // A window that is maximized is one the row offers to put back, the way the
+                // caption's own maximize button does (see `pin_restore_box`).
+                pin.restore.is_some(),
             ));
             rows
         }
