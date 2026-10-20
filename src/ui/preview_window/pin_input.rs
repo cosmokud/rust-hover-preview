@@ -759,15 +759,14 @@ pub(super) unsafe fn toggle_pin_volume(hwnd: HWND) {
 /// without moving anything: the order the tick keeps for the player, asked the other way round for
 /// as long as a volume popup is open.
 ///
-/// **A pin that is not Always On Top is not raised at all.** It is an ordinary window there, and
-/// one put over every other window on the machine the moment its chrome came up — or its volume
-/// panel, or the film beneath it was placed — is a pin that behaves like a topmost one while the
-/// setting says it is not, which is the whole of what that setting is about. What the chrome and
-/// the panel are owed is the film's place, and the film is moved instead: put directly below the
-/// pin it is out of the way of both, and the pair keeps the place the user's own clicks gave it
-/// (see `put_player_under_the_pin`).
+/// **A pin that does not hold the front is not raised at all.** It holds no band there, and one
+/// put over every other window on the machine the moment its chrome came up — or its volume panel,
+/// or the film beneath it was placed — is a window in front of whatever the user is working in
+/// without having been asked to be. What the chrome and the panel are owed is the film's place, and
+/// the film is moved instead: put directly below the pin it is out of the way of both, and the pair
+/// keeps the place the user's own clicks gave it (see `put_player_under_the_pin`).
 pub(super) unsafe fn raise_pinned_window(hwnd: HWND) {
-    if !pin_always_on_top() {
+    if !pin_holds_the_front() {
         put_player_under_the_pin();
         return;
     }

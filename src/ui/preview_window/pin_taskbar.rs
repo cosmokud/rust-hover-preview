@@ -441,6 +441,10 @@ unsafe fn handle_taskbar_restore() {
     } else {
         let preview_hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
         if !preview_hwnd.is_invalid() {
+            // A press on the pin's stand-in is the user asking for the pin: it owes the front, and
+            // it owes it as a band rather than as a raise for the same reason a pick does (see
+            // `PIN_FRONT_OWED`).
+            arm_pin_to_the_front();
             let _ = SetForegroundWindow(preview_hwnd);
             let _ = SetWindowPos(preview_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             place_pinned_siblings();

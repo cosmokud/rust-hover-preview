@@ -210,8 +210,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Threading::{
-    CreateEventW, OpenProcess, QueryFullProcessImageNameW, ResetEvent, SetEvent, TerminateProcess,
-    WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    CreateEventW, GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, ResetEvent,
+    SetEvent, TerminateProcess, WaitForSingleObject, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, GetDoubleClickTime, GetFocus, ReleaseCapture, SetCapture,
@@ -268,6 +269,7 @@ pub(crate) use media_types::PreviewMessage;
 pub(crate) use pin_bubble::PIN_BUBBLE_HWND;
 pub(crate) use pin_drag::publish_pin_media_press;
 pub(crate) use pin_lifecycle::pin_always_on_top;
+pub(crate) use pin_lifecycle::pin_holds_the_front;
 pub(crate) use pin_lifecycle::PinCommand;
 pub(crate) use pin_model::pin_is_focused;
 pub(crate) use pin_model::pin_zoom_keep_alive_try;

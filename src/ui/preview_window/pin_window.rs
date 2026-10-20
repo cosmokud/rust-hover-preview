@@ -770,6 +770,9 @@ pub(super) fn take_pin_for_a_test() -> Option<PinnedPreview> {
 /// what this module is for.
 #[cfg(test)]
 pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
+    // The front a pin owes is part of what is stood here: a test that arms it is a test that has to
+    // give it back, and every one that does not begins without it (see `arm_pin_to_the_front`).
+    super::PIN_FRONT_OWED.store(false, Ordering::SeqCst);
     match pin {
         Some(pin) => install(pin),
         None => {

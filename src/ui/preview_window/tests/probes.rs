@@ -1599,7 +1599,8 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
 }
 
 /// A player's window is asserted the styles **with** the topmost bit, and the click-through style
-/// besides.
+/// besides. The film is topmost for as long as the pin owes the front, which is the state a pick
+/// leaves the pin in (see `pin_holds_the_front`).
 ///
 /// Topmost is what keeps a film above every ordinary window — Explorer, and whatever else the user
 /// brings up — which is the whole of why a band painted over a film is not a band over a film nobody
@@ -1610,6 +1611,28 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
 /// `a_pinned_players_placement_puts_the_pin_back_over_it`; the style half is this test.
 #[test]
 fn a_players_window_is_asserted_topmost() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+    stand_pin(Some(overlay_pin((100, 80, 420, 320), PinChrome::always())));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    arm_pin_to_the_front();
+    assert!(
+        pin_holds_the_front(),
+        "a pin a pick raised owes the front, which is the band the film is asserted into"
+    );
+
     let a_style_the_player_needs = 0x0004_0000isize;
     let asserted = player_ex_style_for(WS_EX_TOPMOST.0 as isize | a_style_the_player_needs);
 
@@ -1630,6 +1653,13 @@ fn a_players_window_is_asserted_topmost() {
         "and the click-through bit with it, which is what a press on the film reaches the pin \
          through"
     );
+
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
 }
 
 /// The film of a pinned mpv preview is placed where the band is, and put under the pin, through

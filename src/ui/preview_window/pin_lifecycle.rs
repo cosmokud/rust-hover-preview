@@ -257,6 +257,63 @@ pub fn pin_always_on_top() -> bool {
         .unwrap_or(DEFAULT_PIN_ALWAYS_ON_TOP)
 }
 
+/// Whether the pin is standing in the front band — the topmost one — as both of its roads to it
+/// agree: the setting's own band, or the one a pin that is not Always On Top keeps while it owes the
+/// front to the listing it follows (see `PIN_FRONT_OWED`).
+///
+/// **The second is what answers a click that picks a file.** The click activates the listing, and
+/// activation is Windows putting that window at the front of the ordinary band — over every
+/// ordinary window, and the pin is one of those. There is no raise fast enough to undo that for the
+/// frame it lasts, which is the flash a pin in the ordinary band answers a pick with: the topmost
+/// band is not subject to it, because a topmost window stands over the foreground one by
+/// definition. So a pin that follows the listing holds that band from the moment it is taken up,
+/// and gives it back at the first press that names no file or window change that leaves the
+/// listing (see `lower_pinned_preview`). The price is the one `Always On Top` pays for the same
+/// band — the taskbar and every other topmost window are under the pin while it stands there — and
+/// it is paid only for as long as the pin owes the front.
+///
+/// A pin that is put away holds no band, and one whose `Move To Top` row is off was never raised by
+/// an update: neither is asked here beyond the setting's own answer.
+pub(crate) fn pin_holds_the_front() -> bool {
+    pinned()
+        && (pin_always_on_top()
+            || (PIN_FRONT_OWED.load(Ordering::SeqCst)
+                && pin_update_move_to_top()
+                && !pin_is_collapsed()))
+}
+
+/// The pin owes the front: a pick, a take-up or a restore asked for it, and no press that named no
+/// file and no window change away from the listing has given it back since.
+///
+/// It is a flag rather than a question asked of the window because the band is asked for *before*
+/// the pick is read (see `arm_pin_to_the_front`), and the window's band at that moment says what the
+/// last click left it in rather than what this one is owed.
+pub(super) static PIN_FRONT_OWED: AtomicBool = AtomicBool::new(false);
+
+/// Say that a pin that is up owes the front: what a take-up, a pick and a restore each ask for.
+///
+/// A pin that is Always On Top owes nothing of its own — its band is the setting's — and neither
+/// does one whose `Move To Top` row is off, because that row is the whole of what says an update
+/// puts the pin in front of what it was behind. A collapsed pin has no window in any band until it
+/// is restored, and the restore is one of the doors that asks again.
+pub(super) fn arm_pin_to_the_front() {
+    if !pinned() || pin_always_on_top() || !pin_update_move_to_top() || pin_is_collapsed() {
+        return;
+    }
+
+    PIN_FRONT_OWED.store(true, Ordering::SeqCst);
+}
+
+/// Whether the window itself is in the topmost band right now, which is what a demotion has to take
+/// away and what a raise into the band is asked to keep.
+///
+/// It is read off the window rather than from `PIN_FRONT_OWED` because the band can be entered by a
+/// road that is not the flag's — a resize re-asserts the place a carried window has — and a demotion
+/// that trusted the flag alone would leave that window over the listing it just went behind.
+pub(super) unsafe fn window_holds_the_topmost_band(hwnd: HWND) -> bool {
+    !hwnd.is_invalid() && GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST.0 as isize != 0
+}
+
 /// Whether a pin that is up is shown the file the user picks next, as the configuration has it
 /// (see `Pin Mode → Update Preview`). It is read on both sides of the swap: by the Explorer hook
 /// before it watches for anything at all, and here before one is taken up.
@@ -894,13 +951,14 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     }
 
     render_pinned_preview_at(hwnd, window.0, window.1);
-    // Where the setting puts it: the topmost band for a pin that is Always On Top, and the ordinary
-    // one for one that is not. The second is no raise — `HWND_NOTOPMOST` asks for the place a window
+    // Where the pin is owed: the topmost band for a pin that is Always On Top or one that owes the
+    // front while it follows the listing (see `pin_holds_the_front`), and the ordinary one for one
+    // that owes neither. The second is no raise — `HWND_NOTOPMOST` asks for the place a window
     // already has, and a pin the user can see is standing in it — but it *is* the one thing that
     // takes the topmost band off a window the Shell had been drawing as a hover's.
     let _ = SetWindowPos(
         hwnd,
-        if pin_always_on_top() {
+        if pin_holds_the_front() {
             HWND_TOPMOST
         } else {
             HWND_NOTOPMOST
@@ -980,6 +1038,25 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
         return;
     }
 
+    // A pin that owes the front *holds* the topmost band rather than taking it and giving it back:
+    // the band is the half of this that the listing's activation cannot undo, and it is kept until
+    // the user's own press gives it back (see `pin_holds_the_front`, `lower_pinned_preview`). What
+    // stands in the pin's band is put in it too, in the order `place_pinned_siblings` asks for.
+    if pin_holds_the_front() {
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        place_pinned_siblings();
+        settle_pinned_mpv_ontop();
+        return;
+    }
+
     let _ = SetWindowPos(
         hwnd,
         HWND_TOPMOST,
@@ -989,7 +1066,67 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
         0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
     );
-    if !pin_always_on_top() {
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_NOTOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+    place_pinned_siblings();
+}
+
+/// Put a pinned window back where the user's own clicks had it: behind the window the press was
+/// made in, and out of the topmost band a pin that owes the front stands in.
+///
+/// The foreground window is the place asked for rather than a band: `HWND_NOTOPMOST` would put the
+/// pin at the top of the ordinary band, which is where the window it is to go behind already is,
+/// so the place is the one directly below that window. `window` is handed in rather than read here
+/// for the same reason `keep_pin_at_the_front` takes it — the caller knows the moment the press was
+/// read, and a test can name a window of its own. An invalid window is no place at all: the band is
+/// still taken away, and the grace the caller begins asks again with the window that has the front
+/// (see `pin_lower_deadline`).
+///
+/// **The band is left before the place is asked for.** A topmost window cannot be put under an
+/// ordinary one, so a pin that holds the topmost band is first put back in the ordinary band and
+/// only then placed below the window. `HWND_NOTOPMOST` alone would be the pin coming back to the
+/// front of the ordinary band, which is over the very window it is to go behind.
+///
+/// A pin that is Always On Top has no ordinary band to go back to and keeps the one it is in, and
+/// one whose `Move To Top` row is off was never raised by an update: both are left alone. So is a
+/// pin that already stands behind the window, and one whose window is the pin itself — a press on
+/// the pin is not a press in the listing, and the grace asks again once the click has landed.
+///
+/// What stands in the pin's band is somebody else's window — a film, or a page the engine draws
+/// in — and it goes under the pin rather than staying where it was: a window left over the listing
+/// is the pin's picture floating over it with no caption, and one the band is being taken from is
+/// the same window over the listing the pin just went behind. A film is moved by the placement that
+/// already inserts it below the pin (see `player_insert_after`), and is taken out of the topmost
+/// band first where it holds one; a page is the engine's window and its placement takes a band
+/// rather than a window to go under, so it is put there here. The next raise puts both where the
+/// band asks for them again (see `place_pinned_siblings`).
+pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
+    if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
+        return;
+    }
+
+    if window == hwnd {
+        return;
+    }
+
+    let topmost = window_holds_the_topmost_band(hwnd);
+    if !topmost && (window.is_invalid() || !pin_stands_over(hwnd, window)) {
+        // Already behind it, or with no window to go behind at all: there is no band to give back,
+        // and asking for the front of the ordinary one would be the pin coming back over the
+        // listing by the road this is meant to take it away by.
+        PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+        return;
+    }
+
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    if topmost {
         let _ = SetWindowPos(
             hwnd,
             HWND_NOTOPMOST,
@@ -1000,59 +1137,64 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         );
     }
-    place_pinned_siblings();
-}
 
-/// Put a pinned window back where the user's own clicks had it: behind the window the press was
-/// made in, which the raise a press or a pick makes had put it in front of.
-///
-/// The foreground window is the place asked for rather than a band: `HWND_NOTOPMOST` would put the
-/// pin at the top of the ordinary band, which is where the window it is to go behind already is,
-/// so the place is the one directly below that window. `window` is handed in rather than read here
-/// for the same reason `keep_pin_at_the_front` takes it — the caller knows the moment the press was
-/// read, and a test can name a window of its own.
-///
-/// A pin that is Always On Top has no ordinary band to go back to and keeps the one it is in, and
-/// one whose `Move To Top` row is off was never raised by an update: both are left alone. So is a
-/// pin that already stands behind the window, and one whose window is the pin itself.
-pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
-    if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
-        return;
+    if !window.is_invalid() {
+        let _ = SetWindowPos(
+            hwnd,
+            window,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
 
-    if window.is_invalid() || window == hwnd || !pin_stands_over(hwnd, window) {
-        return;
-    }
-
-    let _ = SetWindowPos(
-        hwnd,
-        window,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-    );
-
-    // What stands in the pin's band is somebody else's window — a film, or a page the engine draws
-    // in — and it goes under the pin rather than staying where it was: a window left over the
-    // listing is the pin's picture floating over it with no caption, and one a raise had put at the
-    // front of the band is the same window over the listing the pin just went behind. A film is
-    // moved by the placement that already inserts it below the pin (see `player_insert_after`); a
-    // page is the engine's window and its placement takes a band rather than a window to go under,
-    // so it is put there here. The next raise puts both where the band asks for them again (see
-    // `place_pinned_siblings`).
     let kind = CURRENT_MEDIA
         .lock()
         .ok()
         .and_then(|media| media.as_ref().map(|media| media.media_type));
     match kind {
-        Some(MediaType::Video) => place_pinned_siblings(),
+        Some(MediaType::Video) => {
+            // A film that held the topmost band — the player's own `--ontop`, or the band the pin
+            // owed — is taken out of it before it is put under the pin: the place below an ordinary
+            // pin has no topmost window in it, and a film left in the band is the picture floating
+            // over the listing the pin just went behind.
+            let film = VIDEO_HWND.load(Ordering::SeqCst);
+            if film != 0 {
+                let film = HWND(film as *mut _);
+                if window_holds_the_topmost_band(film) {
+                    let _ = SetWindowPos(
+                        film,
+                        HWND_NOTOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
+            }
+            place_pinned_siblings();
+            settle_pinned_mpv_ontop();
+        }
         Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
             let page = webview_preview::showing_hwnd();
             if page != 0 {
+                let page = HWND(page as *mut _);
+                if window_holds_the_topmost_band(page) {
+                    let _ = SetWindowPos(
+                        page,
+                        HWND_NOTOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
                 let _ = SetWindowPos(
-                    HWND(page as *mut _),
+                    page,
                     hwnd,
                     0,
                     0,
@@ -1083,6 +1225,14 @@ pub(super) unsafe fn keep_pin_at_the_front(
     let Some(until) = *deadline else {
         return;
     };
+
+    // A pin that no longer owes the front has given it back: a press that named no file is the
+    // pin's own answer, and a raise here would be the grace putting it back over the listing the
+    // press just took it behind — the pin fighting the hand that moved it.
+    if !pin_holds_the_front() {
+        *deadline = None;
+        return;
+    }
 
     if now >= until {
         *deadline = None;
@@ -1123,6 +1273,32 @@ pub(super) unsafe fn pin_stands_over(hwnd: HWND, window: HWND) -> bool {
     false
 }
 
+/// Whether the window in front belongs to this app: the pin, the menu it opens, the page the engine
+/// draws, the bubble, the taskbar button that stands for the pin. A pin that owes the front owes it
+/// to the listing, and the front being the app's own is the app answering itself — the press that
+/// opened a menu, the click that took the pin's caption — which is not the user leaving the listing.
+pub(super) unsafe fn foreground_is_ours(window: HWND) -> bool {
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(window, Some(&mut pid));
+    pid == GetCurrentProcessId()
+}
+
+/// Whether the window in front is the desktop rather than a program: the shell's `Progman`, which is
+/// what a press on the wallpaper leaves in front, or the `WorkerW` an animated wallpaper is drawn
+/// in.
+///
+/// A press on the desktop names no file, so the pin gives the front back (see
+/// `lower_pinned_preview`) — but not by going *below* the desktop: the desktop is the bottom of the
+/// desktop's own list, and a pin put under it is a pin behind the wallpaper. The band is given back
+/// and the place the pin stands in kept, which is what an ordinary window no other window was
+/// pressed over keeps.
+pub(super) unsafe fn foreground_is_the_desktop(window: HWND) -> bool {
+    let mut name = [0u16; 32];
+    let len = GetClassNameW(window, &mut name).max(0) as usize;
+    let class = String::from_utf16_lossy(&name[..len.min(name.len())]);
+    class == "Progman" || class == "WorkerW"
+}
+
 /// Put the thing a pin leaves a band open for where that band is: the player's own window, or
 /// the browser's, each of which is a window standing in the hole the pinned window leaves — so
 /// that the picture is theirs and the caption is this app's (see `render_pinned_preview_at`).
@@ -1161,6 +1337,29 @@ pub(super) fn place_pinned_siblings() {
                     },
                     engine_background(&path),
                 );
+                // A page left in the ordinary band while the pin holds the topmost one is the
+                // listing showing through the band the pin leaves open for it: the pin's chrome
+                // over the listing with no picture between them. The engine's own placement is a
+                // message away, so the band is asked for here, where the pin asks for its own.
+                if pin_holds_the_front() {
+                    let page = webview_preview::showing_hwnd();
+                    if page != 0 {
+                        let page = HWND(page as *mut _);
+                        unsafe {
+                            if !window_holds_the_topmost_band(page) {
+                                let _ = SetWindowPos(
+                                    page,
+                                    HWND_TOPMOST,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
         _ => {}
@@ -1378,21 +1577,38 @@ pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
             // Moved without a raise: `SWP_NOZORDER` leaves the order alone, so the pin stays
             // over the film it was standing over and no frame puts the film over the chrome.
             //
-            // **And a pin that is not Always On Top puts the film *under it* while it moves it.**
-            // The order still travels with the box — the pair keeps its place in the desktop — but
-            // the film is put directly below the pin, which is where the chrome is over it and
-            // where an mpv window adopted from a hover stops being a topmost one (see
-            // `put_player_under_the_pin`). A pin that is Always On Top keeps the old arrangement:
-            // its film holds its own band up and the pin is raised over it.
-            if pin_always_on_top() {
+            // **And a pin that does not hold the front puts the film *under it* while it moves
+            // it.** The order still travels with the box — the pair keeps its place in the desktop
+            // — but the film is put directly below the pin, which is where the chrome is over it
+            // and where an mpv window adopted from a hover stops being a topmost one (see
+            // `put_player_under_the_pin`). A pin that holds the front keeps the old arrangement:
+            // its film holds its own band up and the pin stands over it.
+            if pin_holds_the_front() {
+                // A film already in the band is moved without a raise: `SWP_NOZORDER` leaves the
+                // order alone, and raising the film first is the band over the pin's chrome for a
+                // frame (see `place_player_window`). A film the band is being asked for — the pin
+                // owes the front again after a press gave it back, and the film was put under it
+                // then — is put in it below the pin itself, which is the same order the two keep
+                // once the film is in the band, and is one call rather than a raise of each.
+                let already = window_holds_the_topmost_band(hwnd);
+                let pin = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+                let insert_after = if already || pin.is_invalid() {
+                    HWND_TOPMOST
+                } else {
+                    pin
+                };
                 let _ = SetWindowPos(
                     hwnd,
-                    HWND_TOPMOST,
+                    insert_after,
                     content.0,
                     content.1,
                     (content.2 - content.0).max(1),
                     (content.3 - content.1).max(1),
-                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+                    if already {
+                        SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW
+                    } else {
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    },
                 );
             } else {
                 let _ = SetWindowPos(

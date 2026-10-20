@@ -350,14 +350,15 @@ impl Host {
         publish(Some((path.clone(), area)));
     }
 
-    /// Put the window in `area`, topmost, and without ever activating it.
+    /// Put the window in `area`, in the band the preview holds, and without ever activating it.
     ///
     /// The placement never activates, whatever the document is: a hover is not a click, and a
     /// preview that appeared over a window being named would put the caret somewhere else
-    /// than where it was.
+    /// than where it was. The band is the pin's when a pin is showing the page, and the topmost
+    /// one everywhere else (see `pin_holds_the_front`).
     pub(super) fn put_window(&self, area: Area) {
         let insert_after = if crate::ui::preview_window::pinned()
-            && !crate::ui::preview_window::pin_always_on_top()
+            && !crate::ui::preview_window::pin_holds_the_front()
         {
             HWND_NOTOPMOST
         } else {

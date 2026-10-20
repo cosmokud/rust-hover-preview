@@ -395,6 +395,14 @@ fn a_pin_restored_from_a_bubble_that_was_never_carried_comes_back_at_its_own_box
     stand_pin(previous_pin);
 }
 
+/// Let the window server finish the placement just asked for before the z-order is read: a window
+/// put in a band and the band's own order are the compositor's to settle, so a test that reads them
+/// the instant the call returns is a test racing it — the same window reads as not yet topmost and
+/// as topmost a call later.
+unsafe fn settle_z_order() {
+    let _ = DwmFlush();
+}
+
 /// Whether `above` stands over `below` in the z-order right now: an ask of the desktop rather than a
 /// reading of what this app meant to ask for.
 ///
@@ -606,13 +614,12 @@ fn a_pin_brought_back_by_its_key_leaves_the_keyboard_in_the_listing() {
     stand_pin(previous_pin);
 }
 
-/// A preview update brings a pin in front of whatever was standing over it, without taking the
-/// keyboard; with `Pin Mode → Update Preview → Move To Top` off it leaves the pin where the user's
-/// own clicks put it.
+/// A preview update raises the pin into the front it owes, without taking the keyboard; with
+/// `Pin Mode → Update Preview → Move To Top` off the pin is left where the user's own clicks put it.
 ///
-/// The z-order is read off the desktop's own list because that is the one part of a raise nothing
-/// records: what the call was asked for is a place among other windows, and a window put behind the
-/// listing it is following is the whole of the fault this row answers (see `raise_pinned_preview`).
+/// The raise is asked about rather than read off the desktop: the band it holds is the desktop's to
+/// apply, and what the update owes is the decision to hold it (`pin_holds_the_front`). The placing
+/// is read off the desktop's own list, where the press that gives the band back leaves the pin.
 #[test]
 fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -621,6 +628,7 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
     let always_on_top = pin_always_on_top();
     let move_to_top = CONFIG
         .lock()
@@ -628,18 +636,13 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
         .unwrap_or(true);
 
     // Safety: both windows are this test's own, opened where no display is. The second is made
-    // after the pin's, which is what puts it in front, and it is still there after each raise, so
-    // that a pin which did not come forward is a pin still under it.
+    // after the pin's, which is what puts it in front — the listing the file was picked in.
     let (pin_hwnd, in_front) = unsafe {
         let pin_hwnd = a_window_of_the_tests_own();
         PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
         let in_front = a_window_of_the_tests_own();
         let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
         let _ = ShowWindow(in_front, SW_SHOWNOACTIVATE);
-        assert!(
-            stands_over(in_front, pin_hwnd),
-            "the window opened after the pin's is the one in front of it"
-        );
         (pin_hwnd, in_front)
     };
 
@@ -654,21 +657,15 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
         config.pin_update_move_to_top = true;
     }
 
-    // Safety: the raise under test, asked of a window this test made.
+    // An update is a pick's raise: the pin owes the front from it until a press gives the band
+    // back, which is the band the listing's own activation cannot take it out of.
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pin_hwnd) };
     assert!(
-        unsafe { stands_over(pin_hwnd, in_front) },
-        "an update puts the pin above the window that was standing over it: the file the user \
-         picked is the one they are looking at next"
-    );
-    // Safety: the raise left `Always On Top` as it found it, which is the half of the raise that is
-    // not about the window's place: the band it ends in is the one the setting names.
-    let raised_style = unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32;
-    assert_eq!(
-        raised_style & WS_EX_TOPMOST.0,
-        0,
-        "a pin that is not Always On Top is raised through the topmost band rather than into it, \
-         and left behind the windows that really are topmost"
+        pin_holds_the_front(),
+        "an update raises the pin into the front it owes, so the window the file was picked in \
+         cannot be put over it by being activated"
     );
     assert_ne!(
         unsafe { GetForegroundWindow() },
@@ -677,33 +674,36 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
          the arrows in the listing, and a raise that took the focus would end that walk"
     );
 
-    // The row switched off: the window in front is put back there, and the update leaves it alone.
-    unsafe {
-        let _ = SetWindowPos(
-            in_front,
-            HWND_TOP,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
-    };
+    // The press that names no file gives the band back, and the placing it makes is what can be
+    // read: the pin ends behind the window the press was made in.
+    unsafe { lower_pinned_preview(pin_hwnd, in_front) };
+    unsafe { settle_z_order() };
     assert!(
         unsafe { stands_over(in_front, pin_hwnd) },
-        "the window in front is the one the setting off leaves the pin behind"
+        "the front given back is the pin behind the listing again"
     );
+    assert!(
+        !pin_holds_the_front(),
+        "and the pin no longer owes it: the next pick decides it again"
+    );
+
+    // The row switched off: the pin is left where the user's own clicks put it.
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_update_move_to_top = false;
     }
-
-    // Safety: the raise under test, asked of a window this test made.
+    arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { settle_z_order() };
     assert!(
         unsafe { stands_over(in_front, pin_hwnd) },
         "with the row off a preview update is a file swapped into the pin where it stands, and the \
          window stays where the user's own clicks put it"
     );
+    assert!(
+        !pin_holds_the_front(),
+        "with the row off there is no front to owe"
+    );
+
     // Safety: both windows are this test's own, and the handles the app holds are put back as they
     // were.
     unsafe {
@@ -711,6 +711,7 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
         let _ = DestroyWindow(pin_hwnd);
     }
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = always_on_top;
         config.pin_update_move_to_top = move_to_top;
@@ -723,9 +724,8 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
 /// rows is answered with (see `lower_pinned_preview`), and a pin that is Always On Top keeps the
 /// band it is in.
 ///
-/// The z-order is read off the desktop's own list for the same reason the raise test reads it
-/// there: what the call was asked for is a place among other windows, and a pin left standing over
-/// the listing it was clicked in is the fault this answers.
+/// The front is asked about rather than read off the desktop, for the reason the update test gives:
+/// holding the band is a decision this app makes, and where the pin ends is the desktop's to place.
 #[test]
 fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -734,6 +734,7 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
     let always_on_top = pin_always_on_top();
     let move_to_top = CONFIG
         .lock()
@@ -762,56 +763,69 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
         config.pin_update_move_to_top = true;
     }
 
-    // The pick raises the pin first, as an update does, and the press that follows names no file.
+    // The pick arms the front, as a take-up or an update does, and the press that follows names no
+    // file.
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pin_hwnd) };
     assert!(
-        unsafe { stands_over(pin_hwnd, in_front) },
-        "an update puts the pin above the listing the file was picked in"
+        pin_holds_the_front(),
+        "a pick puts the pin into the front it owes, so the listing's activation cannot put it \
+         under the pick it is answering"
     );
+
     unsafe { lower_pinned_preview(pin_hwnd, in_front) };
+    unsafe { settle_z_order() };
     assert!(
         unsafe { stands_over(in_front, pin_hwnd) },
         "the pin goes back behind the window the press was made in, which is what a click that \
          picked no file is answered with"
     );
-    // Safety: the lower left `Always On Top` as it found it, which is the half of it that is not
-    // about the window's place.
+    // Safety: the lower put the pin back in the ordinary band, which is the half of it that is
+    // about the pin's place and not about when the band is asked for.
     let lowered_style = unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32;
     assert_eq!(
         lowered_style & WS_EX_TOPMOST.0,
         0,
-        "a pin put back is still in the ordinary band, not the topmost one"
+        "a pin put back is in the ordinary band, so the listing's next activation answers for it"
+    );
+    assert!(
+        !pin_holds_the_front(),
+        "and it no longer owes the front: the next press decides it again"
     );
 
-    // The next pick brings it forward again, so a press that named no file is not a pin left
-    // behind for good.
+    // The next pick brings it forward again — otherwise a press that named no file would be a pin
+    // left behind for good.
+    arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pin_hwnd) };
     assert!(
-        unsafe { stands_over(pin_hwnd, in_front) },
-        "a later pick raises the pin again"
+        pin_holds_the_front(),
+        "a later pick raises the pin again, and owes the front again"
     );
 
-    // `Always On Top` keeps its own band: a pin there is not the listing's to put behind.
+    // A press that names no file gives the band back once more, which is the whole of the cycle a
+    // hand makes: pick a file, work in the listing, pick a file again.
+    unsafe { lower_pinned_preview(pin_hwnd, in_front) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "the band given back is the pin back behind the listing"
+    );
+    assert!(!pin_holds_the_front(), "and the cycle can be made again");
+
+    // `Always On Top` keeps the band it is in: a press that picks no file gives back nothing there.
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = true;
     }
-    unsafe { raise_pinned_preview(pin_hwnd) };
-    let topmost_style = unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32;
-    assert_ne!(
-        topmost_style & WS_EX_TOPMOST.0,
-        0,
-        "a pin that is Always On Top is raised into the topmost band"
+    assert!(
+        pin_holds_the_front(),
+        "a pin that is Always On Top owes the front whether or not a press raised it"
     );
+    PIN_FRONT_OWED.store(true, Ordering::SeqCst);
     unsafe { lower_pinned_preview(pin_hwnd, in_front) };
     assert!(
-        unsafe { stands_over(pin_hwnd, in_front) },
-        "a pin that is Always On Top is left where it stands"
-    );
-    let still_topmost = unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32;
-    assert_ne!(
-        still_topmost & WS_EX_TOPMOST.0,
-        0,
-        "and a press that picks no file does not take its band away from it"
+        PIN_FRONT_OWED.load(Ordering::SeqCst),
+        "a press that names no file is not the listing's answer while Always On Top is on"
     );
 
     // Safety: both windows are this test's own, and the handles the app holds are put back as they
@@ -821,6 +835,7 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
         let _ = DestroyWindow(pin_hwnd);
     }
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = always_on_top;
         config.pin_update_move_to_top = move_to_top;
@@ -828,13 +843,9 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
     stand_pin(previous_pin);
 }
 
-/// The raise a pick makes is asked for again on the ticks right after it, because the click that
-/// made the pick reaches the listing's window after it reaches this app: the listing is activated
-/// then, which is that window being put back over the pin. A pin that has been covered within the
-/// grace is raised again, and one that is covered after it is not.
-///
-/// The window the user is working in is handed in rather than read, so the answer is asked of two
-/// windows this test made (see `keep_pin_at_the_front`).
+/// A pick's raise is a pin owing the front, and the grace that follows it answers while the front
+/// is still owed: the press that names no file gives the band back, and the grace is dropped rather
+/// than putting the pin back over the listing that press just took it behind.
 #[test]
 fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -843,13 +854,16 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
     let always_on_top = pin_always_on_top();
     let move_to_top = CONFIG
         .lock()
         .map(|config| config.pin_update_move_to_top)
         .unwrap_or(true);
 
-    // Safety: both windows are this test's own, opened where no display is.
+    // Safety: both windows are this test's own, opened where no display is. The second is made
+    // after the pin's, which is what puts it in front — the listing, in the arrangement the press
+    // is read in.
     let (pin_hwnd, in_front) = unsafe {
         let pin_hwnd = a_window_of_the_tests_own();
         PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
@@ -868,56 +882,50 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
         config.pin_update_move_to_top = true;
     }
 
-    // A pick raises the pin, and the click that made it then activates the listing — the window
-    // this test made, put back where the click puts it.
-    unsafe {
-        raise_pinned_preview(pin_hwnd);
-        let _ = SetWindowPos(
-            in_front,
-            HWND_TOP,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
-    }
+    // A pick raises the pin and arms it to answer for the front over the next moments.
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { settle_z_order() };
     assert!(
-        !unsafe { pin_stands_over(pin_hwnd, in_front) },
-        "the listing's window is activated after the pick, which is it standing over the pin"
+        pin_holds_the_front(),
+        "a pick's raise is the pin owing the front, which is what the grace is a grace for"
     );
 
-    // Safety: the grace under test, asked of windows this test made.
     let mut deadline = Some(Instant::now() + PIN_RAISE_GRACE);
     unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
     assert!(
-        unsafe { pin_stands_over(pin_hwnd, in_front) },
-        "while the grace lasts a pin covered by the click that picked its file is raised again"
+        deadline.is_some(),
+        "while the front is still owed the grace is kept"
     );
 
-    // The same covering, now that the grace has run out: the pin is left where the user's own
-    // clicks put it.
-    unsafe {
-        let _ = SetWindowPos(
-            in_front,
-            HWND_TOP,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
-    }
-    let mut deadline = Some(Instant::now());
-    unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
+    // The press that names no file is the pin giving the band back. The grace it began goes with
+    // it: asked again, it is dropped rather than raising the pin over the listing.
+    unsafe { lower_pinned_preview(pin_hwnd, in_front) };
+    unsafe { settle_z_order() };
+    assert!(
+        !pin_holds_the_front(),
+        "a press that names no file gives the front back"
+    );
     assert!(
         unsafe { stands_over(in_front, pin_hwnd) },
-        "past the grace an update no longer answers for the front: the window stays where it is"
+        "and leaves the pin behind the listing"
     );
+    unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
     assert_eq!(
         deadline, None,
-        "a grace that has run out is dropped rather than asked about on every tick after it"
+        "a grace a press has ended is dropped rather than asked about on every tick after it"
     );
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "the grace does not put the pin back over the listing the press took it behind"
+    );
+
+    // A grace that has run out is dropped the same way, so a pick is not answered for forever.
+    arm_pin_to_the_front();
+    let mut deadline = Some(Instant::now());
+    unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
+    assert_eq!(deadline, None, "a grace that has run out is dropped");
 
     // Safety: both windows are this test's own, and the handles the app holds are put back as they
     // were.
@@ -926,6 +934,7 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
         let _ = DestroyWindow(pin_hwnd);
     }
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = always_on_top;
         config.pin_update_move_to_top = move_to_top;
