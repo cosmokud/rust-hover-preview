@@ -128,14 +128,20 @@ pub(super) fn bubble_click_restores(was_focused: bool, moved: bool) -> bool {
 /// answered the same way on both wherever the two meet (see `shared_menu_row_press`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum BubbleMenuRow {
+    /// Maximize the window, or restore one that is maximized — one row the way the caption carries
+    /// one button: it leaves the same ask with the loop the caption's own maximize button does, so
+    /// the two roads reach the same box (see `toggle_pin_maximized`). A collapsed pin has no window
+    /// to put up, which is why only a standing pin's menu carries it.
+    Maximize,
     /// Hold what is playing where it stands, or set it going again.
     Toggle,
     /// The file after the one pinned, the same walk the pin's own arrow takes.
     NextFile,
     /// The file before the one pinned.
     PreviousFile,
-    /// The rule between the walk and the settings under it, between the switch and the two picks
-    /// below it, and between those picks and the ways out of the menu.
+    /// The rule under the walk, the one under the maximize and the hold where a window has them,
+    /// the one between the switch and the two picks below it, and the one between those picks and
+    /// the ways out of the menu.
     Separator,
     /// Whether a pin the minimize button puts away holds what it is playing where it stands: the
     /// switch the kind's own `Pin Mode` in the tray carries, on the bubble a minimize is what
@@ -158,33 +164,58 @@ pub(super) enum BubbleMenuRow {
     Close,
 }
 
-/// The rows the bubble's menu holds, from the top of the panel to the bottom: the playback of
-/// the file behind the bubble, the walk of the folder it stands in, the switch that decides what
-/// a minimize holds back, the two places a minimize can put the pin, and the two ways out of any
-/// pin — with the third a pin still standing in its own window has. The hold and the switch are
-/// rows only where the kind behind the bubble has playback for them to answer about; the two
-/// places are every menu's, because a minimize is a thing any pin has (see
-/// `bubble_pause_on_minimize` and `PinMinimizeTo`).
+/// The rows the bubble's menu holds, from the top of the panel to the bottom: the walk of the folder
+/// the file stands in, the maximize a standing window's caption offers with the playback of the file
+/// glued under it, the switch that decides what a minimize holds back, the two places a minimize can
+/// put the pin, and the two ways out of any pin — with the third a pin still standing in its own
+/// window has. The maximize, the hold and the switch are rows only where the window or the kind has
+/// something to answer about; the two places are every menu's, because a minimize is a thing any pin
+/// has (see `bubble_space_toggles`, `bubble_pause_on_minimize` and `PinMinimizeTo`).
 ///
-/// `standing` is whether the panel is a pinned window's own rather than a bubble's, which is the
-/// one thing the two menus differ by: a pin still standing in its own window has a bubble to be
-/// put away into now, and the bubble the other menu is drawn in has none (see
+/// `standing` is whether the panel is a pinned window's own rather than a bubble's: a pin still
+/// standing in its own window has a caption to be maximized by and a bubble to be put away into
+/// now, and the bubble the other menu is drawn in has neither — so a bubble opens on the hold where
+/// the kind plays and on the walk otherwise (see `BubbleMenuRow::Maximize` and
 /// `BubbleMenuRow::ToBubble`).
-pub(super) fn bubble_menu_rows(kind: Option<MediaType>, standing: bool) -> Vec<BubbleMenuRow> {
-    let mut rows = Vec::with_capacity(12);
-    if bubble_space_toggles(kind) {
+///
+/// `settings` is whether the panel holds the three rows that write a setting — the switch and the
+/// two places a minimize can put the pin. A pinned window's own menu asks for them only from its
+/// chrome: a right-click out on the media is a hand that has come for the file, and the window's
+/// settings are a strip away rather than in the way of that (see `pin_menu::PinMenuPage`). A
+/// bubble has no chrome to divide, so its menu holds them everywhere.
+pub(super) fn bubble_menu_rows(
+    kind: Option<MediaType>,
+    standing: bool,
+    settings: bool,
+) -> Vec<BubbleMenuRow> {
+    let mut rows = Vec::with_capacity(14);
+    // The walk tops every standing window's menu, so the file after this one is one row off the top
+    // of it. A bubble has no caption to maximize and no window under the walk, so its hold opens
+    // the menu instead.
+    if !standing && bubble_space_toggles(kind) {
         rows.push(BubbleMenuRow::Toggle);
     }
     rows.push(BubbleMenuRow::NextFile);
     rows.push(BubbleMenuRow::PreviousFile);
     rows.push(BubbleMenuRow::Separator);
-    if bubble_pause_on_minimize(kind).is_some() {
-        rows.push(BubbleMenuRow::PauseOnMinimize);
+    // The window's own group under the walk: the maximize, with the hold glued under it where the
+    // kind behind it plays (see `BubbleMenuRow::Maximize`).
+    if standing {
+        rows.push(BubbleMenuRow::Maximize);
+        if bubble_space_toggles(kind) {
+            rows.push(BubbleMenuRow::Toggle);
+        }
         rows.push(BubbleMenuRow::Separator);
     }
-    rows.push(BubbleMenuRow::MinimizeToBubble);
-    rows.push(BubbleMenuRow::MinimizeToTaskbar);
-    rows.push(BubbleMenuRow::Separator);
+    if settings {
+        if bubble_pause_on_minimize(kind).is_some() {
+            rows.push(BubbleMenuRow::PauseOnMinimize);
+            rows.push(BubbleMenuRow::Separator);
+        }
+        rows.push(BubbleMenuRow::MinimizeToBubble);
+        rows.push(BubbleMenuRow::MinimizeToTaskbar);
+        rows.push(BubbleMenuRow::Separator);
+    }
     // A pin still standing in its own window is a pin with a bubble to be put away into, and the
     // row for it stands above the taskbar's: the two ways out of the pin are one pair (see
     // `BubbleMenuRow::ToBubble`).
@@ -237,19 +268,25 @@ fn set_pin_minimize_to(target: PinMinimizeTo) {
     }
 }
 
-/// What a press on one of the rows a bubble's menu and a pinned window's menu both hold does,
-/// where the two answer it the same way — which is every row but `ToTaskbar`, whose road is
-/// handed in because the two menus walk it differently: a pin already collapsed moves the bubble
-/// it left on the desktop into the app's stand-in, and one still standing puts itself away from
-/// its own window (see `bubble_menu_press` and `pin_menu`). `ToBubble` is the standing window's
-/// own row and takes the other road from its own window, which is the one road there is for it.
-/// Answers whether the panel stays up.
+/// What a press on one of the rows a bubble's menu and a pinned window's menu answer does, where
+/// the two answer it the same way — which is every row they both hold but `ToTaskbar`, whose road
+/// is handed in because the two menus walk it differently: a pin already collapsed moves the bubble
+/// it left on the desktop into the app's stand-in, and one still standing puts itself away from its
+/// own window (see `bubble_menu_press` and `pin_menu`). Two of the rows are one menu's own and take
+/// the road there is for them: `ToBubble`, a standing window's, and `Maximize`, whose ask a bubble
+/// has no window for (see `bubble_menu_rows`). Answers whether the panel stays up.
 ///
 /// A row that picks one of two answers goes away with the pick, the way a menu a choice was made
 /// in does; the switch above them stays up with the mark it now carries, because there is
 /// nothing to pick from and the mark is the answer.
 pub(super) fn shared_menu_row_press(row: BubbleMenuRow, to_taskbar: impl FnOnce()) -> bool {
     match row {
+        // The caption's own button's ask, and nothing else: a maximize puts the window into the
+        // box the button would have given it (see `toggle_pin_maximized`).
+        BubbleMenuRow::Maximize => {
+            ask_pin(PinCommand::Maximize);
+            false
+        }
         BubbleMenuRow::Toggle => {
             ask_pin(PinCommand::TogglePlayback);
             false
@@ -290,13 +327,20 @@ pub(super) fn shared_menu_row_press(row: BubbleMenuRow, to_taskbar: impl FnOnce(
     }
 }
 
-/// What a row of the bubble's menu says: the hold named for what it will do, the two walks
-/// named for the file they step to, the switch spelled the way the tray spells it, the two
-/// places a minimize can put the pin under the words the panel has room for, and the ways out the
-/// same way, both of them named for where they go. A rule carries nothing at all, because there is
-/// nothing on one to read.
-pub(super) fn bubble_menu_row_label(row: BubbleMenuRow, playing: bool) -> &'static str {
+/// What a row of the bubble's menu says: the maximize named for what it will do — the same word
+/// the caption's button answers to, which restores a window it maximized — the hold named the same
+/// way, the two walks named for the file they step to, the switch spelled the way the tray spells
+/// it, the two places a minimize can put the pin under the words the panel has room for, and the
+/// ways out the same way, both of them named for where they go. A rule carries nothing at all,
+/// because there is nothing on one to read.
+pub(super) fn bubble_menu_row_label(
+    row: BubbleMenuRow,
+    playing: bool,
+    maximized: bool,
+) -> &'static str {
     match row {
+        BubbleMenuRow::Maximize if maximized => "Restore",
+        BubbleMenuRow::Maximize => "Maximize",
         BubbleMenuRow::Toggle if playing => "Pause",
         BubbleMenuRow::Toggle => "Play",
         BubbleMenuRow::NextFile => "Next File",
@@ -336,19 +380,22 @@ fn bubble_menu_row_mark(
 
 /// The rows the bubble's menu is painted with: the same panel a pinned sound's card opens, so a
 /// bubble's menu reads as the same menu (see `pin_chrome::paint_menu_popup`) — and the same rows
-/// a pinned window's own menu is painted with, `standing` being which of the two it is (see
-/// `pin_menu::pinned_menu_paint`).
+/// a pinned window's own menu is painted with, `standing` being which of the two it is, and
+/// `maximized` being whether that window is maximized, which is the word its maximize row carries
+/// (see `pin_menu::pinned_menu_paint`).
 pub(super) fn bubble_menu_chrome_rows(
     kind: Option<MediaType>,
     playing: bool,
     standing: bool,
+    settings: bool,
+    maximized: bool,
 ) -> Vec<pin_chrome::MenuRow> {
     let pause_on_minimize = bubble_pause_on_minimize(kind);
     let minimize_to = pin_minimize_to();
-    bubble_menu_rows(kind, standing)
+    bubble_menu_rows(kind, standing, settings)
         .iter()
         .map(|row| pin_chrome::MenuRow {
-            label: bubble_menu_row_label(*row, playing).to_string(),
+            label: bubble_menu_row_label(*row, playing, maximized).to_string(),
             mark: bubble_menu_row_mark(*row, pause_on_minimize, minimize_to),
         })
         .collect()
@@ -407,7 +454,13 @@ pub(super) unsafe fn open_bubble_menu(hwnd: HWND) {
     };
     let dpi = dpi_at(cursor.0, cursor.1);
     let side = logical_px(dpi, PIN_BUBBLE_PIXELS).max(16);
-    let rows = bubble_menu_chrome_rows(current_media_type(), bubble_is_playing(), false);
+    let rows = bubble_menu_chrome_rows(
+        current_media_type(),
+        bubble_is_playing(),
+        false,
+        true,
+        false,
+    );
 
     // The panel's natural size first, so the window grows only as big as the circle and the
     // panel beneath it: measured with room to spare, then held inside the grown window below.
@@ -497,7 +550,7 @@ pub(super) unsafe fn bubble_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     let row = BUBBLE_MENU.lock().ok().and_then(|menu| {
         let menu = menu.as_ref()?;
         let index = pin_chrome::menu_row_at(&menu.popup, x, y)?;
-        bubble_menu_rows(current_media_type(), false)
+        bubble_menu_rows(current_media_type(), false, true)
             .get(index)
             .copied()
     });
@@ -520,7 +573,13 @@ pub(super) unsafe fn bubble_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
         toggle_pause_on_minimize(current_media_type());
         // The rows the panel is painted from are the ones the menu was opened with, so the check
         // it now carries is written into them here rather than being read again at the paint.
-        let rows = bubble_menu_chrome_rows(current_media_type(), bubble_is_playing(), false);
+        let rows = bubble_menu_chrome_rows(
+            current_media_type(),
+            bubble_is_playing(),
+            false,
+            true,
+            false,
+        );
         if let Ok(mut menu) = BUBBLE_MENU.lock() {
             if let Some(menu) = menu.as_mut() {
                 menu.rows = rows;
