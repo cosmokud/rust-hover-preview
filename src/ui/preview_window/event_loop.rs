@@ -3144,6 +3144,22 @@ pub fn run_preview_window() {
                 }
             }
 
+            // The pin's window is this app's own to keep on the screen. The Shell's `Win+D` hides
+            // every ordinary window and shows the desktop, and gives them all back on the second
+            // press — a pin is one of them now that its band is the setting's — but the pin is not
+            // in the Shell's list of windows to bring back, so it is put up here: at the first tick
+            // the user is back in a window rather than looking at the desktop. Asked of the window
+            // and not remembered, so a pin the user put away is not brought back by it (a put-away
+            // pin has no window to show, see `pin_is_collapsed`), and nothing is left over when the
+            // desktop is up (see `foreground_is_the_desktop`).
+            if pinned()
+                && !pin_is_collapsed()
+                && !IsWindowVisible(hwnd).as_bool()
+                && !foreground_is_the_desktop(GetForegroundWindow())
+            {
+                show_pinned_window(hwnd);
+            }
+
             // A pin that has just answered a pick keeps asking for the front of its band for a
             // moment after it: the click is this loop's before it is the listing's, and the
             // window the listing is in is activated after it — which is that window being put
