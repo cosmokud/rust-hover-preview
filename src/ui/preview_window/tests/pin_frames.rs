@@ -3335,3 +3335,120 @@ fn a_checkerboard_backdrop_keeps_its_squares_wherever_the_picture_leaves_it() {
         "the picture's own columns were left as the caller left them"
     );
 }
+
+/// **A page too narrow for its caption is still the whole of a window.**
+///
+/// A caption too narrow to be a command bar is drawn none at all, and the rows it would have taken
+/// are rows the window still has (see `caption_fits` and `pinned_band_rows`). A picture draws its
+/// chrome *over* its media, so the media is under those rows and owes nothing; a page is drawn
+/// *between* its chrome, so a paint that stops at the band leaves them as the surface was emptied —
+/// a hole across the top of the window, with the desktop showing through the pin and a press falling
+/// through it, since a layered window is hit-tested by the shape of its pixels. What fills them is
+/// the bar the caption draws on, which is what is left of a caption with nothing left in it.
+#[test]
+fn a_page_too_narrow_for_its_caption_is_still_a_whole_window() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let Some(palette) = pin_chrome::ChromePalette::current() else {
+        return;
+    };
+    let bar = {
+        let [r, g, b] = palette.background;
+        [b, g, r, 255]
+    };
+
+    // A page on a band of its own colour, so every row of the window says where it came from.
+    let page = [200u8, 200, 200, 255];
+
+    // A box the hand has narrowed a page to: there is no room in it for the caption's own buttons.
+    let content = (100, 80, 220, 300);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.dpi = 96;
+    pin.frame = PinFrame::Free;
+    pin.overlay = false;
+    pin.zoom = None;
+    let caption = pin.caption;
+    stand_pin(Some(pin));
+
+    let (width, height) = the_pins_window_size();
+    assert!(
+        caption > 0 && !pin_chrome::caption_fits(width, 96, true),
+        "a page this narrow has no room for its caption's buttons, so none of it is drawn"
+    );
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(static_image_media(
+            Arc::new(ImageFrame::new(page.repeat(120 * 220), 120, 220, 0)),
+            MediaType::Text,
+        ));
+    }
+    let hwnd = HWND(0x1000 as *mut _);
+    unsafe { render_pinned_preview_at(hwnd, content.0, content.1) };
+
+    let painted = the_painted_surface(hwnd, width, height);
+    for row in 0..caption as usize {
+        assert_eq!(
+            surface_pixel(&painted, (width as u32, height as u32), row, 0),
+            bar,
+            "row {row} is the caption's own bar even though the caption is not drawn, rather than \
+             a hole across the top of the window"
+        );
+        assert!(
+            (0..width as usize).all(|column| surface_pixel(
+                &painted,
+                (width as u32, height as u32),
+                row,
+                column
+            )[3] == 255),
+            "and the whole of row {row} is opaque"
+        );
+    }
+    assert_eq!(
+        surface_pixel(&painted, (width as u32, height as u32), caption as usize, 0),
+        page,
+        "while the media's own rows under the bar are the page's, not the bar's"
+    );
+
+    // And a picture of the same narrowness owes none of it: its chrome is drawn over the media, so
+    // the rows the caption gave up are the picture's own — filling them would paint the bar across
+    // the top of somebody's picture, which is the band the strip was given up not to take.
+    with_pin(|pin| {
+        pin.frame = PinFrame::Shaped;
+        pin.overlay = true;
+    });
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(static_image_media(
+            Arc::new(ImageFrame::new(page.repeat(120 * 220), 120, 220, 0)),
+            MediaType::StaticImage,
+        ));
+    }
+    let (width, height) = the_pins_window_size();
+    unsafe { render_pinned_preview_at(hwnd, content.0, content.1) };
+    let painted = the_painted_surface(hwnd, width, height);
+    assert_eq!(
+        surface_pixel(&painted, (width as u32, height as u32), 0, 0),
+        page,
+        "a picture's own pixels stand in the rows a caption that does not fit would have taken"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// The size of the pin standing now, as the window and the paint are given it.
+fn the_pins_window_size() -> (i32, i32) {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+        .expect("a pin up")
+}
+
+/// The surface the paint of the pin standing now was written into.
+fn the_painted_surface(hwnd: HWND, width: i32, height: i32) -> Vec<u8> {
+    let bits = ensure_layered_surface(hwnd.0 as isize, width as u32, height as u32)
+        .expect("the surface the paint wrote");
+    unsafe { std::slice::from_raw_parts(bits, width as usize * height as usize * 4) }.to_vec()
+}
