@@ -465,11 +465,14 @@ pub(super) fn pin_screen_is_settled(media: Option<MediaType>, engine_draws: bool
 /// longer existed. Every reason but `Reason::Hung` is this road, and the bubble is taken down
 /// here because the loop's own take-down does not know about it.
 pub(super) fn end_pin_state(reason: Reason) -> PreviewMessage {
-    // The pin that has ended is no pin, and the window it stood in is the next pin's question to ask
-    // (see `pin_stands_in_its_own_window`).
-    pin_stands_in_its_own_window(false);
-
     let owed = end_pin(reason, &Win32PinWindow);
+
+    // **Cleared after the teardown, not before it.** The teardown asks which window the pin stands in
+    // — it lets go of the capture, gives the keyboard back and takes the window down — and a pin
+    // whose flag was cleared first answered with the preview's window: a hidden window of the hover's
+    // was released and hidden a second time while the pin's own was left standing on the screen with
+    // a capture nothing would let go of (see `pin_stands_in_its_own_window`, `pinned_window`).
+    pin_stands_in_its_own_window(false);
 
     debug_assert_eq!(
         owed,
