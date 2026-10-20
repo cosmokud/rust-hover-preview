@@ -1,0 +1,215 @@
+//! The pin's own window: a window of this app's that Windows treats as a window, for a pin that is
+//! to be one.
+//!
+//! **Why it is a second window rather than the preview's.** The window a hover is drawn in is
+//! created as a non-activating tool window, and that is not a defect to be fixed later: a hover
+//! appears under a pointer that may be in the middle of renaming a file, and a window that took the
+//! focus would swallow the name being typed. The pin is the opposite case — the hand pressed it, the
+//! user is in it, and it is meant to be raised, listed, minimized and restored the way every other
+//! window is. What Windows decides from the styles of a window (does it hold a taskbar button, is it
+//! in Alt+Tab, may a click activate it) is asked of a window once, when it is made, so the two uses
+//! cannot share one window: a pin made out of the hover's window is a pin that Windows will never
+//! raise on a click, which is the whole reason this app once had to raise it with the topmost band
+//! and take that band off again.
+//!
+//! So a pin that is to be a window gets this one: not a tool window, not non-activating, layered
+//! because its edges are alpha, and no band in its styles at all — the setting asks for the band when
+//! the pin is shown, and asks for the ordinary band when it is not (see `pin_lifecycle::band_place`
+//! for the band the setting names).
+//!
+//! What is *not* here is as much the point: no message of its own for presses, because Windows
+//! activates the window a press lands on and a press on this window is a press on the pin; no
+//! stand-in in the taskbar, because this window brings its own button; no mirror, because the Shell
+//! draws a thumbnail of the window itself. A pin that is a window needs none of that, and the first
+//! ticket of this module is the window alone so that the rest can be proven one kind at a time.
+
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::Once;
+
+use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::HWND;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, MoveWindow, RegisterClassExW, ShowWindow, SW_HIDE, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP,
+    WS_SYSMENU,
+};
+
+use super::window_proc;
+use super::ScreenRegion;
+
+/// The class the pin's own window is made from, kept apart from the preview's so that a window the
+/// Shell is asked about is a window of the pin's rather than a hover's.
+const REAL_PIN_CLASS: PCWSTR = w!("RustHoverPreviewPin");
+
+/// What the window says on the taskbar while it has no file to name. A pin names its own file as soon
+/// as it is up (see `pin_taskbar::set_pin_taskbar_title`, which is the same name written here).
+const REAL_PIN_TITLE: PCWSTR = w!("Rust Preview");
+
+/// The styles a pin's own window is made with.
+///
+/// `WS_POPUP`: the pin's chrome is drawn by this app, not by Windows, so there is no caption of the
+/// platform's to wear around the picture. `WS_SYSMENU | WS_MINIMIZEBOX`: the Shell's own menu on the
+/// window's taskbar button — Close, Minimize — is a gesture on a window the user is meant to be able
+/// to treat like any other, and a window without them wears a button that refuses both.
+///
+/// `WS_EX_LAYERED`: the pin's corners and the shadow around its chrome are alpha, and a layered
+/// window is a window in every other respect, including activation.
+///
+/// `WS_EX_APPWINDOW`: a taskbar button asked for by the window itself rather than inferred from what
+/// owns it, which is the button this window owes and the one the stand-in used to fake.
+///
+/// **What is missing is the answer.** `WS_EX_TOOLWINDOW` is what keeps a window out of Alt+Tab and
+/// out of the taskbar; `WS_EX_NOACTIVATE` is what refuses it the focus; `WS_EX_TOPMOST` is a band,
+/// and the band is the setting's (see `band_place`).
+fn real_pin_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
+    (
+        WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
+        WS_EX_LAYERED | WS_EX_APPWINDOW,
+    )
+}
+
+/// The pin's own window, where one has been made.
+static REAL_PIN_HWND: AtomicIsize = AtomicIsize::new(0);
+
+static REAL_PIN_CLASS_REGISTERED: Once = Once::new();
+
+/// The class is registered the first time a pin asks for a window of its own, rather than at the
+/// loop's start: a run that never pins a picture has no reason to have one, and a class registered
+/// on the road that needs it cannot be out of step with the styles its window is made with.
+unsafe fn register_real_pin_class() {
+    REAL_PIN_CLASS_REGISTERED.call_once(|| {
+        let hinstance = GetModuleHandleW(None).expect("the module's own handle");
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(window_proc),
+            hInstance: hinstance.into(),
+            lpszClassName: REAL_PIN_CLASS,
+            ..Default::default()
+        };
+        RegisterClassExW(&class);
+    });
+}
+
+/// The pin's own window, or nothing where it has not been made: asked by a road that only wants to
+/// know whether there is one.
+pub(super) fn real_pin_window() -> Option<HWND> {
+    let hwnd = REAL_PIN_HWND.load(Ordering::SeqCst);
+    (hwnd != 0).then(|| HWND(hwnd as *mut _))
+}
+
+/// The pin's own window, made where there is none and put at the box the pin says, off the screen.
+///
+/// The window is made hidden and at the pin's box, so that the first show paints into a window that
+/// is already the right size: a layered window shown before its first paint is a window with nothing
+/// in it, and what it would show is the surface it does not have (see `show_pinned_window` for the
+/// same bargain made by the preview's window).
+pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
+    let width = (window.2 - window.0).max(1);
+    let height = (window.3 - window.1).max(1);
+
+    if let Some(hwnd) = real_pin_window() {
+        let _ = MoveWindow(hwnd, window.0, window.1, width, height, false);
+        return Some(hwnd);
+    }
+
+    register_real_pin_class();
+    let (style, ex_style) = real_pin_style();
+    let hinstance = GetModuleHandleW(None).ok()?;
+    let hwnd = CreateWindowExW(
+        ex_style,
+        REAL_PIN_CLASS,
+        REAL_PIN_TITLE,
+        style,
+        window.0,
+        window.1,
+        width,
+        height,
+        None,
+        None,
+        hinstance,
+        None,
+    )
+    .ok()?;
+
+    REAL_PIN_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+    Some(hwnd)
+}
+
+/// Take the pin's own window down: hidden but kept, the way the preview's window is kept between
+/// hovers. A window that is kept holds its class, its styles and its place, and a pin taken up again
+/// is the same window rather than one made and shown in a frame.
+pub(super) unsafe fn hide_real_pin_window() {
+    if let Some(hwnd) = real_pin_window() {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DestroyWindow, GetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST,
+    };
+
+    /// What makes a window a window as far as the Shell is concerned, and what makes it not one: the
+    /// styles are the whole answer, and they are the reason a pin cannot be made out of the hover's
+    /// window after the fact.
+    #[test]
+    fn the_pins_own_window_is_listed_and_may_be_activated() {
+        let (style, ex) = real_pin_style();
+
+        assert_eq!(
+            style & WS_POPUP,
+            WS_POPUP,
+            "the pin's chrome is this app's, so there is nothing of the platform's to wear"
+        );
+        assert_eq!(
+            ex & WS_EX_LAYERED,
+            WS_EX_LAYERED,
+            "the pin's edges are alpha"
+        );
+        assert_eq!(
+            ex & WS_EX_APPWINDOW,
+            WS_EX_APPWINDOW,
+            "the button is the window's own, not a stand-in's"
+        );
+        assert_eq!(
+            ex & WS_EX_TOOLWINDOW,
+            WINDOW_EX_STYLE::default(),
+            "a tool window is not in Alt+Tab, and a pin must be"
+        );
+        assert_eq!(
+            ex & WS_EX_NOACTIVATE,
+            WINDOW_EX_STYLE::default(),
+            "a pin may be activated by the press that lands on it"
+        );
+        assert_eq!(
+            ex & WS_EX_TOPMOST,
+            WINDOW_EX_STYLE::default(),
+            "the band is the setting's to put on, not the style's to start in"
+        );
+    }
+
+    /// The styles above are the styles of the window that is actually made: a plain `STATIC` window
+    /// created with them would prove the constants and nothing about this module.
+    #[test]
+    fn the_window_the_module_makes_wears_them() {
+        let box_ = (-20000, -20000, -19680, -19760);
+        let hwnd = unsafe { real_pin_window_at(box_) }.expect("the pin's own window");
+
+        let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        let ex = WINDOW_EX_STYLE(ex);
+
+        assert_eq!(ex & WS_EX_APPWINDOW, WS_EX_APPWINDOW);
+        assert_eq!(ex & WS_EX_LAYERED, WS_EX_LAYERED);
+        assert_eq!(ex & WS_EX_TOOLWINDOW, WINDOW_EX_STYLE::default());
+        assert_eq!(ex & WS_EX_NOACTIVATE, WINDOW_EX_STYLE::default());
+
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        REAL_PIN_HWND.store(0, Ordering::SeqCst);
+    }
+}

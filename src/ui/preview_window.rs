@@ -85,6 +85,7 @@ mod pin_install;
 mod pin_lifecycle;
 mod pin_menu;
 mod pin_menu_window;
+mod pin_real_window;
 mod pin_model;
 mod pin_playback;
 mod pin_swap;
