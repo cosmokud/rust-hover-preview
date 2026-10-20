@@ -211,6 +211,9 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
         (ID_TRAY_PIN, ID_TRAY_PIN_UPDATE),
         (ID_TRAY_PIN, ID_TRAY_PIN_UPDATE_HOVER),
         (ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER),
+        (ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_PIN),
+        (ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_PIN_UPDATE),
+        (ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_PIN_UPDATE_HOVER),
         (ID_TRAY_PIN, ID_TRAY_ENABLE),
         (ID_TRAY_PIN, ID_TRAY_TRIGGER_ENABLED),
         (ID_TRAY_PIN_UPDATE, ID_TRAY_TRIGGER_ENABLED),
@@ -299,6 +302,10 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
     assert!(
         !defaults.pin_update_on_hover,
         "the pointer's own hover is not one of the ways until it is asked for"
+    );
+    assert!(
+        defaults.pin_update_move_to_top,
+        "an update brings the pin to the top unless it is switched off"
     );
     assert_eq!(
         defaults.pin_nav_video, DEFAULT_PIN_NAV_VIDEO,
@@ -1237,6 +1244,7 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_PIN,
             ID_TRAY_PIN_UPDATE,
             ID_TRAY_PIN_UPDATE_HOVER,
+            ID_TRAY_PIN_UPDATE_TOP,
             ID_TRAY_PIN_PAUSE_AUDIO,
             ID_TRAY_PIN_PAUSE_VIDEO,
             ID_TRAY_PIN_NAV_VIDEO_ALL,

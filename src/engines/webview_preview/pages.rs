@@ -531,6 +531,22 @@ pub(crate) fn place(path: &Path, area: Area, background: TransparentBackground) 
     }
 }
 
+/// Put the engine's window back where it stands, without moving it and without asking for the
+/// document again: what a pinned page owes when the pin has been raised over the window that was
+/// covering the page as well (see `place_pinned_siblings`).
+///
+/// The ask is a placement, which is the one road to the engine's window that neither navigates nor
+/// wakes the browser — and a placement for a box the window already has is a `SetWindowPos` and
+/// nothing else (see `Host::place`). It is asked even where the box has not moved, which `place` is
+/// at pains not to: what a raise changes is not the box but where in the band the window stands,
+/// and that is the one thing a placement still answers for. A document still on its way has no
+/// window to put up: the ask is dropped where it lands, and the want it carried on the way is the
+/// box it will arrive in.
+pub(crate) fn raise(path: &Path, area: Area, background: TransparentBackground) {
+    wanted_here(path, area);
+    ask_place(path, area, background);
+}
+
 /// Publish a box for the engine's thread to move a held document's window into, and ask for it
 /// once however many boxes have been published.
 ///

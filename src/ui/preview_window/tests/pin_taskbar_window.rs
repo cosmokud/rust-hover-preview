@@ -405,7 +405,7 @@ fn a_pin_restored_from_its_button_goes_back_where_it_stood() {
         "the click leaves the stand-in standing: the pin's own restore is what takes it down, and          what it reads the place to come back to from is whether there is one"
     );
 
-    restore_pin();
+    restore_pin(&a_restored_window(), PinRestore::Pressed);
 
     let restored =
         pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.collapsed, pin.content)));
@@ -475,7 +475,7 @@ fn a_pin_minimized_again_after_a_button_restore_goes_away_again() {
         matches!(take_pin_command(), Some(PinCommand::Restore)),
         "the click on the button is the pin's own restore"
     );
-    restore_pin();
+    restore_pin(&a_restored_window(), PinRestore::Pressed);
     assert!(!pin_is_collapsed(), "the button brings the pin back");
     assert_eq!(
         take_pin_command(),
@@ -700,7 +700,7 @@ fn a_pin_the_button_brings_back_comes_back_in_front_of_the_windows_it_left_behin
         matches!(take_pin_command(), Some(PinCommand::Restore)),
         "the click on the button is the pin's own restore"
     );
-    restore_pin();
+    restore_pin(&a_restored_window(), PinRestore::Pressed);
 
     assert!(
         unsafe { stands_over(pin_hwnd, in_front) },

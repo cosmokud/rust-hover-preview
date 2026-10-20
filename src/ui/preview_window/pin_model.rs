@@ -33,7 +33,8 @@ pub(crate) fn pin_is_focused() -> bool {
     unsafe { GetFocus() == HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _) }
 }
 
-/// Give the pin the keyboard, from a press that has landed on it.
+/// Give the pin the keyboard, from a press that asked for it: a press on the window itself, or one
+/// on the bubble standing in for it while it is away (see `restore_pin`).
 ///
 /// A pin is a window of this app's that stands over a listing, and a window the user presses is a
 /// window the user is in: asking for the foreground is what puts the caret on a folder being named
@@ -50,7 +51,7 @@ pub(crate) fn pin_is_focused() -> bool {
 /// A claim written on the asking is a pin that holds a keyboard it was never given and a note of
 /// a window the user is no longer in, and the handover that note exists for is the foreground
 /// asked back from a window the user left (see `pin_release_focus`).
-pub(super) unsafe fn pin_take_focus(hwnd: HWND) {
+pub(super) unsafe fn pin_take_focus(hwnd: HWND, window: &dyn PinWindow) {
     if !pinned() {
         return;
     }
@@ -69,10 +70,10 @@ pub(super) unsafe fn pin_take_focus(hwnd: HWND) {
     // The window is only focusable while a pin is up, so the style is asked to change
     // before the focus is asked for: `SetFocus` on a `WS_EX_NOACTIVATE` window is refused
     // (see `pin_set_focusable`).
-    pin_set_focusable(hwnd, true);
+    window.set_focusable(hwnd.0 as isize, true);
 
-    let _ = SetForegroundWindow(hwnd);
-    let _ = SetFocus(hwnd);
+    window.set_foreground(hwnd.0 as isize);
+    window.set_focus(hwnd.0 as isize);
 
     // Whether the keyboard arrived is asked of Windows, by the same question `pin_is_focused`
     // asks, because that is the one answer here that cannot be wrong: the caret is either in
