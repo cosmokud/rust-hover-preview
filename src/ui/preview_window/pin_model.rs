@@ -47,7 +47,9 @@ pub(crate) fn pin_is_focused() -> bool {
 /// rather than on the asking. Windows refuses them both under the foreground lock — the
 /// foreground goes to whichever process had the last input, and a process that did not have it is
 /// not given it for asking — and that refusal is ordinary rather than a fault: it is what a press
-/// on the pin looks like while something else owns the input, and the hand simply presses again.
+/// on the pin looks like while something else owns the input. What it leaves behind is a window that
+/// did not move, which the press answers on its own (see `put_pin_at_the_front`), and a keyboard
+/// that did not arrive, which the hand asks for again.
 /// A claim written on the asking is a pin that holds a keyboard it was never given and a note of
 /// a window the user is no longer in, and the handover that note exists for is the foreground
 /// asked back from a window the user left (see `pin_release_focus`).

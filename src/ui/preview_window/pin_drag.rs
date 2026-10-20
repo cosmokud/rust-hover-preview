@@ -454,6 +454,60 @@ pub(super) unsafe fn settle_pinned_engine_press(hwnd: HWND, seen_presses: &mut u
     );
 }
 
+/// Bring a pinned window to the front of its band for a press the user made on the preview,
+/// whichever window of the preview's took it.
+///
+/// A press is read from the count the Explorer hook publishes rather than from this window's own
+/// procedure, because the procedure is not always the one that gets it: a page an engine of this
+/// app's draws stands over the pin's band in a window of its own, and a film can stand outside the
+/// band it was given, so a press can be one Windows hands to a window this one never sees. The
+/// pointer says which window that was — the pin's own, the engine's page, or the film's — and any of
+/// them is the preview being asked for.
+///
+/// What the raise answers is the refusal that made a press look unanswered: the foreground is
+/// refused to a process that has just been put behind, which is the first press after a click
+/// anywhere else, while the keyboard arrives and the window stays where it was (see
+/// `pin_take_focus`). This raise is not refused (see `put_pin_at_the_front`).
+///
+/// What a press *does* — a move, a resize, the card's own buttons — is not answered here. A press
+/// this window's procedure never saw begins its drag from the road that owns it: the engine's page
+/// has one of its own (see `settle_pinned_engine_press`).
+pub(super) unsafe fn settle_pinned_press(hwnd: HWND, seen_presses: &mut u64) {
+    let presses = pin_media_press_count();
+
+    if presses == *seen_presses {
+        return;
+    }
+    *seen_presses = presses;
+
+    if !pinned() || pin_is_collapsed() {
+        return;
+    }
+
+    let Some(point) = cursor_screen_point() else {
+        return;
+    };
+
+    // The window the press went to, asked of the point rather than of the procedure that answered
+    // it: a press on a film or on the engine's page is answered by a window this one never sees.
+    use windows::Win32::UI::WindowsAndMessaging::WindowFromPoint;
+
+    let under = WindowFromPoint(POINT {
+        x: point.0,
+        y: point.1,
+    })
+    .0 as isize;
+    let film = VIDEO_HWND.load(Ordering::SeqCst);
+
+    let pressed_the_preview = is_preview_window(under)
+        || (film != 0 && film == under)
+        || engine_window_is_at(point.0, point.1);
+
+    if pressed_the_preview {
+        put_pin_at_the_front(hwnd);
+    }
+}
+
 /// Whether the window under a point is the one a document the engine draws is standing in.
 ///
 /// What the pointer is over *inside* that window is a browser's own child window — one or two

@@ -329,6 +329,10 @@ pub fn run_preview_window() {
         // count is published by the hook for the life of the process, so a snapshot of it
         // outlives the pin it was taken in and swallows the first press of the next one.
         let mut engine_press_seen: u64 = 0;
+        // And the same count for the raise a press owes any of the preview's windows — the pin's
+        // own, a film in its band, a page the engine draws in one — kept the same way and reset
+        // with it (see `settle_pinned_press`).
+        let mut pin_press_seen: u64 = 0;
         // Static-tick throttle state (see `STATIC_WAIT_MS`): whether the media on
         // screen was dynamic the last time it was fully looked at, when that look
         // was, and which generation it was for. A swap bumps `current_generation`,
@@ -557,6 +561,11 @@ pub fn run_preview_window() {
                 // band is a browser's window over this one, so the press is read here and the
                 // drag it means begun here (see `settle_pinned_engine_press`).
                 settle_pinned_engine_press(hwnd, &mut engine_press_seen);
+
+                // And a press on any of the preview's windows is the preview being asked for: the
+                // window comes forward whether or not Windows granted it the foreground, and
+                // whichever of its windows took the press (see `settle_pinned_press`).
+                settle_pinned_press(hwnd, &mut pin_press_seen);
 
                 // And a drag that press began carried on, and let go of, from what the hook
                 // publishes rather than from a message — which is the only end it can have, the
@@ -3492,6 +3501,7 @@ pub fn run_preview_window() {
                         // equivalent is a destructive drain rather than a snapshot, so that
                         // there is no state to go stale between two things.
                         engine_press_seen = pin_media_press_count();
+                        pin_press_seen = pin_media_press_count();
 
                         // And it is owed no hover's wait either, which is the one it inherits.
                         // A pin is taken up out of a hover, and a hover that was still loading
