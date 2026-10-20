@@ -30,10 +30,19 @@ pub(super) fn pin_update_settings() -> (bool, bool) {
 ///
 /// That window and not the foreground one, which is still the window the user came from while the
 /// click that made the press has not been dispatched yet (see `pin_press_was_not_a_pick`).
+///
+/// The owner chain is walked where the press landed on a window of the frame's own rather than in it
+/// — a menu the shell put over its rows is a top-level window owned by the frame — because the popup
+/// is not a place to go behind: it stands over the listing, and a pin put under it is a pin still
+/// over the listing.
 fn press_frame(pointer: &PointerTick) -> isize {
-    item_window_of(pointer.window)
-        .map(|window| window.frame)
-        .unwrap_or_default()
+    let Some(root) = item_window_of(pointer.window) else {
+        return 0;
+    };
+
+    let root = HWND(root.frame as *mut _);
+    let owner = unsafe { GetAncestor(root, GA_ROOTOWNER) };
+    (if owner.is_invalid() { root } else { owner }).0 as isize
 }
 
 /// What the hook watches while a preview is pinned, so that the tray's `Pin Mode … Update Preview`
@@ -324,29 +333,37 @@ impl PinUpdateWatch {
             resolver.forget_window_views();
         }
 
-        // A press on the listing is answered before the shell has said which file it picked: the
-        // click activates the listing, and that activation is the listing being put over the pin
-        // for as long as naming the file takes (see `PreviewMessage::PinPress`). What the press is
-        // *on* is what tells the two kinds apart, and it is asked of the item under the point
-        // rather than of the file the shell names, because the item is there the moment the click
-        // lands while the path is the half the shell is still catching up with. A row that names a
-        // file this app previews is a pick, and the pin is put back in front of the listing for it.
-        // A row that names anything else — a folder, a file no kind previews — and a press that
-        // lands on the tree, the toolbar, the header or the gap between the rows, is a press that
-        // picked no file: the pin goes back behind the listing, so a folder clicked to open it is
-        // not the pin coming forward (see `PreviewMessage::PinNoPick`). A row the shell has not
-        // named yet is left for the retry below rather than guessed at either way.
+        // A press in Explorer's own window is answered: it either names a file this app previews, in
+        // which case the pin is put back in front of the listing for it, or it names anything else —
+        // a folder, a file no kind previews, the tree, the toolbar, the header, the gap between the
+        // rows, the path bar, a tab, a menu the shell put over its own rows — and it is a press that
+        // picked no file, so the pin goes back behind the listing (see `PreviewMessage::PinNoPick`).
+        // Asked of every press rather than of the presses the pick rule accepts, because what the pin
+        // owes the listing is the answer to a press that did *not* pick: a press on the path bar
+        // picks nothing, and it was leaving the pin in front of the listing.
+        //
+        // What is read for the file under the point is still gated on the pick rule: the second half
+        // of a double-click and a press on a menu the shell put over its own rows both name a file
+        // neither of them picked, and the pin is neither raised nor taken behind for them. A row the
+        // shell has not named yet is left for the retry below rather than guessed at either way.
         //
         // A press on this app's own window is left out: it is the pin being used rather than the
         // listing under it being picked, and what the pin stands over is not changed by it.
-        if pick && !over_our_own {
+        if press_is_answered(
+            clicked,
+            over_explorer,
+            over_our_own,
+            window_is_gone(previous_window),
+        ) {
             let row = uia_item_from_point(resolver, pointer.point, false)
                 .is_some()
                 .then(|| get_file_under_cursor(resolver, &pointer));
             let picked = match &row {
                 Some(Some(path)) if !path.is_dir() && is_media_file(path) => {
-                    press_pinned_preview();
-                    true
+                    if pick {
+                        press_pinned_preview();
+                    }
+                    pick
                 }
                 Some(Some(_)) | None => {
                     pin_press_was_not_a_pick(press_frame(&pointer));

@@ -385,6 +385,27 @@ pub(super) fn press_is_a_listing(
         && !previous_was_chrome
 }
 
+/// Whether a press is one the pin answers at all, whatever it turned out to name.
+///
+/// The pin owes the listing an answer for a press in that listing's own window — the frame, its view,
+/// its toolbar and path bar and tabs, the menus it puts over its own rows — because every one of
+/// those presses is either a file picked or a press that picked no file, and the two answers are
+/// the pin staying in front and the pin going behind. A press on this app's own window is not the
+/// listing's: that is the pin being used, and what it stands over does not change. A press that
+/// destroyed the window it landed on names no place to go behind.
+///
+/// Separate from the pick rule because the two answer different questions: that one says whether a
+/// file was picked, and this one says whether there is anything to answer. A press on the path bar
+/// is no pick and is still answered — it was the press the pin was left in front of the listing by.
+pub(super) fn press_is_answered(
+    pressed: bool,
+    over_explorer: bool,
+    over_our_own: bool,
+    aimed_at_a_gone_window: bool,
+) -> bool {
+    pressed && over_explorer && !over_our_own && !aimed_at_a_gone_window
+}
+
 /// Whether a window under the pointer is a menu or flyout rather than anything a listing can
 /// be read under: the popups Explorer puts over its own files.
 ///
