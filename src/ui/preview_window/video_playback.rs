@@ -1042,8 +1042,15 @@ pub(super) unsafe fn place_player_window(
     }
 }
 
-/// What a player's window is put under: the pin's own window while the pin does not hold the
-/// front, and the topmost band everywhere else.
+/// What a player's window is put under: the pin's own window while a pin is up and keeps the
+/// ordinary band, and the topmost band where there is no pin to go under or the pin is Always On
+/// Top.
+///
+/// **It is the pin's presence that asks this, never whether the pin holds the front.** A hover's
+/// film holds the band because nothing of this app's stands over it, and so does the film of a pin
+/// that is Always On Top, whose band is the setting's. What a pin in the ordinary band owes its
+/// film is the place directly below itself — the front it holds or gave back is the pin's own and
+/// moves no window of somebody else's.
 ///
 /// **The pin's handle rather than a z-order command, because the pin is not to move.** With the
 /// setting off the pin is an ordinary window, and one raised above all the others every time its
@@ -1056,7 +1063,12 @@ pub(super) unsafe fn place_player_window(
 /// *out* of the topmost band is the other half of it, and is what turns a film adopted from a
 /// hover — whose window wore that band for the preview's sake — into an ordinary window again.
 pub(super) fn player_insert_after() -> HWND {
-    if !pin_holds_the_front() {
+    // The band is the *hover's* to hold, and the setting's while the pin is Always On Top. What a
+    // pin in the ordinary band keeps is the film under it, holding the front or having given it
+    // back. Asked whether the pin holds the front instead, a demoted pin's film was put back in the
+    // topmost band by the next placement — every tick — which is a picture floating over every
+    // program with `Always On Top` off.
+    if !pinned() || pin_always_on_top() {
         return HWND_TOPMOST;
     }
 
