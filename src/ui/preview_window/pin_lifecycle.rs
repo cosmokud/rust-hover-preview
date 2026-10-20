@@ -1320,7 +1320,21 @@ unsafe fn front_ordinary_window(except: HWND) -> HWND {
 pub(super) unsafe fn foreground_is_ours(window: HWND) -> bool {
     let mut pid = 0u32;
     GetWindowThreadProcessId(window, Some(&mut pid));
-    pid == GetCurrentProcessId()
+    pid_is_the_previews(pid)
+}
+
+/// Whether a process is this app or the player it runs the film with.
+///
+/// **A player's window is the preview's, though its process is not.** The film is drawn by ffplay or
+/// mpv — a window of somebody else's standing in the pin's media band — and what it is not is a
+/// program the user is working in. Read as one, the window is a foreground the pin owes nothing to:
+/// the tick put the pin behind its own film the moment that window came up in front, which is the
+/// pin going out of the band with the picture left over it, and a press that picked a file went the
+/// same way whenever the new film's window came up before the raise could land (see
+/// `foreground_is_ours`, which is the two questions this answers for the watch and for the window a
+/// demotion goes behind).
+pub(super) fn pid_is_the_previews(pid: u32) -> bool {
+    pid != 0 && (pid == unsafe { GetCurrentProcessId() } || pid == VIDEO_PID.load(Ordering::SeqCst))
 }
 
 /// Whether the window in front is the desktop rather than a program: the shell's `Progman`, which is
