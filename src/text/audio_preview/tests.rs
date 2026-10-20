@@ -1973,8 +1973,8 @@ fn the_pin_says_it_is_on_top_in_the_ink_the_numbers_are_read_in() {
         );
         assert!(
             luminance([on_hovered[2], on_hovered[1], on_hovered[0]])
-                < luminance([on[2], on[1], on[0]]),
-            "{theme:?}: and the hand darkens the pin it holds rather than lighting it"
+                > luminance([on[2], on[1], on[0]]),
+            "{theme:?}: and the hand lights the pin it holds rather than dimming it"
         );
     }
 }
