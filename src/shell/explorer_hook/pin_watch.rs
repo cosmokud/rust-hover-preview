@@ -315,25 +315,37 @@ impl PinUpdateWatch {
         // A press on the listing is answered before the shell has said which file it picked: the
         // click activates the listing, and that activation is the listing being put over the pin
         // for as long as naming the file takes (see `PreviewMessage::PinPress`). What the press is
-        // *on* is what tells the two kinds apart, and it is read from the item under the point
-        // rather than from the file it names: the item is there the moment the click lands, while
-        // the path is the half the shell is still catching up with. An item is a press that picked
-        // something — a file, or a folder the selection's own answer puts the pin back behind (see
-        // `PinUpdateWatch::follow_selection`) — and anything else, the tree, the toolbar, the header
-        // or the gap between the rows, is a press that picked no file at all.
+        // *on* is what tells the two kinds apart, and it is asked of the item under the point
+        // rather than of the file the shell names, because the item is there the moment the click
+        // lands while the path is the half the shell is still catching up with. A row that names a
+        // file this app previews is a pick, and the pin is put back in front of the listing for it.
+        // A row that names anything else — a folder, a file no kind previews — and a press that
+        // lands on the tree, the toolbar, the header or the gap between the rows, is a press that
+        // picked no file: the pin goes back behind the listing, so a folder clicked to open it is
+        // not the pin coming forward (see `PreviewMessage::PinNoPick`). A row the shell has not
+        // named yet is left for the retry below rather than guessed at either way.
         //
         // A press on this app's own window is left out: it is the pin being used rather than the
         // listing under it being picked, and what the pin stands over is not changed by it.
         if pick && !over_our_own {
-            let on_an_item = uia_item_from_point(resolver, pointer.point, false).is_some();
-            if on_an_item {
-                press_pinned_preview();
-            } else {
-                pin_press_was_not_a_pick();
-            }
+            let row = uia_item_from_point(resolver, pointer.point, false)
+                .is_some()
+                .then(|| get_file_under_cursor(resolver, &pointer));
+            let picked = match &row {
+                Some(Some(path)) if !path.is_dir() && is_media_file(path) => {
+                    press_pinned_preview();
+                    true
+                }
+                Some(Some(_)) | None => {
+                    pin_press_was_not_a_pick();
+                    false
+                }
+                Some(None) => false,
+            };
             note_pin_click!(
-                "press answer  item {}  at {},{}",
-                on_an_item as u8,
+                "press answer  pick {}  row {}  at {},{}",
+                picked as u8,
+                row.is_some() as u8,
                 pointer.point.x,
                 pointer.point.y,
             );
@@ -347,12 +359,6 @@ impl PinUpdateWatch {
             self.probed = true;
 
             if let Some(path) = get_file_under_cursor(resolver, &pointer) {
-                // A folder is an item the press picked and not a file the pin has anything to show
-                // for: the click picked nothing, and the pin goes back behind the listing the click
-                // put in front (see `PreviewMessage::PinNoPick`).
-                if pick && path.is_dir() {
-                    pin_press_was_not_a_pick();
-                }
                 // What was resolved is answered whatever it turned out to be — a file nothing can
                 // be shown for is one of them — so there is nothing here left to ask about again.
                 let offered = self.offer(&path, &showing);

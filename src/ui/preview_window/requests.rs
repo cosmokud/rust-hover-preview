@@ -98,8 +98,9 @@ pub fn update_pinned_preview(path: &Path) {
 /// The click activates the listing, which is that window being put over the pin, and the shell's
 /// answer for the file can be a tick or ten away — so the pin is put back in front of the listing
 /// here, where the press is, rather than after the answer (see `Pin Mode → Update Preview → Move
-/// To Top`). A press that names no file is put back behind the listing by
-/// [`pin_press_was_not_a_pick`], and a pick that lands raises the pin again.
+/// To Top`). A press that names no file this app previews — a folder, a file no kind previews, a
+/// gap between the rows — is put back behind the listing by [`pin_press_was_not_a_pick`] instead,
+/// and a pick that lands raises the pin again.
 pub fn press_pinned_preview() {
     if !pinned() {
         return;
