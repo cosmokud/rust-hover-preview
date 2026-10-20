@@ -588,8 +588,7 @@ fn a_wheel_that_asks_for_more_notches_than_any_hand_can_turn_is_answered_with_a_
 }
 
 #[test]
-fn a_wheel_notch_over_a_pin_is_counted_for_the_pin_only_while_the_pin_is_the_window_the_user_is_in()
-{
+fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     // The lock every test that reaches the pin's own state takes, and the pin this one stands for the
     // hook to find: what the hook asks is the pin's window box, which is process-wide.
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -616,6 +615,7 @@ fn a_wheel_notch_over_a_pin_is_counted_for_the_pin_only_while_the_pin_is_the_win
 
     // The count and the signal are the process's own, so both are cleared here: what is read below has
     // to be this notch's and not one left behind by a test beside this one.
+    crate::shell::wheel_input::publish_preview_under_the_pointer(false);
     let _ = wheel_input::take_pin_zoom_delta();
     unsafe {
         let _ = ResetEvent(preview_channel_event());
@@ -725,8 +725,39 @@ fn a_wheel_notch_over_a_pin_is_counted_for_the_pin_only_while_the_pin_is_the_win
         LRESULT(1),
         "and the notch is the pin's rather than what stands behind it"
     );
-
     crate::shell::key_input::publish_pin_always_on_top(false);
+
+    // And the same notch is the pin's while the pin is the surface the pointer is standing on,
+    // which is the case the keyboard's question gets wrong: a pin raised over the listing the user
+    // is working in has the pointer over it and the keyboard in the listing behind it, and a notch
+    // turned there is the pin's rather than the list's. It is asked of the desktop once a tick and
+    // published, because a low-level hook may not walk the desktop itself (see
+    // `PREVIEW_UNDER_POINTER`).
+    crate::shell::wheel_input::publish_preview_under_the_pointer(true);
+    let _ = wheel_input::take_pin_zoom_delta();
+    unsafe {
+        let _ = ResetEvent(preview_channel_event());
+    }
+
+    let swallowed = unsafe {
+        wheel_input::wheel_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_MOUSEWHEEL as usize),
+            LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
+        )
+    };
+
+    assert_eq!(
+        wheel_input::take_pin_zoom_delta(),
+        WHEEL_DELTA,
+        "a pin the pointer is on is scrolled without the click that used to be needed to reach it"
+    );
+    assert_eq!(
+        swallowed,
+        LRESULT(1),
+        "and the notch is not left for the listing to scroll behind the pin"
+    );
+    crate::shell::wheel_input::publish_preview_under_the_pointer(false);
     stand_pin(None);
     stand_pin(previous);
     crate::shell::key_input::publish_pin_key_owner(0, 0);
