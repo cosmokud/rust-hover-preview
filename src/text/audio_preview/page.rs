@@ -1069,8 +1069,22 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
     }
 }
 
-/// One of the two window buttons, drawn as the one mark that says what it
-/// is: a dash for the minimize and two crossing strokes for the close.
+/// The card's own pixels, in the form the marks are written in. It is taken per mark rather
+/// than once for the whole paint so that a mark drawn as boxes of ink goes through `fill_rect`
+/// with no other borrow of the surface live beside it (see `paint_window_button`).
+#[allow(clippy::mut_from_ref)] // The pixels are the surface's own, behind the pointer `surface_pixels` hands back.
+fn card_pixels(surface: &DibSurface) -> &mut [u8] {
+    unsafe {
+        std::slice::from_raw_parts_mut(
+            surface_pixels(surface),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    }
+}
+
+/// One of the window buttons, drawn as the one mark that says what it
+/// is: a pin for the always-on-top, a dash for the minimize and two crossing
+/// strokes for the close.
 ///
 /// The marks are drawn by hand rather than with the caption's glyph machinery, because that
 /// machinery's smallest mark has a floor of six pixels and a button this small is barely
@@ -1085,12 +1099,6 @@ fn paint_window_button(
     ink: [u8; 3],
     scale: f32,
 ) {
-    let buffer = unsafe {
-        std::slice::from_raw_parts_mut(
-            surface_pixels(surface),
-            surface.width as usize * surface.height as usize * 4,
-        )
-    };
     let width = surface.width as i32;
 
     // The centre of the box, on the middle of a pixel rather than on the edge of one,
@@ -1107,21 +1115,74 @@ fn paint_window_button(
 
     match control {
         CardControl::AlwaysOnTop => {
-            let glyph = (rect.right - rect.left).max(1);
-            let span = (glyph as f32 * 0.75).round() as i32;
-            crate::text::pin_chrome::draw_pin_top(
-                buffer,
-                width,
-                (rect.left + rect.right) / 2,
-                (rect.top + rect.bottom) / 2,
-                span,
-                stroke,
+            // The box the cross's own strokes are painted in, which is the box the pin is drawn
+            // in as well: its ends sit on pixel centres a quarter of the side in from each edge,
+            // and a stroke is painted in every pixel a half-stroke's reach away from them,
+            // snapped out to whole pixels. It is this box rather than a square of the pin's own
+            // that makes it stand exactly the height of the cross beside it (see `draw_pin_top`,
+            // which takes the square the caption's own marks are drawn in and is a size larger).
+            let reach = (stroke / 2.0).max(0.5) + 0.5;
+            let mark = RECT {
+                left: (rect.left as f32 + inset - reach).floor() as i32 + 1,
+                top: (rect.top as f32 + inset - reach).floor() as i32 + 1,
+                right: (rect.right as f32 - inset + reach - 1.0).ceil() as i32,
+                bottom: (rect.bottom as f32 - inset + reach - 1.0).ceil() as i32,
+            };
+
+            let thick = stroke.round().max(1.0) as i32;
+            let middle_x = (mark.left + mark.right) / 2;
+            let middle_y = (mark.top + mark.bottom) / 2;
+            // Where the arrow's head begins, which is a row below the ceiling and never past the
+            // mark's last row: a mark too small for a stem is one the head is drawn at the bottom
+            // of rather than one whose head is drawn outside the mark (see `mark`).
+            let head_top = (mark.top + thick + 1).min(mark.bottom - 1);
+
+            // The ceiling: the mark's own first rows, as wide as the mark.
+            fill_rect(
+                surface,
+                RECT {
+                    left: mark.left,
+                    top: mark.top,
+                    right: mark.right,
+                    bottom: (mark.top + thick).min(mark.bottom),
+                },
                 ink,
             );
+
+            // The stem down to the mark's last row, as wide as the ceiling is thick.
+            let stem_left = middle_x - thick / 2;
+            fill_rect(
+                surface,
+                RECT {
+                    left: stem_left.max(mark.left),
+                    top: head_top,
+                    right: (stem_left + thick).min(mark.right),
+                    bottom: mark.bottom,
+                },
+                ink,
+            );
+
+            // The head: two arms from the top of the stem out to the mark's middle row.
+            let tip = (middle_x as f32 + 0.5, head_top as f32 + 0.5);
+            let arm = (((mark.right - mark.left) / 2) - thick - 1).max(1) as f32;
+            for direction in [-1.0, 1.0] {
+                stroke_segment(
+                    card_pixels(surface),
+                    width,
+                    tip,
+                    (
+                        middle_x as f32 + 0.5 + direction * arm,
+                        middle_y as f32 + 0.5,
+                    ),
+                    thick as f32,
+                    ink,
+                    1.0,
+                );
+            }
         }
         CardControl::Minimize => {
             stroke_segment(
-                buffer,
+                card_pixels(surface),
                 width,
                 (center_x - inset, center_y),
                 (center_x + inset, center_y),
@@ -1139,7 +1200,7 @@ fn paint_window_button(
             let to_x = rect.right as f32 - inset - 1.0 + 0.5;
             let to_y = rect.bottom as f32 - inset - 1.0 + 0.5;
             stroke_segment(
-                buffer,
+                card_pixels(surface),
                 width,
                 (from_x, from_y),
                 (to_x, to_y),
@@ -1148,7 +1209,7 @@ fn paint_window_button(
                 1.0,
             );
             stroke_segment(
-                buffer,
+                card_pixels(surface),
                 width,
                 (from_x, to_y),
                 (to_x, from_y),
