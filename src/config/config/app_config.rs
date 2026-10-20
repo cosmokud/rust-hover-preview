@@ -33,9 +33,9 @@ use super::setting_types::{
     DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
     DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
-    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
-    DEFAULT_TEXT_SCALE, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND,
-    DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_LOOP, DEFAULT_ZOOM_BACKGROUND,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
+    DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_TEXT_SCALE, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
+    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_LOOP, DEFAULT_ZOOM_BACKGROUND,
 };
 
 #[derive(Debug, Clone)]
@@ -113,6 +113,11 @@ pub struct AppConfig {
     /// after another, the way a Quick Look window does; off, moving the pointer across a
     /// listing leaves the pin alone (see `pin_update_enabled`).
     pub pin_update_on_hover: bool,
+    /// Whether an update also brings the pin in front of the windows it was behind: on, the file
+    /// the user picks is shown in a window that is put at the top of its own band, without taking
+    /// the keyboard from the listing; off, the pin stays exactly where the user's own clicks put it
+    /// (see `pin_update_enabled`).
+    pub pin_update_move_to_top: bool,
     /// What a walk anchored on a video steps through (see `DEFAULT_PIN_NAV_VIDEO`).
     pub pin_nav_video: PinNavFileTypes,
     /// What a walk anchored on a sound steps through (see `DEFAULT_PIN_NAV_AUDIO`).
@@ -700,6 +705,7 @@ impl Default for AppConfig {
             pin_pause_audio: DEFAULT_PIN_PAUSE_AUDIO,
             pin_update_enabled: DEFAULT_PIN_UPDATE_ENABLED,
             pin_update_on_hover: DEFAULT_PIN_UPDATE_ON_HOVER,
+            pin_update_move_to_top: DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
             pin_nav_video: DEFAULT_PIN_NAV_VIDEO,
             pin_nav_audio: DEFAULT_PIN_NAV_AUDIO,
             pin_nav_others: DEFAULT_PIN_NAV_OTHERS,

@@ -2285,6 +2285,15 @@ pub fn run_preview_window() {
                         // `pin_awaiting_box`).
                         pin_awaiting_box = None;
                         pin_pick = Some(path);
+
+                        // And whatever the pin was behind, an update is the moment it comes
+                        // forward: the file the user just picked is the one they are looking at
+                        // next, and a pin left behind the listing it is following is a window they
+                        // would have to find before they could see it (see
+                        // `Pin Mode → Update Preview → Move To Top`). The raise happens here rather
+                        // than at the install so the pin answers the pick at once, with the wait
+                        // for the file drawn in it where the read is not instant.
+                        raise_pinned_preview(hwnd);
                     }
                     PreviewMessage::OfficeRenderReady {
                         path,
