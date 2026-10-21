@@ -1,6 +1,7 @@
 use super::*;
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
+use windows::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetWindow, GetWindowRect, IsIconic, IsWindow, IsWindowVisible,
     SendMessageW, ShowWindow, GW_HWNDPREV, SC_CLOSE, SC_MINIMIZE, SW_SHOWNOACTIVATE,
@@ -611,6 +612,143 @@ fn a_pin_brought_back_by_its_key_leaves_the_keyboard_in_the_listing() {
     PIN_BUBBLE_CARRIED.store(previous_carried, Ordering::Release);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = before;
+    }
+    stand_pin(previous_pin);
+}
+
+/// An update brings a pin that is put away into its bubble back up on the file the update names, and
+/// the bubble goes with it — with `Pin Mode → Update Preview → Move To Top` on and `Always On Top` off.
+///
+/// **The fault this is a regression test for** is the one the taskbar's own test is about, reached from
+/// the bubble: a put-away pin has no window in any band, so the row that says an update brings the pin
+/// in front of the listing it follows answered nothing at all for it, and the file was swapped into the
+/// pin the bubble was standing in for — the user's "even the minimized pin should show on top now" (see
+/// `bring_a_put_away_pin_back`).
+///
+/// The file is what the pin comes back up on rather than something held for the key: a bubble holds a
+/// file picked behind it until the user asks for the pin (see `pin_bubble_pick`), and this road is the
+/// update asking for it — so the window comes back showing the file it was brought back for, in front of
+/// the windows opened over it, and the keyboard stays in the listing the pick was made in.
+///
+/// **The pin here stands in the preview's window**, which is the kind a picture is not: a picture's
+/// pin is a window of its own, and that is the kind the taskbar's test puts away. The two between
+/// them are both kinds of pin behind both ways of being away, and the split is deliberate — the
+/// raise this road makes after the restore is the part the show cannot do for the kind standing in
+/// the preview's window, which is put up with `HWND_TOP` (see `bring_a_put_away_pin_back`).
+#[test]
+fn an_update_brings_a_pin_put_away_into_its_bubble_back_on_top() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let previous_carried = PIN_BUBBLE_CARRIED.load(Ordering::Acquire);
+    let previous_own = pin_is_its_own_window();
+    let before = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+    let updates = CONFIG
+        .lock()
+        .map(|config| config.pin_update_enabled)
+        .unwrap_or(true);
+
+    // Safety: the windows are this test's own, made and destroyed under the one-at-a-time lock, and
+    // the pin is stood up under it too. The stand-in goes first, so that a pin put away into a bubble is
+    // one the bubble is showing for rather than one a button of a test before it stands for.
+    let (pin_hwnd, in_front) = unsafe { a_pin_put_away_into_its_bubble() };
+    unsafe { close_pin_taskbar() };
+    pin_stands_in_its_own_window(false);
+
+    // The bubble the collapse leaves on the desktop: a window of this test's own standing in for it,
+    // since the bubble is painted by the loop's own thread.
+    let bubble = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            NOWHERE,
+            NOWHERE,
+            120,
+            120,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the bubble")
+    };
+    // Safety: the window is this test's own, and it is asked to be on the screen — a bubble that is up
+    // is the whole of what says the pin was put away into it rather than into the taskbar.
+    unsafe {
+        let _ = ShowWindow(bubble, SW_SHOWNOACTIVATE);
+    }
+    PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
+    assert!(
+        showing_bubble_window().is_some(),
+        "the pin is put away behind a bubble standing on the desktop, which is the state an update is          answered from"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_update_enabled = true;
+        config.pin_update_move_to_top = true;
+    }
+
+    assert!(
+        an_update_brings_a_put_away_pin_back(),
+        "with `Move To Top` on, an update is the pin coming forward — and a pin that is away has          nothing to bring forward but itself"
+    );
+    assert!(
+        bring_a_put_away_pin_back(),
+        "so the pin the update names a file for is the pin that comes back up"
+    );
+
+    assert!(!pin_is_collapsed(), "the pin is up again");
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool(),
+        "and the window it stands in is back on the screen"
+    );
+    assert!(
+        showing_bubble_window().is_none(),
+        "the bubble goes with it: a bubble and the window it stands for are never both on the screen"
+    );
+    // Safety: both windows are this test's own, and the z-order is the compositor's to settle.
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "the pin is put in front of the windows opened over it, which is the one thing an update owes          a pin it brings forward"
+    );
+    assert!(
+        !unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "and no band is kept for it: `Pin Mode → Always On Top` is the only thing that keeps a pin over          other programs"
+    );
+    // Safety: asks this thread's own keyboard, which a window of this test's is the only holder of.
+    assert_ne!(
+        unsafe { GetFocus() },
+        pin_hwnd,
+        "and the keyboard stays in the listing the file was picked in: a pick is a step of a walk with          the arrows as often as it is a click, and a restore that took the focus would end that walk at          the first file"
+    );
+
+    // Safety: both windows are this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(bubble);
+        let _ = DestroyWindow(in_front);
+        let _ = DestroyWindow(pin_hwnd);
+        close_pin_taskbar();
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    PIN_BUBBLE_CARRIED.store(previous_carried, Ordering::Release);
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+        config.pin_update_enabled = updates;
+        config.pin_update_move_to_top = move_to_top;
     }
     stand_pin(previous_pin);
 }

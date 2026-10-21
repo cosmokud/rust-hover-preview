@@ -1064,6 +1064,12 @@ pub(super) enum PinRestore {
     /// listing, and the key picks the file rather than moving the keyboard out of it (see
     /// `pin_bubble_pick`).
     Key,
+    /// An update named a file, and `Pin Mode → Update Preview → Move To Top` has the pin come forward
+    /// for it: a pin that is away has no window in any band to come forward, so the file the update
+    /// names is the file it comes back up on. The user is picking in the listing, so the keyboard stays
+    /// there rather than following the window up; the front is asked for after the restore, by the
+    /// update's own raise (see `bring_a_put_away_pin_back`).
+    Update,
     /// Windows brought the pin's window back, and nothing of this app's was pressed for it: a pin put
     /// away as a window is the window minimized, and the button that restores it is the Shell's own. What
     /// is owed is the pin's own state and what the collapse parked — never the front, which the Shell has
