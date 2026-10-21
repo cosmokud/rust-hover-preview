@@ -294,18 +294,6 @@ pub(crate) fn band_place() -> HWND {
     }
 }
 
-/// Whether a pin being shown owes the topmost band and back to reach the front, because `HWND_TOP` is
-/// no way to reach it for a process that does not hold the foreground (see `show_pinned_window`).
-///
-/// It is a question, and it is asked as one, because the answer is three facts about the pin rather
-/// than the call itself: a pin that is Always On Top is going to the band above anyway, a pin that is
-/// already on the screen is left exactly where the user's own clicks put it, and only the kinds still
-/// standing in the preview's window keep the plain raise they have always had — the hover's window is
-/// the one a press lands on for those, so the press is what has already brought it forward.
-pub(super) fn showing_owes_the_band(on_the_screen: bool) -> bool {
-    pin_is_its_own_window() && !pin_always_on_top() && !on_the_screen
-}
-
 /// The pin owes the front: a pick, a take-up or a restore asked for it, and no press that named no
 /// file and no window change away from the listing has given it back since.
 ///
@@ -1064,33 +1052,15 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // stands over; and it is asked for of a window that was *off* the screen only, since one that
     // is on it is to be left exactly where the user's own clicks put it.
     if !pin_always_on_top() && !on_the_screen {
-        // **A window that does not come with the foreground is put in front the one way Windows lets
-        // it be:** the topmost band, given straight back. `HWND_TOP` is asked for below and does
-        // nothing at all for a process that does not hold the foreground — the call reports success
-        // and the window stays where it was — which is a pin taken up with a *key* appearing behind
-        // Explorer while the same pin taken up with a *click* appeared in front of it: the click had
-        // already made its own window the foreground one, and the key had not. Nothing is left in the
-        // band: it is taken and given back in the same breath, so `Pin Mode → Always On Top` is still
-        // the only thing that keeps a pin over other programs (see `pin_holds_the_front`).
-        if showing_owes_the_band(on_the_screen) {
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_NOTOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
+        // **A pin that is a window is asked for the front and left there.** What a window of the
+        // Shell's own gets for being put up is being activated — that is how Windows puts a window in
+        // front of the one the user was in, and it is the whole of what this app asks for: no band, no
+        // place, no second call to undo the first. Whether the front arrives is Windows' to decide, and
+        // a window shown behind the one that holds the foreground is Windows' answer rather than a
+        // fault this road can repair without the band `Always On Top` exists to keep (see
+        // `pin_real_window`).
+        if pin_is_its_own_window() {
+            let _ = SetForegroundWindow(hwnd);
         } else {
             let _ = SetWindowPos(
                 hwnd,
@@ -1134,25 +1104,18 @@ pub(super) const PIN_RAISE_GRACE: Duration = Duration::from_millis(250);
 /// raise whatever the switch says about updates (see `put_pin_at_the_front`). A pin that is put away
 /// has no window to raise and is left alone, and so is one whose row is switched off.
 pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
+    // **A pin that is a window is left to Windows.** It is activated by the press that lands on it and
+    // put behind by the click that lands elsewhere; the Shell puts it in Alt+Tab and gives it a taskbar
+    // button, and every raise, lowering and band this road knows is a stand-in for what a window that
+    // the Shell does not own needs and this one does not. Nothing is forced for it (see `pin_real_window`).
+    if pin_is_its_own_window() {
+        return;
+    }
     if pin_is_collapsed() || !pin_update_move_to_top() {
         return;
     }
 
     put_pin_at_the_front(hwnd);
-}
-
-/// Whether a raise has already been answered by Windows, and the band need not be taken for it.
-///
-/// A window of this app's own — a picture pin — is put at the front by the press that lands on it, so
-/// a raise asked for by that press is a second answer to a question already answered. Every other
-/// ask has the question open: a pick and a preview update both arrive with the listing in front, and
-/// the band is the only way this process can put the pin over it (see `put_pin_at_the_front`).
-///
-/// The kinds still standing in the preview's window answer no even when they hold the foreground: the
-/// band-and-back is what their press has always asked for, and a raise that stopped asking it while
-/// their window happened to hold the foreground would be a pin left behind by the click after it.
-pub(super) fn raise_is_already_answered(its_own: bool, foreground: HWND, hwnd: HWND) -> bool {
-    its_own && foreground == hwnd
 }
 
 /// Put a pinned window at the front of the band it is allowed to stand in, without taking the
@@ -1192,9 +1155,14 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
     // in the listing, so the listing is the foreground window and the pin is what is to be brought in
     // front of it (see `raise_pinned_preview`). Asking about the foreground rather than about the kind
     // of window is what makes both roads right with one question.
-    if raise_is_already_answered(pin_is_its_own_window(), GetForegroundWindow(), hwnd) {
+    // **A pin that is a window is left to Windows** - activated by the press that lands on it and put
+    // behind by the click that lands elsewhere - so there is no band to take here for it (see
+    // `pin_real_window`). Everything below is the stand-in the kinds still standing in the preview's
+    // window need, because a window the Shell does not own is never raised by a click.
+    if pin_is_its_own_window() {
         return;
     }
+
     // A pin that owes the front *holds* the topmost band rather than taking it and giving it back:
     // the band is the half of this that the listing's activation cannot undo, and it is kept until
     // the user's own press gives it back (see `pin_holds_the_front`, `lower_pinned_preview`). What
@@ -1270,6 +1238,13 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
 /// itself (see `Host::put_window`). The next raise puts both where the band asks for them again
 /// (see `place_pinned_siblings`).
 pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
+    // **A pin that is a window is left to Windows.** It is activated by the press that lands on it and
+    // put behind by the click that lands elsewhere; the Shell puts it in Alt+Tab and gives it a taskbar
+    // button, and every raise, lowering and band this road knows is a stand-in for what a window that
+    // the Shell does not own needs and this one does not. Nothing is forced for it (see `pin_real_window`).
+    if pin_is_its_own_window() {
+        return;
+    }
     if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
         return;
     }
@@ -1406,6 +1381,14 @@ pub(super) unsafe fn keep_pin_at_the_front(
     let Some(until) = *deadline else {
         return;
     };
+
+    // **A pin that is a window is left to Windows.** It is activated by the press that lands on it and
+    // put behind by the click that lands elsewhere; the Shell puts it in Alt+Tab and gives it a taskbar
+    // button, and every raise, lowering and band this road knows is a stand-in for what a window that
+    // the Shell does not own needs and this one does not. Nothing is forced for it (see `pin_real_window`).
+    if pin_is_its_own_window() {
+        return;
+    }
 
     // A pin that no longer owes the front has given it back: a press that named no file is the
     // pin's own answer, and a raise here would be the grace putting it back over the listing the

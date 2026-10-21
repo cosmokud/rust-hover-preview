@@ -1128,3 +1128,81 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
     }
     stand_pin(previous_pin);
 }
+
+/// A pin that is a window of its own is not raised, lowered or banded by this app: the press that lands
+/// on it activates it and the click that lands elsewhere puts the other window in front, which is what
+/// Windows does for every window it owns.
+///
+/// The fault this is a regression test for: with `Always On Top` off, the app kept working the pin's
+/// z-order by hand — raising it on a pick, lowering it on a press that named no file — and every one of
+/// those roads was written for a window the Shell does not own. On a real window they were the app
+/// fighting Windows: a pin that would not go behind the listing it was clicked out of, and a pin left
+/// behind whenever a raise was undone by the activation that followed it.
+#[test]
+fn a_pin_that_is_a_window_of_its_own_is_left_to_windows() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let before = pin_always_on_top();
+
+    // The pin's own window and the window this loop holds are two different windows, which is the
+    // arrangement every forced raise got wrong (see `pinned_window`).
+    let (in_front, pin_hwnd) = unsafe {
+        let in_front = a_window_of_the_tests_own();
+        let pin_hwnd = a_window_of_the_tests_own();
+        let _ = ShowWindow(in_front, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        (in_front, pin_hwnd)
+    };
+    PREVIEW_HWND.store(in_front.0 as isize, Ordering::SeqCst);
+    pin_real_window::stand_real_pin_window_for_a_test(Some(pin_hwnd));
+
+    stand_pin(Some(overlay_pin((100, 100, 420, 340), PinChrome::always())));
+    pin_stands_in_its_own_window(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "the window made after the other stands over it"
+    );
+
+    // A press that names no file: the ordinary road puts the pin behind the window the press was made
+    // in, which for a real window is what Windows has already done by activating that window.
+    unsafe { lower_pinned_preview(pin_hwnd, in_front) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "the lowering is the fake window's and is not asked of a pin that is a window of its own"
+    );
+
+    // And the raise: with `Always On Top` on, the raise a fake pin is owed is the topmost band — a band
+    // a real pin is given by the setting when it is shown, and not taken for it here.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    assert!(!unsafe { window_holds_the_topmost_band(pin_hwnd) });
+    unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { settle_z_order() };
+    assert!(
+        !unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "the band is the setting's, put on when the pin is shown, and not taken by a raise"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+        let _ = DestroyWindow(in_front);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(false);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    stand_pin(previous_pin);
+}

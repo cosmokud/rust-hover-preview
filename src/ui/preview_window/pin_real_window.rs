@@ -91,6 +91,13 @@ unsafe fn register_real_pin_class() {
     });
 }
 
+/// Stand a window of the test's own as the pin's own window: what a test needs to ask a road which
+/// window it acts on without putting a real pin on the user's desktop.
+#[cfg(test)]
+pub(super) fn stand_real_pin_window_for_a_test(hwnd: Option<HWND>) {
+    REAL_PIN_HWND.store(hwnd.map_or(0, |hwnd| hwnd.0 as isize), Ordering::SeqCst);
+}
+
 /// The pin's own window, or nothing where it has not been made: asked by a road that only wants to
 /// know whether there is one.
 pub(super) fn real_pin_window() -> Option<HWND> {
