@@ -80,16 +80,23 @@ fn one_notch_up_grows_the_window_about_the_pictures_own_middle() {
     );
 
     // Three notches in one gesture are the same step taken further rather than three boxes: a wheel
-    // turned fast lands on the same size a wheel turned slowly would have arrived at.
+    // turned fast lands on the same size a wheel turned slowly would have arrived at. A window is whole
+    // pixels and the ideal box is not, so the box is the whole pixels the ideal rect covers and can be
+    // the pixel above the ideal size (532.4 by 399.3 here is 532 by 400), which is the one pixel of
+    // slack the two sizes are held to.
     let three = zoomed(a_picture(), PinZoom::filling(a_picture()), 3.0, None);
     let step = PIN_ZOOM_PER_NOTCH.powi(3);
-    assert_eq!(
+    assert!(
+        (three.content.2 - three.content.0 - (400.0 * step).round() as i32).abs() <= 1,
+        "three notches across: {} of {}",
         three.content.2 - three.content.0,
-        (400.0 * step).round() as i32
+        400.0 * step
     );
-    assert_eq!(
+    assert!(
+        (three.content.3 - three.content.1 - (300.0 * step).round() as i32).abs() <= 1,
+        "three notches down: {} of {}",
         three.content.3 - three.content.1,
-        (300.0 * step).round() as i32
+        300.0 * step
     );
 }
 
@@ -297,7 +304,7 @@ fn a_notch_over_the_backdrop_keeps_the_point_of_the_backdrop_under_the_pointer()
     // Background` colour, black by a fresh configuration — is showing down the window's left side,
     // and the hand is over it.
     let window = (0, 0, 1000, 800);
-    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0));
+    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0), middle(window));
     let pointer = (200, 400);
 
     assert_eq!(
@@ -328,7 +335,7 @@ fn a_travel_over_the_backdrop_keeps_the_point_of_the_picture_under_its_anchor() 
     // the window's overhang would walk the picture back over the window a little at a time — a picture
     // that creeps across the hand as it is zoomed rather than one that follows it.
     let window = (0, 0, 1000, 800);
-    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0));
+    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0), middle(window));
     let anchor = (200, 400);
     let toward = carried.drawn.0 * PIN_ZOOM_PER_NOTCH.powi(6);
     let asking = |zoom| PinZoomInputs {
@@ -382,7 +389,7 @@ fn zooming_back_out_of_the_window_consumes_the_overhang_before_it_shrinks_it() {
     // picture is the window's own size again the window starts coming down with it and the pan is
     // given up, because a picture that size has nowhere to sit.
     let window = (0, 0, 1000, 800);
-    let inside = PinZoom::still((1500.0, 1200.0), (-80.0, 40.0));
+    let inside = PinZoom::still((1500.0, 1200.0), (-80.0, 40.0), middle(window));
 
     let first = zoomed(window, inside, -1.0, Some((300, 300)));
     assert_eq!(first.content, window, "the overhang is spent first");
@@ -421,7 +428,7 @@ fn a_window_shrinking_back_out_follows_itself_and_not_the_panned_picture() {
     // about its own middle: a window re-placed about the picture's carried centre would walk across
     // the screen with the pan, following the image inside the window instead of the window itself.
     let window = (0, 0, 1000, 800);
-    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0));
+    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0), middle(window));
     assert_eq!(
         carried.picture_box((1000, 800)),
         (450, -200, 1950, 1000),
@@ -477,22 +484,23 @@ fn a_notch_of_zero_is_no_plan_at_all() {
 fn a_picture_is_drawn_on_the_whole_of_a_window_it_fills_and_inside_one_it_does_not() {
     // Scale one is the ordinary pinned picture: the box the media lands in is the whole band, which is
     // the case every repaint of everything but a zoomed picture goes through.
-    let filling = PinZoom::filling((0, 0, 1000, 800));
+    let window = (0, 0, 1000, 800);
+    let filling = PinZoom::filling(window);
     assert_eq!(filling.picture_box((1000, 800)), (0, 0, 1000, 800));
 
     // And twice the window's size is a picture centred until a hand carries it: half of the overhang
     // hangs off each side.
-    let inside = PinZoom::still((2000.0, 1600.0), (0.0, 0.0));
+    let inside = PinZoom::still((2000.0, 1600.0), (0.0, 0.0), middle(window));
     assert_eq!(inside.picture_box((1000, 800)), (-500, -400, 1500, 1200));
 
     // A pan moves it the way the hand went: a pointer carried to the right shows the left of the
     // picture, so the box steps left.
-    let carried = PinZoom::still((2000.0, 1600.0), (120.0, -60.0));
+    let carried = PinZoom::still((2000.0, 1600.0), (120.0, -60.0), middle(window));
     assert_eq!(carried.picture_box((1000, 800)), (-380, -460, 1620, 1140));
 
     // A picture with no room to be moved has nowhere to be but the whole window, whatever the pan
     // remembers of a bigger one.
-    let back = PinZoom::still((1000.0, 800.0), (400.0, 400.0));
+    let back = PinZoom::still((1000.0, 800.0), (400.0, 400.0), middle(window));
     assert_eq!(back.picture_box((1000, 800)), (0, 0, 1000, 800));
 }
 
@@ -503,7 +511,11 @@ fn a_box_laid_out_again_puts_a_zoomed_picture_back_to_filling_it() {
     // kind the wheel does not zoom has no view to reset and must not be given one.
     let mut pin = PinnedPreview {
         content: (100, 100, 500, 400),
-        zoom: Some(PinZoom::still((1600.0, 1200.0), (200.0, -100.0))),
+        zoom: Some(PinZoom::still(
+            (1600.0, 1200.0),
+            (200.0, -100.0),
+            middle((100, 100, 500, 400)),
+        )),
         ..PinnedPreview::for_test()
     };
 
@@ -934,7 +946,7 @@ fn an_image_is_brought_home_by_the_zoom_out_that_reaches_the_fit() {
     // the window's own size there is nothing left to drop at once — which, without this, is the whole of
     // the pan in a single frame.
     let window = (0, 0, 1000, 800);
-    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0));
+    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0), middle(window));
     let asking = |zoom| PinZoomInputs {
         content: window,
         zoom,
@@ -985,9 +997,11 @@ fn an_image_is_brought_home_by_the_zoom_out_that_reaches_the_fit() {
         notches += 1;
     }
 
+    // The first box the wheel puts the window in once the picture is under the fit: the ideal width is
+    // 1500 / 1.1^5 = 931.4, and the box is the whole pixels that rect covers, so it is 932 of them.
     assert_eq!(
         region_size(content).0,
-        931,
+        932,
         "the wheel has taken the picture under the fit"
     );
 
@@ -1026,7 +1040,7 @@ fn the_image_swings_past_its_place_and_comes_back() {
         room: bounds(),
         pointer: Some((200, 400)),
     };
-    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0));
+    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0), middle(window));
     zoom.toward = 1000.0;
 
     // Where the fit would put the picture at the size it stands at: the middle, with what it overhangs
@@ -1086,7 +1100,7 @@ fn intermediate_zoom_out_does_not_bounce_and_zoom_out_to_fit_clamps_and_bounces_
     };
 
     // Picture starts at 1200px (oversized, window is 1000px), panned significantly.
-    let mut zoom = PinZoom::still((1200.0, 960.0), (300.0, 50.0));
+    let mut zoom = PinZoom::still((1200.0, 960.0), (300.0, 50.0), middle(window));
 
     // First notch out: 1200 / 1.10 = 1090.9 > cap (1000.0).
     let next_toward = pin_zoom_toward(&asking(zoom), -1.0);
@@ -1175,7 +1189,7 @@ fn pin_zoom_bounce_duration_respects_config() {
     if let Ok(mut config) = crate::CONFIG.lock() {
         config.pin_zoom_bounce_ms = 0;
     }
-    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0));
+    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0), middle(window));
     zoom.toward = 1000.0;
     while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
         zoom = plan.zoom;
@@ -1206,7 +1220,7 @@ fn pin_zoom_bounce_gate_disabled_skips_overshoot() {
         config.pin_zoom_bounce_gate = false;
     }
 
-    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0));
+    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0), middle(window));
     zoom.toward = 1000.0;
     let home = |zoom: &PinZoom| (1000.0 - zoom.drawn.0) / 2.0;
     let mut swang = 0.0f32;
@@ -1251,7 +1265,7 @@ fn pin_zoom_bounce_speed_and_power_configurable() {
         config.pin_zoom_bounce_power = 0.08;
     }
 
-    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0));
+    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0), middle(window));
     zoom.toward = 1000.0;
     let home = |zoom: &PinZoom| (1000.0 - zoom.drawn.0) / 2.0;
     let mut swang = 0.0f32;
@@ -1288,7 +1302,7 @@ fn a_picture_sitting_in_the_middle_neither_bounces_nor_keeps_the_loop_awake() {
     let window = (0, 0, 1000, 800);
     // A picture overhanging its window with nothing carried off it: everything the ordinary pin zoomed in
     // to look at something closely is, and the state the stretch is crossed from.
-    let mut zoom = PinZoom::still((1200.0, 960.0), (0.0, 0.0));
+    let mut zoom = PinZoom::still((1200.0, 960.0), (0.0, 0.0), middle(window));
     let asking = |zoom| PinZoomInputs {
         content: window,
         zoom,
@@ -1327,7 +1341,7 @@ fn a_zoom_in_gives_up_nothing_of_an_offset() {
     // rather than taking it away, so a notch in over the last of the overhang carries the offset it has
     // — the wheel's own anchoring, whole (see `home_share`).
     let window = (0, 0, 1000, 800);
-    let carried = PinZoom::still((1024.0, 819.2), (383.0, 0.0));
+    let carried = PinZoom::still((1024.0, 819.2), (383.0, 0.0), middle(window));
     let asking = |zoom| PinZoomInputs {
         content: window,
         zoom,
@@ -1991,4 +2005,266 @@ fn a_paint_asked_for_the_hover_reaches_the_window_the_pin_stands_in() {
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
+}
+
+#[test]
+fn a_travel_is_placed_about_one_centre_and_never_half_a_pixel_either_side_of_it() {
+    // A box whose middle is a half pixel — an odd width and an odd height, which a window a fit or a
+    // hand chose is as often as not — is the case the placement used to lose half of. The middle was
+    // read back off the whole-pixel box every frame, the half was dropped by the division, and the box
+    // the next frame placed was half a pixel to one side of the true middle; a frame later it was on
+    // the other side. What an eye saw was the whole window shimmering sideways as it grew.
+    //
+    // Every box below stays well inside the 1000 by 800 desk, so `clamp_pinned_box` is a no-op and
+    // what is asserted is the placement alone.
+    let seed = (100, 100, 501, 401);
+    let ideal = middle(seed);
+    let mut content = seed;
+    let mut zoom = PinZoom::still((401.0, 301.0), (0.0, 0.0), ideal);
+    let mut boxes = Vec::new();
+
+    for drawn in 401..=520 {
+        let plan = pin_zoom_to(
+            &PinZoomInputs {
+                content,
+                zoom,
+                dpi: DESK,
+                room: bounds(),
+                pointer: None,
+            },
+            drawn as f32,
+            &display(),
+        );
+
+        content = plan.content;
+        zoom = plan.zoom;
+        boxes.push(content);
+    }
+
+    assert_eq!(
+        boxes[0], seed,
+        "the box the notch found is the box the travel starts from"
+    );
+
+    for (at, window) in boxes.iter().enumerate() {
+        let centre = middle(*window);
+        assert!(
+            (centre.0 - ideal.0).abs() <= 0.5 && (centre.1 - ideal.1).abs() <= 0.5,
+            "the box at frame {at} is centred at {centre:?}, not within half a pixel of {ideal:?}"
+        );
+    }
+
+    // And the half pixel never takes turns: a centre that comes back to where it was two frames ago
+    // is a window that stepped one way and then the other.
+    let centres: Vec<(f32, f32)> = boxes.iter().map(|window| middle(*window)).collect();
+    for (at, three) in centres.windows(3).enumerate() {
+        assert!(
+            !(three[2] == three[0] && three[1] != three[0]),
+            "the window's centre came back to {:?} at frame {at} after {:?}: it is placed by the \
+             whole-pixel box rather than by the one centre a travel is owed",
+            three[2],
+            three[1]
+        );
+    }
+}
+
+#[test]
+fn a_notch_on_a_box_a_hand_has_just_moved_zooms_about_where_the_hand_left_it() {
+    // The wheel is turned on the box the hand left, and the box grows about its middle: the middle the
+    // hand put there, not the whole-pixel middle read back off it. The box is 430 by 330 — an even
+    // width whose grown size is odd, so its middle is a whole pixel and the box a notch in has to be
+    // half of one either side of it.
+    //
+    // The box stands well inside the 1000 by 800 desk, so `clamp_pinned_box` is a no-op.
+    let left_behind = (100, 100, 530, 430);
+    let left_where = middle(left_behind);
+    let mut zoom = PinZoom::still((430.0, 330.0), (0.0, 0.0), left_where);
+    let mut content = left_behind;
+
+    zoom.toward = 430.0 * PIN_ZOOM_PER_NOTCH;
+
+    let mut centres = Vec::new();
+    let mut grown = false;
+
+    for frame in 0..30 {
+        let plan = pin_zoom_step(
+            &PinZoomInputs {
+                content,
+                zoom,
+                dpi: DESK,
+                room: bounds(),
+                pointer: None,
+            },
+            0.016,
+            &display(),
+        );
+
+        let Some(plan) = plan else { break };
+
+        content = plan.content;
+        zoom = plan.zoom;
+        grown |= zoom.drawn.0 > 430.0;
+
+        let centre = middle(content);
+        assert!(
+            (centre.0 - left_where.0).abs() <= 0.5 && (centre.1 - left_where.1).abs() <= 0.5,
+            "frame {frame} put the box's middle at {centre:?}, not within half a pixel of where the \
+             hand left it, {left_where:?}"
+        );
+        assert!(
+            content.0 <= left_behind.0 && content.2 >= left_behind.2,
+            "frame {frame} grew the box off to one side: {content:?} of {left_behind:?}"
+        );
+        centres.push(centre);
+    }
+
+    assert!(grown, "the box the hand left is the box the notch grew");
+
+    for (at, three) in centres.windows(3).enumerate() {
+        assert!(
+            !(three[2] == three[0] && three[1] != three[0]),
+            "the box's middle came back to {:?} at frame {at} after {:?}: the notch is placed by the \
+             box the hand left rather than about it",
+            three[2],
+            three[1]
+        );
+    }
+}
+
+#[test]
+fn a_travel_moves_every_edge_one_way_and_never_back() {
+    // A travel is one direction of the window's box: a window growing about one centre opens its left
+    // and top edges up and left and its right and bottom edges down and right, and a window coming
+    // down closes them back the same way. An edge that turned round on itself is the window shaking,
+    // whatever arithmetic shook it.
+    //
+    // Four thirds and widescreen, each out from its own box past the cap and back: the cap is where the
+    // window stops while the picture goes on growing, which is the one place in a travel the box has a
+    // reason to stand still, and a box that stands still is not an edge that went back.
+    //
+    // Both pictures stand in the middle of the 1000 by 800 desk — 400 by 300 and 480 by 270, whose
+    // middles are whole pixels — and the largest box either asks for is the whole width of the desk
+    // between the work area's edges, so `clamp_pinned_box` is a no-op all the way out and what is
+    // asserted is the placement alone.
+    for seed in [(300, 250, 700, 550), (260, 265, 740, 535)] {
+        let (width, height) = region_size(seed);
+        let drawn = width as f32;
+        let mut content = seed;
+        let mut zoom = PinZoom::still((drawn, height as f32), (0.0, 0.0), middle(seed));
+        let mut boxes = Vec::new();
+
+        let frame = |drawn: f32, content: &mut ScreenRegion, zoom: &mut PinZoom| {
+            let plan = pin_zoom_to(
+                &PinZoomInputs {
+                    content: *content,
+                    zoom: *zoom,
+                    dpi: DESK,
+                    room: bounds(),
+                    pointer: None,
+                },
+                drawn,
+                &display(),
+            );
+            *content = plan.content;
+            *zoom = plan.zoom;
+            plan.content
+        };
+
+        // A thousand pixels of travel in four hundred frames, which is a step of two and a half and
+        // takes a picture of either shape well past its cap and back.
+        for step in 0..=400 {
+            boxes.push(frame(drawn + step as f32 * 2.5, &mut content, &mut zoom));
+        }
+        for step in (0..=400).rev() {
+            boxes.push(frame(drawn + step as f32 * 2.5, &mut content, &mut zoom));
+        }
+
+        let out = &boxes[..=400];
+        let back = &boxes[400..];
+
+        for (at, pair) in out.windows(2).enumerate() {
+            let (was, is) = (pair[0], pair[1]);
+            assert!(
+                is.0 <= was.0 && is.1 <= was.1 && is.2 >= was.2 && is.3 >= was.3,
+                "the box at frame {at} on the way out moved an edge back: {is:?} of {was:?}"
+            );
+        }
+        for (at, pair) in back.windows(2).enumerate() {
+            let (was, is) = (pair[0], pair[1]);
+            assert!(
+                is.0 >= was.0 && is.1 >= was.1 && is.2 <= was.2 && is.3 <= was.3,
+                "the box at frame {at} on the way back moved an edge out: {is:?} of {was:?}"
+            );
+        }
+
+        assert_eq!(
+            out.iter().map(|box_| region_size(*box_).0).max(),
+            Some(1000),
+            "the travel reached the cap, where the window stops and the picture does not"
+        );
+        assert_eq!(
+            *boxes.last().unwrap(),
+            seed,
+            "and the travel back in lands the box it started from"
+        );
+    }
+}
+
+#[test]
+fn a_box_keeps_its_place_for_exactly_as_long_as_it_keeps_its_size() {
+    // What an eye reads as a window *moving* rather than being resized is the box sliding with its size
+    // held — which is exactly what taking the middle off a whole-pixel box every frame produces, half a
+    // pixel at a time. So a box either keeps both its size and its place, or it changes both; and what
+    // it changes in one frame is a pixel per edge and no more, which is the whole of the difference
+    // between a resize and the freeze-then-jump a size rounded away from the ideal one leaves behind.
+    //
+    // A slow wheel: a fifth of a pixel a frame, the cadence a hand turning a notch over a second asks
+    // for. The box stands well inside the desk, so `clamp_pinned_box` is a no-op.
+    let seed = (300, 250, 700, 550);
+    let mut content = seed;
+    let mut zoom = PinZoom::still((400.0, 300.0), (0.0, 0.0), middle(seed));
+    let mut last: Option<ScreenRegion> = None;
+
+    for step in 0..=500 {
+        let plan = pin_zoom_to(
+            &PinZoomInputs {
+                content,
+                zoom,
+                dpi: DESK,
+                room: bounds(),
+                pointer: None,
+            },
+            400.0 + step as f32 * 0.2,
+            &display(),
+        );
+
+        content = plan.content;
+        zoom = plan.zoom;
+
+        if let Some(was) = last {
+            let (size, was_size) = (region_size(content), region_size(was));
+
+            if size == was_size {
+                assert_eq!(
+                    content, was,
+                    "the box moved with its size held at {size:?}: {content:?} of {was:?}"
+                );
+            } else {
+                assert!(
+                    (size.0 - was_size.0).abs() <= 2 && (size.1 - was_size.1).abs() <= 2,
+                    "the box jumped by {:?} in one frame: {content:?} of {was:?}",
+                    (size.0 - was_size.0, size.1 - was_size.1)
+                );
+                assert!(
+                    (content.0 - was.0).abs() <= 1
+                        && (content.1 - was.1).abs() <= 1
+                        && (content.2 - was.2).abs() <= 1
+                        && (content.3 - was.3).abs() <= 1,
+                    "an edge jumped more than a pixel in one frame: {content:?} of {was:?}"
+                );
+            }
+        }
+
+        last = Some(content);
+    }
 }

@@ -344,9 +344,19 @@ fn with_pin_zoom(pin: PinnedPreview, scale: f32) -> PinnedPreview {
         zoom: Some(PinZoom::still(
             (width as f32 * scale, height as f32 * scale),
             (0.0, 0.0),
+            middle(pin.content),
         )),
         ..pin
     }
+}
+
+/// The middle of a box in the floats a zoom is placed in: what a window that has not been carried is
+/// grown about, and what the tests hold a placed box to (see `PinZoom::centre`).
+fn middle(region: ScreenRegion) -> (f32, f32) {
+    (
+        (region.0 + region.2) as f32 / 2.0,
+        (region.1 + region.3) as f32 / 2.0,
+    )
 }
 
 fn edge(left: bool, top: bool, right: bool, bottom: bool) -> PinResize {
