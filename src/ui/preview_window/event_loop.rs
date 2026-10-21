@@ -3158,19 +3158,14 @@ pub fn run_preview_window() {
                 }
             }
 
-            // The pin's window is this app's own to keep on the screen. The Shell's `Win+D` hides
-            // every ordinary window and shows the desktop, and gives them all back on the second
-            // press — a pin is one of them now that its band is the setting's — but the pin is not
-            // in the Shell's list of windows to bring back, so it is put up here: at the first tick
-            // the user is back in a window rather than looking at the desktop. Asked of the window
-            // the pin stands in and not remembered, so a pin the user put away is not brought back
-            // by it (a put-away pin has no window to show, see `pin_is_collapsed`), and nothing is
-            // left over when the desktop is up (see `foreground_is_the_desktop`).
-            if pinned()
-                && !pin_is_collapsed()
-                && the_pin_window_is_down(pinned_window())
-                && !foreground_is_the_desktop(GetForegroundWindow())
-            {
+            // The pin's window is this app's own to keep on the screen, where Windows is not already
+            // keeping it. The Shell's `Win+D` takes every ordinary window away and gives them all back on
+            // the second press, and a pin that stands in a window of its own is one of them — so what is
+            // left to this road is the pin that stands in the hover's window, which is no window of the
+            // Shell's list: it is put up here at the first tick the user is back in a window rather than
+            // looking at the desktop (see `the_pin_owes_a_show` for the whole of the question, and
+            // `foreground_is_the_desktop` for the one answer it refuses).
+            if the_pin_owes_a_show(pinned_window(), GetForegroundWindow()) {
                 show_pinned_window(pinned_window());
             }
 

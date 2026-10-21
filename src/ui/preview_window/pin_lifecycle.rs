@@ -196,6 +196,11 @@ pub(crate) enum PinCommand {
     Close,
     /// The bubble a collapsed pin left was clicked: the window goes back up.
     Restore,
+    /// The Shell brought a pin's window back on its own: a pin put away as a window is minimized rather
+    /// than hidden, and the button that restores it belongs to the window rather than to this app, so no
+    /// press of the app's arrives to ask for the pin (see `PinRestore::TheShell`). The state follows the
+    /// window — what a collapse parks is given back, and the pin stops answering as one that is away.
+    CameBack,
     /// Hold what is on screen where it stands, or set it going again: what a Space in a pinned
     /// sound or a pinned video is, and which of the two it is a question the file in the window
     /// answers rather than the key (see `pin_toggle_target`).
@@ -997,10 +1002,10 @@ pub(super) fn pinned_window() -> HWND {
 }
 
 /// Whether a pin's window is down — not on the screen at all, or minimized, which is what the Shell
-/// leaves of it under the desktop. One question with one answer, asked by the two roads that ask it:
-/// the loop's restore, which puts a pin back up on a `Win`+`D` and must not do it to a window that is
-/// already there, and the show itself, which tells a pin standing where the user put it from one being
-/// brought back from away (see `show_pinned_window`).
+/// leaves of it under the desktop. It is asked by the show itself, which tells a pin standing where the
+/// user put it from one being brought back from away, and by the restore's own question about what counts
+/// as away for a kind that has no button of Windows to come back by (see `show_pinned_window` and
+/// `the_pin_owes_a_show`).
 ///
 /// **Which window is asked is the caller's to get right, and it is the pin's own one**: a picture pin
 /// stands in a window of its own and has put the preview's down, so the hover's window answers "down"
@@ -1013,6 +1018,38 @@ pub(super) fn pinned_window() -> HWND {
 /// `step_pin_zoom`).
 pub(super) fn the_pin_window_is_down(hwnd: HWND) -> bool {
     !unsafe { IsWindowVisible(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool()
+}
+
+/// Whether the tick is to put a pin's window back on the screen: the pin is up, its window is away, and
+/// the user is back in a window rather than looking at the desktop.
+///
+/// It is the whole of the question the loop's restore asks, gathered here so that the answer has one
+/// home: which window is asked (the pin's own, see `pinned_window`), what counts as away, and whether
+/// the desktop is still what the user is looking at.
+///
+/// **And what counts as away is not the same question for the two kinds of window a pin stands in.**
+/// A pin that stands in the hover's window is a window this app put on the screen and this app has to
+/// put back, so a `Win`+`D` — the Shell minimizing the preview's window with everything else — is the
+/// road this restore exists for, and a minimized window is a window to bring up.
+///
+/// A pin that stands in a window of its own is a window **Windows** keeps: its own taskbar button puts
+/// it down and brings it back, `Show Desktop` hands it back with everything else it took, and a press on
+/// it is handled by the Shell rather than here. A tick that brought such a window up was a tick that
+/// undid every minimize the user asked for — the button could restore and never minimize — and it is
+/// asked about the one state Windows has no button for: a window that was *hidden*. Nothing in this app
+/// hides a pin's own window while the pin is up (a collapse hides it with the pin's own state, which is
+/// read above), so what this answers is nothing at all for the ordinary pin, and the safety net is kept
+/// for the day the Shell takes a window off the screen rather than minimizing it.
+pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
+    if !pinned() || pin_is_collapsed() || unsafe { foreground_is_the_desktop(foreground) } {
+        return false;
+    }
+
+    if pin_is_its_own_window() {
+        return !unsafe { IsWindowVisible(hwnd) }.as_bool();
+    }
+
+    the_pin_window_is_down(hwnd)
 }
 
 /// Whether the pin on the screen is drawn the whole way by this app, and so stands in a window of its
@@ -1092,9 +1129,9 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // Whether the pin's window is on the screen as this is asked, which is what tells a pin standing
     // where the user put it from one being brought back from away — and it is read before the showing
     // below, since that is the call which puts it on the screen. A window the Shell minimized is a
-    // window being brought back as well, which is why the question is the same one the tick's restore
-    // asks and not the visibility of it alone (see `the_pin_window_is_down`): a pin restored from the
-    // desktop is one to put in front, not one already standing where the user left it.
+    // window being brought back as well, which is why the question is `the_pin_window_is_down` rather
+    // than the visibility alone (see `the_pin_window_is_down`): a pin minimized away is one to put in
+    // front of wherever the Shell left it, not one already standing where the user left it.
     let on_the_screen = !the_pin_window_is_down(hwnd);
     if !on_the_screen {
         let _ = MoveWindow(hwnd, window.0, window.1, width, height, false);

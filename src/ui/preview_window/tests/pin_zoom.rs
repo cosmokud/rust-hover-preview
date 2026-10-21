@@ -5,7 +5,7 @@ use super::*;
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetWindowRect, SendMessageW, ShowWindow, HC_ACTION,
+    CreateWindowExW, DestroyWindow, GetWindowRect, IsIconic, SendMessageW, ShowWindow, HC_ACTION,
     MSLLHOOKSTRUCT, SC_MINIMIZE, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_MOUSEWHEEL,
     WM_SYSCOMMAND, WS_POPUP,
 };
@@ -1992,15 +1992,20 @@ fn a_wheel_frame_sizes_the_window_the_pin_stands_in() {
     stand_pin(previous_pin);
 }
 
-/// The tick's own restore asks the window the pin stands in, and a pin that is on the screen is not put
-/// up again: the show it would take is a move and a second paint of a frame the wheel has already
-/// presented, on every frame of a travel (see `the_pin_window_is_down`).
+/// The tick puts a pin's window back up only where something took it off the screen, and a window
+/// Windows minimized is not one of those: a pin that stands in a window of its own is a window like any
+/// other, and its own taskbar button is the way down and the way back.
 ///
-/// A `Win`+`D` is the case the road exists for, and the reason it asks two questions rather than one:
-/// the Shell minimizes the pin's window instead of hiding it, and a minimized window is still a
-/// visible one.
+/// **The fault this is a regression test for.** The tick asked `the_pin_window_is_down`, which counts a
+/// minimized window as a down one, and so every minimize of a real pin was undone a tick later. The
+/// pin's own taskbar button could only ever bring it back: clicking it while the pin was the window in
+/// front minimized the window — Windows' own gesture, and the one the button exists for — and this app
+/// put it up again, so the button restored and never minimized. A `Win`+`D` and a hand's own minimize
+/// were one and the same ask, though only the first is the desktop taking the window with everything
+/// else, and the second is a window the user put away. What is left to the tick is a window that was
+/// *hidden*: the state no button of Windows has a way back from (see `the_pin_owes_a_show`).
 #[test]
-fn the_tick_puts_a_pin_up_only_where_its_own_window_is_down() {
+fn the_tick_puts_up_a_pin_only_where_something_hid_its_window() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -2019,13 +2024,18 @@ fn the_tick_puts_a_pin_up_only_where_its_own_window_is_down() {
         let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
     }
 
+    // The window the user is working in, which after a minimize from the pin's own button is any window
+    // but the desktop: the Shell hands the front on to whatever is behind the pin.
+    let foreground = preview;
+
     assert!(
-        !the_pin_window_is_down(pin_hwnd),
+        !the_pin_owes_a_show(pin_hwnd, foreground),
         "a pin whose own window is on the screen is not one to put up again, though the hover's \
          window is down"
     );
 
-    // What a `Win`+`D` leaves behind: the window the pin stands in, minimized with the desktop.
+    // The Shell's own minimize of that window: what its taskbar button sends while the pin is the window
+    // in front, and what `Show Desktop` sends to every window of the desktop.
     unsafe {
         let _ = SendMessageW(
             pin_hwnd,
@@ -2035,30 +2045,33 @@ fn the_tick_puts_a_pin_up_only_where_its_own_window_is_down() {
         );
     }
     assert!(
-        the_pin_window_is_down(pin_hwnd),
-        "a pin the Shell minimized with the desktop is one the tick puts back up, and a minimized \
-         window is still a visible one"
+        unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the Shell's ask puts the pin's own window down, which is the button the pin wears"
     );
-
-    // And the show the tick makes on that answer, which is the whole of what the question is for: the
-    // pin comes back up, at the box it stands in, rather than staying a window with nothing on screen.
-    unsafe { show_pinned_window(pinned_window()) };
     assert!(
-        !the_pin_window_is_down(pin_hwnd),
-        "the pin comes back up with the desktop it went down with"
-    );
-    assert_eq!(
-        unsafe { window_rect(pin_hwnd) },
-        box_,
-        "and it comes back where it stood rather than wherever the Shell left it minimized"
+        !the_pin_owes_a_show(pin_hwnd, foreground),
+        "and a pin the Shell minimized is the Shell's to bring back: a tick that put it up again is a \
+         taskbar button that can restore and never minimize"
     );
 
+    // What is left to the tick: a window something took off the screen rather than minimized — no button
+    // of Windows has a road back from this one, which is why the restore exists at all.
     unsafe {
         let _ = ShowWindow(pin_hwnd, SW_HIDE);
     }
     assert!(
-        the_pin_window_is_down(pin_hwnd),
-        "and a window that is not on the screen at all is down as well"
+        the_pin_owes_a_show(pin_hwnd, foreground),
+        "a pin whose window was hidden is one the tick puts back up"
+    );
+
+    // And the show it makes on that answer, which is the whole of what the question is for: the pin comes
+    // back on the screen and at the box it stands in.
+    unsafe { show_pinned_window(pinned_window()) };
+    assert!(!the_pin_window_is_down(pin_hwnd), "the pin comes back up");
+    assert_eq!(
+        unsafe { window_rect(pin_hwnd) },
+        box_,
+        "and it comes back where it stood rather than wherever the Shell left it minimized"
     );
 
     // Safety: both windows are this test's own, and every global written here is put back.
