@@ -3214,6 +3214,7 @@ pub fn run_preview_window() {
             // lands in front of them, which is where a pin with the setting off belongs while the
             // user is in it (see `band_place`, the same question asked where a window is placed).
             if pinned()
+                && !pin_is_its_own_window()
                 && pin_raise_deadline.is_none()
                 && !pin_always_on_top()
                 && !pin_holds_the_front()

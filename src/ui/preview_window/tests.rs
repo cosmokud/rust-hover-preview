@@ -436,7 +436,6 @@ mod pin_keys;
 mod pin_menu;
 mod pin_player_failure;
 mod pin_resize;
-mod pin_show_front;
 mod pin_subtitle_reload;
 mod pin_swap_ffplay_jigsaw;
 mod pin_swap_ffplay_native;
