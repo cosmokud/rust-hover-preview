@@ -1006,22 +1006,27 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         return;
     };
 
+    let started = Instant::now();
+    let mut created_now = false;
+
     // **The window is asked for, not taken from the caller.** A pin this app draws itself stands in a
     // window of its own — Windows activates it on a press and lists it in Alt+Tab — and the preview's
-    // window is put down in the same breath, because two windows holding the same picture is one
-    // picture too many: what the hand sees between one frame and the next is the old surface of the
-    // window that has gone, stretched into the box it had.
+    // window is put down, because two windows holding the same picture is one picture too many.
+    //
+    // **But not yet.** The preview's window is what the user is looking at, and it is the only thing of
+    // ours on the screen until the pin's has been painted *and* shown: put down first, the row behind
+    // them shows through for as long as the paint takes — a scale of the file, a fresh surface and a
+    // compositor round trip, one frame to four — which is the blink the hand sees taking a hover into a
+    // pin. It is put down at the end of this function instead, once nothing of the file is left for it
+    // to explain.
     //
     // Every caller passes the preview's window, which is why it is no longer read: the answer is the
     // state's, and it is the same answer every other road asks for (see `pinned_window`).
     let hwnd = if pin_is_its_own_window() {
+        created_now = pin_real_window::real_pin_window().is_none();
         let Some(hwnd) = pin_real_window::real_pin_window_at(window) else {
             return;
         };
-        let preview = PREVIEW_HWND.load(Ordering::SeqCst);
-        if preview != 0 {
-            let _ = ShowWindow(HWND(preview as *mut _), SW_HIDE);
-        }
 
         // The name on the button the window brings is the file's own, so that the Shell's label
         // beside the hover says which file the window is of (see `pin_taskbar_title`).
@@ -1113,9 +1118,33 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 
+    // **And now the hover goes**, painted, shown and settled: from here the pin is what stands in the
+    // box, and the window that stood in for it while it was only a hover comes down with nothing left
+    // to explain (see the top of this function, which is where it used to go).
+    let preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let preview_up = unsafe { preview != 0 && IsWindowVisible(HWND(preview as *mut _)).as_bool() };
+    if pin_is_its_own_window() {
+        if preview != 0 && preview != hwnd.0 as isize {
+            let _ = ShowWindow(HWND(preview as *mut _), SW_HIDE);
+        }
+    }
+
     if !pin_always_on_top() {
         show_pin_taskbar();
     }
+
+    // What the hand's blink would be measured as, where the trace is asked for: the whole road from the
+    // box being read to the pin being on the screen, and whether this take-up is the one that made the
+    // window (the first of a run is the slowest). `preview_up` says whether there was a hover under the
+    // pin to hand over from at all.
+    crate::shell::explorer_hook::note_pin_click!(
+        "SHOW own {} created {} span {}us box {:?} preview_up {}",
+        pin_is_its_own_window() as u8,
+        created_now as u8,
+        started.elapsed().as_micros(),
+        window,
+        preview_up as u8,
+    );
 }
 
 /// How long after a pick a pin keeps answering for the front of its band.
