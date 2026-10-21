@@ -1129,15 +1129,19 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
     stand_pin(previous_pin);
 }
 
-/// A pin that is a window of its own is not raised, lowered or banded by this app: the press that lands
-/// on it activates it and the click that lands elsewhere puts the other window in front, which is what
-/// Windows does for every window it owns.
+/// A pin that is a window of its own is lowered and banded by Windows rather than by this app — the click
+/// that lands elsewhere puts the other window in front, and `Pin Mode → Always On Top` is the only band
+/// the pin holds — while the front an update owes it is still asked for, the one way Windows allows.
 ///
 /// The fault this is a regression test for: with `Always On Top` off, the app kept working the pin's
-/// z-order by hand — raising it on a pick, lowering it on a press that named no file — and every one of
-/// those roads was written for a window the Shell does not own. On a real window they were the app
-/// fighting Windows: a pin that would not go behind the listing it was clicked out of, and a pin left
-/// behind whenever a raise was undone by the activation that followed it.
+/// z-order by hand — lowering it on a press that named no file, holding the topmost band for it — and
+/// every one of those roads was written for a window the Shell does not own. On a real window they were
+/// the app fighting Windows: a pin that would not go behind the listing it was clicked out of, and a pin
+/// left behind whenever a raise was undone by the activation that followed it.
+///
+/// What is left of them is the raise an update owes the listing it follows (see `raise_pinned_preview`):
+/// `HWND_TOP` is refused to a process that is not in the foreground, so a pin that is a window of its own
+/// is owed the band taken and given back, and nothing more.
 #[test]
 fn a_pin_that_is_a_window_of_its_own_is_left_to_windows() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1147,6 +1151,10 @@ fn a_pin_that_is_a_window_of_its_own_is_left_to_windows() {
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
     let before = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
 
     // The pin's own window and the window this loop holds are two different windows, which is the
     // arrangement every forced raise got wrong (see `pinned_window`).
@@ -1193,6 +1201,65 @@ fn a_pin_that_is_a_window_of_its_own_is_left_to_windows() {
         "the band is the setting's, put on when the pin is shown, and not taken by a raise"
     );
 
+    // An update, with `Always On Top` off and `Move To Top` on: the pin is brought over the window it
+    // follows, which is the one thing Windows will not do for a window of a process that is not in the
+    // foreground (see `raise_pinned_preview`). The listing is put over the pin first, since that is
+    // where a pick leaves it.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+    unsafe {
+        let _ = SetWindowPos(
+            pin_hwnd,
+            in_front,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "the listing is over the pin before the update answers it"
+    );
+    unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "an update brings a pin that is a window of its own over the listing it was behind"
+    );
+    assert!(
+        !unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "and the band is given straight back: with `Always On Top` off the next click on another window \
+         puts the pin behind it, exactly as any window behaves"
+    );
+
+    // And with the row off the pin is left where the user's own clicks put it.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_update_move_to_top = false;
+    }
+    unsafe {
+        let _ = SetWindowPos(
+            pin_hwnd,
+            in_front,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    unsafe { settle_z_order() };
+    unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "with `Move To Top` off an update is a file swapped into the pin where it stands"
+    );
+
     // Safety: both windows are this test's own, and every global written here is put back.
     unsafe {
         let _ = DestroyWindow(pin_hwnd);
@@ -1203,6 +1270,7 @@ fn a_pin_that_is_a_window_of_its_own_is_left_to_windows() {
     pin_stands_in_its_own_window(false);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = before;
+        config.pin_update_move_to_top = move_to_top;
     }
     stand_pin(previous_pin);
 }
