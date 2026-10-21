@@ -200,15 +200,15 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // The `Update Preview` submenu: whether a pin that is up is shown the file the user picks
-    // next — the one the pointer clicks, or the one the keyboard selects — whether the
-    // pointer's own hover is one of the ways it is told about one, and whether being told brings it
-    // in front of what it was behind. A pin is a window to read or to watch, so all three are off
-    // the pin's own row rather than part of it.
+    // next — the one the pointer clicks, or the one the keyboard selects — whether being told
+    // brings it in front of what it was behind, and whether the pointer's own hover is one of the
+    // ways it is told about one. A pin is a window to read or to watch, so all three are off the
+    // pin's own row rather than part of it.
     //
     // The two rows below the first are greyed while it is off, because they say nothing then: a
-    // pin that follows nothing does not follow a hover either, and one that follows nothing has no
-    // update to come forward for. A row that could be ticked without effect would be a setting a
-    // user cannot tell from one that does nothing.
+    // pin that follows nothing has no update to come forward for, and one that follows nothing
+    // does not follow a hover either. A row that could be ticked without effect would be a setting
+    // a user cannot tell from one that does nothing.
     let update_menu = CreatePopupMenu().unwrap();
     append_labeled_item(
         update_menu,
@@ -216,27 +216,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_PIN_UPDATE,
         pin_update_label(),
     );
-    let mut hover_flags = MF_STRING
-        | if pin_update_on_hover {
-            MF_CHECKED
-        } else {
-            MF_UNCHECKED
-        };
-    if !pin_update {
-        hover_flags |= MF_GRAYED;
-    }
-    // A separator between the two, because they are not the same kind of row: the first says
-    // whether the pin follows the selection at all, the second only whether a hover is one of
-    // the ways that selection is made.
-    let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(
-        update_menu,
-        hover_flags,
-        ID_TRAY_PIN_UPDATE_HOVER as usize,
-        w!("On Hover"),
-    );
-    // And the raise, parted from the pair above by a separator of its own: how the file is chosen
-    // is settled by the two above, and this is what the window does once one is chosen.
+    // The raise sits right below the follow, because the two are one row read in two parts: the
+    // first says the pin is shown the file picked next, the second what it does about standing
+    // behind the listing it was picked in — and the user who turns the second off is asking about
+    // the very update the two of them describe.
     let mut move_to_top_flags = MF_STRING
         | if pin_update_move_to_top {
             MF_CHECKED
@@ -246,12 +229,29 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     if !pin_update {
         move_to_top_flags |= MF_GRAYED;
     }
-    let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(
         update_menu,
         move_to_top_flags,
         ID_TRAY_PIN_UPDATE_TOP as usize,
         w!("Move To Top"),
+    );
+    // Then a separator, because the row below is not the same kind of row: the pair above is what
+    // an update is, and this is a second way the file that update names is chosen.
+    let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let mut hover_flags = MF_STRING
+        | if pin_update_on_hover {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    if !pin_update {
+        hover_flags |= MF_GRAYED;
+    }
+    let _ = AppendMenuW(
+        update_menu,
+        hover_flags,
+        ID_TRAY_PIN_UPDATE_HOVER as usize,
+        w!("On Hover"),
     );
     let _ = AppendMenuW(
         pin_menu,
