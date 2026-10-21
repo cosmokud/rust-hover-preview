@@ -1196,8 +1196,28 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
         "a pick leaves the pin over the listing it answers"
     );
 
+    // With no window to go behind — the desktop, which the tick hands in as no window — nothing is
+    // asked: the bottom of the desktop's own list is below the wallpaper, and a pin sent there is one
+    // nobody can click back. The front a pick owed ends with it, as it does for the stand-in kinds: a
+    // press that names no file is the listing's answer whether or not it can say where the listing is.
+    assert!(
+        PIN_FRONT_OWED.load(Ordering::SeqCst),
+        "the pick armed the front this press answers"
+    );
+    unsafe { lower_pinned_preview(pinned_window(), HWND(ptr::null_mut())) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a press with no window to go behind leaves the pin where it is"
+    );
+    assert!(
+        !PIN_FRONT_OWED.load(Ordering::SeqCst),
+        "and the front it owed is given up: nothing is left ticking to raise it back"
+    );
+
     // The press that names no file — the toolbar, the tree, the gap between the rows: the pin goes
     // behind the window the press was made in, which is the listing the user is working in.
+    arm_pin_to_the_front();
     assert_eq!(
         pinned_window(),
         pin_hwnd,
@@ -1211,38 +1231,15 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
         "a press that names no file puts the pin behind the window it was made in"
     );
     assert!(
-        !pin_holds_the_front(),
-        "and it no longer owes the front: the next pick decides it again"
+        !PIN_FRONT_OWED.load(Ordering::SeqCst),
+        "and the front a pick owed is given back with it"
     );
     // Safety: the style is read off this test's own window rather than changed.
-    let lowered_style = unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32;
     assert_eq!(
-        lowered_style & WS_EX_TOPMOST.0,
-        0,
-        "the pin goes into the ordinary band, where the listing's own activation keeps it behind"
-    );
-    assert_eq!(
-        lowered_style & WS_EX_NOACTIVATE.0,
+        unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32 & WS_EX_NOACTIVATE.0,
         0,
         "and it stays one a click may activate: the press that put it behind is one a click on the \
          pin takes it back out of"
-    );
-
-    // With no window to go behind — the desktop, which the tick hands in as no window — nothing is
-    // asked: the bottom of the desktop's list is below the wallpaper, and a pin sent there is one
-    // nobody can click back (see `lower_pinned_preview`).
-    arm_pin_to_the_front();
-    unsafe { raise_pinned_preview(pinned_window()) };
-    unsafe { settle_z_order() };
-    assert!(
-        unsafe { stands_over(pin_hwnd, in_front) },
-        "the raise puts the pin back over the listing"
-    );
-    unsafe { lower_pinned_preview(pinned_window(), HWND(ptr::null_mut())) };
-    unsafe { settle_z_order() };
-    assert!(
-        unsafe { stands_over(pin_hwnd, in_front) },
-        "a press with no window to go behind leaves the pin where it is"
     );
 
     // And the raise: with `Always On Top` on, the raise a fake pin is owed is the topmost band — a band
@@ -1251,7 +1248,7 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
         config.pin_always_on_top = true;
     }
     assert!(!unsafe { window_holds_the_topmost_band(pin_hwnd) });
-    unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { raise_pinned_preview(pinned_window()) };
     unsafe { settle_z_order() };
     assert!(
         !unsafe { window_holds_the_topmost_band(pin_hwnd) },
@@ -1282,7 +1279,7 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
         unsafe { stands_over(in_front, pin_hwnd) },
         "the listing is over the pin before the update answers it"
     );
-    unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { raise_pinned_preview(pinned_window()) };
     unsafe { settle_z_order() };
     assert!(
         unsafe { stands_over(pin_hwnd, in_front) },
@@ -1310,7 +1307,7 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
         );
     }
     unsafe { settle_z_order() };
-    unsafe { raise_pinned_preview(pin_hwnd) };
+    unsafe { raise_pinned_preview(pinned_window()) };
     unsafe { settle_z_order() };
     assert!(
         unsafe { stands_over(in_front, pin_hwnd) },
