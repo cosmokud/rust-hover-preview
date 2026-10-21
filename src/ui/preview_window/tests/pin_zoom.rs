@@ -504,6 +504,78 @@ fn a_picture_is_drawn_on_the_whole_of_a_window_it_fills_and_inside_one_it_does_n
     assert_eq!(back.picture_box((1000, 800)), (0, 0, 1000, 800));
 }
 
+/// A picture the wheel has not taken past its window *is* its window, whatever whole pixel the box's
+/// outward rounding lands on.
+///
+/// The box a travel places is its ideal rect rounded once per edge — `floor` or `ceil` of the ideal
+/// width against the `round` the picture's own whole pixels are — so the box can be a pixel narrower
+/// than the picture it holds. Read against those two numbers, a picture under the cap was a picture
+/// *carried* on every frame whose ideal size fell in the wrong fraction of a pixel, and a travel
+/// under the cap crosses it hundreds of times: the road flipped between the band scaled into the
+/// window and the picture carried inside it several times per pixel of travel (see
+/// `PinZoom::picture_box` and the place beside it).
+#[test]
+fn a_picture_under_the_cap_is_the_whole_band_of_its_window_on_every_frame() {
+    // Two shapes, and both parities of the middle a box is seeded on: a 400 by 300 window's middle is
+    // a whole pixel and a 401 by 301 one's is a half.
+    for content in [
+        (300, 250, 700, 550),
+        (300, 250, 701, 551),
+        (300, 250, 620, 430),
+        (300, 250, 700, 475),
+    ] {
+        let asking = PinZoomInputs {
+            content,
+            zoom: PinZoom::filling(content),
+            dpi: DESK,
+            room: bounds(),
+            pointer: None,
+        };
+        let cap = pin_zoom_cap(&asking);
+        let (start, _) = region_size(content);
+        let mut drawn = start as f32;
+        let mut narrowed = 0;
+
+        // A travel the wheel has not taken past the cap, a twentieth of a pixel a frame: the ideal
+        // width sweeps every fraction of a pixel there is, and the box the rounding gives it is the
+        // whole of what each frame is asked about.
+        while drawn < cap * 0.95 {
+            let plan = pin_zoom_to(&asking, drawn, &display());
+            let (width, height) = region_size(plan.content);
+            let (drawn_width, drawn_height) = plan.zoom.drawn_size();
+
+            assert_eq!(
+                plan.zoom.picture_box((width, height)),
+                (0, 0, width, height),
+                "frame {drawn} of a {cap} cap: a picture the wheel has not taken past its window is \
+                 the band of it — {width} by {height} holding {:?} — and this one took the carried road",
+                plan.zoom.drawn
+            );
+            assert_eq!(
+                plan.zoom.picture_place((width, height)),
+                (0.0, 0.0, width as f32, height as f32),
+                "frame {drawn}: the place the sampler is handed is the same band — {:?} in {width} \
+                 by {height} — and this one took the carried road",
+                plan.zoom.picture_place((width, height))
+            );
+
+            // And the walk reaches the frames this is about: the picture's own whole pixels one wider
+            // than the box the outward rounding gave it, which is the pixel the two roads disagreed
+            // over. A walk that reached none of them would be no test of this at all.
+            if drawn_width > width || drawn_height > height {
+                narrowed += 1;
+            }
+
+            drawn += 0.05;
+        }
+
+        assert!(
+            narrowed > 0,
+            "the walk crosses the pixel the box's outward rounding takes away: {content:?}"
+        );
+    }
+}
+
 #[test]
 fn a_box_laid_out_again_puts_a_zoomed_picture_back_to_filling_it() {
     // Every road that chooses a box for the whole of a window — a walk, a maximize, a double-click, an

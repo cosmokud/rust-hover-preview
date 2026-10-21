@@ -268,6 +268,23 @@ impl PinZoom {
         self.drawn.1 / self.drawn.0
     }
 
+    /// Whether the picture *is* its window: the whole band is the picture's, so there is nowhere for a
+    /// pan to put it and no overhang for a sampler to reach into.
+    ///
+    /// The box a travel places is its ideal rect rounded outward, a pixel wider or narrower than the
+    /// picture it holds; a picture within that pixel of its window is its window, so the road a travel
+    /// takes does not flip with the rounding.
+    ///
+    /// It is here once because the two halves of the answer are two functions: a frame written into the
+    /// band as a fill and drawn as a carried picture is a picture shifted half a pixel inside a box that
+    /// cropped it (see `picture_box` and `picture_place`).
+    fn fills_window(&self, window: (i32, i32)) -> bool {
+        let (width, height) = (window.0.max(1), window.1.max(1));
+        let (drawn_width, drawn_height) = drawn_pixels(self.drawn);
+
+        self.bounce <= 0.0 && drawn_width <= width + 1 && drawn_height <= height + 1
+    }
+
     /// Where the picture *really* lands inside its window: the place in the floats the zoom's own
     /// arithmetic walks, which is what a sampler is owed and what a box of whole pixels is a rounding of.
     ///
@@ -284,8 +301,7 @@ impl PinZoom {
     /// caller wants the exact one or the whole-pixel one and never a third answer.
     pub(super) fn picture_place(&self, window: (i32, i32)) -> (f32, f32, f32, f32) {
         let (width, height) = (window.0.max(1), window.1.max(1));
-        let (drawn_width, drawn_height) = drawn_pixels(self.drawn);
-        if self.bounce <= 0.0 && drawn_width <= width && drawn_height <= height {
+        if self.fills_window(window) {
             return (0.0, 0.0, width as f32, height as f32);
         }
 
@@ -316,10 +332,11 @@ impl PinZoom {
     /// several milliseconds a frame (see `copy_frame_into_band`).
     pub(super) fn picture_box(&self, window: (i32, i32)) -> (i32, i32, i32, i32) {
         let (width, height) = (window.0.max(1), window.1.max(1));
-        let (drawn_width, drawn_height) = drawn_pixels(self.drawn);
-        if self.bounce <= 0.0 && drawn_width <= width && drawn_height <= height {
+        if self.fills_window(window) {
             return (0, 0, width, height);
         }
+
+        let (drawn_width, drawn_height) = drawn_pixels(self.drawn);
 
         let (pan_x, pan_y) = self.swung_pan();
         let left = (width - drawn_width) / 2 + pan_x.round() as i32;
