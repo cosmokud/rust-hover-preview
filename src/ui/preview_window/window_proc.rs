@@ -273,7 +273,7 @@ pub(super) unsafe extern "system" fn window_proc(
             // see (see `pinned_key_command`).
             LRESULT(0)
         }
-        WM_CLOSE | WM_SYSCOMMAND => {
+        WM_CLOSE => {
             // The window is never to be destroyed. It is created once, for the life of the
             // process, and put up and taken down a thousand times over as previews come and go;
             // letting a close reach `DestroyWindow` would end every preview from here on with
@@ -289,6 +289,35 @@ pub(super) unsafe extern "system" fn window_proc(
                 request_pin_end();
             }
             LRESULT(0)
+        }
+        WM_SYSCOMMAND => {
+            // **Not every system command is a close**, and answering them all as one is what made
+            // `Win`+`D` end Pin Mode. Show Desktop is the Shell minimizing every window that offers
+            // a minimize box, and that ask arrives here as `SC_MINIMIZE` on the pin's own window: the
+            // gesture meant to clear the screen took the pin away with it, though nothing had closed
+            // and nothing had been collapsed (see `pin_real_window` for the styles that make the
+            // window one Show Desktop takes).
+            //
+            // Only `SC_CLOSE` is a close: the window's own button, and the row the Shell's menu
+            // beside its taskbar button puts on it. The rest of what a system command can be —
+            // minimizing with the desktop and coming back with it above all — is the desktop's
+            // business with the window and belongs to `DefWindowProcW`, the road every other window
+            // in the system takes for it.
+            //
+            // A stand-in of `pin_taskbar`'s window answers those two commands itself, because that
+            // window is not the pin and has nothing to minimize: the pin is put away into its bubble
+            // instead (see `handle_taskbar_restore`).
+            // The low four bits of a system command belong to the application that sends one, so the
+            // command is the word without them — the mask `pin_taskbar`'s own procedure reads its two
+            // with.
+            if (wparam.0 & 0xFFF0) as u32 == SC_CLOSE {
+                if pinned() {
+                    request_pin_end();
+                }
+                return LRESULT(0);
+            }
+
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_CHAR => {
             // The character a key press has already been answered as. It is swallowed for the

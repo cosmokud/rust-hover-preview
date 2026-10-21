@@ -1,9 +1,10 @@
 use super::*;
 use windows::core::w;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetWindow, IsWindowVisible, ShowWindow, GW_HWNDPREV,
-    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WS_POPUP,
+    CreateWindowExW, DestroyWindow, GetWindow, GetWindowRect, IsIconic, IsWindow, IsWindowVisible,
+    SendMessageW, ShowWindow, GW_HWNDPREV, SC_CLOSE, SC_MINIMIZE, SW_SHOWNOACTIVATE,
+    WINDOW_EX_STYLE, WM_CLOSE, WM_SYSCOMMAND, WS_POPUP,
 };
 
 /// A SPACE with a focused bubble holds a film or a sound, and nothing else.
@@ -1331,6 +1332,133 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
         config.pin_always_on_top = before;
         config.pin_update_move_to_top = move_to_top;
     }
+    stand_pin(previous_pin);
+}
+
+/// The Shell's Show Desktop — `Win`+`D`, or the taskbar's button at the end of the bar — minimizes
+/// every window that offers a minimize box, and the pin's own window is one of them. The pin goes
+/// down with the desktop and comes back up with it, and Pin Mode is still on.
+///
+/// **The fault this is a regression test for.** Show Desktop ended Pin Mode. The window procedure
+/// answered every `WM_SYSCOMMAND` as a close, and the Shell's minimize of a window arrives as one of
+/// those (`SC_MINIMIZE`): the gesture meant to clear the screen took the pin away with it, and the
+/// pin the user had put up had to be put up again by hand. A `Win`+`D` never reaches an app as a key
+/// and no message of it names the desktop, so what is answered here is the only road the gesture has
+/// to this pin.
+///
+/// Only `SC_CLOSE` is a close: the window's own button and the button's menu row, both of them the
+/// Shell's ask rather than a key's — `Alt+F4` never gets as far as a message, because a system
+/// keystroke on this window is swallowed where the pin's own keys are read. Everything else a system
+/// command can be is the desktop's business with the window — `SC_MINIMIZE` and `SC_RESTORE` above
+/// all — and it belongs to `DefWindowProcW`, the road every other window in the system takes for it.
+/// A pin of another kind stands in a window of `pin_taskbar`'s, whose own procedure answers those
+/// two commands because that window is not this one: there is no pin there to minimize, and the pin
+/// is put away into its bubble instead (see `handle_taskbar_restore`).
+#[test]
+fn the_shells_show_desktop_minimizes_a_pin_that_is_a_window_of_its_own() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_own = pin_is_its_own_window();
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_end = PIN_END_REQUESTED.swap(false, Ordering::SeqCst);
+
+    // The box the pin says it stands in, where no display is, and the window the pin's own window is
+    // made from for it: what answers the Shell's command here is the class and procedure the app's
+    // own window answers with rather than a stand-in's.
+    let box_ = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240);
+    stand_pin(Some(overlay_pin(box_, PinChrome::always())));
+    pin_stands_in_its_own_window(true);
+    let pin_hwnd = unsafe {
+        pin_real_window::stand_real_pin_window_for_a_test(None);
+        pin_real_window::real_pin_window_at(box_)
+    }
+    .expect("the pin's own window");
+
+    // What Show Desktop sends every window with a minimize box, and what it therefore sends this
+    // one: the Shell is the sender, and the command is the window's own.
+    unsafe {
+        let _ = SendMessageW(
+            pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_MINIMIZE as usize),
+            LPARAM(0),
+        );
+    }
+
+    assert!(
+        !PIN_END_REQUESTED.load(Ordering::SeqCst),
+        "Show Desktop minimizes a window rather than closing it, so the pin is not asked to end"
+    );
+    assert!(
+        pinned(),
+        "the pin stands with its window down with the rest of the desktop"
+    );
+    assert!(
+        unsafe { IsIconic(pin_hwnd).as_bool() },
+        "and it is the window that went down: the command reaches the default procedure, which is \
+         where a window minimizes"
+    );
+
+    // And the road that puts it back up: the tick's own show, which runs on every tick where the
+    // desktop is not the window in front. The visibility that road asks about is the preview's
+    // window, and a picture pin has put that one down, so the pin the Shell minimized is asked for
+    // on the first tick after the desktop goes away. A pin the Shell minimized that nothing restored
+    // would be a pin gone for good, since it is not a window the Shell keeps in its list.
+    unsafe { show_pinned_window(pin_hwnd) };
+    assert!(
+        !unsafe { IsIconic(pin_hwnd).as_bool() },
+        "the pin comes back up with the desktop it went down with"
+    );
+    assert_eq!(
+        unsafe {
+            let mut rect = RECT::default();
+            let _ = GetWindowRect(pin_hwnd, &mut rect);
+            (rect.left, rect.top, rect.right, rect.bottom)
+        },
+        box_,
+        "and it comes back where it stood, which is not where a minimized window sits"
+    );
+
+    // A close is still a close: the button's own menu row.
+    unsafe {
+        let _ = SendMessageW(
+            pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_CLOSE as usize),
+            LPARAM(0),
+        );
+    }
+    assert!(
+        PIN_END_REQUESTED.load(Ordering::SeqCst),
+        "the Shell's Close is the pin's end, and the pin is ended rather than its window destroyed"
+    );
+    assert!(
+        unsafe { IsWindow(pin_hwnd).as_bool() },
+        "the pin is ended rather than its window destroyed, because the window is this app's for the \
+         life of the process"
+    );
+
+    // And the window's own close, which is what `Alt+F4` would be where the system keys were not
+    // swallowed (see `WM_SYSKEYDOWN`), is the same end.
+    PIN_END_REQUESTED.store(false, Ordering::SeqCst);
+    unsafe {
+        let _ = SendMessageW(pin_hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+    }
+    assert!(
+        PIN_END_REQUESTED.load(Ordering::SeqCst),
+        "and a `WM_CLOSE`, which is the window's own close, is one too"
+    );
+
+    // Safety: the window is this test's own, and every global written here is put back.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PIN_END_REQUESTED.store(previous_end, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
 }
 
