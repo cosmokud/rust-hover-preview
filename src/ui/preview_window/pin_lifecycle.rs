@@ -996,6 +996,25 @@ pub(super) fn pinned_window() -> HWND {
     HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _)
 }
 
+/// Whether a pin's window is down — not on the screen at all, or minimized, which is what the Shell
+/// leaves of it under the desktop. One question with one answer, asked by the two roads that ask it:
+/// the loop's restore, which puts a pin back up on a `Win`+`D` and must not do it to a window that is
+/// already there, and the show itself, which tells a pin standing where the user put it from one being
+/// brought back from away (see `show_pinned_window`).
+///
+/// **Which window is asked is the caller's to get right, and it is the pin's own one**: a picture pin
+/// stands in a window of its own and has put the preview's down, so the hover's window answers "down"
+/// for the whole life of the pin — and a restore that read it would put the pin up again on every
+/// tick, on the one road that exists for a pin the user cannot see (see `pinned_window`). What that
+/// costs a wheel is the whole of what it draws: the frames it presents went to the window that is
+/// down, and the pin on the screen was moved to the box its state holds and painted there by this
+/// restore instead (see `real_pin_window_at`), so each frame of a travel was the frame before it
+/// stretched into the box the frame after it asked for (see `render_layered_preview` and
+/// `step_pin_zoom`).
+pub(super) fn the_pin_window_is_down(hwnd: HWND) -> bool {
+    !unsafe { IsWindowVisible(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool()
+}
+
 /// Whether the pin on the screen is drawn the whole way by this app, and so stands in a window of its
 /// own: a window Windows activates on a press, lists in Alt+Tab and gives a taskbar button to.
 ///
@@ -1051,8 +1070,10 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // pin. It is put down at the end of this function instead, once nothing of the file is left for it
     // to explain.
     //
-    // Every caller passes the preview's window, which is why it is no longer read: the answer is the
-    // state's, and it is the same answer every other road asks for (see `pinned_window`).
+    // Every caller passes the window its own message arrived in, which is the preview's for most of
+    // them and the pin's own for the loop's restore — and it is no longer read for a pin that stands in
+    // its own window: the answer is the state's, and it is the same answer every other road asks for
+    // (see `pinned_window`).
     let hwnd = if pin_is_its_own_window() {
         created_now = pin_real_window::real_pin_window().is_none();
         let Some(hwnd) = pin_real_window::real_pin_window_at(window) else {
@@ -1070,8 +1091,11 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
 
     // Whether the pin's window is on the screen as this is asked, which is what tells a pin standing
     // where the user put it from one being brought back from away — and it is read before the showing
-    // below, since that is the call which puts it on the screen.
-    let on_the_screen = IsWindowVisible(hwnd).as_bool();
+    // below, since that is the call which puts it on the screen. A window the Shell minimized is a
+    // window being brought back as well, which is why the question is the same one the tick's restore
+    // asks and not the visibility of it alone (see `the_pin_window_is_down`): a pin restored from the
+    // desktop is one to put in front, not one already standing where the user left it.
+    let on_the_screen = !the_pin_window_is_down(hwnd);
     if !on_the_screen {
         let _ = MoveWindow(hwnd, window.0, window.1, width, height, false);
     }

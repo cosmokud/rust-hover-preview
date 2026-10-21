@@ -1402,11 +1402,11 @@ fn the_shells_show_desktop_minimizes_a_pin_that_is_a_window_of_its_own() {
          where a window minimizes"
     );
 
-    // And the road that puts it back up: the tick's own show, which runs on every tick where the
-    // desktop is not the window in front. The visibility that road asks about is the preview's
-    // window, and a picture pin has put that one down, so the pin the Shell minimized is asked for
-    // on the first tick after the desktop goes away. A pin the Shell minimized that nothing restored
-    // would be a pin gone for good, since it is not a window the Shell keeps in its list.
+    // And the road that puts it back up: the tick's own show, which runs on a tick where the pin's
+    // window is down and the desktop is not the window in front — and a window the Shell minimized
+    // is a window down, whatever the visibility of it says (see `the_pin_window_is_down`). A pin the
+    // Shell minimized that nothing restored would be a pin gone for good, since it is not a window
+    // the Shell keeps in its list.
     unsafe { show_pinned_window(pin_hwnd) };
     assert!(
         !unsafe { IsIconic(pin_hwnd).as_bool() },
