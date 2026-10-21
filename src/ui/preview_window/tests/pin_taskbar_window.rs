@@ -15,10 +15,11 @@ use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GetDC, ReleaseDC};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowRect, IsIconic, IsWindow,
-    IsWindowVisible, RegisterClassExW, SendMessageW, ShowWindow, GW_HWNDPREV, SC_RESTORE,
-    SW_MINIMIZE, SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SYSCOMMAND,
-    WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    IsIconic, IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, ShowWindow, GWL_EXSTYLE,
+    GW_HWNDPREV, SC_RESTORE, SW_MINIMIZE, SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE,
+    WM_ACTIVATE, WM_SYSCOMMAND, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP,
 };
 
 /// Register the class the stand-in is made from, once for the run.
@@ -1926,4 +1927,199 @@ fn a_pin_that_is_a_window_goes_to_the_taskbar_from_its_bubble_as_a_window() {
     stand_pin(previous_pin);
     hide_pin_bubble();
     forget_the_stand_in();
+}
+
+/// An update brings a pin that is put away into the taskbar back on top of the listing the file was
+/// picked in — and leaves it where the minimize put it where `Pin Mode → Update Preview → Move To Top`
+/// is off.
+///
+/// **The fault this is a regression test for.** `Move To Top` is the row that says an update brings the
+/// pin over the listing it follows, and a put-away pin has no window in any band to bring: the file was
+/// swapped into a window nobody could see, behind the taskbar button the minimize left, so the row
+/// answered nothing at all for a pin the user had minimized — "even the minimized pin should show on top
+/// now" (see `bring_a_put_away_pin_back`).
+///
+/// What the pin is brought back **to** is the window the Shell minimized, and the front is asked for
+/// after it is back: a window that is off the screen has no place of its own in the z-order, and the
+/// place a hidden window is shown into is behind everything opened over it since (see
+/// `show_pinned_window`).
+#[test]
+fn an_update_brings_a_pin_put_away_into_the_taskbar_back_on_top() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+    let updates = CONFIG
+        .lock()
+        .map(|config| config.pin_update_enabled)
+        .unwrap_or(true);
+
+    /// Off every display, so that the windows this test puts up are no windows of the user's — and wide
+    /// enough that the pin's own chrome has room in it.
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    // The stand-in is offered a class and no window of its own, so that a stand-in the collapse asks for
+    // is one it can really make: what is asserted below is that nothing is owed it, not that it is
+    // impossible to make.
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+
+    // The window the loop holds, which the property a restore asks about is asked of: there is always
+    // one, and here it is the pin's own — the own-window pin is drawn into that window alone.
+    PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+    // Safety: the window is this test's own.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    // And the listing the file is picked in: a window opened after the pin's, which is what puts it in
+    // front of the pin — the arrangement an update is answered from.
+    let listing = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            NO_MANS_LAND,
+            NO_MANS_LAND,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the listing")
+    };
+    // Safety: the window is this test's own, and it is asked to be on the screen — an offscreen window
+    // is still one the Shell lists, which is the whole of what the z-order below is read from.
+    unsafe {
+        let _ = ShowWindow(listing, SW_SHOWNOACTIVATE);
+    }
+    assert!(
+        unsafe { stands_over(listing, pin_hwnd) },
+        "the window this test opened after the pin's is the one in front of it"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_enabled = true;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The minimize: the pin goes away as a window, which is the state the update below is answered from.
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin is put away, and the window it stands in is the one Windows minimized"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the ask this app made of its own window is no restore of the Shell's"
+    );
+
+    // The update: the file a pick names is the file the pin comes back up on, and the window comes back
+    // with it, in front of the listing the pick was made in.
+    assert!(
+        an_update_brings_a_put_away_pin_back(),
+        "with `Move To Top` on, an update is the pin coming forward — and a pin that is away has nothing
+         to bring forward but itself"
+    );
+    assert!(
+        bring_a_put_away_pin_back(),
+        "so the pin the update names a file for is the pin that comes back up"
+    );
+
+    assert!(
+        !pin_is_collapsed(),
+        "the pin is up again, and what the collapse held back is the tick's to give back"
+    );
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool() && !unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "and it is the window Windows minimized that comes back, rather than a stand-in for it: a pin
+         put away as a window is the window minimized, and the window is what the update brings up"
+    );
+    assert!(
+        unsafe { stands_over(pin_hwnd, listing) },
+        "the pin is put in front of the window the file was picked in, which is the one thing an
+         update owes a pin it brings forward"
+    );
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0,
+        0,
+        "and no band is kept for it: `Pin Mode → Always On Top` is the only thing that keeps a pin over
+         other programs, and the next click on another window puts this one behind it"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the restore this road asked for is no restore of the Shell's to answer as well"
+    );
+
+    // And the row switched off: an update is a file swapped into the pin where it stands, and a pin that
+    // stands nowhere stays away until the user brings it back.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_update_move_to_top = false;
+    }
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    let _ = take_pin_command();
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin is put away again, which is the state this half is about"
+    );
+    assert!(
+        !an_update_brings_a_put_away_pin_back(),
+        "with the row off an update does not bring a put-away pin back"
+    );
+    assert!(
+        !bring_a_put_away_pin_back(),
+        "and the road answers that there was nothing to bring back"
+    );
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "so the file is swapped into the pin where the minimize put it, behind the button that stands
+         for it, until the user brings it back themselves"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back as it was.
+    unsafe {
+        let _ = DestroyWindow(listing);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    forget_the_stand_in();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_enabled = updates;
+        config.pin_update_move_to_top = move_to_top;
+    }
 }

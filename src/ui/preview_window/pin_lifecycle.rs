@@ -358,7 +358,9 @@ pub(super) static PIN_FRONT_OWED: AtomicBool = AtomicBool::new(false);
 /// A pin that is Always On Top owes nothing of its own — its band is the setting's — and neither
 /// does one whose `Move To Top` row is off, because that row is the whole of what says an update
 /// puts the pin in front of what it was behind. A collapsed pin has no window in any band until it
-/// is restored, and the restore is one of the doors that asks again.
+/// is restored, and the restore is one of the doors that asks again — except where the update is
+/// itself what restores it, which is the same row's other answer (see
+/// `bring_a_put_away_pin_back`).
 pub(super) fn arm_pin_to_the_front() {
     if !pinned() || pin_always_on_top() || !pin_update_move_to_top() || pin_is_collapsed() {
         return;
@@ -1236,13 +1238,75 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
 /// listing is ever met that takes longer than this to answer a click.
 pub(super) const PIN_RAISE_GRACE: Duration = Duration::from_millis(250);
 
+/// Whether an update is what brings a put-away pin back up: `Pin Mode → Update Preview → Move To Top`
+/// says an update brings the pin in front of the listing it follows, and a pin that is away has no
+/// window in any band to bring forward — so the row asks for the pin itself to come back up, and the
+/// file the update names is the window coming back rather than one held for the key (see
+/// `pin_bubble_pick` and `bring_a_put_away_pin_back`).
+///
+/// Asked of the pin's own state rather than of the way it was put away, because the two places a
+/// collapse can leave a pin — the round bubble on the desktop, and the window Windows minimizes
+/// into its own taskbar button — are one fact about the pin (`pin.collapsed`), and a row that
+/// reached only one of the two would be a setting the user cannot tell from one that does nothing.
+/// Asked of the pin rather than of the kind it is showing for the same reason: the row is about
+/// updates, and a pin put away is a pin the user cannot see, whichever kind it is showing.
+///
+/// The update itself is the two rows read together: the first says the pin follows the file the user
+/// picks next, and the second only what it does about being behind — the tray greys the second out
+/// while the first is off, and a pick the switch refuses is no update, so a bubble keeps holding its
+/// file the way it always has (see `pin_update_enabled`).
+pub(super) fn an_update_brings_a_put_away_pin_back() -> bool {
+    pin_is_collapsed() && pin_update_enabled() && pin_update_move_to_top()
+}
+
+/// Bring a put-away pin back up on the file an update names, and put it in front of the window the
+/// file was picked in: the whole of what `Pin Mode → Update Preview → Move To Top` asks of an update
+/// for a pin that is away (see `raise_pinned_preview` for the same update's answer to a pin that is
+/// up).
+///
+/// **The front comes second, and it is asked for of both kinds of pin.** The restore has to be
+/// first: a window that is off the screen has no place in the z-order to be raised from, and what
+/// the show leaves is the place the pin went down in — behind everything opened over it while it
+/// was away. And the raise is this door's own rather than the show's, because the show brings one
+/// of the two kinds of pin forward by itself: a pin that is a window of its own is taken into the
+/// topmost band for the moment it appears and the band is given straight back, while the kinds
+/// standing in the preview's window are put up with `HWND_TOP` — a place Windows refuses to a
+/// process the foreground window is not in, which is every update that arrives while the user is
+/// picking in the listing (see `show_pinned_window` and `put_pin_at_the_front`). For a pin of its
+/// own the ask is the same band twice in one tick, with no paint between the two calls, and that is
+/// the price of one road for both kinds rather than one that quietly comes back behind the listing.
+///
+/// The keyboard stays in the listing the file was picked in: a pick is one step of a walk with the
+/// arrows as often as it is a click, and a restore that took the focus would end that walk at the
+/// first file. Nothing of the band is kept either — `Always On Top` is the setting's, and this is an
+/// ordinary window from here (see `PinRestore::Update`).
+///
+/// Answers whether the pin was away and is up now: a pin that is up is an update's own to raise and
+/// not this road's, and one whose row is off is the user's to bring back.
+pub(super) fn bring_a_put_away_pin_back() -> bool {
+    if !an_update_brings_a_put_away_pin_back() {
+        return false;
+    }
+
+    restore_pin(&Win32PinWindow, PinRestore::Update);
+
+    // Safety: asks the desktop about a window of this app's own — where it stands in the z-order,
+    // and for the band and straight back out of it — which is the pair of calls every update that
+    // finds the pin on the screen already makes.
+    unsafe { raise_pinned_preview(pinned_window()) };
+
+    !pin_is_collapsed()
+}
+
 /// Put a pinned window at the top of the band it is allowed to stand in, without taking the
 /// keyboard and without moving it: what a preview update owes the user when the pin was behind the
 /// listing they picked the file in (see `Pin Mode → Update Preview → Move To Top`).
 ///
 /// The switch is read here rather than in the raise itself, because a press on the pin owes the
 /// raise whatever the switch says about updates (see `put_pin_at_the_front`). A pin that is put away
-/// has no window to raise and is left alone, and so is one whose row is switched off.
+/// has no window to raise and is left alone, and so is one whose row is switched off — the row's own
+/// answer for a pin that is away is to bring it back up first, which is the other door and not this
+/// one (see `bring_a_put_away_pin_back`).
 pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
     if pin_is_collapsed() || !pin_update_move_to_top() {
         return;

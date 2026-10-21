@@ -2946,7 +2946,23 @@ pub fn run_preview_window() {
                 // than stalling silent: what the user is doing behind a bubble is picking, and
                 // a bubble that took the pin down on the first pick would be a window lost for
                 // a file they did not ask to see (see `pin_bubble_pick`).
-                if pinned() && pin_is_collapsed() && walk.is_none() {
+                //
+                // **Unless the update is the pin coming back.** `Pin Mode → Update Preview → Move
+                // To Top` is the row that says an update brings the pin in front of the listing it
+                // follows, and a pin that is away has no window in any band to bring forward — so
+                // with that row on, the file the pick names is the file the pin comes back up on
+                // and is put in front of the listing by, rather than one held for the key (see
+                // `bring_a_put_away_pin_back`). It is asked here, before the file is planned,
+                // because a file held for the key is not one the pin is being shown; and only where
+                // nothing is loading, which is the rule the key's own restore keeps for the bubble it
+                // brings up — a load already in hand is a tick the pick below has no work for, and a
+                // window put back up without the file it was brought back for is a worse answer than
+                // the bubble it stayed in (see `pin_bubble_pick`).
+                let the_pin_comes_back = walk.is_none()
+                    && pending_load.is_none()
+                    && an_update_brings_a_put_away_pin_back();
+
+                if pinned() && pin_is_collapsed() && walk.is_none() && !the_pin_comes_back {
                     pin_bubble_pick = Some(path);
                 } else if pinned() && (pin_update_enabled() || !user_named) {
                     if pending_load.is_some() {
@@ -3064,6 +3080,22 @@ pub fn run_preview_window() {
                             // walk runs out on is the other case, and the mark is the answer to
                             // that (see `show_pin_failure`).
                             pin_step_off(walk, &mut pin_walk);
+                        }
+
+                        // **And the pin comes back up on the file it was brought back for.** It is
+                        // here, after the plan, for the reason the key's own restore waits for a
+                        // pick to be in hand: a window put back up without the file it was brought
+                        // back for is a worse answer than the bubble it stayed in, and a file the pin
+                        // cannot be shown is one it keeps what it has for rather than one a window is
+                        // opened on (see `pin_bubble_pick` and `bring_a_put_away_pin_back`).
+                        //
+                        // A file the pin is still waiting on a box for is the one case it comes up
+                        // ahead of: there is no load to wait for, because what the wait is for is the
+                        // box the pick is asked again with when the answer lands, and until then the
+                        // window shows the file it has — the same wait an update puts in a pin that is
+                        // already on the screen (see `pin_awaiting_box`).
+                        if the_pin_comes_back && !refused {
+                            bring_a_put_away_pin_back();
                         }
                     }
                 } else if pinned() {
