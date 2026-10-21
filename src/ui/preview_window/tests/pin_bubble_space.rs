@@ -1206,3 +1206,56 @@ fn a_pin_that_is_a_window_of_its_own_is_left_to_windows() {
     }
     stand_pin(previous_pin);
 }
+
+/// A picture pin owns the topmost band for the moment it appears, and gives it back — whatever the
+/// setting says, and never again after that moment.
+///
+/// What the user asked for: "the moment we click SPACE the window is exactly on top of everything",
+/// with `Always On Top` off meaning the pin is then an ordinary window that the next click puts behind.
+#[test]
+fn a_pin_that_is_a_window_of_its_own_takes_the_band_to_appear_and_gives_it_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let before = pin_always_on_top();
+
+    stand_pin(Some(overlay_pin((100, 100, 420, 340), PinChrome::always())));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+
+    pin_stands_in_its_own_window(true);
+    assert!(
+        showing_takes_the_band_to_appear(false),
+        "a pin that is a window of its own, off the screen and not Always On Top appears over          everything: `HWND_TOP` is refused for a process that does not hold the foreground"
+    );
+    assert!(
+        !showing_takes_the_band_to_appear(true),
+        "a pin already on the screen is left where the user's own clicks put it: a repaint is not an          appearance, and a band on every repaint is a pin that could not be put behind anything"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    assert!(
+        !showing_takes_the_band_to_appear(false),
+        "a pin that is Always On Top is going to the band above everything anyway, so it is not          taken and given back first"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    pin_stands_in_its_own_window(false);
+    assert!(
+        !showing_takes_the_band_to_appear(false),
+        "the kinds still standing in the preview's window keep the plain raise they have always had"
+    );
+
+    pin_stands_in_its_own_window(false);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    stand_pin(previous_pin);
+}
