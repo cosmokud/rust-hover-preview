@@ -190,10 +190,12 @@ pub(super) struct PinZoom {
     /// a zoom shake — the middle of an odd-width box is a half pixel, and a division that drops it hands
     /// the next frame a centre half a pixel off, which the frame after hands back again.
     ///
-    /// Every road that chooses a box for the whole of the window — a walk, a maximize, a double-click,
-    /// an edge or a whole window a hand dragged — seeds it with the middle of the box it chose, and a
-    /// travel carries it unchanged (see `centred_on`, `aim_pin_zoom` and `apply_pin_drag`).
-    pub(super) centre: (f32, f32),
+    /// It is private for that reason. "The centre agrees with the box unless a travel carries it" is the
+    /// whole of what this field is, and a field written from three modules is a comment rather than a
+    /// type: every road that chooses a box for the whole of the window — a fill, a walk, a maximize, a
+    /// double-click, a reset, a bubble restore — seats it with `reseat`, a hand that carried the window
+    /// moves it by the distance the box went with `carried`, and a travel carries it unchanged.
+    centre: (f32, f32),
     /// How far into its bounce the image inside the window is, in seconds: nothing except while a zoom
     /// out is bringing a panned image back to its place (see `pin_zoom_step`).
     ///
@@ -231,6 +233,28 @@ impl PinZoom {
             centre,
             bounce: 0.0,
         }
+    }
+
+    /// Seat the centre on a box a road has just chosen for the whole window — a fresh fill, a walk to
+    /// another file, a maximize, a double-click's re-centre, a reset, a window put back beside a bubble
+    /// the hand carried — so that the centre is that box's exact middle, half pixel and all.
+    ///
+    /// It and `carried` are the only two ways the centre moves, and between them they are the invariant
+    /// the field is: the centre agrees with the box unless a travel carries it. A road that wrote the
+    /// field itself would be a third rule about it (see `PinZoom::centre`).
+    pub(super) fn reseat(&mut self, content: ScreenRegion) {
+        self.centre = centred_on(content);
+    }
+
+    /// Carry the centre with the whole window a hand has moved by `moved` pixels, so that the box the
+    /// next notch grows about is the one the hand left and not the one it was carried from.
+    ///
+    /// A move changes no size, so the centre moves by exactly the distance the box did. It is a delta
+    /// and not the new box because the box a hand moves is the one the desk allows rather than the one
+    /// the pointer asked for (see `clamp_pinned_box`): what the zoom is owed is where the window *went*.
+    pub(super) fn carried(&mut self, moved: (i32, i32)) {
+        self.centre.0 += moved.0 as f32;
+        self.centre.1 += moved.1 as f32;
     }
 
     /// Whether this view is still on its way to the size the wheel asked for, or swinging the image
@@ -271,18 +295,14 @@ impl PinZoom {
     /// Whether the picture *is* its window: the whole band is the picture's, so there is nowhere for a
     /// pan to put it and no overhang for a sampler to reach into.
     ///
-    /// The box a travel places is its ideal rect rounded outward, a pixel wider or narrower than the
-    /// picture it holds; a picture within that pixel of its window is its window, so the road a travel
-    /// takes does not flip with the rounding.
+    /// The answer is `fills`, and it is asked of the same box by the placement's pan gate: a frame the
+    /// gate carries and this fills is a pan the paint ignores (see `pin_zoom_to`).
     ///
     /// It is here once because the two halves of the answer are two functions: a frame written into the
     /// band as a fill and drawn as a carried picture is a picture shifted half a pixel inside a box that
     /// cropped it (see `picture_box` and `picture_place`).
     fn fills_window(&self, window: (i32, i32)) -> bool {
-        let (width, height) = (window.0.max(1), window.1.max(1));
-        let (drawn_width, drawn_height) = drawn_pixels(self.drawn);
-
-        self.bounce <= 0.0 && drawn_width <= width + 1 && drawn_height <= height + 1
+        fills(self.drawn, self.bounce, window)
     }
 
     /// Where the picture *really* lands inside its window: the place in the floats the zoom's own
@@ -657,10 +677,15 @@ pub(super) fn pin_zoom_to(
         (content.0 + content.2) as f32 / 2.0 + input.zoom.pan.0,
         (content.1 + content.3) as f32 / 2.0 + input.zoom.pan.1,
     );
-    let (drawn_width, drawn_height) = drawn_pixels(drawn);
+    // Whether the pointer may carry the picture is whether the picture has anywhere to be carried to,
+    // which is `fills` — the very question `picture_box` and `picture_place` answer this frame's band
+    // with, asked of this frame's whole pixels and its bounce. It has to be that same question and not
+    // a second one beside it: a pan written here is the pan the next frame's paint is handed, so a
+    // frame the gate carries and the paint fills is a pan that goes into the state and is ignored, and
+    // it lands on the first frame after it where the picture really does overhang — as a jump.
     let pan = match input
         .pointer
-        .filter(|_| drawn_width > size.0 || drawn_height > size.1)
+        .filter(|_| !fills(drawn, input.zoom.bounce, size))
     {
         Some(point) => {
             let grown = drawn.0 / input.zoom.drawn.0;
@@ -935,7 +960,7 @@ pub(super) fn aim_pin_zoom(notches: f32) {
         // again is the same travel aimed at a new size: taking the centre off the box under it would
         // put the second notch's start half a pixel beside the first's, which is the shake.
         if !view.travelling() {
-            view.centre = centred_on(content);
+            view.reseat(content);
         }
         view.toward = toward;
         // The point this travel is anchored on: read from the pointer once, here, and kept for every
@@ -1020,6 +1045,27 @@ fn drawn_pixels(drawn: (f32, f32)) -> (i32, i32) {
         drawn.0.round().max(1.0) as i32,
         drawn.1.round().max(1.0) as i32,
     )
+}
+
+/// Whether a picture drawn at `drawn`, with `bounce` of it still swinging inside the window, *is* the
+/// window `window` wide: the whole band is the picture's, so there is nowhere for a pan to put it and no
+/// overhang for a sampler to reach into.
+///
+/// The box a travel places is its ideal rect rounded outward, a pixel wider or narrower than the picture
+/// it holds; a picture within that pixel of its window is its window, so the road a travel takes does not
+/// flip with the rounding.
+///
+/// It is one answer in one place because two callers ask it of the same frame: `pin_zoom_to` gates the
+/// pan on it and `picture_box`/`picture_place` choose the road a frame is drawn by with it. Asked in two
+/// places it was asked two ways — the gate in whole pixels with no tolerance and no bounce, the paint
+/// with both — and a frame could be *carried* for the gate and *filling* for the paint: the pan was
+/// computed, carried in the state, ignored by that frame's paint, and used by the frame after it, where
+/// the picture first overhangs. So an edge of that frame's picture jumped.
+fn fills(drawn: (f32, f32), bounce: f32, window: (i32, i32)) -> bool {
+    let (width, height) = (window.0.max(1), window.1.max(1));
+    let (drawn_width, drawn_height) = drawn_pixels(drawn);
+
+    bounce <= 0.0 && drawn_width <= width + 1 && drawn_height <= height + 1
 }
 
 /// The size of a screen region, width first, and never less than one pixel in either direction: a box

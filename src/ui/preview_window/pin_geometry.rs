@@ -712,19 +712,18 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             let share = home_share(zoom.drawn.0 - window, window);
             let carried = (carried.0 * share, carried.1 * share);
 
-            pin.zoom = Some(PinZoom {
-                pan: carried,
-                // A hand taking the picture is a hand taking over from the wheel: a travel still in
-                // flight ends at the size the picture has reached rather than going on under a hand
-                // that is carrying it, which would be two answers to where the picture is — and the
-                // loop owes the frame of that size for the same reason it owes one to any other size a
-                // picture has settled at (see `pin_zoom_oversize_box`). The bounce ends with it, for
-                // the same reason a notch's end does: a hand taking the picture is a hand taking over
-                // from the wheel (see `pin_zoom_bounce`).
-                toward: zoom.drawn.0,
-                bounce: 0.0,
-                ..zoom
-            });
+            // A hand taking the picture is a hand taking over from the wheel: a travel still in
+            // flight ends at the size the picture has reached rather than going on under a hand
+            // that is carrying it, which would be two answers to where the picture is — and the
+            // loop owes the frame of that size for the same reason it owes one to any other size a
+            // picture has settled at (see `pin_zoom_oversize_box`). The bounce ends with it, for
+            // the same reason a notch's end does: a hand taking the picture is a hand taking over
+            // from the wheel (see `pin_zoom_bounce`).
+            let mut settled = zoom;
+            settled.pan = carried;
+            settled.toward = zoom.drawn.0;
+            settled.bounce = 0.0;
+            pin.zoom = Some(settled);
             // Where the pointer has been carried out to, so that the next ask for a pointer that has
             // not moved is recognised as the same question (see the early return above).
             if let Some(drag) = pin.dragging.as_mut() {
@@ -779,13 +778,12 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         pin.content = content;
         // A hand that has carried the window has moved the ideal centre with it: the box the next
         // notch is grown about is the box the hand left and not the one it was carried from (see
-        // `PinZoom::centre`). A move changes no size, so the centre moves by exactly the distance the
+        // `PinZoom::carried`). A move changes no size, so the centre moves by exactly the distance the
         // box did. A resize is a box chosen for the whole window and hands the picture back to filling
-        // it below, which seeds a centre of its own.
+        // it below, which seats a centre of its own.
         if matches!(drag.action, PinDragAction::Move) {
             if let Some(zoom) = pin.zoom.as_mut() {
-                zoom.centre.0 += (content.0 - was.0) as f32;
-                zoom.centre.1 += (content.1 - was.1) as f32;
+                zoom.carried((content.0 - was.0, content.1 - was.1));
             }
         }
         // A hand that pulled the box to a size is the box's new bound as well as its size: the
