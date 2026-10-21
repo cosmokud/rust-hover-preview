@@ -1129,27 +1129,34 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
     stand_pin(previous_pin);
 }
 
-/// A pin that is a window of its own is lowered and banded by Windows rather than by this app — the click
-/// that lands elsewhere puts the other window in front, and `Pin Mode → Always On Top` is the only band
-/// the pin holds — while the front an update owes it is still asked for, the one way Windows allows.
+/// A press that names no file puts a pin that is a window of its own behind the window it was made in,
+/// and the front an update owes that pin is still asked for the one way Windows allows.
 ///
-/// The fault this is a regression test for: with `Always On Top` off, the app kept working the pin's
-/// z-order by hand — lowering it on a press that named no file, holding the topmost band for it — and
-/// every one of those roads was written for a window the Shell does not own. On a real window they were
-/// the app fighting Windows: a pin that would not go behind the listing it was clicked out of, and a pin
-/// left behind whenever a raise was undone by the activation that followed it.
+/// **The lowering is the app's, because for this pin Windows cannot do it.** The Shell puts an ordinary
+/// window behind the one a click activates, but a click in the window that is *already* active reorders
+/// nothing: Explorer is the foreground window while the user works in it, so a press on its toolbar, its
+/// tree or the gap between its rows left the pin standing over the listing it follows — the fault the
+/// user reported, beside every other program covering the pin. A press that names no file is the listing
+/// being worked in rather than a file being picked, and the pin goes behind the window that press was
+/// made in (see `PreviewMessage::PinNoPick`). The demotion is recoverable rather than final: the pin's
+/// own window is one a click may activate, so a click on the pin brings it back (see `pin_set_focusable`).
+/// A lowering this window cannot answer is the desktop's, which the tick hands in as no window: there is
+/// no place to go behind, and the bottom of the desktop's list is below the wallpaper.
 ///
-/// What is left of them is the raise an update owes the listing it follows (see `raise_pinned_preview`):
-/// `HWND_TOP` is refused to a process that is not in the foreground, so a pin that is a window of its own
-/// is owed the band taken and given back, and nothing more.
+/// **The raise is the rest of what is left of the stand-in kinds**, because `HWND_TOP` is refused to a
+/// process that is not in the foreground: the band is taken for the moment the pin comes forward over
+/// the listing, and given straight back. With `Always On Top` on the band is the setting's rather than
+/// either road's, and with `Update Preview → Move To Top` off the pin is left where the user's own
+/// clicks put it.
 #[test]
-fn a_pin_that_is_a_window_of_its_own_is_left_to_windows() {
+fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_an_update() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
     let before = pin_always_on_top();
     let move_to_top = CONFIG
         .lock()
@@ -1179,13 +1186,63 @@ fn a_pin_that_is_a_window_of_its_own_is_left_to_windows() {
         "the window made after the other stands over it"
     );
 
-    // A press that names no file: the ordinary road puts the pin behind the window the press was made
-    // in, which for a real window is what Windows has already done by activating that window.
-    unsafe { lower_pinned_preview(pin_hwnd, in_front) };
+    // What a pick leaves: the pin at the front of the ordinary band, over the listing it follows. The
+    // raise is the road below; this is the arrangement the press that answers it is read in.
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pinned_window()) };
     unsafe { settle_z_order() };
     assert!(
         unsafe { stands_over(pin_hwnd, in_front) },
-        "the lowering is the fake window's and is not asked of a pin that is a window of its own"
+        "a pick leaves the pin over the listing it answers"
+    );
+
+    // The press that names no file — the toolbar, the tree, the gap between the rows: the pin goes
+    // behind the window the press was made in, which is the listing the user is working in.
+    assert_eq!(
+        pinned_window(),
+        pin_hwnd,
+        "the road is handed the pin's own window rather than the preview's, which here is the \
+         listing: a lowering that acted on that one would move a window nobody can see"
+    );
+    unsafe { lower_pinned_preview(pinned_window(), in_front) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "a press that names no file puts the pin behind the window it was made in"
+    );
+    assert!(
+        !pin_holds_the_front(),
+        "and it no longer owes the front: the next pick decides it again"
+    );
+    // Safety: the style is read off this test's own window rather than changed.
+    let lowered_style = unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32;
+    assert_eq!(
+        lowered_style & WS_EX_TOPMOST.0,
+        0,
+        "the pin goes into the ordinary band, where the listing's own activation keeps it behind"
+    );
+    assert_eq!(
+        lowered_style & WS_EX_NOACTIVATE.0,
+        0,
+        "and it stays one a click may activate: the press that put it behind is one a click on the \
+         pin takes it back out of"
+    );
+
+    // With no window to go behind — the desktop, which the tick hands in as no window — nothing is
+    // asked: the bottom of the desktop's list is below the wallpaper, and a pin sent there is one
+    // nobody can click back (see `lower_pinned_preview`).
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pinned_window()) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "the raise puts the pin back over the listing"
+    );
+    unsafe { lower_pinned_preview(pinned_window(), HWND(ptr::null_mut())) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a press with no window to go behind leaves the pin where it is"
     );
 
     // And the raise: with `Always On Top` on, the raise a fake pin is owed is the topmost band — a band
@@ -1267,6 +1324,7 @@ fn a_pin_that_is_a_window_of_its_own_is_left_to_windows() {
     }
     pin_real_window::stand_real_pin_window_for_a_test(None);
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
     pin_stands_in_its_own_window(false);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = before;

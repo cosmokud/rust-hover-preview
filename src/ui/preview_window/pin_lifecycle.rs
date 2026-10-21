@@ -1310,11 +1310,19 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
 /// itself (see `Host::put_window`). The next raise puts both where the band asks for them again
 /// (see `place_pinned_siblings`).
 pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
-    // **A pin that is a window is left to Windows.** It is activated by the press that lands on it and
-    // put behind by the click that lands elsewhere; the Shell puts it in Alt+Tab and gives it a taskbar
-    // button, and every raise, lowering and band this road knows is a stand-in for what a window that
-    // the Shell does not own needs and this one does not. Nothing is forced for it (see `pin_real_window`).
-    if pin_is_its_own_window() {
+    // **A pin that is a window of its own is put behind by this road too, and here is why the Shell
+    // cannot be the one to do it.** The Shell puts an ordinary window behind the one a click activates,
+    // but a click in the window that is *already* active reorders nothing — and Explorer is the
+    // foreground window while the user works in it, so a press on its toolbar, its tree or the gap
+    // between its rows left the pin standing over the listing it follows. The press names no file, and
+    // the pin goes behind the window it was made in. That is recoverable rather than final: the pin's
+    // own window is one a click may activate, so a click on the pin brings it back (see
+    // `pin_set_focusable`).
+    //
+    // **What is refused is a press with no place in it.** The desktop is handed in as no window, and the
+    // bottom of the desktop's own list is below the wallpaper: a pin put there is a pin nobody can
+    // click back (see the tick in `event_loop`). Every other road hands in a window.
+    if pin_is_its_own_window() && window.is_invalid() {
         return;
     }
     if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
