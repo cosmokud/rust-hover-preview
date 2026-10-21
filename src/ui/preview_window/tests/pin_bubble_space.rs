@@ -1216,25 +1216,29 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
     );
 
     // The press that names no file — the toolbar, the tree, the gap between the rows: the pin goes
-    // behind the window the press was made in, which is the listing the user is working in.
+    // behind the window the press was made in, which is the listing the user is working in. The handle
+    // handed in is the pin's own, which for a picture is not the loop's: a lowering given the loop's
+    // window moves a window nobody can see (see `pinned_window`).
     arm_pin_to_the_front();
-    assert_eq!(
-        pinned_window(),
-        pin_hwnd,
-        "the road is handed the pin's own window rather than the preview's, which here is the \
-         listing: a lowering that acted on that one would move a window nobody can see"
-    );
     unsafe { lower_pinned_preview(pinned_window(), in_front) };
     unsafe { settle_z_order() };
+    assert_eq!(
+        unsafe { GetWindow(pin_hwnd, GW_HWNDPREV) }.ok(),
+        Some(in_front),
+        "a press that names no file puts the pin directly behind the window it was made in"
+    );
     assert!(
         unsafe { stands_over(in_front, pin_hwnd) },
-        "a press that names no file puts the pin behind the window it was made in"
+        "which is the listing over it, not the bottom of anybody's list"
     );
     assert!(
         !PIN_FRONT_OWED.load(Ordering::SeqCst),
         "and the front a pick owed is given back with it"
     );
-    // Safety: the style is read off this test's own window rather than changed.
+    // Safety: the style is read off this test's own window rather than changed. The bit is the one the
+    // take-down of `8a537f9` must never leave on a pin's own window, whatever road runs (`WS_EX_NOACTIVATE`
+    // is the hover's, whose press is not the pin's), and this is the road that now runs on every press
+    // that names no file.
     assert_eq!(
         unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32 & WS_EX_NOACTIVATE.0,
         0,

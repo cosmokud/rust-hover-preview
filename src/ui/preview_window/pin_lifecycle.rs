@@ -1319,19 +1319,6 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
     // the pin goes behind the window it was made in. That is recoverable rather than final: the pin's
     // own window is one a click may activate, so a click on the pin brings it back (see
     // `pin_set_focusable`).
-    //
-    // **What is refused is a press with no place in it.** The desktop is handed in as no window, and the
-    // bottom of the desktop's own list is below the wallpaper: a pin put there is a pin nobody can
-    // click back (see the tick in `event_loop`). Every other road hands in a window.
-    //
-    // The front a pick owed ends with it, which is the answer the place check further down gives the
-    // stand-in kinds: a press that names no file is the listing being worked in whether or not it can
-    // say where the listing is, and a front left owed here is a grace ticking to undo a press that has
-    // already been answered.
-    if pin_is_its_own_window() && window.is_invalid() {
-        PIN_FRONT_OWED.store(false, Ordering::SeqCst);
-        return;
-    }
     if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
         return;
     }
@@ -1357,6 +1344,12 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
         // Already behind it, or with no window to go behind at all: there is no band to give back,
         // and asking for the front of the ordinary one would be the pin coming back over the
         // listing by the road this is meant to take it away by.
+        //
+        // **No window is the desktop's, and it is no place.** The tick hands it in as no window rather
+        // than as the desktop's own handle, whose bottom is below the wallpaper: a pin put there is a pin
+        // nobody can click back (see `event_loop`). So the press asks for nothing that is about a place,
+        // and the front a pick owed ends here instead — a front left owed is a grace ticking to undo a
+        // press that has already been answered.
         PIN_FRONT_OWED.store(false, Ordering::SeqCst);
         return;
     }
