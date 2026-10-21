@@ -181,6 +181,19 @@ pub(super) struct PinZoom {
     /// picture has no overhang for an anchor to move the picture into, and the middle is what a
     /// picture that has not been carried is measured about (see `pin_zoom_to`).
     pub(super) anchor: Option<(i32, i32)>,
+    /// The window's ideal centre on the screen, in the floats the zoom is walked in: the one point
+    /// every frame of a travel places the box about.
+    ///
+    /// It is *ideal* because a window's box is whole pixels and this is not: the box is this centre
+    /// with half the window's ideal size taken either side of it, and each of the four edges rounded
+    /// once (see `pin_zoom_to`). Reading the centre back off the rounded box every frame is what made
+    /// a zoom shake — the middle of an odd-width box is a half pixel, and a division that drops it hands
+    /// the next frame a centre half a pixel off, which the frame after hands back again.
+    ///
+    /// Every road that chooses a box for the whole of the window — a walk, a maximize, a double-click,
+    /// an edge or a whole window a hand dragged — seeds it with the middle of the box it chose, and a
+    /// travel carries it unchanged (see `centred_on`, `aim_pin_zoom` and `apply_pin_drag`).
+    pub(super) centre: (f32, f32),
     /// How far into its bounce the image inside the window is, in seconds: nothing except while a zoom
     /// out is bringing a panned image back to its place (see `pin_zoom_step`).
     ///
@@ -196,17 +209,26 @@ impl PinZoom {
     pub(super) fn filling(content: ScreenRegion) -> Self {
         let (width, height) = region_size(content);
 
-        Self::still((width as f32, height as f32), (0.0, 0.0))
+        Self::still(
+            (width as f32, height as f32),
+            (0.0, 0.0),
+            centred_on(content),
+        )
     }
 
     /// A picture standing at a size and a place with nothing on its way anywhere: what a zoom that has
     /// arrived is, and the shape a test about where a picture *lands* is written in.
-    pub(super) fn still(drawn: (f32, f32), pan: (f32, f32)) -> Self {
+    ///
+    /// `centre` is the middle of the window the picture stands in, in the floats the placement walks:
+    /// the one fact about the box that is not the picture's, and the one the box is grown about (see
+    /// `PinZoom::centre`).
+    pub(super) fn still(drawn: (f32, f32), pan: (f32, f32), centre: (f32, f32)) -> Self {
         Self {
             drawn,
             pan,
             toward: drawn.0,
             anchor: None,
+            centre,
             bounce: 0.0,
         }
     }
@@ -519,7 +541,6 @@ pub(super) fn pin_zoom_to(
     displays: &dyn Displays,
 ) -> PinZoomPlan {
     let content = input.content;
-    let (width, height) = region_size(content);
     let shape = input.zoom.shape();
 
     // The picture at the size it is being drawn at, held inside the floor it may not be taken under and
@@ -543,22 +564,45 @@ pub(super) fn pin_zoom_to(
     // two stages are decided by one number: two clamps would be two chances for the window to come
     // out of a shape no picture ever had.
     let window_width = drawn_width.min(cap).max(1.0);
-    let size = (
-        window_width.round().max(1.0) as i32,
-        (window_width * shape).round().max(1.0) as i32,
+
+    // Where the window is put: about the one centre the travel carries, never about the box the last
+    // frame placed. The ideal rect is that centre with half the ideal window taken either side of it,
+    // and it is quantized exactly once — one rounding per edge, to the nearest whole pixel, a tie taken
+    // *outward* (the left and top down, the right and bottom up).
+    //
+    // The tie is taken outward because the window's whole pixels and its ideal middle do not line up: a
+    // tie rounded to the same side twice — which is what rounding each edge with `round` does, the tie
+    // going away from zero on both sides — would shift the box half a pixel right and down on exactly
+    // those frames whose ideal size is a whole odd number, and the frame after would shift it back.
+    // Rounded outward, a tie leaves the box a pixel wider and the centre where the travel put it.
+    //
+    // A size and an origin rounded separately would be two roundings of the one rect, and the shaken
+    // window this replaces is what comes of it: the middle read back off a rounded box is a half pixel
+    // on an odd frame and not on the next, so the same ideal centre places a box half a pixel one way
+    // and then half a pixel the other, frame after frame (see `PinZoom::centre`).
+    let (half_width, half_height) = (window_width / 2.0, window_width * shape / 2.0);
+    let placed = (
+        (input.zoom.centre.0 - half_width - 0.5).ceil() as i32,
+        (input.zoom.centre.1 - half_height - 0.5).ceil() as i32,
+        (input.zoom.centre.0 + half_width + 0.5).floor() as i32,
+        (input.zoom.centre.1 + half_height + 0.5).floor() as i32,
     );
 
-    // Where the window is put: about its own middle, and never about the picture's carried
-    // centre inside it. A picture carried inside a window that has stopped is the picture moving
-    // and not the window, so a window shrinking about a carried centre is a window that walks
-    // across the screen as the hand zooms out of a pan — the window follows the window itself,
-    // whatever the pan is doing, and the pan only ever moves the picture within it.
-    let window_centre = ((content.0 + content.2) / 2, (content.1 + content.3) / 2);
-    let placed = if size == (width, height) {
-        content
-    } else {
-        clamp_pinned_box(centred_at(size, window_centre), input.dpi, displays)
-    };
+    // And the box the desk allows in its place. There is no "same size, keep the box" early-out: the
+    // ideal rect of a box's own size and place is that box, so the early-out would return the same
+    // answer for the frame that matters — while for a frame whose size is the one the box already has
+    // it would hold a box the ideal rect has moved on from, which is the freeze a slow travel then
+    // jumps out of.
+    //
+    // The clamp is asked of this frame's whole-pixel rect alone and of nothing the frame before left:
+    // it reads that rect's own middle to choose the display and pins an edge to a constant, so a box
+    // held at the desk's edge cannot take turns between two answers as a travel crosses a pixel, and
+    // no jump can arrive from the previous box. It is asked after the rounding rather than in the
+    // floats before it because the rounding is of the ideal rect and the clamp is of the box that rect
+    // is drawn as; a float clamp would be a second placement rule for the desk's edge, and the edge is
+    // not what shakes.
+    let placed = clamp_pinned_box(placed, input.dpi, displays);
+    let size = region_size(placed);
     let box_centre = (
         (placed.0 + placed.2) as f32 / 2.0,
         (placed.1 + placed.3) as f32 / 2.0,
@@ -637,6 +681,9 @@ pub(super) fn pin_zoom_to(
             // walking toward (see `pin_zoom_step`).
             toward: input.zoom.toward,
             anchor: input.zoom.anchor,
+            // The one centre the travel is placed about, carried through frame after frame: it is
+            // seeded where a box is chosen and never read back off the box it placed (see `centre`).
+            centre: input.zoom.centre,
             bounce: input.zoom.bounce,
         },
     }
@@ -865,6 +912,14 @@ pub(super) fn aim_pin_zoom(notches: f32) {
         }
 
         let view = pin.zoom.as_mut()?;
+        // A notch on a box that is not on its way anywhere is a notch on the box the hand is looking
+        // at, and that box's own middle is where the window grows from (see `PinZoom::centre`). A box
+        // mid-travel already carries the one centre its travel is placed about, and the wheel turning
+        // again is the same travel aimed at a new size: taking the centre off the box under it would
+        // put the second notch's start half a pixel beside the first's, which is the shake.
+        if !view.travelling() {
+            view.centre = centred_on(content);
+        }
         view.toward = toward;
         // The point this travel is anchored on: read from the pointer once, here, and kept for every
         // frame of the travel rather than re-read by each of them.
@@ -954,4 +1009,17 @@ fn drawn_pixels(drawn: (f32, f32)) -> (i32, i32) {
 /// with no room in it is a divide waiting to happen on every road this app measures one.
 pub(super) fn region_size(region: ScreenRegion) -> (i32, i32) {
     ((region.2 - region.0).max(1), (region.3 - region.1).max(1))
+}
+
+/// The middle of a box in the floats a zoom is placed in: where a window that has not been carried is
+/// grown about, and the ideal centre every road that chooses a box for the whole of the window owes the
+/// zoom that follows it (see `PinZoom::centre`).
+///
+/// It is the middle the box's own whole pixels have, halved in the floats rather than in them, so that
+/// an odd width keeps its half pixel: that half is exactly what the placement used to drop.
+pub(super) fn centred_on(content: ScreenRegion) -> (f32, f32) {
+    (
+        (content.0 + content.2) as f32 / 2.0,
+        (content.1 + content.3) as f32 / 2.0,
+    )
 }

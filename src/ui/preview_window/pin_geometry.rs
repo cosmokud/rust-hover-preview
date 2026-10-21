@@ -775,7 +775,19 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // there is no maximize left to undo, so the caption's restore glyph goes back to a maximize
         // with it and the button maximizes again (see `pin_restore_box`).
         pin.restore = pin_restore_box(pin.restore, pin.content, content);
+        let was = pin.content;
         pin.content = content;
+        // A hand that has carried the window has moved the ideal centre with it: the box the next
+        // notch is grown about is the box the hand left and not the one it was carried from (see
+        // `PinZoom::centre`). A move changes no size, so the centre moves by exactly the distance the
+        // box did. A resize is a box chosen for the whole window and hands the picture back to filling
+        // it below, which seeds a centre of its own.
+        if matches!(drag.action, PinDragAction::Move) {
+            if let Some(zoom) = pin.zoom.as_mut() {
+                zoom.centre.0 += (content.0 - was.0) as f32;
+                zoom.centre.1 += (content.1 - was.1) as f32;
+            }
+        }
         // A hand that pulled the box to a size is the box's new bound as well as its size: the
         // side the user dragged the window out to is the side the files that follow may use, and
         // it writes one where the pin had none — a size asked for by hand is the size, not the box

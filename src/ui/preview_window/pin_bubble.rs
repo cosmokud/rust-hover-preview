@@ -1040,6 +1040,13 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
             if let Some(window) = placed_pin_box(pin, &DESKTOPS) {
                 pin.content =
                     content_box_of(window, pin.dpi, pin.transport_bar, pin.overlay, pin.caption);
+                // The box has been placed beside a bubble the hand carried rather than chosen by the
+                // wheel, so the middle a notch on it would grow about is the middle of the box it has
+                // just been given: the box the pin went down in is not the box it came back to (see
+                // `PinZoom::centre`).
+                if let Some(zoom) = pin.zoom.as_mut() {
+                    zoom.centre = centred_on(pin.content);
+                }
             }
         }
     }
