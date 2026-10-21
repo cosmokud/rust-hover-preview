@@ -1264,6 +1264,17 @@ pub(super) fn an_update_brings_a_put_away_pin_back() -> bool {
 /// for a pin that is away (see `raise_pinned_preview` for the same update's answer to a pin that is
 /// up).
 ///
+/// **Asked where the file is on the window, never where it is picked.** An update names a file that
+/// nothing has read yet — the read and the decode are a thread's, and a window is painted from the
+/// file it holds before it is put up (see `show_pinned_window`) — so a restore answered at the pick
+/// puts the window up on the file *before* it and swaps the new one in a tick or more later, which is
+/// the flash the user sees between the two images. So `named` is the file the pin must already be
+/// showing: the loop owes the return at the pick and answers it in the take-up of the file, where the
+/// install has made the named file the pin's own and the media behind it the window's (see
+/// `install_pinned_media` and the loop's `PreviewMessage::Pin` arm). A file the pin cannot be shown
+/// puts nothing on the window, so it is no file to come back on: the pin stays away until a file it
+/// can show arrives.
+///
 /// **The front comes second, and it is asked for of both kinds of pin.** The restore has to be
 /// first: a window that is off the screen has no place in the z-order to be raised from, and what
 /// the show leaves is the place the pin went down in — behind everything opened over it while it
@@ -1281,10 +1292,21 @@ pub(super) fn an_update_brings_a_put_away_pin_back() -> bool {
 /// first file. Nothing of the band is kept either — `Always On Top` is the setting's, and this is an
 /// ordinary window from here (see `PinRestore::Update`).
 ///
-/// Answers whether the pin was away and is up now: a pin that is up is an update's own to raise and
-/// not this road's, and one whose row is off is the user's to bring back.
-pub(super) fn bring_a_put_away_pin_back() -> bool {
+/// Answers whether the pin was away and is up now, on `named`: a pin that is up is an update's own to
+/// raise and not this road's, one whose row is off is the user's to bring back, and one that is
+/// showing another file is a window that would come up on the file before it.
+pub(super) fn bring_a_put_away_pin_back(named: &Path) -> bool {
     if !an_update_brings_a_put_away_pin_back() {
+        return false;
+    }
+
+    // **The file the update names is the file the window must already be showing.** What a window put
+    // up before the file is on it shows is the file before it, for as long as the read and the decode
+    // take — the flash the user reported between the two images (see the top of this function). The
+    // pin's own record is what answers, rather than the caller's word: the install writes the file and
+    // the media in one breath, so a pin naming this file is a pin showing it, and a pick that arrives
+    // ahead of its own load has nothing here to come back on.
+    if pinned_path().as_deref() != Some(named) {
         return false;
     }
 

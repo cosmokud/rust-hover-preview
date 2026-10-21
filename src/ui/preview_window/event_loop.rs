@@ -242,6 +242,18 @@ pub fn run_preview_window() {
         // the answer lands, which is a tick of its own, so this outlives the tick the way the
         // replay flags above it do (see `PinPlan::Awaiting`).
         let mut pin_awaiting_box: Option<PathBuf> = None;
+        // The return a put-away pin is owed once a file it can be shown is on the window: a pick
+        // names a file nothing has read yet, and a window put up on the pick shows the file before it
+        // for as long as the read and the decode take — the flash the user sees between the two
+        // images. So the return is owed where the file is picked and answered where the file is on
+        // the window (see `bring_a_put_away_pin_back` and the `PreviewMessage::Pin` arm, which is the
+        // only place this is read).
+        //
+        // It is the pin the debt is owed to and not a file, because the file a pick names may be one
+        // nothing can be shown for: a pin that stays away for it is brought back by the first file
+        // the walk lands on that can be shown (see `pin_failure_plan`), which is the answer the user
+        // asked for — the pin is the thing missed, not the file it was asked for.
+        let mut pin_return_owed = false;
         // Until when a pinned window owes the front of its band, because it has just answered a
         // pick: the click reaches the listing's window after it reaches this loop, and the listing
         // is activated then — over the pin (see `PIN_RAISE_GRACE` and `keep_pin_at_the_front`).
@@ -2899,6 +2911,9 @@ pub fn run_preview_window() {
                 // screen, because a pin ended and another taken up in the same tick is a tick this
                 // is the only place to notice.
                 pin_bubble_pick = None;
+                // And a return owed a pin that is over is not owed to the pin that follows it: the
+                // file it was owed for belongs to the window that has gone (see `pin_return_owed`).
+                pin_return_owed = false;
             }
 
             if let Some((path, walk, user_named)) = take_pin_pick(
@@ -3082,20 +3097,25 @@ pub fn run_preview_window() {
                             pin_step_off(walk, &mut pin_walk);
                         }
 
-                        // **And the pin comes back up on the file it was brought back for.** It is
-                        // here, after the plan, for the reason the key's own restore waits for a
-                        // pick to be in hand: a window put back up without the file it was brought
-                        // back for is a worse answer than the bubble it stayed in, and a file the pin
-                        // cannot be shown is one it keeps what it has for rather than one a window is
-                        // opened on (see `pin_bubble_pick` and `bring_a_put_away_pin_back`).
+                        // **And the pin comes back up on the file it was brought back for, which is
+                        // not here.** It is owed here, after the plan, for the reason the key's own
+                        // restore waits for a pick to be in hand: a window put back up without the
+                        // file it was brought back for is a worse answer than the bubble it stayed in
+                        // (see `pin_bubble_pick`).
                         //
-                        // A file the pin is still waiting on a box for is the one case it comes up
-                        // ahead of: there is no load to wait for, because what the wait is for is the
-                        // box the pick is asked again with when the answer lands, and until then the
-                        // window shows the file it has — the same wait an update puts in a pin that is
-                        // already on the screen (see `pin_awaiting_box`).
-                        if the_pin_comes_back && !refused {
-                            bring_a_put_away_pin_back();
+                        // And it is answered at the take-up of the file rather than here, because a
+                        // pick names a file nothing has read yet: a window put up now comes up on the
+                        // file before it and swaps the new one in a tick or more later, which is the
+                        // flash between the two images the user reported (see
+                        // `bring_a_put_away_pin_back`). The one file there is nothing to wait for is
+                        // the file the pin is already showing — it is on the window now — and the door
+                        // answers for that one alone, every other answer being the take-up's below.
+                        if the_pin_comes_back {
+                            // The door answers for the file the pin is already showing, which is the
+                            // one pick there is nothing to wait for: a pin left owing a return for it
+                            // would wait on a load that is never asked for, since a swap to the file
+                            // already on the window is no swap at all (see `pin_update_plan`).
+                            pin_return_owed = !bring_a_put_away_pin_back(&path);
                         }
                     }
                 } else if pinned() {
@@ -3166,6 +3186,11 @@ pub fn run_preview_window() {
                     // one that cannot be shown — and where the walk has nothing left to ask
                     // for, the mark for the file is what the pin is left standing over (see
                     // `pin_step_off` and `show_pin_failure`).
+                    //
+                    // A pin that is away stays away for it: the file was never put on the window,
+                    // so there is nothing for it to come back on — and the mark is no file either
+                    // (see `pin_failure_plan`). What brings it back is the first file in the walk
+                    // that can be shown (see `pin_return_owed`).
                     PinSwap::Refused { path, walk } => refuse_pinned_media(install, path, walk),
                     PinSwap::Ready(file) => {
                         install_pinned_media(install, file);
@@ -3809,7 +3834,22 @@ pub fn run_preview_window() {
                             }
                         }
 
-                        show_pinned_window(hwnd);
+                        // **A pin that was away comes back here, where the file is on the window.**
+                        // The take-up above has just given the window the box the file's own kind
+                        // asks for, and the show behind this paints before it appears — so the return
+                        // owed at the pick is answered here and nowhere earlier, and what comes up is
+                        // the file the update named rather than the one before it (see
+                        // `bring_a_put_away_pin_back` and `pin_return_owed`).
+                        //
+                        // Everything else that reaches this arm — a file a walk landed on, a pin that
+                        // was never away, a first take-up — is owed the show alone, which is the
+                        // paint of the new file. The debt is read once and let go of either way: this
+                        // is the take-up it was owed for.
+                        let came_back = pin_return_owed && bring_a_put_away_pin_back(&path);
+                        pin_return_owed = false;
+                        if !came_back {
+                            show_pinned_window(hwnd);
+                        }
                         place_pinned_siblings();
                         publish_pointer_hold(pinned_window());
                     }

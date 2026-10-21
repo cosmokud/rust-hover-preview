@@ -2049,8 +2049,12 @@ fn an_update_brings_a_pin_put_away_into_the_taskbar_back_on_top() {
         "with `Move To Top` on, an update is the pin coming forward — and a pin that is away has nothing
          to bring forward but itself"
     );
+    // The file the pin is showing, which is the file this door answers for: an update's own pick names
+    // a file nothing has read yet, and the window is not put up until that file is on it (see
+    // `bring_a_put_away_pin_back` and `a_put_away_pin_comes_back_on_the_file_the_update_names_rather_than_before_it`).
+    let on_the_pin = pinned_path().expect("the file the pin is showing");
     assert!(
-        bring_a_put_away_pin_back(),
+        bring_a_put_away_pin_back(&on_the_pin),
         "so the pin the update names a file for is the pin that comes back up"
     );
 
@@ -2096,7 +2100,7 @@ fn an_update_brings_a_pin_put_away_into_the_taskbar_back_on_top() {
         "with the row off an update does not bring a put-away pin back"
     );
     assert!(
-        !bring_a_put_away_pin_back(),
+        !bring_a_put_away_pin_back(&on_the_pin),
         "and the road answers that there was nothing to bring back"
     );
     assert!(
@@ -2109,6 +2113,138 @@ fn an_update_brings_a_pin_put_away_into_the_taskbar_back_on_top() {
     unsafe {
         let _ = DestroyWindow(listing);
     }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    forget_the_stand_in();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_enabled = updates;
+        config.pin_update_move_to_top = move_to_top;
+    }
+}
+
+/// A put-away pin comes back on the file an update names, and not a tick before that file is on its
+/// window: the window is not put up on the file it was showing for as long as the read and the decode
+/// take.
+///
+/// **The fault this is a regression test for.** The restore was answered where the pick was read, and
+/// a pick names a file nothing has read yet — so the window came up on the file before it and the new
+/// one was swapped in a tick or more later, a flash between the two images every time an update brought
+/// a put-away pin back (see `bring_a_put_away_pin_back`).
+///
+/// What the door is asked here is the pin's own state rather than the caller's word, because that is
+/// what leaves the order to the window: the install writes the file and the media in one breath (see
+/// `install_pinned_media`), so a pin naming the file is a pin showing it — and until then there is
+/// nothing for the window to come back on.
+#[test]
+fn a_put_away_pin_comes_back_on_the_file_the_update_names_rather_than_before_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+    let updates = CONFIG
+        .lock()
+        .map(|config| config.pin_update_enabled)
+        .unwrap_or(true);
+
+    /// Off every display, so that the window this test puts up is no window of the user's — and wide
+    /// enough that the pin's own chrome has room in it.
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    let showing_before = pin.path.clone();
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    // The stand-in is offered a class and no window of its own, so that a stand-in the collapse asks
+    // for is one it can really make: what is asserted below is that the pin stays away, not that no
+    // button could have stood for it.
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    // The window the loop holds, which the property a restore asks about is asked of: there is always
+    // one, and here it is the pin's own.
+    PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+    // Safety: the window is this test's own.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_enabled = true;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The minimize: the pin goes away as a window, which is the state the update below is answered
+    // from.
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin is put away, and the window it stands in is the one Windows minimized"
+    );
+
+    // The file the update names, which nothing has read yet: the pin still has the file before it, so
+    // there is nothing to come back on, and a window put up here would show that file for as long as
+    // the read and the decode take.
+    let update = PathBuf::from("picture-after-it.png");
+    assert_ne!(
+        update, showing_before,
+        "the update names another file than the one the pin is showing"
+    );
+    assert!(
+        !bring_a_put_away_pin_back(&update),
+        "a restore answered before the file is on the window is no restore: the pin is not showing the file it names"
+    );
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "so the pin stays where the collapse left it rather than coming up on the file before it, \
+         which is the flash the user sees between the two images"
+    );
+
+    // The install's own write, which is where the file an update names becomes the file the pin is
+    // showing and the media behind it the window's (see `install_pinned_media`). The show that follows
+    // it paints before the window appears, so the window comes up on this file and no other.
+    if let Some(mut state) = pin_state() {
+        if let Some(pin) = state.pin_mut() {
+            pin.path = update.clone();
+        }
+    }
+
+    assert!(
+        bring_a_put_away_pin_back(&update),
+        "and the pin comes back where the file it was brought back for is the file on it"
+    );
+    assert!(!pin_is_collapsed(), "the pin is up again");
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool() && !unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "and the window Windows minimized is the one that comes back"
+    );
+
+    // Safety: the window is this test's own, and every global written here is put back as it was.
     pin_real_window::stand_real_pin_window_for_a_test(previous_window);
     unsafe {
         let _ = DestroyWindow(pin_hwnd);
