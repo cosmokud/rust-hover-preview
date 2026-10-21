@@ -273,6 +273,7 @@ pub(crate) use pin_lifecycle::band_place;
 pub(crate) use pin_lifecycle::pin_always_on_top;
 pub(crate) use pin_lifecycle::pin_holds_the_front;
 pub(crate) use pin_lifecycle::PinCommand;
+pub(crate) use pin_menu_window::PIN_MENU_HWND;
 pub(crate) use pin_model::pin_is_focused;
 pub(crate) use pin_model::pin_zoom_keep_alive_try;
 pub(crate) use pin_walk::PinPlanned;

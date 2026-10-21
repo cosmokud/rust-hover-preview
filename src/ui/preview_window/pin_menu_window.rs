@@ -15,6 +15,14 @@
 //! there and is answered against the panel's own rows in the screen's own coordinates
 //! (see `pin_menu::pinned_menu_press`).
 //!
+//! No input, and still a window the mouse lands on: the panels are opaque there, and a
+//! window that let the pointer through would answer "what is under the hand" with the listing
+//! the menu floats over. The Explorer hook reads a pick off that window (`PointerTick::of`)
+//! and cannot tell a row of a panel from the file behind it — a press on **Minimize to
+//! Bubble** would put the pin away and then hand it the file under that row, which brings the
+//! window back showing it (see `window_is_menu_popup_chrome`). The style that makes this
+//! window is named at the create below, and this paragraph is why it is the one it is.
+//!
 //! There is no such window where the card's own is a stand-in, which is what a test
 //! has, so every road here answers nothing and builds nothing without one
 //! (`pin_menu_window`).
@@ -25,7 +33,10 @@ use super::*;
 pub(super) const PIN_MENU_CLASS: PCWSTR = w!("RustHoverPreviewPinMenu");
 
 /// The menu window that is up, or nothing while no menu is.
-static PIN_MENU_HWND: AtomicIsize = AtomicIsize::new(0);
+///
+/// `pub(crate)` for the Explorer hook, which asks whether the window under the pointer is this one
+/// rather than the listing the panel covers (see `pin_menu_window_is_at`).
+pub(crate) static PIN_MENU_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// Put the card's menu where it stands, in a window of its own over the screen, and
 /// take that window away where no menu is up.
@@ -214,8 +225,10 @@ fn pin_menu_window() -> Option<HWND> {
 
     let hwnd = unsafe {
         let hinstance = GetModuleHandleW(None).ok()?;
+        // No `WS_EX_TRANSPARENT`: the pointer has to be able to land on the panel, for the reason
+        // the module doc gives.
         CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
             PIN_MENU_CLASS,
             w!("Pinned menu"),
             WS_POPUP,
