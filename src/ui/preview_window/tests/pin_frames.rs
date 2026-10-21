@@ -725,7 +725,7 @@ fn a_picture_the_wheel_has_taken_past_its_window_is_drawn_where_the_zoom_says_it
     pin.zoom = Some(PinZoom::still(
         (drawn_width as f32, drawn_height as f32),
         (pan, 0.0),
-        middle(pin.content),
+        centred_on(pin.content),
     ));
     stand_pin(Some(pin));
 
