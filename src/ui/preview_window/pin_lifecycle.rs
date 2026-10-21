@@ -294,6 +294,21 @@ pub(crate) fn band_place() -> HWND {
     }
 }
 
+/// Whether a pin being put up takes the topmost band for the moment it appears, and gives it back.
+///
+/// A pin that is a window of its own is put up over everything, whatever the setting says: a window
+/// that appears behind the listing it was asked for from is a window the user does not see, and the
+/// press that asked for it (SPACE) is one the foreground window got, so `HWND_TOP` would do nothing
+/// (see `put_pin_at_the_front`). The band is held for two calls and given back, so nothing of the
+/// setting is taken away from it: a window put up this way is one the next click puts behind.
+///
+/// Asked only of a pin that is *not* already on the screen — a repaint, a drag and a resize are not
+/// appearances, and putting the pin in front on every one of them would be a window that could not be
+/// put behind anything.
+pub(super) fn showing_takes_the_band_to_appear(on_the_screen: bool) -> bool {
+    pin_is_its_own_window() && !pin_always_on_top() && !on_the_screen
+}
+
 /// The pin owes the front: a pick, a take-up or a restore asked for it, and no press that named no
 /// file and no window change away from the listing has given it back since.
 ///
@@ -1059,8 +1074,31 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         // a window shown behind the one that holds the foreground is Windows' answer rather than a
         // fault this road can repair without the band `Always On Top` exists to keep (see
         // `pin_real_window`).
-        if pin_is_its_own_window() {
-            let _ = SetForegroundWindow(hwnd);
+        if showing_takes_the_band_to_appear(on_the_screen) {
+            // **On top of everything the moment it appears, and a normal window from then on.** The
+            // topmost band is the one way a process that does not hold the foreground can put a window
+            // in front of the one that does, and it is given straight back in the same breath: what is
+            // left is a window standing at the front of the ordinary band, which the next click on
+            // another window puts behind it, exactly as any window behaves. `Pin Mode → Always On Top`
+            // is still the only thing that keeps a pin over other programs (see `pin_holds_the_front`).
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
         } else {
             let _ = SetWindowPos(
                 hwnd,

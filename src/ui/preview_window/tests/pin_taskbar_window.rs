@@ -8,6 +8,7 @@
 //! that the picture of a pin put away into the bubble is the bubble.
 
 use super::*;
+use std::time::Duration;
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::DwmFlush;
@@ -1427,11 +1428,22 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     the_stand_in();
 
     // The picture the button of this pin holds, taken the way a collapse takes it.
-    unsafe {
-        keep_the_pin_for_the_taskbar();
+    //
+    // **Asked again while it is still nothing**, because the picture is read off another window's
+    // pixels and that read is a read of what the compositor has drawn: asked once, this was a red in
+    // one run out of three with nothing changed but the moment the run started (the same read stands
+    // behind `DwmFlush` above). The wait is bounded by a few frames.
+    let mut picture = None;
+    for _ in 0..40 {
+        unsafe { keep_the_pin_for_the_taskbar() };
+        picture = the_pin_picture();
+        if picture.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        the_pin_picture().is_some(),
+        picture.is_some(),
         "the button of a pin put away holds the pin's own picture"
     );
 
