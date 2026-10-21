@@ -2368,8 +2368,12 @@ pub fn run_preview_window() {
                         // press was made in, which is the one the user is looking at, and not the
                         // foreground, which can still be the window they came from (see
                         // `pin_press_was_not_a_pick`).
+                        //
+                        // The window lowered is the pin's own, which for a picture is not the handle
+                        // this loop holds: a lowering that moved the loop's window moved a window
+                        // nobody can see while the pin stayed over the listing (see `pinned_window`).
                         pin_raise_deadline = None;
-                        lower_pinned_preview(hwnd, HWND(window as *mut _));
+                        lower_pinned_preview(pinned_window(), HWND(window as *mut _));
                     }
                     PreviewMessage::OfficeRenderReady {
                         path,
