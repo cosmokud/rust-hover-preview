@@ -1664,3 +1664,266 @@ fn a_button_is_not_shown_for_a_pin_put_away_into_its_bubble() {
     forget_the_stand_in();
     stand_pin(previous_pin);
 }
+
+/// A pin that stands in a window of its own is minimized *as a window* when it is put away into the
+/// taskbar: the button it wears is that window's own, and hiding the window is the one thing that takes
+/// the button away with it.
+///
+/// **The fault this is a regression test for.** `Minimize → To Taskbar` took every pinned window off the
+/// screen and then stood the app's own taskbar window in its place — and a real pin is refused that
+/// stand-in, because the window it stands in brings a button of its own. So the collapse hid the only
+/// window that had a button and put nothing in its place: the pin left the screen and the taskbar
+/// together, with nothing anywhere left to bring it back (see `collapse_pin_to` and `a_button_is_owed`).
+/// A window of the Shell's is minimized by the Shell and restored by it, so the collapse asks Windows for
+/// the one thing Windows already does rather than hiding what Windows is drawing a button for.
+#[test]
+fn a_pin_that_is_a_window_keeps_its_button_when_it_is_minimized_to_the_taskbar() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+
+    /// Off every display, so that the window this test puts up is no window of the user's — and wide
+    /// enough that the pin's own chrome has room in it.
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    // The stand-in is offered a class and no window of its own, so that a stand-in the collapse asks for
+    // is one it can really make: what is asserted below is that nothing is owed it, not that it is
+    // impossible to make.
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    // On the screen, off every display: the state a pin's window is in when its button is owed.
+    // Safety: the window is this test's own.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+
+    assert!(
+        pin_is_collapsed(),
+        "the pin is put away, and what is playing behind its window is held by that"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the minimize this app asked its own window for is no restore: the window is shown on its \
+         way down to the button, and a `SIZE_RESTORED` read as the Shell's would bring the pin back in \
+         the same breath it was put away in"
+    );
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin's own window is the one Windows minimizes: a window that is minimized keeps its \
+         taskbar button, and a window that is hidden takes the button away with it"
+    );
+    assert!(
+        showing_taskbar_window().is_none(),
+        "and nothing stands in for it: one pin wears one button, and this one is the window's own"
+    );
+
+    // Safety: the window is this test's own, and every global written here is put back as it was.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    forget_the_stand_in();
+}
+
+/// A pin put away as a window comes back as one: the Shell restores the window, and the pin's own state
+/// follows it.
+///
+/// **The fault this is a regression test for.** A collapse into the taskbar is a state this app holds —
+/// held-back previews, parked playback, and a minimize that is answered by nothing because the pin
+/// believes it is away — while the window a real pin stands in is put back by a button of the Shell's
+/// that asks this app nothing. Left alone, the pin is on the screen and still away as far as the app is
+/// concerned: what it plays stays parked, and the next minimize does not land (see `collapse_pin_to`).
+#[test]
+fn a_pins_own_window_brought_back_is_the_pins_own_restore() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    // Safety: the window is this test's own.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin is put away as a window, which is the state this test is about"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the ask this app made of its own window is no restore of the Shell's"
+    );
+
+    // What the button Windows draws for that window sends when it is clicked: the Shell's own restore,
+    // which reaches the window rather than any stand-in of this app's.
+    // Safety: a message to a window of this app's own, with the numbers the Shell sends with it.
+    unsafe {
+        SendMessageW(
+            pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_RESTORE as usize),
+            LPARAM(0),
+        );
+    }
+
+    assert!(
+        !unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the Shell's own call puts the window back on the screen"
+    );
+    assert!(
+        matches!(take_pin_command(), Some(PinCommand::CameBack)),
+        "and the pin's state comes back with the window: a pin left believing it is away holds \
+         everything a collapse holds back, and answers no minimize with anything"
+    );
+
+    // And the road the answer takes, which is the restore without a window of the app's pressed for it:
+    // the pin is up again, and no window of the app's is put in front of the one the Shell chose.
+    restore_pin(&a_restored_window(), PinRestore::TheShell);
+    assert!(!pin_is_collapsed(), "the pin is up again");
+
+    // Safety: the window is this test's own, and every global written here is put back as it was.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    forget_the_stand_in();
+}
+
+/// The bubble's own `To Taskbar` row is the same door: a pin that stands in a window of its own is put
+/// in the taskbar as a window, whatever door it was asked from.
+///
+/// The fault this is a regression test for is the one above, reached from the other side: a pin inside
+/// the round bubble has its window *hidden*, and the row that moves it to the taskbar put the app's
+/// stand-in up instead of the window — which a real pin is refused — so the button the row was asked for
+/// was the one thing that did not appear (see `bubble_to_taskbar`).
+#[test]
+fn a_pin_that_is_a_window_goes_to_the_taskbar_from_its_bubble_as_a_window() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    // Safety: the window is this test's own.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    // The bubble first, which is the state the row is asked from: the pin's window goes down with it.
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    assert!(
+        pin_is_collapsed() && !unsafe { IsWindowVisible(pin_hwnd) }.as_bool(),
+        "a pin in the bubble has its window down, which is what the row has to undo"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "a pin hidden into the bubble is not one the Shell brought back: nothing of this app's asked the \
+         window down there, so nothing of it is a restore"
+    );
+
+    bubble_to_taskbar();
+
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the row's own minimize is no restore either, though the window is shown to become iconic"
+    );
+    assert!(
+        pin_is_collapsed(),
+        "the pin is still put away, only somewhere else"
+    );
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "and it is the pin's own window that is minimized: a window that is hidden wears no button, so \
+         the taskbar the row asks for is a taskbar with nothing in it"
+    );
+    assert!(
+        showing_taskbar_window().is_none(),
+        "and nothing stands in for it: one pin wears one button, and this one is the window's own"
+    );
+
+    // Safety: the window is this test's own, and every global written here is put back as it was.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    hide_pin_bubble();
+    forget_the_stand_in();
+}

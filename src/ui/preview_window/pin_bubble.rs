@@ -9,6 +9,9 @@
 //! frames of the film *moving* are read beside that player (see `bubble_stream`).
 
 use super::*;
+// The one call a window's own minimize is asked for with: a pin put away into the taskbar is the pin's
+// window minimized, rather than a window hidden (see `collapse_pin_to`).
+use windows::Win32::UI::WindowsAndMessaging::SW_MINIMIZE;
 
 /// The class the round bubble a collapsed pin leaves is created from.
 pub(super) const PIN_BUBBLE_CLASS: PCWSTR = w!("RustHoverPreviewPinBubble");
@@ -636,6 +639,47 @@ pub(super) unsafe fn bubble_menu_hover(hwnd: HWND) -> bool {
     changed
 }
 
+/// Whether this app is asking its own pin's window down right now.
+///
+/// A collapse into the taskbar minimizes the window the pin stands in, and the one message that says a
+/// window has *come back* — `WM_SIZE` with `SIZE_RESTORED` — is a message the same call can send on its
+/// way to the minimized state, since a window that was hidden is shown before it is put down. What tells
+/// the two apart is who asked, and this is the only thing that says so (see `window_proc`'s `WM_SIZE` and
+/// `ask_the_pin_down`).
+static ASKING_THE_PIN_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Ask the pin's own window down, saying that anything arriving during the ask is this app's own.
+///
+/// The collapse and the bubble's `To Taskbar` row both put a pin in the taskbar by minimizing the window
+/// it stands in, which is the one form of it that keeps the window's own taskbar button (see
+/// `collapse_pin_to`).
+unsafe fn ask_the_pin_down(hwnd: HWND) {
+    ASKING_THE_PIN_DOWN.store(true, Ordering::SeqCst);
+    let _ = ShowWindow(hwnd, SW_MINIMIZE);
+    ASKING_THE_PIN_DOWN.store(false, Ordering::SeqCst);
+}
+
+/// Whether the pin's window was put down by this app rather than restored by the Shell.
+pub(super) fn the_pin_is_being_put_down() -> bool {
+    ASKING_THE_PIN_DOWN.load(Ordering::SeqCst)
+}
+
+/// Put a pin that stands in a window of its own away into the taskbar: the window the pin stands in is
+/// minimized, and what stands in it goes down with it.
+///
+/// It is the one door both roads into a taskbar take for such a pin — the minimize button and the bubble's
+/// `To Taskbar` row — because a window that wears its own taskbar button is put away by being minimized,
+/// and a window that is hidden has no button at all. Hiding it is what took the button with it: this pin is
+/// refused the stand-in that would wear one, so the pin left the screen and the taskbar together (see
+/// `hide_pinned_siblings` and `a_button_is_owed`).
+///
+/// Nothing is taken for a stand-in either: no stand-in wears this pin's button, so a picture of the pin
+/// taken for one is a picture of nothing (see `keep_the_pin_for_the_taskbar`).
+unsafe fn put_the_pins_window_in_the_taskbar() {
+    hide_pinned_siblings();
+    ask_the_pin_down(pinned_window());
+}
+
 /// Put the pin away into the taskbar rather than the bubble: the bubble goes, the stand-in comes
 /// up, and the pin stays collapsed until it is brought back (see `show_pin_taskbar`).
 ///
@@ -644,11 +688,24 @@ pub(super) unsafe fn bubble_menu_hover(hwnd: HWND) -> bool {
 /// picture of itself, and a frame taken after it would be a frame of nothing (see
 /// `keep_the_pin_for_the_taskbar` and `pin_taskbar_mirror::mirror_source`).
 pub(super) fn bubble_to_taskbar() {
-    unsafe {
-        keep_the_pin_for_the_taskbar();
+    // A pin that stands in a window of its own takes the same door: the row asks for the taskbar, and
+    // what wears a taskbar button for such a pin is the window it stands in, minimized — not a picture of
+    // the pin taken for a stand-in that is refused it (see `collapse_pin_to` and `a_button_is_owed`).
+    let its_own = pin_is_its_own_window();
+    if !its_own {
+        unsafe {
+            keep_the_pin_for_the_taskbar();
+        }
     }
     hide_pin_bubble();
     unsafe {
+        if its_own {
+            // The window is behind the bubble rather than on the screen — a bubble stands where a window
+            // would be in the way — so minimizing it is also what puts it back: a window that is down
+            // wears no button, and the button is the whole of what this row asks for.
+            put_the_pins_window_in_the_taskbar();
+            return;
+        }
         show_pin_taskbar();
     }
 }
@@ -717,6 +774,15 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
     // stand-in leaves the app in the taskbar instead with the pin off the screen. Everything
     // above is the same either way — which is why only the last step of a collapse differs.
     unsafe {
+        // **A pin that stands in a window of its own is put away into the taskbar the way a window is put
+        // away**, which is one door both of the pin's own roads into a taskbar take (see
+        // `put_the_pins_window_in_the_taskbar`). What is past this point is the stand-in's business: the
+        // round bubble on the desktop, or the app's own window in the taskbar for a kind that has none.
+        if pin_is_its_own_window() && target == PinMinimizeTo::Taskbar {
+            put_the_pins_window_in_the_taskbar();
+            return;
+        }
+
         if target == PinMinimizeTo::Taskbar {
             // The button's hover keeps the pin's own picture, and a picture of a window that has been
             // taken off the screen is a picture of nothing: what the hover is to hold is taken while
@@ -998,6 +1064,12 @@ pub(super) enum PinRestore {
     /// listing, and the key picks the file rather than moving the keyboard out of it (see
     /// `pin_bubble_pick`).
     Key,
+    /// Windows brought the pin's window back, and nothing of this app's was pressed for it: a pin put
+    /// away as a window is the window minimized, and the button that restores it is the Shell's own. What
+    /// is owed is the pin's own state and what the collapse parked — never the front, which the Shell has
+    /// already decided, and never the keyboard, since the pin may not even be the window it gave it to
+    /// (see `collapse_pin_to`).
+    TheShell,
 }
 
 /// Put a collapsed pin back up: the bubble goes, the window comes back where it was, whatever
@@ -1375,6 +1447,16 @@ pub(super) unsafe fn hide_pinned_windows() {
     // window, and one left on the screen is a picture of a pin that has been put away.
     pin_real_window::hide_real_pin_window();
 
+    hide_pinned_siblings();
+}
+
+/// Hide what stands *in* a pin's band — the player's own window over a film, the browser's over a page —
+/// and leave the windows the pin itself stands in alone.
+///
+/// It is the whole of what a pin put away **as a window** owes: the window it stands in is the one
+/// Windows minimizes, and a hidden window is a window whose taskbar button has gone, so the pin would
+/// be gone from the screen and the taskbar together (see `collapse_pin_to`).
+pub(super) unsafe fn hide_pinned_siblings() {
     let video = VIDEO_HWND.load(Ordering::SeqCst);
     if video != 0 {
         let _ = ShowWindow(HWND(video as *mut _), SW_HIDE);

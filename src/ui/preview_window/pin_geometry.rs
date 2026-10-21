@@ -566,6 +566,10 @@ pub(super) unsafe fn pin_command_request(
             restore_pin(&Win32PinWindow, PinRestore::Pressed);
             None
         }
+        Some(PinCommand::CameBack) => {
+            restore_pin(&Win32PinWindow, PinRestore::TheShell);
+            None
+        }
         Some(PinCommand::Maximize) => {
             toggle_pin_maximized(request);
             None

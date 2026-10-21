@@ -319,6 +319,36 @@ pub(super) unsafe extern "system" fn window_proc(
 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
+        WM_SIZE => {
+            // **A pin put away as a window comes back as a window, and the pin's state has to follow it.**
+            // The collapse into the taskbar minimizes the window the pin stands in (see
+            // `collapse_pin_to`), and what brings it back is the button Windows draws for that window:
+            // no window of this app's is pressed for it, so no press arrives here to ask for the pin. What
+            // a pin left believing it is away costs is everything a collapse holds back — playback parked,
+            // previews held — and the next minimize answered by nothing at all, because the pin is still
+            // away as far as the app knows.
+            //
+            // The size is the message rather than the system command, because `SIZE_RESTORED` is what every
+            // road that puts a minimized window back leaves: the Shell's own restore of its button, a
+            // `ShowWindow` from anywhere, and a `Win`+`D` handing back the windows it took. `WM_SYSCOMMAND`
+            // is what some of them send and not what all of them do.
+            //
+            // And the window has to be *on the screen* as well, since a pin put away into the bubble is a
+            // pin whose window is hidden rather than minimized: that collapse holds the pin, and only this
+            // one is undone by a window coming back (see `the_pin_window_is_down`). The ask this app makes
+            // for a window's own minimize is told apart from the Shell's by who asked, because the same
+            // call can leave a `SIZE_RESTORED` behind it on its way down (see `the_pin_is_being_put_down`).
+            if wparam.0 as u32 == SIZE_RESTORED
+                && pin_is_collapsed()
+                && pin_is_its_own_window()
+                && !the_pin_is_being_put_down()
+                && !the_pin_window_is_down(hwnd)
+            {
+                ask_pin(PinCommand::CameBack);
+            }
+
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_CHAR => {
             // The character a key press has already been answered as. It is swallowed for the
             // same reason the key-down is: the pin has had the keyboard, and what it does with a
