@@ -309,6 +309,37 @@ pub(super) fn showing_takes_the_band_to_appear(on_the_screen: bool) -> bool {
     pin_is_its_own_window() && !pin_always_on_top() && !on_the_screen
 }
 
+/// Put a window over every other one, and give the band straight back: what a window of this app's own
+/// is owed when it has to come forward over a window that holds the foreground.
+///
+/// **`HWND_TOP` is no way to the front for a process that is not in the foreground.** Windows refuses
+/// the place to it — the call answers success and the window stays exactly where it was — so the
+/// topmost band is the only road there is, and `HWND_NOTOPMOST` is what puts the window over every
+/// ordinary one in one call: the front of exactly the band a pin that is not
+/// `Pin Mode → Always On Top` belongs in, reached in a way the foreground window cannot refuse.
+/// Nothing of the band is left held, so the next click on another window puts the pin behind it,
+/// exactly as any window behaves (see `pin_holds_the_front`).
+unsafe fn take_the_band_and_give_it_back(hwnd: HWND) {
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_NOTOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+}
+
 /// The pin owes the front: a pick, a take-up or a restore asked for it, and no press that named no
 /// file and no window change away from the listing has given it back since.
 ///
@@ -1080,30 +1111,11 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         // fault this road can repair without the band `Always On Top` exists to keep (see
         // `pin_real_window`).
         if showing_takes_the_band_to_appear(on_the_screen) {
-            // **On top of everything the moment it appears, and a normal window from then on.** The
-            // topmost band is the one way a process that does not hold the foreground can put a window
-            // in front of the one that does, and it is given straight back in the same breath: what is
-            // left is a window standing at the front of the ordinary band, which the next click on
-            // another window puts behind it, exactly as any window behaves. `Pin Mode → Always On Top`
-            // is still the only thing that keeps a pin over other programs (see `pin_holds_the_front`).
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_NOTOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
+            // **On top of everything the moment it appears, and a normal window from then on:** what
+            // is left after the band is given back is a window at the front of the ordinary one, which
+            // the next click on another window puts behind it, exactly as any window behaves.
+            // `Pin Mode → Always On Top` is still the only thing that keeps a pin over other programs.
+            take_the_band_and_give_it_back(hwnd);
         } else {
             let _ = SetWindowPos(
                 hwnd,
@@ -1171,14 +1183,22 @@ pub(super) const PIN_RAISE_GRACE: Duration = Duration::from_millis(250);
 /// raise whatever the switch says about updates (see `put_pin_at_the_front`). A pin that is put away
 /// has no window to raise and is left alone, and so is one whose row is switched off.
 pub(super) unsafe fn raise_pinned_preview(hwnd: HWND) {
-    // **A pin that is a window is left to Windows.** It is activated by the press that lands on it and
-    // put behind by the click that lands elsewhere; the Shell puts it in Alt+Tab and gives it a taskbar
-    // button, and every raise, lowering and band this road knows is a stand-in for what a window that
-    // the Shell does not own needs and this one does not. Nothing is forced for it (see `pin_real_window`).
-    if pin_is_its_own_window() {
+    if pin_is_collapsed() || !pin_update_move_to_top() {
         return;
     }
-    if pin_is_collapsed() || !pin_update_move_to_top() {
+
+    // **A pin that is a window of its own is brought forward the one way Windows lets it be.** The
+    // update arrives while the user is working in the listing, so the listing is the foreground window
+    // and `HWND_TOP` is refused to this process — the pin would stay exactly where it was, behind the
+    // listing it follows. The band is not refused, and it is given straight back: the pin comes over
+    // everything the update would have left it behind and is an ordinary window from then on (see
+    // `take_the_band_and_give_it_back`). Asked only where Windows has not already answered — a press
+    // that activated the pin is the pin already in front, and a band taken over it is a band the user
+    // sees change for nothing.
+    if pin_is_its_own_window() {
+        if !pin_always_on_top() && GetForegroundWindow() != hwnd {
+            take_the_band_and_give_it_back(hwnd);
+        }
         return;
     }
 
@@ -1249,24 +1269,9 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
         return;
     }
 
-    let _ = SetWindowPos(
-        hwnd,
-        HWND_TOPMOST,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-    );
-    let _ = SetWindowPos(
-        hwnd,
-        HWND_NOTOPMOST,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-    );
+    // Taken and given straight back: the band is the only way to the front of the ordinary one for a
+    // window this process cannot ask the foreground for (see `take_the_band_and_give_it_back`).
+    take_the_band_and_give_it_back(hwnd);
     place_pinned_siblings();
 }
 
