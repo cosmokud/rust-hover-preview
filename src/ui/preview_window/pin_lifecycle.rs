@@ -1242,9 +1242,10 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
     // in the listing, so the listing is the foreground window and the pin is what is to be brought in
     // front of it (see `raise_pinned_preview`). Asking about the foreground rather than about the kind
     // of window is what makes both roads right with one question.
-    // **A pin that is a window is left to Windows** - activated by the press that lands on it and put
-    // behind by the click that lands elsewhere - so there is no band to take here for it (see
-    // `pin_real_window`). Everything below is the stand-in the kinds still standing in the preview's
+    // **A pin that is a window is left to Windows** - activated by the press that lands on it, and
+    // with no band to take here for it: a press that lands on the pin is the pin already in front, and a
+    // press that names no file is answered by the lowering rather than by this road (see
+    // `lower_pinned_preview`). Everything below is the stand-in the kinds still standing in the preview's
     // window need, because a window the Shell does not own is never raised by a click.
     if pin_is_its_own_window() {
         return;
@@ -1322,7 +1323,13 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
     // **What is refused is a press with no place in it.** The desktop is handed in as no window, and the
     // bottom of the desktop's own list is below the wallpaper: a pin put there is a pin nobody can
     // click back (see the tick in `event_loop`). Every other road hands in a window.
+    //
+    // The front a pick owed ends with it, which is the answer the place check further down gives the
+    // stand-in kinds: a press that names no file is the listing being worked in whether or not it can
+    // say where the listing is, and a front left owed here is a grace ticking to undo a press that has
+    // already been answered.
     if pin_is_its_own_window() && window.is_invalid() {
+        PIN_FRONT_OWED.store(false, Ordering::SeqCst);
         return;
     }
     if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
@@ -1462,10 +1469,17 @@ pub(super) unsafe fn keep_pin_at_the_front(
         return;
     };
 
-    // **A pin that is a window is left to Windows.** It is activated by the press that lands on it and
-    // put behind by the click that lands elsewhere; the Shell puts it in Alt+Tab and gives it a taskbar
-    // button, and every raise, lowering and band this road knows is a stand-in for what a window that
-    // the Shell does not own needs and this one does not. Nothing is forced for it (see `pin_real_window`).
+    // **A pin that is a window is raised by the press and the pick that answer it, and this grace is
+    // not one of them.** The press that names no file puts the pin behind the listing by its own road
+    // (see `lower_pinned_preview`), and a pick's raise over the listing is the band taken and given
+    // back at the moment it arrives (see `raise_pinned_preview`) — both are answers made once, rather
+    // than a front asked for again on every tick. Nothing of the stand-in kinds' grace is forced for
+    // such a pin (see `pin_real_window`).
+    //
+    // **That leaves one hole, and it is not closed here.** An activation of the listing that lands
+    // *after* the pick's blip is not chased, so a pick can leave the pin behind it until the next one.
+    // Closing it would take the band again on this grace's every tick — a flicker the user sees — so it
+    // is a question of its own (see `PIN_FRONT_OWED`).
     if pin_is_its_own_window() {
         return;
     }
