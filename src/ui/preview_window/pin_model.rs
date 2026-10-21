@@ -118,7 +118,18 @@ pub(super) fn pin_release_focus() {
 /// A pin is not that: the hand pressed it, and the user is in it. So the style is put on when a
 /// pin comes up and taken off when it goes, and the window itself is created the way a hover has
 /// to be created.
+///
+/// **Except a pin that stands in a window of its own.** That window is the Shell's rather than the
+/// hover's: it is made activatable on purpose, it is listed and has a button, and the whole of what
+/// it is for is the press that lands on it activating it. The style is never put on it, because the
+/// window is kept between pins rather than made again (see `hide_real_pin_window`), so a take-down
+/// that stamped it left every pin of the run after the first refusing the very press meant to raise
+/// it — a window Windows will not activate is a window no click brings to the front.
 pub(super) unsafe fn pin_set_focusable(hwnd: HWND, focusable: bool) {
+    if !focusable && pin_real_window::real_pin_window().is_some_and(|pin| pin == hwnd) {
+        return;
+    }
+
     let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     if style == 0 {
         // A style of zero is a failure, not a window with no style: this window always carries

@@ -199,6 +199,55 @@ mod tests {
         );
     }
 
+    /// A pin that is taken down is a window taken off the screen, and the style a take-down writes is
+    /// the hover's: `WS_EX_NOACTIVATE` is what keeps a preview from taking the caret out of a name being
+    /// typed, and it is the one thing a pin's own window must never wear. The window is kept between
+    /// pins rather than made again (see `hide_real_pin_window`), so a take-down that stamped it left
+    /// every pin of the run after the first refusing the very press that is meant to raise it: the style
+    /// is asked of the window rather than of the asker, and a window Windows will not activate is a
+    /// window no click brings to the front.
+    #[test]
+    fn a_taken_down_pin_leaves_its_own_window_one_a_click_may_activate() {
+        use super::super::pin_model::pin_set_focusable;
+
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let box_ = (-20000, -20000, -19680, -19760);
+        let hwnd = unsafe { real_pin_window_at(box_) }.expect("the pin's own window");
+
+        let keeps_out_of_the_keyboard = |hwnd: HWND| unsafe {
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            WINDOW_EX_STYLE(ex) & WS_EX_NOACTIVATE
+        };
+
+        assert_eq!(keeps_out_of_the_keyboard(hwnd), WINDOW_EX_STYLE::default());
+
+        // What `end_pin` asks of the window it takes down: the style goes on and the window is kept.
+        unsafe { pin_set_focusable(hwnd, false) };
+        assert_eq!(
+            keeps_out_of_the_keyboard(hwnd),
+            WINDOW_EX_STYLE::default(),
+            "the pin's own window is the Shell's to activate, so a take-down leaves it as it was made"
+        );
+
+        // And the style is still the hover's to ask for: the same window, stood as no pin's at all,
+        // wears it, which is what makes the answer above about the window rather than about the call.
+        stand_real_pin_window_for_a_test(None);
+        unsafe { pin_set_focusable(hwnd, false) };
+        assert_ne!(
+            keeps_out_of_the_keyboard(hwnd),
+            WINDOW_EX_STYLE::default(),
+            "a window that is no pin's own is the hover's to keep out of the keyboard"
+        );
+
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        REAL_PIN_HWND.store(0, Ordering::SeqCst);
+    }
+
     /// The styles above are the styles of the window that is actually made: a plain `STATIC` window
     /// created with them would prove the constants and nothing about this module.
     #[test]
