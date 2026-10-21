@@ -319,7 +319,14 @@ pub(super) fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -
 /// `pin_menu_dismiss_ask`).
 pub(super) fn bubble_window_is_at(window: HWND) -> bool {
     let bubble = crate::ui::preview_window::PIN_BUBBLE_HWND.load(Ordering::SeqCst);
-    !window.is_invalid() && bubble != 0 && window.0 as isize == bubble
+    window_is_the_slot(window, bubble)
+}
+
+/// Whether `window` is the window `slot` holds, where a slot of nothing holds no window: how the
+/// handles this app keeps in process-wide slots are asked about, the hovers' and the pin's own (see
+/// `PIN_BUBBLE_HWND` and `PIN_MENU_HWND`).
+pub(super) fn window_is_the_slot(window: HWND, slot: isize) -> bool {
+    !window.is_invalid() && slot != 0 && window.0 as isize == slot
 }
 
 /// Whether a press read on a pinned tick is one the Explorer hook publishes so the card's
@@ -406,21 +413,45 @@ pub(super) fn press_is_answered(
     pressed && over_explorer && !over_our_own && !aimed_at_a_gone_window
 }
 
-/// Whether a window under the pointer is a menu or flyout rather than anything a listing can
-/// be read under: the popups Explorer puts over its own files.
+/// Whether the window under the pointer is a menu or flyout rather than anything a listing can
+/// be read under: the popups Explorer puts over its own files, and the one panel this app puts
+/// over them.
 ///
 /// A popup is Explorer's own as far as `is_cursor_over_explorer_full` is concerned — its owner
-/// chain reaches the frame — so a press on it reads as a press on the listing. The class name is
-/// what says otherwise. Every one of them carries a substring of its own kind: the XAML shell
-/// hosts them in `Microsoft.UI.Content.PopupWindowSiteBridge` and
+/// chain reaches the frame — so a press on it reads as a press on the listing. Two answers say
+/// otherwise, and either one is enough.
+///
+/// The class name is the first: every popup of Explorer's carries a substring of its own kind —
+/// the XAML shell hosts them in `Microsoft.UI.Content.PopupWindowSiteBridge` and
 /// `Microsoft.UI.Content.DesktopChildSiteBridge`, and a classic menu window is `#32768`. The
 /// three bare words are the older shells' naming, and none of the windows a listing is read
 /// under has one: the list is `SysListView32` under `DirectUIHWND`, the frame and the view are
 /// `ExplorerWClass` and `CabinetWClass`, and this app's own window is `RustHoverPreviewWindow`.
 ///
-/// Read per call rather than cached: two `GetClassNameW` calls on every pinned tick.
+/// The second is the window itself, for the one panel this app puts over a listing: a pinned
+/// window's own menu (see `pin_menu_window_is_at`). It is asked about by its handle rather than by
+/// its name, so that the pin is free to rename its own window without quietly making a press on a
+/// row of its menu a press on the file behind the panel. That press is the pin's own while the menu
+/// is up — the window under it is the panel, which is no listing — but the press is read on
+/// whichever tick the shell spends the press bit on, and the tick after the menu closes finds the
+/// point reading as the listing the panel was covering. The tick before is asked about for exactly
+/// that, and this rule has to answer for the panel for it to be of any use.
+///
+/// Read per call rather than cached: up to two `GetClassNameW` calls on a pinned tick, and none at
+/// all where the app's own panel is what answered.
 pub(super) fn window_is_menu_popup_chrome(window: HWND) -> bool {
-    class_is_menu_popup_chrome(&window_class_of(window))
+    pin_menu_window_is_at(window) || class_is_menu_popup_chrome(&window_class_of(window))
+}
+
+/// Whether `window` is the pin's own menu: the panel a pinned window draws in a window of its own
+/// over the listing (see `pin_menu_window`).
+///
+/// The one window this app has over a listing where a press is not a press on the file behind it:
+/// the card holds the pointer while its menu is up, and a press the hook reads off the panel is a
+/// row rather than the file that row covers (see `window_is_menu_popup_chrome`).
+pub(super) fn pin_menu_window_is_at(window: HWND) -> bool {
+    let menu = crate::ui::preview_window::PIN_MENU_HWND.load(Ordering::SeqCst);
+    window_is_the_slot(window, menu)
 }
 
 /// The matching half of `window_is_menu_popup_chrome`, on the class name rather than on the

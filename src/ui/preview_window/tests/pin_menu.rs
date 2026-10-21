@@ -1,4 +1,7 @@
 use super::*;
+// The one question this file asks the desktop rather than the pin: what is under a point of the
+// screen, which is how the Explorer hook reads a press.
+use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, WindowFromPoint};
 
 /// The three settings the card's menu holds, put where a test
 /// asks and put back when the guard is dropped, so a test beside
@@ -2404,5 +2407,134 @@ fn a_point_off_both_panels_is_outside_and_one_on_a_row_is_not() {
     assert!(
         pin_menu_point_is_outside(-1_000, -1_000),
         "a press from another window is outside"
+    );
+}
+
+/// Register the class the card's menu window is made from, once for the run, with the styles the
+/// app registers it with: the real registration is the preview loop's own, at its start (see
+/// `run_preview_window`), and a menu standing in a window of its own is the only road here that
+/// asks for one.
+fn register_the_menu_window_class() {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| {
+        // Safety: a class of this process's own, registered once, with the window procedure the app
+        // creates the card's menu window with.
+        unsafe {
+            let hinstance = GetModuleHandleW(None).expect("the module's own handle");
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(pin_menu_proc),
+                hInstance: hinstance.into(),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                lpszClassName: PIN_MENU_CLASS,
+                ..Default::default()
+            };
+            RegisterClassExW(&class);
+        }
+    });
+}
+
+/// The pin's own menu, standing in a window of its own over the desk, and the screen put back when
+/// the guard is dropped.
+///
+/// The card's window is a stand-in for the pin's own — the menu window is its sibling, and
+/// `open_pin_menu` takes the pointer on the card and paints both — because what is asked here is
+/// about the menu's window rather than about the card's (see `pin_menu_window`).
+struct AStandingMenu {
+    menu: HWND,
+    stand_in: HWND,
+    preview: isize,
+}
+
+/// Put the pin's own menu up by the road a right-click puts it up with, ready to be asked about.
+fn a_standing_menu() -> AStandingMenu {
+    register_the_menu_window_class();
+
+    // Safety: a window of this test's own, standing where a card's would.
+    let stand_in = unsafe {
+        CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            40,
+            40,
+            200,
+            120,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a card's window to open the menu against")
+    };
+    let preview = PREVIEW_HWND.swap(stand_in.0 as isize, Ordering::SeqCst);
+    // Made before anything can panic, so that the two slots and the mouse are put back whichever
+    // assertion fails (see `AStandingMenu`).
+    let mut menu = AStandingMenu {
+        menu: HWND::default(),
+        stand_in,
+        preview,
+    };
+
+    stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
+    // Safety: the card's stand-in is the window the press that opened the menu came to, and a
+    // right-click on its caption is the window's own page.
+    unsafe { open_pin_menu(stand_in, 300, 300, PinMenuPage::Chrome) };
+    menu.menu = HWND(PIN_MENU_HWND.load(Ordering::SeqCst) as *mut _);
+
+    menu
+}
+
+impl Drop for AStandingMenu {
+    fn drop(&mut self) {
+        // Safety: the windows are this test's own, the pointer is let go of the card's stand-in, and
+        // the two handles the app holds are put back the way they were found — the menu window's is
+        // a slot for the whole process, and a test that left it filled is a test every test after it
+        // stands inside (see `PIN_MENU_HWND`).
+        unsafe {
+            hide_pin_menu_window();
+            let _ = ReleaseCapture();
+            if !self.menu.is_invalid() {
+                let _ = DestroyWindow(self.menu);
+            }
+            let _ = DestroyWindow(self.stand_in);
+        }
+        PIN_MENU_HWND.store(0, Ordering::SeqCst);
+        PREVIEW_HWND.store(self.preview, Ordering::SeqCst);
+    }
+}
+
+/// The hand on a row of the pin's own menu is on the menu, and not on the listing the panel floats
+/// over.
+///
+/// The fault this is a regression test for: the menu window was created transparent to the mouse, so
+/// a press on one of its rows was read as a press on whatever stood behind the panel. The Explorer
+/// hook asks Windows which window is under the pointer to know what a press picked (see
+/// `PointerTick::of`), and a window the pointer passes through answers with the listing underneath —
+/// so a press on **Minimize to Bubble** put the pin away and then handed the file behind that row
+/// to it, which brought the window back showing that file.
+#[test]
+fn the_hand_on_a_row_of_the_menu_is_on_the_menu() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _kind = MediaKindPutBack::put(MediaType::StaticImage);
+    let _config = ConfigFilePutBack::take();
+    let menu = a_standing_menu();
+
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Minimize to Bubble"));
+
+    // Safety: one question of the desktop, which is what the hook asks while the menu is up.
+    let under = unsafe { WindowFromPoint(POINT { x, y }) };
+    assert_eq!(
+        under, menu.menu,
+        "the hand on ({x}, {y}) is on the menu's own window ({:#x}): a window the pointer passes \
+         through answers with the listing behind it, which is a file the user never clicked",
+        menu.menu.0 as isize
     );
 }
