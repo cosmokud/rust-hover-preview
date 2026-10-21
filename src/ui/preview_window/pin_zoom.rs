@@ -884,11 +884,20 @@ pub(super) fn aim_pin_zoom(notches: f32) {
 /// holds the old box and the window the new one, which an eye reads as the picture jumping (see
 /// `apply_pin_drag`).
 ///
+/// **The window is the pin's own**, asked here rather than carried down from the loop: the loop's own
+/// handle is the hover's window, and a picture pin has put that one down and stands in a window of its
+/// own. A frame painted into the hover's window was never on the screen at all, so what a travel showed
+/// was the tick's restore, once per tick, by the one road there is for a pin the user cannot see — and
+/// that road moves the window to the box the pin's state holds before it draws anything into it (see
+/// `real_pin_window_at`), so each frame of a travel was the frame before it stretched into the box the
+/// frame after it was drawn for, and only then replaced by a re-composite of the media at that box. The
+/// wheel's own frame never arrived (see `the_pin_window_is_down`).
+///
 /// Nothing is answered about whether the travel has ended: what a caller does with a size a picture has
 /// settled at — laying the file out again for it — is asked of the size itself and not of the moment it
 /// stopped, so that a travel ended by a hand taking the picture is owed the same frame as one that ran
 /// its course (see `pin_zoom_oversize_box`).
-pub(super) unsafe fn step_pin_zoom(hwnd: HWND, elapsed: f32) {
+pub(super) unsafe fn step_pin_zoom(elapsed: f32) {
     let Some(input) = pin_zoom_inputs() else {
         return;
     };
@@ -915,7 +924,7 @@ pub(super) unsafe fn step_pin_zoom(hwnd: HWND, elapsed: f32) {
         .is_some();
 
     if written {
-        render_pinned_preview_at(hwnd, plan.content.0, plan.content.1);
+        render_pinned_preview_at(pinned_window(), plan.content.0, plan.content.1);
     }
 }
 

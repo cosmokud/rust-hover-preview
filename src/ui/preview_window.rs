@@ -227,8 +227,8 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     EnumWindows, FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
-    GetTopWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
-    IsWindowVisible, LoadCursorW, MoveWindow, MsgWaitForMultipleObjectsEx, PeekMessageW,
+    GetTopWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+    IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, MsgWaitForMultipleObjectsEx, PeekMessageW,
     PostMessageW, RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowPos, ShowWindow, ShowWindowAsync, TrackPopupMenu, TranslateMessage,
     UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER,

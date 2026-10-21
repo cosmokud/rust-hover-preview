@@ -2,8 +2,13 @@ use super::*;
 
 // What the wheel hook is handed a message as: the delta in the high word of `mouseData`, the pointer in
 // its own point, and a code that says the message is one to look at.
-use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WAIT_OBJECT_0, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{HC_ACTION, MSLLHOOKSTRUCT, WM_MOUSEWHEEL};
+use windows::core::w;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DestroyWindow, GetWindowRect, SendMessageW, ShowWindow, HC_ACTION,
+    MSLLHOOKSTRUCT, SC_MINIMIZE, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_MOUSEWHEEL,
+    WM_SYSCOMMAND, WS_POPUP,
+};
 
 /// The room every one of these zooms is measured in: a display of 1000 by 800 at the origin, which is
 /// what `bounds` is in `tests` — and a picture whose shape the boxes below keep, since a pinned
@@ -1736,5 +1741,254 @@ another
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
     }
+    stand_pin(previous_pin);
+}
+
+/// Where this file's windows stand: no display is there, so a run of the suite is no window of the
+/// user's and no place the hand can land in.
+const NOWHERE: i32 = -32000;
+
+/// The screen box a window is standing at, as the desktop has it rather than as this app meant it.
+///
+/// Safety: the handle is a window of this test's or of the app's own, and the question is a
+/// measurement of it.
+unsafe fn window_rect(hwnd: HWND) -> ScreenRegion {
+    let mut rect = RECT::default();
+    let _ = GetWindowRect(hwnd, &mut rect);
+    (rect.left, rect.top, rect.right, rect.bottom)
+}
+
+/// A picture pin standing in a window of its own at `box_`, with the hover's window down beside it:
+/// what a picture pin is on the screen, and the arrangement the two roads below are asked in.
+///
+/// The hover's window is a window of the test's own, hidden, because that is the state a picture pin
+/// leaves it in — and because it is the window a road that asked the wrong one would answer from.
+///
+/// The caller holds the pin tests' lock and puts back every global written here: the handle the app
+/// reads its preview window by, the pin's own window, the flag saying which window the pin stands in,
+/// and the pin itself.
+///
+/// Safety: both windows are the caller's to destroy.
+unsafe fn a_picture_pin_in_a_window_of_its_own(box_: ScreenRegion, zoom: PinZoom) -> (HWND, HWND) {
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.zoom = Some(zoom);
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd = pin_real_window::real_pin_window_at(box_).expect("the pin's own window");
+
+    let preview = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("STATIC"),
+        w!(""),
+        WS_POPUP,
+        NOWHERE,
+        NOWHERE,
+        320,
+        240,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("a window of the test's own");
+    PREVIEW_HWND.store(preview.0 as isize, Ordering::SeqCst);
+
+    (pin_hwnd, preview)
+}
+
+/// A wheel's frame is one present of the window the pin stands in: the picture, the size and the place
+/// reach the compositor in the one call that sets them (see `step_pin_zoom`).
+///
+/// **The fault this is a regression test for.** A picture pin stands in a window of its own, and a
+/// wheel's frame was painted into the preview's — the hover's window, which a pin has put down. The
+/// window on the screen was left a frame behind, and what caught it up was the tick's own restore: a
+/// `MoveWindow` made before the paint that followed it, so the frame the window already had was
+/// stretched into the box the frame after it asked for, on every frame of a travel. That is the shake
+/// a hand sees zooming in or out below the fit — the wheel's own window changing size, which is the
+/// one part of a zoom this app has never been allowed to get wrong.
+#[test]
+fn a_wheel_frame_sizes_the_window_the_pin_stands_in() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_own = pin_is_its_own_window();
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+
+    let box_ = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240);
+    // A notch aimed at and not yet arrived at: 352 by 264 from a picture 320 wide, which is a frame of
+    // a travel rather than the size the wheel has asked for (see `pin_zoom_release`).
+    let mut travel = PinZoom::filling(box_);
+    travel.toward = 352.0;
+    let (pin_hwnd, preview) = unsafe { a_picture_pin_in_a_window_of_its_own(box_, travel) };
+
+    unsafe { step_pin_zoom(0.05) };
+
+    let content = pin_state()
+        .and_then(|state| state.pin().map(|pin| pin.content))
+        .expect("the pin that is up");
+    assert_ne!(
+        content, box_,
+        "a frame of a travel is a box of its own, so something was sized by it"
+    );
+    assert_eq!(
+        unsafe { window_rect(pin_hwnd) },
+        content,
+        "the pin's own window is the window the frame is drawn into, and the one call that draws it \
+         is the one that sizes it"
+    );
+    assert_eq!(
+        unsafe { window_rect(preview) },
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        "and the hover's window is left where it stands: the pin's picture is not the hover's"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+        let _ = DestroyWindow(preview);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+}
+
+/// The tick's own restore asks the window the pin stands in, and a pin that is on the screen is not put
+/// up again: the show it would take is a move and a second paint of a frame the wheel has already
+/// presented, on every frame of a travel (see `the_pin_window_is_down`).
+///
+/// A `Win`+`D` is the case the road exists for, and the reason it asks two questions rather than one:
+/// the Shell minimizes the pin's window instead of hiding it, and a minimized window is still a
+/// visible one.
+#[test]
+fn the_tick_puts_a_pin_up_only_where_its_own_window_is_down() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_own = pin_is_its_own_window();
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+
+    let box_ = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240);
+    let (pin_hwnd, preview) =
+        unsafe { a_picture_pin_in_a_window_of_its_own(box_, PinZoom::filling(box_)) };
+    // On the screen, which is the state the road is asked about — and where no display is, so it is
+    // no window of the user's.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    assert!(
+        !the_pin_window_is_down(pin_hwnd),
+        "a pin whose own window is on the screen is not one to put up again, though the hover's \
+         window is down"
+    );
+
+    // What a `Win`+`D` leaves behind: the window the pin stands in, minimized with the desktop.
+    unsafe {
+        let _ = SendMessageW(
+            pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_MINIMIZE as usize),
+            LPARAM(0),
+        );
+    }
+    assert!(
+        the_pin_window_is_down(pin_hwnd),
+        "a pin the Shell minimized with the desktop is one the tick puts back up, and a minimized \
+         window is still a visible one"
+    );
+
+    // And the show the tick makes on that answer, which is the whole of what the question is for: the
+    // pin comes back up, at the box it stands in, rather than staying a window with nothing on screen.
+    unsafe { show_pinned_window(pinned_window()) };
+    assert!(
+        !the_pin_window_is_down(pin_hwnd),
+        "the pin comes back up with the desktop it went down with"
+    );
+    assert_eq!(
+        unsafe { window_rect(pin_hwnd) },
+        box_,
+        "and it comes back where it stood rather than wherever the Shell left it minimized"
+    );
+
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_HIDE);
+    }
+    assert!(
+        the_pin_window_is_down(pin_hwnd),
+        "and a window that is not on the screen at all is down as well"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+        let _ = DestroyWindow(preview);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+}
+
+/// A road that carries the hover's handle paints the window the pin stands in: the loop's own handle is
+/// the window it pumps messages for, and a picture pin has put that one down (see
+/// `render_layered_preview`).
+///
+/// **The fault this is a regression test for.** Every paint the loop made for a pin — a spinner put
+/// away, a playhead turned, a frame laid out again, a menu dismissed — went into the hover's window,
+/// which nobody can see. What did reach the screen was the tick's restore, painting the pin's window at
+/// the box the pin's state held, on every tick, whatever frame the road had meant to present. Asked of
+/// the state instead, the window is one the painter answers for itself.
+#[test]
+fn a_paint_asked_for_the_hover_reaches_the_window_the_pin_stands_in() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_own = pin_is_its_own_window();
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+
+    let box_ = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240);
+    let (pin_hwnd, preview) =
+        unsafe { a_picture_pin_in_a_window_of_its_own(box_, PinZoom::filling(box_)) };
+
+    // A pin whose box has moved on and whose frame has not been presented yet: what a road that paints
+    // owes the window is a size the window is not standing in.
+    let grown = (box_.0, box_.1, box_.0 + 352, box_.1 + 264);
+    pin_state()
+        .and_then(|mut pinned| pinned.pin_mut().map(|pin| pin.content = grown))
+        .expect("the pin that is up");
+
+    unsafe { render_layered_preview(preview) };
+
+    assert_eq!(
+        unsafe { window_rect(pin_hwnd) },
+        grown,
+        "the pin's own window is the window a pin's paint is drawn into, whatever handle the road had"
+    );
+    assert_eq!(
+        unsafe { window_rect(preview) },
+        box_,
+        "and the hover's window is left where it stands: it is down, and it holds no picture of a pin"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+        let _ = DestroyWindow(preview);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
 }

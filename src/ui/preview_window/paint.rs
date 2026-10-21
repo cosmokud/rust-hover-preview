@@ -5,18 +5,36 @@
 use super::*;
 
 pub(super) unsafe fn render_layered_preview(hwnd: HWND) {
+    // **A pin is painted into the window the pin stands in**, and the handle a road carries is only
+    // whichever window its message came to: the loop's own is the hover's, which a picture pin has put
+    // down (see `pinned_window`). Asked of the state instead, so a road that runs on the loop — a
+    // spinner put away, a playhead turned, a frame laid out again, a menu dismissed — reaches the window
+    // the user is looking at rather than a hidden one. It was the tick's restore that used to catch a
+    // picture pin up every tick, and that road is asked of the pin's own window now (see
+    // `the_pin_window_is_down`), so nothing catches it up any more.
+    //
+    // The answer is the same handle for every other pin: one that is not its own window stands in the
+    // preview's, and a hover is not a pin at all. The window and the painter it is owed are one
+    // answer rather than two asks of the same question.
+    let (window, a_pin) = if pinned() {
+        (pinned_window(), true)
+    } else {
+        (hwnd, false)
+    };
+
     let mut rect = RECT::default();
-    if GetWindowRect(hwnd, &mut rect).is_err() {
+    if GetWindowRect(window, &mut rect).is_err() {
         return;
     }
 
     // The window is two things: the hover's own frame, and — while a preview is pinned — a
     // window with a caption and a bar of its own. Which of the two it is showing is not a
-    // question about its size, so it is asked here rather than worked out by each painter.
-    if pinned() {
-        render_pinned_preview_at(hwnd, rect.left, rect.top);
+    // question about its size, so it is settled with the window rather than worked out by each
+    // painter.
+    if a_pin {
+        render_pinned_preview_at(window, rect.left, rect.top);
     } else {
-        render_layered_preview_at(hwnd, rect.left, rect.top);
+        render_layered_preview_at(window, rect.left, rect.top);
     }
 }
 

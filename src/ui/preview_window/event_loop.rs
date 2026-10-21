@@ -2113,7 +2113,7 @@ pub fn run_preview_window() {
             // tick before it and not from whenever the last zoom happened to be.
             let zoom_elapsed = last_zoom_frame.elapsed().as_secs_f32();
             last_zoom_frame = Instant::now();
-            step_pin_zoom(hwnd, zoom_elapsed);
+            step_pin_zoom(zoom_elapsed);
 
             // And the frame it is owed. A picture the wheel has taken past its window is a frame the
             // window is holding scaled up, so the file itself is asked for at the size the picture has
@@ -3163,15 +3163,15 @@ pub fn run_preview_window() {
             // press — a pin is one of them now that its band is the setting's — but the pin is not
             // in the Shell's list of windows to bring back, so it is put up here: at the first tick
             // the user is back in a window rather than looking at the desktop. Asked of the window
-            // and not remembered, so a pin the user put away is not brought back by it (a put-away
-            // pin has no window to show, see `pin_is_collapsed`), and nothing is left over when the
-            // desktop is up (see `foreground_is_the_desktop`).
+            // the pin stands in and not remembered, so a pin the user put away is not brought back
+            // by it (a put-away pin has no window to show, see `pin_is_collapsed`), and nothing is
+            // left over when the desktop is up (see `foreground_is_the_desktop`).
             if pinned()
                 && !pin_is_collapsed()
-                && !IsWindowVisible(hwnd).as_bool()
+                && the_pin_window_is_down(pinned_window())
                 && !foreground_is_the_desktop(GetForegroundWindow())
             {
-                show_pinned_window(hwnd);
+                show_pinned_window(pinned_window());
             }
 
             // A pin that has just answered a pick keeps asking for the front of its band for a
