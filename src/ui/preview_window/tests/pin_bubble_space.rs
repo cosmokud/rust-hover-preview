@@ -702,8 +702,9 @@ fn an_update_brings_a_pin_put_away_into_its_bubble_back_on_top() {
         an_update_brings_a_put_away_pin_back(),
         "with `Move To Top` on, an update is the pin coming forward — and a pin that is away has          nothing to bring forward but itself"
     );
+    let on_the_pin = pinned_path().expect("the file the pin is showing");
     assert!(
-        bring_a_put_away_pin_back(),
+        bring_a_put_away_pin_back(&on_the_pin),
         "so the pin the update names a file for is the pin that comes back up"
     );
 
