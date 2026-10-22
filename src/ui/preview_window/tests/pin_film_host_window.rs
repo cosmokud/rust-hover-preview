@@ -51,6 +51,10 @@ impl StandingFilm {
         // **A hosted film has no window of the desktop's**, so the road that would find one by pid
         // is stood at nothing here (see `video_window_for`).
         let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+        // A host left by a test that took its pin's window down without taking the host with it is
+        // a handle to nothing by now; the stand begins from no host at all. Taken down before the
+        // player is noted, because taking it down forgets the player beside it.
+        unsafe { pin_film_host::take_down_the_pin_film_host() };
         // The host holds this test's own process, which is the pid of any child it makes: a film is
         // drawn in the host only when the player begun into it is the one this app recorded (see
         // `host_holds_the_pinned_film`).
