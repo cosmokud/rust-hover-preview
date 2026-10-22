@@ -109,8 +109,22 @@ pub(super) fn host_holds_the_pinned_film() -> bool {
 /// A child's owning process is the player that made it — mpv's window is created by mpv's own
 /// process under `--wid` — so the two facts are one question (see `GetWindowThreadProcessId`).
 pub(super) fn the_pinned_film_is_drawing() -> bool {
-    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst))
+}
+
+/// Whether this player has put a child of its own under the host, which is what a hosted film's
+/// window arriving *is* for a player that has no window of the desktop's (see
+/// `the_pinned_film_is_drawing`).
+pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
     pid != 0 && hosted_player() == Some(pid) && host_has_a_child_of(pid)
+}
+
+/// Whether this player has a window on screen: a window of the desktop's of its own, or the child
+/// a hosted player draws under the pin's own host. It is one answer because the settlement roads
+/// have one question — has this player arrived — and a hosted player never publishes a `VIDEO_HWND`
+/// to be found by (see `video_window_for`, `settle_video_retirement` and `PinSwapHold::settle`).
+pub(super) fn the_players_window_is_up(pid: u32) -> bool {
+    video_window_for(pid).is_some() || the_hosted_player_is_drawing(pid)
 }
 
 fn host_has_a_child_of(pid: u32) -> bool {
@@ -198,6 +212,16 @@ pub(super) unsafe fn take_up_the_pin_film_host() {
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
     let _ = EnableWindow(host, false);
+
+    // **A hosted player has no window of the desktop's to be found by pid**, so any handle still
+    // published for an older player is not this film's picture and must not be read as one (see
+    // `the_players_window_is_up`). A player the pin took up from a hover is not this case yet: it
+    // is a top-level window until the relaunch below it takes the film into the host, and the
+    // park that relaunch raises goes looking for that window (see
+    // `begin_the_adopted_film_in_the_host`).
+    if host_holds_the_pinned_film() {
+        VIDEO_HWND.store(0, Ordering::SeqCst);
+    }
 
     // Only a host the player is already drawing in is shown: a fresh one is a black rectangle over
     // the band, and what the band showed a moment ago is the film the hover was playing (see the

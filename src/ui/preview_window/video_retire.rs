@@ -393,11 +393,12 @@ pub(super) fn settle_video_retirement() {
         return;
     };
 
-    // The handle the arriving player published is what says it has arrived, and it has to be the
-    // handle that belongs to *that* player rather than to any window on screen: the two overlap,
-    // the old window is on screen throughout, and `VIDEO_HWND` names whichever of them the
-    // monitor found last (see `video_window_for`).
-    let arrival = video_window_for(pending.replacement).is_some();
+    // The window the arriving player has is what says it has arrived, and it has to be that
+    // player's rather than any window on screen: the two overlap, the old window is on screen
+    // throughout, and `VIDEO_HWND` names whichever of them the monitor found last. A hosted
+    // player has no top-level window to find there at all, so the question is asked of the host
+    // as well (see `video_window_for` and `pin_film_host::the_players_window_is_up`).
+    let arrival = pin_film_host::the_players_window_is_up(pending.replacement);
 
     // A pin that is no longer up is the other end of the wait, and it ends it at once. What this
     // player is being kept on screen *for* is a window that has gone — a pin closed, a walk that
