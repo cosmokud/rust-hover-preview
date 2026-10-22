@@ -1312,3 +1312,35 @@ fn a_selection_miss_in_the_watched_listing_is_not_a_pick() {
         None
     );
 }
+
+/// A rest a menu already answered is not a hover, and that is what keeps a press on a row from
+/// handing the pin the file that row was covering.
+///
+/// The press on a menu is answered by the row it picked, and the hand does not move: the panel that
+/// was under it is gone and the listing is there instead. Read as a hover, that rest offers the file
+/// behind the row — a file nobody chose — and an update naming a file is what brings a pin put away
+/// by that press back on it (`bring_a_put_away_pin_back`). Spent, it is a rest and nothing else until
+/// the hand moves, which is when a hover is asked about again.
+#[test]
+fn a_rest_a_menu_already_answered_is_not_a_hover() {
+    assert!(
+        a_rest_is_a_hover(true, true, false, true),
+        "a hand that has arrived and been still for the delay is hovering the file under it"
+    );
+    assert!(
+        !a_rest_is_a_hover(true, true, true, true),
+        "and a rest the press on a row already answered is not a hover, however long it is held"
+    );
+    assert!(
+        !a_rest_is_a_hover(false, true, false, true),
+        "a setting that asks for no hovers is asking for none"
+    );
+    assert!(
+        !a_rest_is_a_hover(true, false, false, true),
+        "and a hand that has not moved at all since the pin went up has not come to rest on a file"
+    );
+    assert!(
+        !a_rest_is_a_hover(true, true, false, false),
+        "nor has one that has not been still for the delay a preview is given"
+    );
+}

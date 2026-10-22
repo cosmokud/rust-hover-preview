@@ -87,7 +87,9 @@ pub(super) struct PinUpdateWatch {
     pub(super) pin_box: Option<(i32, i32, i32, i32)>,
     /// When the pointer last moved, which is what a hover of what is under it is measured from.
     pub(super) settled_at: Option<Instant>,
-    /// Whether the file under a settled pointer has already been resolved for that settle.
+    /// Whether the rest the hand is making has already been answered, so that it is not asked about
+    /// again: a pick resolves a file for it, and a press on a menu spends it outright (see
+    /// `PinUpdateWatch::follow` and `a_rest_is_a_hover`). Cleared when the hand moves.
     pub(super) probed: bool,
     /// Whether the hand has moved at all since this watch began. A pointer parked on another
     /// file while the pin goes up has not hovered anything.
@@ -247,6 +249,25 @@ impl PinUpdateWatch {
             self.probed = false;
         }
 
+        // What the press was read on, on both ticks: a menu or flyout is chrome, whether it is the
+        // shell's own popup over its rows or this app's panel over them (see
+        // `window_is_menu_popup_chrome`), and the press bit is spent on whichever tick finds it.
+        let current_is_chrome = window_is_menu_popup_chrome(pointer.window);
+        let previous_was_chrome = previous_window.is_some_and(window_is_menu_popup_chrome);
+        let clicked = focus_move.clicked;
+
+        // A press on a menu spends the rest of the hand, for the same reason a pick does: the hand has
+        // not moved, the panel that was under it is gone, and the point it is on is the listing again
+        // — so the rest would be read as a hover of the file the panel was covering, a file the user
+        // never came to rest on. For a pin that press put away, that hover is an update, and an update
+        // naming a file is what brings the window back on it (`bring_a_put_away_pin_back`).
+        //
+        // Spent here rather than beside the press's own answer below, because the tick that reads the
+        // press is the tick that would offer the file: the rest is measured from this, once, below.
+        if clicked && (current_is_chrome || previous_was_chrome) {
+            self.probed = true;
+        }
+
         // Whether this tick looks at what the pointer is on, and why. A click is the pointer acting
         // on the view — what it does in Explorer is select, and the file it selected is the pin's to
         // show — and it counts whatever else is on: it is the one reason the setting leaves on when
@@ -256,7 +277,7 @@ impl PinUpdateWatch {
             .settled_at
             .map(|at| at.elapsed() >= Duration::from_millis(hover_delay_ms))
             .unwrap_or(false);
-        let hovered = on_hover && self.arrived && !self.probed && settled;
+        let hovered = a_rest_is_a_hover(on_hover, self.arrived, self.probed, settled);
         // Read by the tick that hands the watch its input rather than here, because the press bit is
         // the one thing about a click that can only be read once a tick (see `focus_move_input`).
         //
@@ -286,9 +307,6 @@ impl PinUpdateWatch {
         // is still up, or on the poll after it has closed and the point reads as the listing it
         // was covering. The hand does not move for either, and the file under it is not one it
         // picked (see `window_is_menu_popup_chrome`).
-        let clicked = focus_move.clicked;
-        let current_is_chrome = window_is_menu_popup_chrome(pointer.window);
-        let previous_was_chrome = previous_window.is_some_and(window_is_menu_popup_chrome);
         let pick = clicked
             && self.press_is_a_pick(pointer.point, threshold, now)
             && press_is_a_listing(

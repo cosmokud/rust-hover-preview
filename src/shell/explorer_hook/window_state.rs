@@ -413,6 +413,20 @@ pub(super) fn press_is_answered(
     pressed && over_explorer && !over_our_own && !aimed_at_a_gone_window
 }
 
+/// Whether the rest a hand is making over the listing is a hover of the file under it: it is a rest
+/// at all only where the setting asks for hovers, the hand has arrived, the delay a preview is given
+/// has passed since it last moved, and this rest has not been answered already.
+///
+/// A rest is answered by the thing that already read it, and there are two: the pick that resolved a
+/// file for it, and the press that picked a menu row over it. Both leave the hand where it was — the
+/// panel that was under it is gone and the listing is there instead — so what is under it now is what
+/// that answer uncovered rather than a file the user came to rest on, and asking again would answer
+/// with a file nobody chose. A pin put away by such a press would be brought back on that file by the
+/// update the hover offers (`bring_a_put_away_pin_back`).
+pub(super) fn a_rest_is_a_hover(on_hover: bool, arrived: bool, spent: bool, settled: bool) -> bool {
+    on_hover && arrived && !spent && settled
+}
+
 /// Whether the window under the pointer is a menu or flyout rather than anything a listing can
 /// be read under: the popups Explorer puts over its own files, and the one panel this app puts
 /// over them.
