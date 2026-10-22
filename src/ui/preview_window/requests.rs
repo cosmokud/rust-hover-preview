@@ -98,15 +98,20 @@ pub fn update_pinned_preview(path: &Path) {
 /// The click activates the listing, which is that window being put over the pin, and the shell's
 /// answer for the file can be a tick or ten away — so the pin is put back in front of the listing
 /// here, where the press is, rather than after the answer (see `Pin Mode → Update Preview → Move
-/// To Top`). A press that names no file this app previews — a folder, a file no kind previews, a
-/// gap between the rows — is put back behind the listing by [`pin_press_was_not_a_pick`] instead,
-/// and a pick that lands raises the pin again.
-pub fn press_pinned_preview() {
+/// To Top`). `window` is the frame the press was made in, carried for the reason
+/// [`pin_press_was_not_a_pick`] carries it: the activation is still to land when this loop reads
+/// the press, so the window the pin is to be answered against is the one the click landed in and
+/// not the foreground — which is the window the user came from at that moment, and may be another
+/// program or another listing by the time the raise is asked for (see `PinFrontOwed`). A press that
+/// names no file this app previews — a folder, a file no kind previews, a gap between the rows — is
+/// put back behind the listing by [`pin_press_was_not_a_pick`] instead, and a pick that lands
+/// raises the pin again.
+pub fn press_pinned_preview(window: isize) {
     if !pinned() {
         return;
     }
 
-    send_preview(PreviewMessage::PinPress);
+    send_preview(PreviewMessage::PinPress { window });
 }
 
 /// Note that the press above named no file, and put the pin back behind the window the press was

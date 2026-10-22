@@ -77,10 +77,16 @@ pub enum PreviewMessage {
     PinUpdate(PathBuf),
     /// A press landed on the listing behind the pin, before the file it picked is known: the
     /// click activates the listing, which puts it over the pin for as long as the shell takes to
-    /// answer for the file, so the pin comes forward here rather than after that answer. The
-    /// answer is a [`PinUpdate`](Self::PinUpdate); a press that names no file is put back behind
-    /// the listing by [`PinNoPick`](Self::PinNoPick) (see `press_pinned_preview`).
-    PinPress,
+    /// answer for the file, so the pin comes forward here rather than after that answer. `window`
+    /// is the frame of the listing the press was made in, and it travels because the activation
+    /// that lands after this loop reads the press is *that* window being put over the pin: the
+    /// answer to it is asked of the window, not of whatever is in front by then (see
+    /// `PinFrontOwed`). The answer is a [`PinUpdate`](Self::PinUpdate); a press that names no file
+    /// is put back behind the listing by [`PinNoPick`](Self::PinNoPick) (see
+    /// `press_pinned_preview`).
+    PinPress {
+        window: isize,
+    },
     /// A press that was read as a pick named no file — a folder, a file no kind previews, the gap
     /// between the rows, the toolbar above them — and the pin goes back behind the window the press
     /// was made in, which is the frame `window` names: the foreground is still the window the user
