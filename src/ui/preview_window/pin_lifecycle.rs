@@ -1231,6 +1231,14 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
 /// tick of the grace asks whether it still stands where it was put and raises it again if it does
 /// not (see `keep_pin_at_the_front`).
 ///
+/// **The grace is also what the hold a press takes is measured against.** A press holds the band
+/// rather than taking it and giving it straight back — no activation can be put over a topmost
+/// window, so the tick the grace would answer on is a tick the user does not see — and the tick that
+/// finds the listing the window the user is in gives that band back, which is the click having
+/// landed. Every other road out of the grace gives it back as well, so the longest the pin is over
+/// every program the user works in is one stale tick (see `raise_pinned_preview` and
+/// `give_the_band_back`).
+///
 /// The tick a static pin wakes on is `STATIC_PIN_WAIT_MS`, so the grace has to be several of those
 /// rather than the few milliseconds an activation takes.
 ///
@@ -1629,6 +1637,11 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
 /// off standing over a window the user chose, which is user story 10 exactly. Read where the press
 /// is, the window is the one the click landed in, and the click is what the raise answers for (see
 /// `PIN_RAISE_GRACE` and `keep_pin_at_the_front`).
+///
+/// **The band the press holds while this is owed is the grace's to give back, not the answer's.**
+/// What is owed is a front, and with the listing's activation still on its way the band is the only
+/// place a front can be kept; so the pick holds it, every road that ends the answer gives it back,
+/// and no road that ends it leaves it held (see `give_the_band_back`).
 #[derive(Clone, Copy)]
 pub(super) struct PinFrontOwed {
     pub(super) until: Instant,
@@ -1696,7 +1709,7 @@ pub(super) unsafe fn keep_pin_at_the_front(
     // twice ("we have the same problem just like in fake windows").
     if !PIN_FRONT_OWED.load(Ordering::SeqCst) {
         *owed = None;
-        give_the_band_back(hwnd);
+        give_the_band_back(hwnd, foreground);
         return;
     }
 
@@ -1706,7 +1719,7 @@ pub(super) unsafe fn keep_pin_at_the_front(
     // `give_the_band_back`).
     if now >= until {
         *owed = None;
-        give_the_band_back(hwnd);
+        give_the_band_back(hwnd, foreground);
         return;
     }
 
@@ -1718,7 +1731,7 @@ pub(super) unsafe fn keep_pin_at_the_front(
     // one thing `Always On Top` off must never do (see `PinFrontOwed`).
     if !IsWindow(listing).as_bool() {
         *owed = None;
-        give_the_band_back(hwnd);
+        give_the_band_back(hwnd, foreground);
         return;
     }
 
@@ -1726,16 +1739,18 @@ pub(super) unsafe fn keep_pin_at_the_front(
     // work.** The listing is now the window the user is in, and giving the band back is the pin staying
     // exactly where it is: `HWND_NOTOPMOST` puts it at the front of the ordinary band, which is over the
     // listing the click just activated — so what the press asked for and what the activation did settle
-    // into one window over the file the user picked, with nothing between them for the user to see. A pin
-    // the band was taken off before the activation landed — a show that placed the window, a restore — is
-    // behind the listing now, and is raised the way every raise is made, so that what is left is still the
-    // pin the user picked a file for.
+    // into one window over the file the user picked, with nothing between them for the user to see. There
+    // is no window to go behind here, which is the no-window the release is given: the user is in the
+    // listing, and the listing is the window the pin has just been kept over. A pin the band was taken off
+    // before the activation landed — a show that placed the window, a restore — is behind the listing now,
+    // and is raised the way every raise is made, so that what is left is still the pin the user picked a
+    // file for.
     if foreground == listing {
         if !pin_stands_over(hwnd, listing) {
             raise_pinned_preview(hwnd, false);
         }
         *owed = None;
-        give_the_band_back(hwnd);
+        give_the_band_back(hwnd, HWND::default());
         return;
     }
 
@@ -1744,7 +1759,8 @@ pub(super) unsafe fn keep_pin_at_the_front(
     }
 }
 
-/// Give back the topmost band a pick's press held across the listing's activation.
+/// Give back the topmost band a pick's press held across the listing's activation, and leave the pin where
+/// the user is.
 ///
 /// A window in the topmost band is over every program the user works in, which with `Always On Top` off is
 /// the one thing a pin must never be — so the band is only ever held for the length of a pick's click, and
@@ -1752,11 +1768,30 @@ pub(super) unsafe fn keep_pin_at_the_front(
 /// happens to place the window next (see `raise_pinned_preview` and `keep_pin_at_the_front`). A window that
 /// is not holding the band is left alone: this is no raise, and a pin standing where the user's own clicks
 /// put it is not one to move.
-unsafe fn give_the_band_back(hwnd: HWND) {
+///
+/// **The band goes back where the user is, not where the pin was raised.** `HWND_NOTOPMOST` alone puts the
+/// window at the front of the ordinary band — over the program the user just moved to, which is the fault the
+/// hold was a fix for, one program along. Where the window the user is in is somebody else's, the pin goes
+/// below it, which is what the user's own click in that window would have done; where there is no such window
+/// to go behind — the activation road, the pin itself, the desktop — the front of the band is where it belongs
+/// (see `lower_pinned_preview` and `foreground_is_the_desktop`).
+///
+/// **A window of this app's own is no exception**, though `pid_is_the_previews` is the question the tick asks
+/// about the foreground: the band is given back all the same. What that gate protects there is a pin put
+/// behind its own film for as long as the film is in front, which is a band the pin places again the moment it
+/// is drawn (see `band_place`) — while a band left held here is over every program the user works in until
+/// something else takes it, and nothing else does.
+///
+/// `behind` is the window the pin is to go below, or no window where the front of the band is the answer. It
+/// is handed in rather than read here for the same reason the grace is handed the window the user is in: a test
+/// process cannot make a window of its own the foreground, and the question is only ever which window that is.
+unsafe fn give_the_band_back(hwnd: HWND, behind: HWND) {
     if !pin_is_its_own_window() || pin_always_on_top() || !window_holds_the_topmost_band(hwnd) {
         return;
     }
 
+    // The band goes first, whatever else this road does: the one thing it must never leave is a window in
+    // the topmost band with no debt left to ask about it (see `PinFrontOwed`).
     let _ = SetWindowPos(
         hwnd,
         HWND_NOTOPMOST,
@@ -1766,6 +1801,12 @@ unsafe fn give_the_band_back(hwnd: HWND) {
         0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
     );
+
+    if behind.is_invalid() || behind == hwnd || foreground_is_the_desktop(behind) {
+        return;
+    }
+
+    lower_pinned_preview(hwnd, behind);
 }
 
 /// Whether the pin stands over `window` in the z-order right now: whether walking up from that

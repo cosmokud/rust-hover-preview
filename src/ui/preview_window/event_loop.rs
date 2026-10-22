@@ -3295,7 +3295,11 @@ pub fn run_preview_window() {
             // the pin's chrome, a setting turned off under it — would otherwise leave the pin over
             // every program the user works in, with nothing left ticking to look for it (see
             // `PinFrontOwed` and `give_the_band_back`).
-            if pinned() && pin_front_owed.is_none() && !pin_always_on_top() && !pin_holds_the_front() {
+            if pinned()
+                && pin_front_owed.is_none()
+                && !pin_always_on_top()
+                && !pin_holds_the_front()
+            {
                 for window in [hwnd, pinned_window()] {
                     if window_holds_the_topmost_band(window) {
                         let _ = SetWindowPos(
