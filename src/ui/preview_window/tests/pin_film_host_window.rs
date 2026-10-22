@@ -82,8 +82,12 @@ impl StandingFilm {
         let box_ = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240);
         let mut pin = overlay_pin(box_, PinChrome::always());
         pin.path = PathBuf::from("a-film.mkv");
+        // The take-up's own question, asked of the film the way the loop asks it: the host exists
+        // only for a film whose pin the classification puts in a window of its own (see
+        // `pin_should_stand_in_its_own_window`).
+        let its_own = pin_should_stand_in_its_own_window(Some(MediaType::Video), &pin.path);
         stand_pin(Some(pin));
-        pin_stands_in_its_own_window(true);
+        pin_stands_in_its_own_window(its_own);
 
         pin_real_window::stand_real_pin_window_for_a_test(None);
         let pin_hwnd =

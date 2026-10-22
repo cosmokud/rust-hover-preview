@@ -37,11 +37,7 @@ fn every_kind_the_pin_draws_whole_stands_in_the_pins_own_window() {
         );
     }
 
-    for kind in [
-        MediaType::Video,
-        MediaType::EngineSvg,
-        MediaType::EngineFont,
-    ] {
+    for kind in [MediaType::EngineSvg, MediaType::EngineFont] {
         assert!(
             !pin_should_stand_in_its_own_window(Some(kind), Path::new("a-file")),
             "{kind:?} is drawn in a window of somebody else's, so its pin keeps the preview's"
@@ -49,19 +45,113 @@ fn every_kind_the_pin_draws_whole_stands_in_the_pins_own_window() {
     }
 }
 
+/// A film mpv plays is drawn into a host this app owns under the pin's own window, so a pin of
+/// one stands in the pin's own window; a film FFmpeg's player draws is that player's window
+/// behind the band, and its pin keeps the preview's until its own ticket. The kind on screen and
+/// the file's own route answer the same way, placeholder or not (see `pin_film_host`).
+#[test]
+fn a_film_mpv_plays_stands_in_the_pins_own_window() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    stand_mpv_in(Some(true));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+
+    for kind in [
+        Some(MediaType::Video),
+        Some(MediaType::Loading),
+        Some(MediaType::Unplayable),
+        None,
+    ] {
+        assert!(
+            pin_should_stand_in_its_own_window(kind, Path::new("a.mp4")),
+            "{kind:?} of a film mpv plays is drawn in a host of the pin's own, so the pin is the \
+             pin's own window"
+        );
+    }
+
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+
+    for kind in [
+        Some(MediaType::Video),
+        Some(MediaType::Loading),
+        Some(MediaType::Unplayable),
+        None,
+    ] {
+        assert!(
+            !pin_should_stand_in_its_own_window(kind, Path::new("a.mp4")),
+            "{kind:?} of a film FFmpeg's player draws in a window of its own keeps the preview's"
+        );
+    }
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+}
+
+/// A drag parks the window behind the band, and a film mpv draws into the pin's own host leaves
+/// no window of the desktop's behind it to park; a film FFmpeg's player draws still does (see
+/// `MediaType::draws_in_a_window_of_its_own`).
+#[test]
+fn a_hosted_film_leaves_nothing_for_a_drag_to_park() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let previous_own = pin_is_its_own_window();
+
+    stand_pin(Some(overlay_pin((100, 80, 420, 320), PinChrome::always())));
+
+    pin_stands_in_its_own_window(true);
+    assert!(
+        !MediaType::Video.draws_in_a_window_of_its_own(),
+        "a hosted film's picture is a child of the pin's own window, not a window of the desktop's"
+    );
+
+    pin_stands_in_its_own_window(false);
+    assert!(
+        MediaType::Video.draws_in_a_window_of_its_own(),
+        "and a film FFmpeg's player draws is still the window a drag parks"
+    );
+    assert!(
+        !MediaType::NativeVideo.draws_in_a_window_of_its_own(),
+        "the media engine's film is a frame this window draws, as it always was"
+    );
+
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+}
+
 /// The kind on screen is the answer where there is one, and the file's name is not asked again:
-/// a picture is the pin's own window whatever it is called, and a film a player draws keeps the
-/// preview's even under a picture's name.
+/// a picture is the pin's own window whatever it is called, and a film FFmpeg's player draws keeps
+/// the preview's even under a picture's name. A film's route is the one thing asked beside the
+/// kind, because it is the player that decides where its picture is drawn (see
+/// `pin_should_stand_in_its_own_window`).
 #[test]
 fn a_known_kind_is_not_re_read_from_the_path() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     assert!(
         pin_should_stand_in_its_own_window(Some(MediaType::StaticImage), Path::new("a.svg")),
         "the picture in hand is a picture, whatever the name beside it says"
     );
+
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     assert!(
         !pin_should_stand_in_its_own_window(Some(MediaType::Video), Path::new("a.png")),
         "and a player's window is still a player's window under a picture's name"
     );
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
 }
 
 /// A pin whose media is a placeholder — the spinner before a file is read, or the cross a failed

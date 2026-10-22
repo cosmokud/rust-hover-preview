@@ -387,11 +387,15 @@ impl MediaType {
     /// window behind the band, so a band this app fills itself has nothing to put away, and the
     /// flat fill a park paints would be laid over a picture this window is drawing — a frame of
     /// this app's own, blanked for the length of a drag and answered with a stray decode. FFmpeg's
-    /// player and the browser that draws an engine document are the two of them; the media engine's
-    /// video is drawn into this window's own surface like any other frame (see
-    /// `park_pinned_player`).
+    /// player and the browser that draws an engine document are the two of them; a film mpv plays
+    /// into the pin's own host is a child of the pin's window rather than a window of the
+    /// desktop's, and the media engine's video is drawn into this window's own surface like any
+    /// other frame (see `park_pinned_player` and `pin_film_host`).
     pub(super) fn draws_in_a_window_of_its_own(&self) -> bool {
-        matches!(self, Self::Video) || self.is_engine()
+        match self {
+            Self::Video => !pin_lifecycle::pin_is_its_own_window(),
+            _ => self.is_engine(),
+        }
     }
 
     /// Whether this is a sound, whose card is the one painted preview that changes while it is

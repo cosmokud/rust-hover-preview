@@ -1093,6 +1093,10 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
 /// pin taken up with no kind at all does (see [`a_pin_of_this_file_stands_in_its_own_window`]).
 pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: &Path) -> bool {
     match kind {
+        // A film mpv plays is drawn into a host this app owns under the pin's own window, so the
+        // pin is the pin's own; a film FFmpeg's player draws is that player's window behind the
+        // band, and keeps the preview's until its own ticket (see `pin_film_host`).
+        Some(MediaType::Video) => video_route(path) == VideoRoute::Mpv,
         Some(kind) if !matches!(kind, MediaType::Loading | MediaType::Unplayable) => {
             !kind.draws_in_a_window_of_its_own()
         }
@@ -1105,9 +1109,10 @@ pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: 
 /// A placeholder is still a pin of the file under it, so the file's own route is asked rather
 /// than the spinner or the cross. Every route this app draws the whole way — a reader of its
 /// own, a card, or the page an engine writes into this app's frame — belongs here; the browser's
-/// three and a film a player of its own draws do not. The media engine's film is drawn into this
-/// app's own surface like any other frame, which is the one video that is the pin's to host (see
-/// `engine_kind_of` and `MediaType::draws_in_a_window_of_its_own`).
+/// three do not. A film is the pin's own window where mpv draws it into the pin's own host, and
+/// the preview's where FFmpeg's player draws a window of the desktop's; the media engine's film is
+/// drawn into this app's own surface like any other frame (see `engine_kind_of`,
+/// `MediaType::draws_in_a_window_of_its_own` and `pin_film_host`).
 fn a_pin_of_this_file_stands_in_its_own_window(path: &Path) -> bool {
     use crate::formats::routing::DrawnBy;
 
@@ -1119,7 +1124,7 @@ fn a_pin_of_this_file_stands_in_its_own_window(path: &Path) -> bool {
     }
 
     match HoverFacts::read(path).route.drawn_by {
-        DrawnBy::MediaEngine => video_route(path) == VideoRoute::MediaEngine,
+        DrawnBy::MediaEngine => matches!(video_route(path), VideoRoute::MediaEngine | VideoRoute::Mpv),
         DrawnBy::WebView(_) | DrawnBy::Native(_) | DrawnBy::Card | DrawnBy::Nothing => true,
     }
 }
