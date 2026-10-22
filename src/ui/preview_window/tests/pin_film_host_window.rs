@@ -38,6 +38,7 @@ struct StandingFilm {
     previous_window: Option<HWND>,
     previous_media: Option<MediaData>,
     previous_pid: u32,
+    previous_hwnd: isize,
 }
 
 impl StandingFilm {
@@ -47,6 +48,9 @@ impl StandingFilm {
         let previous_window = pin_real_window::real_pin_window();
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pid = VIDEO_PID.swap(unsafe { GetCurrentProcessId() }, Ordering::SeqCst);
+        // **A hosted film has no window of the desktop's**, so the road that would find one by pid
+        // is stood at nothing here (see `video_window_for`).
+        let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
         // The host holds this test's own process, which is the pid of any child it makes: a film is
         // drawn in the host only when the player begun into it is the one this app recorded (see
         // `host_holds_the_pinned_film`).
@@ -79,6 +83,7 @@ impl StandingFilm {
             previous_window,
             previous_media,
             previous_pid,
+            previous_hwnd,
         }
     }
 }
@@ -95,6 +100,7 @@ impl Drop for StandingFilm {
         pin_stands_in_its_own_window(self.previous_own);
         stand_pin(self.previous_pin.take());
         VIDEO_PID.store(self.previous_pid, Ordering::SeqCst);
+        VIDEO_HWND.store(self.previous_hwnd, Ordering::SeqCst);
         stand_mpv_in(None);
         stand_video_engine_in(None);
         if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -188,6 +194,63 @@ fn a_park_hides_the_film_host_and_the_unpark_shows_it() {
         unsafe { IsWindowVisible(host) }.as_bool(),
         "and the unpark is the same window back"
     );
+}
+
+/// A hosted film's park is ended by the host's own child and not by a window of the desktop's: the
+/// settle hands the band back to the same host, which is the show — no player is placed, styled or
+/// raised, and nothing is relaunched (see `settle_pinned_park` and `unpark_pinned_player`).
+#[test]
+fn a_hosted_films_park_is_settled_by_the_host_it_was_hidden_in() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::pin_film_host().expect("the film's host");
+
+    // The player's own child, which is what a hosted film drawing is (see
+    // `the_pinned_film_is_drawing`).
+    let child = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            0,
+            16,
+            16,
+            host,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a child of the host's, in this process");
+
+    assert!(
+        park_pinned_player_for_step(film.pin_hwnd, (film.box_.0, film.box_.1)),
+        "a file step covers the band and hides the film's window"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "which for a hosted film is the host hidden"
+    );
+    assert!(pin_player_is_parked(), "with the cover standing");
+
+    assert!(
+        settle_pinned_park(),
+        "the settle hands the band back to the child the player is drawing in"
+    );
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "which is the same host shown again"
+    );
+    assert!(!pin_player_is_parked(), "with the cover down");
+
+    unsafe {
+        let _ = DestroyWindow(child);
+    };
 }
 
 /// The topmost road is for players placed from the outside; the host is already where the pin is,

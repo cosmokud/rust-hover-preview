@@ -2181,10 +2181,12 @@ fn prepare_resume_frame() {
 /// as the park stands, and the tick's own raise is answered out of the hand for the same reason,
 /// so the tick that takes the park back is the one that has to place the window.
 pub(super) fn settle_pinned_park() -> bool {
-    settle_pinned_park_where(
-        &Win32PinWindow,
-        video_window_for(VIDEO_PID.load(Ordering::SeqCst)).is_some(),
-    )
+    // **A hosted film's window is a child of the pin's**, so there is no window of the desktop's to
+    // find by pid: what "the player's window is up" is for it is the child the player has put under
+    // the host (see `pin_film_host`).
+    let window_up = pin_film_host::the_pinned_film_is_drawing()
+        || video_window_for(VIDEO_PID.load(Ordering::SeqCst)).is_some();
+    settle_pinned_park_where(&Win32PinWindow, window_up)
 }
 
 /// The settle with the two facts a machine with no player of this app's in it cannot supply given
