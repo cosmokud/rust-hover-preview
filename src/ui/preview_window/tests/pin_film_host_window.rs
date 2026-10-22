@@ -270,3 +270,39 @@ fn the_film_is_drawing_when_the_player_has_a_child_of_its_own_under_the_host() {
         "and the child going is the film not being drawn anywhere"
     );
 }
+
+/// A player begun for a pinned mpv film is told the pin's own host and nothing about a window of
+/// the desktop's, while a film whose pin stands in the preview's window keeps the top-level launch
+/// it has (see `start_mpv_video_playback`).
+#[test]
+fn a_pinned_mpv_film_is_begun_into_the_pins_film_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::pin_film_host().expect("the film's host");
+
+    let path = Path::new("a-film.mkv");
+    let wid = mpv_launch_host(path).expect("the host the film is drawn in");
+
+    assert_eq!(
+        wid,
+        host.0 as usize as u32,
+        "the window the player is told to draw into is the pin's own child"
+    );
+    assert!(
+        video_launch::mpv_args(
+            path, 0, 0, 320, 240, 0.0, 80, None, false, false, None, "rhp-test", Some(wid),
+        )
+        .iter()
+        .any(|arg| arg == &format!("--wid={wid}")),
+        "and the command line names it"
+    );
+
+    pin_stands_in_its_own_window(false);
+    assert!(
+        mpv_launch_host(path).is_none(),
+        "a film whose pin stands in the preview's window keeps a window of the desktop's"
+    );
+}
