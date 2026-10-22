@@ -63,7 +63,7 @@ static FILM_HOST_CLASS_REGISTERED: Once = Once::new();
 /// The host the pin is showing its film through, or nothing while there is none.
 pub(super) fn film_host() -> Option<HWND> {
     let host = PIN_FILM_HOST.load(Ordering::SeqCst);
-    (host != 0).then(|| HWND(host as *mut _))
+    (host != 0).then_some(HWND(host as *mut _))
 }
 
 /// The player this app has attached to the host, recorded beside it so that a window of mpv's that
