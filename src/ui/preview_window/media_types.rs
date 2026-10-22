@@ -391,9 +391,13 @@ impl MediaType {
     /// into the pin's own host is a child of the pin's window rather than a window of the
     /// desktop's, and the media engine's video is drawn into this window's own surface like any
     /// other frame (see `park_pinned_player` and `pin_film_host`).
-    pub(super) fn draws_in_a_window_of_its_own(&self) -> bool {
+    ///
+    /// **A film's answer is the route of the film it is showing now**, rather than the window the
+    /// pin was taken up in: an engine row can change under a pin that is already up, and the pin is
+    /// not taken up again for it (see `video_route`).
+    pub(super) fn draws_in_a_window_of_its_own(&self, path: &Path) -> bool {
         match self {
-            Self::Video => !pin_lifecycle::pin_is_its_own_window(),
+            Self::Video => video_route(path) != VideoRoute::Mpv,
             _ => self.is_engine(),
         }
     }

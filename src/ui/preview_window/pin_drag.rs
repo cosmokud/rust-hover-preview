@@ -724,10 +724,14 @@ pub(super) fn begin_pin_drag(
             // being held for this gesture: parking it would hide a playing film behind a still and
             // let it run on unwatched, so a drag or a resize is a move of the window it already has
             // (see `video_drag_hold_apply` and `mpv_ipc`).
-            let mpv_is_drawing =
-                pinned_media_owner().is_some_and(|(path, _)| video_route(&path) == VideoRoute::Mpv);
+            let pinned_film = pinned_media_owner();
+            let mpv_is_drawing = pinned_film
+                .as_ref()
+                .is_some_and(|(path, _)| video_route(path) == VideoRoute::Mpv);
             if !mpv_is_drawing
-                && current_media_type().is_some_and(|kind| kind.draws_in_a_window_of_its_own())
+                && pinned_film.as_ref().is_some_and(|(path, _)| {
+                    current_media_type().is_some_and(|kind| kind.draws_in_a_window_of_its_own(path))
+                })
             {
                 park_pinned_player(
                     HWND(hwnd as *mut _),
