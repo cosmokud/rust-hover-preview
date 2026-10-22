@@ -663,6 +663,12 @@ pub(super) fn take_down_pinned_media() {
         }
         *current = None;
     }
+
+    // **The picture's host goes off the band with the media it was showing.** A hosted film's
+    // picture is the host, so a take-down that left it up would leave a black rectangle where the
+    // incoming file is about to be painted — and it would stand there until a later show destroyed
+    // it (see `pin_film_host` and `swap_pinned_media`).
+    unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
 }
 
 /// Take the media the pin is showing down for the file replacing it — unless the pin is a bubble.

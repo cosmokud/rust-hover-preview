@@ -747,6 +747,54 @@ fn a_stopped_pinned_player_leaves_no_empty_host_over_the_band() {
     };
 }
 
+/// A pin shown a picture after a hosted film takes the host off the band as it takes the film
+/// down: the host is a black rectangle where the picture is about to be painted, and waiting for
+/// the next show to destroy it leaves that rectangle over the band in the meantime (see
+/// `swap_pinned_media` and `take_down_pinned_media`).
+#[test]
+fn a_swap_from_a_hosted_film_to_a_picture_takes_the_host_off_the_band() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let drawn = 0x7FFF_FFFA;
+    film.drawn_in_the_host(drawn);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+    }
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "the film's host is the picture the pin is showing"
+    );
+
+    let mut picture = create_loading_media(320, 240);
+    picture.media_type = MediaType::StaticImage;
+    let swap = swap_pinned_media(PinAnswer {
+        path: PathBuf::from("a-picture.png"),
+        update: PinUpdate {
+            content: film.box_,
+            dpi: 96,
+            volume: 100,
+        },
+        media: Some(picture),
+        walk: None,
+        arc: PinArc::new(),
+    });
+
+    assert!(
+        matches!(swap, PinSwap::Ready(_)),
+        "a picture has no player to wait for"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host the film was drawn in goes off the band with the film, rather than standing as \
+         a black rectangle over the picture that replaces it"
+    );
+}
+
 /// A retired player is ended when its replacement has arrived, and a hosted replacement arrives
 /// when its own child is under the host — not when a top-level handle is published, which a hosted
 /// player never has (see `settle_video_retirement`).
