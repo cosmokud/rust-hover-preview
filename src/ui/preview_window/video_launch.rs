@@ -1298,7 +1298,7 @@ mod tests {
                 true,
                 Some(Path::new("scratch/mpv-input.conf")),
                 IPC,
-            None,
+                None,
             ),
             [
                 "films/episode.mkv",
@@ -1386,7 +1386,7 @@ mod tests {
             true,
             None,
             IPC,
-        None,
+            None,
         );
         assert!(
             args.iter().any(|arg| arg == "--window-dragging=no"),
@@ -1416,7 +1416,7 @@ mod tests {
                 false,
                 None,
                 IPC,
-            None,
+                None,
             ),
             [
                 "a.mkv",
@@ -1459,7 +1459,7 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
+                None,
             ),
             [
                 "a.mkv",
@@ -1501,7 +1501,7 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
+                None,
             ),
             [
                 "a.mkv",
@@ -1552,7 +1552,7 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
+                None,
             ),
             [
                 "a.mkv",
@@ -1646,7 +1646,7 @@ mod tests {
                     true,
                     None,
                     IPC,
-                None,
+                    None,
                 ),
                 [
                     "a.mkv",
@@ -1684,7 +1684,7 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
+                None,
             )
             .contains(&"--geometry=640x360+0+0".to_string()),
             "a box at the primary display's own origin is passed as it stands"
@@ -1732,7 +1732,7 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
+                None,
             ),
             [
                 "a.mkv",
@@ -1796,7 +1796,7 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
+                None,
             ),
             [
                 "a.mkv",

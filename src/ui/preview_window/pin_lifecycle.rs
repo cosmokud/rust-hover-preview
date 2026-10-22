@@ -1124,7 +1124,9 @@ fn a_pin_of_this_file_stands_in_its_own_window(path: &Path) -> bool {
     }
 
     match HoverFacts::read(path).route.drawn_by {
-        DrawnBy::MediaEngine => matches!(video_route(path), VideoRoute::MediaEngine | VideoRoute::Mpv),
+        DrawnBy::MediaEngine => {
+            matches!(video_route(path), VideoRoute::MediaEngine | VideoRoute::Mpv)
+        }
         DrawnBy::WebView(_) | DrawnBy::Native(_) | DrawnBy::Card | DrawnBy::Nothing => true,
     }
 }
@@ -2359,7 +2361,7 @@ pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
     // player's geometry is never touched, because mpv's child fills whatever box the host is given
     // (see `place_the_pin_film_host`). Placed while a park stands as much as after one: the band a
     // hidden host comes back at is the band it was given (see `settle_pinned_park`).
-    if pin_film_host::host_holds_the_pinned_film() {
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         unsafe { pin_film_host::place_the_pin_film_host(content) };
         return;
     }

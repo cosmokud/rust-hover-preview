@@ -153,7 +153,7 @@ pub(super) fn player_ex_style_for(current: isize) -> isize {
     // wearing bits this app puts on another program's window: a hosted player is mpv's child under a
     // host the pin owns and disables, so it neither takes a press nor holds a band of its own (see
     // `pin_film_host`).
-    if pin_film_host::host_holds_the_pinned_film() {
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         return current;
     }
 
@@ -174,7 +174,7 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // **A hosted player's window is not this app's to style or to publish.** It is mpv's child under
     // a host the pin owns, and every road that would place, style or raise it is answered by the
     // host instead (see `player_ex_style_for`, `place_player_window`).
-    if pin_film_host::host_holds_the_pinned_film() {
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         return false;
     }
 
