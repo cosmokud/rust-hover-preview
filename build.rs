@@ -34,9 +34,29 @@ fn main() {
         res.set("ProductName", "Rust Hover Preview");
         res.set("FileDescription", "Rust Hover Preview");
         res.set("LegalCopyright", "Copyright 2026");
+        // A failure here is not a warning to read later. The icon and the version block are what
+        // the Shell draws this app by and what its own tray loads at run time (see
+        // `shell::app_icon`), so a binary built without them is a binary that wears the system's
+        // placeholder — and nothing else about it is wrong, so nothing else says a word.
         if let Err(e) = res.compile() {
-            eprintln!("Warning: Failed to compile Windows resources: {}", e);
+            panic!("could not compile the Windows resources: {e}");
         }
+
+        // And what the compiler produced has to be handed to the *binary's* link. Cargo passes a
+        // build script's `rustc-link-lib` to the package's library target rather than to the
+        // binary that links it, so a `src/lib.rs` appearing beside `main.rs` is enough to drop
+        // both the icon and the version block out of the executable with every exit code still
+        // zero (`tests/executable_icon` is what asks, and there is no other symptom until a
+        // build is run). Named here as the binary's own link argument, the file arrives whatever
+        // else the package grows, and winres's own `rustc-link-lib` line stays where it is: the
+        // same file, named for the library target.
+        let resource_file = std::path::Path::new(&env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
+            .join("resource.lib");
+        println!(
+            "cargo:rustc-link-arg-bin={}={}",
+            env::var("CARGO_PKG_NAME").expect("cargo sets CARGO_PKG_NAME"),
+            resource_file.display()
+        );
     }
 }
 
