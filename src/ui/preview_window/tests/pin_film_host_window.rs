@@ -9,7 +9,8 @@
 use super::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, GetParent, GWL_STYLE, WINDOW_EX_STYLE, WS_CHILD, WS_VISIBLE,
+    DestroyWindow, GetParent, GWL_EXSTYLE, GWL_STYLE, WINDOW_EX_STYLE, WS_CHILD, WS_POPUP,
+    WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -142,6 +143,104 @@ unsafe fn a_child_of_the_host(host: HWND) -> HWND {
         )
     }
     .expect("a child of the host's, in this process")
+}
+
+/// A film in the pin's own host is a child of the pin's window: it has no place in the desktop's
+/// order, no band to hold, and no style of this app's to wear. Every road that places, styles,
+/// raises or tells a top-level player's window is answered for it by the host — and every one of
+/// them is left working unchanged for a film that *is* a window of the desktop's (see
+/// `host_holds_the_pinned_film`).
+#[test]
+fn the_top_level_roads_leave_a_hosted_player_alone() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    let previous_image = video_process_image();
+    note_player_process(pid, MPV_IMAGE_NAME);
+    mpv_ipc::remember_pipe(pid, "a-hosted-ontop-pipe", false);
+    mpv_ipc::clear_noted();
+
+    let player = unsafe { a_window_of_the_desktops() };
+    let box_ = (200, 160, 840, 560);
+    unsafe {
+        let _ = SetWindowPos(player, HWND_TOP, box_.0, box_.1, box_.2 - box_.0, box_.3 - box_.1, SWP_NOACTIVATE);
+    }
+
+    // The band a hosted film holds is the pin's own: the player's flag is not the pin's to correct.
+    settle_pinned_mpv_ontop();
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "a player drawn into the pin's own host is told nothing about a band of the desktop's"
+    );
+
+    // The style list is the top-level player's: a child of a disabled host takes no press and
+    // needs none of it.
+    assert_eq!(
+        player_ex_style_for(0),
+        0,
+        "a hosted player wears none of the bits a window of the desktop's is given"
+    );
+
+    assert!(
+        !unsafe { apply_noactivate_to_hwnd(player) },
+        "and the road that styles one answers that it styled nothing"
+    );
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(player, GWL_EXSTYLE) },
+        0,
+        "which leaves the window exactly as it was"
+    );
+    assert_eq!(
+        VIDEO_HWND.load(Ordering::SeqCst),
+        0,
+        "and publishes no handle of a hosted film's as the player's to place"
+    );
+
+    unsafe {
+        place_player_window(
+            player,
+            PlayerOrder::Raise,
+            (10, 10, 410, 310),
+            SWP_NOACTIVATE,
+        );
+    }
+    assert_eq!(
+        unsafe { window_rect(player) },
+        box_,
+        "and the road that places and raises a player's window does not move this one"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(player);
+    };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_noted();
+    note_player_process(pid, previous_image);
+}
+
+/// A window of the desktop's, standing nowhere in particular: what the top-level roads are asked
+/// about in place of a player of this app's, which a test never begins.
+unsafe fn a_window_of_the_desktops() -> HWND {
+    unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            16,
+            16,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a stand-in window for a player's")
 }
 
 /// The film's host is the band, and the band is what a resize changes: the host follows the pin's
