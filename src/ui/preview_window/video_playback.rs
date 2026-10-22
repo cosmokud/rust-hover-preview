@@ -1242,6 +1242,10 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         // The band is owed its picture back, and the picture is the host — but only once the player
         // has put a child of its own in it: a host shown empty is a black rectangle over the band,
         // which is the film the hover was playing, blanked (see `pin_film_host::create`).
+        //
+        // **Where the host stands is not this road's to say**, and the box it was handed is a
+        // top-level player's rather than the band's: the band's box is the pin's, and it is given
+        // by the roads that read it (see `ensure_pinned_sibling_box`).
         if pin_film_host::the_pinned_film_is_drawing() {
             // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
             // takes any window and reports rather than faults.
