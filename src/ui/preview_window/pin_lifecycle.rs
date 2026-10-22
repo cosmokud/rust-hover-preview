@@ -1080,31 +1080,39 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
 ///
 /// Asked of the media in hand where it has a kind: what fills the pin's band is the kind's
 /// answer, and every kind this app draws the whole way stands in the pin's own window (see
-/// `MediaType::is_drawn_in_the_pins_own_window`). A pin taken up while the file is still
-/// loading has no kind to ask yet, so the file's route is asked instead (see
-/// [`pin_should_stand_in_its_own_window_for`]).
+/// `MediaType::draws_in_a_window_of_its_own`). The two placeholder kinds — a spinner and the
+/// cross a failed file leaves — are not the file, so they ask the file's route instead, as a
+/// pin taken up with no kind at all does (see [`a_pin_of_this_file_stands_in_its_own_window`]).
 pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: &Path) -> bool {
     match kind {
-        Some(kind) if !kind.is_loading() => kind.is_drawn_in_the_pins_own_window(),
-        _ => pin_should_stand_in_its_own_window_for(path),
+        Some(kind) if !matches!(kind, MediaType::Loading | MediaType::Unplayable) => {
+            !kind.draws_in_a_window_of_its_own()
+        }
+        _ => a_pin_of_this_file_stands_in_its_own_window(path),
     }
 }
 
-/// Whether a file whose media is not known yet belongs in the pin's own window.
+/// Whether a file whose media is not in hand belongs in the pin's own window.
 ///
-/// The placeholder for a pin taken up before its preview has answered is still a pin of that
-/// file, so the file's own route is asked rather than the spinner in hand. Every route this app
-/// draws the whole way — a reader of its own, a card, or the page an engine writes into this
-/// app's frame — belongs here; the browser's three and a film a player of its own draws do not.
-/// The media engine's film is drawn into this app's own surface like any other frame, which is
-/// the one video that is the pin's to host (see `MediaType::is_drawn_in_the_pins_own_window`).
-fn pin_should_stand_in_its_own_window_for(path: &Path) -> bool {
+/// A placeholder is still a pin of the file under it, so the file's own route is asked rather
+/// than the spinner or the cross. Every route this app draws the whole way — a reader of its
+/// own, a card, or the page an engine writes into this app's frame — belongs here; the browser's
+/// three and a film a player of its own draws do not. The media engine's film is drawn into this
+/// app's own surface like any other frame, which is the one video that is the pin's to host (see
+/// `engine_kind_of` and `MediaType::draws_in_a_window_of_its_own`).
+fn a_pin_of_this_file_stands_in_its_own_window(path: &Path) -> bool {
     use crate::formats::routing::DrawnBy;
 
+    // The engine's three are the browser's window, and the engine's own answer is what says it
+    // is really drawing this file: the route names a page of HTML whatever the tray's switch
+    // says, while the engine with the switch off draws the text preview instead.
+    if engine_kind_of(path).is_some() {
+        return false;
+    }
+
     match HoverFacts::read(path).route.drawn_by {
-        DrawnBy::WebView(_) => false,
         DrawnBy::MediaEngine => video_route(path) == VideoRoute::MediaEngine,
-        DrawnBy::Native(_) | DrawnBy::Card | DrawnBy::Nothing => true,
+        DrawnBy::WebView(_) | DrawnBy::Native(_) | DrawnBy::Card | DrawnBy::Nothing => true,
     }
 }
 
@@ -1114,7 +1122,7 @@ fn pin_should_stand_in_its_own_window_for(path: &Path) -> bool {
 /// Asked of the kind rather than of the setting, because it is what the kind can be: the preview's
 /// window is a tool window that never takes the focus, and every kind this app draws the whole way
 /// has nothing of anybody else's standing in its band (see
-/// `MediaType::is_drawn_in_the_pins_own_window`).
+/// `MediaType::draws_in_a_window_of_its_own`).
 pub(super) fn pin_is_its_own_window() -> bool {
     pinned() && PIN_IS_ITS_OWN_WINDOW.load(Ordering::SeqCst)
 }
@@ -1130,8 +1138,8 @@ pub(super) fn pin_stands_in_its_own_window(its_own: bool) {
 }
 
 /// The pin that is up stands in a window of its own: written at the take-up from the kind the pin was
-/// taken up on, or from the file's route where the media was still loading (see
-/// `MediaType::is_drawn_in_the_pins_own_window`).
+/// taken up on, or from the file's route where the media is a placeholder (see
+/// `pin_should_stand_in_its_own_window`).
 static PIN_IS_ITS_OWN_WINDOW: AtomicBool = AtomicBool::new(false);
 
 /// Put a pinned window up at the box its state says, painted before it is shown: what a layered

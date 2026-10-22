@@ -394,17 +394,6 @@ impl MediaType {
         matches!(self, Self::Video) || self.is_engine()
     }
 
-    /// Whether a pin of this kind stands in the pin's own window rather than the preview's: a
-    /// window Windows activates on a press, lists in Alt+Tab and gives a taskbar button to.
-    ///
-    /// Every kind this app draws the whole way does, which is every kind but the ones whose band
-    /// holds a window of somebody else's (see `draws_in_a_window_of_its_own`). A film the media
-    /// engine draws is drawn into this app's own surface like any other frame, so it stands here
-    /// too; a film FFmpeg's player or mpv draws does not.
-    pub(super) fn is_drawn_in_the_pins_own_window(&self) -> bool {
-        !self.draws_in_a_window_of_its_own()
-    }
-
     /// Whether this is a sound, whose card is the one painted preview that changes while it is
     /// on screen: the clock and the bar under it are drawn from a player that is running.
     pub(super) fn is_audio(&self) -> bool {
