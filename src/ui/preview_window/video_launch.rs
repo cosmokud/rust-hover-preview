@@ -130,6 +130,7 @@ pub(super) fn mpv_args(
     subtitles: bool,
     input_conf: Option<&Path>,
     ipc: &str,
+    wid: Option<u32>,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         // Read before the configuration and before any file the user has: the app's own command
@@ -164,15 +165,26 @@ pub(super) fn mpv_args(
     // asked for on every tick and on every monitor pass (see `place_player_window`): what makes
     // the two halves two rather than one is that this side holds the window up before this app has
     // ever found its handle, which is what the first frames of a pinned film are drawn under.
-    args.push("--ontop".to_string());
-    // The size and the position, always both, and always written `+x+y` whether x and y are
-    // negative or not: a box on a monitor left of or above the primary one has a negative
-    // coordinate, and `+-2160` is how that coordinate is spelled for a geometry whose offsets are
-    // introduced by a sign — a bare `-2160` is a distance from the far edge instead, so the film
-    // would be put somewhere other than the box. Measured on mpv 0.41.0, on a primary display
-    // 3440x1440 with a second one at (3440,-2160), preview box (3540,-2060): `+3540+-2060` puts
-    // the window on the second display, and the size alone centres it on the primary at (1520,570).
-    args.push(format!("--geometry={width}x{height}+{x}+{y}"));
+    //
+    // **A player given a window of this app's own is told that window and neither of the two.** A
+    // host is a child of the pin's, so where the picture goes is the host's box and the band it
+    // stands in is the pin's own order to keep: `--wid` names the window and mpv draws into it,
+    // while a `--geometry` would be a top-level box nobody asked for and an `--ontop` a place in
+    // the desktop's order the pin is the owner of (see `pin_film_host`).
+    if let Some(wid) = wid {
+        args.push(format!("--wid={wid}"));
+    } else {
+        args.push("--ontop".to_string());
+        // The size and the position, always both, and always written `+x+y` whether x and y are
+        // negative or not: a box on a monitor left of or above the primary one has a negative
+        // coordinate, and `+-2160` is how that coordinate is spelled for a geometry whose offsets
+        // are introduced by a sign — a bare `-2160` is a distance from the far edge instead, so the
+        // film would be put somewhere other than the box. Measured on mpv 0.41.0, on a primary
+        // display 3440x1440 with a second one at (3440,-2160), preview box (3540,-2060):
+        // `+3540+-2060` puts the window on the second display, and the size alone centres it on the
+        // primary at (1520,570).
+        args.push(format!("--geometry={width}x{height}+{x}+{y}"));
+    }
     args.push("--gpu-api=d3d11".to_string());
 
     // mpv decodes on the card by its own safe list with its own software fallback, so the switch
@@ -1286,6 +1298,7 @@ mod tests {
                 true,
                 Some(Path::new("scratch/mpv-input.conf")),
                 IPC,
+            None,
             ),
             [
                 "films/episode.mkv",
@@ -1308,6 +1321,41 @@ mod tests {
             "the film, then the configuration off, the mouse off, the chrome off, the order it is\
              held up in, the box, the two Direct3D options and the level — `--vo` is deliberately\
              not passed and no `--start` is asked for at the beginning of a file (see `mpv_args`)"
+        );
+    }
+
+    /// A player begun into a pin's host is told the host and nothing about a window of its own:
+    /// there is no top-level window to place and no place in the desktop's order to ask for, so
+    /// `--geometry` and `--ontop` are the two flags that would be a lie (see `pin_film_host`).
+    #[test]
+    fn an_mpv_player_in_a_host_is_told_the_host_and_no_place_of_its_own() {
+        let args = mpv_args(
+            Path::new("a.mkv"),
+            10,
+            20,
+            640,
+            360,
+            0.0,
+            80,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+            Some(0x1234_5678),
+        );
+
+        assert!(
+            args.iter().any(|arg| arg == "--wid=305419896"),
+            "the host is named as an unsigned 32-bit decimal, which is what mpv reads: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg.starts_with("--geometry")),
+            "a child has no box of its own on the desktop to be given: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "--ontop"),
+            "and a child has no place in the desktop's order to hold: {args:?}"
         );
     }
 
@@ -1338,6 +1386,7 @@ mod tests {
             true,
             None,
             IPC,
+        None,
         );
         assert!(
             args.iter().any(|arg| arg == "--window-dragging=no"),
@@ -1367,6 +1416,7 @@ mod tests {
                 false,
                 None,
                 IPC,
+            None,
             ),
             [
                 "a.mkv",
@@ -1409,6 +1459,7 @@ mod tests {
                 true,
                 None,
                 IPC,
+            None,
             ),
             [
                 "a.mkv",
@@ -1450,6 +1501,7 @@ mod tests {
                 true,
                 None,
                 IPC,
+            None,
             ),
             [
                 "a.mkv",
@@ -1500,6 +1552,7 @@ mod tests {
                 true,
                 None,
                 IPC,
+            None,
             ),
             [
                 "a.mkv",
@@ -1540,6 +1593,7 @@ mod tests {
                 true,
                 None,
                 IPC,
+            None,
             ),
             [
                 "a.mkv",
@@ -1592,6 +1646,7 @@ mod tests {
                     true,
                     None,
                     IPC,
+                None,
                 ),
                 [
                     "a.mkv",
@@ -1629,6 +1684,7 @@ mod tests {
                 true,
                 None,
                 IPC,
+            None,
             )
             .contains(&"--geometry=640x360+0+0".to_string()),
             "a box at the primary display's own origin is passed as it stands"
@@ -1676,6 +1732,7 @@ mod tests {
                 true,
                 None,
                 IPC,
+            None,
             ),
             [
                 "a.mkv",
@@ -1739,6 +1796,7 @@ mod tests {
                 true,
                 None,
                 IPC,
+            None,
             ),
             [
                 "a.mkv",
