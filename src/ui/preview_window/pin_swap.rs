@@ -853,7 +853,10 @@ impl PinSwapHold {
             .video_process
             .as_mut()
             .is_some_and(|player| matches!(player.try_wait(), Ok(None)));
-        let window_up = video_window_for(VIDEO_PID.load(Ordering::SeqCst)).is_some();
+        // A hosted player has no window of the desktop's to find by pid: what its first frame
+        // arriving is for one is the child it put under the host (see
+        // `pin_film_host::the_players_window_is_up`).
+        let window_up = pin_film_host::the_players_window_is_up(VIDEO_PID.load(Ordering::SeqCst));
 
         player_swap_wait(window_up, alive, self.started.elapsed()).map(|wait| match wait {
             PlayerWait::Arrived => PinSwapWait::Arrived,

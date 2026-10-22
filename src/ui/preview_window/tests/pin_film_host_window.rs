@@ -706,6 +706,103 @@ fn the_film_is_drawing_when_the_player_has_a_child_of_its_own_under_the_host() {
     );
 }
 
+/// A retired player is ended when its replacement has arrived, and a hosted replacement arrives
+/// when its own child is under the host — not when a top-level handle is published, which a hosted
+/// player never has (see `settle_video_retirement`).
+#[test]
+fn a_hosted_replacement_ends_the_retirement_it_took_over_from() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_pid = VIDEO_PID.load(Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_retirement = VIDEO_RETIREMENT.lock().ok().and_then(|mut held| held.take());
+
+    let film = StandingFilm::new();
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::pin_film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+
+    // The replacement is this test's own process, recorded under the image it runs: alive as far
+    // as the check is concerned, which is what makes its *arrival* the only thing that can end the
+    // wait (see `is_player_pid_alive` and `note_player_process`).
+    let image = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .expect("this test's own executable");
+    note_player_process(drawn, Box::leak(image.into_boxed_str()));
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        *held = Some(VideoRetirement {
+            retiring: 0x7FFF_FFFC,
+            replacement: drawn,
+            started: Instant::now(),
+        });
+    }
+
+    settle_video_retirement();
+
+    assert!(
+        VIDEO_RETIREMENT
+            .lock()
+            .ok()
+            .and_then(|held| *held)
+            .is_none(),
+        "the hosted replacement's child is the film on screen, so the player it replaced is ended \
+         now rather than at the ten-second bound"
+    );
+
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        *held = previous_retirement;
+    }
+    note_player_process(previous_pid, previous_image);
+}
+
+/// A swap onto a hosted film is answered by the child its player has put under the host, not by a
+/// top-level handle a hosted player never publishes: the file is installed on the child's arrival
+/// rather than let go of at the cover's bound (see `PinSwapHold::settle`).
+#[test]
+fn a_hosted_swaps_wait_is_answered_by_the_hosts_child() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    // The child this test makes is the test's own process's, so the player the host holds has to be
+    // this process as well (see `the_hosted_player_is_drawing`).
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::pin_film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+
+    let mut media = create_loading_media(320, 240);
+    media.media_type = MediaType::Video;
+    media.video_process = Some(PlayerProcess::Noted(drawn));
+    let mut hold = PinSwapHold {
+        file: PinInstallable {
+            path: PathBuf::from("the-next-film.mkv"),
+            update: PinUpdate {
+                content: film.box_,
+                dpi: 96,
+                volume: 100,
+            },
+            media,
+            audio: None,
+            walk: None,
+        },
+        arc: PinArc::new(),
+        started: Instant::now(),
+    };
+
+    assert_eq!(
+        hold.settle(),
+        Some(PinSwapWait::Arrived),
+        "the hosted player's own child is the film on screen, so the swap arrives instead of \
+         being given up on at the cover's six hundred milliseconds"
+    );
+}
+
 /// A player begun for a pinned mpv film is told the pin's own host and nothing about a window of
 /// the desktop's, while a film whose pin stands in the preview's window keeps the top-level launch
 /// it has (see `start_mpv_video_playback`).
