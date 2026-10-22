@@ -79,6 +79,7 @@ mod paint;
 mod pin_bubble;
 mod pin_chrome_layout;
 mod pin_drag;
+mod pin_film_host;
 mod pin_geometry;
 mod pin_input;
 mod pin_install;

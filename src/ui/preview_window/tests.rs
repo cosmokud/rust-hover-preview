@@ -431,6 +431,7 @@ mod pin_bubble_art;
 mod pin_bubble_space;
 mod pin_cards;
 mod pin_edges;
+mod pin_film_host_window;
 mod pin_frames;
 mod pin_input;
 mod pin_keys;

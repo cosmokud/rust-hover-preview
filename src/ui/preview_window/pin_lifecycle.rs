@@ -1272,6 +1272,21 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         show_pin_taskbar();
     }
 
+    // **The film's window goes where the band it is seen through went.** A pin standing in a
+    // window of its own gets a host to put a pinned mpv's picture in, at the band this window was
+    // just painted around; a pin standing in the preview's has no such band, because the film it
+    // shows is a window of FFmpeg's player and it is placed from the outside (see `pin_film_host`
+    // and `ensure_video_window_topmost`). A host left by a pin that has just left this window is
+    // taken down here rather than waiting for the hide that ends the pin: the file being installed
+    // may not be a film at all.
+    unsafe {
+        if pin_is_its_own_window() {
+            pin_film_host::take_up_the_pin_film_host();
+        } else {
+            pin_film_host::take_down_the_pin_film_host();
+        }
+    }
+
     // What the hand's blink would be measured as, where the trace is asked for: the whole road from the
     // box being read to the pin being on the screen, and whether this take-up is the one that made the
     // window (the first of a run is the slowest). `preview_up` says whether there was a hover under the
