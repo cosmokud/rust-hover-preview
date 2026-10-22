@@ -9,8 +9,8 @@
 use super::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, GetParent, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, MoveWindow, SW_SHOWNOACTIVATE,
-    SWP_NOACTIVATE, SWP_NOZORDER, WINDOW_EX_STYLE, WS_CHILD, WS_POPUP, WS_VISIBLE,
+    DestroyWindow, GetParent, MoveWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, SWP_NOACTIVATE,
+    SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WS_CHILD, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -210,7 +210,15 @@ fn the_top_level_roads_leave_a_hosted_player_alone() {
     let player = unsafe { a_window_of_the_desktops() };
     let box_ = (200, 160, 840, 560);
     unsafe {
-        let _ = SetWindowPos(player, HWND_TOP, box_.0, box_.1, box_.2 - box_.0, box_.3 - box_.1, SWP_NOACTIVATE);
+        let _ = SetWindowPos(
+            player,
+            HWND_TOP,
+            box_.0,
+            box_.1,
+            box_.2 - box_.0,
+            box_.3 - box_.1,
+            SWP_NOACTIVATE,
+        );
     }
 
     // The band a hosted film holds is the pin's own: the player's flag is not the pin's to correct.
@@ -326,7 +334,12 @@ fn the_film_host_follows_the_pins_band() {
     // A resize of the pin's window hands the media band another box, and the loop lays the window
     // out around it: the host is the band inside that window, so it is the same box the picture
     // would be shown in.
-    let wider = (film.box_.0, film.box_.1, film.box_.0 + 400, film.box_.1 + 300);
+    let wider = (
+        film.box_.0,
+        film.box_.1,
+        film.box_.0 + 400,
+        film.box_.1 + 300,
+    );
     with_pin(|pin| pin.content = wider);
     place_pinned_siblings();
 

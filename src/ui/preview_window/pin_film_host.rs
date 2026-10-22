@@ -18,7 +18,7 @@
 //!
 //! The host outlives the players begun into it: a seek is mpv's own IPC, a resize is the host's
 //! box, and a file step begins another player into the same host. It goes down with the pin (see
-//! `take_down_the_pin_film_host`, called from the hide a pin ends with).
+//! `take_down_the_pin_film_host`, called from the state a road out of a pin clears).
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Once;
@@ -152,10 +152,12 @@ fn band_in_the_window(content: ScreenRegion) -> (i32, i32, i32, i32) {
 /// and a box change — have the pin's state written before either of them asks, and the band the
 /// host is placed at is the same band the window was painted around.
 ///
-/// **A host made here is not shown.** It is a black window until the player this app begins has
-/// put a child of its own in it, and a black rectangle over the band is the film the hover was
-/// showing, blanked. It is the tick's own road that shows it once that child is there (see
-/// `ensure_video_window_topmost`), and the park's settle that shows it again after a park.
+/// **A host made here is not shown unless the player is already drawing in it.** It is a black
+/// window until the player this app begins has put a child of its own in it, and a black rectangle
+/// over the band is the film the hover was showing, blanked. A host a restore takes up is drawing
+/// already and is shown here; one a fresh launch made is shown by the tick's own road once that
+/// child is there (see `ensure_video_window_topmost`), and the park's settle that shows it again
+/// after a park.
 pub(super) unsafe fn take_up_the_pin_film_host() {
     let Some(path) = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.path.clone()))
     else {
