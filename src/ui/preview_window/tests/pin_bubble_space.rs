@@ -1421,6 +1421,7 @@ fn a_pick_holds_the_pin_over_the_listing_until_the_click_activates_it() {
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
     let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_band = PIN_BAND_HELD.load(Ordering::SeqCst);
     let previous_window = pin_real_window::real_pin_window();
     let previous_own = pin_is_its_own_window();
     let always_on_top = pin_always_on_top();
@@ -1453,6 +1454,7 @@ fn a_pick_holds_the_pin_over_the_listing_until_the_click_activates_it() {
     // The press, read off the hook before the click reaches the listing: the pin is raised for the pick
     // it names, and the band is kept rather than given straight back.
     PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    PIN_BAND_HELD.store(false, Ordering::SeqCst);
     arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pinned_window(), true) };
     unsafe { settle_z_order() };
@@ -1481,14 +1483,38 @@ fn a_pick_holds_the_pin_over_the_listing_until_the_click_activates_it() {
         "the pin the user picked a file for is never a window the listing's activation covers"
     );
 
-    // And the band goes back the moment the listing is the window the user is in, with the pin where it
-    // was: the front of the ordinary band, which is over the listing the click just activated.
+    // **The click landing is not the band's signal to go.** Windows sets the foreground before it raises
+    // the window it names, so a tick that gave the band back because the listing is now the window the user
+    // is in would hand the pin to a raise still on its way: the listing over the pin, for a tick, which is
+    // the flash. What the band's own deadline is measured from is the press.
+    let pressed = Instant::now();
     let mut owed = Some(PinFrontOwed {
-        until: Instant::now() + PIN_RAISE_GRACE,
-        band_until: Instant::now() + PIN_RAISE_GRACE,
+        until: pressed + PIN_RAISE_GRACE,
+        band_until: pressed + PIN_RAISE_GRACE,
         listing,
     });
-    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), listing) };
+    unsafe {
+        keep_pin_at_the_front(
+            pin_hwnd,
+            &mut owed,
+            pressed + Duration::from_millis(1),
+            listing,
+        )
+    };
+    unsafe { settle_z_order() };
+    assert!(
+        owed.is_some(),
+        "the pick is still owed while the press's grace has time on it"
+    );
+    assert!(
+        unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "and the band is not given back on the activation's word: the foreground is set before the window it names is raised"
+    );
+
+    // And on the press's clock the band goes back, with the pin over the listing it answered for: the front
+    // of the ordinary band is the pin landing on the file, not the pin put behind the window the user went on
+    // working in.
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, pressed + PIN_RAISE_GRACE, listing) };
     unsafe { settle_z_order() };
     assert!(
         owed.is_none(),
@@ -1511,6 +1537,7 @@ fn a_pick_holds_the_pin_over_the_listing_until_the_click_activates_it() {
     pin_real_window::stand_real_pin_window_for_a_test(previous_window);
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
     pin_stands_in_its_own_window(previous_own);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = always_on_top;
@@ -1537,6 +1564,7 @@ fn a_band_held_for_a_pick_goes_back_behind_the_window_the_user_moved_to() {
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
     let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_band = PIN_BAND_HELD.load(Ordering::SeqCst);
     let previous_window = pin_real_window::real_pin_window();
     let previous_own = pin_is_its_own_window();
     let always_on_top = pin_always_on_top();
@@ -1571,6 +1599,7 @@ fn a_band_held_for_a_pick_goes_back_behind_the_window_the_user_moved_to() {
     // The press holds the band, and the user is then in a program of their own — the one the pin's
     // hold put it over, and the one it must not be left over.
     PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    PIN_BAND_HELD.store(false, Ordering::SeqCst);
     arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pinned_window(), true) };
     unsafe { settle_z_order() };
@@ -1610,6 +1639,119 @@ fn a_band_held_for_a_pick_goes_back_behind_the_window_the_user_moved_to() {
     pin_real_window::stand_real_pin_window_for_a_test(previous_window);
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
+/// A pick's own placement keeps the band the press held.
+///
+/// **The fault this is a regression test for.** Between the press and the activation that click ends in,
+/// the pick is installed: the file the press named is read, decoded and shown in the window, and the show
+/// places that window the way every placement asks — `band_place()`. With the band held for the press and
+/// the placement's answer written for a pin that owes nothing, every pick put its own window back in the
+/// ordinary band a few milliseconds *before* the listing was activated over it, so the band was given back
+/// before the click that took it had landed and the user saw Explorer over the pin for a tick — on a
+/// click, and not on the arrows, which walk the same files without a press to hold anything.
+#[test]
+fn a_picks_own_placement_keeps_the_band_the_press_held() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_band = PIN_BAND_HELD.load(Ordering::SeqCst);
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    // The pin in a window of its own, and the listing the click that picked the file was made in.
+    let (pin_hwnd, listing) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        let listing = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(listing.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(listing, SW_SHOWNOACTIVATE);
+        (pin_hwnd, listing)
+    };
+    pin_real_window::stand_real_pin_window_for_a_test(Some(pin_hwnd));
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    pin_stands_in_its_own_window(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The press, read before the click reaches the listing: the band is held for it.
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    PIN_BAND_HELD.store(false, Ordering::SeqCst);
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pinned_window(), true) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "the press holds the band until the click it answers has landed"
+    );
+
+    // The pick is installed while the click is still on its way: the window is placed the one way every
+    // placement is asked, which is the question a show puts to the band.
+    unsafe {
+        let _ = SetWindowPos(
+            pin_hwnd,
+            band_place(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "a pick's own placement is no band given back: what holds the band outlives the show"
+    );
+
+    // And the click lands after it: the listing is activated, and nothing of it can be put over the pin.
+    unsafe {
+        let _ = SetWindowPos(
+            listing,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, listing) },
+        "the pin the user picked a file for is never a window the listing's activation covers"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(listing);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
     pin_stands_in_its_own_window(previous_own);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = always_on_top;
@@ -1636,6 +1778,7 @@ fn a_band_held_for_a_pick_is_given_back_on_the_presss_own_clock() {
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
     let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_band = PIN_BAND_HELD.load(Ordering::SeqCst);
     let previous_window = pin_real_window::real_pin_window();
     let previous_own = pin_is_its_own_window();
     let always_on_top = pin_always_on_top();
@@ -1669,6 +1812,7 @@ fn a_band_held_for_a_pick_is_given_back_on_the_presss_own_clock() {
 
     let pressed = Instant::now();
     PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    PIN_BAND_HELD.store(false, Ordering::SeqCst);
     arm_pin_to_the_front();
     unsafe { raise_pinned_preview(pinned_window(), true) };
     unsafe { settle_z_order() };
@@ -1678,15 +1822,15 @@ fn a_band_held_for_a_pick_is_given_back_on_the_presss_own_clock() {
     );
 
     // The file the pick named takes longer to read than the grace the press began, so the debt is
-    // extended — and the hold is not: the tick after the press's own grace has run out is a tick that
-    // gives the band back, with the answer still owed and the pin still chased.
+    // extended — and the hold is not: the tick the press's own grace runs out on is a tick that gives the
+    // band back to the program the user is in, whatever the file still costs.
     let mut owed = Some(PinFrontOwed {
         until: pressed + PIN_RAISE_GRACE,
         band_until: pressed + PIN_RAISE_GRACE,
         listing,
     });
     extend_pin_front_owed(&mut owed);
-    let mut owed = owed.expect("a pick's grace is still owed for the file on its way");
+    let owed = owed.expect("a pick's grace is still owed for the file on its way");
     let still_owed = owed.until;
     unsafe {
         let _ = SetWindowPos(
@@ -1715,7 +1859,11 @@ fn a_band_held_for_a_pick_is_given_back_on_the_presss_own_clock() {
     );
     assert!(
         still_owed > pressed + PIN_RAISE_GRACE,
-        "while the answer itself is still owed, and for longer than the press's own grace"
+        "while the answer itself was owed for longer than the press's own grace"
+    );
+    assert!(
+        unsafe { stands_over(elsewhere, pin_hwnd) },
+        "and the band going back is the pin behind the program the user went to, not over it"
     );
 
     // Safety: all three windows are this test's own, and every global written here is put back.
@@ -1727,6 +1875,7 @@ fn a_band_held_for_a_pick_is_given_back_on_the_presss_own_clock() {
     pin_real_window::stand_real_pin_window_for_a_test(previous_window);
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
     pin_stands_in_its_own_window(previous_own);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = always_on_top;
