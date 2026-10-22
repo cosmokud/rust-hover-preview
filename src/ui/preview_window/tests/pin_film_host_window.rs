@@ -706,6 +706,45 @@ fn the_film_is_drawing_when_the_player_has_a_child_of_its_own_under_the_host() {
     );
 }
 
+/// A dead hosted player's host goes off the screen with it: a black rectangle over the band is the
+/// pin's held frame blanked, which is exactly the band a file step has just covered (see
+/// `stop_pinned_player`).
+#[test]
+fn a_stopped_pinned_player_leaves_no_empty_host_over_the_band() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::pin_film_host().expect("the film's host");
+    let child = unsafe { a_child_of_the_host(host) };
+    unsafe { ShowWindow(host, SW_SHOWNOACTIVATE) };
+
+    // The player the pin's media holds, and the name it is checked under: a noted player is
+    // killed by the media's own take-down and the pid this test stands is not a process to touch
+    // (see `PlayerProcess`).
+    note_player_process(drawn, MPV_IMAGE_NAME);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.video_process = Some(PlayerProcess::Noted(drawn));
+        }
+    }
+
+    stop_pinned_player();
+
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host is a black rectangle once its player is gone, so it goes with the player rather \
+         than standing over the frame a file step put in its place"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(child);
+    };
+}
+
 /// A retired player is ended when its replacement has arrived, and a hosted replacement arrives
 /// when its own child is under the host — not when a top-level handle is published, which a hosted
 /// player never has (see `settle_video_retirement`).

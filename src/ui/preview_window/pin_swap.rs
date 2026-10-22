@@ -717,6 +717,13 @@ pub(super) fn stop_pinned_player() {
     if pid != 0 {
         retire_orphaned_player(pid);
     }
+
+    // **And the window the film was drawn in goes off the screen with it.** A hosted player's
+    // picture is the host, and a host left standing over a band whose player has gone is a black
+    // rectangle where the pin's held frame belongs — the very band a file step has just covered
+    // (see `pin_film_host`). A pin whose film a top-level player draws has no host here, and a
+    // hidden host that is already hidden is the same no-op either way.
+    unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
 }
 
 /// How the wait for a swap's first frame stands: whether the video is on screen now, whether the
