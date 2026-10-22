@@ -3305,6 +3305,9 @@ pub fn run_preview_window() {
                 && !pin_always_on_top()
                 && !pin_holds_the_front()
             {
+                // And the band is nobody's to hold any more, so the next placement asks the setting
+                // again rather than keeping a window in a band its hold is over (see `PIN_BAND_HELD`).
+                PIN_BAND_HELD.store(false, Ordering::SeqCst);
                 for window in [hwnd, pinned_window()] {
                     if window_holds_the_topmost_band(window) {
                         let _ = SetWindowPos(
