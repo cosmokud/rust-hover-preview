@@ -559,6 +559,7 @@ fn start_mpv_video_playback(
             subtitles_wanted(),
             video_launch::mpv_input_conf(),
             &ipc,
+            None,
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
