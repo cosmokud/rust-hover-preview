@@ -42,6 +42,14 @@ struct StandingFilm {
 }
 
 impl StandingFilm {
+    /// The same stand taken up on a hover's player: the film is mpv's, and the window it is drawing
+    /// in is a window of the desktop's rather than the host's (see `host_holds_the_pinned_film`),
+    /// with `hovered` the process that owns it.
+    fn taken_up_from_a_hover(&self, hovered: u32) {
+        pin_film_host::note_hosted_player(0);
+        VIDEO_PID.store(hovered, Ordering::SeqCst);
+    }
+
     fn new() -> StandingFilm {
         let previous_pin = take_pin_for_a_test();
         let previous_own = pin_is_its_own_window();
@@ -134,6 +142,57 @@ unsafe fn a_child_of_the_host(host: HWND) -> HWND {
         )
     }
     .expect("a child of the host's, in this process")
+}
+
+/// A hover's mpv film is a window of the desktop's, and a pin that takes it up cannot keep it
+/// there: the picture belongs in the host the pin draws it in. So the take-up begins the player
+/// again through the relaunch road the rest of the pin's life uses — at the second the hover had
+/// reached, and held or playing as it was — and the band is covered while it does (see
+/// `begin_the_adopted_film_in_the_host`).
+#[test]
+fn a_film_taken_up_from_a_hover_is_begun_again_in_the_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let hovered = 0x7FFF_FFFB;
+    film.taken_up_from_a_hover(hovered);
+    clear_restart_count();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    let host = pin_film_host::pin_film_host().expect("the film's host");
+    assert_eq!(
+        restart_count(),
+        1,
+        "the player the hover began is begun again rather than kept as it stands"
+    );
+    assert!(
+        pin_player_is_parked(),
+        "behind the cover the relaunch road raises over the player it replaces"
+    );
+    assert_ne!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        hovered,
+        "and the window it was drawing in is not the pin's player any more"
+    );
+    assert_eq!(
+        mpv_launch_host(Path::new("a-film.mkv")),
+        Some(host.0 as usize as u32),
+        "because the player begun in its place draws in the pin's own host"
+    );
+
+    // The other half of the same question: a film the host is already drawing is a film to leave
+    // alone, or every show of a hosted pin would begin its player again.
+    drop(film);
+    let hosted = StandingFilm::new();
+    clear_restart_count();
+    unsafe { show_pinned_window(hosted.pin_hwnd) };
+    assert_eq!(
+        restart_count(),
+        0,
+        "and a pin whose film the host already holds begins nothing"
+    );
 }
 
 /// The picture has a window of the pin's own making, standing in the band and disabled: the pin is

@@ -824,6 +824,49 @@ pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
     true
 }
 
+/// Begin the film a pin took up from a hover in the host it is drawn in, where the player the
+/// hover began is still a window of the desktop's.
+///
+/// **A pin does not keep a hover's player for a film it draws in a window of its own.** The host is
+/// where the picture belongs from the take-up on, and a player begun before the pin existed was
+/// given a top-level window, `--ontop` and a place of its own — none of which is what a film the
+/// pin draws is. So the take-up is a relaunch: the same `restart_pinned_player` a seek and a resize
+/// settle on, given the file and the second the pin's transport already holds (the clock the hover's
+/// pass was read onto at the take-up), held where the film was held, and at the level the pin's own
+/// bar says. It raises the cover the other relaunches raise — the last frame of the player being
+/// replaced, read before it is hidden — so the band is not the desktop for the length of a start,
+/// and the settle hands it back when the hosted player's own child is there (see
+/// `park_pinned_player_for_step` and `pin_film_host::the_pinned_film_is_drawing`).
+///
+/// The player being replaced is retired by that road, not ended here: its window is the picture on
+/// screen until the hosted one has a child of its own (see `retire_replaced_player`).
+///
+/// Nothing is begun for a film the host already holds — every show of a hosted pin would otherwise
+/// be a player begun again — and nothing for a pin with no player up at all, which is a film that
+/// has not started rather than one to move (see `pin_film_host::host_for_the_pins_film`).
+pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
+    let Some((path, content, transport, _)) = pinned_playback_state() else {
+        return false;
+    };
+
+    if pin_film_host::host_for_the_pins_film(&path).is_none()
+        || pin_film_host::host_holds_the_pinned_film()
+        || VIDEO_PID.load(Ordering::SeqCst) == 0
+    {
+        return false;
+    }
+
+    let seconds = pin_playhead(&transport).unwrap_or(0.0);
+    let holding = transport.paused_at.is_some();
+
+    if !park_pinned_player_for_step(pinned_window(), (content.0, content.1)) {
+        return false;
+    }
+
+    restart_pinned_player(&path, content, seconds, holding);
+    true
+}
+
 /// Write an answer about the transport back into the pin, if there is still one.
 pub(super) fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
     with_pin(|pin| change(&mut pin.transport));

@@ -1279,9 +1279,15 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // and `ensure_video_window_topmost`). A host left by a pin that has just left this window is
     // taken down here rather than waiting for the hide that ends the pin: the file being installed
     // may not be a film at all.
+    //
+    // **And a film the pin took up from a hover is begun again in that host**, rather than left
+    // drawing in the top-level window the hover gave it: the pin has just painted the band it is
+    // seen through, and this is the moment the picture belongs in it (see
+    // `begin_the_adopted_film_in_the_host`).
     unsafe {
         if pin_is_its_own_window() {
             pin_film_host::take_up_the_pin_film_host();
+            begin_the_adopted_film_in_the_host();
         } else {
             pin_film_host::take_down_the_pin_film_host();
         }
