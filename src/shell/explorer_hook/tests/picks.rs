@@ -1321,6 +1321,9 @@ fn a_selection_miss_in_the_watched_listing_is_not_a_pick() {
 /// behind the row — a file nobody chose — and an update naming a file is what brings a pin put away
 /// by that press back on it (`bring_a_put_away_pin_back`). Spent, it is a rest and nothing else until
 /// the hand moves, which is when a hover is asked about again.
+///
+/// Asserted on the rule rather than on the tick that sets it: a tick needs a real pointer and a real
+/// shell, and this is the decision that wiring only feeds.
 #[test]
 fn a_rest_a_menu_already_answered_is_not_a_hover() {
     assert!(

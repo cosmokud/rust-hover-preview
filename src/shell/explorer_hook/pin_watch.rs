@@ -256,15 +256,18 @@ impl PinUpdateWatch {
         let previous_was_chrome = previous_window.is_some_and(window_is_menu_popup_chrome);
         let clicked = focus_move.clicked;
 
-        // A press on a menu spends the rest of the hand, for the same reason a pick does: the hand has
-        // not moved, the panel that was under it is gone, and the point it is on is the listing again
-        // — so the rest would be read as a hover of the file the panel was covering, a file the user
-        // never came to rest on. For a pin that press put away, that hover is an update, and an update
-        // naming a file is what brings the window back on it (`bring_a_put_away_pin_back`).
+        // A press on one of this app's own panels spends the rest of the hand, so that the rest is not
+        // read as a hover of the file the panel was covering (see `a_rest_is_a_hover`). Asked on both
+        // ticks the press could be read on: while the panel is still up, and on the poll after the
+        // shell has taken it down and the point reads as the listing again (see
+        // `pin_menu_window_is_at`).
         //
         // Spent here rather than beside the press's own answer below, because the tick that reads the
         // press is the tick that would offer the file: the rest is measured from this, once, below.
-        if clicked && (current_is_chrome || previous_was_chrome) {
+        if clicked
+            && (pin_menu_window_is_at(pointer.window)
+                || previous_window.is_some_and(pin_menu_window_is_at))
+        {
             self.probed = true;
         }
 
@@ -379,7 +382,7 @@ impl PinUpdateWatch {
             let picked = match &row {
                 Some(Some(path)) if !path.is_dir() && is_media_file(path) => {
                     if pick {
-                        press_pinned_preview();
+                        press_pinned_preview(press_frame(&pointer));
                     }
                     pick
                 }

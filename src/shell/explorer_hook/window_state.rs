@@ -413,16 +413,19 @@ pub(super) fn press_is_answered(
     pressed && over_explorer && !over_our_own && !aimed_at_a_gone_window
 }
 
-/// Whether the rest a hand is making over the listing is a hover of the file under it: it is a rest
-/// at all only where the setting asks for hovers, the hand has arrived, the delay a preview is given
-/// has passed since it last moved, and this rest has not been answered already.
+/// Whether the rest a hand is making is a hover of the file under it: it is a rest at all only where
+/// the setting asks for hovers, the hand has arrived, the delay a preview is given has passed since it
+/// last moved, and this rest has not been answered already.
 ///
-/// A rest is answered by the thing that already read it, and there are two: the pick that resolved a
-/// file for it, and the press that picked a menu row over it. Both leave the hand where it was — the
-/// panel that was under it is gone and the listing is there instead — so what is under it now is what
-/// that answer uncovered rather than a file the user came to rest on, and asking again would answer
-/// with a file nobody chose. A pin put away by such a press would be brought back on that file by the
-/// update the hover offers (`bring_a_put_away_pin_back`).
+/// A rest is answered by the thing that read it. A pick named the file under the point, so there is
+/// nothing left to ask. A press on a row of this app's own menu was answered by that row, and it left
+/// the hand over the listing the row was covering — a file nobody chose. Asked again, either of them
+/// answers with a file the user never came to rest on, and a pin put away by that press is brought
+/// back on it by the update a hover offers (`bring_a_put_away_pin_back`). The answer holds until the
+/// hand moves, which is when there is a new rest to ask about.
+///
+/// The menus are this app's own and not Explorer's: a popup of the shell's is the listing being
+/// worked in, and what it leaves under the hand is a file the user may well mean to see.
 pub(super) fn a_rest_is_a_hover(on_hover: bool, arrived: bool, spent: bool, settled: bool) -> bool {
     on_hover && arrived && !spent && settled
 }
