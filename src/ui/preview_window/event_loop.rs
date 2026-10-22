@@ -2349,16 +2349,18 @@ pub fn run_preview_window() {
                         // would have to find before they could see it (see
                         // `Pin Mode → Update Preview → Move To Top`). The raise happens here rather
                         // than at the install so the pin answers the pick at once, with the wait
-                        // for the file drawn in it where the read is not instant — and the front it
-                        // answers with is the pin's to hold rather than to take and give back,
-                        // because the click that made the pick activates the listing after this
-                        // loop reads it (see `PIN_FRONT_OWED`).
+                        // for the file drawn in it where the read is not instant — and it keeps the
+                        // band where a pick's press is holding it, because the click that made the
+                        // pick activates the listing after this loop reads it (see `PIN_FRONT_OWED`).
+                        // An update with no press behind it — a file walked to with the keys, a
+                        // hover — has no activation to be kept out of, so its raise is the band
+                        // taken and given straight back.
                         arm_pin_to_the_front();
                         // The window raised is the pin's own, which for a picture is not the handle
                         // this loop holds: the loop's window is the hover's, and a raise that moved it
                         // moved a window nobody can see while the pin stayed behind the listing (see
                         // `pinned_window`).
-                        raise_pinned_preview(pinned_window());
+                        raise_pinned_preview(pinned_window(), pin_front_owed.is_some());
                         extend_pin_front_owed(&mut pin_front_owed);
                     }
                     PreviewMessage::PinPress { window } => {
@@ -2366,8 +2368,15 @@ pub fn run_preview_window() {
                         // listing being put over the pin — before the shell has said which file
                         // was picked, and before any `PinUpdate` can answer for it. The pin owes
                         // the front from here, and holds the band the activation of the listing
-                        // cannot undo (see `PIN_FRONT_OWED`); the pick's answer comes forward
-                        // again when it lands.
+                        // cannot undo (see `PIN_FRONT_OWED` and `keep_pin_at_the_front`); the
+                        // pick's answer comes forward again when it lands.
+                        //
+                        // **The band is held across the activation rather than given back before
+                        // it**, which is the whole of why a pick no longer shows the listing for a
+                        // tick: this press is read off the hook *before* the click reaches the
+                        // listing, so a raise made here is a raise the activation that follows
+                        // undoes — and the correction is a tick late, which the user sees as the
+                        // listing flashing over the pin.
                         //
                         // The window the grace asks about is the one the press was made in, which
                         // is the listing itself and not the foreground: the foreground is the
@@ -2375,7 +2384,7 @@ pub fn run_preview_window() {
                         // the pin is already behind (see `PinFrontOwed` and
                         // `pin_press_was_not_a_pick`).
                         arm_pin_to_the_front();
-                        raise_pinned_preview(pinned_window());
+                        raise_pinned_preview(pinned_window(), true);
                         pin_front_owed = Some(PinFrontOwed {
                             until: Instant::now() + PIN_RAISE_GRACE,
                             listing: HWND(window as *mut _),
@@ -3236,11 +3245,16 @@ pub fn run_preview_window() {
                 show_pinned_window(pinned_window());
             }
 
-            // A pin that has just answered a pick keeps asking for the front of its band for a
-            // moment after it: the click is this loop's before it is the listing's, and the
-            // window the listing is in is activated after it — which is that window being put
-            // over the pin again (see `PIN_RAISE_GRACE`).
-            keep_pin_at_the_front(pinned_window(), &mut pin_front_owed, Instant::now());
+            // A pin that has just answered a pick keeps answering for the front of its band for a
+            // moment after it: the click is this loop's before it is the listing's, and the window the
+            // listing is in is activated after it — which is that window being put over the pin again
+            // where the band is not held across it (see `PIN_RAISE_GRACE` and `keep_pin_at_the_front`).
+            keep_pin_at_the_front(
+                pinned_window(),
+                &mut pin_front_owed,
+                Instant::now(),
+                GetForegroundWindow(),
+            );
 
             // A pin that owes the front owes it while the window it follows is the one the user is
             // in. Another program in front is the user working elsewhere, so the band goes back to
@@ -3274,21 +3288,27 @@ pub fn run_preview_window() {
             // is the whole repair: the window keeps the place it stands among the ordinary ones and
             // lands in front of them, which is where a pin with the setting off belongs while the
             // user is in it (see `band_place`, the same question asked where a window is placed).
-            if pinned()
-                && pin_front_owed.is_none()
-                && !pin_always_on_top()
-                && !pin_holds_the_front()
-                && window_holds_the_topmost_band(hwnd)
-            {
-                let _ = SetWindowPos(
-                    hwnd,
-                    HWND_NOTOPMOST,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
+            //
+            // **The pin's own window is asked too, and it is the one that needs it most.** A pick's
+            // press holds that band across the listing's activation, and the grace that began it is
+            // what gives it back; a debt that ended by any other road — the flag cleared by a press on
+            // the pin's chrome, a setting turned off under it — would otherwise leave the pin over
+            // every program the user works in, with nothing left ticking to look for it (see
+            // `PinFrontOwed` and `give_the_band_back`).
+            if pinned() && pin_front_owed.is_none() && !pin_always_on_top() && !pin_holds_the_front() {
+                for window in [hwnd, pinned_window()] {
+                    if window_holds_the_topmost_band(window) {
+                        let _ = SetWindowPos(
+                            window,
+                            HWND_NOTOPMOST,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                    }
+                }
             }
 
             if pinned() {
