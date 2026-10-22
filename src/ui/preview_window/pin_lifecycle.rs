@@ -1075,12 +1075,46 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
     the_pin_window_is_down(hwnd)
 }
 
+/// Whether the pin taken up on a file stands in the pin's own window, decided once at the
+/// take-up and written by [`pin_stands_in_its_own_window`].
+///
+/// Asked of the media in hand where it has a kind: what fills the pin's band is the kind's
+/// answer, and every kind this app draws the whole way stands in the pin's own window (see
+/// `MediaType::is_drawn_in_the_pins_own_window`). A pin taken up while the file is still
+/// loading has no kind to ask yet, so the file's route is asked instead (see
+/// [`pin_should_stand_in_its_own_window_for`]).
+pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: &Path) -> bool {
+    match kind {
+        Some(kind) if !kind.is_loading() => kind.is_drawn_in_the_pins_own_window(),
+        _ => pin_should_stand_in_its_own_window_for(path),
+    }
+}
+
+/// Whether a file whose media is not known yet belongs in the pin's own window.
+///
+/// The placeholder for a pin taken up before its preview has answered is still a pin of that
+/// file, so the file's own route is asked rather than the spinner in hand. Every route this app
+/// draws the whole way — a reader of its own, a card, or the page an engine writes into this
+/// app's frame — belongs here; the browser's three and a film a player of its own draws do not.
+/// The media engine's film is drawn into this app's own surface like any other frame, which is
+/// the one video that is the pin's to host (see `MediaType::is_drawn_in_the_pins_own_window`).
+fn pin_should_stand_in_its_own_window_for(path: &Path) -> bool {
+    use crate::formats::routing::DrawnBy;
+
+    match HoverFacts::read(path).route.drawn_by {
+        DrawnBy::WebView(_) => false,
+        DrawnBy::MediaEngine => video_route(path) == VideoRoute::MediaEngine,
+        DrawnBy::Native(_) | DrawnBy::Card | DrawnBy::Nothing => true,
+    }
+}
+
 /// Whether the pin on the screen is drawn the whole way by this app, and so stands in a window of its
 /// own: a window Windows activates on a press, lists in Alt+Tab and gives a taskbar button to.
 ///
 /// Asked of the kind rather than of the setting, because it is what the kind can be: the preview's
-/// window is a tool window that never takes the focus, and a picture is the one kind with nothing of
-/// anybody else's standing in its band (see `MediaType::is_a_picture_of_its_own`).
+/// window is a tool window that never takes the focus, and every kind this app draws the whole way
+/// has nothing of anybody else's standing in its band (see
+/// `MediaType::is_drawn_in_the_pins_own_window`).
 pub(super) fn pin_is_its_own_window() -> bool {
     pinned() && PIN_IS_ITS_OWN_WINDOW.load(Ordering::SeqCst)
 }
@@ -1096,7 +1130,8 @@ pub(super) fn pin_stands_in_its_own_window(its_own: bool) {
 }
 
 /// The pin that is up stands in a window of its own: written at the take-up from the kind the pin was
-/// taken up on (see `MediaType::is_a_picture_of_its_own`).
+/// taken up on, or from the file's route where the media was still loading (see
+/// `MediaType::is_drawn_in_the_pins_own_window`).
 static PIN_IS_ITS_OWN_WINDOW: AtomicBool = AtomicBool::new(false);
 
 /// Put a pinned window up at the box its state says, painted before it is shown: what a layered

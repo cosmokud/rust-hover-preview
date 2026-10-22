@@ -394,17 +394,15 @@ impl MediaType {
         matches!(self, Self::Video) || self.is_engine()
     }
 
-    /// Whether this app draws the whole of this kind into a window of its own, with nothing of
-    /// anybody else's standing in it.
+    /// Whether a pin of this kind stands in the pin's own window rather than the preview's: a
+    /// window Windows activates on a press, lists in Alt+Tab and gives a taskbar button to.
     ///
-    /// A still picture is: its pixels are this app's, painted into the pin's window, so the window
-    /// the pin stands in can be a window Windows knows — activated, listed, swept and returned by
-    /// the Shell — because a press on the picture is a press on that window. Every other kind is not
-    /// yet: a film is a player's window standing in the pin's band, a page is the engine's, a sound
-    /// and a card are painted here but carry their own roads. They keep the preview's window until
-    /// their own ticket (see `.scratch/pin-real-window`).
-    pub(super) fn is_a_picture_of_its_own(&self) -> bool {
-        matches!(self, Self::StaticImage)
+    /// Every kind this app draws the whole way does, which is every kind but the ones whose band
+    /// holds a window of somebody else's (see `draws_in_a_window_of_its_own`). A film the media
+    /// engine draws is drawn into this app's own surface like any other frame, so it stands here
+    /// too; a film FFmpeg's player or mpv draws does not.
+    pub(super) fn is_drawn_in_the_pins_own_window(&self) -> bool {
+        !self.draws_in_a_window_of_its_own()
     }
 
     /// Whether this is a sound, whose card is the one painted preview that changes while it is
