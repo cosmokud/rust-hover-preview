@@ -856,8 +856,10 @@ pub(super) fn release_the_pointer(window: &dyn PinWindow, hwnd: isize) {
 pub(super) fn set_pinned_player_window_visible(visible: bool) {
     // **A film drawn into the pin's own child has no window of the desktop's to hide.** The host is
     // the picture's window and the band is the hole it is seen through, so a park is the host
-    // hidden and the unpark the same window back (see `pin_film_host`).
-    if pin_film_host::pin_film_host().is_some() {
+    // hidden and the unpark the same window back — and it is asked of the pairing, because a pin
+    // that took up a hover's top-level player has a host standing empty until a relaunch fills it
+    // (see `pin_film_host`).
+    if pin_film_host::host_holds_the_pinned_film() {
         // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
         // takes any window and reports rather than faults.
         unsafe { pin_film_host::set_the_pin_film_host_visible(visible) };
