@@ -243,6 +243,30 @@ unsafe fn a_window_of_the_desktops() -> HWND {
     .expect("a stand-in window for a player's")
 }
 
+/// The film's host goes down with the pin it drew it for: a window of this app's own that stood in
+/// the pin's band, and a handle left standing for the pin after it is a band of nothing the next
+/// pin would take up as its picture (see `pin_film_host`).
+#[test]
+fn a_pin_that_ends_takes_its_film_host_with_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::pin_film_host().expect("the film's host");
+
+    let _ = end_pin(Reason::Closed, &Win32PinWindow);
+
+    assert!(
+        !unsafe { IsWindow(host) }.as_bool(),
+        "the window the film was drawn in goes down with the pin, whichever road ended it"
+    );
+    assert!(
+        pin_film_host::pin_film_host().is_none(),
+        "with the handle forgotten as well as the window destroyed"
+    );
+}
+
 /// The film's host is the band, and the band is what a resize changes: the host follows the pin's
 /// box wherever the loop is told it, without a player's geometry being touched (see
 /// `place_the_pin_film_host`).

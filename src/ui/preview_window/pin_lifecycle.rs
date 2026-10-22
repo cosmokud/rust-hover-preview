@@ -732,6 +732,14 @@ pub(super) fn end_pin_beside_the_state() {
     // `compose_parked_band`).
     forget_video_frame();
 
+    // And the window a pinned mpv film was drawn in — a host this app made a child of the pin's —
+    // with the player it held: it is a window of this app's own, and one left standing for a pin
+    // that has gone is a black band in the next pin's picture (see `pin_film_host`). The player is
+    // the loop's own kill road's, which is asked for by the take-down the message below is.
+    unsafe {
+        pin_film_host::take_down_the_pin_film_host();
+    }
+
     // And the window the card's menu was drawn in, if one is up: it is a window of this
     // app's own standing for a pin that has gone, exactly as the bubble is, and a panel
     // nothing will ever paint again is a window the desktop keeps for nothing.
