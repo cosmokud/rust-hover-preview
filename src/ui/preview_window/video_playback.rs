@@ -498,6 +498,19 @@ pub(super) fn start_video_playback(
     child
 }
 
+/// The window an mpv player begun for this film is told to draw into, as `--wid` is given it: the
+/// pin's own child for a pinned mpv film, and nothing for every other launch — a hover's film, a
+/// pin standing in the preview's window, and FFmpeg's player and the media engine's own frame,
+/// which are not this route at all (see `pin_film_host::host_for_the_pins_film`).
+///
+/// **The one answer both of the launch's questions are read from.** A player given a window of
+/// this app's own is told it and no place of its own, and it is owed no topmost ask either: the
+/// pin is the host's order, so the ask that is the desktop's to answer is the top-level road's
+/// alone (see `mpv_ipc::set_ontop`).
+pub(super) fn mpv_launch_host(path: &Path) -> Option<u32> {
+    pin_film_host::host_for_the_pins_film(path).map(|host| host.0 as usize as u32)
+}
+
 /// Begin an mpv video, in a window of its own over the preview box.
 ///
 /// It is the ffplay launch's own shape — a player spawned and booked in, its window found by pid
@@ -544,6 +557,11 @@ fn start_mpv_video_playback(
     let (asked_width, asked_height) =
         video_launch::mpv_box_size(width, height, dpi_at(x, y), dpi_at(0, 0));
 
+    // The window this player draws into, where it is the pin's to give: a pinned mpv film is a
+    // child of the pin's own window, and a player told about it has no top-level window for the
+    // tick to place (see `mpv_launch_host`).
+    let host = mpv_launch_host(path);
+
     let mut command = engine_processes::hidden_command(program);
     command
         .args(video_launch::mpv_args(
@@ -559,12 +577,18 @@ fn start_mpv_video_playback(
             subtitles_wanted(),
             video_launch::mpv_input_conf(),
             &ipc,
-            None,
+            host,
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let child = spawn_player(&mut command)?;
+    // **The host holds this player and no older one**, recorded before the player has a window of
+    // its own in there: the wait for the film's first frame is a wait for this player's child and
+    // not the last film's, which is what the pid beside the host is for (see `pin_film_host`).
+    if host.is_some() {
+        pin_film_host::note_hosted_player(child.id());
+    }
     // The pipe the player is told on, and the one thing a later command has to know about the
     // launch: whether it gave the player any audio at all (see `mpv_launched_without_audio`,
     // `mpv_ipc::remember_pipe` and `set_volume`).
@@ -579,7 +603,10 @@ fn start_mpv_video_playback(
     // not hold the front wants the opposite of it: asking here rather than at the launch's
     // arguments is what keeps one command line for both, and the pipe is already remembered so the
     // ask is on the player this app holds (see `mpv_ipc::set_ontop`).
-    if pinned() && !pin_holds_the_front() {
+    //
+    // **And a player in the pin's own host is not asked at all**: it has no place in the desktop's
+    // order for the answer to be about, and the pin is the host's order (see `mpv_launch_host`).
+    if host.is_none() && pinned() && !pin_holds_the_front() {
         let _ = mpv_ipc::set_ontop(child.id(), false);
     }
 
