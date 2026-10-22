@@ -1198,33 +1198,41 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
     // asks and the band is the setting's (see `keep_pin_at_the_front`). Asked of the band, the grace
     // ended on its first tick and every pick made after the user had clicked anything was a pin left
     // behind the listing.
-    let mut deadline = Some(Instant::now() + PIN_RAISE_GRACE);
-    unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
+    let mut owed = Some(PinFrontOwed {
+        until: Instant::now() + PIN_RAISE_GRACE,
+        listing: in_front,
+    });
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now()) };
     assert!(
-        deadline.is_some(),
+        owed.is_some(),
         "a pick's grace keeps answering while the debt stands, with `Always On Top` off"
     );
 
-    // What the click does: the window it activates comes over the pin. The grace answers it with the
-    // raise, so the pin the user just picked a file for is the one they are looking at.
-    let activated = unsafe { a_window_of_the_tests_own() };
+    // What the click does: the listing it was made in is activated, which is the pin being put behind
+    // it. The grace answers that with the raise, so the pin the user just picked a file for is the one
+    // they are looking at.
     unsafe {
-        let _ = ShowWindow(activated, SW_SHOWNOACTIVATE);
-    };
+        let _ = SetWindowPos(
+            pin_hwnd,
+            in_front,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
     unsafe { settle_z_order() };
     assert!(
-        unsafe { stands_over(activated, pin_hwnd) },
-        "the window opened after the pin is the one the click left in front of it"
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "the activation the click ends in is the listing over the pin"
     );
-    unsafe { keep_pin_at_the_front(pin_hwnd, activated, &mut deadline, Instant::now()) };
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now()) };
     unsafe { settle_z_order() };
     assert!(
-        unsafe { stands_over(pin_hwnd, activated) },
-        "the grace raises the pin back over the window the click activated"
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "the grace raises the pin back over the listing the click activated"
     );
-    unsafe {
-        let _ = DestroyWindow(activated);
-    };
 
     // The press that names no file is the pin giving the band back. The grace it began goes with
     // it: asked again, it is dropped rather than raising the pin over the listing.
@@ -1238,9 +1246,9 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
         unsafe { stands_over(in_front, pin_hwnd) },
         "and leaves the pin behind the listing"
     );
-    unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
-    assert_eq!(
-        deadline, None,
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now()) };
+    assert!(
+        owed.is_none(),
         "a grace a press has ended is dropped rather than asked about on every tick after it"
     );
     assert!(
@@ -1250,14 +1258,322 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
 
     // A grace that has run out is dropped the same way, so a pick is not answered for forever.
     arm_pin_to_the_front();
-    let mut deadline = Some(Instant::now());
-    unsafe { keep_pin_at_the_front(pin_hwnd, in_front, &mut deadline, Instant::now()) };
-    assert_eq!(deadline, None, "a grace that has run out is dropped");
+    let mut owed = Some(PinFrontOwed {
+        until: Instant::now(),
+        listing: in_front,
+    });
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now()) };
+    assert!(owed.is_none(), "a grace that has run out is dropped");
 
     // Safety: both windows are this test's own, and the handles the app holds are put back as they
     // were.
     unsafe {
         let _ = DestroyWindow(in_front);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
+/// A pick's raise is answered again when the listing's own activation lands after it: the answer the
+/// stand-in kinds already had, and the one a pin that is a window of its own was left without.
+///
+/// **The fault this is a regression test for.** The click that picks a file reaches this app before it
+/// reaches the listing: the press is read off the mouse hook and posted, the pick's raise takes the
+/// band and gives it straight back, and only then is the window the click landed in activated — which
+/// is that window being put over the pin again, a moment after the pin was put over it. The raise is
+/// one answer made once, and the grace a pick begins is the answer to the activation that follows it;
+/// it was asked of the stand-in kinds only (see
+/// `a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts`), so a picture pin stayed
+/// behind the listing it had just followed, and every file picked after that was picked out of sight
+/// of the pin.
+///
+/// What the grace asks is where the two windows stand, and its raise is the band taken and given back
+/// rather than held, so a pin with `Always On Top` off is still left behind by the window the user's
+/// next click puts in front (see `keep_pin_at_the_front` and `take_the_band_and_give_it_back`).
+#[test]
+fn a_pick_chases_the_listing_when_the_activation_lands_after_its_raise() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    // The pin's own window and the listing it follows: two windows of the test's own, opened where no
+    // display is, and the pin standing in the first rather than in the loop's.
+    let (pin_hwnd, listing) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        let listing = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(listing.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(listing, SW_SHOWNOACTIVATE);
+        (pin_hwnd, listing)
+    };
+    pin_real_window::stand_real_pin_window_for_a_test(Some(pin_hwnd));
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    pin_stands_in_its_own_window(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The pick's answer, made once: the pin comes over the listing it answers.
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pinned_window()) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, listing) },
+        "a pick's raise puts the pin over the listing it answers"
+    );
+
+    // And then the click that made the pick reaches the listing, which is activated: the window the
+    // user is working in is put over the pin again. `Always On Top` off means no band is held that
+    // could keep it out, which is the setting meaning what it says.
+    unsafe {
+        let _ = SetWindowPos(
+            pin_hwnd,
+            listing,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(listing, pin_hwnd) },
+        "the activation the click ends in is the listing over the pin"
+    );
+
+    // The grace the pick began is the answer to it, and the pin the user has just picked a file for is
+    // the window they are looking at, whichever window the pin stands in.
+    let mut owed = Some(PinFrontOwed {
+        until: Instant::now() + PIN_RAISE_GRACE,
+        listing,
+    });
+    unsafe { keep_pin_at_the_front(pinned_window(), &mut owed, Instant::now()) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, listing) },
+        "the grace brings the pin back over the listing the click activated"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(listing);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
+/// A pick's grace answers the listing its click was made in, and no other window: a second listing
+/// put over the pin is the user having gone to another folder, not the answer this grace owes, and a
+/// pin raised over the window they chose is a pin with `Always On Top` off standing over it — the one
+/// thing that setting must never do (see `PinFrontOwed`).
+#[test]
+fn a_pick_answers_only_the_listing_its_click_was_made_in() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+
+    // The pin, the listing the pick was made in, and the second listing the user moved to inside the
+    // grace: three windows of this test's own, opened where no display is.
+    let (pin_hwnd, picked_in, moved_to) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        let picked_in = a_window_of_the_tests_own();
+        let moved_to = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(picked_in, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(moved_to, SW_SHOWNOACTIVATE);
+        (pin_hwnd, picked_in, moved_to)
+    };
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The pin stands over the listing the pick was made in, and the second listing comes over the pin:
+    // a click into it is that window being activated, and it is not a window the pin follows. Placed
+    // rather than activated, because `SetForegroundWindow` is another program's to do to this one.
+    unsafe {
+        let _ = SetWindowPos(
+            picked_in,
+            pin_hwnd,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        let _ = SetWindowPos(
+            pin_hwnd,
+            moved_to,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(moved_to, pin_hwnd) },
+        "another listing is over the pin, which is where a click into it puts it"
+    );
+    assert!(
+        unsafe { stands_over(pin_hwnd, picked_in) },
+        "with the pin still standing over the listing the pick was made in"
+    );
+
+    // The grace asks about that listing, which the pin stands over: nothing is raised, so the window
+    // the user went to keeps the front its own click gave it — and the front the pick owed is still
+    // owed, for the listing the pick was made in.
+    arm_pin_to_the_front();
+    let mut owed = Some(PinFrontOwed {
+        until: Instant::now() + PIN_RAISE_GRACE,
+        listing: picked_in,
+    });
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now()) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(moved_to, pin_hwnd) },
+        "the grace does not raise the pin over a window the pick's click was never made in"
+    );
+    assert!(
+        owed.is_some(),
+        "and the front the pick owes is still owed for the listing it answers"
+    );
+
+    // Safety: every window is this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(moved_to);
+        let _ = DestroyWindow(picked_in);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+    }
+    stand_pin(previous_pin);
+}
+
+/// A pick whose listing is closed inside its grace is answered for nothing: the window the click was
+/// made in is gone, so there is nothing left for the raise to answer — and asking the z-order of a
+/// handle that is no longer a window would have the grace raise the pin over whatever the user had
+/// moved to instead, which is the one thing `Always On Top` off must never do (see `PinFrontOwed`).
+#[test]
+fn a_pick_whose_listing_is_gone_answers_for_nothing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    // The pin, the listing the press was made in, and the window the user moved to after closing it.
+    let (pin_hwnd, closed_listing, moved_to) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        let closed_listing = a_window_of_the_tests_own();
+        let moved_to = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(closed_listing, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(moved_to, SW_SHOWNOACTIVATE);
+        let _ = DestroyWindow(closed_listing);
+        (pin_hwnd, closed_listing, moved_to)
+    };
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The user is in the window they moved to, which stands over the pin.
+    unsafe {
+        let _ = SetWindowPos(
+            pin_hwnd,
+            moved_to,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(moved_to, pin_hwnd) },
+        "the window the user moved to stands over the pin"
+    );
+
+    // The grace the press began still carries the listing, which is no longer a window: nothing is
+    // raised, and the debt goes with the window rather than standing until the grace runs out.
+    arm_pin_to_the_front();
+    let mut owed = Some(PinFrontOwed {
+        until: Instant::now() + PIN_RAISE_GRACE,
+        listing: closed_listing,
+    });
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now()) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(moved_to, pin_hwnd) },
+        "the grace raises nothing for a listing that is no longer a window"
+    );
+    assert!(
+        owed.is_none(),
+        "and the front a closed listing was owed goes with it"
+    );
+
+    // Safety: every window is this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(moved_to);
         let _ = DestroyWindow(pin_hwnd);
     }
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);

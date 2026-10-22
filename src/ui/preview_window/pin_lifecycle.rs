@@ -1591,39 +1591,67 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
     }
 }
 
+/// The pick a pin still owes the front for: when its grace runs out, and the listing the click that
+/// made it was in.
+///
+/// The listing travels with the grace rather than being read off the foreground on the tick, because
+/// the two are different windows and the answer is about the first one. The foreground is whatever
+/// the user has just moved to: another program where they went elsewhere, another folder window
+/// where they picked a second listing — and a pin raised over either is a pin with `Always On Top`
+/// off standing over a window the user chose, which is user story 10 exactly. Read where the press
+/// is, the window is the one the click landed in, and the click is what the raise answers for (see
+/// `PIN_RAISE_GRACE` and `keep_pin_at_the_front`).
+#[derive(Clone, Copy)]
+pub(super) struct PinFrontOwed {
+    pub(super) until: Instant,
+    pub(super) listing: HWND,
+}
+
+/// Ask the grace a pick began to last another `PIN_RAISE_GRACE` from now, where the file it was
+/// raised for has only just reached the window: the read and the decode can outlast the grace the
+/// press began, and the click that answers for the listing may still be on its way (see
+/// `keep_pin_at_the_front`).
+///
+/// A grace that is not owed is not begun here. An update with no press behind it — a file walked to
+/// with the keys, a hover where `Pin Mode → Update Preview → On Hover` asks for one — is a pick no
+/// click is to undo, and the raise the update makes stands on its own.
+pub(super) fn extend_pin_front_owed(owed: &mut Option<PinFrontOwed>) {
+    if let Some(owed) = owed.as_mut() {
+        owed.until = Instant::now() + PIN_RAISE_GRACE;
+    }
+}
+
 /// Answer, on each tick of the grace a pick began, for the front of the pin's band: raise the pin
-/// again if the click that made the pick has since brought the window the user is working in over
-/// it (see `PIN_RAISE_GRACE`).
+/// again if the click that made the pick has since brought the listing it was made in over it (see
+/// `PIN_RAISE_GRACE`).
 ///
 /// Nothing is asked once the grace has run out, and nothing of a pin that already stands where it
-/// was put — a tick costs the walk from the window the user is working in up to the pin and no
-/// more, which is a handful of calls rather than a reorder of the desktop. `window` is that window,
-/// handed in rather than read here so the walk is asked of windows a test can make.
+/// was put — a tick costs the walk from that listing up to the pin and no more, which is a handful of
+/// calls rather than a reorder of the desktop. The listing is the one the owed answer carries rather
+/// than one read here, so the walk is asked of windows a test can make (see `PinFrontOwed`).
 pub(super) unsafe fn keep_pin_at_the_front(
     hwnd: HWND,
-    window: HWND,
-    deadline: &mut Option<Instant>,
+    owed: &mut Option<PinFrontOwed>,
     now: Instant,
 ) {
-    let Some(until) = *deadline else {
+    let Some(PinFrontOwed { until, listing }) = *owed else {
         return;
     };
 
-    // **A pin that is a window is raised by the press and the pick that answer it, and this grace is
-    // not one of them.** The press that names no file puts the pin behind the listing by its own road
-    // (see `lower_pinned_preview`), and a pick's raise over the listing is the band taken and given
-    // back at the moment it arrives (see `raise_pinned_preview`) — both are answers made once, rather
-    // than a front asked for again on every tick. Nothing of the stand-in kinds' grace is forced for
-    // such a pin (see `pin_real_window`).
+    // **The chase is the same for both kinds of pin, and nothing of it outlives the click.** What is
+    // owed here is the answer to one pick: the band is taken and given back on the tick that finds the
+    // pin behind the window the listing is in, never kept, and once the grace has run out — or a press
+    // that named no file has given the front back — nothing asks again (see `PIN_FRONT_OWED`,
+    // `raise_pinned_preview` and `take_the_band_and_give_it_back`).
     //
-    // **That leaves one hole, and it is not closed here.** An activation of the listing that lands
-    // *after* the pick's blip is not chased, so a pick can leave the pin behind it until the next one.
-    // Closing it would take the band again on this grace's every tick — a flicker the user sees — so it
-    // is a question of its own (see `PIN_FRONT_OWED`).
-    if pin_is_its_own_window() {
-        return;
-    }
-
+    // **A pin that is a window of its own is the case that needs it most.** Its raise over the listing
+    // is one pair of calls made where the pick arrives, and the click that made the pick reaches the
+    // listing *after* that: the window the click landed in is activated a moment later, which is that
+    // window put over the pin again — so the user who picked a file to look at went on looking at the
+    // listing (see `a_pick_chases_the_listing_when_the_activation_lands_after_its_raise`). The walk
+    // below asks the desktop where the two windows stand rather than asking for a raise on every tick,
+    // so a tick that finds the pin already over the listing costs the walk and nothing else.
+    //
     // A pin that no longer owes the front has given it back: a press that named no file is the
     // pin's own answer, and a raise here would be the grace putting it back over the listing the
     // press just took it behind — the pin fighting the hand that moved it.
@@ -1636,16 +1664,27 @@ pub(super) unsafe fn keep_pin_at_the_front(
     // went back behind the listing it had just been raised over, which is the fault the user reported
     // twice ("we have the same problem just like in fake windows").
     if !PIN_FRONT_OWED.load(Ordering::SeqCst) {
-        *deadline = None;
+        *owed = None;
         return;
     }
 
     if now >= until {
-        *deadline = None;
+        *owed = None;
         return;
     }
 
-    if !pin_stands_over(hwnd, window) {
+    // A listing that is no longer a window is a pick nothing more can happen to: the folder was
+    // closed inside the grace, and the activation that was to land is gone with it. So the debt goes
+    // with the window. The walk cannot answer for it either — `pin_stands_over` reads a window that
+    // is gone as one the pin does not stand over, since nothing above it ever reaches the pin — and
+    // asking it would raise the pin over whatever window the user had moved to instead, which is the
+    // one thing `Always On Top` off must never do (see `PinFrontOwed`).
+    if !IsWindow(listing).as_bool() {
+        *owed = None;
+        return;
+    }
+
+    if !pin_stands_over(hwnd, listing) {
         raise_pinned_preview(hwnd);
     }
 }
