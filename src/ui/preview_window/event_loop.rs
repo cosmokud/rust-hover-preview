@@ -3717,14 +3717,15 @@ pub fn run_preview_window() {
                             .ok()
                             .and_then(|media| media.as_ref().map(|media| media.media_type));
 
-                        // Whether this pin stands in a window of its own is decided here, from the
-                        // kind it was taken up on, and never asked of the media again: a picture is
-                        // drawn the whole way by this app, so the window it is in can be a window
-                        // Windows activates and lists — and every other kind still stands in the
-                        // preview's (see `MediaType::is_a_picture_of_its_own`).
-                        pin_stands_in_its_own_window(
-                            kind.is_some_and(|kind| kind.is_a_picture_of_its_own()),
-                        );
+                        // Whether this pin stands in a window of its own is decided here, once,
+                        // from the kind it was taken up on — or from the file's route where the
+                        // media is still loading and has no kind yet — and never asked of the media
+                        // again: every kind this app draws the whole way is in a window Windows
+                        // activates and lists, and the kinds whose band holds somebody else's
+                        // window keep the preview's (see `pin_should_stand_in_its_own_window`).
+                        pin_stands_in_its_own_window(pin_should_stand_in_its_own_window(
+                            kind, &path,
+                        ));
 
                         // The pin is published as up inside this, after the state it publishes
                         // is written (see `pin_window::install`).

@@ -442,6 +442,7 @@ mod pin_swap_ffplay_jigsaw;
 mod pin_swap_ffplay_native;
 mod pin_taskbar_window;
 mod pin_volume;
+mod pin_window_kind;
 mod pin_zoom;
 mod placement;
 mod probes;
