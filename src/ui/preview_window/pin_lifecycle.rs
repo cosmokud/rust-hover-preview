@@ -1404,7 +1404,36 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND, keep_the_band: bool) {
                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                     );
 
+                    // **A band the desktop is not giving is asked for again, from outside it.** The
+                    // desktop answers a band assignment as made and can still not make it: a window it
+                    // has not laid out yet — one shown this moment — and one whose process has no
+                    // foreground rights are both windows it leaves in the band they were in, which for a
+                    // hold is a pin the click it is held for goes over. Leaving the band and taking it is
+                    // the same front asked a second time, and it is the way the take-and-give raise asks
+                    // for the front on every update (see `take_the_band_and_give_it_back`): one call more
+                    // on a road the first ask did not answer, and none at all where it did.
+                    if !window_holds_the_topmost_band(hwnd) {
+                        let _ = SetWindowPos(
+                            hwnd,
+                            HWND_NOTOPMOST,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                        let _ = SetWindowPos(
+                            hwnd,
+                            HWND_TOPMOST,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                    }
                 }
+
                 // Said out loud as well as done, because the window is placed again before the click it
                 // is held for has landed: the pick's own show asks `band_place`, and an answer from the
                 // setting alone is the band given back a few milliseconds too early (see
