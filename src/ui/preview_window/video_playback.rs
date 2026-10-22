@@ -1239,9 +1239,14 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // a hover's top-level player has a host standing empty until a relaunch fills it, and that
     // player still has a window this road places (see `pin_film_host`).
     if pin_film_host::host_holds_the_pinned_film() {
-        // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
-        // takes any window and reports rather than faults.
-        unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+        // The band is owed its picture back, and the picture is the host — but only once the player
+        // has put a child of its own in it: a host shown empty is a black rectangle over the band,
+        // which is the film the hover was playing, blanked (see `pin_film_host::create`).
+        if pin_film_host::the_pinned_film_is_drawing() {
+            // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
+            // takes any window and reports rather than faults.
+            unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+        }
         return true;
     }
     // What is to be done with the window, from the one answer both of the places that put one
