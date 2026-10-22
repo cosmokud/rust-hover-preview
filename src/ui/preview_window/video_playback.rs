@@ -1232,6 +1232,18 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     if pin_is_collapsed() {
         return false;
     }
+    // **A film drawn into a child of the pin's has no window of the desktop's to order, style or
+    // raise.** The host is the picture and the pin is the order it stands in, so showing it is the
+    // whole of what the band is owed — and the box this road was handed is a top-level player's,
+    // not the host's. It is asked of the pairing rather than of the host alone: a pin that took up
+    // a hover's top-level player has a host standing empty until a relaunch fills it, and that
+    // player still has a window this road places (see `pin_film_host`).
+    if pin_film_host::host_holds_the_pinned_film() {
+        // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
+        // takes any window and reports rather than faults.
+        unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+        return true;
+    }
     // What is to be done with the window, from the one answer both of the places that put one
     // somewhere read: everything held off — the pin's own chrome, its popup or its menu — is
     // nothing this road places, and a raise puts the pin back over the film it raised (see

@@ -854,6 +854,16 @@ pub(super) fn release_the_pointer(window: &dyn PinWindow, hwnd: isize) {
 /// one that says what it means, and it is the same call the style monitor already makes to put the
 /// window up without activating it (see `ensure_video_window_topmost`).
 pub(super) fn set_pinned_player_window_visible(visible: bool) {
+    // **A film drawn into the pin's own child has no window of the desktop's to hide.** The host is
+    // the picture's window and the band is the hole it is seen through, so a park is the host
+    // hidden and the unpark the same window back (see `pin_film_host`).
+    if pin_film_host::pin_film_host().is_some() {
+        // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
+        // takes any window and reports rather than faults.
+        unsafe { pin_film_host::set_the_pin_film_host_visible(visible) };
+        return;
+    }
+
     let Some(hwnd) = video_window_for(VIDEO_PID.load(Ordering::SeqCst)) else {
         return;
     };
