@@ -1760,6 +1760,129 @@ fn a_picks_own_placement_keeps_the_band_the_press_held() {
     stand_pin(previous_pin);
 }
 
+/// A band the desktop did not give is no band to give back, and the pick's front is still owed.
+///
+/// **The road the take can fail on.** The desktop answers a band assignment as made and can still leave the
+/// window where it was (see `raise_pinned_preview`, which asks again from outside the band for that reason),
+/// and a hold the desktop has not taken is no hold: the pick's own placement is a placement in the ordinary
+/// band, the activation lands over the pin, and the release on the press's clock finds nothing to give back.
+/// Dropping the answer there would be a pin left behind the listing it followed for the rest of the walk —
+/// the fault the whole grace exists for, on the one road the take is not trusted. So the answer stays with
+/// the pick's own clock, and it is answered the way a stand-in's is: the pin raised over the listing, a take
+/// and a give back, no band kept.
+#[test]
+fn a_pick_whose_band_the_desktop_did_not_give_is_still_owed_the_front() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_band = PIN_BAND_HELD.load(Ordering::SeqCst);
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    // The pin in a window of its own and the listing its click was made in, both in the ordinary band: the
+    // hold is owed but never taken, which is the take that was answered and not made.
+    let (pin_hwnd, listing) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        let listing = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(listing.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(listing, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(
+            pin_hwnd,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        (pin_hwnd, listing)
+    };
+    pin_real_window::stand_real_pin_window_for_a_test(Some(pin_hwnd));
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    pin_stands_in_its_own_window(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+    assert!(
+        unsafe { !window_holds_the_topmost_band(pin_hwnd) },
+        "the window the band was asked of and not given is no window in the topmost band"
+    );
+
+    // The click lands while the band is not the desktop's: the listing is activated, which is that window
+    // put over the pin — the flash, on a take that did not take. The press's clock then runs out.
+    unsafe {
+        let _ = SetWindowPos(
+            listing,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        settle_z_order();
+    }
+    assert!(
+        unsafe { stands_over(listing, pin_hwnd) },
+        "the activation the band was meant to answer covers the pin it was not given for"
+    );
+
+    // A file that reached the window late, which is the only road the press's clock runs out first: the
+    // answer has been moved on (see `extend_pin_front_owed`) and the band's hold has not.
+    let pressed = Instant::now();
+    let mut owed = Some(PinFrontOwed {
+        until: pressed + PIN_RAISE_GRACE + PIN_RAISE_GRACE,
+        band_until: pressed + PIN_RAISE_GRACE,
+        listing,
+    });
+    arm_pin_to_the_front();
+    PIN_BAND_HELD.store(true, Ordering::SeqCst);
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, pressed + PIN_RAISE_GRACE, listing) };
+    unsafe { settle_z_order() };
+    assert!(
+        owed.is_some(),
+        "a band that was never the desktop's to give back leaves the pick's front still owed"
+    );
+    assert!(
+        unsafe { stands_over(pin_hwnd, listing) },
+        "and the answer is the pin over the file the user picked, not the pin left behind the listing"
+    );
+    assert!(
+        unsafe { !window_holds_the_topmost_band(pin_hwnd) },
+        "while the answer is owed the chase keeps no band: this is the stand-in kinds' road, taken and given back"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(listing);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
 /// A band held for a pick is given back on the press's own clock, however long the file it named takes
 /// to arrive: the hold is the answer to one click, and a pick whose click never brings the listing to the
 /// front — the folder closed under it, the frame the press was read in never activated — is not a licence
