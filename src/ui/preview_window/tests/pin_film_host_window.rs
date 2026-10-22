@@ -47,6 +47,10 @@ impl StandingFilm {
         let previous_window = pin_real_window::real_pin_window();
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pid = VIDEO_PID.swap(unsafe { GetCurrentProcessId() }, Ordering::SeqCst);
+        // The host holds this test's own process, which is the pid of any child it makes: a film is
+        // drawn in the host only when the player begun into it is the one this app recorded (see
+        // `host_holds_the_pinned_film`).
+        pin_film_host::note_hosted_player(unsafe { GetCurrentProcessId() });
 
         stand_mpv_in(Some(true));
         stand_video_engine_in(Some((VideoEngine::Mpv, true)));
