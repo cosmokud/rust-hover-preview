@@ -149,6 +149,14 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
 /// swaps its own surface. A video that stopped rendering would be a far worse
 /// answer than a click that falls through to the desktop.
 pub(super) fn player_ex_style_for(current: isize) -> isize {
+    // **A film in the pin's own host wears none of this.** The list is a window of the desktop's own
+    // wearing bits this app puts on another program's window: a hosted player is mpv's child under a
+    // host the pin owns and disables, so it neither takes a press nor holds a band of its own (see
+    // `pin_film_host`).
+    if pin_film_host::host_holds_the_pinned_film() {
+        return current;
+    }
+
     let mut style = current
         | WS_EX_NOACTIVATE.0 as isize
         | WS_EX_TOOLWINDOW.0 as isize
@@ -163,6 +171,13 @@ pub(super) fn player_ex_style_for(current: isize) -> isize {
 
 /// Style and raise a player's known window.
 pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
+    // **A hosted player's window is not this app's to style or to publish.** It is mpv's child under
+    // a host the pin owns, and every road that would place, style or raise it is answered by the
+    // host instead (see `player_ex_style_for`, `place_player_window`).
+    if pin_film_host::host_holds_the_pinned_film() {
+        return false;
+    }
+
     // Store the video window HWND for cursor-over-preview detection
     VIDEO_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
 

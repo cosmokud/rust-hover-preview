@@ -1052,6 +1052,14 @@ pub(super) unsafe fn place_player_window(
     box_: ScreenRegion,
     flags: SET_WINDOW_POS_FLAGS,
 ) {
+    // **A film the pin draws into its own host is not placed from the outside.** Its window is a
+    // child of the pin's and the host's box is the band (see `ensure_pinned_sibling_box`), so there
+    // is no place of the desktop's for this road to put it in and nothing for the pin to be raised
+    // back over (see `pin_film_host`).
+    if pin_film_host::host_holds_the_pinned_film() {
+        return;
+    }
+
     let (x, y, width, height) = box_;
     let _ = SetWindowPos(hwnd, player_insert_after(), x, y, width, height, flags);
 
@@ -1174,6 +1182,13 @@ pub(super) unsafe fn player_is_under_the_pin(pin: HWND) -> bool {
 /// has no opinion of its own to correct (see `mpv_ipc::set_ontop`).
 pub(super) fn settle_pinned_mpv_ontop() {
     if !pinned() {
+        return;
+    }
+
+    // **A film in the pin's own host has no band of the desktop's to be told about.** Its window is a
+    // child of the pin's, so the pin is the order it stands in and the flag `--ontop` would hold is
+    // not a window the user can see over anything (see `mpv_launch_host`).
+    if pin_film_host::host_holds_the_pinned_film() {
         return;
     }
 
