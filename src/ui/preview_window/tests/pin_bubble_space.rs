@@ -1515,6 +1515,104 @@ fn a_pick_holds_the_pin_over_the_listing_until_the_click_activates_it() {
     stand_pin(previous_pin);
 }
 
+/// A band held for a pick goes back behind the window the user moved to. The grace answers one click,
+/// and a pick whose activation never lands where it was expected — the user gone to another program, a
+/// listing closed under the click, a press that named no file — is not a licence to leave the pin over
+/// the program they went to, which with `Always On Top` off is the one thing that setting forbids.
+///
+/// **The band is given back where the user is, not where the pin was raised.** `HWND_NOTOPMOST` alone
+/// would put the pin at the front of the ordinary band — over the window the user just moved to, which
+/// is the same fault the hold was a fix for, one program along. So the release asks where the user is
+/// and puts the pin below that window, which is what every other press of theirs would have done.
+#[test]
+fn a_band_held_for_a_pick_goes_back_behind_the_window_the_user_moved_to() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    // The pin in a window of its own, the listing its click was made in, and the program the user went
+    // to instead: three windows of this test's own, opened where no display is.
+    let (pin_hwnd, listing, moved_to) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        let listing = a_window_of_the_tests_own();
+        let moved_to = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(listing.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(listing, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(moved_to, SW_SHOWNOACTIVATE);
+        (pin_hwnd, listing, moved_to)
+    };
+    pin_real_window::stand_real_pin_window_for_a_test(Some(pin_hwnd));
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    pin_stands_in_its_own_window(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The press holds the band, and the user is then in a program of their own — the one the pin's
+    // hold put it over, and the one it must not be left over.
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pinned_window(), true) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "the press holds the band until the click it answers has landed"
+    );
+
+    // And the grace runs out with the user in another program: the band goes, and the pin goes back
+    // behind the window they are in rather than over it.
+    let mut owed = Some(PinFrontOwed {
+        until: Instant::now(),
+        listing,
+    });
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), moved_to) };
+    unsafe { settle_z_order() };
+    assert!(
+        owed.is_none(),
+        "a grace that has run out is dropped, whatever held the band"
+    );
+    assert!(
+        !unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "a band held for a pick is never the band the pin keeps"
+    );
+    assert!(
+        unsafe { stands_over(moved_to, pin_hwnd) },
+        "and the pin goes behind the program the user moved to, not over it"
+    );
+
+    // Safety: all three windows are this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(moved_to);
+        let _ = DestroyWindow(listing);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
 /// A pick's grace answers the listing its click was made in, and no other window: a second listing
 /// put over the pin is the user having gone to another folder, not the answer this grace owes, and a
 /// pin raised over the window they chose is a pin with `Always On Top` off standing over it — the one
