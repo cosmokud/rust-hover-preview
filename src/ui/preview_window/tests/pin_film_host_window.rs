@@ -144,6 +144,48 @@ unsafe fn a_child_of_the_host(host: HWND) -> HWND {
     .expect("a child of the host's, in this process")
 }
 
+/// The film's host is the band, and the band is what a resize changes: the host follows the pin's
+/// box wherever the loop is told it, without a player's geometry being touched (see
+/// `place_the_pin_film_host`).
+#[test]
+fn the_film_host_follows_the_pins_band() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::pin_film_host().expect("the film's host");
+
+    // A resize of the pin's window hands the media band another box, and the loop lays the window
+    // out around it: the host is the band inside that window, so it is the same box the picture
+    // would be shown in.
+    let wider = (film.box_.0, film.box_.1, film.box_.0 + 400, film.box_.1 + 300);
+    with_pin(|pin| pin.content = wider);
+    place_pinned_siblings();
+
+    assert_eq!(
+        unsafe { window_rect(host) },
+        wider,
+        "the host stands in the band the pin now shows its film through"
+    );
+
+    // And the band keeps being followed while the film is away: a park hides the host but does not
+    // stop the band it comes back at from moving, so a resize under a cover places the hidden host
+    // rather than the picture it will show again (see `settle_pinned_park`).
+    let taller = (wider.0, wider.1, wider.0 + 400, wider.1 + 500);
+    hide_pinned_player_window();
+    ensure_pinned_sibling_box(taller);
+    assert_eq!(
+        unsafe { window_rect(host) },
+        taller,
+        "the band a hidden host comes back at is the box it was placed at"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "and placing it is not the show a park is waiting to end"
+    );
+}
+
 /// A hover's mpv film is a window of the desktop's, and a pin that takes it up cannot keep it
 /// there: the picture belongs in the host the pin draws it in. So the take-up begins the player
 /// again through the relaunch road the rest of the pin's life uses — at the second the hover had

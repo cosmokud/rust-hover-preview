@@ -2340,6 +2340,17 @@ pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
 /// park holds is the window's *absence*, and there is nothing about being out of date to say the
 /// absence can be ended (see `pin_player_is_parked`).
 pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
+    // **A film drawn into the pin's own host travels with the band rather than being placed at it.**
+    // The host is a child of the pin's window, so a move is the compositor's and never this app's;
+    // what a resize changes is the band *inside* that window, which is the host's own box — and the
+    // player's geometry is never touched, because mpv's child fills whatever box the host is given
+    // (see `place_the_pin_film_host`). Placed while a park stands as much as after one: the band a
+    // hidden host comes back at is the band it was given (see `settle_pinned_park`).
+    if pin_film_host::host_holds_the_pinned_film() {
+        unsafe { pin_film_host::place_the_pin_film_host(content) };
+        return;
+    }
+
     if pin_player_is_parked() || pin_is_collapsed() {
         return;
     }
