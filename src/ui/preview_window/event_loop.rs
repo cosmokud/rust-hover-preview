@@ -3719,10 +3719,10 @@ pub fn run_preview_window() {
 
                         // Whether this pin stands in a window of its own is decided here, once,
                         // from the kind it was taken up on — or from the file's route where the
-                        // media is still loading and has no kind yet — and never asked of the media
-                        // again: every kind this app draws the whole way is in a window Windows
-                        // activates and lists, and the kinds whose band holds somebody else's
-                        // window keep the preview's (see `pin_should_stand_in_its_own_window`).
+                        // media is a placeholder — and never asked of the media again: every kind
+                        // this app draws the whole way is in a window Windows activates and
+                        // lists, and the kinds whose band holds somebody else's window keep the
+                        // preview's (see `pin_should_stand_in_its_own_window`).
                         pin_stands_in_its_own_window(pin_should_stand_in_its_own_window(
                             kind, &path,
                         ));
