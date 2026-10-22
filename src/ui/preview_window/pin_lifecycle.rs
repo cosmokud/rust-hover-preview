@@ -1842,10 +1842,19 @@ pub(super) unsafe fn keep_pin_at_the_front(
     // band, and a chase after it would be the pin put over a listing by a raise taken and given straight
     // back — the very shape of the fault. The stand-in kinds have no band to hold and keep the chase they
     // always had (see `PIN_RAISE_GRACE`).
+    // **The answer goes with the band, where there is a band to go with.** A band the desktop answered as
+    // made and did not make (see `raise_pinned_preview`) is no band this release can give back: the
+    // placement below is a no-op on a window that never left the ordinary band, and dropping the answer
+    // here would be a pin left behind the listing it followed — the very fault, on the one road the take
+    // is not trusted. What is left there is the stand-in kinds' road, the chase, which is bounded by the
+    // answer's own clock and reaches this branch again a tick later.
     if pin_is_its_own_window() && now >= band_until {
-        *owed = None;
+        let band_was_the_desktops = window_holds_the_topmost_band(hwnd);
         give_the_band_back(hwnd, where_the_band_goes_back(foreground, listing));
-        return;
+        if band_was_the_desktops || pin_stands_over(hwnd, listing) {
+            *owed = None;
+            return;
+        }
     }
 
     if !pin_stands_over(hwnd, listing) {
