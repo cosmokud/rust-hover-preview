@@ -113,6 +113,29 @@ impl Drop for StandingFilm {
     }
 }
 
+/// A window of the player's own under the host, which is the film drawing where the pin can see
+/// it (see `the_pinned_film_is_drawing`): made by this process, which is the player the stand's
+/// host holds.
+unsafe fn a_child_of_the_host(host: HWND) -> HWND {
+    unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            0,
+            16,
+            16,
+            host,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a child of the host's, in this process")
+}
+
 /// The picture has a window of the pin's own making, standing in the band and disabled: the pin is
 /// what a press on the film reaches, and the band is the one box of the pin's the film is shown in.
 #[test]
@@ -172,6 +195,46 @@ fn a_pinned_film_stands_in_a_disabled_child_of_the_pins_window() {
     );
 }
 
+/// A host the player has drawn nothing into yet is a black rectangle where the band is — the
+/// film the hover was showing, blanked — so it is not shown until the player has put a child of
+/// its own under it, and the tick's road is what shows it then (see `take_up_the_pin_film_host`
+/// and `ensure_video_window_topmost`).
+#[test]
+fn a_host_with_no_film_in_it_is_not_on_screen() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::pin_film_host().expect("the film's host");
+
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host is made where the band is and left off the screen until there is a picture in it"
+    );
+
+    let child = unsafe { a_child_of_the_host(host) };
+    assert!(
+        pin_film_host::the_pinned_film_is_drawing(),
+        "the player has put a child of its own under the host"
+    );
+
+    let _ = ensure_video_window_topmost(
+        film.box_.0,
+        film.box_.1,
+        (film.box_.2 - film.box_.0).max(1),
+        (film.box_.3 - film.box_.1).max(1),
+    );
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "and the tick's own road is what shows the band once the film is drawing in it"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(child);
+    };
+}
+
 /// A park is the host's absence and the pin's held frame is what shows through the band; the
 /// unpark is the host again.
 #[test]
@@ -182,6 +245,11 @@ fn a_park_hides_the_film_host_and_the_unpark_shows_it() {
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::pin_film_host().expect("the film's host");
+
+    // The player's own child, and the pin asked again the way a restore asks: a host the film is
+    // already drawing in is the band's picture from the take-up on.
+    let child = unsafe { a_child_of_the_host(host) };
+    unsafe { show_pinned_window(film.pin_hwnd) };
     assert!(
         unsafe { IsWindowVisible(host) }.as_bool(),
         "a film that is not parked is a film on screen"
@@ -198,6 +266,10 @@ fn a_park_hides_the_film_host_and_the_unpark_shows_it() {
         unsafe { IsWindowVisible(host) }.as_bool(),
         "and the unpark is the same window back"
     );
+
+    unsafe {
+        let _ = DestroyWindow(child);
+    };
 }
 
 /// A hosted film's park is ended by the host's own child and not by a window of the desktop's: the
@@ -268,6 +340,9 @@ fn the_topmost_road_neither_moves_nor_raises_the_host() {
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::pin_film_host().expect("the film's host");
+    // The player's own child is the film drawing in the band (see `the_pinned_film_is_drawing`),
+    // which is the picture a park hides and the topmost road hands back.
+    let child = unsafe { a_child_of_the_host(host) };
 
     hide_pinned_player_window();
     let elsewhere = (100, 100, 700, 500);
@@ -288,6 +363,10 @@ fn the_topmost_road_neither_moves_nor_raises_the_host() {
         film.box_,
         "at the pin's band rather than at the box a top-level player would have been given"
     );
+
+    unsafe {
+        let _ = DestroyWindow(child);
+    };
 }
 
 /// The wait for a film's first frame is the wait for the player's own child under the host: the

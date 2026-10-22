@@ -29,9 +29,9 @@ use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow,
-    GetWindowThreadProcessId, RegisterClassExW, ShowWindow, GW_CHILD, GW_HWNDNEXT, SW_HIDE,
-    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, GetWindowThreadProcessId,
+    RegisterClassExW, ShowWindow, GW_CHILD, GW_HWNDNEXT, SW_HIDE, SW_SHOWNOACTIVATE,
+    WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD,
 };
 
 use super::*;
@@ -196,6 +196,13 @@ pub(super) unsafe fn take_up_the_pin_film_host() {
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
     let _ = EnableWindow(host, false);
+
+    // Only a host the player is already drawing in is shown: a fresh one is a black rectangle over
+    // the band, and what the band showed a moment ago is the film the hover was playing (see the
+    // module note on `create`).
+    if the_pinned_film_is_drawing() {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+    }
 }
 
 /// Put the host at the pin's band, without showing it: the band-change road, where the window is
@@ -251,11 +258,18 @@ unsafe fn create(parent: HWND) -> Option<HWND> {
     });
 
     let hinstance = GetModuleHandleW(None).ok()?;
+    // **Made without `WS_VISIBLE`, and that is what keeps the band the film's until the player has
+    // drawn into it.** A host put on the screen empty is a black rectangle where the hover's picture
+    // was, for as long as the player takes to open the file — and for a pin that took up a hover's
+    // player it is the picture on screen that the park's held frame is read from (see
+    // `begin_the_adopted_film_in_the_host`). What shows it is the take-up of a host the player is
+    // already drawing in, the tick's own road, and the settle of a park (see
+    // `take_up_the_pin_film_host`, `ensure_video_window_topmost`).
     let host = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         FILM_HOST_CLASS,
         w!("film host"),
-        WS_CHILD | WS_VISIBLE,
+        WS_CHILD,
         0,
         0,
         1,
