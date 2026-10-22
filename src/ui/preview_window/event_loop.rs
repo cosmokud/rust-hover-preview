@@ -2385,8 +2385,13 @@ pub fn run_preview_window() {
                         // `pin_press_was_not_a_pick`).
                         arm_pin_to_the_front();
                         raise_pinned_preview(pinned_window(), true);
+                        // The two clocks the press begins, from the one moment it was read: how long the
+                        // pick is answered for, and how long the band it took is held for. Only the first
+                        // is extended, by a file that reaches the window late (see `PinFrontOwed`).
+                        let pressed = Instant::now();
                         pin_front_owed = Some(PinFrontOwed {
-                            until: Instant::now() + PIN_RAISE_GRACE,
+                            until: pressed + PIN_RAISE_GRACE,
+                            band_until: pressed + PIN_RAISE_GRACE,
                             listing: HWND(window as *mut _),
                         });
                     }

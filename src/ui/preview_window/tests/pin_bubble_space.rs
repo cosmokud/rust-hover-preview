@@ -1204,6 +1204,7 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
     // says the pick's answer has arrived.
     let mut owed = Some(PinFrontOwed {
         until: Instant::now() + PIN_RAISE_GRACE,
+        band_until: Instant::now() + PIN_RAISE_GRACE,
         listing: in_front,
     });
     unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), pin_hwnd) };
@@ -1264,6 +1265,7 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
     arm_pin_to_the_front();
     let mut owed = Some(PinFrontOwed {
         until: Instant::now(),
+        band_until: Instant::now(),
         listing: in_front,
     });
     unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), in_front) };
@@ -1372,6 +1374,7 @@ fn a_pick_chases_the_listing_when_the_activation_lands_after_its_raise() {
     // the window they are looking at, whichever window the pin stands in.
     let mut owed = Some(PinFrontOwed {
         until: Instant::now() + PIN_RAISE_GRACE,
+        band_until: Instant::now() + PIN_RAISE_GRACE,
         listing,
     });
     unsafe { keep_pin_at_the_front(pinned_window(), &mut owed, Instant::now(), listing) };
@@ -1482,6 +1485,7 @@ fn a_pick_holds_the_pin_over_the_listing_until_the_click_activates_it() {
     // was: the front of the ordinary band, which is over the listing the click just activated.
     let mut owed = Some(PinFrontOwed {
         until: Instant::now() + PIN_RAISE_GRACE,
+        band_until: Instant::now() + PIN_RAISE_GRACE,
         listing,
     });
     unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), listing) };
@@ -1579,6 +1583,7 @@ fn a_band_held_for_a_pick_goes_back_behind_the_window_the_user_moved_to() {
     // behind the window they are in rather than over it.
     let mut owed = Some(PinFrontOwed {
         until: Instant::now(),
+        band_until: Instant::now(),
         listing,
     });
     unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), moved_to) };
@@ -1599,6 +1604,123 @@ fn a_band_held_for_a_pick_goes_back_behind_the_window_the_user_moved_to() {
     // Safety: all three windows are this test's own, and every global written here is put back.
     unsafe {
         let _ = DestroyWindow(moved_to);
+        let _ = DestroyWindow(listing);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
+/// A band held for a pick is given back on the press's own clock, however long the file it named takes
+/// to arrive: the hold is the answer to one click, and a pick whose click never brings the listing to the
+/// front — the folder closed under it, the frame the press was read in never activated — is not a licence
+/// to keep the pin over every program the user works in for as long as files keep being stepped through.
+///
+/// **The grace is extended and the hold is not.** An update that reaches the window late is a file the
+/// pin must still come back on, so the debt lasts another `PIN_RAISE_GRACE` from it (see
+/// `extend_pin_front_owed`); the band the press took is not the debt's, though, and extending it would
+/// make the longest the pin stands over the user's programs as long as their hand keeps moving.
+#[test]
+fn a_band_held_for_a_pick_is_given_back_on_the_presss_own_clock() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    // The pin in a window of its own, the listing its click was made in, and the program the user is in
+    // while the file it named is still being read.
+    let (pin_hwnd, listing, elsewhere) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        let listing = a_window_of_the_tests_own();
+        let elsewhere = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(listing.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(listing, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(elsewhere, SW_SHOWNOACTIVATE);
+        (pin_hwnd, listing, elsewhere)
+    };
+    pin_real_window::stand_real_pin_window_for_a_test(Some(pin_hwnd));
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    pin_stands_in_its_own_window(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    let pressed = Instant::now();
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pinned_window(), true) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "the press holds the band until the click it answers has landed"
+    );
+
+    // The file the pick named takes longer to read than the grace the press began, so the debt is
+    // extended — and the hold is not: the tick after the press's own grace has run out is a tick that
+    // gives the band back, with the answer still owed and the pin still chased.
+    let mut owed = Some(PinFrontOwed {
+        until: pressed + PIN_RAISE_GRACE,
+        band_until: pressed + PIN_RAISE_GRACE,
+        listing,
+    });
+    extend_pin_front_owed(&mut owed);
+    let mut owed = owed.expect("a pick's grace is still owed for the file on its way");
+    let still_owed = owed.until;
+    unsafe {
+        let _ = SetWindowPos(
+            elsewhere,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    unsafe { settle_z_order() };
+    unsafe {
+        keep_pin_at_the_front(
+            pin_hwnd,
+            &mut Some(owed),
+            pressed + PIN_RAISE_GRACE + Duration::from_millis(1),
+            elsewhere,
+        )
+    };
+    unsafe { settle_z_order() };
+    assert!(
+        !unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "a hold is measured from the press, not from the last update a file cost"
+    );
+    assert!(
+        still_owed > pressed + PIN_RAISE_GRACE,
+        "while the answer itself is still owed, and for longer than the press's own grace"
+    );
+
+    // Safety: all three windows are this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(elsewhere);
         let _ = DestroyWindow(listing);
         let _ = DestroyWindow(pin_hwnd);
     }
@@ -1688,6 +1810,7 @@ fn a_pick_answers_only_the_listing_its_click_was_made_in() {
     arm_pin_to_the_front();
     let mut owed = Some(PinFrontOwed {
         until: Instant::now() + PIN_RAISE_GRACE,
+        band_until: Instant::now() + PIN_RAISE_GRACE,
         listing: picked_in,
     });
     unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), moved_to) };
@@ -1778,6 +1901,7 @@ fn a_pick_whose_listing_is_gone_answers_for_nothing() {
     arm_pin_to_the_front();
     let mut owed = Some(PinFrontOwed {
         until: Instant::now() + PIN_RAISE_GRACE,
+        band_until: Instant::now() + PIN_RAISE_GRACE,
         listing: closed_listing,
     });
     unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), moved_to) };

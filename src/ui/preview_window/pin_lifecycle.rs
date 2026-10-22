@@ -1347,6 +1347,11 @@ pub(super) fn bring_a_put_away_pin_back(named: &Path) -> bool {
 /// one click and given back by the grace the press begins, the moment the listing is the window the user
 /// is in (see `keep_pin_at_the_front`). Nothing of it is held past that grace, and no road that ends the
 /// grace leaves it held (see `give_the_band_back`).
+///
+/// **Only a pin that is a window of its own has a band to hold**, so a stand-in kind's raise is the
+/// band taken and given straight back whatever `keep_the_band` says: the stand-in kinds have no window
+/// of their own to be put over the listing, and their front is this app's place for them rather than a
+/// band Windows could keep (see `put_pin_at_the_front`).
 pub(super) unsafe fn raise_pinned_preview(hwnd: HWND, keep_the_band: bool) {
     if pin_is_collapsed() || !pin_update_move_to_top() {
         return;
@@ -1644,7 +1649,15 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
 /// and no road that ends it leaves it held (see `give_the_band_back`).
 #[derive(Clone, Copy)]
 pub(super) struct PinFrontOwed {
+    /// When the answer is no longer owed: set by the press, and moved on by every update that reaches
+    /// the window late (see `extend_pin_front_owed`).
     pub(super) until: Instant,
+    /// When the band the press took goes back: set by the press too, and **never moved on**. A file's
+    /// read can outlast the grace it was picked in, and the answer owes the pin a front for as long as
+    /// that takes — but the band is the answer's answer, not the file's, and a hold that followed the
+    /// hand through a folder would be the pin over every program the user works in for as long as they
+    /// kept stepping (see `keep_pin_at_the_front` and `give_the_band_back`).
+    pub(super) band_until: Instant,
     pub(super) listing: HWND,
 }
 
@@ -1656,6 +1669,11 @@ pub(super) struct PinFrontOwed {
 /// A grace that is not owed is not begun here. An update with no press behind it — a file walked to
 /// with the keys, a hover where `Pin Mode → Update Preview → On Hover` asks for one — is a pick no
 /// click is to undo, and the raise the update makes stands on its own.
+///
+/// **The answer is extended and the band the press held is not.** What a late file asks for is another
+/// grace to be answered in; the front the press kept belongs to the click, and letting an update move it
+/// would make the pin over every program the user works in for as long as files kept being stepped
+/// through (see `PinFrontOwed`).
 pub(super) fn extend_pin_front_owed(owed: &mut Option<PinFrontOwed>) {
     if let Some(owed) = owed.as_mut() {
         owed.until = Instant::now() + PIN_RAISE_GRACE;
@@ -1678,7 +1696,12 @@ pub(super) unsafe fn keep_pin_at_the_front(
     now: Instant,
     foreground: HWND,
 ) {
-    let Some(PinFrontOwed { until, listing }) = *owed else {
+    let Some(PinFrontOwed {
+        until,
+        band_until,
+        listing,
+    }) = *owed
+    else {
         return;
     };
 
@@ -1754,6 +1777,15 @@ pub(super) unsafe fn keep_pin_at_the_front(
         return;
     }
 
+    // **The hold is the press's, and it is over whether or not the answer is.** A file that outlasts the
+    // grace moves the answer on and not the band (see `extend_pin_front_owed`), so what is left when this
+    // runs out is the chase alone — the band taken and given back a tick at a time, as every other raise
+    // makes it (see `raise_pinned_preview`). Without this the longest the pin stands over every program
+    // the user works in would be as long as their hand kept moving over the listing.
+    if now >= band_until {
+        give_the_band_back(hwnd, foreground);
+    }
+
     if !pin_stands_over(hwnd, listing) {
         raise_pinned_preview(hwnd, false);
     }
@@ -1781,6 +1813,12 @@ pub(super) unsafe fn keep_pin_at_the_front(
 /// behind its own film for as long as the film is in front, which is a band the pin places again the moment it
 /// is drawn (see `band_place`) — while a band left held here is over every program the user works in until
 /// something else takes it, and nothing else does.
+///
+/// **The band is given back whatever the settings say.** `Move To Top` is about a raise — whether a pick is
+/// owed the front of the band at all — and a band already held is not that question: it is a window over every
+/// program the user works in, and the setting being turned off under it is one more reason to take it away.
+/// Where the pin is placed after the band goes is the setting's, since that is a raise (see
+/// `lower_pinned_preview`).
 ///
 /// `behind` is the window the pin is to go below, or no window where the front of the band is the answer. It
 /// is handed in rather than read here for the same reason the grace is handed the window the user is in: a test
