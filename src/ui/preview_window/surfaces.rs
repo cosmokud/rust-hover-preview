@@ -229,7 +229,16 @@ pub(super) fn forget_video_frame() {
 /// that is still there would be worse than the frame, and the park below knows the difference
 /// between a picture and no picture (see `compose_parked_band`).
 pub(super) fn hold_video_window_frame() -> bool {
-    let Some(hwnd) = video_window_for(VIDEO_PID.load(Ordering::SeqCst)) else {
+    // **A film the pin draws into its own host has no window of the desktop's to find by pid**: the
+    // picture is the child mpv made under the host, so what is on screen in the band is the host
+    // itself, and that is the rect the frame is read off. Everything else is a player's own window,
+    // found the way it always was (see `pin_film_host`).
+    let window = if pin_film_host::host_holds_the_pinned_film() {
+        pin_film_host::pin_film_host()
+    } else {
+        video_window_for(VIDEO_PID.load(Ordering::SeqCst))
+    };
+    let Some(hwnd) = window else {
         return false;
     };
 

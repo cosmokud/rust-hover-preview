@@ -9,8 +9,8 @@
 use super::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, GetParent, GWL_EXSTYLE, GWL_STYLE, WINDOW_EX_STYLE, WS_CHILD, WS_POPUP,
-    WS_VISIBLE,
+    DestroyWindow, GetParent, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, MoveWindow, SW_SHOWNOACTIVATE,
+    SWP_NOACTIVATE, SWP_NOZORDER, WINDOW_EX_STYLE, WS_CHILD, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -43,6 +43,13 @@ struct StandingFilm {
 }
 
 impl StandingFilm {
+    /// The same stand with the film drawing in the host: `drawn` is the player whose child under it
+    /// is the picture (see `the_pinned_film_is_drawing`), and it owns no window of the desktop's.
+    fn drawn_in_the_host(&self, drawn: u32) {
+        pin_film_host::note_hosted_player(drawn);
+        VIDEO_PID.store(drawn, Ordering::SeqCst);
+    }
+
     /// The same stand taken up on a hover's player: the film is mpv's, and the window it is drawing
     /// in is a window of the desktop's rather than the host's (see `host_holds_the_pinned_film`),
     /// with `hovered` the process that owns it.
@@ -143,6 +150,43 @@ unsafe fn a_child_of_the_host(host: HWND) -> HWND {
         )
     }
     .expect("a child of the host's, in this process")
+}
+
+/// A park holds the last frame the band showed, and a hosted film's band is the host: the player's
+/// window is a child inside it and not a window of the desktop's, so a capture that went looking for
+/// one by pid would find nothing and the cover would be painted flat — the band this app fills with
+/// a colour rather than with the film (see `hold_video_window_frame`).
+#[test]
+fn a_hosted_park_holds_the_frame_the_host_is_showing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let drawn = 0x7FFF_FFFD;
+    film.drawn_in_the_host(drawn);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::pin_film_host().expect("the film's host");
+
+    // The band where the screen can be read, at a size of its own so that the frame says which
+    // window it was taken from.
+    unsafe {
+        let _ = MoveWindow(film.pin_hwnd, 100, 100, 320, 240, true);
+        let _ = SetWindowPos(host, HWND_TOP, 0, 0, 64, 48, SWP_NOZORDER | SWP_NOACTIVATE);
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+    }
+    forget_video_frame();
+
+    assert!(
+        hold_video_window_frame(),
+        "the frame a hosted film's park holds is the host's, which is where the picture is"
+    );
+    let held = held_video_frame();
+    let held = held.as_ref().expect("the frame the park holds");
+    assert_eq!(
+        (held.width, held.height),
+        (64, 48),
+        "read at the band the film is drawn in rather than at a box of the desktop's"
+    );
 }
 
 /// A film in the pin's own host is a child of the pin's window: it has no place in the desktop's
