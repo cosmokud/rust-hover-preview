@@ -346,8 +346,6 @@ pub fn run_preview_window() {
         // own, a film in its band, a page the engine draws in one — kept the same way and reset
         // with it (see `settle_pinned_press`).
         let mut pin_press_seen: u64 = 0;
-        let mut band_state_seen: Option<(u8, u8, u8, String)> = None;
-        let mut windows_seen = String::new();
         // Static-tick throttle state (see `STATIC_WAIT_MS`): whether the media on
         // screen was dynamic the last time it was fully looked at, when that look
         // was, and which generation it was for. A swap bumps `current_generation`,
@@ -3320,44 +3318,6 @@ pub fn run_preview_window() {
                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                         );
                     }
-                }
-            }
-
-            if pinned() {
-                let picture = crate::shell::explorer_hook::describe_windows([
-                    std::process::id(),
-                    webview_preview::browser_pid(),
-                    VIDEO_PID.load(Ordering::SeqCst),
-                ]);
-                if picture != windows_seen {
-                    crate::shell::explorer_hook::note_windows(&format!(
-                        "PINNED box {:?} shown {} band {} aot {}",
-                        pinned_window_box(),
-                        IsWindowVisible(hwnd).as_bool() as u8,
-                        window_holds_the_topmost_band(hwnd) as u8,
-                        pin_always_on_top() as u8,
-                    ));
-                    crate::shell::explorer_hook::note_windows(&picture);
-                    windows_seen = picture;
-                }
-            }
-
-            if pinned() {
-                let state = (
-                    pin_always_on_top() as u8,
-                    window_holds_the_topmost_band(hwnd) as u8,
-                    IsWindowVisible(hwnd).as_bool() as u8,
-                    crate::shell::explorer_hook::window_class_of(GetForegroundWindow()),
-                );
-                if band_state_seen.as_ref() != Some(&state) {
-                    crate::shell::explorer_hook::note_pin_click!(
-                        "BAND aot {} band {} shown {} fg {}",
-                        state.0,
-                        state.1,
-                        state.2,
-                        state.3,
-                    );
-                    band_state_seen = Some(state);
                 }
             }
 
