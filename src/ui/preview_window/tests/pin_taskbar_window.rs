@@ -1043,6 +1043,12 @@ fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
 
     register_the_stand_in_class();
     forget_the_stand_in();
+    // The film is FFmpeg's player's, which is the kind of film this test is about: a window of its
+    // own standing in the pin's band, so the player is the picture and the pin's window is the hole
+    // (see `mirror_source`).
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
 
     // The pin's own window, up: where a picture, a page, a card and a folder's listing are drawn.
     let pin_hwnd = unsafe {
@@ -1118,6 +1124,9 @@ fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
     }
     VIDEO_HWND.store(previous_video, Ordering::SeqCst);
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
     forget_the_stand_in();
     stand_pin(previous_pin);
 }

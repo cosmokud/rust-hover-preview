@@ -548,7 +548,9 @@ pub(super) fn mirror_source(kind: Option<MediaType>) -> Option<HWND> {
     let document = webview_preview::showing_hwnd();
     let preview = PREVIEW_HWND.load(Ordering::SeqCst);
 
-    if let Some(kind) = kind.filter(|kind| kind.draws_in_a_window_of_its_own()) {
+    if let Some(kind) = kind.filter(|kind| {
+        pinned_media_owner().is_some_and(|(path, _)| kind.draws_in_a_window_of_its_own(&path))
+    }) {
         let own = if kind.is_engine() { document } else { player };
         return on_the_screen(HWND(own as *mut _));
     }

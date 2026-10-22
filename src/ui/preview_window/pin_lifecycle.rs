@@ -1088,17 +1088,15 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
 ///
 /// Asked of the media in hand where it has a kind: what fills the pin's band is the kind's
 /// answer, and every kind this app draws the whole way stands in the pin's own window (see
-/// `MediaType::draws_in_a_window_of_its_own`). The two placeholder kinds — a spinner and the
-/// cross a failed file leaves — are not the file, so they ask the file's route instead, as a
-/// pin taken up with no kind at all does (see [`a_pin_of_this_file_stands_in_its_own_window`]).
+/// `MediaType::draws_in_a_window_of_its_own`). A film's answer there is its live route, so a pin
+/// shown a film of another route after the engine row changed is answered for the film it is
+/// showing now. The two placeholder kinds — a spinner and the cross a failed file leaves — are not
+/// the file, so they ask the file's route instead, as a pin taken up with no kind at all does (see
+/// [`a_pin_of_this_file_stands_in_its_own_window`]).
 pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: &Path) -> bool {
     match kind {
-        // A film mpv plays is drawn into a host this app owns under the pin's own window, so the
-        // pin is the pin's own; a film FFmpeg's player draws is that player's window behind the
-        // band, and keeps the preview's until its own ticket (see `pin_film_host`).
-        Some(MediaType::Video) => video_route(path) == VideoRoute::Mpv,
         Some(kind) if !matches!(kind, MediaType::Loading | MediaType::Unplayable) => {
-            !kind.draws_in_a_window_of_its_own()
+            !kind.draws_in_a_window_of_its_own(path)
         }
         _ => a_pin_of_this_file_stands_in_its_own_window(path),
     }
