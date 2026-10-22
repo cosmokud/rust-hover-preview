@@ -4,7 +4,8 @@
 //! **Why it is not the pin's window itself.** mpv's `--wid` fills the window it is given, and the
 //! pin's window is the chrome and the transport as well as the band; pointed at the pin, the film
 //! would be drawn over the caption. So the picture gets a window of its own at the band's client
-//! rectangle, and the pin keeps every other pixel (see `pin_film_host` in the ticket's prototype).
+//! rectangle, and the pin keeps every other pixel (see `band_in_the_window`, which is the box the
+//! host is given).
 //!
 //! **Why it is a child.** The film has to travel with the pin — on a move, on a resize, and with
 //! the window when it is hidden or put away — and a child does that in the compositor rather than
@@ -41,32 +42,33 @@ use super::*;
 /// window procedure is the pin's (see `pin_real_window`).
 const FILM_HOST_CLASS: windows::core::PCWSTR = w!("RustHoverPreviewPinFilmHost");
 
-/// The host of the pin that is up, and the player this app has attached to it.
-static PIN_FILM_HOST: AtomicIsize = AtomicIsize::new(0);
-static PIN_FILM_HOST_PLAYER: AtomicU32 = AtomicU32::new(0);
-static FILM_HOST_CLASS_REGISTERED: Once = Once::new();
-
-unsafe extern "system" fn film_host_proc(
+/// The default answer is the whole of what the host does: it draws nothing of its own and no press
+/// lands on it, because the picture is mpv's child (see the module doc). This bindings version
+/// exposes `DefWindowProcW` as a Rust-callable function, so the class still needs a system-ABI shim
+/// around it.
+unsafe extern "system" fn the_default_answer(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // Nothing of this window's is drawn by it and nothing of a press lands on it: the picture is
-    // mpv's child, and the host is a black rectangle behind it for the milliseconds before it
-    // appears. The default answer is the whole of what it does.
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
+/// The host of the pin that is up, and the player this app has attached to it.
+static PIN_FILM_HOST: AtomicIsize = AtomicIsize::new(0);
+static PIN_FILM_HOST_PLAYER: AtomicU32 = AtomicU32::new(0);
+static FILM_HOST_CLASS_REGISTERED: Once = Once::new();
+
 /// The host the pin is showing its film through, or nothing while there is none.
-pub(super) fn pin_film_host() -> Option<HWND> {
+pub(super) fn film_host() -> Option<HWND> {
     let host = PIN_FILM_HOST.load(Ordering::SeqCst);
     (host != 0).then(|| HWND(host as *mut _))
 }
 
 /// The player this app has attached to the host, recorded beside it so that a window of mpv's that
 /// is not the pin's — a hover's, which is a window of the desktop — is never mistaken for it.
-pub(super) fn hosted_player() -> Option<u32> {
+pub(super) fn hosted_player_pid() -> Option<u32> {
     let player = PIN_FILM_HOST_PLAYER.load(Ordering::SeqCst);
     (player != 0).then_some(player)
 }
@@ -82,7 +84,7 @@ pub(super) fn note_hosted_player(pid: u32) {
 /// stands in a window of its own. `None` is every other launch: a hover's film, FFmpeg's player,
 /// and the media engine's own frame.
 pub(super) fn host_for_the_pins_film(path: &Path) -> Option<HWND> {
-    the_film_is_shown_in_a_host(path).then(pin_film_host).flatten()
+    the_film_is_shown_in_a_host(path).then(film_host).flatten()
 }
 
 /// Whether this file is shown in a host this app owns: a film mpv plays, pinned in a window of the
@@ -92,31 +94,27 @@ fn the_film_is_shown_in_a_host(path: &Path) -> bool {
     pin_is_its_own_window() && video_route(path) == VideoRoute::Mpv
 }
 
-/// Whether the window this app holds is the one the current player is drawing into — the question
-/// every road that used to find a top-level mpv window by pid asks instead (see
+/// Whether the player this app is holding is the one it began into the host — the question every
+/// road that used to find a top-level mpv window by pid asks instead (see
 /// `ensure_video_window_topmost`, `hold_video_window_frame`, `settle_pinned_mpv_ontop`).
-pub(super) fn host_holds_the_pinned_film() -> bool {
+///
+/// It says the pairing and not that the film is drawing: a player begun into the host has not put
+/// a child of its own there for a moment or more, and that wait is `the_hosted_player_is_drawing`.
+pub(super) fn the_pinned_player_was_begun_in_the_host() -> bool {
     let pid = VIDEO_PID.load(Ordering::SeqCst);
-    pid != 0 && pin_film_host().is_some() && hosted_player() == Some(pid)
+    pid != 0 && film_host().is_some() && hosted_player_pid() == Some(pid)
 }
 
-/// Whether the player this app last began has put a child of its own under the host, which is what
-/// a film's window arriving *is* for a player that has no window of the desktop's.
+/// Whether this player has put a child of its own under the host, which is what a film's window
+/// arriving *is* for a player that has no window of the desktop's.
 ///
 /// **It is asked of the process, not of the window alone**, because the host carries the last
 /// player's child for as long as that process is alive: a file step begins a new player into the
 /// same host, and the older child would answer "a film is drawing" for a film about to be killed.
 /// A child's owning process is the player that made it — mpv's window is created by mpv's own
 /// process under `--wid` — so the two facts are one question (see `GetWindowThreadProcessId`).
-pub(super) fn the_pinned_film_is_drawing() -> bool {
-    the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst))
-}
-
-/// Whether this player has put a child of its own under the host, which is what a hosted film's
-/// window arriving *is* for a player that has no window of the desktop's (see
-/// `the_pinned_film_is_drawing`).
 pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
-    pid != 0 && hosted_player() == Some(pid) && host_has_a_child_of(pid)
+    pid != 0 && hosted_player_pid() == Some(pid) && host_has_a_child_of(pid)
 }
 
 /// Whether this player has a window on screen: a window of the desktop's of its own, or the child
@@ -128,7 +126,7 @@ pub(super) fn the_players_window_is_up(pid: u32) -> bool {
 }
 
 fn host_has_a_child_of(pid: u32) -> bool {
-    let Some(host) = pin_film_host() else {
+    let Some(host) = film_host() else {
         return false;
     };
 
@@ -173,8 +171,7 @@ fn band_in_the_window(content: ScreenRegion) -> (i32, i32, i32, i32) {
 /// child is there (see `ensure_video_window_topmost`), and the park's settle that shows it again
 /// after a park.
 pub(super) unsafe fn take_up_the_pin_film_host() {
-    let Some(path) = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.path.clone()))
-    else {
+    let Some(path) = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.path.clone())) else {
         take_down_the_pin_film_host();
         return;
     };
@@ -188,7 +185,7 @@ pub(super) unsafe fn take_up_the_pin_film_host() {
         return;
     };
 
-    let host = match pin_film_host() {
+    let host = match film_host() {
         Some(host) => host,
         None => {
             let Some(parent) = pin_real_window::real_pin_window() else {
@@ -204,14 +201,13 @@ pub(super) unsafe fn take_up_the_pin_film_host() {
     let (x, y, width, height) = band_in_the_window(content);
     let _ = SetWindowPos(
         host,
-        HWND_TOP,
+        HWND::default(),
         x,
         y,
         width,
         height,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
-    let _ = EnableWindow(host, false);
 
     // **A hosted player has no window of the desktop's to be found by pid**, so any handle still
     // published for an older player is not this film's picture and must not be read as one (see
@@ -219,42 +215,41 @@ pub(super) unsafe fn take_up_the_pin_film_host() {
     // is a top-level window until the relaunch below it takes the film into the host, and the
     // park that relaunch raises goes looking for that window (see
     // `begin_the_adopted_film_in_the_host`).
-    if host_holds_the_pinned_film() {
+    if the_pinned_player_was_begun_in_the_host() {
         VIDEO_HWND.store(0, Ordering::SeqCst);
     }
 
     // Only a host the player is already drawing in is shown: a fresh one is a black rectangle over
     // the band, and what the band showed a moment ago is the film the hover was playing (see the
     // module note on `create`).
-    if the_pinned_film_is_drawing() {
+    if the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
         let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
     }
 }
 
 /// Put the host at the pin's band, without showing it: the band-change road, where the window is
 /// either already up or is the park's to hand back (see `ensure_pinned_sibling_box`).
-pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) -> bool {
-    let Some(host) = pin_film_host() else {
-        return false;
+pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
+    let Some(host) = film_host() else {
+        return;
     };
 
     let (x, y, width, height) = band_in_the_window(content);
-    SetWindowPos(
+    let _ = SetWindowPos(
         host,
-        HWND_TOP,
+        HWND::default(),
         x,
         y,
         width,
         height,
         SWP_NOZORDER | SWP_NOACTIVATE,
-    )
-    .is_ok()
+    );
 }
 
 /// Hide or show the host for a park, at the box it already has: a park hides the window behind the
 /// band, and the pin paints its held frame in its place (see `park_pinned_player_inner`).
 pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
-    if let Some(host) = pin_film_host() {
+    if let Some(host) = film_host() {
         let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
     }
 }
@@ -262,7 +257,7 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
 /// Destroy the host and forget the player it held: the pin it was a child of is ending, and a
 /// window left in the pin's window would stand in the next pin's band as a black rectangle.
 pub(super) unsafe fn take_down_the_pin_film_host() {
-    if let Some(host) = pin_film_host() {
+    if let Some(host) = film_host() {
         let _ = DestroyWindow(host);
     }
     PIN_FILM_HOST.store(0, Ordering::SeqCst);
@@ -274,7 +269,7 @@ unsafe fn create(parent: HWND) -> Option<HWND> {
         let hinstance = GetModuleHandleW(None).expect("the module's own handle");
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            lpfnWndProc: Some(film_host_proc),
+            lpfnWndProc: Some(the_default_answer),
             hInstance: hinstance.into(),
             hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
             lpszClassName: FILM_HOST_CLASS,

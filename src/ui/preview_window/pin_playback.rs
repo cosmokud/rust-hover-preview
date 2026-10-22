@@ -836,7 +836,7 @@ pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
 /// bar says. It raises the cover the other relaunches raise — the last frame of the player being
 /// replaced, read before it is hidden — so the band is not the desktop for the length of a start,
 /// and the settle hands it back when the hosted player's own child is there (see
-/// `park_pinned_player_for_step` and `pin_film_host::the_pinned_film_is_drawing`).
+/// `park_pinned_player_for_step` and `pin_film_host::the_hosted_player_is_drawing`).
 ///
 /// The player being replaced is retired by that road, not ended here: its window is the picture on
 /// screen until the hosted one has a child of its own (see `retire_replaced_player`).
@@ -850,7 +850,7 @@ pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
     };
 
     if pin_film_host::host_for_the_pins_film(&path).is_none()
-        || pin_film_host::host_holds_the_pinned_film()
+        || pin_film_host::the_pinned_player_was_begun_in_the_host()
         || VIDEO_PID.load(Ordering::SeqCst) == 0
     {
         return false;

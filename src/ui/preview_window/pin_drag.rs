@@ -859,7 +859,7 @@ pub(super) fn set_pinned_player_window_visible(visible: bool) {
     // hidden and the unpark the same window back — and it is asked of the pairing, because a pin
     // that took up a hover's top-level player has a host standing empty until a relaunch fills it
     // (see `pin_film_host`).
-    if pin_film_host::host_holds_the_pinned_film() {
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
         // takes any window and reports rather than faults.
         unsafe { pin_film_host::set_the_pin_film_host_visible(visible) };

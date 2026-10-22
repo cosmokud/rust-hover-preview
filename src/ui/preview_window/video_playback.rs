@@ -1056,7 +1056,7 @@ pub(super) unsafe fn place_player_window(
     // child of the pin's and the host's box is the band (see `ensure_pinned_sibling_box`), so there
     // is no place of the desktop's for this road to put it in and nothing for the pin to be raised
     // back over (see `pin_film_host`).
-    if pin_film_host::host_holds_the_pinned_film() {
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         return;
     }
 
@@ -1188,7 +1188,7 @@ pub(super) fn settle_pinned_mpv_ontop() {
     // **A film in the pin's own host has no band of the desktop's to be told about.** Its window is a
     // child of the pin's, so the pin is the order it stands in and the flag `--ontop` would hold is
     // not a window the user can see over anything (see `mpv_launch_host`).
-    if pin_film_host::host_holds_the_pinned_film() {
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         return;
     }
 
@@ -1253,7 +1253,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // not the host's. It is asked of the pairing rather than of the host alone: a pin that took up
     // a hover's top-level player has a host standing empty until a relaunch fills it, and that
     // player still has a window this road places (see `pin_film_host`).
-    if pin_film_host::host_holds_the_pinned_film() {
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         // The band is owed its picture back, and the picture is the host — but only once the player
         // has put a child of its own in it: a host shown empty is a black rectangle over the band,
         // which is the film the hover was playing, blanked (see `pin_film_host::create`).
@@ -1261,7 +1261,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         // **Where the host stands is not this road's to say**, and the box it was handed is a
         // top-level player's rather than the band's: the band's box is the pin's, and it is given
         // by the roads that read it (see `ensure_pinned_sibling_box`).
-        if pin_film_host::the_pinned_film_is_drawing() {
+        if pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
             // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
             // takes any window and reports rather than faults.
             unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
