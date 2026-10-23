@@ -394,7 +394,15 @@ pub(super) fn refresh_pin_chrome(
         // belong to the pin-mode frame, and that frame is not on screen yet. The handover shows
         // no chrome either — it is the pin's first frame, not an arrival, and only the pointer
         // asks a strip back (see `pin_film_host::settle_pin_handover`).
-        let (caption, bar) = if pin_film_host::pin_handover_armed() {
+        //
+        // A file step's held frame is alone on the band while the new film loads. The pointer
+        // that asked for the step is still on the caption, so hover would keep the strips up;
+        // a bar over that frame without the film is worse than no chrome at all. The pointer
+        // asks the strips back on the tick after the park settles. The pin is asked for its own
+        // parked flag because this already holds the pin's lock (see `pin_player_is_parked`,
+        // `park_record_owner`).
+        let step_park = pin.parked && park_record_owner() == Some(ParkArm::Step);
+        let (caption, bar) = if pin_film_host::pin_handover_armed() || step_park {
             (false, false)
         } else {
             // The arrival window is spent the moment it closes, and there is no bringing it back:
