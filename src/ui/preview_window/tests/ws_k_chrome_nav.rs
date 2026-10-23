@@ -1134,6 +1134,116 @@ fn a_step_onto_a_video_parks_the_outgoing_frame() {
     restore(previous_pin, previous_pid, previous_media);
 }
 
+/// K2 STEP: a step asked for from the caption leaves the pointer on the caption, so the chrome
+/// must be held hidden by the step's own park rather than by where the hand happens to be. The
+/// held frame is alone on the band while the new film loads, and the pointer asks the caption
+/// back once that park has settled and the new film is in the band.
+#[test]
+fn a_step_from_the_caption_hides_the_chrome_over_the_held_frame_and_the_hover_asks_it_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 800, 320);
+    let mut pin = wide_banded_video_pin(content, 30.0);
+    pin.hides_chrome = true;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    take_pin_command();
+
+    // The step is the caption's own: a press arms the button and a release on it asks the walk
+    // to move, with the pointer left exactly where the hand clicked.
+    let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on Next is the caption's to act on"
+    );
+    let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
+    assert!(
+        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "and its release asks the step"
+    );
+    assert_eq!(take_pin_command(), Some(PinCommand::Next));
+
+    assert!(
+        cover_step_swap_for_video(true),
+        "the step raises the cover it hands to the incoming player"
+    );
+    assert!(
+        pin_player_is_parked() && park_record_owner() == Some(ParkArm::Step),
+        "with the step's own park holding the outgoing frame"
+    );
+
+    // The pointer is still on the caption, and the chrome would otherwise be shown by hover.
+    let box_ = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .expect("a pin up");
+    let cursor = Some((box_.0 + x, box_.1 + y));
+    with_pin(|pin| pin.chrome = PinChrome::always());
+    let hidden = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(pin, Instant::now(), cursor))
+    });
+    assert_eq!(
+        hidden,
+        Some(true),
+        "the step's park takes the chrome down over the held frame"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((false, false)),
+        "with the pointer still on the caption it clicked"
+    );
+
+    // The new film draws and the park hands the band over; the same pointer asks the caption back.
+    fake_end_relaunch(103, 0.0, false);
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "the incoming player's window settles the step's park"
+    );
+    assert!(!pin_player_is_parked(), "and the held frame is gone");
+
+    let shown = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(pin, Instant::now(), cursor))
+    });
+    assert_eq!(
+        shown,
+        Some(true),
+        "the pointer asks the caption back once the film is in the band"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((true, false)),
+        "the caption is back over the new film, with the bar left to its own end of the pin"
+    );
+
+    // The bar's end of the pin asks its own strip back the same way, now that the step's gate is
+    // gone for both strips rather than only for the one the hand clicked.
+    let bar_cursor = Some((box_.0 + x, box_.3 - 1));
+    let bar_shown = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(pin, Instant::now(), bar_cursor))
+    });
+    assert_eq!(
+        bar_shown,
+        Some(true),
+        "the bar comes back under the hand too"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((false, true)),
+        "and the caption goes away again at the other end of the pin"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
 /// K4 COVER: a file that paints itself is not covered, and a cover standing over
 /// one is given up: there is no player coming to be handed this band, so a
 /// frozen film left standing over a picture is worse than the hole it hides.
