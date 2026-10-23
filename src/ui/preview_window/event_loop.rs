@@ -1012,7 +1012,10 @@ pub fn run_preview_window() {
                         // show it at the hover's box once the player is drawing, so the wait ends
                         // on the film rather than on the desktop (see `hover_film_host`).
                         if start.hosted {
-                            hover_film_host::reveal_the_hover_film_host(start.pid, video_pos);
+                            hover_film_host::reveal_the_hover_film_host(
+                                start.pid,
+                                hover_film_host::the_hover_box_as_a_region(video_pos),
+                            );
                         }
 
                         let _ = ShowWindow(hwnd, SW_HIDE);

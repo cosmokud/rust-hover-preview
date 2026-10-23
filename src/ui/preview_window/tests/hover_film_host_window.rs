@@ -285,6 +285,99 @@ fn the_hover_host_follows_the_box_and_answers_for_the_players_window() {
     );
 }
 
+/// The loop keeps a hover's video place as `(x, y, width, height)` and the host it reveals is placed
+/// at a region: revealed from the loop's own box, the host ends at `(x, y, x + w, y + h)` rather than
+/// at the box's own numbers, which is the wrong size the reveal used to put up for a frame.
+#[test]
+fn the_loops_hover_box_reveals_the_host_at_the_hovers_own_size() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _stand = HoverHostStand::new(true);
+    let pid = unsafe { GetCurrentProcessId() };
+    let path = a_film();
+
+    let box_ = (NOWHERE, NOWHERE + 40, 320, 180);
+    let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 1, 1)) }
+        .expect("the hover's host");
+    hover_film_host::note_hover_film_host_player(pid, &path);
+    let _child = unsafe { a_child_of_the_host(host) };
+
+    unsafe {
+        hover_film_host::reveal_the_hover_film_host(
+            pid,
+            hover_film_host::the_hover_box_as_a_region(box_),
+        )
+    };
+
+    assert_eq!(
+        window_rect(host),
+        (box_.0, box_.1, box_.0 + box_.2, box_.1 + box_.3),
+        "the first reveal is the hover's own size and aspect"
+    );
+    assert_ne!(
+        window_rect(host),
+        (box_.0, box_.1, box_.2, box_.3),
+        "and not the box's numbers read as a region, which is the wrong size"
+    );
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host is up once the player is drawing"
+    );
+}
+
+/// A hosted hover's visible surface is the hover's own host, and a pin key over it takes that box up:
+/// the preview's window is hidden behind the host and a hosted player has no window of the desktop's,
+/// so neither of the two the rect used to know about is on screen.
+#[test]
+fn a_visible_hover_host_is_the_rect_a_pin_takes_up() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _stand = HoverHostStand::new(true);
+    let pid = unsafe { GetCurrentProcessId() };
+    let path = a_film();
+
+    let box_ = (NOWHERE, NOWHERE + 80, 320, 180);
+    let host = unsafe {
+        hover_film_host::take_up_the_hover_film_host(hover_film_host::the_hover_box_as_a_region(box_))
+    }
+    .expect("the hover's host");
+    hover_film_host::note_hover_film_host_player(pid, &path);
+    let _child = unsafe { a_child_of_the_host(host) };
+    VIDEO_PID.store(pid, Ordering::SeqCst);
+    VIDEO_HWND.store(0, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video_media());
+    }
+
+    unsafe {
+        hover_film_host::reveal_the_hover_film_host(
+            pid,
+            hover_film_host::the_hover_box_as_a_region(box_),
+        )
+    };
+    let host_rect = window_rect(host);
+
+    assert_eq!(
+        preview_screen_rect(),
+        Some(host_rect),
+        "the hover's host is the preview surface on screen"
+    );
+
+    let show = PreviewMessage::Show(path.clone(), 0, 0, None);
+    match pin_what_is_on_screen(&Some(show), None) {
+        Some(PreviewMessage::Pin {
+            path: pinned,
+            rect,
+        }) => {
+            assert_eq!(pinned, path, "the pin takes up the file that is on screen");
+            assert_eq!(rect, host_rect, "and the box the hover's host is in");
+        }
+        _ => panic!("the pin key takes the hover's box up rather than finding nothing"),
+    }
+}
+
 /// Teardown is owner-aware: ending another player leaves the hover's host standing, and only the
 /// player it holds takes it down. A new player replaces the old one in the same host rather than
 /// making a second.

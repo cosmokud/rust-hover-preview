@@ -182,6 +182,13 @@ pub(super) unsafe fn set_the_hover_film_host_visible(visible: bool) {
     }
 }
 
+/// The hover's box as the region its host is placed at: the loop keeps a video's place as
+/// `(x, y, width, height)` and every window placed from it takes `(left, top, right, bottom)`.
+pub(super) fn the_hover_box_as_a_region(box_: (i32, i32, i32, i32)) -> ScreenRegion {
+    let (x, y, width, height) = box_;
+    (x, y, x + width, y + height)
+}
+
 /// Put the host at `rect` and show it, where this player is the one begun into it and has a child
 /// of its own drawing: the hover's first real frame, on the tick the start wait ends.
 pub(super) unsafe fn reveal_the_hover_film_host(pid: u32, rect: ScreenRegion) {

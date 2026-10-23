@@ -626,6 +626,12 @@ pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
             pin_real_window::real_pin_window()
                 .map(|hwnd| hwnd.0 as isize)
                 .unwrap_or(0),
+            // A hosted hover's picture is the hover's own host: `PREVIEW_HWND` is hidden behind it
+            // and a hosted player has no window of the desktop's at all, yet the host is the visible
+            // preview surface, in the hover's box and where a pin takes it up (see `hover_film_host`).
+            hover_film_host::hover_film_host()
+                .map(|hwnd| hwnd.0 as isize)
+                .unwrap_or(0),
             PREVIEW_HWND.load(Ordering::SeqCst),
             VIDEO_HWND.load(Ordering::SeqCst),
         ];
