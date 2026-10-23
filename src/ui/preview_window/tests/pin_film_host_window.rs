@@ -2,6 +2,10 @@
 //! the band the picture is seen through, hidden for a park and shown again after it, and going down
 //! with the pin it was made for.
 //!
+//! Beside it, the chrome it buries: the caption and the transport are painted into the pin's own
+//! layered surface, which a child composites over, so the strips of chrome live in windows of
+//! their own that stand over the host (see `pin_chrome_strips`).
+//!
 //! Every test here stands a pin in a window of its own (see `pin_real_window`) and a film mpv is
 //! playing, because the host only exists for that pair: a film FFmpeg's player draws is a window of
 //! its own until its ticket, and every other kind is this app's own frame.
@@ -9,8 +13,9 @@
 use super::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, GetParent, MoveWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, SWP_NOACTIVATE,
-    SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WS_CHILD, WS_POPUP, WS_VISIBLE,
+    DestroyWindow, GetParent, MoveWindow, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOP,
+    SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WS_CHILD, WS_DISABLED,
+    WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -942,5 +947,282 @@ fn a_pinned_mpv_film_is_begun_into_the_pins_film_host() {
     assert!(
         mpv_launch_host(path).is_none(),
         "a film whose pin stands in the preview's window keeps a window of the desktop's"
+    );
+}
+
+/// The geometry the strips of chrome are carried in, read the way the paint and the placement read
+/// it: the window's own size, and the two strips' heights as the pin settled them.
+fn the_strips_geometry() -> (i32, i32, i32, i32) {
+    pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                let (width, height) = pin.window_size();
+                (
+                    width,
+                    height,
+                    pin.caption,
+                    pinned_transport_height(pin.dpi, pin.transport_bar),
+                )
+            })
+        })
+        .expect("the pin the strips are carried for")
+}
+
+/// The family of the pin's own window, walked upward from `host`: every sibling above it, nearest
+/// first. The strips are siblings of the host in this family; the film itself is a child of the
+/// host's and has no place in it.
+unsafe fn the_family_above(host: HWND) -> Vec<isize> {
+    let mut above = Vec::new();
+    let mut current = unsafe { GetWindow(host, GW_HWNDPREV) }.ok();
+    while let Some(hwnd) = current {
+        above.push(hwnd.0 as isize);
+        current = unsafe { GetWindow(hwnd, GW_HWNDPREV) }.ok();
+    }
+    above
+}
+
+/// The film's chrome is drawn over its picture (see `band_in_the_window`), and a child composites
+/// over the layered surface its parent paints — so mpv's film stood over the strips the moment it
+/// began to draw, painted and interactive and invisible. The chrome therefore has windows of its
+/// own, layered children of the pin's window made for the host's lifetime, which composite over
+/// the host carrying the very pixels the pin paints into its own rows (see `pin_chrome_strips`).
+#[test]
+fn the_chrome_of_a_hosted_film_stands_over_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+    let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
+
+    for strip in [caption, transport] {
+        assert_eq!(
+            unsafe { GetParent(strip) }.ok(),
+            Some(film.pin_hwnd),
+            "the strips are children of the pin's own window, like the host they stand over"
+        );
+        assert!(
+            !unsafe { IsWindowEnabled(strip) }.as_bool(),
+            "a disabled strip is skipped by `WindowFromPoint`, which is what keeps a press on the \
+             chrome a press on the pin"
+        );
+        assert_ne!(
+            unsafe { GetWindowLongPtrW(strip, GWL_EXSTYLE) } & WS_EX_LAYERED.0 as isize,
+            0,
+            "per-pixel alpha is what a strip is composited by"
+        );
+        assert_ne!(
+            unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_DISABLED.0 as isize,
+            0,
+            "and it is disabled by style as well as by answer"
+        );
+        assert!(
+            !unsafe { IsWindowVisible(strip) }.as_bool(),
+            "a strip comes into the world off the screen, like the host it belongs to"
+        );
+    }
+
+    // Above the host, and nothing else of the pin's between them: the order is set when the strips
+    // are made, and the host is placed with `SWP_NOZORDER` wherever the band goes after that, so
+    // the order is the one that sticks.
+    assert_eq!(
+        unsafe { the_family_above(host) },
+        vec![caption.0 as isize, transport.0 as isize],
+        "the strips stand over the host, nearest above it"
+    );
+}
+
+/// The strips stand where the chrome is painted: the caption across the window's first rows and
+/// the transport across its last, the same rows `render_pinned_preview_at` paints them into (see
+/// `pinned_paint`).
+#[test]
+fn the_chrome_strips_of_a_hosted_film_stand_where_the_chrome_is_painted() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let box_ = film.box_;
+    let (width, height, caption_height, transport_height) = the_strips_geometry();
+
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+    assert_eq!(
+        unsafe { window_rect(caption) },
+        (
+            box_.0,
+            box_.1,
+            box_.0 + width,
+            box_.1 + caption_height.max(1)
+        ),
+        "the caption's strip is the window's first rows, which is where the caption is painted"
+    );
+
+    let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
+    assert_eq!(
+        unsafe { window_rect(transport) },
+        (
+            box_.0,
+            box_.1 + height - transport_height.max(1),
+            box_.0 + width,
+            box_.1 + height
+        ),
+        "the transport's strip is the window's last rows, which is where the bar is painted"
+    );
+}
+
+/// The strips belong to the band, and the band is what a resize changes: they follow the pin's box
+/// wherever the loop is told it, at the same point the host is re-placed at (see
+/// `place_the_pin_film_host`).
+#[test]
+fn the_chrome_strips_of_a_hosted_film_follow_the_band() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    let wider = (
+        film.box_.0,
+        film.box_.1,
+        film.box_.0 + 400,
+        film.box_.1 + 300,
+    );
+    with_pin(|pin| pin.content = wider);
+    place_pinned_siblings();
+    let (_, _, caption_height, transport_height) = the_strips_geometry();
+
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+    assert_eq!(
+        unsafe { window_rect(caption) },
+        (wider.0, wider.1, wider.2, wider.1 + caption_height.max(1)),
+        "the caption's strip is at the head of the band the pin now shows its film through"
+    );
+
+    let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
+    assert_eq!(
+        unsafe { window_rect(transport) },
+        (wider.0, wider.3 - transport_height.max(1), wider.2, wider.3),
+        "and the transport's strip is at its foot"
+    );
+}
+
+/// The strips are the host's, not the film's or the chrome's: they are made when the host is, they
+/// go down when it does, and they are on the screen for exactly as long as the host is — a park
+/// hides the host, and the strips hide with it (see `pin_chrome_strips`).
+#[test]
+fn the_chrome_strips_of_a_hosted_film_go_with_the_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+
+    assert!(
+        pin_chrome_strips::caption_strip().is_none()
+            && pin_chrome_strips::transport_strip().is_none(),
+        "a pin with no film has no host, and no strips of chrome to stand over it"
+    );
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let caption = pin_chrome_strips::caption_strip().expect("the strips are made with the host");
+    let transport = pin_chrome_strips::transport_strip().expect("both of them");
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    assert!(
+        !unsafe { IsWindow(caption) }.as_bool() && !unsafe { IsWindow(transport) }.as_bool(),
+        "the strips go down with the host rather than standing in the next pin's band"
+    );
+    assert!(
+        pin_chrome_strips::caption_strip().is_none()
+            && pin_chrome_strips::transport_strip().is_none(),
+        "with the handles forgotten as well as the windows destroyed"
+    );
+
+    // And the on-screen half of the same question: the strips are up when the host is, and down
+    // when it is — a park is the host hidden, so it is the chrome with it (see
+    // `set_the_pin_film_host_visible`).
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let caption = pin_chrome_strips::caption_strip().expect("the strips are made with the host");
+    let _child = unsafe { a_child_of_the_host(host) };
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert!(
+        unsafe { IsWindowVisible(caption) }.as_bool(),
+        "a film that is not parked is a film the chrome stands over"
+    );
+
+    hide_pinned_player_window();
+    let transport = pin_chrome_strips::transport_strip().expect("both of them");
+    assert!(
+        !unsafe { IsWindowVisible(caption) }.as_bool()
+            && !unsafe { IsWindowVisible(transport) }.as_bool(),
+        "a park takes the chrome off the screen with the picture"
+    );
+
+    show_pinned_player_window();
+    assert!(
+        unsafe { IsWindowVisible(caption) }.as_bool(),
+        "and the unpark is the chrome back over the film"
+    );
+}
+
+/// The strips follow the chrome's own state, apart: the caption comes and goes with
+/// `pin.chrome.caption` and the transport with `pin.chrome.bar`, on the clock the pin's strips are
+/// already on — a strip the pin is not painting is a strip off the screen (see `PinChrome`).
+#[test]
+fn the_chrome_strips_of_a_hosted_film_carry_the_chrome_state() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+    let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
+    let _child = unsafe { a_child_of_the_host(host) };
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert!(
+        unsafe { IsWindowVisible(caption) }.as_bool()
+            && unsafe { IsWindowVisible(transport) }.as_bool(),
+        "the chrome the pin shows the strips carry"
+    );
+
+    // The caption asked away, on the repaint the ask is answered by: the pin paints no caption,
+    // and the strip that carried it goes off the screen with it.
+    with_pin(|pin| pin.chrome.caption = false);
+    unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+    assert!(
+        !unsafe { IsWindowVisible(caption) }.as_bool(),
+        "a caption the pin is not painting is a caption off the screen"
+    );
+    assert!(
+        unsafe { IsWindowVisible(transport) }.as_bool(),
+        "and the transport, asked for still, stays"
+    );
+
+    // The transport the same way, and both back together.
+    with_pin(|pin| {
+        pin.chrome.caption = true;
+        pin.chrome.bar = false;
+    });
+    unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+    assert!(
+        !unsafe { IsWindowVisible(transport) }.as_bool(),
+        "a bar the pin is not painting is a bar off the screen"
+    );
+
+    with_pin(|pin| pin.chrome.bar = true);
+    unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+    assert!(
+        unsafe { IsWindowVisible(caption) }.as_bool()
+            && unsafe { IsWindowVisible(transport) }.as_bool(),
+        "and what the chrome asks for again, the strips carry again"
     );
 }

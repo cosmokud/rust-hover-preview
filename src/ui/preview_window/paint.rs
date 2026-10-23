@@ -566,6 +566,11 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         );
     }
 
+    // And the strips a hosted film's chrome stands over it in, which carry what this paint just
+    // put into those same rows of its own surface (see `pin_chrome_strips`): asked here because
+    // the chrome's own show and hide is answered on this paint everywhere else (see `PinChrome`).
+    pin_chrome_strips::sync_the_chrome_strips();
+
     // As in `render_layered_preview_at`: the hold is the tick's to publish, because a publish
     // per painted frame is what made the 500 ms throttle suppress nothing.
 }
