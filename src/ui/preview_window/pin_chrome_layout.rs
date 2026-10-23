@@ -327,6 +327,17 @@ impl PinChrome {
             until: None,
         }
     }
+
+    /// The chrome of a kind that hides it after a step: neither strip showing, and no arrival
+    /// window armed — what the swap's cover shows under, until the pointer asks for a strip back
+    /// (see `take_up_pinned_window`).
+    pub(super) fn hidden() -> Self {
+        Self {
+            caption: false,
+            bar: false,
+            until: None,
+        }
+    }
 }
 
 /// Ask which strips of a pinned window's chrome the pointer is calling for, answering whether
