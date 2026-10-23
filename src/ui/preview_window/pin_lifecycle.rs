@@ -1216,6 +1216,28 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         let _ = MoveWindow(hwnd, window.0, window.1, width, height, false);
     }
 
+    // **The film's window goes where the band it is seen through went — before the paint and the
+    // showing, not after.** A pin standing in a window of its own gets a host to put a pinned
+    // mpv's picture in, at the band this window is about to be painted around; a pin standing in
+    // the preview's has no such band, because the film it shows is a window of FFmpeg's player
+    // and it is placed from the outside (see `pin_film_host` and `ensure_video_window_topmost`).
+    // A host left by a pin that has just left this window is taken down here rather than waiting
+    // for the hide that ends the pin: the file being installed may not be a film at all.
+    //
+    // **And a film the pin took up from a hover is begun again in that host**, rather than left
+    // drawing in the top-level window the hover gave it: the relaunch raises its cover — the held
+    // frame captured while the hover is still up, painted into the bitmap — so the paint below
+    // carries the cover and the window appears with its bars over that frame rather than over the
+    // desktop between them (see `begin_the_adopted_film_in_the_host`).
+    unsafe {
+        if pin_is_its_own_window() {
+            pin_film_host::take_up_the_pin_film_host();
+            begin_the_adopted_film_in_the_host();
+        } else {
+            pin_film_host::take_down_the_pin_film_host();
+        }
+    }
+
     render_pinned_preview_at(hwnd, window.0, window.1);
     // Where the pin is owed: the topmost band for a pin that is Always On Top or one that owes the
     // front while it follows the listing (see `pin_holds_the_front`), and the ordinary one for one
@@ -1269,6 +1291,10 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    // Traced for the take-up that must cover before it shows: a pin taken up on a hover's film
+    // captures the held frame and paints the cover before this line, so the bars appear over
+    // that frame and never over the desktop between them (see `begin_the_adopted_film_in_the_host`).
+    trace_park_step("show");
 
     // **And now the hover goes**, painted, shown and settled: from here the pin is what stands in the
     // box, and the window that stood in for it while it was only a hover comes down with nothing left
@@ -1283,27 +1309,6 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
 
     if !pin_always_on_top() {
         show_pin_taskbar();
-    }
-
-    // **The film's window goes where the band it is seen through went.** A pin standing in a
-    // window of its own gets a host to put a pinned mpv's picture in, at the band this window was
-    // just painted around; a pin standing in the preview's has no such band, because the film it
-    // shows is a window of FFmpeg's player and it is placed from the outside (see `pin_film_host`
-    // and `ensure_video_window_topmost`). A host left by a pin that has just left this window is
-    // taken down here rather than waiting for the hide that ends the pin: the file being installed
-    // may not be a film at all.
-    //
-    // **And a film the pin took up from a hover is begun again in that host**, rather than left
-    // drawing in the top-level window the hover gave it: the pin has just painted the band it is
-    // seen through, and this is the moment the picture belongs in it (see
-    // `begin_the_adopted_film_in_the_host`).
-    unsafe {
-        if pin_is_its_own_window() {
-            pin_film_host::take_up_the_pin_film_host();
-            begin_the_adopted_film_in_the_host();
-        } else {
-            pin_film_host::take_down_the_pin_film_host();
-        }
     }
 
     // What the hand's blink would be measured as, where the trace is asked for: the whole road from the

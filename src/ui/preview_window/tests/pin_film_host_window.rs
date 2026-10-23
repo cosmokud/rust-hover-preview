@@ -1537,3 +1537,66 @@ fn a_pointer_over_a_window_covering_the_pin_shows_no_chrome() {
     );
     assert!(!bar, "and the bar stays hidden under the covering window");
 }
+
+/// A pin taken up on a hover's film shows its bars over the held frame, never over the desktop:
+/// the adopted player's cover — the frame captured while the hover is still up, painted into
+/// the bitmap — stands before the window is shown (see `show_pinned_window`).
+#[test]
+fn a_pin_taken_up_on_a_hover_shows_its_bars_over_the_held_frame() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    // Taken up from a hover: the film is the hover's player's, drawing in a window of the
+    // desktop's rather than in the host's, so the take-up relaunches it into the host under a
+    // cover (see `begin_the_adopted_film_in_the_host`).
+    film.taken_up_from_a_hover(101);
+    // A first pin, whose arrival window is open: the bars show over whatever the band holds.
+    with_pin(|pin| pin.chrome = PinChrome::on_arrival(Instant::now()));
+    // The frame a real park would have taken off the desktop is stood in for it: there is no
+    // player of this app's on the machine these run on, and the capture answers false rather
+    // than writing a blank frame over a good one (see `hold_video_window_frame`).
+    let red = [0u8, 0, 255, 255].repeat(64);
+    stand_video_frame_for_a_test(red, 8, 8);
+    forget_pin_park_swap();
+    clear_park_trace();
+    clear_pending_pinned_relaunch();
+    clear_restart_count();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    // The cover before the showing: the capture, its paint into the bitmap, and the player's
+    // window put away all precede the window appearing, so the band it appears with is the held
+    // frame rather than the desktop between the bars.
+    assert_eq!(
+        park_trace(),
+        vec!["capture", "paint", "hide", "show"],
+        "the take-up captures the held frame and paints the cover before showing the pin"
+    );
+    assert_eq!(
+        restart_count(),
+        1,
+        "and the adopted film is still relaunched into the host behind that cover"
+    );
+    assert!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.parked)) == Some(true),
+        "so the cover stands over the relaunch"
+    );
+    assert!(
+        held_video_frame().is_some(),
+        "holding the frame the bars appear over"
+    );
+    assert!(
+        pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.chrome.caption))
+            == Some(true),
+        "and the arrival's bars do appear — over the held frame, never over a desktop gap"
+    );
+
+    forget_pin_park_swap();
+    forget_video_frame();
+    clear_pending_pinned_relaunch();
+    clear_restart_count();
+    clear_park_trace();
+    drop(film);
+}
