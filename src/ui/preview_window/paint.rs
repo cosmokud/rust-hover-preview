@@ -408,8 +408,25 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 } else if film_band_is_hit_testable(media.media_type, paint.parked) {
                     // Nothing is composed into this band — the film is in a window under it — so
                     // what is written here is only ever the pin's own claim on the pixel (see
-                    // `film_band_is_hit_testable`).
-                    fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
+                    // `film_band_is_hit_testable`). A hosted film with no first frame in the host
+                    // yet is not a hole to see through: the band stays opaque until the player's
+                    // shown child arrives, so chrome up over an empty host is chrome over black
+                    // rather than over the desktop (see `pin_film_host`).
+                    // shortcut: opaque black where a held frame would be; upgrade to the held frame
+                    // where one is in hand if this ever shows.
+                    // Only where the host stands: a pin never shown has no host yet, and its
+                    // bitmap keeps the pin's claim the way the strips' own test reads it (see
+                    // `the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows`).
+                    let hosted_needs_cover = pin_film_host::film_host().is_some()
+                        && !paint.parked
+                        && !pin_film_host::the_hosted_player_is_drawing(
+                            VIDEO_PID.load(Ordering::Acquire),
+                        );
+                    if hosted_needs_cover {
+                        fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
+                    } else {
+                        fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
+                    }
                 }
             }
         }
