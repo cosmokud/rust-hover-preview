@@ -166,6 +166,36 @@ pub(super) fn restart_pinned_player(
     seconds: f64,
     holding: bool,
 ) {
+    relaunch_pinned_player(path, content, seconds, holding, false);
+}
+
+/// Begin the pin's player on the very frame the hover is showing, and hold that hover there until
+/// the pin can show the same one.
+///
+/// It is the relaunch above with the one difference a take-up from a hover has: the player being
+/// replaced is the hover's, and it is the picture on screen until the pin's own player has drawn
+/// that frame. So it is **frozen** where it stands rather than parked for the loop to end (see
+/// `pin_film_host::FrozenHover`), the second it froze at is **read back off the player** rather than
+/// estimated from this app's clock, and the player begun in its place is begun standing on that
+/// second rather than playing from it (see `video_launch::mpv_args` and
+/// `pin_film_host::settle_pin_handover`).
+pub(super) fn begin_the_pinned_film_at_the_hovers_frame(
+    path: &PathBuf,
+    content: ScreenRegion,
+    seconds: f64,
+    holding: bool,
+) {
+    relaunch_pinned_player(path, content, seconds, holding, true);
+}
+
+/// The relaunch both roads above are, where `handover` says the player being replaced is a hover's.
+fn relaunch_pinned_player(
+    path: &PathBuf,
+    content: ScreenRegion,
+    seconds: f64,
+    holding: bool,
+    handover: bool,
+) {
     #[cfg(test)]
     RESTART_COUNT.fetch_add(1, Ordering::AcqRel);
 
@@ -206,13 +236,28 @@ pub(super) fn restart_pinned_player(
         }
     }
 
+    // **A hover's second is read off the player rather than counted by this app**, and the read is
+    // asked before the pipe is dropped: the frame the user is looking at is mpv's own last one, and
+    // the clock this app keeps is an estimate of where that frame is — good enough to begin a film
+    // on and not good enough to *stand* one on, which is what the handover asks (see
+    // `pin_film_host::the_hosted_frame_is_presented`). A read that does not answer leaves the
+    // estimate as the second to begin on, which is the launch this road had before the hover was
+    // frozen at all.
+    let frozen = if handover {
+        freeze_the_hover(replaced)
+    } else {
+        None
+    };
+    let seconds = frozen.unwrap_or(seconds);
+
     // The player being parked keeps nothing back: the pipe a command would go down is the
     // replacement's once one is named, and the parked player's name is not reusable (see
-    // `mpv_ipc`).
+    // `mpv_ipc`). The frozen hover's last line is the one above — what is left for it is a kill,
+    // not a command (see `pin_film_host::retire_the_frozen_hover`).
     mpv_ipc::forget_pipe(replaced);
 
     let process = start_video_playback(
-        path, content.0, content.1, width, height, seconds, volume, subtitle,
+        path, content.0, content.1, width, height, seconds, handover, volume, subtitle,
     );
     let pid = process.as_ref().map(|player| player.id()).unwrap_or(0);
 
@@ -229,8 +274,23 @@ pub(super) fn restart_pinned_player(
         // ...unless it is the superseded one just killed: nothing waits on its arrival and
         // nothing will ever show it.
         if killed != Some(replaced) {
-            retire_replaced_player(replaced, pid);
+            if handover {
+                // **The hover stays the picture until the pin has drawn it.** What retires it is the
+                // handover, once the pin's window is up over the same frame; ending it here would
+                // leave the band the desktop for as long as the pin's player takes to open the file
+                // and decode, which is the flash the whole wait exists to keep out (see
+                // `pin_film_host::settle_pin_handover`).
+                pin_film_host::hold_the_hover_for_the_handover(replaced, seconds);
+            } else {
+                retire_replaced_player(replaced, pid);
+            }
         }
+    } else if handover {
+        // A pin's player that did not come up leaves no swap to make, so the hover it froze is ended
+        // here rather than left frozen for a handover that is never going to happen — the same road
+        // an unconfirmed kill goes down, and the only one that can end a player this app has stopped
+        // holding (see `retire_orphaned_player`).
+        retire_orphaned_player(replaced);
     } else {
         // A replacement that did not come up leaves nothing to arrive, so the player on screen is
         // ended here instead of waiting for an arrival that is never going to happen — which is the
@@ -269,6 +329,25 @@ pub(super) fn restart_pinned_player(
     // the drag settled on, for as long as the replacement takes to put a window up
     // (see `settle_pinned_park`).
     settle_pinned_park();
+}
+
+/// Hold the hover where it stands and read back the second its picture is at.
+///
+/// **Pausing is the freeze.** mpv leaves the frame it was showing on screen when it is told to hold,
+/// so the hover window the user is looking at keeps that frame for as long as the take-up takes —
+/// nothing is captured, nothing is painted over it, and nothing hides it (see
+/// `begin_the_pinned_film_at_the_hovers_frame`).
+///
+/// `None` where the player did not take the hold or did not answer with its position, which leaves
+/// the caller's own clock as the second to begin the pin on: a frozen picture this app cannot read is
+/// still a frozen picture, and the launch is the one it would have been before the read existed (see
+/// `mpv_ipc::get_property`).
+fn freeze_the_hover(pid: u32) -> Option<f64> {
+    if !mpv_ipc::set_paused(pid, true) {
+        return None;
+    }
+
+    mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse().ok())
 }
 
 /// Whether the pinned window is showing a held file, for a relaunch that has no transport of its
@@ -830,16 +909,19 @@ pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
 /// **A pin does not keep a hover's player for a film it draws in a window of its own.** The host is
 /// where the picture belongs from the take-up on, and a player begun before the pin existed was
 /// given a top-level window, `--ontop` and a place of its own — none of which is what a film the
-/// pin draws is. So the take-up is a relaunch: the same `restart_pinned_player` a seek and a resize
-/// settle on, given the file and the second the pin's transport already holds (the clock the hover's
-/// pass was read onto at the take-up), held where the film was held, and at the level the pin's own
-/// bar says. What it deliberately raises no cover for is the hover that is still up: the take-up
-/// keeps that window visible and playing as the placeholder, and the tick's handover shows the pin
-/// over its live film and takes the hover down in the same pass — so the band is never the desktop
-/// between them (see `pin_film_host::settle_pin_handover`).
+/// pin draws is. So the take-up is a relaunch, held where the film was held and at the level the
+/// pin's own bar says, with the one thing about it that a seek and a resize do not have: the hover
+/// is **frozen** where it stands, the second its picture is at is read back off the player, and the
+/// pin's player is begun **standing on that frame** rather than playing from it (see
+/// `begin_the_pinned_film_at_the_hovers_frame`).
 ///
-/// The player being replaced is retired by that road, not ended here: its window is the picture on
-/// screen until the hosted one has a child of its own (see `retire_replaced_player`).
+/// So the hover's own last frame is the placeholder, and it stays the picture until the pin's player
+/// has that same frame drawn — not a window made — and the tick's handover swaps the two in one pass
+/// (see `pin_film_host::settle_pin_handover`). Nothing covers it and nothing hides it: a cover would
+/// be this app's guess at a frame mpv is already showing.
+///
+/// The player being replaced is retired by that road and not ended here: it is the picture on screen
+/// until the hosted one has the same frame in it (see `pin_film_host::FrozenHover`).
 ///
 /// Nothing is begun for a film the host already holds — every show of a hosted pin would otherwise
 /// be a player begun again — and nothing for a pin with no player up at all, which is a film that
@@ -859,7 +941,7 @@ pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
     let seconds = pin_playhead(&transport).unwrap_or(0.0);
     let holding = transport.paused_at.is_some();
 
-    restart_pinned_player(&path, content, seconds, holding);
+    begin_the_pinned_film_at_the_hovers_frame(&path, content, seconds, holding);
     true
 }
 

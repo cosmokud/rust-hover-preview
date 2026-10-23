@@ -220,6 +220,7 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             width,
             height,
             0.0,
+            false,
             volume,
             video_subtitles(&file.path).chosen(),
         ) else {

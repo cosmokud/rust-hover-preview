@@ -124,6 +124,7 @@ pub(super) fn mpv_args(
     width: i32,
     height: i32,
     start: f64,
+    hold: bool,
     volume: u32,
     gain: Option<f64>,
     hw_accel: bool,
@@ -227,6 +228,18 @@ pub(super) fn mpv_args(
     // nothing is asked for that would be answered with the position it is already at.
     if start > 0.0 {
         args.push(format!("--start={start:.3}"));
+    }
+
+    // **A player begun on a frame another player is showing is begun standing on it.** A pin taken
+    // up from a hover begins its own player at the exact second the hover was frozen on, and the
+    // hover's frame is the picture on screen until that player can show the same one — so the seek
+    // is exact rather than to the keyframe before the second, and the player is paused, because a
+    // player begun playing would have advanced off the frame by the time the handover asks for it
+    // (see `pin_film_host::settle_pin_handover`). Both are per-file options, which is why they are
+    // written beside `--start` and not at the top of this list.
+    if hold {
+        args.push("--hr-seek=yes".to_string());
+        args.push("--pause".to_string());
     }
 
     if mpv_launched_without_audio(volume) {
@@ -1292,6 +1305,7 @@ mod tests {
                 640,
                 360,
                 0.0,
+                false,
                 80,
                 None,
                 true,
@@ -1336,6 +1350,7 @@ mod tests {
             640,
             360,
             0.0,
+            false,
             80,
             None,
             true,
@@ -1380,6 +1395,7 @@ mod tests {
             8,
             8,
             0.0,
+            false,
             100,
             None,
             true,
@@ -1410,6 +1426,7 @@ mod tests {
                 8,
                 8,
                 0.0,
+                false,
                 100,
                 None,
                 true,
@@ -1453,6 +1470,7 @@ mod tests {
                 8,
                 8,
                 0.0,
+                false,
                 50,
                 None,
                 false,
@@ -1495,6 +1513,7 @@ mod tests {
                 8,
                 8,
                 0.0,
+                false,
                 0,
                 Some(2.5),
                 true,
@@ -1546,6 +1565,7 @@ mod tests {
                 8,
                 8,
                 0.0,
+                false,
                 100,
                 Some(2.5),
                 true,
@@ -1587,6 +1607,7 @@ mod tests {
                 8,
                 8,
                 12.5,
+                false,
                 100,
                 None,
                 true,
@@ -1617,6 +1638,68 @@ mod tests {
         );
     }
 
+    /// **A player begun on a frame another player is showing is begun standing on it**: the seek is
+    /// exact rather than to the keyframe before the second, and the player is paused so that the frame
+    /// it presents is that one and stays that one until the handover lets it go (see
+    /// `pin_film_host::settle_pin_handover`). A player begun any other way is given neither flag, and
+    /// an ordinary launch is unchanged by this.
+    #[test]
+    fn a_player_begun_on_a_frozen_frame_is_held_there_and_seeks_to_it_exactly() {
+        let held = mpv_args(
+            Path::new("a.mkv"),
+            0,
+            0,
+            8,
+            8,
+            12.5,
+            true,
+            100,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+            None,
+        );
+        assert!(
+            held.contains(&"--start=12.500".to_string()),
+            "the frame to stand on is named: {held:?}"
+        );
+        assert!(
+            held.contains(&"--hr-seek=yes".to_string()),
+            "and the seek is exact rather than to the keyframe before it, or the pin opens on a \
+             frame the hover was never showing: {held:?}"
+        );
+        assert!(
+            held.contains(&"--pause".to_string()),
+            "and the player stands there rather than playing off the frame the hover froze on \
+             before the handover can ask for it: {held:?}"
+        );
+
+        let playing = mpv_args(
+            Path::new("a.mkv"),
+            0,
+            0,
+            8,
+            8,
+            12.5,
+            false,
+            100,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+            None,
+        );
+        assert!(
+            !playing
+                .iter()
+                .any(|arg| arg == "--hr-seek=yes" || arg == "--pause"),
+            "and a player begun to play from a second is given neither: {playing:?}"
+        );
+    }
+
     /// A preview box on a monitor left of or above the primary one has a negative coordinate, and
     /// that coordinate is passed on as `+-100`: the geometry's offsets are introduced by a sign, so
     /// a negative one is `+-100` rather than `-100` — which mpv reads as a distance from the right
@@ -1640,6 +1723,7 @@ mod tests {
                     640,
                     360,
                     0.0,
+                    false,
                     100,
                     None,
                     true,
@@ -1678,6 +1762,7 @@ mod tests {
                 640,
                 360,
                 0.0,
+                false,
                 100,
                 None,
                 true,
@@ -1726,6 +1811,7 @@ mod tests {
                 asked_w,
                 asked_h,
                 0.0,
+                false,
                 100,
                 None,
                 true,
@@ -1790,6 +1876,7 @@ mod tests {
                 8,
                 8,
                 0.0,
+                false,
                 100,
                 None,
                 true,

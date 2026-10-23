@@ -243,6 +243,15 @@ pub(super) fn close_pin_volume() -> bool {
 /// to; and nothing is holding it, because there is no transport that could be holding it (see
 /// `pin_is_playing` and `video_loop_tick`).
 pub(super) fn pin_is_playing_current() -> bool {
+    // **A pin waiting on its hosted film's frame is holding that film, whatever its transport
+    // says.** The player is begun paused on the frame the hover froze on (see
+    // `pin_film_host::settle_pin_handover`), and the transport's clock is the only thing that says
+    // otherwise — so the loop is told the truth here, and a film frozen a tenth of a second from its
+    // end is not rewound and set going underneath the wait.
+    if pin_film_host::pin_handover_armed() {
+        return false;
+    }
+
     pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin_is_playing(&pin.transport)))
         .unwrap_or(true)

@@ -171,6 +171,15 @@ unsafe fn a_child_of_the_host(host: HWND) -> HWND {
     .expect("a child of the host's, in this process")
 }
 
+/// The hosted player's own pipe, and the player's word that the frame it is standing on is on
+/// screen: the second the hover froze at, and a video output configured for that frame (see
+/// `the_hosted_frame_is_presented`).
+fn the_hosted_player_has_the_frame(pid: u32, at: &str) {
+    mpv_ipc::remember_pipe(pid, "the-hosted-players-pipe", false);
+    mpv_ipc::answer_a_read(pid, "time-pos", Some(at));
+    mpv_ipc::answer_a_read(pid, "vo-configured", Some("true"));
+}
+
 /// A park holds the last frame the band showed, and a hosted film's band is the host: the player's
 /// window is a child inside it and not a window of the desktop's, so a capture that went looking for
 /// one by pid would find nothing and the cover would be painted flat — the band this app fills with
@@ -435,6 +444,305 @@ fn a_film_taken_up_from_a_hover_is_begun_again_in_the_host() {
         0,
         "and a pin whose film the host already holds begins nothing"
     );
+}
+
+/// **The hover is frozen where it stands and the pin's player is begun on the very second its picture
+/// is at** — read back off the player rather than estimated from this app's clock, because the frame
+/// the user is looking at is mpv's own last one and the two pictures have to be the same frame for the
+/// swap to be invisible (see `begin_the_pinned_film_at_the_hovers_frame`).
+#[test]
+fn the_hover_is_frozen_on_its_own_frame_and_the_pin_begins_there() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let hovered = 0x7FFF_FFFB;
+    film.taken_up_from_a_hover(hovered);
+    clear_restart_count();
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    mpv_ipc::remember_pipe(hovered, "the-hovers-pipe", false);
+    mpv_ipc::answer_a_read(hovered, "time-pos", Some("412.500000"));
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![format!(
+            "{}\n",
+            r#"{"command":["set_property","pause",true],"async":true}"#
+        )],
+        "the hover is told to hold where it stands, and the frame it is showing is the freeze — \
+         nothing is captured, painted over or hidden"
+    );
+    assert_eq!(
+        mpv_ipc::noted_reads(),
+        vec![format!("{hovered}:time-pos")],
+        "and the second that frame is at is asked of the player that is showing it"
+    );
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        Some((hovered, 412.5)),
+        "the hover is what the wait holds, at the second the pin's player was begun on"
+    );
+
+    let pinned = VIDEO_PID.load(Ordering::SeqCst);
+    let launched = video_loop_playhead(pinned, Path::new("a-film.mkv"))
+        .expect("the clock the pin's player is measured by");
+    assert!(
+        (launched - 412.5).abs() < 0.5,
+        "the pin begins at the second the hover froze on rather than at the clock's estimate of \
+         it: {launched}"
+    );
+    let playhead =
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport)));
+    assert!(
+        playhead.is_some_and(|at| (at - 412.5).abs() < 0.5),
+        "and the bar the pin is drawn against stands there too: {playhead:?}"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::forget_pipe(hovered);
+    mpv_ipc::forget_pipe(pinned);
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    clear_restart_count();
+    drop(film);
+}
+
+/// **A read that does not answer leaves the clock as the second to begin on**, and the take-up goes
+/// ahead: a frozen picture this app cannot read is still a frozen picture, and the pin is begun where
+/// it would have been begun before the read existed.
+#[test]
+fn a_read_that_does_not_answer_leaves_the_clock_as_the_second() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let hovered = 0x7FFF_FFFB;
+    film.taken_up_from_a_hover(hovered);
+    clear_restart_count();
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    mpv_ipc::remember_pipe(hovered, "a-pipe-that-says-nothing", false);
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        mpv_ipc::noted_reads(),
+        vec![format!("{hovered}:time-pos")],
+        "the question is asked, and a player that does not answer is not waited for"
+    );
+    assert_eq!(restart_count(), 1, "the pin's player is begun all the same");
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        Some((hovered, 0.0)),
+        "on this app's own clock, which is what the launch had before the read existed"
+    );
+    assert!(
+        pin_film_host::pin_handover_armed(),
+        "and the handover waits for that player's frame as it always does"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::forget_pipe(hovered);
+    mpv_ipc::forget_pipe(VIDEO_PID.load(Ordering::SeqCst));
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    clear_restart_count();
+    drop(film);
+}
+
+/// **The hover is retired at the swap and not before it**: it is the picture on screen for the whole
+/// wait, and a player parked for the loop's retirement would be ended the moment the pin's window was
+/// under the host — which is the flash this whole road is (see `pin_film_host::FrozenHover`).
+#[test]
+fn the_frozen_hover_is_retired_only_once_the_pin_has_the_frame() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_retirement = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    let film = StandingFilm::new();
+    let hovered = 0x7FFF_FFFB;
+    film.taken_up_from_a_hover(hovered);
+    let hover = unsafe { StandingHover::up() };
+    clear_restart_count();
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    mpv_ipc::remember_pipe(hovered, "the-hovers-pipe", false);
+    mpv_ipc::answer_a_read(hovered, "time-pos", Some("7.000000"));
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    // The wait goes on with the hover as the picture: nothing has ended it and nothing has parked it
+    // for the loop to end.
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::Waiting
+        ),
+        "a window with no frame proved is still a wait"
+    );
+    assert!(
+        hover.shown(),
+        "and the hover is what the user is looking at"
+    );
+    assert!(
+        VIDEO_RETIREMENT
+            .lock()
+            .ok()
+            .and_then(|held| *held)
+            .is_none(),
+        "with the hover's player held for the handover rather than parked for the loop to end"
+    );
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        Some((hovered, 7.0)),
+        "still the picture on screen"
+    );
+
+    // The frame: the swap is made, and only now is the hover let go of.
+    the_hosted_player_has_the_frame(drawn, "7.000000");
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::HandedOver
+        ),
+        "the frame the hover froze is the frame the pin has"
+    );
+    assert!(!hover.shown(), "so the hover goes");
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        None,
+        "and its player with it"
+    );
+
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        *held = previous_retirement;
+    }
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::forget_pipe(hovered);
+    mpv_ipc::forget_pipe(VIDEO_PID.load(Ordering::SeqCst));
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    clear_restart_count();
+    drop(film);
+}
+
+/// **A film the user had held stays held after the handover.** The player is begun paused only because
+/// the frame has to be the hover's; a hold that was the user's is not a presentation and is not let go
+/// of here (see `PinTransport::paused_at`).
+#[test]
+fn a_film_the_user_held_stays_held_at_the_handover() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    film.taken_up_from_a_hover(101);
+    let hover = unsafe { StandingHover::up() };
+    with_pin(|pin| pin.transport.held(0.0));
+    clear_restart_count();
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+    the_hosted_player_has_the_frame(drawn, "0.000000");
+
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::HandedOver
+        ),
+        "the swap is made on the frame, held or not"
+    );
+    assert!(
+        !mpv_ipc::noted_lines().iter().any(|line| line
+            == &format!(
+                "{}\n",
+                r#"{"command":["set_property","pause",false],"async":true}"#
+            )),
+        "and a film the user was holding is not set going by it: {:?}",
+        mpv_ipc::noted_lines()
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.paused_at)),
+        Some(0.0),
+        "the pin's own transport still says the film is held, which is what the bar is drawn from"
+    );
+    assert!(
+        !hover.shown(),
+        "with the hover down like any other handover"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::forget_pipe(VIDEO_PID.load(Ordering::SeqCst));
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    clear_restart_count();
+    drop(film);
+}
+
+/// A pin that goes away down another road — closed, or collapsed — takes the hover it froze with it:
+/// there is nothing left for that player to be the picture of, and a frozen player nobody holds is a
+/// process this app would never end.
+#[test]
+fn a_pin_that_goes_away_takes_the_frozen_hover_with_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let hovered = 0x7FFF_FFFB;
+    film.taken_up_from_a_hover(hovered);
+    clear_restart_count();
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    mpv_ipc::remember_pipe(hovered, "the-hovers-pipe", false);
+    mpv_ipc::answer_a_read(hovered, "time-pos", Some("3.000000"));
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        Some((hovered, 3.0)),
+        "the take-up is holding the hover"
+    );
+
+    // The pin goes away: the close owns the teardown and there is no pin for the swap to be made on.
+    stand_pin(None);
+
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::Waiting
+        ),
+        "a wait with no pin behind it is not a handover"
+    );
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        None,
+        "and the hover it froze is ended with the pin it was being kept for"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::forget_pipe(hovered);
+    mpv_ipc::forget_pipe(VIDEO_PID.load(Ordering::SeqCst));
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    clear_restart_count();
+    drop(film);
 }
 
 /// The picture has a window of the pin's own making, standing in the band and disabled: the pin is
@@ -941,6 +1249,7 @@ fn a_pinned_mpv_film_is_begun_into_the_pins_film_host() {
             320,
             240,
             0.0,
+            false,
             80,
             None,
             false,
@@ -1910,6 +2219,8 @@ fn the_handover_shows_the_pin_over_the_drawn_film_and_takes_the_hover_down() {
     clear_restart_count();
     clear_pending_pinned_relaunch();
     pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
     unsafe { show_pinned_window(film.pin_hwnd) };
     assert!(
         pin_film_host::pin_handover_armed(),
@@ -1922,6 +2233,11 @@ fn the_handover_shows_the_pin_over_the_drawn_film_and_takes_the_hover_down() {
     film.drawn_in_the_host(drawn);
     let host = pin_film_host::film_host().expect("the film's host");
     let _child = unsafe { a_child_of_the_host(host) };
+
+    // And the player's own word that the frame it is standing on is the one the hover froze on: a
+    // window under the host is not a picture, and the swap waits for both (see
+    // `the_hosted_frame_is_presented`).
+    the_hosted_player_has_the_frame(drawn, "0.000000");
 
     assert!(
         matches!(
@@ -1956,11 +2272,107 @@ fn the_handover_shows_the_pin_over_the_drawn_film_and_takes_the_hover_down() {
         !pin_film_host::pin_handover_armed(),
         "a handover fires once: nothing is left armed behind the shown pin"
     );
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        None,
+        "and the hover the take-up froze is let go of rather than left frozen behind the pin"
+    );
+    assert!(
+        mpv_ipc::noted_lines().iter().any(|line| line
+            == &format!(
+                "{}\n",
+                r#"{"command":["set_property","pause",false],"async":true}"#
+            )),
+        "the pin's film is playing from the frame it was frozen on, rather than standing on it \
+         behind a pin that looks alive: {:?}",
+        mpv_ipc::noted_lines()
+    );
 
     pin_film_host::disarm_pin_handover();
     clear_pending_pinned_relaunch();
     clear_restart_count();
     clear_park_trace();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    drop(film);
+}
+
+/// **A window under the host is not a picture**, and the swap waits for the player's own word that
+/// the frame is drawn: the second it is standing at, and a video output configured for it.
+#[test]
+fn a_window_alone_is_not_a_handover() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    film.taken_up_from_a_hover(101);
+    let hover = unsafe { StandingHover::up() };
+    clear_park_trace();
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+
+    // A player that has said nothing: a window with a box, and no frame this app can prove.
+    mpv_ipc::remember_pipe(drawn, "the-hosted-players-pipe", false);
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::Waiting
+        ),
+        "a window the player has made is not a frame it has drawn"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool() && hover.shown(),
+        "so the pin stays down and the hover's own frozen frame stays the picture"
+    );
+
+    // A second the hover never froze on is a frame that is not the one on screen.
+    mpv_ipc::answer_a_read(drawn, "time-pos", Some("900.000000"));
+    mpv_ipc::answer_a_read(drawn, "vo-configured", Some("true"));
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::Waiting
+        ),
+        "a player standing somewhere else in the film has not the frame the swap is made on"
+    );
+
+    // And the frame at that second with no video output configured for it is still not the picture:
+    // the position is where the file is, and the output is what has been drawn there.
+    mpv_ipc::answer_a_read(drawn, "time-pos", Some("0.000000"));
+    mpv_ipc::answer_a_read(drawn, "vo-configured", None);
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::Waiting
+        ),
+        "a frame the video output has not configured is not a frame on screen"
+    );
+    assert!(hover.shown(), "and the hover is the picture for all of it");
+
+    mpv_ipc::answer_a_read(drawn, "vo-configured", Some("true"));
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::HandedOver
+        ),
+        "the tick both facts hold is the tick the swap is made"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    clear_pending_pinned_relaunch();
+    clear_restart_count();
+    clear_park_trace();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
     drop(film);
 }
 
@@ -2039,6 +2451,8 @@ fn a_step_handover_starts_the_arrival_over_the_new_film() {
     clear_restart_count();
     clear_pending_pinned_relaunch();
     pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
     unsafe { show_pinned_window(film.pin_hwnd) };
     // The step's cover standing over the outgoing frame, with the chrome hidden across the swap.
     with_pin(|pin| {
@@ -2050,6 +2464,7 @@ fn a_step_handover_starts_the_arrival_over_the_new_film() {
     film.drawn_in_the_host(drawn);
     let host = pin_film_host::film_host().expect("the film's host");
     let _child = unsafe { a_child_of_the_host(host) };
+    the_hosted_player_has_the_frame(drawn, "0.000000");
 
     assert!(
         matches!(
@@ -2072,6 +2487,8 @@ fn a_step_handover_starts_the_arrival_over_the_new_film() {
     clear_pending_pinned_relaunch();
     clear_restart_count();
     clear_park_trace();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
     drop(film);
 }
 
@@ -2114,6 +2531,12 @@ fn a_film_that_never_draws_hands_the_pin_back() {
     assert!(
         !pin_film_host::pin_handover_armed(),
         "and the handover disarms rather than sticking behind a hidden pin"
+    );
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        None,
+        "and the hover it froze is let go of rather than left frozen for a swap that is never \
+         coming"
     );
     assert!(
         !unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
@@ -2162,6 +2585,11 @@ fn a_film_that_keeps_starting_hands_the_pin_back_at_the_start_timeout() {
     assert!(
         !pin_film_host::pin_handover_armed(),
         "and the handover disarms rather than sticking behind a hidden pin"
+    );
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        None,
+        "and the hover it froze is ended rather than left frozen behind a pin that never came"
     );
     assert!(
         !unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),

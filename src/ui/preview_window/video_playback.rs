@@ -258,6 +258,12 @@ pub(super) fn bubble_players_box(x: i32, y: i32, width: i32) -> (i32, i32) {
 /// written back to the setting (see `PinVolume`). `subtitle` is the same kind of answer for the
 /// same reason: it is what a pinned window is remembering, and `None` is what a hover asks for
 /// (see `next_subtitle`).
+///
+/// `hold` is the handover's own launch: a player begun **standing** on the frame another player is
+/// showing, which is what a pin taken up from a hover begins (see
+/// `pin_playback::begin_the_pinned_film_at_the_hovers_frame`). It is mpv's to answer and no other
+/// route's — FFmpeg's player has neither a pause to begin in nor an exact seek, and no take-up of a
+/// hover's film reaches that route (see `pin_film_host::host_for_the_pins_film`).
 #[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 pub(super) fn start_video_playback(
     path: &PathBuf,
@@ -266,6 +272,7 @@ pub(super) fn start_video_playback(
     width: i32,
     height: i32,
     start: f64,
+    hold: bool,
     volume: u32,
     subtitle: Option<usize>,
 ) -> Option<PlayerProcess> {
@@ -300,7 +307,7 @@ pub(super) fn start_video_playback(
     };
 
     if route == VideoRoute::Mpv {
-        return start_mpv_video_playback(path, x, y, width, height, start, volume, gain);
+        return start_mpv_video_playback(path, x, y, width, height, start, hold, volume, gain);
     }
 
     // Use ffplay for video playback - borderless, positioned at preview location
@@ -529,6 +536,7 @@ fn start_mpv_video_playback(
     width: i32,
     height: i32,
     start: f64,
+    hold: bool,
     volume: u32,
     gain: Option<f64>,
 ) -> Option<PlayerProcess> {
@@ -571,6 +579,7 @@ fn start_mpv_video_playback(
             asked_width,
             asked_height,
             start,
+            hold,
             volume,
             gain,
             video_hw_accel_wanted(),
