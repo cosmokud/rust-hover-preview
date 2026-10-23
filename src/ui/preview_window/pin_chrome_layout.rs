@@ -70,6 +70,14 @@ pub(super) fn with_pin(change: impl FnOnce(&mut PinnedPreview)) {
     }
 }
 
+/// End the chrome suppression a file step raised, where the step ends without a file landing: a
+/// walk that was given up on, one whose answer was for a file the pin has left, or one that ran
+/// out of files to step to. The pointer asks the strips back from the next tick on (see
+/// `step_pinned_file` and `refresh_pin_chrome`).
+pub(super) fn clear_pin_step_chrome() {
+    with_pin(|pin| pin.chrome.step_in_flight = false);
+}
+
 /// The level the pin that is up plays a film at, and the setting where there is no pin: what a
 /// player this app starts for a pinned file is given (see `restart_pinned_player`).
 pub(super) fn pinned_volume_level() -> u32 {
@@ -317,6 +325,11 @@ pub(super) struct PinChrome {
     pub(super) bar: bool,
     /// When the arrival window closes, while one is open. While it is open both strips are shown.
     pub(super) until: Option<Instant>,
+    /// Whether a file step is still on its way to the band. The pointer that asked for the step
+    /// is still on the caption, so hover would keep the strips up over a held frame or an old
+    /// file while the walk and the load run; the step clears this when the new file lands (see
+    /// `step_pinned_file` and `refresh_pin_chrome`).
+    pub(super) step_in_flight: bool,
 }
 
 impl PinChrome {
@@ -329,6 +342,7 @@ impl PinChrome {
             caption: true,
             bar: true,
             until: Some(now + Duration::from_secs_f32(PIN_CHROME_ARRIVAL_SECONDS)),
+            step_in_flight: false,
         }
     }
 
@@ -339,6 +353,7 @@ impl PinChrome {
             caption: true,
             bar: true,
             until: None,
+            step_in_flight: false,
         }
     }
 
@@ -350,6 +365,7 @@ impl PinChrome {
             caption: false,
             bar: false,
             until: None,
+            step_in_flight: false,
         }
     }
 }
@@ -397,12 +413,16 @@ pub(super) fn refresh_pin_chrome(
         //
         // A file step's held frame is alone on the band while the new film loads. The pointer
         // that asked for the step is still on the caption, so hover would keep the strips up;
-        // a bar over that frame without the film is worse than no chrome at all. The pointer
-        // asks the strips back on the tick after the park settles. The pin is asked for its own
-        // parked flag because this already holds the pin's lock (see `pin_player_is_parked`,
-        // `park_record_owner`).
+        // a bar over that frame without the film is worse than no chrome at all. The step is
+        // suppressed from the moment it is asked for rather than from its park, which is after
+        // the walk and the load have run, and the pointer asks the strips back once the new
+        // file lands. The pin is asked for its own parked flag because this already holds the
+        // pin's lock (see `pin_player_is_parked`, `park_record_owner`).
         let step_park = pin.parked && park_record_owner() == Some(ParkArm::Step);
-        let (caption, bar) = if pin_film_host::pin_handover_armed() || step_park {
+        let (caption, bar) = if pin.chrome.step_in_flight
+            || pin_film_host::pin_handover_armed()
+            || step_park
+        {
             (false, false)
         } else {
             // The arrival window is spent the moment it closes, and there is no bringing it back:
