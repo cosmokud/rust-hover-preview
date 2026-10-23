@@ -4179,6 +4179,7 @@ pub fn run_preview_window() {
                                     media_width,
                                     media_height,
                                     0.0,
+                                    false,
                                     current_video_volume(),
                                     // A hover shows the file the way the player chooses to, which
                                     // is its first subtitle stream and the one any relaunch

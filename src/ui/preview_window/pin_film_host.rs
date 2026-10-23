@@ -352,6 +352,56 @@ unsafe fn create(parent: HWND) -> Option<HWND> {
 /// the handover settles on, and a pin that ends or collapses disarms it by going away.
 static PIN_HANDOVER_SINCE: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
 
+/// The hover a take-up froze, and the second its picture stands at.
+///
+/// **It is the picture on screen until the pin can show the same one.** The take-up holds the
+/// hover's player where it is rather than ending it, so the frame the user is looking at is mpv's own
+/// last frame and nothing this app has to paint or cover: the wait ends when the pin's player reports
+/// that frame drawn, and the swap is two windows showing one frame (see `settle_pin_handover`).
+#[derive(Clone, Copy)]
+struct FrozenHover {
+    /// The hover's player, still running and held on the frame it was showing.
+    pid: u32,
+    /// The second that frame is at — the second the pin's player was begun on, and the one it has to
+    /// be standing at before the swap is made.
+    seconds: f64,
+}
+
+/// The hover a take-up is holding while the wait for its hosted player's frame is on.
+static PIN_HANDOVER_HOVER: Lazy<Mutex<Option<FrozenHover>>> = Lazy::new(|| Mutex::new(None));
+
+/// Hold the hover a take-up froze: the player still drawing the frame on screen, and the second it
+/// stands at. Written by the take-up that begins the pin's player on that frame, and read by the
+/// handover that swaps the two (see `FrozenHover`).
+pub(super) fn hold_the_hover_for_the_handover(pid: u32, seconds: f64) {
+    if let Ok(mut frozen) = PIN_HANDOVER_HOVER.lock() {
+        *frozen = Some(FrozenHover { pid, seconds });
+    }
+}
+
+/// The hover a take-up is holding, while the wait for its hosted player's frame is on.
+fn held_hover() -> Option<FrozenHover> {
+    PIN_HANDOVER_HOVER.lock().ok().and_then(|frozen| *frozen)
+}
+
+/// The hover a take-up froze, as a test reads it: the player still drawing the picture on screen and
+/// the second the pin's player was begun on (see `FrozenHover`).
+#[cfg(test)]
+pub(super) fn held_hover_for_a_test() -> Option<(u32, f64)> {
+    held_hover().map(|frozen| (frozen.pid, frozen.seconds))
+}
+
+/// End the hover a take-up froze, where one is still held: it is the picture no longer, and nothing
+/// else holds it — the player was taken out of the media at the take-up, so this is the only call
+/// that will ever end it. A kill not confirmed on the spot is parked with the orphans the loop
+/// retries rather than dropped, which is the same road a pin's own teardown uses (see
+/// `retire_orphaned_player`).
+fn retire_the_frozen_hover(frozen: Option<FrozenHover>) {
+    if let Some(frozen) = frozen {
+        retire_orphaned_player(frozen.pid);
+    }
+}
+
 /// Whether a pin taken up on a hover's film is still waiting on its hosted player's first frame:
 /// its own window down, the hover up as the placeholder, and no chrome over either.
 ///
@@ -375,10 +425,14 @@ pub(super) fn arm_pin_handover() {
 }
 
 /// Disarm the handover: the film drew and the pin went up, the wait failed and the pin is being
-/// torn down, or the pin went away down another road and there is nothing left to wait on.
+/// torn down, or the pin went away down another road and there is nothing left to wait on. The hover
+/// the take-up froze goes with it: a wait that is over has no picture to hold (see `FrozenHover`).
 pub(super) fn disarm_pin_handover() {
     if let Ok(mut since) = PIN_HANDOVER_SINCE.lock() {
         *since = None;
+    }
+    if let Ok(mut frozen) = PIN_HANDOVER_HOVER.lock() {
+        *frozen = None;
     }
 }
 
@@ -406,16 +460,54 @@ pub(super) enum PinHandover {
     Failed,
 }
 
-/// Hand a pin taken up on a hover's film over once its hosted player draws, and tear the hidden
-/// pin down where that player never does.
+/// How far from the second it was begun on a hosted player may be and still be standing on the frame
+/// the hover froze.
 ///
-/// The only visible swap: the pin's window appears with the film already drawing in it — no cover,
-/// no black stage — the arrival starts over that live film, and only then does the hover come
-/// down, all in the same pass (see `show_pinned_window`). A hover that is gone by then changes
-/// nothing: the pin paints opaque over a host with no first frame in it, so the show is a black
-/// band and never a transparent one (see `hosted_needs_cover`). Where the player errored or the
-/// start timeout ran out, the wait is over the other way: the pin never appears, and the loop
-/// ends it down the road a dead film has always gone (see `Reason::MediaGone`).
+/// A frame's own timestamp is not the second it was sought to, and a film whose frames are a second
+/// apart is a film whose frame at 12.345 is stamped 12.000. It is not a tolerance on the swap — the
+/// player is begun paused, so it cannot be anywhere but on that frame — it is the width of the gap
+/// between a seek target and the frame that answers it (see `the_hosted_frame_is_presented`).
+const PIN_HANDOVER_FRAME_SECS: f64 = 1.0;
+
+/// Whether the hosted player has the frame the hover froze on screen, rather than only a window.
+///
+/// **A window is not a picture.** mpv makes its child under the host before it has decoded anything,
+/// and a shown child with a box is the most `the_hosted_player_is_drawing` can see — which leaves the
+/// band black until the first frame is drawn into it, and is the empty stage the whole wait exists to
+/// keep behind the hover. The two facts that separate a window from a picture are the player's own,
+/// read over its pipe: `time-pos` has no value until a file is loaded and positioned, and
+/// `vo-configured` is true once the video output is configured for a frame. **Both**, because either
+/// alone is a weaker question — a position is where the file is and not what has been drawn, and a
+/// configured video output is a size and a format and not a frame.
+///
+/// The player is begun paused on that second (see `video_launch::mpv_args`), so the pair is not a
+/// race: it is true exactly while the frame at that second is the one on screen, and the unpause at
+/// the handover is the first thing that moves it. A read that does not answer is a player that has
+/// not proved anything, so the wait goes on — bounded by the player-start timeout, never by a timer
+/// of its own (see `VIDEO_START_WAIT_SECS`).
+pub(super) fn the_hosted_frame_is_presented(pid: u32, at: f64) -> bool {
+    let Some(seconds) =
+        mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse::<f64>().ok())
+    else {
+        return false;
+    };
+
+    (seconds - at).abs() <= PIN_HANDOVER_FRAME_SECS
+        && mpv_ipc::get_property(pid, "vo-configured").as_deref() == Some("true")
+}
+
+/// Hand a pin taken up on a hover's film over once its hosted player has the frame on screen, and
+/// tear the hidden pin down where that player never does.
+///
+/// The only visible swap, and it is one frame: the pin's window appears with the film already showing
+/// the frame the hover was frozen on — no cover, no black stage — the arrival starts over that live
+/// picture, the hover comes down, the hosted player is let go of, and the frozen hover is ended, all
+/// in the same pass (see `show_pinned_window`). What the wait waits on is the player's own word that
+/// the frame is drawn and not a window that has been made (see `the_hosted_frame_is_presented`), and
+/// nothing here is a timer: a player that takes its time is waited for, up to the player-start bound.
+/// Where the player errored or the start timeout ran out, the wait is over the other way: the pin
+/// never appears, the hover it never took down is what is kept, and the hover's own player is ended
+/// rather than left frozen for a handover that is never coming (see `Reason::MediaGone`).
 ///
 /// One shot: the arm goes down however the wait ends, so a handover never fires twice and a
 /// failure never sticks behind a hidden pin.
@@ -423,20 +515,43 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     let Some(since) = PIN_HANDOVER_SINCE.lock().ok().and_then(|since| *since) else {
         return PinHandover::Waiting;
     };
+    let frozen = held_hover();
 
     // A pin that went away down another road — closed, or collapsed into its bubble — leaves no
-    // wait behind it: the close owns the teardown and the collapse owns the pin now.
+    // wait behind it: the close owns the teardown and the collapse owns the pin now. The hover the
+    // take-up froze is ended with it, because the pin that was going to take the picture from it is
+    // not going to.
     if !pinned() || pin_is_collapsed() {
         disarm_pin_handover();
+        retire_the_frozen_hover(frozen);
         return PinHandover::Waiting;
     }
 
-    // The film drawing is the handover: the wait is over, and what is on screen from here is the
-    // pin over its live film rather than the hover as its placeholder.
-    if the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
+    // The film's own frame on screen is the handover: the wait is over, and what is on screen from
+    // here is the pin over that picture rather than the hover as its placeholder. A frame this app
+    // cannot prove is a frame it waits for — the read failing is not an error, it is not-yet.
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if the_hosted_player_is_drawing(pid)
+        && frozen.is_some_and(|frozen| the_hosted_frame_is_presented(pid, frozen.seconds))
+    {
         disarm_pin_handover();
         with_pin(|pin| pin.chrome = PinChrome::on_arrival(Instant::now()));
         unsafe { show_pinned_window(pinned_window()) };
+
+        // **And the film is playing from here, unless the user had held it.** The player was begun
+        // paused so that the frame the hover froze is the frame it has; letting it go of that hold is
+        // this moment and no earlier one — and the clock the pass is measured by moves onto the
+        // second it is let go at, because a clock begun at the launch has counted the whole wait
+        // (see `PinTransport::released` and `rebase_video_loop_clock_to`).
+        if let Some(frozen) = frozen.filter(|_| !pinned_is_held()) {
+            mpv_ipc::set_paused(pid, false);
+            video_hw::rebase_video_loop_clock_to(pid, frozen.seconds);
+            update_pin_transport(|transport| transport.released(frozen.seconds));
+        }
+
+        // The pin has the picture, so the hover's player is the picture no longer: ended now that its
+        // window is behind the pin's, rather than left frozen and unowned (see `FrozenHover`).
+        retire_the_frozen_hover(frozen);
         return PinHandover::HandedOver;
     }
 
@@ -444,6 +559,7 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     // pin it was begun for never appears, and the hover it never took down is what is kept.
     if !is_video_process_running() {
         disarm_pin_handover();
+        retire_the_frozen_hover(frozen);
         return PinHandover::Failed;
     }
 
@@ -451,6 +567,7 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     // hidden pin waiting past a start ever takes is a stuck one (see `VIDEO_START_WAIT_SECS`).
     if since.elapsed() >= Duration::from_secs(VIDEO_START_WAIT_SECS) {
         disarm_pin_handover();
+        retire_the_frozen_hover(frozen);
         return PinHandover::Failed;
     }
 
