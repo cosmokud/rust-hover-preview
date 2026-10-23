@@ -720,6 +720,7 @@ fn a_picture_the_wheel_has_taken_past_its_window_is_drawn_where_the_zoom_says_it
             caption: false,
             bar: false,
             until: None,
+            step_in_flight: false,
         },
     );
     pin.zoom = Some(PinZoom::still(

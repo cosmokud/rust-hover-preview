@@ -1134,9 +1134,12 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
             // arrived-and-gone title bar is a strip of chrome, and a kind
             // that keeps its chrome in bands has never shown one (see
             // `pin_hides_chrome`).
-            Some((_, chrome, _, was_overlay, was_hiding, _))
+            Some((_, mut chrome, _, was_overlay, was_hiding, _))
                 if was_overlay == overlay && was_hiding == hides_chrome =>
             {
+                // The file the step was for has landed: the strips are the pointer's again
+                // (see `clear_pin_step_chrome`).
+                chrome.step_in_flight = false;
                 chrome
             }
             _ => {

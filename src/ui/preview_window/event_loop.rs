@@ -705,6 +705,12 @@ pub fn run_preview_window() {
                     .is_some_and(|wait| wait.started.elapsed() >= PIN_JOB_GIVEUP)
                 {
                     pin_walk_wait = None;
+                    // A walk given up on is a step that will not land, and the pin keeps the file
+                    // it is showing: the strips come back rather than stay suppressed for a file
+                    // nobody is fetching (see `clear_pin_step_chrome`).
+                    if pin_walk.is_none() {
+                        clear_pin_step_chrome();
+                    }
                 }
 
                 // And a wait that is no longer a wait takes its arc down with it, once: a
@@ -2499,6 +2505,11 @@ pub fn run_preview_window() {
                                         // of starting another (see `pin_walk_synced_its_playlist`).
                                         pin_walk_synced_its_playlist(&walk);
                                         pin_walk = Some(walk);
+                                    } else {
+                                        // The pin has left the file this walk was asked from:
+                                        // the answer is dropped, and with it the step whose
+                                        // file will not land (see `clear_pin_step_chrome`).
+                                        clear_pin_step_chrome();
                                     }
                                 }
                                 // The hand-off button's name, for the file the pin is showing
@@ -2517,6 +2528,9 @@ pub fn run_preview_window() {
                             }
                         } else {
                             pin_walk_wait = None;
+                            // A walk answered for a pin that is over is a step with no band to
+                            // land in (see `clear_pin_step_chrome`).
+                            clear_pin_step_chrome();
                         }
                     }
                     PreviewMessage::MeasureProbed { path, size } => {
@@ -3160,6 +3174,14 @@ pub fn run_preview_window() {
                     // dropping it: the setting gates a file the user named, not the playlist
                     // behind it, so the next press still steps the order it holds.
                     pin_walk = walk;
+                }
+
+                // A step whose file was stepped over or never planned has nothing left on its
+                // way to the band, so the suppression it raised ends here rather than waiting
+                // for an install that is not coming (see `clear_pin_step_chrome`). A walk still
+                // held, or a load still running, keeps it for the file that is.
+                if pin_load.is_none() && pin_walk.is_none() {
+                    clear_pin_step_chrome();
                 }
             }
 

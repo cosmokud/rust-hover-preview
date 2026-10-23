@@ -1438,6 +1438,7 @@ fn a_pins_chrome_is_shown_and_hidden_by_where_the_pointer_is() {
         caption: false,
         bar: false,
         until: None,
+        step_in_flight: false,
     };
     pressed.pressed = Some(pin_chrome::CaptionButton::Minimize);
     pressed.dragging = Some(PinDrag {

@@ -36,6 +36,7 @@ fn a_volume_popup_is_kept_on_its_control_and_put_away_once_the_pointer_has_left_
         caption: false,
         bar: false,
         until: None,
+        step_in_flight: false,
     };
     assert!(refresh_pin_chrome(&mut pin, now, on_the_popup));
     assert!(pin.volume.open);

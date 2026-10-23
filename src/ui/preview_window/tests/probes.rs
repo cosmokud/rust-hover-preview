@@ -1701,6 +1701,7 @@ fn a_pinned_mpv_film_is_placed_by_a_tick_a_drag_and_a_monitor_pass() {
             caption: false,
             bar: false,
             until: None,
+            step_in_flight: false,
         },
     );
     pin.path = PathBuf::from("a-film-the-pin-stands-above.mkv");
@@ -1812,6 +1813,7 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
             caption: false,
             bar: false,
             until: None,
+            step_in_flight: false,
         },
     )));
     assert!(
@@ -1896,6 +1898,7 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
             caption: false,
             bar: false,
             until: None,
+            step_in_flight: false,
         },
     );
     with_menu.menu.open = true;
