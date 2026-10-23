@@ -657,7 +657,7 @@ fn start_mpv_video_playback(
     if pin_host.is_some() {
         pin_film_host::note_hosted_player(child.id());
     } else if host.is_some() {
-        hover_film_host::note_hover_film_host_player(child.id());
+        hover_film_host::note_hover_film_host_player(child.id(), path);
     }
     // The pipe the player is told on, and the one thing a later command has to know about the
     // launch: whether it gave the player any audio at all (see `mpv_launched_without_audio`,

@@ -53,6 +53,9 @@ unsafe extern "system" fn the_default_answer(
 /// The host a hovered film is drawn in, and the player this app has begun into it.
 static HOVER_FILM_HOST: AtomicIsize = AtomicIsize::new(0);
 static HOVER_FILM_HOST_PLAYER: AtomicU32 = AtomicU32::new(0);
+/// The file the player in the host was begun for, so that a pin taking the host up can prove the
+/// player is the one drawing the film it was given rather than another hover's.
+static HOVER_FILM_HOST_PATH: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 /// The thread that made the host, which is the only thread Windows lets destroy it.
 static HOVER_FILM_HOST_THREAD: AtomicU32 = AtomicU32::new(0);
 static HOVER_FILM_HOST_CLASS_REGISTERED: Once = Once::new();
@@ -70,8 +73,45 @@ pub(super) fn hover_film_host_player() -> Option<u32> {
 }
 
 /// Record the player begun into the hover's host, before it has a window of its own in there.
-pub(super) fn note_hover_film_host_player(pid: u32) {
+pub(super) fn note_hover_film_host_player(pid: u32, path: &Path) {
     HOVER_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
+    if let Ok(mut held) = HOVER_FILM_HOST_PATH.lock() {
+        *held = Some(path.to_path_buf());
+    }
+}
+
+/// The hover's host, where this player is the one begun into it for this file and is already
+/// drawing there: the host a pin can move into its own window instead of beginning a second player.
+pub(super) fn the_hover_film_to_adopt(path: &Path) -> Option<HWND> {
+    if current_media_type() != Some(MediaType::Video) || video_route(path) != VideoRoute::Mpv {
+        return None;
+    }
+
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if !the_hover_player_was_begun_in_the_host(pid) || !the_hover_player_is_drawing(pid) {
+        return None;
+    }
+
+    let matches = HOVER_FILM_HOST_PATH
+        .lock()
+        .ok()
+        .and_then(|held| held.as_deref().map(|held| held == path))
+        .unwrap_or(false);
+    matches.then(hover_film_host).flatten()
+}
+
+/// Forget the hover's host after handing its window to the pin: the window is the pin's from here,
+/// so the hover's own take-down must not destroy it (see `pin_film_host`).
+pub(super) fn forget_the_hover_film_host_that_was_handed_over(host: HWND) {
+    if hover_film_host() != Some(host) {
+        return;
+    }
+    HOVER_FILM_HOST.store(0, Ordering::SeqCst);
+    HOVER_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
+    HOVER_FILM_HOST_THREAD.store(0, Ordering::SeqCst);
+    if let Ok(mut held) = HOVER_FILM_HOST_PATH.lock() {
+        *held = None;
+    }
 }
 
 /// Whether this file is a hovered mpv film that a host should hold: the pins' own route changed
@@ -172,6 +212,9 @@ pub(super) unsafe fn take_down_the_hover_film_host() {
     HOVER_FILM_HOST.store(0, Ordering::SeqCst);
     HOVER_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
     HOVER_FILM_HOST_THREAD.store(0, Ordering::SeqCst);
+    if let Ok(mut held) = HOVER_FILM_HOST_PATH.lock() {
+        *held = None;
+    }
 }
 
 /// Destroy the host only where this player is the one it holds: the owner-aware teardown, so a

@@ -893,12 +893,45 @@ pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
         return false;
     }
 
+    // A hosted hover's player has no copied subtitle to add, and relaunching it would be the
+    // second decode this road exists to avoid. The pin keeps the film without the late copy until
+    // its next relaunch (a seek, a step, or a track change).
+    if hover_film_host::the_hover_player_was_begun_in_the_host(VIDEO_PID.load(Ordering::SeqCst)) {
+        return false;
+    }
+
     restart_pinned_player(
         &pinned,
         content,
         pinned_playhead().unwrap_or(0.0),
         transport.paused_at.is_some(),
     );
+
+    true
+}
+
+/// Move the hover's already-running host into the pin, and give the film the pin's level.
+///
+/// **Nothing is begun and nothing is frozen.** The player in the host is the one that was drawing
+/// the hover: the same child, the same pid, the same playhead. The only changes are the window it
+/// draws in and the level the pin plays it at; the transport was already written at the take-up
+/// from `video_loop_playhead`, so the bar continues from where the hover had reached rather than
+/// from a frozen second.
+pub(super) fn adopt_the_hovered_film_in_the_host() -> bool {
+    let Some((path, _)) = pinned_media_owner() else {
+        return false;
+    };
+
+    let Some(host) = hover_film_host::the_hover_film_to_adopt(&path) else {
+        return false;
+    };
+
+    unsafe { pin_film_host::take_up_the_pin_film_host(Some(host)) };
+
+    // This also asks `aid` back where the hover was begun muted and the pin has a level to hear.
+    let volume = pinned_volume_level();
+    mpv_ipc::set_volume(VIDEO_PID.load(Ordering::SeqCst), volume);
+    with_pin(|pin| pin.volume.playing_at = volume);
 
     true
 }

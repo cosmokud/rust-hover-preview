@@ -245,7 +245,7 @@ fn the_hover_host_follows_the_box_and_answers_for_the_players_window() {
         "and follows it on a move or a relayout"
     );
 
-    hover_film_host::note_hover_film_host_player(pid);
+    hover_film_host::note_hover_film_host_player(pid, &a_film());
     assert!(
         !hover_film_host::the_hover_player_is_drawing(pid),
         "recording the player is not a picture"

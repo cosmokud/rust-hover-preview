@@ -30,9 +30,12 @@ use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, ShowWindow, GW_CHILD, GW_HWNDNEXT,
-    GWL_STYLE, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, RegisterClassExW, SetParent, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, HWND_NOTOPMOST, HWND_TOP,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    WS_POPUP, WS_VISIBLE,
 };
 
 use super::*;
@@ -196,7 +199,12 @@ fn band_in_the_window(content: ScreenRegion) -> (i32, i32, i32, i32) {
 /// already and is shown here; one a fresh launch made is shown by the tick's own road once that
 /// child is there (see `ensure_video_window_topmost`), and the park's settle that shows it again
 /// after a park.
-pub(super) unsafe fn take_up_the_pin_film_host() {
+///
+/// `adopted` is the hover's top-level host on the road that moves an already-running film into the
+/// pin: its player is the one drawing the hover, and the window is re-styled and re-parented rather
+/// than replaced (see `adopt_the_hover_film_host`). Every other road passes `None` and a fresh child
+/// is made where there is none.
+pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
     let Some(path) = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.path.clone())) else {
         take_down_the_pin_film_host();
         return;
@@ -210,6 +218,11 @@ pub(super) unsafe fn take_up_the_pin_film_host() {
     let Some(content) = pinned_content() else {
         return;
     };
+
+    if let Some(host) = adopted.filter(|host| unsafe { IsWindow(*host) }.as_bool()) {
+        unsafe { adopt_the_hover_film_host(host, content) };
+        return;
+    }
 
     let host = match film_host() {
         Some(host) => host,
@@ -253,6 +266,74 @@ pub(super) unsafe fn take_up_the_pin_film_host() {
         let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
         pin_chrome_strips::sync_the_chrome_strips();
     }
+}
+
+/// Move the hover's already-running top-level host into the pin's window.
+///
+/// **The player is not begun again.** Its child keeps drawing where it is; only the window around
+/// it changes parent and style. The order is the one Windows needs and the spike proved: clear the
+/// topmost band while the host is still top-level, turn `WS_POPUP` into `WS_CHILD`, `SetParent`,
+/// clear the topmost bit `SetParent` puts back, then place the host at the pin's band and show it
+/// (the pin was shown first, so the host is never revealed with a hidden parent). The host stays
+/// disabled, so a press on the picture is still a press on the pin.
+unsafe fn adopt_the_hover_film_host(host: HWND, content: ScreenRegion) {
+    let Some(parent) = pin_real_window::real_pin_window() else {
+        return;
+    };
+    let pid = hover_film_host::hover_film_host_player().unwrap_or(0);
+    let (x, y, width, height) = band_in_the_window(content);
+
+    // The topmost band goes before the style does, while the window is still a window of the
+    // desktop's: a child cannot hold it, and SetParent would only put it back.
+    let ex = GetWindowLongPtrW(host, GWL_EXSTYLE);
+    let ex = ex & !(WS_EX_TOPMOST.0 as isize) & !(WS_EX_TRANSPARENT.0 as isize);
+    let _ = SetWindowLongPtrW(host, GWL_EXSTYLE, ex);
+    let _ = SetWindowPos(
+        host,
+        HWND_NOTOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+
+    let style = GetWindowLongPtrW(host, GWL_STYLE);
+    let style = (style & !(WS_POPUP.0 as isize)) | WS_CHILD.0 as isize;
+    let _ = SetWindowLongPtrW(host, GWL_STYLE, style);
+    let _ = SetParent(host, parent);
+
+    // `SetParent` restores the topmost bit for a window that had one; the pin's host wears none.
+    let _ = SetWindowLongPtrW(host, GWL_EXSTYLE, ex);
+    let _ = SetWindowPos(
+        host,
+        HWND_NOTOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+    let _ = SetWindowPos(
+        host,
+        HWND_TOP,
+        x,
+        y,
+        width,
+        height,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
+    let _ = EnableWindow(host, false);
+
+    PIN_FILM_HOST.store(host.0 as isize, Ordering::SeqCst);
+    PIN_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
+    // The hover had already proved its frame: keep the latch rather than making the pin ask again.
+    PRESENTED_PID.store(pid, Ordering::SeqCst);
+    hover_film_host::forget_the_hover_film_host_that_was_handed_over(host);
+    VIDEO_HWND.store(0, Ordering::SeqCst);
+
+    pin_chrome_strips::place_the_chrome_strips();
+    unsafe { pin_chrome_strips::raise_the_chrome_strips_over_the_host() };
 }
 
 /// Put the host at the pin's band, without showing it: the band-change road, where the window is

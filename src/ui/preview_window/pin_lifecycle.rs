@@ -1239,14 +1239,29 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // hover coming down (see `pin_film_host::settle_pin_handover`). Where the pin is already
     // standing over a park, the film is adopted the synchronous way instead: the cover that park
     // raised is the placeholder, and the show below hands the band over through it.
+    // **And a film the pin took up from a hover whose player is already in the app's host is
+    // moved rather than begun again.** The host the hover was drawing in is re-parented into this
+    // window once the pin is on the screen, and its player keeps the same child and the same
+    // playhead — no freeze, no read back of `time-pos`, no second decode. Every other take-up from
+    // a hover keeps the freeze/relaunch handover below as the fallback.
+    let adopts_the_hover_host = pin_is_its_own_window()
+        && pin_state()
+            .and_then(|pinned| {
+                pinned
+                    .pin()
+                    .map(|pin| hover_film_host::the_hover_film_to_adopt(&pin.path).is_some())
+            })
+            .unwrap_or(false);
     unsafe {
         if pin_is_its_own_window() {
-            pin_film_host::take_up_the_pin_film_host();
-            if begin_the_adopted_film_in_the_host() && !pin_player_is_parked() {
-                with_pin(|pin| pin.chrome = PinChrome::hidden());
-                pin_film_host::arm_pin_handover();
-                render_pinned_preview_at(hwnd, window.0, window.1);
-                return;
+            if !adopts_the_hover_host {
+                pin_film_host::take_up_the_pin_film_host(None);
+                if begin_the_adopted_film_in_the_host() && !pin_player_is_parked() {
+                    with_pin(|pin| pin.chrome = PinChrome::hidden());
+                    pin_film_host::arm_pin_handover();
+                    render_pinned_preview_at(hwnd, window.0, window.1);
+                    return;
+                }
             }
         } else {
             pin_film_host::take_down_the_pin_film_host();
@@ -1306,6 +1321,14 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+    // The pin is painted and on the screen over the hover's still-top-level host, and only now is
+    // that host moved into this window: the move is the visible handover, and the picture never
+    // sits in a hidden parent or behind a pin that has not appeared yet.
+    if adopts_the_hover_host {
+        adopt_the_hovered_film_in_the_host();
+    }
+
     // Traced for the take-up that shows the pin: a step's cover was painted before this line, so
     // the bars appear over the held frame, and a take-up from a hover reaches it through the
     // handover with the film already drawing (see `settle_pin_handover`).
