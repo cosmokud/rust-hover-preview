@@ -67,6 +67,7 @@ mod engine_render;
 mod event_loop;
 mod ffplay_window;
 mod hover_facts;
+mod hover_film_host;
 mod image_cache;
 mod layout;
 mod load;

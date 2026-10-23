@@ -125,7 +125,10 @@ pub(super) fn the_pinned_player_was_begun_in_the_host() -> bool {
 /// is what the host is shown for and the cover handed over on (see `host_has_a_child_of`). No
 /// timer poll invents it and nothing shown is hidden again.
 pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
-    pid != 0 && hosted_player_pid() == Some(pid) && host_has_a_child_of(pid)
+    let Some(host) = film_host() else {
+        return false;
+    };
+    pid != 0 && hosted_player_pid() == Some(pid) && a_child_of_the_host(host, pid).is_some()
 }
 
 /// Whether this player has a window on screen: a window of the desktop's of its own, or the child
@@ -136,11 +139,11 @@ pub(super) fn the_players_window_is_up(pid: u32) -> bool {
     video_window_for(pid).is_some() || the_hosted_player_is_drawing(pid)
 }
 
-fn host_has_a_child_of(pid: u32) -> bool {
-    let Some(host) = film_host() else {
-        return false;
-    };
-
+/// The window a player of `pid`'s has made under `host`, where it is drawing: the shown child with
+/// a box, which is the engine's own report of a first frame (see `the_hosted_player_is_drawing`).
+/// The style is read rather than `IsWindowVisible`, because a host is hidden until that frame — a
+/// shown child under a hidden host is still the film arriving.
+pub(super) fn a_child_of_the_host(host: HWND, pid: u32) -> Option<HWND> {
     unsafe {
         let mut child = GetWindow(host, GW_CHILD).unwrap_or_default();
         while !child.is_invalid() {
@@ -148,9 +151,7 @@ fn host_has_a_child_of(pid: u32) -> bool {
             GetWindowThreadProcessId(child, Some(&mut owner));
             // A made window is not a drawn one: a child without the shown style or with no box
             // is a player still opening, so only the engine's own shown window with a box is taken
-            // as its first frame (see `the_hosted_player_is_drawing`). The style is read rather
-            // than `IsWindowVisible`, because the host itself is hidden until the first frame —
-            // a shown child under a hidden host is still the film arriving.
+            // as its first frame.
             // SAFETY: `child` is a live window found under this app's own host, and the style is
             // a read of its own bits that reports rather than faults for a window on its way out.
             let shown = GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE.0 as isize != 0;
@@ -160,14 +161,14 @@ fn host_has_a_child_of(pid: u32) -> bool {
                     && rect.right > rect.left
                     && rect.bottom > rect.top
                 {
-                    return true;
+                    return Some(child);
                 }
             }
             child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
         }
     }
 
-    false
+    None
 }
 
 /// The band's rectangle in the pin window's own client coordinates: the whole window for a film,
@@ -403,6 +404,10 @@ pub(super) fn held_hover_for_a_test() -> Option<(u32, f64)> {
 /// `retire_orphaned_player`).
 fn retire_the_frozen_hover(frozen: Option<FrozenHover>) {
     if let Some(frozen) = frozen {
+        // The host the hover was drawn in is the picture no longer, and the pin it was waiting
+        // for has already been shown: destroying the host ends mpv with it, so the retire below
+        // is the confirmation rather than the picture's own end (see `hover_film_host`).
+        unsafe { hover_film_host::take_down_the_hover_film_host_if_it_held(frozen.pid) };
         retire_orphaned_player(frozen.pid);
     }
 }

@@ -276,6 +276,43 @@ pub(super) fn start_video_playback(
     volume: u32,
     subtitle: Option<usize>,
 ) -> Option<PlayerProcess> {
+    start_video_playback_where(
+        path, x, y, width, height, start, hold, volume, subtitle, true,
+    )
+}
+
+/// Begin the same film again on the ordinary top-level road, with no host: the one fallback a
+/// hover whose hosted player never drew is given (see `event_loop`'s video wait).
+#[allow(clippy::too_many_arguments)] // The launch's facts, passed through unchanged.
+pub(super) fn restart_hover_video_without_a_host(
+    path: &PathBuf,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    start: f64,
+    hold: bool,
+    volume: u32,
+    subtitle: Option<usize>,
+) -> Option<PlayerProcess> {
+    start_video_playback_where(
+        path, x, y, width, height, start, hold, volume, subtitle, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
+fn start_video_playback_where(
+    path: &PathBuf,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    start: f64,
+    hold: bool,
+    volume: u32,
+    subtitle: Option<usize>,
+    allow_the_hover_host: bool,
+) -> Option<PlayerProcess> {
     let volume = volume.min(100);
 
     // Which player this file is begun with, asked here rather than left to the caller because
@@ -307,7 +344,18 @@ pub(super) fn start_video_playback(
     };
 
     if route == VideoRoute::Mpv {
-        return start_mpv_video_playback(path, x, y, width, height, start, hold, volume, gain);
+        return start_mpv_video_playback(
+            path,
+            x,
+            y,
+            width,
+            height,
+            start,
+            hold,
+            volume,
+            gain,
+            allow_the_hover_host,
+        );
     }
 
     // Use ffplay for video playback - borderless, positioned at preview location
@@ -539,6 +587,7 @@ fn start_mpv_video_playback(
     hold: bool,
     volume: u32,
     gain: Option<f64>,
+    allow_the_hover_host: bool,
 ) -> Option<PlayerProcess> {
     // The switches are read here, at the launch, for the reason the ffplay route reads its own
     // here: a film already playing was started with the answer that stood then and is kept
@@ -565,10 +614,19 @@ fn start_mpv_video_playback(
     let (asked_width, asked_height) =
         video_launch::mpv_box_size(width, height, dpi_at(x, y), dpi_at(0, 0));
 
-    // The window this player draws into, where it is the pin's to give: a pinned mpv film is a
-    // child of the pin's own window, and a player told about it has no top-level window for the
-    // tick to place (see `mpv_launch_host`).
-    let host = mpv_launch_host(path);
+    // The window this player draws into, where it is this app's to give: a pinned mpv film is a
+    // child of the pin's own window, and a hover whose Pin Mode is on gets a top-level host of the
+    // app's own so that the film can move into the pin without a second launch (see
+    // `mpv_launch_host` and `hover_film_host`).
+    let pin_host = mpv_launch_host(path);
+    let host = pin_host.or_else(|| {
+        (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
+            .then(|| unsafe {
+                hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
+                    .map(|host| host.0 as usize as u32)
+            })
+            .flatten()
+    });
 
     let mut command = engine_processes::hidden_command(program);
     command
@@ -594,9 +652,12 @@ fn start_mpv_video_playback(
     let child = spawn_player(&mut command)?;
     // **The host holds this player and no older one**, recorded before the player has a window of
     // its own in there: the wait for the film's first frame is a wait for this player's child and
-    // not the last film's, which is what the pid beside the host is for (see `pin_film_host`).
-    if host.is_some() {
+    // not the last film's, which is what the pid beside the host is for (see `pin_film_host` and
+    // `hover_film_host`).
+    if pin_host.is_some() {
         pin_film_host::note_hosted_player(child.id());
+    } else if host.is_some() {
+        hover_film_host::note_hover_film_host_player(child.id());
     }
     // The pipe the player is told on, and the one thing a later command has to know about the
     // launch: whether it gave the player any audio at all (see `mpv_launched_without_audio`,
@@ -697,6 +758,12 @@ pub(super) struct VideoStart {
     pub(super) path: PathBuf,
     pub(super) pid: u32,
     pub(super) started: Instant,
+    /// Whether this player was begun into the hover's own host, and so has no window of the
+    /// desktop's to wait for (see `hover_film_host`).
+    pub(super) hosted: bool,
+    /// Whether the one top-level fallback has already been spent for this hover: a hosted player
+    /// that never draws is begun again once without `--wid`, and a second failure is abandoned.
+    pub(super) fell_back: bool,
 }
 
 /// A video the media engine plays whose preview is up but has no frame of the file in it
@@ -770,6 +837,13 @@ pub(super) fn first_frame_lands(
 /// on: a player that has not by then is one that will not, and a spinner that never ends
 /// is worse than the desktop it leaves behind.
 pub(super) const VIDEO_START_WAIT_SECS: u64 = 10;
+
+/// Whether a hovered player that was begun into the app's host is owed the one top-level
+/// relaunch, rather than being abandoned: it is still alive and never drew, and the fallback has
+/// not already been spent on this hover (see `restart_hover_video_without_a_host`).
+pub(super) fn the_hover_host_fallback_is_owed(hosted: bool, fell_back: bool, alive: bool) -> bool {
+    hosted && !fell_back && alive
+}
 
 /// How the wait for a player stands: whether the video is on screen now, whether the
 /// wait is over some other way, or whether the player is still starting.
@@ -869,6 +943,13 @@ pub(super) fn stop_video_playback(media: &mut MediaData) {
     }
 
     kill_player_process(media);
+
+    // With no pin up the hover's own host is the film no longer, whatever the media held: it goes
+    // down on the preview thread that made it, so no black top-level window outlives the hover
+    // (see `hover_film_host`).
+    if !pinned() {
+        unsafe { hover_film_host::take_down_the_hover_film_host() };
+    }
 }
 
 /// End the player process a preview holds, if it has one, and forget its window.
@@ -878,6 +959,7 @@ pub(super) fn stop_video_playback(media: &mut MediaData) {
 /// thread end the `ffplay` a hover started without reaching for the media engine, whose
 /// session is the preview thread's alone (see `stop_video_playback` and `hide_preview`).
 pub(super) fn kill_player_process(media: &mut MediaData) {
+    let killed = media.video_process.as_ref().map(|process| process.id());
     if let Some(ref mut process) = media.video_process {
         // The pipe a player was told things on goes with the player: nothing is left behind for a
         // command to reach once the process is ended (see `mpv_ipc`).
@@ -888,6 +970,12 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
         let _ = process.kill();
     }
     media.video_process = None;
+    // **The hover's host goes with the player it was holding**, and only with that one: a pin's
+    // teardown passes another player and must not take the hover's host with it (see
+    // `hover_film_host`).
+    if let Some(pid) = killed {
+        unsafe { hover_film_host::take_down_the_hover_film_host_if_it_held(pid) };
+    }
     // Clear the video window HWND. VIDEO_PID stays recorded until the process
     // is confirmed gone, so a surviving ffplay can still be found and killed.
     VIDEO_HWND.store(0, Ordering::SeqCst);
@@ -1274,6 +1362,19 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
             // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
             // takes any window and reports rather than faults.
             unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+        }
+        return true;
+    }
+    // **A hover's film in the app's own top-level host is not a window of the desktop's to order,
+    // style or raise either.** The host is the picture and the box this road was handed is the
+    // hover's own, so placing the host at it and showing it once the player draws is the whole of
+    // what the hover is owed; neither the host nor mpv's child is enumerated or styled as a
+    // player's own top-level window (see `hover_film_host`).
+    let hover_pid = VIDEO_PID.load(Ordering::SeqCst);
+    if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid) {
+        unsafe { hover_film_host::place_the_hover_film_host((x, y, x + width, y + height)) };
+        if hover_film_host::the_hover_player_is_drawing(hover_pid) {
+            unsafe { hover_film_host::set_the_hover_film_host_visible(true) };
         }
         return true;
     }

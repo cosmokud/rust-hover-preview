@@ -259,6 +259,11 @@ pub fn hide_preview() {
         kill_stray_video_process();
     }
 
+    // A hover's film host goes down with it. This thread may not own that window — the loop's
+    // `Hide` below takes it down there — so a take-down here is only ever the same thread's case,
+    // and the `Hide` covers every other (see `hover_film_host`).
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+
     send_preview(PreviewMessage::Hide);
 }
 
