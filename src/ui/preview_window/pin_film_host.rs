@@ -30,9 +30,9 @@ use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, ShowWindow, GW_CHILD, GW_HWNDNEXT,
-    GWL_STYLE, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsWindowVisible, RegisterClassExW, ShowWindow, GWL_STYLE, GW_CHILD,
+    GW_HWNDNEXT, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_VISIBLE,
 };
 
 use super::*;
@@ -122,6 +122,22 @@ pub(super) fn the_pinned_player_was_begun_in_the_host() -> bool {
 /// timer poll invents it and nothing shown is hidden again.
 pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
     pid != 0 && hosted_player_pid() == Some(pid) && host_has_a_child_of(pid)
+}
+
+/// Whether the band a host stands in has no film in it: a host is up and its player has not put a
+/// picture under it, or the host is off the band. The band is then the pin's to paint opaque black
+/// rather than a hole through to the desktop, whether the player is still opening, has been hidden,
+/// or the media has already been let go (see `render_pinned_preview_at`).
+pub(super) fn the_band_has_no_film(parked: bool) -> bool {
+    if parked {
+        return false;
+    }
+    let Some(host) = film_host() else {
+        return false;
+    };
+
+    !the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::Acquire))
+        || !unsafe { IsWindowVisible(host) }.as_bool()
 }
 
 /// Whether this player has a window on screen: a window of the desktop's of its own, or the child

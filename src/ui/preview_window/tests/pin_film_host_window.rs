@@ -27,6 +27,31 @@ unsafe fn window_rect(hwnd: HWND) -> ScreenRegion {
     (rect.left, rect.top, rect.right, rect.bottom)
 }
 
+/// The pixel in the middle of the pin's media band, read out of the layered surface the last paint
+/// wrote.
+fn the_band_pixel(film: &StandingFilm) -> [u8; 4] {
+    let (width, height) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+        .expect("a pin to have a size");
+    let bits = ensure_layered_surface(film.pin_hwnd.0 as isize, width as u32, height as u32)
+        .expect("the surface the paint drew into");
+    let painted = unsafe { std::slice::from_raw_parts(bits, width as usize * height as usize * 4) };
+    let (band_top, band_height) = pinned_band_rows(
+        height,
+        pinned_caption_height(96, None),
+        0,
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.overlay)) == Some(true),
+    );
+    let row = (band_top.max(0) as usize + band_height as usize / 2).min(height as usize - 1);
+    let start = row * width as usize * 4;
+    [
+        painted[start],
+        painted[start + 1],
+        painted[start + 2],
+        painted[start + 3],
+    ]
+}
+
 /// A pin of a film standing in its own window at `box_`, with mpv as the engine that plays it and
 /// the pin's pid the one this process answers to.
 ///
@@ -2024,6 +2049,128 @@ fn a_hosted_band_with_no_film_in_it_is_opaque_never_a_hole() {
         pixel[3], 255,
         "a band with no film in it is opaque, never a hole in the desktop (row {row}: {pixel:?})"
     );
+}
+
+/// A repaint with no media and no film in the host is still opaque: the swap clears the media
+/// before the host is hidden, and a paint in that gap must leave black rather than the desktop
+/// (see `render_pinned_preview_at` and `pin_film_host::the_band_has_no_film`).
+#[test]
+fn a_band_with_no_media_and_no_film_is_opaque_never_a_hole() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let child = unsafe { a_child_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1);
+    }
+    assert_eq!(
+        the_band_pixel(&film)[3],
+        1,
+        "a film drawing in the host is the pin's least claim on the band"
+    );
+
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = None;
+    }
+    unsafe {
+        pin_film_host::set_the_pin_film_host_visible(false);
+        render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1);
+    }
+    assert_eq!(
+        the_band_pixel(&film)[3],
+        255,
+        "with no media and no film the band is black, never a hole in the desktop"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(child);
+    };
+}
+
+/// Taking a hosted film down paints the band black before the host goes off it, so the compositor
+/// never gets a frame with a hidden host behind the old transparent band (see
+/// `take_down_pinned_media`).
+#[test]
+fn taking_the_film_down_covers_the_band_before_the_host_goes() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let child = unsafe { a_child_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1);
+    }
+    assert_eq!(the_band_pixel(&film)[3], 1, "the band is the film's claim");
+
+    take_down_pinned_media();
+
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host goes off the band with the media"
+    );
+    assert_eq!(
+        the_band_pixel(&film)[3],
+        255,
+        "and the paint that covered it is already on the surface"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(child);
+    };
+}
+
+/// The same for the player a swap ends while keeping its media: the band is painted black before
+/// the host is hidden (see `stop_pinned_player`).
+#[test]
+fn stopping_the_film_covers_the_band_before_the_host_goes() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let child = unsafe { a_child_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1);
+    }
+    assert_eq!(the_band_pixel(&film)[3], 1, "the band is the film's claim");
+
+    note_player_process(drawn, MPV_IMAGE_NAME);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.video_process = Some(PlayerProcess::Noted(drawn));
+        }
+    }
+
+    stop_pinned_player();
+
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host goes off the band with the player"
+    );
+    assert_eq!(
+        the_band_pixel(&film)[3],
+        255,
+        "and the paint that covered it is already on the surface"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(child);
+    };
 }
 
 /// A step holds the old cover until the new film's first frame: parked over a band with no
