@@ -1916,6 +1916,119 @@ fn the_chrome_stays_hidden_at_spawn_and_follows_the_pointer_over_the_pin() {
     drop(film);
 }
 
+/// A step's arrival is the film's frame and not its window: the player's shown child is a band
+/// the chrome would stand over black, so the strips wait for the player's own `vo-configured` and
+/// the pointer near them asks for nothing until then. The latch that saves the pipe read is per
+/// player, so a new player proves its own frame (see `the_hosted_frame_is_up`).
+#[test]
+fn the_chrome_waits_for_the_hosted_films_frame_not_its_window() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    // The window the player has made, with its video output not configured for a frame yet.
+    let _child = unsafe { a_child_of_the_host(host) };
+    with_pin(|pin| {
+        pin.chrome = PinChrome::hidden();
+        pin.transport_bar = true;
+    });
+    stand_window_at_point_in(Some(film.pin_hwnd.0 as isize));
+    let window = film.box_;
+    let caption_cursor = Some((window.0 + 5, window.1));
+    let refresh = |cursor| {
+        pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            Some(refresh_pin_chrome(pin, Instant::now(), cursor))
+        })
+    };
+
+    assert!(
+        pin_film_host::the_hosted_player_is_drawing(pid),
+        "the player has a window under the host"
+    );
+    assert!(
+        !pin_film_host::the_hosted_frame_is_up(pid),
+        "which is not a frame it has drawn"
+    );
+    refresh(caption_cursor);
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((false, false)),
+        "a pointer on the caption asks for nothing over a window with no picture"
+    );
+
+    // The player's own word that the frame is drawn, and the pointer asks the caption back.
+    the_hosted_player_has_the_frame(pid, "0.000000");
+    assert_eq!(
+        refresh(caption_cursor),
+        Some(true),
+        "the tick the frame is up is the tick the chrome may come back"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((true, false)),
+        "with the caption showing and the bar left to its own end"
+    );
+
+    // The latch answers for this player and not the next: a new player is begun with no frame of
+    // its own, and the unasked pipe read is what says so.
+    mpv_ipc::answer_a_read(pid, "vo-configured", None);
+    pin_film_host::note_hosted_player(pid);
+    assert!(
+        !pin_film_host::the_hosted_frame_is_up(pid),
+        "a player just begun has not inherited the last one's frame"
+    );
+
+    stand_window_at_point_in(None);
+    mpv_ipc::clear_reads();
+    mpv_ipc::clear_noted();
+    drop(film);
+}
+
+/// The gate is for a standing pin only: a park holds its frame over the band, so its chrome stays
+/// over that held frame while the incoming player has a window and no picture yet.
+#[test]
+fn a_parked_pin_keeps_its_chrome_before_the_new_films_frame() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+    with_pin(|pin| {
+        pin.parked = true;
+        pin.chrome = PinChrome::hidden();
+        pin.transport_bar = true;
+    });
+    stand_window_at_point_in(Some(film.pin_hwnd.0 as isize));
+    assert!(pin_film_host::the_hosted_player_is_drawing(pid));
+    assert!(!pin_film_host::the_hosted_frame_is_up(pid));
+
+    let window = film.box_;
+    let shown = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(
+            pin,
+            Instant::now(),
+            Some((window.0 + 5, window.1)),
+        ))
+    });
+    assert_eq!(shown, Some(true), "a park's held frame keeps its chrome");
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((true, false)),
+        "with the caption over the cover while the new film has no picture"
+    );
+
+    stand_window_at_point_in(None);
+    drop(film);
+}
+
 /// A pin taken up on a hover's film waits for the hosted player's first frame before it
 /// appears: the take-up relaunches the adopted film into the host in the background, the hover
 /// stays up and playing as the placeholder meanwhile, and the pin's window and its strips stay
@@ -2410,9 +2523,9 @@ fn a_window_alone_is_not_a_handover() {
         "so the pin stays down and the hover's own frozen frame stays the picture"
     );
 
-    // A second the hover never froze on is a frame that is not the one on screen.
+    // A second the hover never froze on is a frame that is not the one on screen, and the video
+    // output has not configured anything yet.
     mpv_ipc::answer_a_read(drawn, "time-pos", Some("900.000000"));
-    mpv_ipc::answer_a_read(drawn, "vo-configured", Some("true"));
     assert!(
         matches!(
             unsafe { pin_film_host::settle_pin_handover() },
