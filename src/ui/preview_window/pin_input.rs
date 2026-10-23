@@ -119,10 +119,13 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         // way the tick asks it: it is the strip the pointer is in, not the window it is over.
         let (_, height) = pin.window_size();
         let bar_top = height - pinned_transport_height(pin.dpi, pin.transport_bar);
-        if y < caption.height {
+        // A step on its way, a handover, or a step's park holds the strips down: a move must not
+        // bring one back over the film it is holding (see `pin_chrome_is_held_down`).
+        let held_down = pin_chrome_is_held_down(pin);
+        if !held_down && y < caption.height {
             pin.chrome.caption = true;
         }
-        if pin.transport_bar && y >= bar_top {
+        if !held_down && pin.transport_bar && y >= bar_top {
             pin.chrome.bar = true;
         }
 

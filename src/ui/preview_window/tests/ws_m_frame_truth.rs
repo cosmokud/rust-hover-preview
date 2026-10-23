@@ -460,9 +460,14 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
         "which walks the listing along"
     );
 
-    // 2 — the next file, which is the swap.
+    // 2 — the next file, which is the swap. Its park settles before a hand can reach the
+    // window, which is when the chrome comes back with the file that replaced the film.
     step_the_pin_to_another_file();
     let window = CapturingWindow::around(a_window_at(the_window_box()));
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "the incoming player's window settles the step's park"
+    );
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Close);
     // The hand arrives before it presses: the step hid the chrome, and the move is what asks
     // the strip back — a press on a strip that is not drawn is a press on the picture, which
@@ -600,8 +605,13 @@ fn a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_b
 
     // The level, which is a button on the bar and a popup over the picture. The hand arrives
     // first, for the same reason the caption's presses do: the step hid the bar with the rest
-    // of the chrome (see `pinned_mouse_move`).
+    // of the chrome, and the settle of its park is what hands the strips back (see
+    // `pinned_mouse_move`).
     let window = CapturingWindow::around(a_window_at(the_window_box()));
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "the incoming player's window settles the step's park"
+    );
     let (x, y) = a_transport_part_point(pin_chrome::TransportPart::Volume);
     unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
     assert!(

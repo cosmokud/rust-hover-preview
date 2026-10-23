@@ -1135,9 +1135,9 @@ fn a_step_onto_a_video_parks_the_outgoing_frame() {
 }
 
 /// K2 STEP: a step asked for from the caption leaves the pointer on the caption, so the chrome
-/// must be held hidden by the step's own park rather than by where the hand happens to be. The
-/// held frame is alone on the band while the new film loads, and the pointer asks the caption
-/// back once that park has settled and the new film is in the band.
+/// must stand while the outgoing film is live and go down with the park that takes it away. The
+/// held frame is alone on the band while the new film loads, and the caption comes back in the
+/// settle call that ends that park, with the file that replaces it.
 #[test]
 fn a_step_from_the_caption_hides_the_chrome_over_the_held_frame_and_the_hover_asks_it_back() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1154,6 +1154,7 @@ fn a_step_from_the_caption_hides_the_chrome_over_the_held_frame_and_the_hover_as
     forget_pin_park_swap();
     forget_video_frame();
     forget_resume_frame();
+    pin_film_host::note_hosted_player(0);
     take_pin_command();
 
     // The step is the caption's own: a press arms the button and a release on it asks the walk
@@ -1170,8 +1171,8 @@ fn a_step_from_the_caption_hides_the_chrome_over_the_held_frame_and_the_hover_as
     );
     assert_eq!(take_pin_command(), Some(PinCommand::Next));
 
-    // The command is the walk's question, and the chrome goes down with it rather than with the
-    // park at the end: everything between the click and the new file is still the old frame.
+    // The command is the walk's question, and the chrome stands: the outgoing film is still live
+    // and the strips have no business leaving before it does.
     let mut wait = None;
     assert!(step_pinned_file(1, &mut wait, None).is_none());
     assert!(wait.is_some(), "the step is a walk the planner owes an answer");
@@ -1186,22 +1187,21 @@ fn a_step_from_the_caption_hides_the_chrome_over_the_held_frame_and_the_hover_as
     let cursor = Some((box_.0 + x, box_.1 + y));
     with_pin(|pin| {
         pin.chrome.caption = true;
-        pin.chrome.bar = true;
+        pin.chrome.bar = false;
         pin.chrome.until = None;
     });
-    let hidden = pin_state().and_then(|mut pinned| {
+    pin_state().and_then(|mut pinned| {
         let pin = pinned.pin_mut()?;
         Some(refresh_pin_chrome(pin, Instant::now(), cursor))
     });
     assert_eq!(
-        hidden,
-        Some(true),
-        "the step takes the chrome down the moment it is asked, before any park"
-    );
-    assert_eq!(
         pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
-        Some((false, false)),
-        "with the pointer still on the caption it clicked"
+        Some((true, false)),
+        "and the chrome stands while the outgoing film is still live, with the pointer still on the caption it clicked"
+    );
+    assert!(
+        pin_state().is_some_and(|pinned| pinned.pin().is_some_and(|pin| !pin.chrome.step_in_flight)),
+        "and the ask alone does not raise the step's suppression"
     );
 
     assert!(
@@ -1212,31 +1212,28 @@ fn a_step_from_the_caption_hides_the_chrome_over_the_held_frame_and_the_hover_as
         pin_player_is_parked() && park_record_owner() == Some(ParkArm::Step),
         "with the step's own park holding the outgoing frame"
     );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((false, false)),
+        "and the chrome goes down in the same call as the park that hides the film"
+    );
 
     // The new film draws and the park hands the band over; the take-up of that file clears the
-    // step's suppression, and the same pointer asks the caption back.
+    // step's suppression, and the chrome is asked back inside that same settle call.
     fake_end_relaunch(103, 0.0, false);
+    clear_pin_step_chrome();
+    with_pin(|pin| pin.chrome.until = Some(Instant::now() + std::time::Duration::from_secs(5)));
     assert!(
-        settle_pinned_park_where(&window, true),
+        unpark_pinned_player(&window),
         "the incoming player's window settles the step's park"
     );
     assert!(!pin_player_is_parked(), "and the held frame is gone");
-
-    clear_pin_step_chrome();
-    let shown = pin_state().and_then(|mut pinned| {
-        let pin = pinned.pin_mut()?;
-        Some(refresh_pin_chrome(pin, Instant::now(), cursor))
-    });
     assert_eq!(
-        shown,
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.chrome.caption)),
         Some(true),
-        "the pointer asks the caption back once the film is in the band"
+        "and the caption is back in the settle call that ended the park"
     );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
-        Some((true, false)),
-        "the caption is back over the new film, with the bar left to its own end of the pin"
-    );
+    with_pin(|pin| pin.chrome.until = None);
 
     // The bar's end of the pin asks its own strip back the same way, now that the step's gate is
     // gone for both strips rather than only for the one the hand clicked.
@@ -1259,12 +1256,12 @@ fn a_step_from_the_caption_hides_the_chrome_over_the_held_frame_and_the_hover_as
     restore(previous_pin, previous_pid, previous_media);
 }
 
-/// K2 STEP GAP: the click's suppression covers the whole walk and load, not just the park at the
-/// end of them — the interval the user sees is the old file with a lone chrome bar over it. The
-/// flag is set where the step is asked and cleared where the new file lands, and a walk given up
-/// on without a file clears it too rather than leaving the strips suppressed for good.
+/// K2 STEP GAP: the chrome stands over the outgoing film for the whole walk and load and goes
+/// down only with the park at the end of them, while the flag stays the one that names a step on
+/// its way and is cleared where the new file lands. A walk given up on without a file clears it
+/// too rather than leaving the strips suppressed for good.
 #[test]
-fn a_step_from_the_caption_hides_the_chrome_until_the_file_it_asked_for_lands() {
+fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_lands() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -1279,6 +1276,7 @@ fn a_step_from_the_caption_hides_the_chrome_until_the_file_it_asked_for_lands() 
     forget_pin_park_swap();
     forget_video_frame();
     forget_resume_frame();
+    pin_film_host::note_hosted_player(0);
     take_pin_command();
     if let Ok(mut pending) = PIN_JOBS.0.lock() {
         *pending = None;
@@ -1313,25 +1311,20 @@ fn a_step_from_the_caption_hides_the_chrome_until_the_file_it_asked_for_lands() 
         .expect("a pin up");
     let cursor = Some((box_.0 + x, box_.1 + y));
 
-    // No cover and no park yet — this is the gap the user sees. The pointer is still on the
-    // chevron, so hover would put the caption straight back unless the step itself holds it.
-    let hidden = pin_state().and_then(|mut pinned| {
+    // No cover and no park yet — this is the gap the user sees, and the outgoing film is still
+    // live under it, so the chrome stands rather than leaving a lone strip over an old frame.
+    pin_state().and_then(|mut pinned| {
         let pin = pinned.pin_mut()?;
         Some(refresh_pin_chrome(pin, Instant::now(), cursor))
     });
     assert_eq!(
-        hidden,
-        Some(true),
-        "the step takes the chrome down the moment it is asked"
-    );
-    assert_eq!(
         pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
-        Some((false, false)),
-        "with the pointer still on the chevron it clicked"
+        Some((true, false)),
+        "and the step leaves the chrome up while the outgoing film is live, with the pointer still on the chevron it clicked"
     );
     assert!(
-        pin_state().is_some_and(|pinned| pinned.pin().is_some_and(|pin| pin.chrome.step_in_flight)),
-        "and the step is the thing holding them down"
+        pin_state().is_some_and(|pinned| pinned.pin().is_some_and(|pin| !pin.chrome.step_in_flight)),
+        "and asking for the step raises no suppression of its own"
     );
 
     // The file lands: the take-up hides the chrome it draws for this file, and that hidden
@@ -1381,6 +1374,171 @@ fn a_step_from_the_caption_hides_the_chrome_until_the_file_it_asked_for_lands() 
     if let Ok(mut pending) = PIN_JOBS.0.lock() {
         *pending = None;
     }
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// A step is asked and the outgoing film is still live: the chrome stands, with no suppression
+/// raised by the ask alone.
+#[test]
+fn a_step_ask_leaves_the_chrome_up_while_the_outgoing_film_is_live() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 800, 320);
+    let mut pin = wide_banded_video_pin(content, 30.0);
+    pin.hides_chrome = true;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    pin_film_host::note_hosted_player(0);
+    take_pin_command();
+    if let Ok(mut pending) = PIN_JOBS.0.lock() {
+        *pending = None;
+    }
+
+    let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
+    assert!(unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) });
+    let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
+    assert!(unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) });
+    assert_eq!(take_pin_command(), Some(PinCommand::Next));
+    let mut wait = None;
+    assert!(step_pinned_file(1, &mut wait, None).is_none());
+    assert!(wait.is_some(), "the planner owes the step an answer");
+    if let Ok(mut pending) = PIN_JOBS.0.lock() {
+        *pending = None;
+    }
+
+    let box_ = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .expect("a pin up");
+    let cursor = Some((box_.0 + x, box_.1 + y));
+    pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(pin, Instant::now(), cursor))
+    });
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((true, false)),
+        "and the chrome stands over the live film, with the pointer still on the chevron it clicked"
+    );
+    assert!(
+        pin_state().is_some_and(|pinned| pinned.pin().is_some_and(|pin| !pin.chrome.step_in_flight)),
+        "and the ask raises no step suppression of its own"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// The step's park takes the chrome down in its own call, not one tick or one message later.
+#[test]
+fn a_step_park_takes_the_chrome_down_in_the_same_park_call() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    stand_pin(Some(playing_pin(content, 30.0)));
+    with_pin(|pin| {
+        pin.chrome.caption = true;
+        pin.chrome.bar = false;
+    });
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    assert!(cover_step_swap_for_video(true), "a step onto a video parks");
+    assert!(
+        pin_player_is_parked() && park_record_owner() == Some(ParkArm::Step),
+        "with the step's own park holding the outgoing frame"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((false, false)),
+        "the strips go down in the park call that hid the film"
+    );
+    assert!(
+        pin_state().is_some_and(|pinned| pinned.pin().is_some_and(|pin| pin.chrome.step_in_flight)),
+        "and the park is what raised the step's suppression"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// The settle that ends a step's park asks the chrome back in its own call, once the take-up has
+/// cleared the step, so the caption is painted over the file that replaced the film.
+#[test]
+fn the_settle_that_ends_a_step_park_brings_the_caption_back_in_the_same_call() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    stand_pin(Some(playing_pin(content, 30.0)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    assert!(cover_step_swap_for_video(true), "the step covers");
+    clear_pin_step_chrome();
+    // An armed arrival keeps the answer off the desktop's own pointer, so the same-call question
+    // is answerable on a headless run (see `PinChrome::until`).
+    with_pin(|pin| pin.chrome.until = Some(Instant::now() + std::time::Duration::from_secs(5)));
+    fake_end_relaunch(103, 0.0, false);
+    let window = RecordedPinWindow::new(0x1000);
+
+    assert!(
+        unpark_pinned_player(&window),
+        "the incoming player's window settles the step's park"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.chrome.caption)),
+        Some(true),
+        "and the caption is back in the settle call itself"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// A hand moving over the caption while a step is in flight must not bring a strip back over the
+/// film the step is holding.
+#[test]
+fn a_move_over_the_caption_does_not_bring_a_strip_back_while_a_step_is_in_flight() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 800, 320);
+    let mut pin = wide_banded_video_pin(content, 30.0);
+    pin.hides_chrome = true;
+    pin.chrome = PinChrome::hidden();
+    pin.chrome.step_in_flight = true;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((false, false)),
+        "a move is not an ask while the step holds the strips down"
+    );
+
     restore(previous_pin, previous_pid, previous_media);
 }
 
