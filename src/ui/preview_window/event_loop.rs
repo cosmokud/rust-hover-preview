@@ -840,6 +840,10 @@ pub fn run_preview_window() {
                 // release is the first tick that finds the replacement up (see
                 // `settle_pinned_park`).
                 settle_pinned_park();
+                // And the cover a move raised while the hover's host was re-parented: it stands
+                // until a frame has been drawn into the moved window, then gives the band back to
+                // the film's alpha-1 claim before any later park can see a stale frame.
+                pin_film_host::settle_the_move_cover();
                 settle_pending_hold();
 
                 // And what the taskbar button's own hover is offering, which is settled by the same

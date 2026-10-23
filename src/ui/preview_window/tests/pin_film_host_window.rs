@@ -11,12 +11,38 @@
 //! its own until its ticket, and every other kind is this app's own frame.
 
 use super::*;
+use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetParent, IsWindowVisible, MoveWindow, GWL_EXSTYLE, GWL_STYLE,
-    GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE,
-    WS_CHILD, WS_DISABLED, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetParent, GetWindowLongPtrW, IsWindowVisible,
+    MoveWindow, SetWindowLongPtrW, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOP,
+    SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WM_SHOWWINDOW, WINDOW_EX_STYLE, WS_CHILD,
+    WS_DISABLED, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
+
+/// The show and hide messages the adopted host received, in order: whether it was shown, the style
+/// it wore at that moment, and its parent. The style and parent are what tells the hide before the
+/// restyle from the show after the `SetParent` (see the move order test).
+static HOST_SHOWS: Lazy<Mutex<Vec<(bool, isize, isize)>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+unsafe extern "system" fn watch_the_host_shows(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_SHOWWINDOW {
+        let parent = unsafe { GetParent(hwnd) }
+            .ok()
+            .map(|parent| parent.0 as isize)
+            .unwrap_or(0);
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+        if let Ok(mut shows) = HOST_SHOWS.lock() {
+            shows.push((wparam.0 != 0, style, parent));
+        }
+    }
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
 const NOWHERE: i32 = -32000;
@@ -620,7 +646,12 @@ fn a_hosted_hover_move_shows_the_pin_before_the_host_and_keeps_the_chrome_hidden
     clear_restart_count();
     pin_film_host::disarm_pin_handover();
 
+    HOST_SHOWS.lock().unwrap_or_else(|held| held.into_inner()).clear();
+    let previous = unsafe {
+        SetWindowLongPtrW(hover.host, GWLP_WNDPROC, watch_the_host_shows as *const () as isize)
+    };
     unsafe { show_pinned_window(film.pin_hwnd) };
+    unsafe { SetWindowLongPtrW(hover.host, GWLP_WNDPROC, previous) };
 
     assert!(
         unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
@@ -630,6 +661,31 @@ fn a_hosted_hover_move_shows_the_pin_before_the_host_and_keeps_the_chrome_hidden
         unsafe { IsWindowVisible(hover.host) }.as_bool(),
         "and the moved film is shown inside it, not hidden with a hidden parent"
     );
+    let shows = HOST_SHOWS.lock().unwrap_or_else(|held| held.into_inner());
+    let hidden_before_the_restyle = shows
+        .iter()
+        .position(|(shown, style, parent)| {
+            !shown && style & WS_POPUP.0 as isize != 0 && *parent == 0
+        });
+    assert!(
+        hidden_before_the_restyle.is_some(),
+        "the host is hidden while still a top-level window, before the style and parent change: \
+         {shows:?}"
+    );
+    assert!(
+        shows.iter().all(|(shown, _, _)| !shown),
+        "and nothing shows it until the move's final `SetWindowPos`: {shows:?}"
+    );
+    assert_eq!(
+        unsafe { GetParent(hover.host) }.ok(),
+        Some(film.pin_hwnd),
+        "and the host ends the move shown as the pin's own child"
+    );
+    assert!(
+        unsafe { GetWindowLongPtrW(hover.host, GWL_STYLE) } & WS_CHILD.0 as isize != 0,
+        "with the child style the final show hands it"
+    );
+    drop(shows);
     let chrome = pin_state().and_then(|pinned| {
         pinned.pin().map(|pin| {
             (
@@ -3077,4 +3133,206 @@ fn a_film_that_keeps_starting_hands_the_pin_back_at_the_start_timeout() {
     clear_restart_count();
     clear_park_trace();
     drop(film);
+}
+
+/// The move cover is a picture the pin owns: its first paint after a hosted hover is taken up
+/// stands on the held frame, so the band is opaque and never the alpha-1 claim that let the
+/// desktop show through while the host left the compositor (see `raise_the_move_cover`).
+#[test]
+fn a_move_paints_the_pins_bitmap_from_the_held_frame_not_a_hole() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 3.0) };
+    // A place the screen can be read from, so the capture takes the hover's own host rather than
+    // failing off the edge of the desktop.
+    unsafe {
+        let _ = MoveWindow(hover.host, 100, 100, 320, 240, true);
+        let _ = ShowWindow(hover.host, SW_SHOWNOACTIVATE);
+    }
+    pin_film_host::disarm_pin_handover();
+    forget_video_frame();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert!(
+        pin_film_host::the_move_cover_is_up(),
+        "the adopt road raises the cover before the pin's first paint"
+    );
+    let (width, height) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+        .expect("a pin to have a size");
+    let held = held_video_frame();
+    let held = held.as_ref().expect("the frame the move holds");
+    let bits = ensure_layered_surface(film.pin_hwnd.0 as isize, width as u32, height as u32)
+        .expect("the surface the paint drew into");
+    let painted =
+        unsafe { std::slice::from_raw_parts(bits, width as usize * height as usize * 4) };
+    let (band_top, band_height) = pinned_band_rows(
+        height,
+        pinned_caption_height(96, None),
+        0,
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.overlay)) == Some(true),
+    );
+    let row = (band_top.max(0) as usize + band_height as usize / 2).min(height as usize - 1);
+    let column = width as usize / 2;
+    let pixel = &painted[(row * width as usize + column) * 4..][..4];
+    assert_eq!(pixel[3], 255, "the covered band is opaque, never a hole: {pixel:?}");
+    assert_eq!(
+        (held.width, held.height),
+        (width as u32, height as u32),
+        "the captured frame is the band the pin paints"
+    );
+    let held_pixel = &held.pixels[(row * width as usize + column) * 4..][..4];
+    assert_eq!(
+        pixel, held_pixel,
+        "the pin's bitmap carries the held frame itself, not a flat claim"
+    );
+    mpv_ipc::forget_pipe(hover.pid);
+}
+
+/// The move cover is given up only once a frame has moved in the moved window: a shown child is
+/// not proof (the hover's latch is carried over), so the clock has to pass the second captured at
+/// take-up. Then the band goes back to its alpha-1 claim, with no stale frame left behind.
+#[test]
+fn a_move_cover_waits_for_a_frame_past_the_captured_second() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 3.0) };
+    mpv_ipc::remember_pipe(hover.pid, "a-move-cover-pipe", false);
+    mpv_ipc::answer_a_read(hover.pid, "time-pos", Some("3.0"));
+    pin_film_host::disarm_pin_handover();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the host the move took up");
+    // The moved player's child is the one the hover made, and it is still shown under the host.
+    assert!(
+        pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
+        "a visible child is a player drawing, and no more than that"
+    );
+    assert!(
+        !pin_film_host::settle_the_move_cover(),
+        "the same second is the same frame: the cover stands"
+    );
+    assert!(pin_film_host::the_move_cover_is_up(), "holding the band");
+    assert!(held_video_frame().is_some(), "with the captured frame still in hand");
+
+    mpv_ipc::answer_a_read(hover.pid, "time-pos", Some("4.0"));
+    assert!(
+        pin_film_host::settle_the_move_cover(),
+        "a frame past the captured second is the moved window presenting"
+    );
+    assert!(!pin_film_host::the_move_cover_is_up(), "the cover is down");
+    assert!(
+        held_video_frame().is_none(),
+        "and the frame goes with it, so no later park opens on a stale picture"
+    );
+
+    let (width, height) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+        .expect("a pin to have a size");
+    let bits = ensure_layered_surface(film.pin_hwnd.0 as isize, width as u32, height as u32)
+        .expect("the surface the paint drew into");
+    let painted =
+        unsafe { std::slice::from_raw_parts(bits, width as usize * height as usize * 4) };
+    let (band_top, band_height) = pinned_band_rows(
+        height,
+        pinned_caption_height(96, None),
+        0,
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.overlay)) == Some(true),
+    );
+    let row = (band_top.max(0) as usize + band_height as usize / 2).min(height as usize - 1);
+    let column = width as usize / 2;
+    let pixel = &painted[(row * width as usize + column) * 4..][..4];
+    assert_eq!(
+        pixel,
+        &[1, 1, 1, 1],
+        "the handed-back band is the film's alpha-1 claim again: {pixel:?}"
+    );
+    unsafe { let _ = DestroyWindow(host); }
+    mpv_ipc::forget_pipe(hover.pid);
+}
+
+/// A move that could take no frame leaves black, never alpha zero: the pin's bitmap is the only
+/// guaranteed surface while the host changes parent (see `compose_parked_band`).
+#[test]
+fn a_move_cover_with_no_frame_is_black_never_a_hole() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    forget_video_frame();
+    pin_film_host::raise_the_move_cover();
+    unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+
+    let (width, height) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+        .expect("a pin to have a size");
+    let bits = ensure_layered_surface(film.pin_hwnd.0 as isize, width as u32, height as u32)
+        .expect("the surface the paint drew into");
+    let painted =
+        unsafe { std::slice::from_raw_parts(bits, width as usize * height as usize * 4) };
+    let (band_top, band_height) = pinned_band_rows(
+        height,
+        pinned_caption_height(96, None),
+        0,
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.overlay)) == Some(true),
+    );
+    let row = (band_top.max(0) as usize + band_height as usize / 2).min(height as usize - 1);
+    let column = width as usize / 2;
+    let pixel = &painted[(row * width as usize + column) * 4..][..4];
+    assert_eq!(pixel[3], 255, "an uncaptured cover is opaque black: {pixel:?}");
+    assert_eq!(&pixel[..3], &[0, 0, 0], "black rather than a transparent hole: {pixel:?}");
+    pin_film_host::clear_the_move_cover();
+}
+
+/// A paused film's cover never settles, so a park, a step or a take-down must clear it: otherwise
+/// the next pin would open on the previous film's frame (see `clear_the_move_cover`).
+#[test]
+fn a_paused_moves_cover_is_cleared_by_a_park_and_a_take_down() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 3.0) };
+    mpv_ipc::remember_pipe(hover.pid, "a-paused-cover-pipe", false);
+    mpv_ipc::answer_a_read(hover.pid, "time-pos", Some("3.0"));
+    pin_film_host::disarm_pin_handover();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert!(pin_film_host::the_move_cover_is_up(), "a paused film leaves it standing");
+    assert!(
+        !pin_film_host::settle_the_move_cover(),
+        "and its clock never moves past the captured second"
+    );
+
+    assert!(
+        park_pinned_player_for_step(film.pin_hwnd, (film.box_.0, film.box_.1)),
+        "a step parks over the outgoing film"
+    );
+    assert!(
+        !pin_film_host::the_move_cover_is_up(),
+        "the park's own capture owns the band now"
+    );
+    give_up_pinned_park();
+    forget_video_frame();
+    forget_pin_park_swap();
+
+    pin_film_host::raise_the_move_cover();
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    assert!(
+        !pin_film_host::the_move_cover_is_up(),
+        "and a take-down leaves no cover for the next pin"
+    );
+    assert!(
+        held_video_frame().is_none(),
+        "nor the frame the next pin would otherwise open on"
+    );
+    mpv_ipc::forget_pipe(hover.pid);
 }

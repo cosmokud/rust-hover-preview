@@ -21,7 +21,7 @@
 //! box, and a file step begins another player into the same host. It goes down with the pin (see
 //! `take_down_the_pin_film_host`, called from the state a road out of a pin clears).
 
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::Once;
 
 use windows::core::w;
@@ -64,7 +64,74 @@ static PIN_FILM_HOST_PLAYER: AtomicU32 = AtomicU32::new(0);
 /// The hosted player whose frame this app has proved on screen, so the pipe read that proves it is
 /// asked once and not on every tick (see `the_hosted_frame_is_up`).
 static PRESENTED_PID: AtomicU32 = AtomicU32::new(0);
+/// The move cover: the held frame the pin paints in its own bitmap while a hover's host is hidden,
+/// restyled and re-parented into the pin (see `raise_the_move_cover` and `show_pinned_window`).
+static PIN_MOVE_COVER: AtomicBool = AtomicBool::new(false);
+/// The second the hover's picture stood at when that cover was raised, so that the cover is only
+/// given up once a frame has been drawn into the moved window (see `settle_the_move_cover`).
+static PIN_MOVE_COVER_SECONDS: Lazy<Mutex<Option<f64>>> = Lazy::new(|| Mutex::new(None));
 static FILM_HOST_CLASS_REGISTERED: Once = Once::new();
+
+/// Raise the move cover: the pin's next paint stands on the held frame (or on black where none
+/// could be taken) rather than on an alpha-1 band, so the desktop cannot show through while the
+/// hover's host leaves the compositor as a top-level window and arrives as a child of the pin.
+pub(super) fn raise_the_move_cover() {
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    let seconds =
+        mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse::<f64>().ok());
+    if let Ok(mut held) = PIN_MOVE_COVER_SECONDS.lock() {
+        *held = seconds;
+    }
+    PIN_MOVE_COVER.store(true, Ordering::SeqCst);
+}
+
+/// Whether the move cover is standing (see `raise_the_move_cover`).
+pub(super) fn the_move_cover_is_up() -> bool {
+    PIN_MOVE_COVER.load(Ordering::SeqCst)
+}
+
+/// Stand the cover down without painting: a park owns the band from its first capture, and a
+/// take-down owns it by going away (see `park_pinned_player_inner` and `take_down_the_pin_film_host`).
+pub(super) fn clear_the_move_cover() {
+    PIN_MOVE_COVER.store(false, Ordering::SeqCst);
+    if let Ok(mut held) = PIN_MOVE_COVER_SECONDS.lock() {
+        *held = None;
+    }
+}
+
+/// Give the move cover up once the moved player has drawn a frame into its new window: the child
+/// window composites above the pin's bitmap, so the cover is invisible from then on, but it must go
+/// so that a later park or step does not open on a stale frame. A paused film's clock never moves,
+/// which keeps the cover standing until a take-down, a park or a step clears it (see
+/// `clear_the_move_cover`).
+pub(super) fn settle_the_move_cover() -> bool {
+    if !the_move_cover_is_up() {
+        return false;
+    }
+
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    let captured = PIN_MOVE_COVER_SECONDS.lock().ok().and_then(|held| *held);
+    let moved =
+        mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse::<f64>().ok());
+    if !(the_hosted_player_is_drawing(pid)
+        && captured
+            .zip(moved)
+            .is_some_and(|(captured, moved)| moved > captured))
+    {
+        return false;
+    }
+
+    clear_the_move_cover();
+    if !pin_player_is_parked() {
+        forget_video_frame();
+    }
+    if let Some((window, _, _)) = pinned_window_box() {
+        // SAFETY: the handle is the pin's own window and the paint is a layered-window blit out of
+        // a surface this app drew for exactly this window (see `render_pinned_preview_at`).
+        unsafe { render_pinned_preview_at(pinned_window(), window.0, window.1) };
+    }
+    true
+}
 
 /// The host the pin is showing its film through, or nothing while there is none.
 pub(super) fn film_host() -> Option<HWND> {
@@ -283,6 +350,12 @@ unsafe fn adopt_the_hover_film_host(host: HWND, content: ScreenRegion) {
     let pid = hover_film_host::hover_film_host_player().unwrap_or(0);
     let (x, y, width, height) = band_in_the_window(content);
 
+    // Off the screen before the restyle: a visible top-level window changing style and parent is a
+    // surface the compositor has to present again, and the pin's cover is the picture until the
+    // final show below (see `raise_the_move_cover`). Hiding costs nothing visually because the
+    // cover is already on screen.
+    let _ = ShowWindow(host, SW_HIDE);
+
     // The topmost band goes before the style does, while the window is still a window of the
     // desktop's: a child cannot hold it, and SetParent would only put it back.
     let ex = GetWindowLongPtrW(host, GWL_EXSTYLE);
@@ -380,6 +453,12 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     PIN_FILM_HOST.store(0, Ordering::SeqCst);
     PIN_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
     PRESENTED_PID.store(0, Ordering::SeqCst);
+    clear_the_move_cover();
+    // A cover left over from a move must not open the next pin or park on this film's frame. A
+    // park's own frame is its to give up, so it is left standing for the park.
+    if !pin_player_is_parked() {
+        forget_video_frame();
+    }
 }
 
 unsafe fn create(parent: HWND) -> Option<HWND> {
