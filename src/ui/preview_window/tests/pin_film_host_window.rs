@@ -1453,3 +1453,87 @@ fn a_park_keeps_the_chrome_in_the_strips_over_the_cover() {
         "a park hides the picture, and the strips keep the chrome over the cover"
     );
 }
+
+/// Only a really hovered pin shows its chrome: the geometric question is asked first, and then
+/// the window under the pointer — the host and the strips are disabled, so `WindowFromPoint`
+/// skips them and the pin's own window comes back wherever the pointer is genuinely over the
+/// pin (see `refresh_pin_chrome`).
+#[test]
+fn a_hover_over_the_pin_itself_asks_its_chrome_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    // The step's own state: hidden, with no arrival armed (see `take_up_pinned_window`) — on a
+    // film's pin, whose bar the pointer below is near.
+    with_pin(|pin| {
+        pin.chrome = PinChrome::hidden();
+        pin.transport_bar = true;
+    });
+    let hwnd = pin_real_window::real_pin_window().expect("the pin's own window");
+    stand_window_at_point_in(Some(hwnd.0 as isize));
+
+    let window = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .expect("a pin up");
+    let changed = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(
+            pin,
+            Instant::now(),
+            Some((window.0 + 5, window.3 - 1)),
+        ))
+    });
+    let bar = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.chrome.bar))
+        .unwrap_or(false);
+
+    stand_window_at_point_in(None);
+    drop(film);
+    assert_eq!(
+        changed,
+        Some(true),
+        "a pointer over the pin's own window is a hover, which shows the bar again"
+    );
+    assert!(bar, "and the bar is what the hover asked back");
+}
+
+/// The other half: a pointer geometrically near the pin but over another window — Notepad
+/// standing over it — is not a hover, so the chrome stays hidden (see `refresh_pin_chrome`).
+#[test]
+fn a_pointer_over_a_window_covering_the_pin_shows_no_chrome() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _film = StandingFilm::new();
+    with_pin(|pin| {
+        pin.chrome = PinChrome::hidden();
+        pin.transport_bar = true;
+    });
+    // Somebody else's window under the pointer: what `WindowFromPoint` answers where a covering
+    // window stands over the pin.
+    stand_window_at_point_in(Some(0x2000));
+
+    let window = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .expect("a pin up");
+    let changed = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(
+            pin,
+            Instant::now(),
+            Some((window.0 + 5, window.3 - 1)),
+        ))
+    });
+    let bar = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.chrome.bar))
+        .unwrap_or(true);
+
+    stand_window_at_point_in(None);
+    assert_eq!(
+        changed,
+        Some(false),
+        "an occluded pointer asks for nothing, so no repaint is owed"
+    );
+    assert!(!bar, "and the bar stays hidden under the covering window");
+}
