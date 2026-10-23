@@ -19,6 +19,9 @@ pub(super) const PIN_BUBBLE_PIXELS: f32 = 44.0;
 /// rather than a level, since a chrome that has been asked for is drawn whole in the paint that
 /// notices.
 pub(super) const PIN_CHROME_NEAR_PIXELS: f32 = 24.0;
+/// The arrival window tests still exercise; no real install arms one — every pin comes up hidden
+/// and only the pointer asks a strip back (see `PinChrome::hidden`).
+#[cfg(test)]
 pub(super) const PIN_CHROME_ARRIVAL_SECONDS: f32 = 1.5;
 /// The volume a pinned preview is playing at.
 ///
@@ -317,8 +320,10 @@ pub(super) struct PinChrome {
 }
 
 impl PinChrome {
-    /// The chrome a pinned window comes up with: both strips, and staying that way for a moment
-    /// whether or not the pointer is near them.
+    /// The chrome a pinned window comes up with in the tests that still exercise an arrival
+    /// window: both strips, and staying that way for a moment whether or not the pointer is near
+    /// them. Nothing in the app arms one: every install comes up hidden.
+    #[cfg(test)]
     pub(super) fn on_arrival(now: Instant) -> Self {
         Self {
             caption: true,
@@ -386,8 +391,9 @@ pub(super) fn refresh_pin_chrome(
     let mut shown = false;
     if pin.hides_chrome {
         // A pin waiting on its hosted film's first frame shows no chrome meanwhile: the strips
-        // belong to the pin-mode frame, and that frame is not on screen yet — the arrival starts
-        // at the handover, over the live film (see `pin_film_host::settle_pin_handover`).
+        // belong to the pin-mode frame, and that frame is not on screen yet. The handover shows
+        // no chrome either — it is the pin's first frame, not an arrival, and only the pointer
+        // asks a strip back (see `pin_film_host::settle_pin_handover`).
         let (caption, bar) = if pin_film_host::pin_handover_armed() {
             (false, false)
         } else {

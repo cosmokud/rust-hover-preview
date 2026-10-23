@@ -535,7 +535,9 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
         && frozen.is_some_and(|frozen| the_hosted_frame_is_presented(pid, frozen.seconds))
     {
         disarm_pin_handover();
-        with_pin(|pin| pin.chrome = PinChrome::on_arrival(Instant::now()));
+        // The handover is the pin's first frame, not an arrival: the chrome stays hidden over it
+        // until the pointer asks for a strip (see `refresh_pin_chrome`).
+        with_pin(|pin| pin.chrome = PinChrome::hidden());
         unsafe { show_pinned_window(pinned_window()) };
 
         // **And the film is playing from here, unless the user had held it.** The player was begun

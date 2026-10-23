@@ -1075,7 +1075,6 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
     // answer lands rather than the take-up waiting for it.
     ask_pin_open_with(path.to_path_buf());
 
-    let now = Instant::now();
     PinnedPreview {
         path: path.to_path_buf(),
         content,
@@ -1141,8 +1140,13 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
                 chrome
             }
             _ => {
+                // An install brings the chrome up hidden, whatever road it is: a first pin, a
+                // re-pin, a step or a relaunch all stand a cover or a first frame where a
+                // strip would flash. Only the pointer asks a strip back (see
+                // `refresh_pin_chrome`). A kind whose chrome is in bands around its media keeps
+                // its chrome, which is `PinChrome::always` and not an arrival.
                 if hides_chrome {
-                    PinChrome::on_arrival(now)
+                    PinChrome::hidden()
                 } else {
                     PinChrome::always()
                 }
