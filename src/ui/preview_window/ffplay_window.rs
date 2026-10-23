@@ -174,7 +174,9 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // **A hosted player's window is not this app's to style or to publish.** It is mpv's child under
     // a host the pin owns, and every road that would place, style or raise it is answered by the
     // host instead (see `player_ex_style_for`, `place_player_window`).
-    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
+    if pin_film_host::the_pinned_player_was_begun_in_the_host()
+        || hover_film_host::the_hover_player_was_begun_in_the_host(VIDEO_PID.load(Ordering::SeqCst))
+    {
         return false;
     }
 
@@ -279,6 +281,15 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
 /// Apply WS_EX_NOACTIVATE style to a window
 /// Returns true if the window was found and modified
 pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
+    // **A player in a host of this app's has no window of the desktop's to style.** mpv's child
+    // under the host is already disabled, and there is nothing to enumerate or to publish: the
+    // host stands in every top-level road instead (see `pin_film_host` and `hover_film_host`).
+    if pin_film_host::the_pinned_player_was_begun_in_the_host()
+        || hover_film_host::the_hover_player_was_begun_in_the_host(pid)
+    {
+        return false;
+    }
+
     // Reuse the window already found while it still exists and still belongs to
     // the player. This runs every few milliseconds for as long as a video plays,
     // so the desktop enumeration below is needed once, or again if ffplay
@@ -497,6 +508,14 @@ pub(super) const VIDEO_PAUSE_KEY: (u32, u32) = (b'P' as u32, 0x19);
 pub(super) fn video_window_for(pid: u32) -> Option<HWND> {
     if pid == 0 {
         return None;
+    }
+
+    // **A hover's hosted player has no window of the desktop's**, only mpv's child under this
+    // app's host: that child is the player's own window, already disabled and non-activating, and
+    // it is what the roads asking "is the player's window up" are answered with (see
+    // `the_players_window_is_up`).
+    if let Some(child) = hover_film_host::the_hover_players_window(pid) {
+        return Some(child);
     }
 
     let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
@@ -761,6 +780,9 @@ pub(super) fn clear_video_process_state(pid: u32) {
         .is_ok()
     {
         VIDEO_HWND.store(0, Ordering::SeqCst);
+        // A hover's host outlives nothing: the player it held is confirmed gone, so the window is
+        // taken down rather than left as a black top-level rectangle (see `hover_film_host`).
+        unsafe { hover_film_host::take_down_the_hover_film_host_if_it_held(pid) };
         // The player is confirmed gone, so the record of it goes with it rather than
         // being left for the next run to look for.
         engine_processes::forget(pid);

@@ -234,10 +234,15 @@ pub(super) fn hold_video_window_frame() -> bool {
     // picture is the child mpv made under the host, so what is on screen in the band is the host
     // itself, and that is the rect the frame is read off. Everything else is a player's own window,
     // found the way it always was (see `pin_film_host`).
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
     let window = if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         pin_film_host::film_host()
+    } else if hover_film_host::the_hover_player_was_begun_in_the_host(pid) {
+        // The hover's host is the visible surface; mpv's child inside it is the picture (see
+        // `hover_film_host`).
+        hover_film_host::hover_film_host()
     } else {
-        video_window_for(VIDEO_PID.load(Ordering::SeqCst))
+        video_window_for(pid)
     };
     let Some(hwnd) = window else {
         return false;

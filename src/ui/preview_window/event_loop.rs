@@ -977,8 +977,10 @@ pub fn run_preview_window() {
             // never came up — one that died, one that took longer than a start ever does
             // — is ended here rather than left playing behind nothing (see `player_wait`).
             if let Some(start) = video_start.take() {
-                let window_up = VIDEO_HWND.load(Ordering::SeqCst) != 0
-                    && VIDEO_PID.load(Ordering::SeqCst) == start.pid;
+                // **A hosted hover's player has no window of the desktop's**: mpv's child under
+                // the hover's own host is the window the wait is for, and the same question
+                // answers a top-level player's window (see `the_players_window_is_up`).
+                let window_up = pin_film_host::the_players_window_is_up(start.pid);
                 let alive = is_player_pid_alive(start.pid);
 
                 // The hover this player was started for may have moved on before its
@@ -1006,6 +1008,13 @@ pub fn run_preview_window() {
                         // (see `rebase_video_loop_clock`).
                         rebase_video_loop_clock(start.pid);
 
+                        // A hosted hover's picture is the host, not the preview's own window:
+                        // show it at the hover's box once the player is drawing, so the wait ends
+                        // on the film rather than on the desktop (see `hover_film_host`).
+                        if start.hosted {
+                            hover_film_host::reveal_the_hover_film_host(start.pid, video_pos);
+                        }
+
                         let _ = ShowWindow(hwnd, SW_HIDE);
                         pending_load = None;
                         clear_pointer_hold();
@@ -1014,13 +1023,61 @@ pub fn run_preview_window() {
                         // The player is not coming, or the hover it was started for has
                         // gone: ending it here is what keeps a process this app started
                         // from playing behind a preview that has gone.
-                        let mut media = start.media;
-                        stop_video_playback(&mut media);
+                        //
+                        // **A hosted hover that never drew is given one ordinary launch.** mpv's
+                        // child under the host is the only sign a hosted player gives, and a
+                        // player that is alive but has put nothing there inside the start bound is
+                        // a host this app cannot show a picture through; the hover is begun again
+                        // once without `wid`, and a second failure is abandoned below (see
+                        // `restart_hover_video_without_a_host`).
+                        let mut media = Some(start.media);
+                        let mut relaunched = false;
 
-                        if current {
-                            let _ = ShowWindow(hwnd, SW_HIDE);
-                            pending_load = None;
-                            clear_pointer_hold();
+                        if current
+                            && the_hover_host_fallback_is_owed(start.hosted, start.fell_back, alive)
+                        {
+                            if let Some(held) = media.as_mut() {
+                                stop_video_playback(held);
+                            }
+                            let (x, y, width, height) = video_pos;
+                            if let Some(process) = restart_hover_video_without_a_host(
+                                &start.path,
+                                x,
+                                y,
+                                width,
+                                height,
+                                0.0,
+                                false,
+                                current_video_volume(),
+                                None,
+                            ) {
+                                let pid = process.id();
+                                let mut data = media.take().expect("the hover's media is in hand");
+                                data.video_process = Some(process);
+                                current_video_path = Some(start.path.clone());
+                                let _ = ensure_video_window_topmost(x, y, width, height);
+                                video_start = Some(VideoStart {
+                                    media: data,
+                                    path: start.path,
+                                    pid,
+                                    started: Instant::now(),
+                                    hosted: false,
+                                    fell_back: true,
+                                });
+                                relaunched = true;
+                            }
+                        }
+
+                        if !relaunched {
+                            if let Some(held) = media.as_mut() {
+                                stop_video_playback(held);
+                            }
+
+                            if current {
+                                let _ = ShowWindow(hwnd, SW_HIDE);
+                                pending_load = None;
+                                clear_pointer_hold();
+                            }
                         }
                     }
                     // Still starting: the wait goes on, and the player stays in hand.
@@ -3623,6 +3680,12 @@ pub fn run_preview_window() {
                         current_video_path = None;
                         video_pos = (0, 0, 0, 0);
 
+                        // The hover's own film host is this thread's window and goes down with
+                        // the hover: a host left behind is a black top-level rectangle over the
+                        // desktop, and destroying it ends the player it held (see
+                        // `hover_film_host`).
+                        hover_film_host::take_down_the_hover_film_host();
+
                         // The page held for the preview that is going away is no
                         // longer being waited on: at a budget of nothing it is
                         // dropped here rather than kept until something else is
@@ -4226,6 +4289,11 @@ pub fn run_preview_window() {
                                         path: path.clone(),
                                         pid,
                                         started: Instant::now(),
+                                        hosted:
+                                            hover_film_host::the_hover_player_was_begun_in_the_host(
+                                                pid,
+                                            ),
+                                        fell_back: false,
                                     });
                                     pending_load = Some(PendingLoad {
                                         generation: current_generation,
