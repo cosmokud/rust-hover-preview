@@ -294,6 +294,21 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
     );
     assert_eq!(restart_count(), 1, "and nothing is begun");
 
+    // **A hosted hover is not begun again for the same copy**: its player was moved into the pin
+    // rather than launched there, and a relaunch would be the second decode the move exists to
+    // avoid. The pin keeps the film without the late copy until its next relaunch.
+    let host = unsafe { hover_film_host::take_up_the_hover_film_host((100, 80, 420, 320)) }
+        .expect("a host standing in for the moved hover");
+    hover_film_host::note_hover_film_host_player(101, &film);
+    note_player_subtitles(&film, false);
+    assert!(
+        !reload_adopted_subtitles(&film),
+        "a hosted hover's moved player is not relaunched for the late copy"
+    );
+    assert_eq!(restart_count(), 1, "and nothing is begun");
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    assert!(!unsafe { IsWindow(host) }.as_bool(), "the stand goes");
+
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     restore_media(previous_media);

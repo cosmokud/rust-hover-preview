@@ -394,55 +394,336 @@ fn the_film_host_follows_the_pins_band() {
     );
 }
 
-/// A hover's mpv film is a window of the desktop's, and a pin that takes it up cannot keep it
-/// there: the picture belongs in the host the pin draws it in. So the take-up begins the player
-/// again through the relaunch road the rest of the pin's life uses — at the second the hover had
-/// reached, and held or playing as it was — while the hover it replaces keeps playing until the
-/// handover ends it (see `begin_the_adopted_film_in_the_host`).
+/// A hover's mpv film drawn in the app-owned top-level host, with its player's child under it:
+/// the state a take-up can move into the pin rather than begin again.
+struct HostedHover {
+    host: HWND,
+    child: HWND,
+    pid: u32,
+    at: f64,
+}
+
+impl HostedHover {
+    unsafe fn up(film: &StandingFilm, path: &Path, at: f64) -> HostedHover {
+        let pid = unsafe { GetCurrentProcessId() };
+        let host = unsafe { hover_film_host::take_up_the_hover_film_host(film.box_) }
+            .expect("the hover's own host");
+        hover_film_host::note_hover_film_host_player(pid, path);
+        let child = unsafe { a_child_of_the_host(host) };
+        unsafe { hover_film_host::reveal_the_hover_film_host(pid, film.box_) };
+        note_video_loop(pid, path, film.box_, at, None);
+        VIDEO_PID.store(pid, Ordering::SeqCst);
+        HostedHover {
+            host,
+            child,
+            pid,
+            at,
+        }
+    }
+}
+
+impl Drop for HostedHover {
+    fn drop(&mut self) {
+        // A host the pin adopted belongs to the pin now; the stand's take-down owns that one.
+        if hover_film_host::hover_film_host() == Some(self.host) {
+            unsafe { hover_film_host::take_down_the_hover_film_host() };
+        }
+        forget_video_loop(self.pid);
+    }
+}
+
+/// The move route is for an mpv hover that is the pinned file and is still drawing in the host:
+/// another route, another file, or a player the host no longer holds is the fallback handover.
 #[test]
-fn a_film_taken_up_from_a_hover_is_begun_again_in_the_host() {
+fn only_a_hosted_mpv_hover_is_moved_into_the_pin() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     let film = StandingFilm::new();
-    let hovered = 0x7FFF_FFFB;
-    film.taken_up_from_a_hover(hovered);
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 2.0) };
+
+    assert_eq!(
+        hover_film_host::the_hover_film_to_adopt(&path),
+        Some(hover.host),
+        "the hosted mpv hover of the pinned file is the one that moves"
+    );
+    assert!(
+        hover_film_host::the_hover_film_to_adopt(Path::new("a-picture.png")).is_none(),
+        "a file of another route is not moved"
+    );
+    assert!(
+        hover_film_host::the_hover_film_to_adopt(Path::new("another-film.mkv")).is_none(),
+        "nor is a player begun for another file"
+    );
+
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    assert!(
+        hover_film_host::the_hover_film_to_adopt(&path).is_none(),
+        "and a player the host no longer holds has nothing to move"
+    );
+}
+
+/// **The already-running hosted hover is moved, not begun again.** The same player and the same
+/// child survive; the only window that changes is the host's, and it becomes a disabled child of
+/// the pin. Nothing is frozen, read back, relaunched or held for a handover.
+#[test]
+fn a_film_taken_up_from_a_hosted_hover_launches_nothing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 12.5) };
+    clear_restart_count();
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        restart_count(),
+        0,
+        "the hover's player is kept, not begun again"
+    );
+    let host = pin_film_host::film_host().expect("the film's host");
+    assert_eq!(
+        host, hover.host,
+        "the hover's own host is the pin's host now"
+    );
+    assert_eq!(
+        unsafe { GetParent(host) }.ok(),
+        Some(film.pin_hwnd),
+        "and it travels as a child of the pin's window"
+    );
+    assert_ne!(
+        unsafe { GetWindowLongPtrW(host, GWL_STYLE) } & WS_CHILD.0 as isize,
+        0,
+        "with the child style it was re-styled to"
+    );
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) } & WS_EX_TOPMOST.0 as isize,
+        0,
+        "and no topmost band of its own"
+    );
+    assert!(
+        unsafe { IsWindow(hover.child) }.as_bool(),
+        "the player's child is the same window, still drawing"
+    );
+    assert_eq!(
+        unsafe { GetParent(hover.child) }.ok(),
+        Some(host),
+        "under the same host, now inside the pin"
+    );
+    assert_eq!(
+        pin_film_host::hosted_player_pid(),
+        Some(hover.pid),
+        "and the pin holds the player it moved"
+    );
+    assert_eq!(VIDEO_PID.load(Ordering::SeqCst), hover.pid);
+    assert_eq!(VIDEO_HWND.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        hover_film_host::hover_film_host(),
+        None,
+        "the hover's handle is handed over rather than left to destroy the pin's host"
+    );
+    assert!(
+        !pin_film_host::pin_handover_armed(),
+        "nothing is waiting for a second player's first frame"
+    );
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        None,
+        "and no frozen hover is held behind the pin"
+    );
+    assert!(
+        !mpv_ipc::noted_lines()
+            .iter()
+            .any(|line| line.contains("pause")),
+        "the film is neither frozen nor released: it simply carries on"
+    );
+    assert!(
+        mpv_ipc::noted_reads().is_empty(),
+        "and no frame is read back off it for a second launch"
+    );
+    let at = video_loop_playhead(hover.pid, &path).expect("the same clock");
+    assert!(
+        at >= hover.at,
+        "the clock the take-up read is the hover's own playhead, still advancing: {at}"
+    );
+}
+
+/// The pin's own level is put on the moved player, and the transport continues from the hover's
+/// playhead rather than from a frozen second.
+#[test]
+fn a_hosted_hover_move_keeps_its_clock_and_takes_the_pins_volume() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 41.0) };
+    with_pin(|pin| {
+        pin.volume.audio = false;
+        pin.volume.level = 37;
+        pin.volume.playing_at = 0;
+        let at = video_loop_playhead(hover.pid, &path).unwrap_or(41.0);
+        pin.transport.started = Some((Instant::now(), at));
+    });
+    clear_restart_count();
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    mpv_ipc::remember_pipe(hover.pid, "the-hovers-moved-pipe", false);
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert!(
+        mpv_ipc::noted_lines()
+            .iter()
+            .any(|line| line.contains(r#""volume",37"#)),
+        "the pin's level is applied to the moved player: {:?}",
+        mpv_ipc::noted_lines()
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.volume.playing_at)),
+        Some(37),
+        "and the bar knows the level the player is at"
+    );
+    let playhead =
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport)));
+    assert!(
+        playhead.is_some_and(|at| at >= 41.0),
+        "the transport stands at the hover's playhead rather than at zero: {playhead:?}"
+    );
+    assert!(
+        !mpv_ipc::noted_lines()
+            .iter()
+            .any(|line| line.contains("pause")),
+        "and the film is not paused or released by the move"
+    );
+    mpv_ipc::forget_pipe(hover.pid);
+}
+
+/// The pin is painted and shown before the host moves, and the chrome is still hidden over the
+/// moved film: only the pointer asks a strip back.
+#[test]
+fn a_hosted_hover_move_shows_the_pin_before_the_host_and_keeps_the_chrome_hidden() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 3.0) };
+    with_pin(|pin| pin.chrome = PinChrome::hidden());
     clear_restart_count();
     pin_film_host::disarm_pin_handover();
 
     unsafe { show_pinned_window(film.pin_hwnd) };
 
-    let host = pin_film_host::film_host().expect("the film's host");
-    assert_eq!(
-        restart_count(),
-        1,
-        "the player the hover began is begun again rather than kept as it stands"
+    assert!(
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "the pin is on screen"
     );
     assert!(
-        !pin_player_is_parked(),
-        "without a cover: the hover staying up is the placeholder the relaunch plays behind"
+        unsafe { IsWindowVisible(hover.host) }.as_bool(),
+        "and the moved film is shown inside it, not hidden with a hidden parent"
     );
-    assert!(
-        pin_film_host::pin_handover_armed(),
-        "and the handover is armed for the first frame rather than shown over nothing"
-    );
+    let chrome = pin_state().and_then(|pinned| {
+        pinned.pin().map(|pin| {
+            (
+                pin.chrome.caption,
+                pin.chrome.bar,
+                pin.chrome.until.is_some(),
+            )
+        })
+    });
     assert_eq!(
-        mpv_launch_host(Path::new("a-film.mkv")),
-        Some(host.0 as usize as u32),
-        "because the player begun in its place draws in the pin's own host"
+        chrome,
+        Some((false, false, false)),
+        "the chrome stays hidden over the moved picture"
+    );
+    for strip in [
+        pin_chrome_strips::caption_strip(),
+        pin_chrome_strips::transport_strip(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        assert!(
+            !unsafe { IsWindowVisible(strip) }.as_bool(),
+            "no strip is shown over a frame the pointer has not asked about"
+        );
+    }
+}
+
+/// Closing a pin that moved a hover's host takes that host down with it, and the player's child
+/// goes too; a park only hides the host and the unpark shows the same one.
+#[test]
+fn a_moved_hover_host_goes_with_the_pin_and_survives_a_park() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 6.0) };
+    clear_restart_count();
+    pin_film_host::disarm_pin_handover();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    hide_pinned_player_window();
+    assert!(
+        !unsafe { IsWindowVisible(hover.host) }.as_bool(),
+        "a park hides the moved host rather than taking it down"
+    );
+    show_pinned_player_window();
+    assert!(
+        unsafe { IsWindowVisible(hover.host) }.as_bool(),
+        "and the unpark shows the same child of the pin"
     );
 
-    // The other half of the same question: a film the host is already drawing is a film to leave
-    // alone, or every show of a hosted pin would begin its player again.
-    pin_film_host::disarm_pin_handover();
-    drop(film);
-    let hosted = StandingFilm::new();
+    let _ = end_pin(Reason::Closed, &Win32PinWindow);
+
+    assert!(
+        !unsafe { IsWindow(hover.host) }.as_bool(),
+        "the pin's close destroys the host it moved"
+    );
+    assert!(
+        !unsafe { IsWindow(hover.child) }.as_bool(),
+        "and the player's child with it"
+    );
+    assert!(
+        pin_film_host::film_host().is_none(),
+        "with the handle forgotten as well as the window destroyed"
+    );
+}
+
+/// A step after a moved take-up still begins the next player into the same host: the move hands
+/// the host to the pin, and the pin's launch route is unchanged.
+#[test]
+fn a_step_after_a_moved_hover_uses_the_same_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let _hover = unsafe { HostedHover::up(&film, &path, 1.0) };
     clear_restart_count();
-    unsafe { show_pinned_window(hosted.pin_hwnd) };
+    pin_film_host::disarm_pin_handover();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    let host = pin_film_host::film_host().expect("the host the move took up");
     assert_eq!(
-        restart_count(),
-        0,
-        "and a pin whose film the host already holds begins nothing"
+        mpv_launch_host(&path),
+        Some(host.0 as usize as u32),
+        "the next player launched for the pinned film is given the same host"
+    );
+    assert!(
+        pin_film_host::the_pinned_player_was_begun_in_the_host(),
+        "and it is the pin's host the launch route finds"
     );
 }
 
