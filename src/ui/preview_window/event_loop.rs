@@ -3334,6 +3334,16 @@ pub fn run_preview_window() {
                         // file's shape, which is the whole of what the hold was for (see
                         // `PinSwapHold` and `settle_pinned_park`).
                         settle_pinned_park();
+
+                        // The chrome a step took down comes back with the file that replaced its
+                        // film: asked here, after the take-up has cleared the step, because the
+                        // park's own settle can run earlier in this tick — before this install —
+                        // and its ask is then answered as held down. The repaint below carries the
+                        // new file's caption into the strips and syncs them, so the strips stand
+                        // with the first paint of the film rather than a tick later.
+                        if refresh_the_pin_chrome_now() {
+                            refresh_requested = true;
+                        }
                     }
                 }
             }
