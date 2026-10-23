@@ -34,9 +34,9 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{GetStockObject, HBRUSH, NULL_BRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassExW, SetWindowPos, ShowWindow,
-    HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
-    WNDCLASSEXW, WS_CHILD, WS_DISABLED, WS_EX_LAYERED,
+    CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, RegisterClassExW, SetWindowPos, ShowWindow,
+    GWL_STYLE, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+    SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_CHILD, WS_DISABLED, WS_EX_LAYERED, WS_VISIBLE,
 };
 
 use super::*;
@@ -337,7 +337,9 @@ unsafe fn set_the_strip_at(
     wanted: (u32, u32),
     shown: bool,
 ) {
-    let up = unsafe { IsWindowVisible(strip) }.as_bool();
+    // The strip's own bit, not `IsWindowVisible`: that answer is false under a hidden pin, and a
+    // strip left up by one pin would otherwise be revealed with the next (see `show_pinned_window`).
+    let up = unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
     if !shown {
         if up {
             let _ = unsafe { ShowWindow(strip, SW_HIDE) };
