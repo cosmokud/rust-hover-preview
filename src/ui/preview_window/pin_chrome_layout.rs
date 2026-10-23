@@ -419,9 +419,17 @@ pub(super) fn refresh_pin_chrome(
         // file lands. The pin is asked for its own parked flag because this already holds the
         // pin's lock (see `pin_player_is_parked`, `park_record_owner`).
         let step_park = pin.parked && park_record_owner() == Some(ParkArm::Step);
+        // A hosted film whose player has a window but no frame yet is a band that would be black
+        // behind the chrome: the strips wait for the picture the player itself says it drew. Asked
+        // only of a standing pin, because a park keeps its chrome over the held frame.
+        let pid = VIDEO_PID.load(Ordering::SeqCst);
+        let film_window_without_a_picture = !pin.parked
+            && pin_film_host::the_hosted_player_is_drawing(pid)
+            && !pin_film_host::the_hosted_frame_is_up(pid);
         let (caption, bar) = if pin.chrome.step_in_flight
             || pin_film_host::pin_handover_armed()
             || step_park
+            || film_window_without_a_picture
         {
             (false, false)
         } else {

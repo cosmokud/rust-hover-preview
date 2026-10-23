@@ -58,6 +58,9 @@ unsafe extern "system" fn the_default_answer(
 /// The host of the pin that is up, and the player this app has attached to it.
 static PIN_FILM_HOST: AtomicIsize = AtomicIsize::new(0);
 static PIN_FILM_HOST_PLAYER: AtomicU32 = AtomicU32::new(0);
+/// The hosted player whose frame this app has proved on screen, so the pipe read that proves it is
+/// asked once and not on every tick (see `the_hosted_frame_is_up`).
+static PRESENTED_PID: AtomicU32 = AtomicU32::new(0);
 static FILM_HOST_CLASS_REGISTERED: Once = Once::new();
 
 /// The host the pin is showing its film through, or nothing while there is none.
@@ -78,6 +81,7 @@ pub(super) fn hosted_player_pid() -> Option<u32> {
 /// film's.
 pub(super) fn note_hosted_player(pid: u32) {
     PIN_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
+    PRESENTED_PID.store(0, Ordering::SeqCst);
 }
 
 /// The host to give a player begun for `path`, where that player is a pinned mpv and the pin
@@ -293,6 +297,7 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     }
     PIN_FILM_HOST.store(0, Ordering::SeqCst);
     PIN_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
+    PRESENTED_PID.store(0, Ordering::SeqCst);
 }
 
 unsafe fn create(parent: HWND) -> Option<HWND> {
@@ -469,6 +474,27 @@ pub(super) enum PinHandover {
 /// between a seek target and the frame that answers it (see `the_hosted_frame_is_presented`).
 const PIN_HANDOVER_FRAME_SECS: f64 = 1.0;
 
+/// Whether this hosted player has a frame of its own on screen: a shown child of the host's *and* a
+/// video output the player says is configured for a frame.
+///
+/// A window is not a picture (see `the_hosted_player_is_drawing`), and `vo-configured` is the
+/// player's own word that its video output has been set up for a frame. The answer is latched per
+/// player because the read is bounded by a pipe timeout rather than free: once this player has
+/// proved a frame it has one, and every later tick answers at once. A step begins a new player, so
+/// `note_hosted_player` clears the latch for it.
+pub(super) fn the_hosted_frame_is_up(pid: u32) -> bool {
+    if pid != 0 && PRESENTED_PID.load(Ordering::SeqCst) == pid {
+        return true;
+    }
+    if !the_hosted_player_is_drawing(pid)
+        || mpv_ipc::get_property(pid, "vo-configured").as_deref() != Some("true")
+    {
+        return false;
+    }
+    PRESENTED_PID.store(pid, Ordering::SeqCst);
+    true
+}
+
 /// Whether the hosted player has the frame the hover froze on screen, rather than only a window.
 ///
 /// **A window is not a picture.** mpv makes its child under the host before it has decoded anything,
@@ -492,8 +518,7 @@ pub(super) fn the_hosted_frame_is_presented(pid: u32, at: f64) -> bool {
         return false;
     };
 
-    (seconds - at).abs() <= PIN_HANDOVER_FRAME_SECS
-        && mpv_ipc::get_property(pid, "vo-configured").as_deref() == Some("true")
+    the_hosted_frame_is_up(pid) && (seconds - at).abs() <= PIN_HANDOVER_FRAME_SECS
 }
 
 /// Hand a pin taken up on a hover's film over once its hosted player has the frame on screen, and
