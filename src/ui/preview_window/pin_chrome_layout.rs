@@ -384,7 +384,17 @@ pub(super) fn refresh_pin_chrome(
 
         let (caption, bar) = match pin.chrome.until.is_some() {
             true => (true, true),
-            false => pin_chrome_near(pin, cursor),
+            false => {
+                let (caption, bar) = pin_chrome_near(pin, cursor);
+                // Near is only geometric: a pointer over a window standing over the pin is near
+                // it without hovering it, so the strips stay hidden there (see
+                // `pin_chrome_occluded`).
+                if (caption || bar) && pin_chrome_occluded(cursor) {
+                    (false, false)
+                } else {
+                    (caption, bar)
+                }
+            }
         };
 
         // The strip the popup came out of stays showing while it is open, whatever the pointer
@@ -531,6 +541,10 @@ pub(super) fn refresh_pin_volume(pin: &mut PinnedPreview, cursor: Option<(i32, i
 /// they have in common is the room beside them — a strip is asked for from either side of the
 /// window's own edge, since a pointer that has not quite arrived is on its way there — so a pointer
 /// out beyond the window's sides is near neither.
+///
+/// Near is geometric only: whether the pointer is really over the pin rather than over a window
+/// standing over it is the hover question's own, asked where the answer is used (see
+/// `pin_chrome_occluded`).
 pub(super) fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -> (bool, bool) {
     let Some((x, y)) = cursor else {
         return (false, false);
@@ -556,6 +570,50 @@ pub(super) fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -
 
     (at_the_top, at_the_bottom)
 }
+
+/// Whether the pointer the chrome's hover question is about is over another window rather than
+/// the pin's own: a hand past the pin's edge counts as near, but one over a window standing over
+/// the pin is a hand somewhere else — Notepad over the pin is not a hand asking for the pin's
+/// caption (see `refresh_pin_chrome`).
+///
+/// Asked of the window under the point rather than of the order, because the pin's children —
+/// the host, the strips — are disabled and `WindowFromPoint` skips them, so the pin's own window
+/// comes back wherever the pointer is genuinely over the pin. A pin with no window of its own
+/// has nothing standing over it to ask about, so there the geometric question stands as it did.
+fn pin_chrome_occluded(cursor: Option<(i32, i32)>) -> bool {
+    let (Some((x, y)), Some(hwnd)) = (cursor, pin_real_window::real_pin_window()) else {
+        return false;
+    };
+    window_at_point(x, y) != hwnd.0 as isize
+}
+
+/// The window under a screen point, which a test stands in rather than reading off the desktop:
+/// a headless run has no pointer, and the desktop under it has no pin in it (see
+/// `pin_chrome_occluded`).
+fn window_at_point(x: i32, y: i32) -> isize {
+    #[cfg(test)]
+    if let Ok(held) = WINDOW_AT_POINT_STAND_IN.lock() {
+        if let Some(answer) = *held {
+            return answer;
+        }
+    }
+
+    use windows::Win32::UI::WindowsAndMessaging::WindowFromPoint;
+    unsafe { WindowFromPoint(POINT { x, y }) }.0 as isize
+}
+
+/// Stand an answer for `window_at_point` in place of the desktop's own, or give the desktop's
+/// own answer back with `None` — put back the same way.
+#[cfg(test)]
+pub(super) fn stand_window_at_point_in(answer: Option<isize>) {
+    if let Ok(mut held) = WINDOW_AT_POINT_STAND_IN.lock() {
+        *held = answer;
+    }
+}
+
+/// The answer `window_at_point` gives while a test stands one in (see `stand_window_at_point_in`).
+#[cfg(test)]
+static WINDOW_AT_POINT_STAND_IN: Mutex<Option<isize>> = Mutex::new(None);
 
 /// Whether a pinned window's chrome — the caption and the transport bar — is drawn *over* the
 /// media rather than in bands above and below it.
