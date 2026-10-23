@@ -461,6 +461,10 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
     step_the_pin_to_another_file();
     let window = CapturingWindow::around(a_window_at(the_window_box()));
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Close);
+    // The hand arrives before it presses: the step hid the chrome, and the move is what asks
+    // the strip back — a press on a strip that is not drawn is a press on the picture, which
+    // is a handle for moving the window (see `pinned_mouse_move`).
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
     assert!(
         unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
         "and a button on a pin shown another file is still a button"
@@ -508,6 +512,7 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
 
     let window = CapturingWindow::around(a_window_at(the_window_box()));
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
     assert!(
         unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
         "and a caption button is still a caption button"
@@ -590,9 +595,12 @@ fn a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_b
     take_up_a_video_pin();
     step_the_pin_to_another_file();
 
-    // The level, which is a button on the bar and a popup over the picture.
+    // The level, which is a button on the bar and a popup over the picture. The hand arrives
+    // first, for the same reason the caption's presses do: the step hid the bar with the rest
+    // of the chrome (see `pinned_mouse_move`).
     let window = CapturingWindow::around(a_window_at(the_window_box()));
     let (x, y) = a_transport_part_point(pin_chrome::TransportPart::Volume);
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
     assert!(
         unsafe { pinned_transport_press(HWND(0x1000 as *mut _), x, y) },
         "a press on the level is the bar's to act on after a swap"
@@ -744,6 +752,15 @@ fn a_swap_leaves_the_state_a_box_change_leaves() {
     assert_eq!(
         difference(&a, &b),
         vec![
+            format!("pin.chrome.bar: {} | {}", a["pin.chrome.bar"], b["pin.chrome.bar"]),
+            format!(
+                "pin.chrome.caption: {} | {}",
+                a["pin.chrome.caption"], b["pin.chrome.caption"]
+            ),
+            format!(
+                "pin.chrome.until: {} | {}",
+                a["pin.chrome.until"], b["pin.chrome.until"]
+            ),
             format!("pin.content: {} | {}", a["pin.content"], b["pin.content"]),
             format!("pin.parked: {} | {}", a["pin.parked"], b["pin.parked"]),
             format!("pin.path: {} | {}", a["pin.path"], b["pin.path"]),
@@ -768,8 +785,9 @@ fn a_swap_leaves_the_state_a_box_change_leaves() {
                 a["static.VIDEO_PID"], b["static.VIDEO_PID"]
             ),
         ],
-        "and a swap changes exactly what a swap is: the file, the box that file is laid out in, and \
-         the cover and the generation that go with a player being replaced"
+        "and a swap changes exactly what a swap is: the file, the box that file is laid out in, \
+         the hidden chrome the cover shows under, and the cover and the generation that go with \
+         a player being replaced"
     );
 
     stand_pin(None);

@@ -1120,6 +1120,12 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         hides_chrome,
         caption,
         chrome: match carried {
+            // A step hides the chrome rather than carrying it: the swap stands its cover over
+            // the outgoing frame, and chrome carried verbatim — or an arrival armed again for
+            // a kind that hides it — is a strip showing over that cover before the pointer has
+            // asked for anything. The tick's hover rules show it again on the next qualifying
+            // hover, so nothing is lost but the flash (see `refresh_pin_chrome`).
+            Some(_) if hides_chrome => PinChrome::hidden(),
             // Chrome belongs to the kind it was drawn over: one kind's
             // strip has nothing to say about another's, so a swap that
             // changes it arrives as the new kind's own does. What is

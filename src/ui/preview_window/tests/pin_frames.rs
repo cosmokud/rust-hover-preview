@@ -3493,3 +3493,84 @@ fn a_resize_paints_a_row_of_slack_so_the_window_moves_and_the_picture_does_not()
     );
     assert_eq!(paint::the_slack_a_resize_paints_with(false), (0, 0));
 }
+
+/// A step hides the pin's chrome rather than carrying it: the swap's cover shows without chrome,
+/// no arrival is armed, and the pointer asks the strips back afterwards (see
+/// `take_up_pinned_window`).
+#[test]
+fn a_step_hides_the_pins_chrome_until_the_pointer_asks_for_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let stand_media = |kind| {
+        let mut media = create_loading_media(320, 240);
+        media.media_type = kind;
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(media);
+        }
+    };
+
+    // A first pin comes up showing its chrome for a moment, whether or not the pointer is near.
+    stand_media(MediaType::StaticImage);
+    let arrived =
+        take_up_pinned_window(&PathBuf::from("first-picture.png"), (100, 80, 420, 320));
+    assert!(
+        arrived.chrome.caption && arrived.chrome.until.is_some(),
+        "a pin comes up with its chrome showing on an arrival window"
+    );
+
+    // A step onto another picture carries none of that over: the cover the swap stands shows
+    // without chrome, and the arrival window is not armed again.
+    stand_pin(Some(arrived));
+    stand_media(MediaType::StaticImage);
+    let mut stepped =
+        take_up_pinned_window(&PathBuf::from("second-picture.png"), (100, 80, 420, 320));
+    assert!(
+        !stepped.chrome.caption && !stepped.chrome.bar && stepped.chrome.until.is_none(),
+        "a step hides the chrome outright: caption {}, bar {}, arrival {:?}",
+        stepped.chrome.caption,
+        stepped.chrome.bar,
+        stepped.chrome.until
+    );
+
+    // The pointer asks it back: near the caption after the arrival would have closed, the strip
+    // comes out, and away from the window it stays in.
+    let window = stepped.window_box();
+    let after_arrival = Instant::now() + Duration::from_secs(2);
+    let changed =
+        refresh_pin_chrome(&mut stepped, after_arrival, Some((window.0 + 5, window.1)));
+    assert!(
+        changed && stepped.chrome.caption,
+        "a hover after the step shows the caption again"
+    );
+    refresh_pin_chrome(&mut stepped, after_arrival, Some((-1000, -1000)));
+    assert!(
+        !stepped.chrome.caption,
+        "while away from the window the stepped-on chrome stays hidden"
+    );
+
+    // And a step across kinds arms no arrival either: a pin of a bands kind carries an always-on
+    // caption, and the film stepped onto comes up hidden all the same.
+    stand_pin(Some(stepped));
+    stand_media(MediaType::Text);
+    let bands = take_up_pinned_window(&PathBuf::from("note.txt"), (100, 80, 420, 320));
+    assert!(
+        !bands.hides_chrome,
+        "a text pin keeps its chrome in bands, which is the carry this step breaks"
+    );
+    stand_pin(Some(bands));
+    stand_media(MediaType::Video);
+    let crossed = take_up_pinned_window(&PathBuf::from("film.mkv"), (100, 80, 420, 320));
+    assert!(
+        !crossed.chrome.caption && !crossed.chrome.bar && crossed.chrome.until.is_none(),
+        "a step onto a film hides the chrome rather than re-arming the arrival"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
