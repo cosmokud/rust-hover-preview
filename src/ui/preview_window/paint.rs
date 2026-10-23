@@ -216,6 +216,21 @@ pub(super) fn chrome_rows_are_hit_testable(overlay: bool) -> bool {
 /// A film is the one band that is painted instead, the least a pixel can be, because a
 /// press on a picture is the pin's own (see `film_band_is_hit_testable`).
 pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
+    render_pinned_preview_at_with(hwnd, x, y, false)
+}
+
+/// Paint the pin with its media band forced opaque black, for the moment a film's host is about
+/// to go off the band. The band's pixels are the last thing the compositor has, and a host hidden
+/// before they are opaque is the desktop standing in the band's shape (see
+/// `pin_swap::cover_the_band_before_the_film_host_goes`).
+///
+/// A parked band is left to the park: what stands there is the held frame, and black would take
+/// its place rather than cover the hole under it (see `compose_parked_band`).
+pub(super) unsafe fn cover_the_pinned_band_at(hwnd: HWND, x: i32, y: i32) {
+    render_pinned_preview_at_with(hwnd, x, y, true)
+}
+
+unsafe fn render_pinned_preview_at_with(hwnd: HWND, x: i32, y: i32, cover_the_band: bool) {
     let Some(paint) = pinned_paint() else {
         return;
     };
@@ -342,6 +357,10 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // to exactly as a picture's own frame is (see `compose_parked_band`), and black under it rather
     // than the configured `Background -> Video` — that setting is allowed to be `Transparent`, and
     // a deliberately transparent band is exactly the hole this is here not to leave.
+    if cover_the_band && !paint.parked && mem_dc.is_some() {
+        fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
+    }
+
     if paint.parked {
         if mem_dc.is_some() {
             let held = held_video_frame();
@@ -371,8 +390,23 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         }
     }
 
-    if mem_dc.is_some() {
+    if mem_dc.is_some() && !(cover_the_band && !paint.parked) {
         if let Ok(media) = CURRENT_MEDIA.lock() {
+            // **A hosted band with no film in it is black, never the desktop, whatever the media
+            // list says.** A film step clears the media before the host is hidden or the next
+            // player draws, so a repaint in that gap finds either nothing or a film with no shown
+            // child; both are the pin's to make opaque (see `pin_film_host::the_band_has_no_film`).
+            // The kind is kept to a film: a picture or a page fills its own band, and black under
+            // it would hide the window that does.
+            let band_has_no_film = pin_film_host::the_band_has_no_film(paint.parked)
+                || (pin_film_host::film_host().is_some() && !paint.parked && media.is_none());
+            let band_is_a_film = media
+                .as_ref()
+                .is_none_or(|media| matches!(media.media_type, MediaType::Video));
+            if band_has_no_film && band_is_a_film {
+                fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
+            }
+
             if let Some(media) = media.as_ref() {
                 if composed_here {
                     // What the picture is composited over, and what the band beside it was filled with:
@@ -405,28 +439,17 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                             exact,
                         },
                     );
-                } else if film_band_is_hit_testable(media.media_type, paint.parked) {
+                } else if film_band_is_hit_testable(media.media_type, paint.parked)
+                    && !band_has_no_film
+                {
                     // Nothing is composed into this band — the film is in a window under it — so
                     // what is written here is only ever the pin's own claim on the pixel (see
                     // `film_band_is_hit_testable`). A hosted film with no first frame in the host
-                    // yet is not a hole to see through: the band stays opaque until the player's
-                    // shown child arrives, so chrome up over an empty host is chrome over black
-                    // rather than over the desktop (see `pin_film_host`).
-                    // shortcut: opaque black where a held frame would be; upgrade to the held frame
-                    // where one is in hand if this ever shows.
+                    // yet is not a hole to see through: black was filled above and is left alone.
                     // Only where the host stands: a pin never shown has no host yet, and its
                     // bitmap keeps the pin's claim the way the strips' own test reads it (see
                     // `the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows`).
-                    let hosted_needs_cover = pin_film_host::film_host().is_some()
-                        && !paint.parked
-                        && !pin_film_host::the_hosted_player_is_drawing(
-                            VIDEO_PID.load(Ordering::Acquire),
-                        );
-                    if hosted_needs_cover {
-                        fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
-                    } else {
-                        fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
-                    }
+                    fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
                 }
             }
         }

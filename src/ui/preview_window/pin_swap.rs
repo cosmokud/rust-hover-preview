@@ -664,11 +664,38 @@ pub(super) fn take_down_pinned_media() {
         *current = None;
     }
 
+    cover_the_band_before_the_film_host_goes();
+
     // **The picture's host goes off the band with the media it was showing.** A hosted film's
     // picture is the host, so a take-down that left it up would leave a black rectangle where the
     // incoming file is about to be painted — and it would stand there until a later show destroyed
     // it (see `pin_film_host` and `swap_pinned_media`).
     unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
+}
+
+/// Paint the band opaque black before the film's host leaves it.
+///
+/// Hiding the host first spends a compositor tick with the band's old pixels — the least claim a
+/// film's band is given — still on screen and nothing behind them, which is the desktop seen
+/// through a film-shaped hole. So the cover is painted and flushed while the host still stands
+/// over it, and only then does the host go (see `cover_the_pinned_band_at`). A park has already
+/// done exactly this with the frame it holds, and is left alone.
+fn cover_the_band_before_the_film_host_goes() {
+    if pin_film_host::film_host().is_none() || pin_player_is_parked() {
+        return;
+    }
+
+    let Some(content) = pinned_content() else {
+        return;
+    };
+
+    // SAFETY: the window is the pin's own, and the paint is a layered-window blit out of a surface
+    // this thread drew for it. `GdiFlush` is in the same block because what reads the surface next
+    // is the compositor rather than a GDI call.
+    unsafe {
+        cover_the_pinned_band_at(pinned_window(), content.0, content.1);
+        let _ = GdiFlush();
+    }
 }
 
 /// Take the media the pin is showing down for the file replacing it — unless the pin is a bubble.
@@ -723,6 +750,8 @@ pub(super) fn stop_pinned_player() {
     if pid != 0 {
         retire_orphaned_player(pid);
     }
+
+    cover_the_band_before_the_film_host_goes();
 
     // **And the window the film was drawn in goes off the screen with it.** A hosted player's
     // picture is the host, and a host left standing over a band whose player has gone is a black
