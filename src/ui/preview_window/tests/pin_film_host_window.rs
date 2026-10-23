@@ -15,9 +15,9 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetParent, GetWindowLongPtrW, IsWindowVisible,
-    MoveWindow, SetWindowLongPtrW, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOP,
-    SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WM_SHOWWINDOW, WINDOW_EX_STYLE, WS_CHILD,
-    WS_DISABLED, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    MoveWindow, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV,
+    HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WM_SHOWWINDOW, WINDOW_EX_STYLE,
+    WS_CHILD, WS_DISABLED, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
 /// The show and hide messages the adopted host received, in order: whether it was shown, the style
@@ -2250,6 +2250,45 @@ fn the_chrome_stays_hidden_at_spawn_and_follows_the_pointer_over_the_pin() {
         "the caption goes with the pointer"
     );
     stand_window_at_point_in(None);
+    drop(film);
+}
+
+/// A pin that went down with its chrome up leaves the strip's own `WS_VISIBLE` set, and the next
+/// pin's first paint, still behind its hidden window, is what must put it away: asking
+/// `IsWindowVisible` there answers for the hidden parent rather than for the strip, so the stale
+/// strip would be revealed with the window and flash the previous pin's chrome (see
+/// `set_the_strip_at`).
+#[test]
+fn a_strip_left_up_by_a_hidden_pin_is_not_revealed_when_the_next_one_appears() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.chrome = PinChrome::always());
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip");
+    assert!(
+        unsafe { GetWindowLongPtrW(caption, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0,
+        "the pin came up with its chrome"
+    );
+
+    // The pin goes down the way every road takes it down: only the window is hidden, so the
+    // strip's own bit is still set behind it.
+    unsafe { pin_real_window::hide_real_pin_window() };
+    with_pin(|pin| pin.chrome = PinChrome::hidden());
+    unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+
+    assert!(
+        unsafe { GetWindowLongPtrW(caption, GWL_STYLE) } & WS_VISIBLE.0 as isize == 0,
+        "a strip the hidden pin left up is put away by the paint that asks for no chrome"
+    );
+    // And so the next show has nothing stale to reveal.
+    unsafe { let _ = ShowWindow(film.pin_hwnd, SW_SHOWNOACTIVATE); };
+    assert!(
+        !unsafe { IsWindowVisible(caption) }.as_bool(),
+        "a pin coming back up reveals no strip the pointer has not asked about"
+    );
     drop(film);
 }
 
