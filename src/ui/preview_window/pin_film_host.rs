@@ -25,14 +25,14 @@ use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Once;
 
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, GetWindowThreadProcessId,
-    RegisterClassExW, ShowWindow, GW_CHILD, GW_HWNDNEXT, SW_HIDE, SW_SHOWNOACTIVATE,
-    WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, GetWindowLongPtrW,
+    GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, ShowWindow, GW_CHILD, GW_HWNDNEXT,
+    GWL_STYLE, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_VISIBLE,
 };
 
 use super::*;
@@ -113,6 +113,13 @@ pub(super) fn the_pinned_player_was_begun_in_the_host() -> bool {
 /// same host, and the older child would answer "a film is drawing" for a film about to be killed.
 /// A child's owning process is the player that made it — mpv's window is created by mpv's own
 /// process under `--wid` — so the two facts are one question (see `GetWindowThreadProcessId`).
+///
+/// **And only a shown child with a size counts, never a hidden or empty one.** A player that has
+/// just been begun makes its window before it has decoded anything, so existence alone is true
+/// for the whole of the decode — which is the empty host the cover was dropped for. What the
+/// engine's own report of a first frame is, is a window it shows: visible and with a box, which
+/// is what the host is shown for and the cover handed over on (see `host_has_a_child_of`). No
+/// timer poll invents it and nothing shown is hidden again.
 pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
     pid != 0 && hosted_player_pid() == Some(pid) && host_has_a_child_of(pid)
 }
@@ -135,8 +142,22 @@ fn host_has_a_child_of(pid: u32) -> bool {
         while !child.is_invalid() {
             let mut owner = 0u32;
             GetWindowThreadProcessId(child, Some(&mut owner));
-            if owner == pid {
-                return true;
+            // A made window is not a drawn one: a child without the shown style or with no box
+            // is a player still opening, so only the engine's own shown window with a box is taken
+            // as its first frame (see `the_hosted_player_is_drawing`). The style is read rather
+            // than `IsWindowVisible`, because the host itself is hidden until the first frame —
+            // a shown child under a hidden host is still the film arriving.
+            // SAFETY: `child` is a live window found under this app's own host, and the style is
+            // a read of its own bits that reports rather than faults for a window on its way out.
+            let shown = GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE.0 as isize != 0;
+            if owner == pid && shown {
+                let mut rect = RECT::default();
+                if GetWindowRect(child, &mut rect).is_ok()
+                    && rect.right > rect.left
+                    && rect.bottom > rect.top
+                {
+                    return true;
+                }
             }
             child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
         }

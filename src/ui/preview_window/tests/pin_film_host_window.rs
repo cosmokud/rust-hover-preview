@@ -1600,3 +1600,189 @@ fn a_pin_taken_up_on_a_hover_shows_its_bars_over_the_held_frame() {
     clear_park_trace();
     drop(film);
 }
+
+/// A hidden child is not a film drawing: the host carries the last player's child for as long
+/// as that process lives, and a player that has not put a visible child of its own under the
+/// host has nothing on screen yet — so the host stays off the screen even though a process of
+/// its own exists (see `the_hosted_player_is_drawing`).
+#[test]
+fn a_hidden_child_is_not_a_film_drawing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    // A child mpv made but has not shown yet: created hidden, the way a player whose first
+    // frame has not arrived leaves it (see `host_has_a_child_of`).
+    let hidden = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_CHILD,
+            0,
+            0,
+            16,
+            16,
+            host,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a hidden child of the host's, in this process");
+
+    assert!(
+        !pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
+        "a hidden child is not a first frame: the engine's own report is a window it shows, \
+         not one it made"
+    );
+
+    let _ = ensure_video_window_topmost(
+        film.box_.0,
+        film.box_.1,
+        (film.box_.2 - film.box_.0).max(1),
+        (film.box_.3 - film.box_.1).max(1),
+    );
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "and the tick's road leaves the host off the screen until that frame arrives"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(hidden);
+    };
+}
+
+/// A hosted band with no film in it is opaque, never a hole: the pin's bitmap carries the
+/// cover while the player has no first frame, so chrome up over an empty host is chrome over
+/// a picture this app owns rather than over the desktop (see `render_pinned_preview_at`).
+#[test]
+fn a_hosted_band_with_no_film_in_it_is_opaque_never_a_hole() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    // No child: the player has put nothing under the host yet, so there is no first frame.
+    assert!(
+        !pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
+        "no child is no frame"
+    );
+
+    let hwnd = film.pin_hwnd;
+    unsafe { render_pinned_preview_at(hwnd, film.box_.0, film.box_.1) };
+    let (width, height) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+        .expect("a pin to have a size");
+    let bits = ensure_layered_surface(hwnd.0 as isize, width as u32, height as u32)
+        .expect("the surface the paint drew into");
+    let painted =
+        unsafe { std::slice::from_raw_parts(bits, width as usize * height as usize * 4) };
+    let (band_top, band_height) = pinned_band_rows(
+        height,
+        pinned_caption_height(96, None),
+        0,
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.overlay)) == Some(true),
+    );
+    let row = (band_top.max(0) as usize + band_height as usize / 2).min(height as usize - 1);
+    let pixel = &painted[row * width as usize * 4..row * width as usize * 4 + 4];
+    assert_eq!(
+        pixel[3], 255,
+        "a band with no film in it is opaque, never a hole in the desktop (row {row}: {pixel:?})"
+    );
+}
+
+/// A step holds the old cover until the new film's first frame: parked over a band with no
+/// visible child, the settle keeps the frame standing; the tick the child arrives hands the
+/// band back with nothing transparent in between (see `settle_pinned_park`).
+#[test]
+fn a_step_holds_its_cover_until_the_new_films_first_frame() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    // The outgoing frame, stood where a real capture would have put it: there is no player on
+    // the machine these run on, and the capture answers false rather than blanking a good
+    // frame (see `hold_video_window_frame`).
+    let red = [0u8, 0, 255, 255].repeat(64);
+    stand_video_frame_for_a_test(red, 8, 8);
+    assert!(
+        park_pinned_player_for_step(film.pin_hwnd, (film.box_.0, film.box_.1)),
+        "a file step covers the band it is leaving"
+    );
+    assert!(pin_player_is_parked(), "with the cover standing");
+    assert!(held_video_frame().is_some(), "holding the outgoing frame");
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "and the host hidden behind it"
+    );
+
+    // No visible child yet: the replacement has put nothing on screen, so the settle holds.
+    assert!(
+        !settle_pinned_park(),
+        "with no first frame the band is not handed back"
+    );
+    assert!(pin_player_is_parked(), "so the cover stands");
+    assert!(held_video_frame().is_some(), "holding the frame it stood over");
+
+    // A child made but not shown yet is still no first frame: the settle keeps holding.
+    let hidden = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_CHILD,
+            0,
+            0,
+            16,
+            16,
+            host,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a hidden child of the host's, in this process");
+    assert!(
+        !pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
+        "a hidden child is a player still opening, not a film"
+    );
+    assert!(
+        !settle_pinned_park(),
+        "so the cover stands over a window that has drawn nothing"
+    );
+    assert!(pin_player_is_parked(), "holding the outgoing frame still");
+    assert!(held_video_frame().is_some(), "rather than a transparent gap");
+    unsafe {
+        let _ = DestroyWindow(hidden);
+    };
+
+    // The new film's first frame: a visible child of the player's own process under the host.
+    let _child = unsafe { a_child_of_the_host(host) };
+    assert!(
+        pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
+        "a visible child is the film on screen"
+    );
+    assert!(
+        settle_pinned_park(),
+        "the tick the first frame lands hands the band back"
+    );
+    assert!(!pin_player_is_parked(), "with the cover down");
+    assert!(held_video_frame().is_none(), "and the frame given up with it");
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "which is the same host shown again, already drawing"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+}
