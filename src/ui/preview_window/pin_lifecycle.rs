@@ -1076,6 +1076,13 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
         return false;
     }
 
+    // A pin waiting on its hosted film's first frame is hidden on purpose: its window goes up at
+    // the handover and on no earlier tick, so the restore leaves it down (see
+    // `pin_film_host::settle_pin_handover`).
+    if pin_film_host::pin_handover_armed() {
+        return false;
+    }
+
     if pin_is_its_own_window() {
         return !unsafe { IsWindowVisible(hwnd) }.as_bool();
     }
@@ -1224,15 +1231,23 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // A host left by a pin that has just left this window is taken down here rather than waiting
     // for the hide that ends the pin: the file being installed may not be a film at all.
     //
-    // **And a film the pin took up from a hover is begun again in that host**, rather than left
-    // drawing in the top-level window the hover gave it: the relaunch raises its cover — the held
-    // frame captured while the hover is still up, painted into the bitmap — so the paint below
-    // carries the cover and the window appears with its bars over that frame rather than over the
-    // desktop between them (see `begin_the_adopted_film_in_the_host`).
+    // **And a film the pin took up from a hover is begun again in that host behind the hover**,
+    // rather than left drawing in the top-level window the hover gave it: the relaunch starts the
+    // hosted player in the background while the hover stays visible and playing as the placeholder,
+    // the pin's window and its strips stay down with the chrome hidden, and the tick's handover is
+    // the only visible swap — the pin appearing with the film already drawing, and only then the
+    // hover coming down (see `pin_film_host::settle_pin_handover`). Where the pin is already
+    // standing over a park, the film is adopted the synchronous way instead: the cover that park
+    // raised is the placeholder, and the show below hands the band over through it.
     unsafe {
         if pin_is_its_own_window() {
             pin_film_host::take_up_the_pin_film_host();
-            begin_the_adopted_film_in_the_host();
+            if begin_the_adopted_film_in_the_host() && !pin_player_is_parked() {
+                with_pin(|pin| pin.chrome = PinChrome::hidden());
+                pin_film_host::arm_pin_handover();
+                render_pinned_preview_at(hwnd, window.0, window.1);
+                return;
+            }
         } else {
             pin_film_host::take_down_the_pin_film_host();
         }
@@ -1291,9 +1306,9 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-    // Traced for the take-up that must cover before it shows: a pin taken up on a hover's film
-    // captures the held frame and paints the cover before this line, so the bars appear over
-    // that frame and never over the desktop between them (see `begin_the_adopted_film_in_the_host`).
+    // Traced for the take-up that shows the pin: a step's cover was painted before this line, so
+    // the bars appear over the held frame, and a take-up from a hover reaches it through the
+    // handover with the film already drawing (see `settle_pin_handover`).
     trace_park_step("show");
 
     // **And now the hover goes**, painted, shown and settled: from here the pin is what stands in the

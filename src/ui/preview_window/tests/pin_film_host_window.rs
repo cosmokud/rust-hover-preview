@@ -13,9 +13,9 @@
 use super::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, GetParent, MoveWindow, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOP,
-    SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WS_CHILD, WS_DISABLED,
-    WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    CreateWindowExW, DestroyWindow, GetParent, IsWindowVisible, MoveWindow, GWL_EXSTYLE, GWL_STYLE,
+    GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE,
+    WS_CHILD, WS_DISABLED, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -122,6 +122,10 @@ impl StandingFilm {
 
 impl Drop for StandingFilm {
     fn drop(&mut self) {
+        // A handover armed by a take-up that never reached its settle — a test that failed
+        // before it disarmed — must not leak into the next test's chrome (see
+        // `pin_handover_armed`).
+        pin_film_host::disarm_pin_handover();
         unsafe {
             pin_film_host::take_down_the_pin_film_host();
             // The strips with the host: the window going down destroys them, and the handles must
@@ -384,8 +388,8 @@ fn the_film_host_follows_the_pins_band() {
 /// A hover's mpv film is a window of the desktop's, and a pin that takes it up cannot keep it
 /// there: the picture belongs in the host the pin draws it in. So the take-up begins the player
 /// again through the relaunch road the rest of the pin's life uses — at the second the hover had
-/// reached, and held or playing as it was — and the band is covered while it does (see
-/// `begin_the_adopted_film_in_the_host`).
+/// reached, and held or playing as it was — while the hover it replaces keeps playing until the
+/// handover ends it (see `begin_the_adopted_film_in_the_host`).
 #[test]
 fn a_film_taken_up_from_a_hover_is_begun_again_in_the_host() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -395,6 +399,7 @@ fn a_film_taken_up_from_a_hover_is_begun_again_in_the_host() {
     let hovered = 0x7FFF_FFFB;
     film.taken_up_from_a_hover(hovered);
     clear_restart_count();
+    pin_film_host::disarm_pin_handover();
 
     unsafe { show_pinned_window(film.pin_hwnd) };
 
@@ -405,13 +410,12 @@ fn a_film_taken_up_from_a_hover_is_begun_again_in_the_host() {
         "the player the hover began is begun again rather than kept as it stands"
     );
     assert!(
-        pin_player_is_parked(),
-        "behind the cover the relaunch road raises over the player it replaces"
+        !pin_player_is_parked(),
+        "without a cover: the hover staying up is the placeholder the relaunch plays behind"
     );
-    assert_ne!(
-        VIDEO_PID.load(Ordering::SeqCst),
-        hovered,
-        "and the window it was drawing in is not the pin's player any more"
+    assert!(
+        pin_film_host::pin_handover_armed(),
+        "and the handover is armed for the first frame rather than shown over nothing"
     );
     assert_eq!(
         mpv_launch_host(Path::new("a-film.mkv")),
@@ -421,6 +425,7 @@ fn a_film_taken_up_from_a_hover_is_begun_again_in_the_host() {
 
     // The other half of the same question: a film the host is already drawing is a film to leave
     // alone, or every show of a hosted pin would begin its player again.
+    pin_film_host::disarm_pin_handover();
     drop(film);
     let hosted = StandingFilm::new();
     clear_restart_count();
@@ -1538,63 +1543,78 @@ fn a_pointer_over_a_window_covering_the_pin_shows_no_chrome() {
     assert!(!bar, "and the bar stays hidden under the covering window");
 }
 
-/// A pin taken up on a hover's film shows its bars over the held frame, never over the desktop:
-/// the adopted player's cover — the frame captured while the hover is still up, painted into
-/// the bitmap — stands before the window is shown (see `show_pinned_window`).
+/// A pin taken up on a hover's film waits for the hosted player's first frame before it
+/// appears: the take-up relaunches the adopted film into the host in the background, the hover
+/// stays up and playing as the placeholder meanwhile, and the pin's window and its strips stay
+/// down with the chrome hidden until the film is really drawing (see `settle_pin_handover`).
 #[test]
-fn a_pin_taken_up_on_a_hover_shows_its_bars_over_the_held_frame() {
+fn a_pin_taken_up_on_a_hover_waits_for_the_first_frame() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     let film = StandingFilm::new();
     // Taken up from a hover: the film is the hover's player's, drawing in a window of the
-    // desktop's rather than in the host's, so the take-up relaunches it into the host under a
-    // cover (see `begin_the_adopted_film_in_the_host`).
+    // desktop's rather than in the host's, so the take-up relaunches it into the host behind
+    // the hover that is still up (see `begin_the_adopted_film_in_the_host`).
     film.taken_up_from_a_hover(101);
-    // A first pin, whose arrival window is open: the bars show over whatever the band holds.
+    let hover = unsafe { StandingHover::up() };
+    // A first pin, whose arrival window is open: the take-up must not spend it over nothing.
     with_pin(|pin| pin.chrome = PinChrome::on_arrival(Instant::now()));
-    // The frame a real park would have taken off the desktop is stood in for it: there is no
-    // player of this app's on the machine these run on, and the capture answers false rather
-    // than writing a blank frame over a good one (see `hold_video_window_frame`).
-    let red = [0u8, 0, 255, 255].repeat(64);
-    stand_video_frame_for_a_test(red, 8, 8);
     forget_pin_park_swap();
     clear_park_trace();
-    clear_pending_pinned_relaunch();
     clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_film_host::disarm_pin_handover();
 
     unsafe { show_pinned_window(film.pin_hwnd) };
 
-    // The cover before the showing: the capture, its paint into the bitmap, and the player's
-    // window put away all precede the window appearing, so the band it appears with is the held
-    // frame rather than the desktop between the bars.
+    // No cover before the showing: nothing is captured, painted or hidden, because the hover
+    // is the placeholder and it never comes down until the handover.
     assert_eq!(
         park_trace(),
-        vec!["capture", "paint", "hide", "show"],
-        "the take-up captures the held frame and paints the cover before showing the pin"
+        Vec::<&'static str>::new(),
+        "the take-up raises no cover: the hover stays up as the placeholder"
     );
     assert_eq!(
         restart_count(),
         1,
-        "and the adopted film is still relaunched into the host behind that cover"
+        "but the adopted film is still relaunched into the host behind it"
     );
     assert!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.parked)) == Some(true),
-        "so the cover stands over the relaunch"
+        !pin_player_is_parked(),
+        "with no park standing over the relaunch"
     );
     assert!(
-        held_video_frame().is_some(),
-        "holding the frame the bars appear over"
+        !unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "and the pin's own window stays down until the hosted player draws"
     );
     assert!(
-        pin_state()
-            .and_then(|pinned| pinned.pin().map(|pin| pin.chrome.caption))
-            == Some(true),
-        "and the arrival's bars do appear — over the held frame, never over a desktop gap"
+        hover.shown(),
+        "while the hover stays up and playing as the placeholder"
     );
+    assert!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.chrome.caption)) == Some(false),
+        "with the chrome hidden rather than arriving over nothing"
+    );
+    assert!(
+        pin_film_host::pin_handover_armed(),
+        "until the handover the tick performs once the first frame lands"
+    );
+    for strip in [
+        pin_chrome_strips::caption_strip(),
+        pin_chrome_strips::transport_strip(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        assert!(
+            !unsafe { IsWindowVisible(strip) }.as_bool(),
+            "and no strip shows regardless of the chrome state"
+        );
+    }
 
+    pin_film_host::disarm_pin_handover();
     forget_pin_park_swap();
-    forget_video_frame();
     clear_pending_pinned_relaunch();
     clear_restart_count();
     clear_park_trace();
@@ -1785,4 +1805,376 @@ fn a_step_holds_its_cover_until_the_new_films_first_frame() {
     forget_video_frame();
     forget_resume_frame();
     forget_pin_park_swap();
+}
+
+/// A window of the desktop's standing in for the hover's: shown, so the take-up it hands over
+/// from is a hover still up — destroyed with the guard, and the previous hover handle put back.
+struct StandingHover {
+    hwnd: HWND,
+    previous: isize,
+}
+
+impl StandingHover {
+    unsafe fn up() -> StandingHover {
+        let previous = PREVIEW_HWND.load(Ordering::SeqCst);
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP | WS_VISIBLE,
+                NOWHERE,
+                NOWHERE,
+                320,
+                240,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .expect("a window for the hover to be up in");
+        PREVIEW_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+        StandingHover { hwnd, previous }
+    }
+
+    fn shown(&self) -> bool {
+        unsafe { IsWindowVisible(self.hwnd).as_bool() }
+    }
+}
+
+impl Drop for StandingHover {
+    fn drop(&mut self) {
+        PREVIEW_HWND.store(self.previous, Ordering::SeqCst);
+        unsafe {
+            let _ = DestroyWindow(self.hwnd);
+        }
+    }
+}
+
+/// A live process standing in for the player the take-up began: mpv is not on the machine these
+/// run on, so the relaunch the take-up begins comes back with no handle — and a handover with no
+/// player behind it is a wait that is already over rather than one still going on.
+struct LiveStandInPlayer;
+
+impl LiveStandInPlayer {
+    // The guard's `Drop` kills and reaps the sleeper, which the lint cannot see from the spawn.
+    #[allow(clippy::zombie_processes)]
+    fn stand() -> LiveStandInPlayer {
+        use std::os::windows::process::CommandExt;
+        let child = std::process::Command::new("cmd")
+            .args(["/c", "ping", "-n", "30", "127.0.0.1"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(0x08000000)
+            .spawn()
+            .expect("a live stand-in for the player the take-up began");
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            if let Some(media) = current.as_mut() {
+                media.video_process = Some(PlayerProcess::Started(child));
+            }
+        }
+        LiveStandInPlayer
+    }
+}
+
+impl Drop for LiveStandInPlayer {
+    fn drop(&mut self) {
+        // Killed and reaped rather than dropped: a `Child` left to its handle outlives the
+        // kill by however long the process takes to die, and a 30-second sleeper is a stray
+        // process on a machine running the suite.
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            if let Some(media) = current.as_mut() {
+                if let Some(PlayerProcess::Started(mut child)) = media.video_process.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
+    }
+}
+
+/// The handover is the only visible swap: the pin's window appears with the film already drawing
+/// in it and the chrome arriving over that film, and the hover comes down in the same pass.
+#[test]
+fn the_handover_shows_the_pin_over_the_drawn_film_and_takes_the_hover_down() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    film.taken_up_from_a_hover(101);
+    let hover = unsafe { StandingHover::up() };
+    with_pin(|pin| pin.chrome = PinChrome::on_arrival(Instant::now()));
+    clear_park_trace();
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_film_host::disarm_pin_handover();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert!(
+        pin_film_host::pin_handover_armed(),
+        "the take-up arms the handover"
+    );
+
+    // The film's first frame: a shown child of this process under the host, owned by the player
+    // the pin is holding (see `the_hosted_player_is_drawing`).
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::HandedOver
+        ),
+        "the tick the first frame lands hands the band over"
+    );
+    assert!(
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "and the pin's window is the swap the user sees"
+    );
+    assert!(
+        !hover.shown(),
+        "with the hover coming down in the same pass, its film already replaced"
+    );
+    let chrome = pin_state().and_then(|pinned| {
+        pinned.pin().map(|pin| {
+            (
+                pin.chrome.caption,
+                pin.chrome.bar,
+                pin.chrome.until.is_some(),
+            )
+        })
+    });
+    assert_eq!(
+        chrome,
+        Some((true, true, true)),
+        "and the arrival starts over the live film, never over nothing"
+    );
+    assert!(
+        !pin_film_host::pin_handover_armed(),
+        "a handover fires once: nothing is left armed behind the shown pin"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    clear_pending_pinned_relaunch();
+    clear_restart_count();
+    clear_park_trace();
+    drop(film);
+}
+
+/// No handover before the first frame: the pin stays down, the hover stays up, and the chrome
+/// stays hidden no matter what the pointer does.
+#[test]
+fn no_handover_before_the_first_frame() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    film.taken_up_from_a_hover(101);
+    let hover = unsafe { StandingHover::up() };
+    with_pin(|pin| pin.chrome = PinChrome::on_arrival(Instant::now()));
+    clear_park_trace();
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_film_host::disarm_pin_handover();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    // A player behind the wait, so the wait is still a wait: mpv is not on this machine, and a
+    // relaunch that began nothing is a wait already over rather than one going on.
+    let _player = LiveStandInPlayer::stand();
+
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::Waiting
+        ),
+        "a hosted player still opening is not a film yet"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "so the pin's window stays down"
+    );
+    assert!(hover.shown(), "and the hover stays up and playing");
+    assert!(
+        pin_film_host::pin_handover_armed(),
+        "with the handover still armed behind them"
+    );
+
+    // The pointer over the pin's box while it is still down: near enough to ask for the chrome,
+    // which stays hidden because the frame it belongs to is not on screen yet.
+    pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        let now = Instant::now();
+        Some(refresh_pin_chrome(
+            pin,
+            now,
+            Some((NOWHERE + 10, NOWHERE + 10)),
+        ))
+    });
+    assert!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar)))
+            == Some((false, false)),
+        "no strip is asked for or shown over a frame that is not there"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    clear_pending_pinned_relaunch();
+    clear_restart_count();
+    clear_park_trace();
+    drop(film);
+}
+
+/// A step's handover starts the arrival over the new film: the swap held the old frame with the
+/// chrome hidden until the new player drew, and the bars start at that handover.
+#[test]
+fn a_step_handover_starts_the_arrival_over_the_new_film() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    film.taken_up_from_a_hover(101);
+    let hover = unsafe { StandingHover::up() };
+    clear_park_trace();
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_film_host::disarm_pin_handover();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    // The step's cover standing over the outgoing frame, with the chrome hidden across the swap.
+    with_pin(|pin| {
+        pin.parked = true;
+        pin.chrome = PinChrome::hidden();
+    });
+
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::HandedOver
+        ),
+        "the tick the new film draws hands the band over"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((true, true)),
+        "and the bars start over the new film at that handover, not before it"
+    );
+    assert!(
+        !hover.shown(),
+        "with the hover coming down in the same pass where one is still up"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    clear_pending_pinned_relaunch();
+    clear_restart_count();
+    clear_park_trace();
+    drop(film);
+}
+
+/// A film that never draws hands the pin back: the replacement is dead, so the wait is over and
+/// the hidden pin comes down with the hover still up.
+#[test]
+fn a_film_that_never_draws_hands_the_pin_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    film.taken_up_from_a_hover(101);
+    let hover = unsafe { StandingHover::up() };
+    clear_park_trace();
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_film_host::disarm_pin_handover();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert!(
+        pin_film_host::pin_handover_armed(),
+        "the take-up arms the handover"
+    );
+
+    // No player behind the wait: the relaunch the take-up began errored rather than starting -
+    // headless runs note the player instead of beginning one, so the errored player is stood in
+    // for by no player at all.
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.video_process = None;
+        }
+    }
+
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::Failed
+        ),
+        "a replacement that is gone is a wait with nothing left to wait for"
+    );
+    assert!(
+        !pin_film_host::pin_handover_armed(),
+        "and the handover disarms rather than sticking behind a hidden pin"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "the pin never appears"
+    );
+    assert!(
+        hover.shown(),
+        "and the hover is still up for the teardown to keep"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    clear_pending_pinned_relaunch();
+    clear_restart_count();
+    clear_park_trace();
+    drop(film);
+}
+
+/// A film that keeps starting hands the pin back at the start timeout: a player that never draws
+/// is one that will not, and a hidden pin waiting past the start ever does is a stuck one.
+#[test]
+fn a_film_that_keeps_starting_hands_the_pin_back_at_the_start_timeout() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    film.taken_up_from_a_hover(101);
+    let hover = unsafe { StandingHover::up() };
+    clear_park_trace();
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_film_host::disarm_pin_handover();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    // A player still starting, past the start timeout: alive, but with no frame in the host.
+    let _player = LiveStandInPlayer::stand();
+    pin_film_host::stand_pin_handover_armed_at(Some(
+        Instant::now() - Duration::from_secs(VIDEO_START_WAIT_SECS + 1),
+    ));
+
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::Failed
+        ),
+        "a start past its timeout is a wait that is over"
+    );
+    assert!(
+        !pin_film_host::pin_handover_armed(),
+        "and the handover disarms rather than sticking behind a hidden pin"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "the pin never appears"
+    );
+    assert!(
+        hover.shown(),
+        "and the hover is still up for the teardown to keep"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    clear_pending_pinned_relaunch();
+    clear_restart_count();
+    clear_park_trace();
+    drop(film);
 }
