@@ -812,6 +812,11 @@ pub(super) fn unpark_pinned_player(window: &dyn PinWindow) -> bool {
         return false;
     }
 
+    // The chrome is asked after the flag is down and before the repaint: the strips' surfaces then
+    // carry the *new* file's caption, and the repaint's own sync shows them in the same tick as
+    // the film. Syncing earlier would show the last file's caption pixels (see `refresh_pin_chrome`).
+    let _ = refresh_the_pin_chrome_now();
+
     // **And then the band is painted, in this same tick, which is the whole of what was left of the
     // release flash.** The flag going down changes what the *next* paint would draw; it changes
     // nothing about the pixels the compositor is already holding, and what it is holding is the

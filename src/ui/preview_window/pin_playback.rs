@@ -1906,12 +1906,28 @@ pub(super) fn park_pinned_player_for_seek(hwnd: HWND, at: (i32, i32)) -> bool {
 /// the relaunch is not waiting for a release to begin it — the swap begins the
 /// next player a few lines later — so the record is not held back for one.
 ///
+/// **And the chrome goes down with this park, not with the ask.** The outgoing film is live until
+/// the park hides it, so the strips stand over it for the whole walk and load; the file that
+/// replaces it asks them back, and the take-up clears the step (see `refresh_pin_chrome` and
+/// `clear_pin_step_chrome`).
+///
 /// `replacing` rather than `awaiting` is what makes the settle wait for that
 /// player's window rather than hand the band to whatever window happens to
 /// exist, which for a replacement is the one the bound was written for (see
 /// `park_swap_arm`).
 pub(super) fn park_pinned_player_for_step(hwnd: HWND, at: (i32, i32)) -> bool {
-    park_pinned_player_inner(hwnd, at, true, false, false, ParkArm::Step)
+    if !park_pinned_player_inner(hwnd, at, true, false, false, ParkArm::Step) {
+        return false;
+    }
+
+    // The chrome asks after the flag is up, in this same call: the strips go down in the tick the
+    // host window was hidden in, with no refresh in between.
+    with_pin(|pin| pin.chrome.step_in_flight = true);
+    if refresh_the_pin_chrome_now() {
+        unsafe { pin_chrome_strips::sync_the_chrome_strips() };
+    }
+
+    true
 }
 
 /// The press half of a box change: freeze the clock, park the cover over the

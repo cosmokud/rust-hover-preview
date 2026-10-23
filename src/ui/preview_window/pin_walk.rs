@@ -213,12 +213,6 @@ pub(super) fn step_pinned_file(
     // arc is put up on the same delay a load's is however long the planner is busy.
     *wait = Some(PinWait::new());
 
-    // And the chrome goes down with the question rather than with the park at the end of the
-    // step: the pointer that asked is still on the caption, and everything between here and the
-    // new file's arrival is a frame the strips have no business standing over (see
-    // `refresh_pin_chrome` and `clear_pin_step_chrome`).
-    with_pin(|pin| pin.chrome.step_in_flight = true);
-
     None
 }
 
