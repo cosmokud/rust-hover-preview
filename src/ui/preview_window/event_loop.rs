@@ -2583,20 +2583,24 @@ pub fn run_preview_window() {
 
                 if changed == Some(true) {
                     refresh_requested = true;
+                    // The strips are the chrome now, so a change answers them here rather than
+                    // waiting for the repaint below: the paint carries their pixels, and the sync
+                    // carries the paint onto the screen (see `sync_the_chrome_strips`).
+                    pin_chrome_strips::sync_the_chrome_strips();
                 }
 
-                // A strip of a pin's chrome is painted into the pin's own rows, which for a
-                // video a player draws are rows of that window — and that window is the one on
-                // top for as long as no strip is showing. Both of its raises are held off from
-                // here on (see `pin_chrome_up`), so the raise the pin owes is the pin's own: on
-                // the way up, which is a moment a hand is looking for a close button, and again
-                // for as long as a strip is showing, because the film stands itself back up over
-                // the pin on its own band (see `player_stands_over_the_pin`). The way out needs
-                // none: the first raise through either caller once the last strip has gone puts
-                // the player back on top. What keeps this one raise from being a raise per tick
-                // is that it is asked of the order that is standing rather than of the strips
-                // that are up — the player *under* the pin is the answer both raisers put in,
-                // and the one this leaves alone (see `place_player_window`).
+                // A strip of the pin's chrome stands over whatever is in the band — a hosted film,
+                // the cover, or FFmpeg's player — and that window is the one on top for as long as
+                // no strip is showing. Both of its raises are held off from here on (see
+                // `pin_chrome_up`), so the raise the pin owes is the pin's own: on the way up,
+                // which is a moment a hand is looking for a close button, and again for as long
+                // as a strip is showing, because the film stands itself back up over the pin on
+                // its own band (see `player_stands_over_the_pin`). The way out needs none: the
+                // first raise through either caller once the last strip has gone puts the player
+                // back on top. What keeps this one raise from being a raise per tick is that it
+                // is asked of the order that is standing rather than of the strips that are up —
+                // the player *under* the pin is the answer both raisers put in, and the one this
+                // leaves alone (see `place_player_window`).
                 if pin_chrome_up() {
                     // A topmost pin is put back over the film whenever the film has stood itself
                     // back up on its band. A pin that is not Always On Top has no such fight to

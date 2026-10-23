@@ -13,10 +13,11 @@ pub(super) const PIN_BUBBLE_PIXELS: f32 = 44.0;
 /// long a pin shows its chrome for whether or not the pointer is near it — a moment after the pin
 /// is taken up, which is when a hand is looking for the buttons.
 ///
-/// There is no fade between those two states, and none is wanted: the chrome is drawn into the
-/// window's own rows rather than composited over anything, so a half-shown one is a strip with the
-/// picture missing behind it rather than a fainter strip — and what is cheap is the state rather
-/// than a level, since a chrome that has been asked for is drawn whole in the paint that notices.
+/// There is no fade between those two states, and none is wanted: the chrome is carried in
+/// windows of its own rather than composited over anything, so a half-shown one is a strip with
+/// the picture missing behind it rather than a fainter strip — and what is cheap is the state
+/// rather than a level, since a chrome that has been asked for is drawn whole in the paint that
+/// notices.
 pub(super) const PIN_CHROME_NEAR_PIXELS: f32 = 24.0;
 pub(super) const PIN_CHROME_ARRIVAL_SECONDS: f32 = 1.5;
 /// The volume a pinned preview is playing at.
@@ -297,8 +298,8 @@ pub(super) unsafe fn pin_ask_keyboard_back(hwnd: HWND) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct PinChrome {
     /// Whether the pointer is asking for the caption, and for the transport bar. There is no
-    /// half-shown state: a strip is drawn into the window's own rows, so one painted at a share
-    /// of itself would be a strip with the picture gone behind it. Each is drawn whole or not at
+    /// half-shown state: a strip stands in a window of its own, so one painted at a share of
+    /// itself would be a strip with the picture gone behind it. Each is drawn whole or not at
     /// all (see the note over `PIN_CHROME_NEAR_PIXELS`).
     pub(super) caption: bool,
     pub(super) bar: bool,

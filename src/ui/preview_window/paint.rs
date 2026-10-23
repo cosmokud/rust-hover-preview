@@ -171,13 +171,32 @@ pub(super) unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
 ///
 /// The kind is what is read, because a film is the only band a player of somebody else's stands
 /// in; every other kind's band is this app's own pixels already, and a band a park has painted
-/// flat is left alone, since what stands in it is the parked film rather than a hole to close.
+/// flat is left alone, since what stands in it is the parked film rather than a hole to close. The
+/// chrome's own rows are the same claim wherever they are not the media's own: a kind whose chrome
+/// stands in bands around its media owes them the same least pixel (see
+/// `chrome_rows_are_hit_testable`), and a kind whose chrome is drawn over its media has no such
+/// rows — they are the band's own, answered here.
 pub(super) fn film_band_is_hit_testable(media: MediaType, parked: bool) -> bool {
     !parked && matches!(media, MediaType::Video)
 }
 
-/// Paint a pinned window: the caption, the media in the band below it, and — for a kind that
-/// plays — the transport bar below that.
+/// Whether the chrome's own rows of a pinned window are the pin's claim rather than its chrome:
+/// they always are where they are not the media's own. The strips carry the chrome on every road,
+/// so the bitmap owes those rows only the least pixel a press can land on — the same one part in
+/// 255 the film's band is given, and for the same reason (see `pin_chrome_strips`).
+///
+/// Asked of the overlay because rows that are the band's own are the band's answer rather than
+/// this one's: a kind whose chrome is drawn over its media has its chrome rows inside the band,
+/// already the media, the cover, or the film's claim (see `film_band_is_hit_testable`). A kind
+/// whose chrome stands in bands around its media leaves its first and last rows to the strips, and
+/// what stands in them is this.
+pub(super) fn chrome_rows_are_hit_testable(overlay: bool) -> bool {
+    !overlay
+}
+
+/// Paint a pinned window: the media in its band, and the pin's alpha-1 claim on the chrome's
+/// rows for the strips to stand over — for a kind that plays, the transport bar's rows below the
+/// band as well (see `pin_chrome_strips`).
 ///
 /// It is the same composition `render_layered_preview_at` performs, for a window that is no
 /// longer the frame's size: the surface is the window's whole box, the frame is composed into
@@ -401,16 +420,14 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // wait is not allowed to cost the window (see `paint_pin_spinner`).
     paint_pin_spinner(out, width.max(1) as u32, band_top, band_height as i32);
 
-    // The chrome, for kinds that draw it over their media: each strip whole, or not painted at
-    // all, which is what makes a picture whose chrome has gone a picture and nothing else — and the
-    // two are asked about one at a time, so a hand at one end of a window does not bring out what
-    // is at the other end of it (see `PinChrome`). The palette both strips are drawn in is read
-    // once for the paint, and not at all where neither is drawn. The caption, across the window's
-    // first rows.
-    let palette = if paint.caption
-        || (paint.transport_height > 0 && paint.bar)
-        || (!paint.overlay && caption_height > 0)
-    {
+    // The chrome, for the strips to carry: each strip whole, or not painted at all, which is what
+    // makes a picture whose chrome has gone a picture and nothing else — and the two are asked
+    // about one at a time, so a hand at one end of a window does not bring out what is at the
+    // other end of it (see `PinChrome`). The bitmap carries none of it: the strips composite over
+    // the rows, and what stands in them is the pin's own claim (see `chrome_rows_are_hit_testable`).
+    // The palette both strips are drawn in is read once for the paint, and not at all where neither
+    // is drawn. The caption, for the window's first rows.
+    let palette = if paint.caption || (paint.transport_height > 0 && paint.bar) {
         pin_chrome::ChromePalette::current()
     } else {
         None
@@ -439,36 +456,34 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 }
                 if let Some(surface) = surface.as_ref() {
                     pin_chrome::paint_caption(surface, palette, &caption, paint.dpi);
-                    copy_surface_rows_into(surface, out, width as u32, 0);
                 }
             });
         }
-    } else if !paint.overlay && caption_height > 0 {
-        // The rows a caption leaves behind are the window's own however it went: a window too
-        // narrow to hold one, or a chrome that has been asked to leave it off. A kind that draws
-        // its chrome over its media has the media under them and owes nothing; a page is drawn
-        // between them, so those rows would be left as the surface's own emptiness — a hole across
-        // the top of the window, with the desktop showing through it and a press falling through
-        // it, since a layered window is hit-tested by the shape of its pixels. What fills them is
-        // the bar the caption draws on, so a caption with nothing left in it is the bar and
-        // nothing else (see `caption_fits` and `pinned_band_rows`).
-        //
-        // shortcut: the rows stay the caption's rather than becoming the page's, so a caption that
-        // goes away leaves a band of bar and not a window 30 pixels shorter; upgrade if the box a
-        // pin is given should follow its caption going and coming back.
-        if let Some(palette) = palette.as_ref() {
-            let bar = palette.background;
-            let stride = width.max(1) as usize * 4;
-            let strip = (caption_height as usize * stride).min(out.len());
-            for row in out[..strip].chunks_exact_mut(stride) {
-                for pixel in row.chunks_exact_mut(4) {
-                    pixel.copy_from_slice(&[bar[2], bar[1], bar[0], 255]);
-                }
-            }
+    }
+
+    // The chrome's own rows, where they are not the media's: a kind whose chrome stands in bands
+    // around its media leaves its first rows and its last to the strips, and what stands in them
+    // is the pin's claim rather than a hole a press falls through — a layered window is hit-tested
+    // by the shape of its pixels (see `chrome_rows_are_hit_testable`). A kind whose chrome is drawn
+    // over its media has no such rows — they are the band's own, painted above — and owes nothing
+    // here. A caption too narrow to hold one, or asked away, leaves the same claim: the strips
+    // carry nothing where the pin paints nothing, and the rows stay the pin's either way.
+    if chrome_rows_are_hit_testable(paint.overlay) {
+        if caption_height > 0 {
+            fill_band_hit_testable(out, width.max(1) as u32, 0, caption_height.max(1) as u32);
+        }
+        if paint.transport_height > 0 {
+            fill_band_hit_testable(
+                out,
+                width.max(1) as u32,
+                (height - paint.transport_height).max(0) as u32,
+                paint.transport_height.max(1) as u32,
+            );
         }
     }
 
-    // The transport bar, for the kinds that play, across the window's last rows.
+    // The transport bar, for the kinds that play, for the window's last rows — painted for the
+    // strips and never into the bitmap, the way the caption is.
     if paint.transport_height > 0 && paint.bar {
         if let Some(palette) = palette.as_ref() {
             let state = pin_chrome::TransportState {
@@ -494,12 +509,6 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 }
                 if let Some(surface) = surface.as_ref() {
                     pin_chrome::paint_transport(surface, palette, &state, paint.dpi);
-                    copy_surface_rows_into(
-                        surface,
-                        out,
-                        width as u32,
-                        (height - paint.transport_height).max(0) as u32,
-                    );
                 }
             });
         }
@@ -566,9 +575,9 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         );
     }
 
-    // And the strips a hosted film's chrome stands over it in, which carry what this paint just
-    // put into those same rows of its own surface (see `pin_chrome_strips`): asked here because
-    // the chrome's own show and hide is answered on this paint everywhere else (see `PinChrome`).
+    // And the strips the chrome stands in, which carry what this paint just painted into their own
+    // surfaces — the bitmap carries none of it (see `pin_chrome_strips`): asked here because the
+    // chrome's own show and hide is answered on this paint everywhere else (see `PinChrome`).
     pin_chrome_strips::sync_the_chrome_strips();
 
     // As in `render_layered_preview_at`: the hold is the tick's to publish, because a publish

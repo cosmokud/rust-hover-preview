@@ -1,36 +1,7 @@
-//! The small helpers the window and the hook share: the point a mouse message carries, the
-//! rows copied out of a surface, and what the Explorer hook asks of a pinned window.
+//! The small helpers the window and the hook share: the point a mouse message carries, and what
+//! the Explorer hook asks of a pinned window.
 
 use super::*;
-
-/// Copy a surface painted by `pin_chrome` into the rows of a pinned window's own surface. The
-/// two are the same width — a caption is as wide as the window it is on — and what the surface
-/// carries is already the form the layered window is in (see `pin_chrome`).
-pub(super) fn copy_surface_rows_into(
-    surface: &DibSurface,
-    out: &mut [u8],
-    out_width: u32,
-    origin_y: u32,
-) {
-    let width = surface.width as usize;
-    let height = surface.height as usize;
-    if width == 0 || height == 0 || (out_width as usize) < width {
-        return;
-    }
-
-    let row_bytes = width * 4;
-    let out_row_bytes = out_width as usize * 4;
-    let source = unsafe { std::slice::from_raw_parts(surface.bits(), row_bytes * height) };
-
-    for row in 0..height {
-        let start = (origin_y as usize + row) * out_row_bytes;
-        let end = start + row_bytes;
-        if end > out.len() {
-            break;
-        }
-        out[start..end].copy_from_slice(&source[row * row_bytes..(row + 1) * row_bytes]);
-    }
-}
 
 /// Where a scroll of `lines` from the preview's current position lands.
 pub(super) fn text_scroll_target(lines: i64) -> Option<usize> {

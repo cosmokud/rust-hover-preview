@@ -250,20 +250,23 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
 }
 
 /// Hide or show the host for a park, at the box it already has: a park hides the window behind the
-/// band, and the pin paints its held frame in its place (see `park_pinned_player_inner`).
+/// band, and the pin paints its held frame in its place (see `park_pinned_player_inner`). The
+/// chrome stays where the chrome state puts it: the strips are the pin's window's rather than the
+/// host's, and a park hides the picture rather than the chrome (see `pin_chrome_strips`).
 pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
     if let Some(host) = film_host() {
         let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
     }
-    // The chrome that stands over the host follows it: a park is the picture hidden, and the
-    // chrome that is drawn over the picture is hidden with it (see `pin_chrome_strips`).
+    // The strips carry the chrome on every road, whatever the host is doing: the sync answers
+    // what the chrome state asks for over the picture or over the cover (see `pin_chrome_strips`).
     pin_chrome_strips::sync_the_chrome_strips();
 }
 
 /// Destroy the host and forget the player it held: the pin it was a child of is ending, and a
-/// window left in the pin's window would stand in the next pin's band as a black rectangle.
+/// window left in the pin's window would stand in the next pin's band as a black rectangle. The
+/// strips stay: they are the pin's window's, and the next take-up places them again (see
+/// `pin_chrome_strips`).
 pub(super) unsafe fn take_down_the_pin_film_host() {
-    pin_chrome_strips::take_the_strips_down();
     if let Some(host) = film_host() {
         let _ = DestroyWindow(host);
     }
@@ -313,9 +316,9 @@ unsafe fn create(parent: HWND) -> Option<HWND> {
     // the picture has to reach the pin (see the module doc).
     let _ = EnableWindow(host, false);
     PIN_FILM_HOST.store(host.0 as isize, Ordering::SeqCst);
-    // And the chrome that stands over it is made with it: the film is drawn over the whole of the
-    // client rectangle, so the caption and the transport it is seen through have windows of their
-    // own that composite over it (see `pin_chrome_strips`).
-    unsafe { pin_chrome_strips::take_the_strips_up_with_the_host(parent) };
+    // And the chrome is put back over it: making the host puts it on top of the strips, which are
+    // the pin's window's and were standing before it, so the order is re-asserted here (see
+    // `pin_chrome_strips`).
+    unsafe { pin_chrome_strips::raise_the_chrome_strips_over_the_host() };
     Some(host)
 }
