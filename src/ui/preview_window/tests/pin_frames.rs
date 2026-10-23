@@ -3336,23 +3336,16 @@ fn a_checkerboard_backdrop_keeps_its_squares_wherever_the_picture_leaves_it() {
 /// A caption too narrow to be a command bar is drawn none at all, and the rows it would have taken
 /// are rows the window still has (see `caption_fits` and `pinned_band_rows`). A picture draws its
 /// chrome *over* its media, so the media is under those rows and owes nothing; a page is drawn
-/// *between* its chrome, so a paint that stops at the band leaves them as the surface was emptied —
-/// a hole across the top of the window, with the desktop showing through the pin and a press falling
-/// through it, since a layered window is hit-tested by the shape of its pixels. What fills them is
-/// the bar the caption draws on, which is what is left of a caption with nothing left in it.
+/// *between* its chrome, so a paint that stops at the band would leave them as the surface was
+/// emptied — a hole across the top of the window, with the desktop showing through the pin and a
+/// press falling through it, since a layered window is hit-tested by the shape of its pixels. What
+/// stands in them is the pin's own claim instead: the strips carry the chrome, and the bitmap owes
+/// those rows only the least pixel a press can land on (see `chrome_rows_are_hit_testable`).
 #[test]
 fn a_page_too_narrow_for_its_caption_is_still_a_whole_window() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
-
-    let Some(palette) = pin_chrome::ChromePalette::current() else {
-        return;
-    };
-    let bar = {
-        let [r, g, b] = palette.background;
-        [b, g, r, 255]
-    };
 
     // A page on a band of its own colour, so every row of the window says where it came from.
     let page = [200u8, 200, 200, 255];
@@ -3384,21 +3377,14 @@ fn a_page_too_narrow_for_its_caption_is_still_a_whole_window() {
 
     let painted = the_painted_surface(hwnd, width, height);
     for row in 0..caption as usize {
-        assert_eq!(
-            surface_pixel(&painted, (width as u32, height as u32), row, 0),
-            bar,
-            "row {row} is the caption's own bar even though the caption is not drawn, rather than \
-             a hole across the top of the window"
-        );
-        assert!(
-            (0..width as usize).all(|column| surface_pixel(
-                &painted,
-                (width as u32, height as u32),
-                row,
-                column
-            )[3] == 255),
-            "and the whole of row {row} is opaque"
-        );
+        for column in 0..width as usize {
+            assert_eq!(
+                surface_pixel(&painted, (width as u32, height as u32), row, column),
+                &[1, 1, 1, 1],
+                "row {row} column {column} is the pin's own claim even though the caption is not \
+                 drawn, rather than a hole across the top of the window"
+            );
+        }
     }
     assert_eq!(
         surface_pixel(&painted, (width as u32, height as u32), caption as usize, 0),

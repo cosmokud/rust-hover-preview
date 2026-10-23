@@ -998,7 +998,7 @@ pub(super) fn player_order(
     // A park, a strip of the pin's chrome, the volume popup and the card's menu are all refused for
     // every window there is: a parked film is not on screen to be raised, and on any of the other
     // routes a raise puts the film over what this app is drawing — the caption and the bar in the
-    // pin's own rows, and the panel of a card's menu in a window of its own over them. mpv's film
+    // pin's strips over it, and the panel of a card's menu in a window of its own over them. mpv's film
     // holds its own band (`--ontop`) while the pin's own raise carries the press, and a band that
     // has moved is placed without a raise (see the note above and `ensure_pinned_sibling_box`).
     let order = if parked || chrome_up || volume_open || menu_open {
@@ -1209,9 +1209,9 @@ pub(super) fn settle_pinned_mpv_ontop() {
 /// **This is the one place a player's window is raised, and the volume popup and the pin's
 /// chrome are guarded here rather than by their callers.** That is the whole of the
 /// arrangement: what either one floats over is the media, and the media of a video FFmpeg
-/// plays *is* this window — a popup is drawn over the band, and a strip of chrome is
-/// painted into the pin's own rows, which for this kind are rows of this same window, so
-/// a raise while either is up puts the film over the thing the user is looking at. The
+/// plays *is* this window — a popup is drawn over the band, and a strip of the pin's chrome
+/// stands over it in a window of its own, so a raise while either is up puts the film over the
+/// thing the user is looking at. The
 /// tick was guarding the popup here,
 /// which covered the periodic re-assertion and nothing else — a seek, a resize settling and the
 /// first appearance of a pinned player all raise the window from their own call sites, and those are

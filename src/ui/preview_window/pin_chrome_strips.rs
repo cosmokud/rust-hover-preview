@@ -1,21 +1,19 @@
-//! The two windows a hosted film's chrome is carried over it in.
+//! The two windows the pin's chrome is carried in.
 //!
 //! **Why they exist.** The film's host is a child of the pin's window standing in the whole of the
 //! client rectangle (see `band_in_the_window`), and a child composites over the layered surface its
 //! parent paints. So the moment mpv began to draw, the film stood over the caption and the
-//! transport: the pin went on painting both into its own rows and answering presses on them by
-//! their coordinates, and neither was ever seen again. The chrome therefore has windows of its own
-//! — layered children of the pin's window, placed at the strips the chrome is painted in — which
-//! composite over the host and so over the film, carrying the very pixels the pin paints.
+//! transport. The pin's bitmap therefore paints no chrome at all — only its alpha-1 claim on the
+//! chrome's rows, which keeps every press on them the pin's (see `render_pinned_preview_at`) — and
+//! the chrome has windows of its own: layered children of the pin's window, placed at the strips
+//! the chrome is painted in, which composite over whatever stands in the band — a hosted film, the
+//! cover, FFmpeg's player, or this app's own picture.
 //!
 //! **What they carry, and when.** Their surfaces are the strips the pin paints — the caption's
 //! surface and the transport's, taken as they were painted (see `CHROME_SURFACE` and
-//! `TRANSPORT_SURFACE`) — and a strip is on the screen only while the host is *and* the chrome
-//! state asks for that strip. A park hides the host, so the strips go with it; the chrome's own
-//! show and hide is answered on the repaint it is answered by everywhere else (see `PinChrome`).
-//! The pin goes on painting both strips into its own rows exactly as it always has: that surface
-//! is what stands over the film on every road that has no host in it, and these windows only ever
-//! stand where the pin's own pixels already are.
+//! `TRANSPORT_SURFACE`) — and a strip is on the screen while the chrome state asks for that strip,
+//! on every road. They belong to the pin's window rather than to any host: made with it, they stand
+//! wherever the pin's band is, whatever is drawing in it.
 //!
 //! **Why they take no input.** They are made disabled, and a disabled child is skipped by
 //! `WindowFromPoint`, so a press on the chrome keeps landing on the pin and being answered by its
@@ -36,7 +34,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{GetStockObject, HBRUSH, NULL_BRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SetWindowPos, ShowWindow,
+    CreateWindowExW, DefWindowProcW, RegisterClassExW, SetWindowPos, ShowWindow,
     HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
     WNDCLASSEXW, WS_CHILD, WS_DISABLED, WS_EX_LAYERED,
 };
@@ -61,8 +59,8 @@ unsafe extern "system" fn the_default_answer(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-/// The caption's strip and the transport's, where a hosted film's chrome has windows of its own,
-/// and nothing while there is no host for them to stand over.
+/// The caption's strip and the transport's, where the pin's chrome has windows of its own, and
+/// nothing while the pin's window has not taken them up.
 static CAPTION_STRIP: AtomicIsize = AtomicIsize::new(0);
 static TRANSPORT_STRIP: AtomicIsize = AtomicIsize::new(0);
 static STRIP_CLASS_REGISTERED: Once = Once::new();
@@ -115,15 +113,23 @@ fn the_strips_state() -> Option<TheStripsState> {
     })
 }
 
-/// Make the two strips with the host they stand over: children of the pin's own window, layered
-/// from the moment they are made (a layered child is the one thing a film's host is allowed to
-/// have over it, and it is measured to work — see the module doc over `pin_film_host`), disabled,
-/// and off the screen until something is carried in them.
+/// Make the two strips with the pin's own window: children of it, layered from the moment they
+/// are made (a layered child is the one thing a film's host is allowed to have over it, and it is
+/// measured to work — see the module doc over `pin_film_host`), disabled, and off the screen until
+/// something is carried in them.
 ///
 /// The class is registered here the way the host's is, and its style is nothing at all: no
 /// `CS_CLASSDC`, which breaks the layered calls, and no `CS_OWNDC` either, which nothing here
 /// needs — a strip's surface is this app's own DIB, not a GDI device (see `ensure_layered_surface`).
-pub(super) unsafe fn take_the_strips_up_with_the_host(parent: HWND) {
+///
+/// Asked wherever the pin's window is taken up, and a take-up that finds them standing finds them
+/// kept: they belong to the window rather than to any road, and a strip left standing carries the
+/// chrome into the next take-up's band rather than leaving it without any.
+///
+/// Above the host, and left there: the host is placed with `SWP_NOZORDER` wherever the band
+/// goes, so this is the order that sticks — until the host is made again, which puts it on top
+/// and is answered by `raise_the_chrome_strips_over_the_host` (see `pin_film_host`).
+pub(super) unsafe fn take_the_strips_up(parent: HWND) {
     STRIP_CLASS_REGISTERED.call_once(|| {
         let hinstance = GetModuleHandleW(None).expect("the module's own handle");
         let class = WNDCLASSEXW {
@@ -157,7 +163,8 @@ pub(super) unsafe fn take_the_strips_up_with_the_host(parent: HWND) {
         )
         .ok()?;
         // Above the host, and left there: the host is placed with `SWP_NOZORDER` wherever the band
-        // goes, so this is the order that sticks (see `pin_film_host`).
+        // goes, so this is the order that sticks — until the host is made again (see
+        // `raise_the_chrome_strips_over_the_host`).
         let _ = SetWindowPos(
             strip,
             HWND_TOP,
@@ -170,18 +177,52 @@ pub(super) unsafe fn take_the_strips_up_with_the_host(parent: HWND) {
         Some(strip)
     };
 
-    if let Some(strip) = make(w!("caption strip")) {
-        CAPTION_STRIP.store(strip.0 as isize, Ordering::SeqCst);
+    // One at a time: a take-up that finds one strip standing and the other gone keeps the one,
+    // and a parent a test stood in answers the make with nothing (see
+    // `stand_real_pin_window_for_a_test`).
+    if !caption_strip().is_some_and(|strip| unsafe { IsWindow(strip) }.as_bool()) {
+        if let Some(strip) = make(w!("caption strip")) {
+            CAPTION_STRIP.store(strip.0 as isize, Ordering::SeqCst);
+        }
     }
-    if let Some(strip) = make(w!("transport strip")) {
-        TRANSPORT_STRIP.store(strip.0 as isize, Ordering::SeqCst);
+    if !transport_strip().is_some_and(|strip| unsafe { IsWindow(strip) }.as_bool()) {
+        if let Some(strip) = make(w!("transport strip")) {
+            TRANSPORT_STRIP.store(strip.0 as isize, Ordering::SeqCst);
+        }
     }
 }
 
-/// Take the two strips down with the host: the pin they are children of is ending or has stopped
-/// showing a film, and a strip left standing would carry the last film's chrome into the next
-/// pin's band (see `take_down_the_pin_film_host`).
+/// Put the strips back over the host a take-up has just made: making it puts it on top of them,
+/// and the chrome stands over the film rather than under it (see `pin_film_host`).
+///
+/// The caption first and the transport after it, which is the order the take-up made them in:
+/// the transport stands nearest the top, the caption under it, and the host under both.
+pub(super) unsafe fn raise_the_chrome_strips_over_the_host() {
+    for strip in [caption_strip(), transport_strip()].into_iter().flatten() {
+        if unsafe { IsWindow(strip) }.as_bool() {
+            let _ = SetWindowPos(
+                strip,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
+/// Take the two strips down: the pin's window they are children of is going, and a strip left
+/// standing would carry the last pin's chrome into the next pin's band. Windows itself destroys
+/// them with their parent; what is forgotten here are the handles.
+///
+/// Only tests take the pin's window down — the run keeps it between pins — so only tests ask
+/// for this (see `StandingFilm`).
+#[cfg(test)]
 pub(super) unsafe fn take_the_strips_down() {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
     if let Some(strip) = caption_strip() {
         let _ = DestroyWindow(strip);
     }
@@ -192,13 +233,13 @@ pub(super) unsafe fn take_the_strips_down() {
     TRANSPORT_STRIP.store(0, Ordering::SeqCst);
 }
 
-/// Put the strips where the chrome is painted, at the box the host has just been placed at: the
-/// caption across the window's first rows and the transport across its last (see
-/// `pinned_band_rows`, which is where those rows are read from by the paint).
+/// Put the strips where the chrome is painted: the caption across the window's first rows and
+/// the transport across its last (see `pinned_band_rows`, which is where those rows are read
+/// from by the paint).
 ///
-/// It is asked wherever the host is placed, so the strips never stand anywhere the film is not —
-/// and a strip whose rows do not exist (a pin with no caption, or none playing) is left where it
-/// is, because the sync never shows it.
+/// It is asked wherever the pin's box is placed, so the strips never stand anywhere the band is
+/// not — and a strip whose rows do not exist (a pin with no caption, or none playing) is left
+/// where it is, because the sync never shows it.
 pub(super) unsafe fn place_the_chrome_strips() {
     let Some(state) = the_strips_state() else {
         return;
@@ -237,8 +278,7 @@ pub(super) unsafe fn place_the_chrome_strips() {
 ///
 /// The surface asked for is the strip's own, kept between paints like every other layered surface
 /// (see `ensure_layered_surface`). The pixels are copied verbatim from the surface the chrome was
-/// painted on — they are already the form a layered window is composited from, which is the form
-/// `copy_surface_rows_into` carries them to the pin's surface in (see `pin_chrome`).
+/// painted on — they are already the form a layered window is composited from (see `pin_chrome`).
 unsafe fn paint_a_strip(strip: HWND, surface: &DibSurface) -> bool {
     let (width, height) = (surface.width, surface.height);
     if width == 0 || height == 0 {
@@ -317,32 +357,34 @@ unsafe fn set_the_strip_at(
     }
 }
 
-/// Bring the strips in line with the host and the chrome: a strip is on the screen while the host
-/// is *and* the chrome asks for that strip, and what it carries is the pixels the pin painted into
-/// those rows the last time it painted.
+/// Bring the strips in line with the pin and its chrome, which is the one applier every road
+/// answers: the tick's chrome-change branch, the paint the chrome's own show and hide are answered
+/// on, and wherever the host's own visibility changes (see `set_the_pin_film_host_visible`, whose
+/// show and hide are every road a park, a swap and the film's own arrival take). A strip is on the
+/// screen while the chrome asks for it, and what it carries is the pixels the pin painted into
+/// those strips the last time it painted — the pin's bitmap carries none of them (see
+/// `render_pinned_preview_at`).
 ///
-/// It is asked wherever the host's own visibility changes (see `set_the_pin_film_host_visible`,
-/// whose show and hide are every road a park, a swap and the film's own arrival take) and after
-/// every paint of the pin, which is where the chrome's own show and hide are answered (see
-/// `PinChrome`). It is asked for nothing where there is no host: the strips are the host's, made
-/// and taken down with it (see `take_the_strips_up_with_the_host`).
+/// The place is put first: a box the paint has not caught up with yet is a size the strips'
+/// surfaces do not have, and a strip shown carrying what it last had is kept off the screen until
+/// the paint after the box change repaints it (see `set_the_strip_at`).
 pub(super) unsafe fn sync_the_chrome_strips() {
-    let Some(host) = pin_film_host::film_host() else {
-        return;
-    };
+    // The strips stand where the chrome is painted before anything is carried into them, so a
+    // resize answers them on the paint it is painted on rather than on the place after it.
+    place_the_chrome_strips();
+
     let (Some(caption), Some(transport)) = (caption_strip(), transport_strip()) else {
         return;
     };
 
     let Some(state) = the_strips_state() else {
         // No pin to read, or a pin collapsed into its bubble: whatever the strips are carrying,
-        // the pin's own surface is not being asked for any of it.
+        // nothing on screen is asking for any of it.
         let _ = unsafe { ShowWindow(caption, SW_HIDE) };
         let _ = unsafe { ShowWindow(transport, SW_HIDE) };
         return;
     };
 
-    let host_is_up = unsafe { IsWindowVisible(host) }.as_bool();
     let caption_wanted = (
         state.width.max(1) as u32,
         state.caption_height.max(1) as u32,
@@ -350,12 +392,7 @@ pub(super) unsafe fn sync_the_chrome_strips() {
     CHROME_SURFACE.with(|cell| {
         let surface = cell.borrow();
         unsafe {
-            set_the_strip_at(
-                caption,
-                surface.as_ref(),
-                caption_wanted,
-                host_is_up && state.caption,
-            );
+            set_the_strip_at(caption, surface.as_ref(), caption_wanted, state.caption);
         }
     });
 
@@ -366,12 +403,7 @@ pub(super) unsafe fn sync_the_chrome_strips() {
     TRANSPORT_SURFACE.with(|cell| {
         let surface = cell.borrow();
         unsafe {
-            set_the_strip_at(
-                transport,
-                surface.as_ref(),
-                transport_wanted,
-                host_is_up && state.bar,
-            );
+            set_the_strip_at(transport, surface.as_ref(), transport_wanted, state.bar);
         }
     });
 }

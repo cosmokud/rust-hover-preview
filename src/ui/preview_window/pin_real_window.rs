@@ -117,6 +117,9 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
 
     if let Some(hwnd) = real_pin_window() {
         let _ = MoveWindow(hwnd, window.0, window.1, width, height, false);
+        // Kept with the window rather than made once: a take-up that finds them gone — a test
+        // that stood the window without them — stands them again (see `take_the_strips_up`).
+        unsafe { super::pin_chrome_strips::take_the_strips_up(hwnd) };
         return Some(hwnd);
     }
 
@@ -140,6 +143,10 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
     .ok()?;
 
     REAL_PIN_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+    // The chrome the pin is carried in is made with the window that carries it, on every road —
+    // a hosted film, a park, a cover, FFmpeg's player, or this app's own picture — and kept for
+    // the window's life (see `pin_chrome_strips`).
+    unsafe { super::pin_chrome_strips::take_the_strips_up(hwnd) };
     Some(hwnd)
 }
 
