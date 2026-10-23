@@ -32,9 +32,10 @@ impl Drop for LayeredSurface {
 
 thread_local! {
     /// The surfaces this thread paints layered windows on, one per window and kept between
-    /// repaints. The windows at most are three, and all of them are painted by the preview
+    /// repaints. The windows at most are five, and all of them are painted by the preview
     /// thread: the preview — which is the pinned window while a pin is up — the round bubble a
-    /// collapsed pin leaves, and the window of the card's own over the screen. A surface
+    /// collapsed pin leaves, the window of the card's own over the screen, and the two strips of
+    /// chrome a hosted film's pin carries over its film (see `pin_chrome_strips`). A surface
     /// rebuilt per repaint would be a display's worth of
     /// pixels allocated for every frame of a video.
     pub(super) static LAYERED_SURFACES: RefCell<Vec<(isize, LayeredSurface)>> = const { RefCell::new(Vec::new()) };
@@ -330,8 +331,8 @@ pub(super) fn screen_pixels(area: RECT) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 /// How many windows keep a surface of their own: the preview — pinned or not — the bubble,
-/// and the card's menu.
-pub(super) const LAYERED_SURFACE_WINDOWS: usize = 3;
+/// the card's menu, and the two strips of chrome a hosted film's pin carries over it.
+pub(super) const LAYERED_SURFACE_WINDOWS: usize = 5;
 
 /// DIB bits for a `width` x `height` frame in one window's own surface, reusing what
 /// that window already has when the size is unchanged. `None` means the surface could

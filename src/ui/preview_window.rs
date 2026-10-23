@@ -29,6 +29,7 @@
 //! - `pin_model` - what a pin is.
 //! - `pin_playback` - what the pin plays.
 //! - `pin_chrome_layout` - the pin's chrome, and the level it is at.
+//! - `pin_chrome_strips` - the windows a hosted film's chrome is carried over it in.
 //! - `pin_geometry` - the box of a pinned window.
 //! - `pin_lifecycle` - a pin's own lifetime, and the window it stands in.
 //! - `pin_swap` - what a pin should show next, and what is waited for.
@@ -78,6 +79,7 @@ mod mpv_ipc;
 mod paint;
 mod pin_bubble;
 mod pin_chrome_layout;
+mod pin_chrome_strips;
 mod pin_drag;
 mod pin_film_host;
 mod pin_geometry;
