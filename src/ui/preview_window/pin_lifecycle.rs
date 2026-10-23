@@ -1268,6 +1268,15 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
 
+    // The pin's first paint on the adopt road stands on the held frame rather than on an alpha-1
+    // band: the host is about to leave the desktop's composition as a top-level window and arrive
+    // as a child of the pin, and until it presents there the only guaranteed pixels are the pin's
+    // own bitmap (see `raise_the_move_cover`). The park flag is deliberately not set: this cover is
+    // not the park machine's.
+    if adopts_the_hover_host {
+        surfaces::hold_video_window_frame();
+        pin_film_host::raise_the_move_cover();
+    }
     render_pinned_preview_at(hwnd, window.0, window.1);
     // Where the pin is owed: the topmost band for a pin that is Always On Top or one that owes the
     // front while it follows the listing (see `pin_holds_the_front`), and the ordinary one for one

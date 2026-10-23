@@ -342,7 +342,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // to exactly as a picture's own frame is (see `compose_parked_band`), and black under it rather
     // than the configured `Background -> Video` — that setting is allowed to be `Transparent`, and
     // a deliberately transparent band is exactly the hole this is here not to leave.
-    if paint.parked {
+    if paint.parked || pin_film_host::the_move_cover_is_up() {
         if mem_dc.is_some() {
             let held = held_video_frame();
             compose_parked_band(
@@ -405,7 +405,10 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                             exact,
                         },
                     );
-                } else if film_band_is_hit_testable(media.media_type, paint.parked) {
+                } else if film_band_is_hit_testable(
+                    media.media_type,
+                    paint.parked || pin_film_host::the_move_cover_is_up(),
+                ) {
                     // Nothing is composed into this band — the film is in a window under it — so
                     // what is written here is only ever the pin's own claim on the pixel (see
                     // `film_band_is_hit_testable`). A hosted film with no first frame in the host
@@ -425,7 +428,12 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     if hosted_needs_cover {
                         fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
                     } else {
-                        fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
+                        fill_band_hit_testable(
+                            out,
+                            band_width,
+                            band_top.max(0) as u32,
+                            band_height,
+                        );
                     }
                 }
             }
