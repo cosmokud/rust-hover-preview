@@ -13,9 +13,10 @@
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::{FreeLibrary, HANDLE, HMODULE};
 use windows::Win32::System::LibraryLoader::{
-    FindResourceW, LoadLibraryExW, LOAD_LIBRARY_AS_DATAFILE,
+    FindResourceW, LoadLibraryExW, LoadResource, LockResource, SizeofResource,
+    LOAD_LIBRARY_AS_DATAFILE,
 };
-use windows::Win32::UI::WindowsAndMessaging::{RT_GROUP_ICON, RT_VERSION};
+use windows::Win32::UI::WindowsAndMessaging::{RT_GROUP_ICON, RT_MANIFEST, RT_VERSION};
 
 /// The ID `build.rs` compiles both resources under — `1 ICON` and `1 VERSIONINFO` in the resource
 /// script winres writes — which is also the ID the app loads its own icon by at run time (see
@@ -61,4 +62,56 @@ fn the_executable_carries_its_own_icon_and_its_own_version_block() {
         "the executable has no version block in it: properties and the task manager would show it \
          as a file with no name"
     );
+}
+
+/// The supportedOS GUIDs the manifest declares, one for Windows 8, one for 8.1 and one for
+/// Windows 10 and 11. Their absence is not a missing picture: an executable with no manifest is
+/// given the compatibility of the oldest Windows there is, the version lie comes with it, and one
+/// of its pre-Win8 semantics refuses a `WS_CHILD` window made `WS_EX_LAYERED` — the pair a
+/// pinned mpv film's picture is drawn in (see `pin_film_host`).
+const SUPPORTED_OS: [&str; 3] = [
+    "4a2f28c8-2506-4483-a6d7-18b95a9b46ea",
+    "1f676c76-80e1-4239-95bb-83d0f6d0da78",
+    "8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a",
+];
+
+/// The bytes of the executable's own manifest, or nothing where it has none. Read as a data file,
+/// like `carries`, and answered as text because what a manifest says is text.
+fn the_manifest(path: &str) -> Option<String> {
+    unsafe {
+        let image: HMODULE = LoadLibraryExW(
+            &HSTRING::from(path),
+            HANDLE(std::ptr::null_mut()),
+            LOAD_LIBRARY_AS_DATAFILE,
+        )
+        .expect("the executable cargo built");
+        let found = FindResourceW(image, ordinal(ITS_OWN), RT_MANIFEST);
+        let bytes = (!found.is_invalid())
+            .then_some(found)
+            .and_then(|found| LoadResource(image, found).ok())
+            .and_then(|held| {
+                let address = LockResource(held);
+                let size = SizeofResource(image, found);
+                (size > 0 && !address.is_null()).then(|| {
+                    std::slice::from_raw_parts(address.cast::<u8>(), size as usize).to_vec()
+                })
+            })
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+        let _ = FreeLibrary(image);
+        bytes
+    }
+}
+
+#[test]
+fn the_executable_declares_the_windows_it_supports() {
+    let the_exe = env!("CARGO_BIN_EXE_rust-hover-preview");
+
+    let manifest = the_manifest(the_exe).expect("the executable has no manifest in it");
+    for guid in SUPPORTED_OS {
+        assert!(
+            manifest.contains(guid),
+            "the manifest does not declare {guid}, so the process is version-lied into \
+             pre-Win8 semantics"
+        );
+    }
 }
