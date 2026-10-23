@@ -343,3 +343,116 @@ unsafe fn create(parent: HWND) -> Option<HWND> {
     unsafe { pin_chrome_strips::raise_the_chrome_strips_over_the_host() };
     Some(host)
 }
+
+/// When the take-up that is waiting on its hosted film began waiting, while one is.
+///
+/// A pin taken up on a hover's mpv film keeps the hover up and its own window down until the
+/// hosted player draws (see `show_pinned_window`): the wait is this instant, and the tick's
+/// handover ends it. Nothing else reads it — the wait is bounded by the player-start timeout
+/// the handover settles on, and a pin that ends or collapses disarms it by going away.
+static PIN_HANDOVER_SINCE: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether a pin taken up on a hover's film is still waiting on its hosted player's first frame:
+/// its own window down, the hover up as the placeholder, and no chrome over either.
+///
+/// Asked by the roads that must leave a waiting pin alone: the tick's restore, which would put a
+/// hidden-on-purpose window back up, and the chrome refresh, which would spend the arrival over
+/// nothing (see `the_pin_owes_a_show` and `refresh_pin_chrome`).
+pub(super) fn pin_handover_armed() -> bool {
+    PIN_HANDOVER_SINCE
+        .lock()
+        .ok()
+        .and_then(|since| *since)
+        .is_some()
+}
+
+/// Arm the handover a take-up on a hover's film waits on, from the moment the hosted player is
+/// begun in the background (see `show_pinned_window`).
+pub(super) fn arm_pin_handover() {
+    if let Ok(mut since) = PIN_HANDOVER_SINCE.lock() {
+        *since = Some(Instant::now());
+    }
+}
+
+/// Disarm the handover: the film drew and the pin went up, the wait failed and the pin is being
+/// torn down, or the pin went away down another road and there is nothing left to wait on.
+pub(super) fn disarm_pin_handover() {
+    if let Ok(mut since) = PIN_HANDOVER_SINCE.lock() {
+        *since = None;
+    }
+}
+
+/// Stand a handover wait's beginning in place of the take-up's own, or give the take-up's own
+/// answer back with `None` — a test of the timeout the wait is bounded by, which cannot wait out
+/// the start timeout itself (see `settle_pin_handover`).
+#[cfg(test)]
+pub(super) fn stand_pin_handover_armed_at(since: Option<Instant>) {
+    if let Ok(mut armed) = PIN_HANDOVER_SINCE.lock() {
+        *armed = since;
+    }
+}
+
+/// What the wait for a hosted film's first frame has come to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum PinHandover {
+    /// The film is not on screen yet and the player is still starting: the pin stays down and
+    /// the hover stays up, and the wait goes on.
+    Waiting,
+    /// The hosted player drew: the pin went up over its live film with the chrome arriving,
+    /// and the hover came down in the same pass.
+    HandedOver,
+    /// The player errored or never drew inside the player-start timeout: the hidden pin is for
+    /// the teardown, and the hover it never took down is what is kept.
+    Failed,
+}
+
+/// Hand a pin taken up on a hover's film over once its hosted player draws, and tear the hidden
+/// pin down where that player never does.
+///
+/// The only visible swap: the pin's window appears with the film already drawing in it — no cover,
+/// no black stage — the arrival starts over that live film, and only then does the hover come
+/// down, all in the same pass (see `show_pinned_window`). A hover that is gone by then changes
+/// nothing: the pin paints opaque over a host with no first frame in it, so the show is a black
+/// band and never a transparent one (see `hosted_needs_cover`). Where the player errored or the
+/// start timeout ran out, the wait is over the other way: the pin never appears, and the loop
+/// ends it down the road a dead film has always gone (see `Reason::MediaGone`).
+///
+/// One shot: the arm goes down however the wait ends, so a handover never fires twice and a
+/// failure never sticks behind a hidden pin.
+pub(super) unsafe fn settle_pin_handover() -> PinHandover {
+    let Some(since) = PIN_HANDOVER_SINCE.lock().ok().and_then(|since| *since) else {
+        return PinHandover::Waiting;
+    };
+
+    // A pin that went away down another road — closed, or collapsed into its bubble — leaves no
+    // wait behind it: the close owns the teardown and the collapse owns the pin now.
+    if !pinned() || pin_is_collapsed() {
+        disarm_pin_handover();
+        return PinHandover::Waiting;
+    }
+
+    // The film drawing is the handover: the wait is over, and what is on screen from here is the
+    // pin over its live film rather than the hover as its placeholder.
+    if the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
+        disarm_pin_handover();
+        with_pin(|pin| pin.chrome = PinChrome::on_arrival(Instant::now()));
+        unsafe { show_pinned_window(pinned_window()) };
+        return PinHandover::HandedOver;
+    }
+
+    // No player behind the wait is a player that errored rather than one still starting: the
+    // pin it was begun for never appears, and the hover it never took down is what is kept.
+    if !is_video_process_running() {
+        disarm_pin_handover();
+        return PinHandover::Failed;
+    }
+
+    // And a player that never draws inside the player-start timeout is one that will not: a
+    // hidden pin waiting past a start ever takes is a stuck one (see `VIDEO_START_WAIT_SECS`).
+    if since.elapsed() >= Duration::from_secs(VIDEO_START_WAIT_SECS) {
+        disarm_pin_handover();
+        return PinHandover::Failed;
+    }
+
+    PinHandover::Waiting
+}

@@ -833,10 +833,10 @@ pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
 /// pin draws is. So the take-up is a relaunch: the same `restart_pinned_player` a seek and a resize
 /// settle on, given the file and the second the pin's transport already holds (the clock the hover's
 /// pass was read onto at the take-up), held where the film was held, and at the level the pin's own
-/// bar says. It raises the cover the other relaunches raise — the last frame of the player being
-/// replaced, read before it is hidden — so the band is not the desktop for the length of a start,
-/// and the settle hands it back when the hosted player's own child is there (see
-/// `park_pinned_player_for_step` and `pin_film_host::the_hosted_player_is_drawing`).
+/// bar says. What it deliberately raises no cover for is the hover that is still up: the take-up
+/// keeps that window visible and playing as the placeholder, and the tick's handover shows the pin
+/// over its live film and takes the hover down in the same pass — so the band is never the desktop
+/// between them (see `pin_film_host::settle_pin_handover`).
 ///
 /// The player being replaced is retired by that road, not ended here: its window is the picture on
 /// screen until the hosted one has a child of its own (see `retire_replaced_player`).
@@ -858,10 +858,6 @@ pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
 
     let seconds = pin_playhead(&transport).unwrap_or(0.0);
     let holding = transport.paused_at.is_some();
-
-    if !park_pinned_player_for_step(pinned_window(), (content.0, content.1)) {
-        return false;
-    }
 
     restart_pinned_player(&path, content, seconds, holding);
     true

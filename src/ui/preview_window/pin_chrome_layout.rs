@@ -376,23 +376,30 @@ pub(super) fn refresh_pin_chrome(
     // (see `pin_hides_chrome`).
     let mut shown = false;
     if pin.hides_chrome {
-        // The arrival window is spent the moment it closes, and there is no bringing it back:
-        // what asks for a strip after it is the pointer and nothing else.
-        if pin.chrome.until.is_some_and(|until| now >= until) {
-            pin.chrome.until = None;
-        }
+        // A pin waiting on its hosted film's first frame shows no chrome meanwhile: the strips
+        // belong to the pin-mode frame, and that frame is not on screen yet — the arrival starts
+        // at the handover, over the live film (see `pin_film_host::settle_pin_handover`).
+        let (caption, bar) = if pin_film_host::pin_handover_armed() {
+            (false, false)
+        } else {
+            // The arrival window is spent the moment it closes, and there is no bringing it back:
+            // what asks for a strip after it is the pointer and nothing else.
+            if pin.chrome.until.is_some_and(|until| now >= until) {
+                pin.chrome.until = None;
+            }
 
-        let (caption, bar) = match pin.chrome.until.is_some() {
-            true => (true, true),
-            false => {
-                let (caption, bar) = pin_chrome_near(pin, cursor);
-                // Near is only geometric: a pointer over a window standing over the pin is near
-                // it without hovering it, so the strips stay hidden there (see
-                // `pin_chrome_occluded`).
-                if (caption || bar) && pin_chrome_occluded(cursor) {
-                    (false, false)
-                } else {
-                    (caption, bar)
+            match pin.chrome.until.is_some() {
+                true => (true, true),
+                false => {
+                    let (caption, bar) = pin_chrome_near(pin, cursor);
+                    // Near is only geometric: a pointer over a window standing over the pin is near
+                    // it without hovering it, so the strips stay hidden there (see
+                    // `pin_chrome_occluded`).
+                    if (caption || bar) && pin_chrome_occluded(cursor) {
+                        (false, false)
+                    } else {
+                        (caption, bar)
+                    }
                 }
             }
         };

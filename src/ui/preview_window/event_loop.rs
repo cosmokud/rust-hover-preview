@@ -818,6 +818,17 @@ pub fn run_preview_window() {
                 // video FFmpeg plays is something this app asserted (see `settle_pinned_transport`).
                 settle_pinned_transport();
                 settle_video_retirement();
+                // A pin taken up on a hover's film goes up once its hosted player draws, and comes
+                // down where that player never does: the handover is the only visible swap, and
+                // the teardown for a wait with nothing to swap to goes down the road a dead film
+                // has always gone (see `pin_film_host::settle_pin_handover`).
+                if matches!(
+                    pin_film_host::settle_pin_handover(),
+                    pin_film_host::PinHandover::Failed
+                ) && pin_request.is_none()
+                {
+                    pin_request = Some(end_pin_state(Reason::MediaGone));
+                }
                 // And the band a drag's parking is holding: it is a hole again only once the
                 // player's own window is standing in it, which for a relaunch begun on a resize's
                 // release is the first tick that finds the replacement up (see
@@ -3709,7 +3720,10 @@ pub fn run_preview_window() {
                         // frame, and the transport the new file is to be played by. Both roads
                         // that reach this arm reach it through the same call, so a window shown
                         // another file is the same window as one shown its first (see
-                        // `take_up_pinned_window`).
+                        // `take_up_pinned_window`). Whether a pin is already up tells the second
+                        // road from the first: a swap installs through here with the pin standing,
+                        // and a take-up from a hover arrives with none (see `settle_pin_handover`).
+                        let was_up = pinned();
                         let pin = take_up_pinned_window(&path, rect);
                         let content = pin.content;
 
@@ -3747,12 +3761,6 @@ pub fn run_preview_window() {
                         // the name is written here or the button names the file before the step
                         // (see `pin_taskbar::refresh_pin_taskbar_title`).
                         pin_taskbar::refresh_pin_taskbar_title();
-
-                        // And a film adopted from a hover is told whose setting governs its window
-                        // now: the hover's topmost band is the preview's, and the pin's own
-                        // `Always On Top` is the answer from here on (see
-                        // `settle_pinned_mpv_ontop`).
-                        settle_pinned_mpv_ontop();
 
                         // A pin comes up under a pointer that may be anywhere, including inside a
                         // name being renamed, so it may take the focus but is not given it until
@@ -3852,6 +3860,29 @@ pub fn run_preview_window() {
                         if !came_back {
                             show_pinned_window(hwnd);
                         }
+
+                        // A film adopted from a hover is told whose setting governs its window
+                        // now: the hover's topmost band is the preview's, and the pin's own
+                        // `Always On Top` is the answer from here on. Asked after the show rather
+                        // than at the take-up, because a take-up that defers its showing keeps the
+                        // hover up and playing behind it — and a hover still on screen keeps the
+                        // band it was given (see `pin_film_host::settle_pin_handover`).
+                        settle_pinned_mpv_ontop();
+
+                        // And a re-take-up that lands on a hosted film already drawing is a step's
+                        // handover rather than an arrival: the swap held the outgoing frame with
+                        // the chrome hidden until the new player's first frame, so the bars start
+                        // now, over the new film (see `PinSwapHold`).
+                        if was_up
+                            && pin_is_its_own_window()
+                            && pin_film_host::the_pinned_player_was_begun_in_the_host()
+                            && pin_film_host::the_hosted_player_is_drawing(
+                                VIDEO_PID.load(Ordering::SeqCst),
+                            )
+                        {
+                            with_pin(|pin| pin.chrome = PinChrome::on_arrival(Instant::now()));
+                        }
+
                         place_pinned_siblings();
                         publish_pointer_hold(pinned_window());
                     }
