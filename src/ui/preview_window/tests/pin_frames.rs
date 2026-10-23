@@ -3494,11 +3494,12 @@ fn a_resize_paints_a_row_of_slack_so_the_window_moves_and_the_picture_does_not()
     assert_eq!(paint::the_slack_a_resize_paints_with(false), (0, 0));
 }
 
-/// A step hides the pin's chrome rather than carrying it: the swap's cover shows without chrome,
+/// Every road that installs a file in a pin — a first pin, the same file pinned again, a step to
+/// the next or previous one — brings the chrome up hidden: a stable below shows without chrome,
 /// no arrival is armed, and the pointer asks the strips back afterwards (see
 /// `take_up_pinned_window`).
 #[test]
-fn a_step_hides_the_pins_chrome_until_the_pointer_asks_for_it() {
+fn every_spawn_hides_the_pins_chrome_until_the_pointer_asks_for_it() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -3513,18 +3514,35 @@ fn a_step_hides_the_pins_chrome_until_the_pointer_asks_for_it() {
         }
     };
 
-    // A first pin comes up showing its chrome for a moment, whether or not the pointer is near.
+    // A first pin comes up with neither strip showing and no arrival armed behind it.
     stand_media(MediaType::StaticImage);
     let arrived =
         take_up_pinned_window(&PathBuf::from("first-picture.png"), (100, 80, 420, 320));
     assert!(
-        arrived.chrome.caption && arrived.chrome.until.is_some(),
-        "a pin comes up with its chrome showing on an arrival window"
+        !arrived.chrome.caption && !arrived.chrome.bar && arrived.chrome.until.is_none(),
+        "a first pin comes up hidden: caption {}, bar {}, arrival {:?}",
+        arrived.chrome.caption,
+        arrived.chrome.bar,
+        arrived.chrome.until
     );
 
-    // A step onto another picture carries none of that over: the cover the swap stands shows
-    // without chrome, and the arrival window is not armed again.
+    // Pinning the file that is already up carries no chrome either, for the same reason a step
+    // does not: it is an install, and an install brings the chrome up hidden.
     stand_pin(Some(arrived));
+    stand_media(MediaType::StaticImage);
+    let again =
+        take_up_pinned_window(&PathBuf::from("first-picture.png"), (100, 80, 420, 320));
+    assert!(
+        !again.chrome.caption && !again.chrome.bar && again.chrome.until.is_none(),
+        "pinning the file again comes up hidden: caption {}, bar {}, arrival {:?}",
+        again.chrome.caption,
+        again.chrome.bar,
+        again.chrome.until
+    );
+
+    // And a step onto another picture carries none of that over: the cover the swap stands shows
+    // without chrome, and the arrival window is not armed again.
+    stand_pin(Some(again));
     stand_media(MediaType::StaticImage);
     let mut stepped =
         take_up_pinned_window(&PathBuf::from("second-picture.png"), (100, 80, 420, 320));

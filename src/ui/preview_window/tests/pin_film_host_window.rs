@@ -1852,6 +1852,70 @@ fn a_pointer_over_a_window_covering_the_pin_shows_no_chrome() {
     assert!(!bar, "and the bar stays hidden under the covering window");
 }
 
+/// The whole of the chrome rule on a pin's own window: it starts hidden on every spawn, the
+/// pointer over the pin asks the strip near it back, and the pointer leaving puts it away again —
+/// the strips follow the pin's chrome in the same pass (see `refresh_pin_chrome` and
+/// `sync_the_chrome_strips`).
+#[test]
+fn the_chrome_stays_hidden_at_spawn_and_follows_the_pointer_over_the_pin() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| {
+        pin.chrome = PinChrome::hidden();
+        pin.transport_bar = true;
+    });
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip");
+    let transport = pin_chrome_strips::transport_strip().expect("the transport's strip");
+    assert!(
+        !unsafe { IsWindowVisible(caption) }.as_bool()
+            && !unsafe { IsWindowVisible(transport) }.as_bool(),
+        "a pin comes up with neither strip on the screen"
+    );
+
+    // The pointer over the pin's own window: the window under it is the pin, so this is a hover.
+    let hwnd = pin_real_window::real_pin_window().expect("the pin's own window");
+    stand_window_at_point_in(Some(hwnd.0 as isize));
+    let window = film.box_;
+    pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(
+            pin,
+            Instant::now(),
+            Some((window.0 + 5, window.1)),
+        ))
+    });
+    unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+    assert!(
+        unsafe { IsWindowVisible(caption) }.as_bool(),
+        "a hover asks the caption back"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(transport) }.as_bool(),
+        "and only the strip the pointer is near: the bar at the foot is not it"
+    );
+
+    // And the pointer leaving the pin puts it away in the same pass.
+    pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(
+            pin,
+            Instant::now(),
+            Some((-1000, -1000)),
+        ))
+    });
+    unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+    assert!(
+        !unsafe { IsWindowVisible(caption) }.as_bool(),
+        "the caption goes with the pointer"
+    );
+    stand_window_at_point_in(None);
+    drop(film);
+}
+
 /// A pin taken up on a hover's film waits for the hosted player's first frame before it
 /// appears: the take-up relaunches the adopted film into the host in the background, the hover
 /// stays up and playing as the placeholder meanwhile, and the pin's window and its strips stay
@@ -2205,7 +2269,7 @@ impl Drop for LiveStandInPlayer {
 }
 
 /// The handover is the only visible swap: the pin's window appears with the film already drawing
-/// in it and the chrome arriving over that film, and the hover comes down in the same pass.
+/// in it and the chrome hidden over that film, and the hover comes down in the same pass.
 #[test]
 fn the_handover_shows_the_pin_over_the_drawn_film_and_takes_the_hover_down() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -2265,9 +2329,21 @@ fn the_handover_shows_the_pin_over_the_drawn_film_and_takes_the_hover_down() {
     });
     assert_eq!(
         chrome,
-        Some((true, true, true)),
-        "and the arrival starts over the live film, never over nothing"
+        Some((false, false, false)),
+        "and the pin comes up hidden over the live film: only the pointer asks a strip back"
     );
+    for strip in [
+        pin_chrome_strips::caption_strip(),
+        pin_chrome_strips::transport_strip(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        assert!(
+            !unsafe { IsWindowVisible(strip) }.as_bool(),
+            "and no strip shows, whatever the film is drawing behind it"
+        );
+    }
     assert!(
         !pin_film_host::pin_handover_armed(),
         "a handover fires once: nothing is left armed behind the shown pin"
@@ -2437,10 +2513,11 @@ fn no_handover_before_the_first_frame() {
     drop(film);
 }
 
-/// A step's handover starts the arrival over the new film: the swap held the old frame with the
-/// chrome hidden until the new player drew, and the bars start at that handover.
+/// A step's handover starts the new film with the chrome hidden: the swap held the old frame
+/// without chrome until the new player drew, and the hidden chrome stays hidden at that handover
+/// until the pointer asks for it.
 #[test]
-fn a_step_handover_starts_the_arrival_over_the_new_film() {
+fn a_step_handover_starts_the_new_film_with_the_chrome_hidden() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -2474,9 +2551,10 @@ fn a_step_handover_starts_the_arrival_over_the_new_film() {
         "the tick the new film draws hands the band over"
     );
     assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
-        Some((true, true)),
-        "and the bars start over the new film at that handover, not before it"
+        pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((false, false)),
+        "and the bars stay hidden over the new film after that handover, not before it"
     );
     assert!(
         !hover.shown(),

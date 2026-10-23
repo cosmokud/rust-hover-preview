@@ -3723,7 +3723,6 @@ pub fn run_preview_window() {
                         // `take_up_pinned_window`). Whether a pin is already up tells the second
                         // road from the first: a swap installs through here with the pin standing,
                         // and a take-up from a hover arrives with none (see `settle_pin_handover`).
-                        let was_up = pinned();
                         let pin = take_up_pinned_window(&path, rect);
                         let content = pin.content;
 
@@ -3868,20 +3867,6 @@ pub fn run_preview_window() {
                         // hover up and playing behind it — and a hover still on screen keeps the
                         // band it was given (see `pin_film_host::settle_pin_handover`).
                         settle_pinned_mpv_ontop();
-
-                        // And a re-take-up that lands on a hosted film already drawing is a step's
-                        // handover rather than an arrival: the swap held the outgoing frame with
-                        // the chrome hidden until the new player's first frame, so the bars start
-                        // now, over the new film (see `PinSwapHold`).
-                        if was_up
-                            && pin_is_its_own_window()
-                            && pin_film_host::the_pinned_player_was_begun_in_the_host()
-                            && pin_film_host::the_hosted_player_is_drawing(
-                                VIDEO_PID.load(Ordering::SeqCst),
-                            )
-                        {
-                            with_pin(|pin| pin.chrome = PinChrome::on_arrival(Instant::now()));
-                        }
 
                         place_pinned_siblings();
                         publish_pointer_hold(pinned_window());

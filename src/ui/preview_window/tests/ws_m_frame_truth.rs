@@ -434,10 +434,13 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
     let previous_media = stand_a_video(640, 360);
     clean_slate();
 
-    // 1 — a pin up on a video, and a caption that answers.
+    // 1 — a pin up on a video, and a caption that answers once the hand asks for it: the
+    // chrome comes up hidden, and the move into the caption is what asks the strip out (see
+    // `PinChrome::hidden`).
     take_up_a_video_pin();
     let window = CapturingWindow::around(a_window_at(the_window_box()));
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
     assert!(
         unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
         "a button on a pin that has just come up is a button"
@@ -749,18 +752,11 @@ fn a_swap_leaves_the_state_a_box_change_leaves() {
         Vec::<String>::new(),
         "a maximize and a restore after a swap change nothing a box change is asked to change"
     );
+    // The chrome is hidden before the swap and stays hidden across it, so the swap changes no
+    // chrome at all: only the pointer asks a strip back (see `PinChrome::hidden`).
     assert_eq!(
         difference(&a, &b),
         vec![
-            format!("pin.chrome.bar: {} | {}", a["pin.chrome.bar"], b["pin.chrome.bar"]),
-            format!(
-                "pin.chrome.caption: {} | {}",
-                a["pin.chrome.caption"], b["pin.chrome.caption"]
-            ),
-            format!(
-                "pin.chrome.until: {} | {}",
-                a["pin.chrome.until"], b["pin.chrome.until"]
-            ),
             format!("pin.content: {} | {}", a["pin.content"], b["pin.content"]),
             format!("pin.parked: {} | {}", a["pin.parked"], b["pin.parked"]),
             format!("pin.path: {} | {}", a["pin.path"], b["pin.path"]),
@@ -786,8 +782,7 @@ fn a_swap_leaves_the_state_a_box_change_leaves() {
             ),
         ],
         "and a swap changes exactly what a swap is: the file, the box that file is laid out in, \
-         the hidden chrome the cover shows under, and the cover and the generation that go with \
-         a player being replaced"
+         and the cover and the generation that go with a player being replaced"
     );
 
     stand_pin(None);
