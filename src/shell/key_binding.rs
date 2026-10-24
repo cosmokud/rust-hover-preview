@@ -14,8 +14,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
 use super::key_input::key_to_vk;
 
-/// The pin key an empty or unreadable setting falls back to.
-pub(crate) const DEFAULT_PIN_KEY: &str = "mouse3";
+/// The pin key an empty or unreadable setting falls back to: the middle mouse button,
+/// or Space.
+pub(crate) const DEFAULT_PIN_KEY: &str = "mouse3,space";
 
 /// And the trigger key's.
 pub(crate) const DEFAULT_TRIGGER_KEY: &str = "alt";
@@ -243,11 +244,16 @@ mod tests {
     }
 
     #[test]
-    fn the_built_in_pin_key_is_the_middle_button() {
-        assert_eq!(parse_key(DEFAULT_PIN_KEY), Some(0x04)); // VK_MBUTTON
+    fn the_built_in_pin_key_is_the_middle_button_or_space() {
+        assert_eq!(parse_key("mouse3"), Some(0x04)); // VK_MBUTTON
+        assert_eq!(parse_key("space"), Some(0x20)); // VK_SPACE
         let binding = parse_or_default("", DEFAULT_PIN_KEY);
+        assert_eq!(binding.alternatives.len(), 2);
         assert_eq!(binding.alternatives[0].main(), 0x04);
-        assert_eq!(packed_main(packed_binding(&binding)[0]), 0x04);
+        assert_eq!(binding.alternatives[1].main(), 0x20);
+        let packed = packed_binding(&binding);
+        assert_eq!(packed_main(packed[0]), 0x04);
+        assert_eq!(packed_main(packed[1]), 0x20);
     }
 
     #[test]
