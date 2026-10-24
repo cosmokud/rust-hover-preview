@@ -22,6 +22,13 @@ fn engine_idle_is_offered_longest_first() {
     );
 }
 
+#[test]
+fn a_pin_key_is_named_with_each_alternative_capitalized() {
+    assert_eq!(pin_key_label("mouse3,space"), "Mouse3, Space");
+    assert_eq!(pin_key_label("space"), "Space");
+    assert_eq!(pin_key_label(""), "");
+}
+
 /// The halves of the `Background` submenu list the backdrops their settings hold, in the
 /// order the ids are handed out in, and each id resolves back to the backdrop its item was
 /// listed for — which is what makes a click select what it named. Every half marks the

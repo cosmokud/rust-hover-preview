@@ -48,7 +48,7 @@ use super::submenus::{
     append_engine_idle_menu, append_labeled_item, append_loop_item, append_office_engine_menu,
     append_pin_mode_menu, append_pin_nav_menu, append_pin_seek_menu_renamed,
     append_seek_menu_renamed, append_shuffle_item, append_tick_menu, append_video_engine_menu,
-    cache_size_label, decode_budget_label, default_label, pin_minimize_label, pin_update_label,
+    cache_size_label, decode_budget_label, default_label, pin_key_label, pin_minimize_label, pin_update_label,
     remember_volume_label, system_menu_label, timing_delay_menu, update_available_label,
     MF_RADIOCHECK,
 };
@@ -168,11 +168,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_PIN_NAV_AUDIO,
             DEFAULT_PIN_NAV_OTHERS,
         ));
-    let mut pin_key_chars = pin_key.chars();
-    let pin_key_display = match pin_key_chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + pin_key_chars.as_str(),
-        None => pin_key,
-    };
+    let pin_key_display = pin_key_label(&pin_key);
     let pin_label = format!("Enable ({pin_key_display})");
     let pin_label_wide: Vec<u16> = pin_label.encode_utf16().chain(std::iter::once(0)).collect();
     let pin_menu = CreatePopupMenu().unwrap();
