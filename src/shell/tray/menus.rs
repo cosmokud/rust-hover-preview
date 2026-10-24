@@ -159,7 +159,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .unwrap_or((
             true,
             DEFAULT_PIN_ALWAYS_ON_TOP,
-            "space".to_string(),
+            "mouse3".to_string(),
             DEFAULT_PIN_MINIMIZE_TO,
             DEFAULT_PIN_UPDATE_ENABLED,
             DEFAULT_PIN_UPDATE_ON_HOVER,
