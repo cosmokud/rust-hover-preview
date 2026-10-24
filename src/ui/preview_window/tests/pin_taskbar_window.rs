@@ -1040,6 +1040,7 @@ fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
     let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
+    let previous_own = pin_is_its_own_window();
 
     register_the_stand_in_class();
     forget_the_stand_in();
@@ -1098,12 +1099,13 @@ fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
     let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
     pin.collapsed = false;
     stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
 
     assert_eq!(
         mirror_source(Some(MediaType::Video)),
-        None,
-        "a film is pictured by its player's window, and a player that is not on the screen is no \
-         picture of a film: the pin's own band is a hole where it stood"
+        Some(pin_hwnd),
+        "a hosted film is drawn by the pin's own window, so the pin is its picture: a stale player \
+         window that is not on the screen is no picture of a film"
     );
     assert_eq!(
         mirror_source(Some(MediaType::EngineSvg)),
@@ -1128,6 +1130,7 @@ fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
     stand_ffplay_in(None);
     stand_video_engine_in(None);
     forget_the_stand_in();
+    pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
 }
 
@@ -1380,6 +1383,9 @@ fn a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up() {
 
 /// A button made again holds no picture of the pin the button before it belonged to.
 ///
+/// The picture of a hosted film is the pin's own window's, because the player is a child of the
+/// pin's film host rather than a window of the desktop's (see `mirror_source`).
+///
 /// The road this is a regression test for: the Shell's own `Close` takes the stand-in's window down
 /// with the pin (see `close_pin_taskbar`, `pin_taskbar_window`), and the next pin makes another one —
 /// while the picture the button holds is this app's own and not the window's, so a picture kept past
@@ -1399,6 +1405,27 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     forget_the_stand_in();
 
     // The window the pin is drawn by, on the screen and painted: what a picture of it is taken of.
+    // A hosted film — mpv's or FFmpeg's, adopted into the pin's own host — is drawn by the pin's
+    // own window, so that is the picture the button holds; the stale player window beside it is a
+    // handle that is not on the screen and never the picture (see `mirror_source`).
+    let pin_window = unsafe {
+        CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            A_BOX_ON_THE_DESK.0,
+            A_BOX_ON_THE_DESK.1,
+            64,
+            48,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("the pin's own window")
+    };
+    let previous_preview = PREVIEW_HWND.swap(pin_window.0 as isize, Ordering::SeqCst);
     let player = unsafe {
         CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
@@ -1414,13 +1441,13 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
             None,
             None,
         )
-        .expect("a player's window")
+        .expect("a stale player's window")
     };
     // Safety: the window is this test's own, asked to be on the screen and painted — the two things
     // that make it the picture the button of a film pin is taken of.
     unsafe {
-        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
-        fill_the_window(player, A_COLOUR_OF_ITS_OWN);
+        let _ = ShowWindow(pin_window, SW_SHOWNOACTIVATE);
+        fill_the_window(pin_window, A_COLOUR_OF_ITS_OWN);
     }
     let _ = unsafe { DwmFlush() };
     VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
@@ -1468,8 +1495,10 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     // Safety: the window is this test's own; the handles the app holds are put back as they were.
     unsafe {
         let _ = DestroyWindow(player);
+        let _ = DestroyWindow(pin_window);
     }
     VIDEO_HWND.store(previous_video, Ordering::SeqCst);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;

@@ -226,7 +226,7 @@ pub(super) fn video_drag_hold_apply(dragging: bool) -> bool {
     // `mpv_ipc`), so there is no pause key to post and no hold to write: a hold written here would
     // leave the bar claiming a pause the film never took. The claim above is still reconciled, so
     // nothing of a film this app held before survives into this one.
-    if video_route(&path) == VideoRoute::Mpv {
+    if pin_film_host::the_pinned_film_is_drawn_in_a_host(&path) {
         return false;
     }
 
@@ -725,10 +725,10 @@ pub(super) fn begin_pin_drag(
             // let it run on unwatched, so a drag or a resize is a move of the window it already has
             // (see `video_drag_hold_apply` and `mpv_ipc`).
             let pinned_film = pinned_media_owner();
-            let mpv_is_drawing = pinned_film
+            let a_host_is_drawing = pinned_film
                 .as_ref()
-                .is_some_and(|(path, _)| video_route(path) == VideoRoute::Mpv);
-            if !mpv_is_drawing
+                .is_some_and(|(path, _)| pin_film_host::the_pinned_film_is_drawn_in_a_host(path));
+            if !a_host_is_drawing
                 && pinned_film.as_ref().is_some_and(|(path, _)| {
                     current_media_type().is_some_and(|kind| kind.draws_in_a_window_of_its_own(path))
                 })
