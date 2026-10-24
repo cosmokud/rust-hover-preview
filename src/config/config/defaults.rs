@@ -156,6 +156,9 @@ pub const DEFAULT_RENDER_HTML: bool = false;
 /// a newer release is offered. Off, nothing is asked at any moment — neither at startup
 /// nor when the menu is opened — and the row never appears (see `request_check`).
 pub const DEFAULT_CHECK_FOR_UPDATES: bool = true;
+/// The key that turns previews on or off while File Explorer is in front. F7 by default,
+/// so the switch has a shortcut without taking a key another program may be using.
+pub const DEFAULT_TOGGLE_KEY: &str = "f7";
 pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 125;
 pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;

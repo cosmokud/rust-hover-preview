@@ -24,6 +24,20 @@ pub(crate) fn is_foreground_explorer() -> bool {
     }
 }
 
+/// The same question asked without the window cache, for the low-level keyboard hook: that
+/// callback may not take a lock, and the cache behind `is_foreground_explorer` is one. It is
+/// the foreground window and one class lookup, which is all a `WH_KEYBOARD_LL` callback can
+/// afford to ask about a key it is about to let through anyway.
+pub(crate) fn is_foreground_explorer_without_cache() -> bool {
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.is_invalid() {
+            return false;
+        }
+        explorer_browser_class_matches(foreground)
+    }
+}
+
 /// Whether the engine's window — the window a page of HTML is drawn in — owns the keyboard
 /// right now, which is what a click into a page that runs makes it do. Nothing else the
 /// engine draws can be asked the question: a document and a specimen refuse activation, so
@@ -191,7 +205,7 @@ pub(super) fn utf16_contains_ascii_ignore_case(haystack: &[u16], needle: &[u8]) 
     })
 }
 
-pub(super) fn explorer_browser_class_matches(hwnd: HWND) -> bool {
+pub(crate) fn explorer_browser_class_matches(hwnd: HWND) -> bool {
     unsafe {
         let mut class_name = [0u16; 256];
         let len = GetClassNameW(hwnd, &mut class_name);

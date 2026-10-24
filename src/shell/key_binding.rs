@@ -257,6 +257,14 @@ mod tests {
     }
 
     #[test]
+    fn the_built_in_preview_shortcut_is_f7() {
+        let binding = parse_or_default("", crate::config::config::DEFAULT_TOGGLE_KEY);
+        assert_eq!(binding.alternatives.len(), 1);
+        assert_eq!(binding.alternatives[0].main(), 0x76); // VK_F7
+        assert!(binding.alternatives[0].companions().is_empty());
+    }
+
+    #[test]
     fn an_empty_or_unknown_binding_falls_back_to_its_default() {
         assert_eq!(
             parse_or_default("", DEFAULT_PIN_KEY),

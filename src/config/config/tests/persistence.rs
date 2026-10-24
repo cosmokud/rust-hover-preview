@@ -168,6 +168,7 @@ fn a_file_the_app_wrote_is_one_it_reads_back_as_itself() {
         trigger_key_affect_pin_mode: true,
         trigger_key: "ctrl+alt+f8".to_string(),
         pin_key: "ctrl+space,mouse3".to_string(),
+        toggle_key: "ctrl+f9".to_string(),
         mpv_path: r"an-install\mpv.exe".to_string(),
         ..Default::default()
     };

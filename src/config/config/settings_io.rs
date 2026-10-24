@@ -58,6 +58,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "preview_enabled",
             "run_at_startup",
             "theme",
+            "toggle_key",
         ],
     ),
     // Where a pin put away by its own minimize goes — the `Pin Mode → Minimize`

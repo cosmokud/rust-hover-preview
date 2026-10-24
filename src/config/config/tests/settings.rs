@@ -1,5 +1,30 @@
 use super::*;
 
+/// The preview shortcut is a key setting like the pin's: it starts at F7, a file that names
+/// another one is read as that key, and a blank line is nothing to bind rather than a key
+/// with no name.
+#[test]
+fn the_preview_shortcut_key_is_read_from_its_own_key() {
+    assert_eq!(AppConfig::default().toggle_key, DEFAULT_TOGGLE_KEY);
+    assert_eq!(DEFAULT_TOGGLE_KEY, "f7");
+
+    let mut ini = Ini::new();
+    ini.set(
+        CONFIG_SECTION,
+        "toggle_key",
+        Some("ctrl+alt+f8".to_string()),
+    );
+    assert_eq!(read_file(&mut ini).toggle_key, "ctrl+alt+f8");
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "toggle_key", Some("   ".to_string()));
+    assert_eq!(
+        read_file(&mut ini).toggle_key,
+        DEFAULT_TOGGLE_KEY,
+        "a blank setting is nothing to bind, so the default stands"
+    );
+}
+
 /// The delay a hover's load is given before the spinner goes up is a setting of its
 /// own, read from its own key in milliseconds: `0` is a delay like any other, and a
 /// number past the ceiling is reduced to it.
