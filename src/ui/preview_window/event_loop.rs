@@ -9,6 +9,7 @@
 //! pieces decided, which is a change to the program rather than a move of it. Nothing is
 //! extracted out of it here, and no helper is introduced into it: it is the file as it was.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -1110,7 +1111,7 @@ pub fn run_preview_window() {
             // is the one place a player's window is put on top and is reached from four others that
             // this guard did not cover (see `ensure_video_window_topmost`).
             let topmost_cadence_ms = topmost_cadence_ms(pinned());
-            if current_video_path.is_some()
+            if pin_film_host::the_video_window_is_owed_the_front(current_video_path.as_deref())
                 && !pin_is_collapsed()
                 && last_topmost_check.elapsed() >= Duration::from_millis(topmost_cadence_ms)
             {
@@ -1137,16 +1138,7 @@ pub fn run_preview_window() {
                 // would be looking at — and it put the film back over a band being held flat (see
                 // `pin_player_is_parked`). The slider is still raised over a parked player, because
                 // it is drawn into the pin's own window and that window is the one thing on screen.
-                if pin_volume_open() {
-                    raise_pinned_window(HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _));
-                } else if !pin_player_is_parked() {
-                    let _ = ensure_video_window_topmost(
-                        video_pos.0,
-                        video_pos.1,
-                        video_pos.2,
-                        video_pos.3,
-                    );
-                }
+                video_playback::bring_the_video_window_to_the_front(video_pos);
             }
 
             // A player this app is looping itself is begun again at the beginning of its file rather
@@ -1650,29 +1642,22 @@ pub fn run_preview_window() {
                     if abandoned {
                         // The take-down the `Hide` message performs, for the same reason and
                         // in the same order: the wait is over, so its window, its media, the
-                        // hold it published and anything it had asked for go with it.
+                        // hold it published and anything it had asked for go with it. A pin
+                        // that owns the window keeps all of that: this hide was posted before
+                        // the take-up, and the pin's own end is the only road that takes it
+                        // down (see `take_the_hover_down`).
                         current_generation += 1;
                         clear_load_request(&load_request_slot);
                         if let Some(cancel) = pending_load_cancel.take() {
                             cancel.store(true, Ordering::Release);
                         }
 
-                        let _ = ShowWindow(hwnd, SW_HIDE);
-                        // The pin's own window, where it stands in one, goes down with it.
-                        pin_real_window::hide_real_pin_window();
-                        clear_pointer_hold();
-                        webview_preview::hide();
-
-                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                            if let Some(ref mut media) = *current {
-                                media.cancel_background_work();
-                                stop_video_playback(media);
-                            }
-                            *current = None;
-                        }
-                        current_video_path = None;
-                        video_pos = (0, 0, 0, 0);
-
+                        note_pin_trace!("abandoned load hide");
+                        pin_lifecycle::take_the_hover_down(
+                            hwnd,
+                            &mut current_video_path,
+                            &mut video_pos,
+                        );
                         if let Some(path) = current_show.as_ref().and_then(self::show_path) {
                             office_render::hover_ended(path);
                         }
@@ -3673,6 +3658,18 @@ pub fn run_preview_window() {
                         }
                     }
                     PreviewMessage::Hide => {
+                        // A pin that stands in a window of its own is not the hover this message
+                        // was posted for: the dismissal (or the abandoned load above) can be in
+                        // the channel before the take-up, and a hide already queued must not
+                        // clear the media out from under the pin it now belongs to. The pin's own
+                        // end is the only road that takes its window down.
+                        note_pin_trace!("hover hide");
+                        pin_lifecycle::take_the_hover_down(
+                            hwnd,
+                            &mut current_video_path,
+                            &mut video_pos,
+                        );
+
                         // Invalidate any pending background loads
                         current_generation += 1;
                         pending_load = None;
@@ -3680,35 +3677,6 @@ pub fn run_preview_window() {
                         if let Some(cancel) = pending_load_cancel.take() {
                             cancel.store(true, Ordering::Release);
                         }
-
-                        let _ = ShowWindow(hwnd, SW_HIDE);
-                        // The pin's own window, where it stands in one, goes down with it. The flag
-                        // that said which window the pin was in is cleared by the end of the pin,
-                        // which happened before this message arrived - so the hide is asked of the
-                        // handle itself rather than of the pin's state (see `hide_real_pin_window`).
-                        pin_real_window::hide_real_pin_window();
-                        clear_pointer_hold();
-
-                        // A document the engine is playing goes with the preview: its
-                        // window is its own, so nothing else here takes it down.
-                        webview_preview::hide();
-
-                        // Stop video playback if any
-                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                            if let Some(ref mut media) = *current {
-                                media.cancel_background_work();
-                                stop_video_playback(media);
-                            }
-                            *current = None;
-                        }
-                        current_video_path = None;
-                        video_pos = (0, 0, 0, 0);
-
-                        // The hover's own film host is this thread's window and goes down with
-                        // the hover: a host left behind is a black top-level rectangle over the
-                        // desktop, and destroying it ends the player it held (see
-                        // `hover_film_host`).
-                        hover_film_host::take_down_the_hover_film_host();
 
                         // The page held for the preview that is going away is no
                         // longer being waited on: at a budget of nothing it is
@@ -3852,6 +3820,16 @@ pub fn run_preview_window() {
                         pin_stands_in_its_own_window(pin_should_stand_in_its_own_window(
                             kind, &path,
                         ));
+
+                        // A film the pin draws in its own host is the pin's film from here, not
+                        // the hover's that put it up: the tick's place-and-show reads this rather
+                        // than the hover's bookkeeping, which a late `Hide` can empty (see
+                        // `the_video_window_is_owed_the_front`). The box is the band the take-up
+                        // just gave the window.
+                        if pin_film_host::the_film_is_shown_in_a_host(&path) {
+                            current_video_path = Some(path.clone());
+                            video_pos = (rect.0, rect.1, rect.2 - rect.0, rect.3 - rect.1);
+                        }
 
                         // The pin is published as up inside this, after the state it publishes
                         // is written (see `pin_window::install`).

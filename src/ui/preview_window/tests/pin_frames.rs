@@ -2647,22 +2647,24 @@ fn an_unpark_places_the_player_before_it_drops_the_flag_on_a_replacement() {
     }
 }
 
-/// WS-F R4: the gesture's hold is taken before the park it belongs to, on both entries.
+/// WS-F R4: the gesture's hold is taken, and a hosted film leaves nothing behind it to park.
 ///
-/// The hold is a pause key and the park below reads the picture off the screen, so a hold
-/// that lands a tick later is a band holding a frame the player has already moved on from.
-/// Both entries go through one call, and the trace is the seam that says which came first.
+/// The hold is a pause key and a park would read the picture off the screen, so a hold that lands
+/// a tick later is a band holding a frame the player has already moved on from. But a film FFmpeg's
+/// player draws is adopted into the pin's own host now, exactly as mpv's is, so the picture travels
+/// with the band and there is no window to capture, paint over or hide (see
+/// `MediaType::draws_in_a_window_of_its_own`).
 #[test]
 fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
+    let previous_own = pin_is_its_own_window();
     let holding = video_drag_holding();
 
-    // A press is only parked for a picture that is a window of its own — the film FFmpeg is
-    // playing, which is what this gesture is about (see `MediaType::draws_in_a_window_of_its_own`).
-    // A player id of zero keeps the press on the hold road the trace below is written by, which
-    // parks the same way as the kill road it is the fallback for.
+    // A player id of zero keeps the press on the hold road the trace below is written by. A film
+    // FFmpeg's player draws is hosted now, so nothing is parked for it (see
+    // `MediaType::draws_in_a_window_of_its_own`).
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -2694,6 +2696,7 @@ fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
         pin.path = PathBuf::from("hold-before-capture.mkv");
         pin.dpi = 96;
         stand_pin(Some(pin));
+        pin_stands_in_its_own_window(true);
         forget_pin_park_swap();
         forget_video_frame();
         forget_resume_frame();
@@ -2703,14 +2706,15 @@ fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
         begin_pin_drag(HWND(0x1000 as *mut _), &window, action, true);
         assert_eq!(
             park_trace(),
-            vec!["hold", "capture", "paint", "hide"],
-            "a {name}'s hold is taken before the park reads the frame it is going to hold"
+            vec!["hold"],
+            "a hosted {name}'s hold is taken, and its picture travels with the band rather than              being parked"
         );
 
         video_drag_hold_set(false);
     }
 
     video_drag_hold_set(holding);
+    pin_stands_in_its_own_window(previous_own);
     forget_video_frame();
     forget_resume_frame();
     forget_pin_park_swap();
