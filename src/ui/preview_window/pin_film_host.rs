@@ -187,12 +187,9 @@ pub(super) fn host_for_the_pins_ffplay(path: &Path) -> Option<HWND> {
 
 /// Whether this file is shown in a host this app owns: a film mpv plays or FFmpeg's player draws,
 /// pinned in a window of the pin's own. Asked of the route rather than of the player's process
-/// because it is the *launch* that decides where the picture is drawn (see `start_video_playback`),
-/// and of the media because a sound takes FFmpeg's route with no picture for a host to hold.
+/// because it is the *launch* that decides where the picture is drawn (see `start_video_playback`).
 pub(super) fn the_film_is_shown_in_a_host(path: &Path) -> bool {
-    current_media_type() == Some(MediaType::Video)
-        && pin_is_its_own_window()
-        && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
+    pin_is_its_own_window() && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
 }
 
 /// Whether the pin's film is FFmpeg's, whose child is fitted to the host's box on every place:

@@ -1128,12 +1128,11 @@ fn a_pin_of_this_file_stands_in_its_own_window(path: &Path) -> bool {
         return false;
     }
 
-    let facts = HoverFacts::read(path);
-    match facts.route.drawn_by {
-        DrawnBy::MediaEngine => {
-            matches!(video_route(path), VideoRoute::MediaEngine | VideoRoute::Mpv)
-                || (facts.is_video() && video_route(path) == VideoRoute::Ffplay)
-        }
+    match HoverFacts::read(path).route.drawn_by {
+        DrawnBy::MediaEngine => matches!(
+            video_route(path),
+            VideoRoute::MediaEngine | VideoRoute::Mpv | VideoRoute::Ffplay
+        ),
         DrawnBy::WebView(_) | DrawnBy::Native(_) | DrawnBy::Card | DrawnBy::Nothing => true,
     }
 }
@@ -1258,10 +1257,7 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         if pin_is_its_own_window() {
             if !adopts_the_hover_host {
                 pin_film_host::take_up_the_pin_film_host(None);
-                if current_media_type() == Some(MediaType::Video)
-                    && begin_the_adopted_film_in_the_host()
-                    && !pin_player_is_parked()
-                {
+                if begin_the_adopted_film_in_the_host() && !pin_player_is_parked() {
                     with_pin(|pin| pin.chrome = PinChrome::hidden());
                     pin_film_host::arm_pin_handover();
                     render_pinned_preview_at(hwnd, window.0, window.1);
