@@ -4,14 +4,14 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in File Explorer for an instant preview, or press **Space** to open a pinned preview window. Works with keyboard navigation, and customizes easily via the tray icon or a simple `config.ini`.
+Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in File Explorer for an instant preview, or middle-click to open a pinned preview window. Works with keyboard navigation, and customizes easily via the tray icon or a simple `config.ini`.
 
 [Showcase.webm](https://github.com/user-attachments/assets/33ee1f35-d399-4226-8847-5bd50f867ebb)
 
 ## Highlights
 
 - Mouse-hover and keyboard-navigation previews in Explorer, beside the cursor or the focused item and kept on screen.
-- Press a key (SPACE by default) and a preview becomes a window of its own — captioned, movable, resizable, and there until you close it, always on top unless `Pin Mode → Always On Top` is turned off. 
+- Press a key (the middle mouse button by default) and a preview becomes a window of its own — captioned, movable, resizable, and there until you close it, always on top unless `Pin Mode → Always On Top` is turned off. 
 - Supports images, videos, audios, ebooks, Office documents, design documents, text/code, archives, camera raw, vector drawings, fonts, and more.
 - Granular display scaling: Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.
 - Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
@@ -257,14 +257,14 @@ Or download the official installer from [https://calibre-ebook.com/download_wind
 1. Start the app — a tray icon appears.
 2. Hover media files in Explorer to preview them.
 3. Or navigate with the keyboard — arrow keys, Tab, or a file's name typed to jump to it — to preview the focused item.
-4. Use SPACE (by default) to pin the preview.
+4. Use the middle mouse button (by default) to pin the preview.
 5. Right-click the tray icon to configure behavior.
 
-Pin mode works like Quick Look: pressing `Space` (`pin_key`, watched while `pin_enabled`)
+Pin mode works like Quick Look: pressing the middle mouse button (`pin_key`, watched while `pin_enabled`)
 turns the settled preview into a window of its own — always on top unless **Pin Mode → Always
 On Top** is off, in which case it is an ordinary window that also wears this app's own taskbar
 button while it is up. `Space` in a focused pin pauses and resumes a sound; a minimized pin
-sits in a draggable bubble — or in that taskbar button — that `Space` in Explorer brings back.
+sits in a draggable bubble — or in that taskbar button — that a middle click in Explorer brings back.
 Arrow keys walk siblings, `Escape` closes. A right-click on a pinned window opens its own menu,
 and a pinned page of text takes the keyboard: the arrows and page keys scroll it, `F3` finds
 the next place the selection appears, and `Ctrl` and a wheel sizes it.
@@ -275,7 +275,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 
 - **Enable Preview** — Turn previews on or off.
 - **Pin Mode** — Everything about pinning, in one place.
-  - **Enable (Space)** — Turn pinning on or off.
+  - **Enable (Mouse3)** — Turn pinning on or off.
     - Pressing the key while a preview is up turns it into a window of its own: captioned, movable, resizable, always on top unless **Always On Top** is off, and still there when the pointer leaves.
     - The caption carries **Previous**, **Next**, **Open With**, and **Open With...**.
       - **Previous** / **Next** — Step the pin through the sibling files in the folder it was taken up in, in the order the listing is showing them; step over any one that will not open rather than stopping there.
@@ -504,7 +504,7 @@ pin_always_on_top=true
 pin_double_click_center=true
 pin_double_click_reset_size=true
 pin_enabled=true
-pin_key=space
+pin_key=mouse3
 pin_nav_audio=category
 pin_nav_others=all
 pin_nav_video=category
@@ -692,7 +692,7 @@ spinner_delay_ms=250
 
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
 - `trigger_key_affect_pin_mode`: whether the trigger key reaches a pinned preview. Default `false` — the key is not read while a preview is pinned, up or collapsed into its bubble, since a pin is a window you put there rather than a hover for the key to hold back. `true` lets holding the key bring the pin down with the previews it stops. It speaks for `disable`; the `enable` mode is left as it is.
-- `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. See **Pin Mode** above for what a pin does.
+- `pin_key` / `pin_enabled`: the key that pins the preview on screen (`mouse3` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. See **Pin Mode** above for what a pin does.
   - A binding may name alternatives and chords: `,` separates alternatives (either one matches) and `+` joins keys that must all be held. The last key of a chord is the one whose press counts.
     - `pin_key=space,page_down` — either key pins.
     - `pin_key=ctrl+space` — Space pins while Ctrl is held; `ctrl+alt+space` needs both.
@@ -773,7 +773,7 @@ The release binary is written to `target/release/rust-hover-preview.exe`. A rele
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, and GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, and runs HTML pages where Render HTML is switched on, camera raw and the pictures beside it are developed by ImageMagick, and video is played by mpv where installed, and otherwise by Windows' own media engine for small films and FFmpeg's player for large ones. Pressing Space pins the preview into a captioned window of its own — always on top unless you turn that off, in which case it wears a taskbar button of its own.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, and GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, and runs HTML pages where Render HTML is switched on, camera raw and the pictures beside it are developed by ImageMagick, and video is played by mpv where installed, and otherwise by Windows' own media engine for small films and FFmpeg's player for large ones. A middle click pins the preview into a captioned window of its own — always on top unless you turn that off, in which case it wears a taskbar button of its own.
 
 ## TODO
 

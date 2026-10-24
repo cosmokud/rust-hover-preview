@@ -697,7 +697,7 @@ impl Default for AppConfig {
             trigger_key_affect_pin_mode: DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
             pin_enabled: true,
             pin_always_on_top: DEFAULT_PIN_ALWAYS_ON_TOP,
-            pin_key: "space".to_string(),
+            pin_key: "mouse3".to_string(),
             pin_minimize_to: DEFAULT_PIN_MINIMIZE_TO,
             pin_double_click_center: DEFAULT_PIN_DOUBLE_CLICK_CENTER,
             pin_double_click_reset_size: DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE,
