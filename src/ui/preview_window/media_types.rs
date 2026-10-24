@@ -394,10 +394,12 @@ impl MediaType {
     ///
     /// **A film's answer is the route of the film it is showing now**, rather than the window the
     /// pin was taken up in: an engine row can change under a pin that is already up, and the pin is
-    /// not taken up again for it (see `video_route`).
-    pub(super) fn draws_in_a_window_of_its_own(&self, path: &Path) -> bool {
+    /// not taken up again for it (see `video_route`). Both players a pinned film can draw in now
+    /// stand in the pin's own host — mpv through `--wid`, FFmpeg's player adopted into it — so a
+    /// pinned film leaves no window of the desktop's for a drag to park.
+    pub(super) fn draws_in_a_window_of_its_own(&self, _path: &Path) -> bool {
         match self {
-            Self::Video => video_route(path) != VideoRoute::Mpv,
+            Self::Video => false,
             _ => self.is_engine(),
         }
     }

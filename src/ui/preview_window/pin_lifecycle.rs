@@ -1129,9 +1129,10 @@ fn a_pin_of_this_file_stands_in_its_own_window(path: &Path) -> bool {
     }
 
     match HoverFacts::read(path).route.drawn_by {
-        DrawnBy::MediaEngine => {
-            matches!(video_route(path), VideoRoute::MediaEngine | VideoRoute::Mpv)
-        }
+        DrawnBy::MediaEngine => matches!(
+            video_route(path),
+            VideoRoute::MediaEngine | VideoRoute::Mpv | VideoRoute::Ffplay
+        ),
         DrawnBy::WebView(_) | DrawnBy::Native(_) | DrawnBy::Card | DrawnBy::Nothing => true,
     }
 }

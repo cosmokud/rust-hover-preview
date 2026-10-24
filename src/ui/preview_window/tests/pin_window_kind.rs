@@ -45,47 +45,35 @@ fn every_kind_the_pin_draws_whole_stands_in_the_pins_own_window() {
     }
 }
 
-/// A film mpv plays is drawn into a host this app owns under the pin's own window, so a pin of
-/// one stands in the pin's own window; a film FFmpeg's player draws is that player's window
-/// behind the band, and its pin keeps the preview's until its own ticket. The kind on screen and
-/// the file's own route answer the same way, placeholder or not (see `pin_film_host`).
+/// A film is drawn into a host this app owns under the pin's own window, whichever player draws
+/// it: mpv through `--wid`, FFmpeg's player adopted as a disabled child after it makes its own
+/// window. So a pin of one stands in the pin's own window. The kind on screen and the file's own
+/// route answer the same way, placeholder or not (see `pin_film_host`).
 #[test]
-fn a_film_mpv_plays_stands_in_the_pins_own_window() {
+fn a_film_stands_in_the_pins_own_window_whichever_player_draws_it() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    stand_mpv_in(Some(true));
-    stand_ffplay_in(Some(true));
-    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
-
-    for kind in [
-        Some(MediaType::Video),
-        Some(MediaType::Loading),
-        Some(MediaType::Unplayable),
-        None,
+    for (mpv, ffplay_event, engine) in [
+        (true, true, VideoEngine::Mpv),
+        (false, true, VideoEngine::Ffmpeg),
     ] {
-        assert!(
-            pin_should_stand_in_its_own_window(kind, Path::new("a.mp4")),
-            "{kind:?} of a film mpv plays is drawn in a host of the pin's own, so the pin is the \
-             pin's own window"
-        );
-    }
+        stand_mpv_in(Some(mpv));
+        stand_ffplay_in(Some(ffplay_event));
+        stand_video_engine_in(Some((engine, true)));
 
-    stand_mpv_in(Some(false));
-    stand_ffplay_in(Some(true));
-    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
-
-    for kind in [
-        Some(MediaType::Video),
-        Some(MediaType::Loading),
-        Some(MediaType::Unplayable),
-        None,
-    ] {
-        assert!(
-            !pin_should_stand_in_its_own_window(kind, Path::new("a.mp4")),
-            "{kind:?} of a film FFmpeg's player draws in a window of its own keeps the preview's"
-        );
+        for kind in [
+            Some(MediaType::Video),
+            Some(MediaType::Loading),
+            Some(MediaType::Unplayable),
+            None,
+        ] {
+            assert!(
+                pin_should_stand_in_its_own_window(kind, Path::new("a.mp4")),
+                "{kind:?} of a film {engine:?} draws is drawn in a host of the pin's own, so the                  pin is the pin's own window"
+            );
+        }
     }
 
     stand_mpv_in(None);
@@ -93,8 +81,8 @@ fn a_film_mpv_plays_stands_in_the_pins_own_window() {
     stand_video_engine_in(None);
 }
 
-/// A drag parks the window behind the band, and a film mpv draws into the pin's own host leaves
-/// no window of the desktop's behind it to park; a film FFmpeg's player draws still does (see
+/// A drag parks the window behind the band, and a film drawn into the pin's own host leaves no
+/// window of the desktop's behind it to park, whichever player draws it (see
 /// `MediaType::draws_in_a_window_of_its_own`).
 #[test]
 fn a_hosted_film_leaves_nothing_for_a_drag_to_park() {
@@ -116,12 +104,11 @@ fn a_hosted_film_leaves_nothing_for_a_drag_to_park() {
         "a hosted film's picture is a child of the pin's own window, not a window of the desktop's"
     );
 
-    pin_stands_in_its_own_window(false);
     stand_mpv_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     assert!(
-        MediaType::Video.draws_in_a_window_of_its_own(path),
-        "and a film FFmpeg's player draws is still the window a drag parks"
+        !MediaType::Video.draws_in_a_window_of_its_own(path),
+        "and a film FFmpeg's player draws is adopted into the same host, so it is no window to park"
     );
     assert!(
         !MediaType::NativeVideo.draws_in_a_window_of_its_own(path),
@@ -135,13 +122,11 @@ fn a_hosted_film_leaves_nothing_for_a_drag_to_park() {
     stand_pin(previous_pin);
 }
 
-/// The answer a film gives about a window of its own follows the route of the film the pin is
-/// showing, not the take-up decision: an engine row can change under a pin that is already up,
-/// and the pin is not taken up again for it. A film FFmpeg's player draws is the window a drag
-/// parks, and a film mpv draws is the pin's own host — whichever route the pin was taken up on
-/// (see `MediaType::draws_in_a_window_of_its_own`).
+/// A film's answer about a window of its own is the same whichever player the route names now: an
+/// engine row can change under a pin that is already up, and both players draw into the pin's own
+/// host (see `MediaType::draws_in_a_window_of_its_own`).
 #[test]
-fn a_pins_film_answers_for_the_route_it_is_drawn_by_now() {
+fn a_pins_film_is_a_host_child_whichever_route_it_is_drawn_by_now() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -156,62 +141,28 @@ fn a_pins_film_answers_for_the_route_it_is_drawn_by_now() {
     pin.path = path.to_path_buf();
     stand_pin(Some(pin));
 
-    // Taken up on an mpv film: the pin's own window, with mpv drawing in its host.
     pin_stands_in_its_own_window(true);
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
-    assert!(
-        !MediaType::Video.draws_in_a_window_of_its_own(path),
-        "a film mpv draws is the pin's own host, not a window of the desktop's"
-    );
-    assert!(
-        pin_should_stand_in_its_own_window(Some(MediaType::Video), path),
-        "so its pin is the pin's own window"
-    );
+    assert_eq!(video_route(path), VideoRoute::Mpv);
+    assert!(!MediaType::Video.draws_in_a_window_of_its_own(path));
+    assert!(pin_should_stand_in_its_own_window(Some(MediaType::Video), path));
 
-    // The engine row changes to FFmpeg's player under the same pin, and it is shown the film
-    // again: the take-up decision still says the pin is its own, and the film is now a window of
-    // FFmpeg's player that a drag has to park.
+    // The engine row changes to FFmpeg's player under the same pin: the film is adopted into the
+    // same host, not left as a window of the desktop's.
     stand_mpv_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
-    assert_eq!(
-        video_route(path),
-        VideoRoute::Ffplay,
-        "the row now names FFmpeg's player"
-    );
+    assert_eq!(video_route(path), VideoRoute::Ffplay);
     assert!(
         pin_is_its_own_window(),
         "which the take-up decision has not heard about"
     );
     assert!(
-        MediaType::Video.draws_in_a_window_of_its_own(path),
-        "the window the drag parks is FFmpeg's player's, whichever window the pin was taken up in"
-    );
-    assert!(
-        !pin_should_stand_in_its_own_window(Some(MediaType::Video), path),
-        "and a pin taken up again on it keeps the preview's window"
-    );
-
-    // The other direction on the same pin: an FFmpeg film, whose pin was taken up in the
-    // preview's window, when the row changes the other way.
-    pin_stands_in_its_own_window(false);
-    assert!(
-        MediaType::Video.draws_in_a_window_of_its_own(path),
-        "an FFmpeg film is still a window of the desktop's"
-    );
-    stand_mpv_in(Some(true));
-    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
-    assert_eq!(video_route(path), VideoRoute::Mpv, "the row now names mpv");
-    assert!(
-        !pin_is_its_own_window(),
-        "and the take-up decision is still FFmpeg's"
-    );
-    assert!(
         !MediaType::Video.draws_in_a_window_of_its_own(path),
-        "the film mpv draws is the pin's own host, so no window of the desktop's is left to park"
+        "the film FFmpeg's player draws stands in the pin's host too"
     );
     assert!(
         pin_should_stand_in_its_own_window(Some(MediaType::Video), path),
-        "and a pin taken up again on it is the pin's own window"
+        "so a pin taken up again on it is the pin's own window"
     );
 
     stand_mpv_in(None);
@@ -222,9 +173,8 @@ fn a_pins_film_answers_for_the_route_it_is_drawn_by_now() {
 }
 
 /// The kind on screen is the answer where there is one, and the file's name is not asked again:
-/// a picture is the pin's own window whatever it is called, and a film FFmpeg's player draws keeps
-/// the preview's even under a picture's name. A film's route is the one thing asked beside the
-/// kind, because it is the player that decides where its picture is drawn (see
+/// a picture is the pin's own window whatever it is called, and a film FFmpeg's player draws is
+/// hosted like every other film even under a picture's name (see
 /// `pin_should_stand_in_its_own_window`).
 #[test]
 fn a_known_kind_is_not_re_read_from_the_path() {
@@ -241,8 +191,8 @@ fn a_known_kind_is_not_re_read_from_the_path() {
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     assert!(
-        !pin_should_stand_in_its_own_window(Some(MediaType::Video), Path::new("a.png")),
-        "and a player's window is still a player's window under a picture's name"
+        pin_should_stand_in_its_own_window(Some(MediaType::Video), Path::new("a.png")),
+        "and a film is still hosted under a picture's name"
     );
     stand_mpv_in(None);
     stand_ffplay_in(None);
@@ -281,11 +231,10 @@ fn a_placeholder_pin_stands_where_its_files_route_says() {
     }
 }
 
-/// A failed film is the cross, but it is a failed *film*: the route that says a player of its own
-/// draws it still says so, so the pin stays in the preview's window rather than becoming a real
-/// window over a player's band the user asked to leave alone.
+/// A failed film is the cross, but it is a failed *film*: a player of its own is drawn in the pin's
+/// host like any film, so its pin is still the pin's own window.
 #[test]
-fn a_failed_film_a_player_draws_keeps_the_previews_window() {
+fn a_failed_film_a_player_draws_stands_in_the_pins_own_window() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -295,8 +244,8 @@ fn a_failed_film_a_player_draws_keeps_the_previews_window() {
     stand_mpv_in(Some(false));
 
     assert!(
-        !pin_should_stand_in_its_own_window(Some(MediaType::Unplayable), Path::new("a.mp4")),
-        "the cross over a film a player draws is still that player's band, not the pin's window"
+        pin_should_stand_in_its_own_window(Some(MediaType::Unplayable), Path::new("a.mp4")),
+        "the cross over a film a player draws is still a pin of a hosted film"
     );
 
     stand_mpv_in(None);

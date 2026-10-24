@@ -156,16 +156,50 @@ pub(super) fn note_hosted_player(pid: u32) {
 
 /// The host to give a player begun for `path`, where that player is a pinned mpv and the pin
 /// stands in a window of its own. `None` is every other launch: a hover's film, FFmpeg's player,
-/// and the media engine's own frame.
+/// and the media engine's own frame. FFmpeg's player is not given a window — it is adopted into
+/// the host once it makes its own (see `host_for_the_pins_ffplay`).
 pub(super) fn host_for_the_pins_film(path: &Path) -> Option<HWND> {
-    the_film_is_shown_in_a_host(path).then(film_host).flatten()
+    (the_film_is_shown_in_a_host(path) && video_route(path) == VideoRoute::Mpv)
+        .then(film_host)
+        .flatten()
 }
 
-/// Whether this file is shown in a host this app owns: a film mpv plays, pinned in a window of the
-/// pin's own. Asked of the route rather than of the player's process because it is the *launch*
-/// that decides where the picture is drawn (see `start_mpv_video_playback`).
-fn the_film_is_shown_in_a_host(path: &Path) -> bool {
-    pin_is_its_own_window() && video_route(path) == VideoRoute::Mpv
+/// The host an FFmpeg film begun for `path` is to be adopted into, where this is the pin's own
+/// window and the pin stands in it. `None` is every other launch, where the player keeps its own
+/// window of the desktop's (see `draws_in_a_window_of_its_own`).
+pub(super) fn host_for_the_pins_ffplay(path: &Path) -> Option<HWND> {
+    (the_film_is_shown_in_a_host(path) && video_route(path) == VideoRoute::Ffplay)
+        .then(film_host)
+        .flatten()
+}
+
+/// Whether this file is shown in a host this app owns: a film mpv plays or FFmpeg's player draws,
+/// pinned in a window of the pin's own. Asked of the route rather than of the player's process
+/// because it is the *launch* that decides where the picture is drawn (see `start_video_playback`).
+pub(super) fn the_film_is_shown_in_a_host(path: &Path) -> bool {
+    pin_is_its_own_window() && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
+}
+
+/// Whether the pin's film is FFmpeg's, whose child is fitted to the host's box on every place:
+/// mpv's child sizes itself and is left alone (see `place_the_pin_film_host`).
+pub(super) fn the_pins_film_is_ffplay() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| video_route(&pin.path) == VideoRoute::Ffplay))
+        .unwrap_or(false)
+}
+
+/// Fit the player's child to the host's client box, where the pin's film is FFmpeg's and the
+/// player is the one the host holds.
+pub(super) unsafe fn fit_the_hosted_ffplay_to_the_host(host: HWND) {
+    if !the_pins_film_is_ffplay() {
+        return;
+    }
+    let Some(pid) = hosted_player_pid() else {
+        return;
+    };
+    if let Some(child) = a_child_of_the_host(host, pid) {
+        unsafe { ffplay_window::fit_the_hosted_player_to_the_host(child, host) };
+    }
 }
 
 /// Whether the player this app is holding is the one it began into the host — the question every
@@ -314,6 +348,7 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
         height,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
+    unsafe { fit_the_hosted_ffplay_to_the_host(host) };
     pin_chrome_strips::place_the_chrome_strips();
 
     // **A hosted player has no window of the desktop's to be found by pid**, so any handle still
@@ -396,6 +431,10 @@ unsafe fn adopt_the_hover_film_host(host: HWND, content: ScreenRegion) {
         height,
         SWP_NOACTIVATE | SWP_SHOWWINDOW,
     );
+    // The child inside the host keeps the box it was fitted to while this was a hover; the pin's
+    // band is another box, and FFmpeg's child does not follow its parent (see
+    // `fit_the_hosted_player_to_the_host`).
+    unsafe { fit_the_hosted_ffplay_to_the_host(host) };
     let _ = EnableWindow(host, false);
 
     PIN_FILM_HOST.store(host.0 as isize, Ordering::SeqCst);
@@ -426,6 +465,7 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
         height,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
+    unsafe { fit_the_hosted_ffplay_to_the_host(host) };
     pin_chrome_strips::place_the_chrome_strips();
 }
 
@@ -447,6 +487,13 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
 /// strips stay: they are the pin's window's, and the next take-up places them again (see
 /// `pin_chrome_strips`).
 pub(super) unsafe fn take_down_the_pin_film_host() {
+    // **The player is ended before the window it draws in is destroyed.** Destroying a parent takes
+    // its children with it, and a player whose surface was destroyed under it is a kill the player
+    // did not get to answer; the record below is what the ordinary kill road retries to confirmation
+    // (see `terminate_player_pid`).
+    if let Some(pid) = hosted_player_pid() {
+        terminate_player_pid(pid);
+    }
     if let Some(host) = film_host() {
         let _ = DestroyWindow(host);
     }

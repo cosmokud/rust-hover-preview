@@ -361,6 +361,26 @@ fn start_video_playback_where(
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = engine_processes::hidden_command("ffplay");
 
+    // **Where this film's picture will be drawn, before the command is built.** mpv is told the host
+    // with `--wid`; FFmpeg's player has no such switch, so it is begun with the frame it will lose
+    // and adopted into the same host once its own window exists (see
+    // `ffplay_window::adopt_the_players_window`). A hosted launch is born off every display with
+    // `-left/-top` and **without `-noborder`**: `-noborder` makes SDL create a non-resizable window
+    // whose cached flags then clamp every external resize, so the band could never follow the pin.
+    let hosted = if route == VideoRoute::Ffplay {
+        match pin_film_host::host_for_the_pins_ffplay(path) {
+            Some(host) => Some((host, true)),
+            None => (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
+                .then(|| unsafe {
+                    hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
+                })
+                .flatten()
+                .map(|host| (host, false)),
+        }
+    } else {
+        None
+    };
+
     // **And no `-hwaccel`, which is not an oversight.** It names a *device* rather than asking
     // for a decoder, and ffplay brings its Vulkan renderer up the moment the flag is present:
     // measured on this machine, every candidate device dies of an access violation in the graphics
@@ -500,22 +520,38 @@ fn start_video_playback_where(
     // to be numbered — which is also the numbering a next-track press walks in, and the one
     // `si=` is given in (see `next_subtitle`).
 
+    let width_arg = width.to_string();
+    let height_arg = height.to_string();
+    let left_arg = if hosted.is_some() {
+        "-32000".to_string()
+    } else {
+        x.to_string()
+    };
+    let top_arg = if hosted.is_some() {
+        "-32000".to_string()
+    } else {
+        y.to_string()
+    };
+    let mut cmd = cmd.args([
+        "-err_detect",
+        "ignore_err", // Ignore header/stream errors
+        "-fflags",
+        "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
+        "-framedrop",                    // Drop undecodable frames instead of stalling
+    ]);
+    if hosted.is_none() {
+        cmd = cmd.arg("-noborder"); // No window border
+    }
     let child = cmd
         .args([
-            "-err_detect",
-            "ignore_err", // Ignore header/stream errors
-            "-fflags",
-            "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
-            "-framedrop",                    // Drop undecodable frames instead of stalling
-            "-noborder",                     // No window border
             "-left",
-            &x.to_string(),
+            &left_arg,
             "-top",
-            &y.to_string(),
+            &top_arg,
             "-x",
-            &width.to_string(),
+            &width_arg,
             "-y",
-            &height.to_string(),
+            &height_arg,
             "-autoexit",
             "-loglevel",
             "quiet",
@@ -540,6 +576,16 @@ fn start_video_playback_where(
     // name is what its id is verified as, and its loop — where the loop is this app's to give — is
     // clocked from here (see `note_player_started`).
     if let Some(ref player) = child {
+        // The host holds this player and no older one, recorded before the player has a window of
+        // its own to adopt: the monitor's wait for that window is a wait for *this* player's (see
+        // `host_for_a_hosted_player`).
+        if let Some((_, in_the_pin)) = hosted {
+            if in_the_pin {
+                pin_film_host::note_hosted_player(player.id());
+            } else {
+                hover_film_host::note_hover_film_host_player(player.id(), path);
+            }
+        }
         note_player_started(
             player_image(VideoRoute::Ffplay),
             path,
