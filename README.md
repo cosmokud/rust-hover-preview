@@ -693,6 +693,12 @@ spinner_delay_ms=250
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
 - `trigger_key_affect_pin_mode`: whether the trigger key reaches a pinned preview. Default `false` — the key is not read while a preview is pinned, up or collapsed into its bubble, since a pin is a window you put there rather than a hover for the key to hold back. `true` lets holding the key bring the pin down with the previews it stops. It speaks for `disable`; the `enable` mode is left as it is.
 - `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. See **Pin Mode** above for what a pin does.
+  - A binding may name alternatives and chords: `,` separates alternatives (either one matches) and `+` joins keys that must all be held. The last key of a chord is the one whose press counts.
+    - `pin_key=space,page_down` — either key pins.
+    - `pin_key=ctrl+space` — Space pins while Ctrl is held; `ctrl+alt+space` needs both.
+    - `pin_key=space,mouse3` — a mouse button can pin too (`mouse3`, `mouse4`, `mouse5`; `mouse1` and `mouse2` are not allowed).
+  - The same syntax applies to `trigger_key`, where an alternative counts as held only while all of its keys are.
+  - Names are case-insensitive, spaces around `,` and `+` are ignored, and underscore spellings such as `page_down`, `page_up` and `caps_lock` work.
 - `pin_always_on_top`: whether a pin stays above every other window. `true` (default) keeps it topmost; `false` makes it an ordinary window that other programs can cover and that wears this app's own taskbar button while it is up. The caption's own mark toggles the same setting, a film mpv plays is put in the same band, and the wheel over such a pin is the pin's only while the pin is the window you are in.
 - `pin_double_click_center` / `pin_double_click_reset_size`: what a double-click on a pinned window does. Both default `true`: the window is put back to the size its kind's scaling setting asks for, and in the middle of the screen it stands on. Off, either half is left out — with the size reset off, a hand's own size stands and the double-click is the move alone.
 - `pin_update_enabled`: whether a pin that is up is shown the file picked next, by click or by keyboard, without moving the window. Default `true`.
