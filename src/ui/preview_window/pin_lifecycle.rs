@@ -1,6 +1,7 @@
 //! A pin's own lifetime: the state it is installed and ended from, what ends it, and the
 //! window it stands in beside the player's.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 /// A pin was asked to come down, by the Explorer hook (previews were turned off, or the</path>
@@ -28,28 +29,39 @@ pub(super) fn a_pin_owns_the_window_a_hide_would_take_down() -> bool {
     pinned() && pin_is_its_own_window()
 }
 
-/// The teardown a hover's `Hide` performs, unless a pin owns the window it would take down.
+/// The teardown a hover's `Hide` performs: the hover's window always goes, and the pin's own
+/// holdings go with it only where no pin stands in a window of its own.
 ///
-/// Returns whether anything was taken down, so the caller can keep its own bookkeeping — the
-/// generation, the pending load and the show it came from — out of a hide the pin owns. The
-/// hover's film host goes with it for the same reason: the host a pin holds is the pin's, and a
-/// hide that arrived late must not destroy the window its film is drawn in.
+/// A pin drawn in the preview's window *is* the window this takes down, so the whole old teardown
+/// stands for it. A pin standing in a window of its own is the window the user is looking at, and a
+/// `Hide` posted before the take-up can still be in the channel when it is up: the hover goes, and
+/// the pin's window, media, film path and host are left exactly where the take-up put them.
 pub(super) unsafe fn take_the_hover_down(
     hwnd: HWND,
     current_video_path: &mut Option<PathBuf>,
     video_pos: &mut ScreenRegion,
-) -> bool {
-    if a_pin_owns_the_window_a_hide_would_take_down() {
-        return false;
-    }
+) {
+    let pin_owns_the_window = a_pin_owns_the_window_a_hide_would_take_down();
+    note_pin_trace!(
+        "hide pinned {} own {} skip_pin_teardown {} path {}",
+        pinned() as u8,
+        pin_is_its_own_window() as u8,
+        pin_owns_the_window as u8,
+        current_video_path.is_some() as u8,
+    );
 
+    // The hover's own window, its held pointer and the document the engine is playing all go with
+    // it. A document's window is its own, so nothing else here takes it down.
     let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-    unsafe { pin_real_window::hide_real_pin_window() };
+    if !pin_owns_the_window {
+        unsafe { pin_real_window::hide_real_pin_window() };
+    }
     clear_pointer_hold();
-
-    // A document the engine is playing goes with the preview: its window is its own, so nothing
-    // else here takes it down.
     webview_preview::hide();
+
+    if pin_owns_the_window {
+        return;
+    }
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(ref mut media) = *current {
@@ -62,7 +74,6 @@ pub(super) unsafe fn take_the_hover_down(
     *video_pos = (0, 0, 0, 0);
 
     unsafe { hover_film_host::take_down_the_hover_film_host() };
-    true
 }
 
 impl PinnedPreview {
@@ -1301,6 +1312,21 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
                     .map(|pin| hover_film_host::the_hover_film_to_adopt(&pin.path).is_some())
             })
             .unwrap_or(false);
+    {
+        let path = pinned_path();
+        let route = path.as_deref().map(video_route);
+        note_pin_trace!(
+            "take-up path {} own {} adopt_host {} route {:?} host {} pid {}",
+            path.as_deref()
+                .map(pin_trace::path_name)
+                .unwrap_or_else(|| "-".to_string()),
+            pin_is_its_own_window() as u8,
+            adopts_the_hover_host as u8,
+            route,
+            pin_film_host::film_host().is_some() as u8,
+            VIDEO_PID.load(Ordering::SeqCst),
+        );
+    }
     unsafe {
         if pin_is_its_own_window() {
             if !adopts_the_hover_host {
@@ -1379,6 +1405,13 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    note_pin_trace!(
+        "show hwnd {:?} handover {} visible {} rect {:?}",
+        hwnd,
+        adopts_the_hover_host as u8,
+        unsafe { IsWindowVisible(hwnd).as_bool() } as u8,
+        window,
+    );
 
     // The pin is painted and on the screen over the hover's still-top-level host, and only now is
     // that host moved into this window: the move is the visible handover, and the picture never

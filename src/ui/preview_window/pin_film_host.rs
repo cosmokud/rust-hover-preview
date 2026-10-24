@@ -30,14 +30,15 @@ use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, RegisterClassExW, SetParent, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, HWND_NOTOPMOST, HWND_TOP,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW,
+    GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, SetParent, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, HWND_NOTOPMOST,
+    HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
     SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     WS_POPUP, WS_VISIBLE,
 };
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 /// The class a film's host is made from. A class of its own rather than the pin window's: what a
@@ -255,9 +256,16 @@ pub(super) fn the_pinned_player_was_begun_in_the_host() -> bool {
 /// timer poll invents it and nothing shown is hidden again.
 pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
     let Some(host) = film_host() else {
+        note_pin_trace!("hosted drawing pid {pid} host none false");
         return false;
     };
-    pid != 0 && hosted_player_pid() == Some(pid) && a_child_of_the_host(host, pid).is_some()
+    let drawing =
+        pid != 0 && hosted_player_pid() == Some(pid) && a_child_of_the_host(host, pid).is_some();
+    note_pin_trace!(
+        "hosted drawing pid {pid} host {host:?} drawing {}",
+        drawing as u8
+    );
+    drawing
 }
 
 /// Whether this player has a window on screen: a window of the desktop's of its own, or the child
@@ -350,6 +358,14 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
     };
 
     if let Some(host) = adopted.filter(|host| unsafe { IsWindow(*host) }.as_bool()) {
+        let pid = hover_film_host::hover_film_host_player().unwrap_or(0);
+        note_pin_trace!(
+            "host adopted {:?} pid {} child {:?} client {:?}",
+            host,
+            pid,
+            a_child_of_the_host(host, pid),
+            a_client_box(host),
+        );
         unsafe { adopt_the_hover_film_host(host, content) };
         return;
     }
@@ -363,6 +379,14 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
             let Some(host) = create(parent) else {
                 return;
             };
+            note_pin_trace!(
+                "host created {:?} parent {:?} pid {} child {:?} client {:?}",
+                host,
+                parent,
+                VIDEO_PID.load(Ordering::SeqCst),
+                a_child_of_the_host(host, VIDEO_PID.load(Ordering::SeqCst)),
+                a_client_box(host),
+            );
             host
         }
     };
@@ -504,6 +528,7 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
 /// host's, and a park hides the picture rather than the chrome (see `pin_chrome_strips`).
 pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
     if let Some(host) = film_host() {
+        note_pin_trace!("host visible {} {:?}", visible as u8, host);
         let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
     }
     // The strips carry the chrome on every road, whatever the host is doing: the sync answers
@@ -536,6 +561,12 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     if !pin_player_is_parked() {
         forget_video_frame();
     }
+}
+
+/// A client box as a trace reads it, or nothing where the window has already gone.
+fn a_client_box(hwnd: HWND) -> Option<(i32, i32)> {
+    let mut rect = RECT::default();
+    (unsafe { GetClientRect(hwnd, &mut rect) }.is_ok()).then_some((rect.right, rect.bottom))
 }
 
 unsafe fn create(parent: HWND) -> Option<HWND> {

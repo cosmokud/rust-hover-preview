@@ -1,6 +1,7 @@
 //! Starting and stopping a film: the launch itself, the wait for its window and for its first
 //! frame, and putting the player's window back in front.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 /// The films whose most recently begun player was drawing subtitles: a sidecar, the film's own
@@ -1395,6 +1396,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // `bubble_stream`), so there is nothing of the player's to carry into the circle and nothing to
     // put back where something has moved it.
     if pin_is_collapsed() {
+        note_pin_trace!("topmost skipped: pin collapsed");
         return false;
     }
     // **A film drawn into a child of the pin's has no window of the desktop's to order, style or
@@ -1412,9 +1414,12 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         // top-level player's rather than the band's: the band's box is the pin's, and it is given
         // by the roads that read it (see `ensure_pinned_sibling_box`).
         if pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
+            note_pin_trace!("topmost shown: pin host drawing");
             // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
             // takes any window and reports rather than faults.
             unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+        } else {
+            note_pin_trace!("topmost skipped: pin host not drawing yet");
         }
         return true;
     }
@@ -1427,7 +1432,10 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid) {
         unsafe { hover_film_host::place_the_hover_film_host((x, y, x + width, y + height)) };
         if hover_film_host::the_hover_player_is_drawing(hover_pid) {
+            note_pin_trace!("topmost shown: hover host drawing");
             unsafe { hover_film_host::set_the_hover_film_host_visible(true) };
+        } else {
+            note_pin_trace!("topmost skipped: hover host not drawing yet");
         }
         return true;
     }
@@ -1448,6 +1456,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         false,
     );
     if order == PlayerOrder::Leave {
+        note_pin_trace!("topmost skipped: raise held off");
         // The raise is what is held off and the band is still owed (see the note over this
         // function): a window that is not on screen goes back where it stands in the band, with no
         // raise for anything to be put back over.
@@ -1466,12 +1475,14 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
 
     let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
     if hwnd_val == 0 {
+        note_pin_trace!("topmost skipped: no player hwnd");
         return false;
     }
 
     unsafe {
         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
         if hwnd.is_invalid() {
+            note_pin_trace!("topmost skipped: player hwnd invalid");
             VIDEO_HWND.store(0, Ordering::SeqCst);
             return false;
         }
@@ -1491,6 +1502,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        note_pin_trace!("topmost shown: player hwnd {:?}", hwnd);
     }
 
     true
