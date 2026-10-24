@@ -223,6 +223,7 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             false,
             volume,
             video_subtitles(&file.path).chosen(),
+            Some(file.media.media_type),
         ) else {
             // A cover standing over a player that was killed for a replacement that never came is
             // a frozen frame nothing will ever end, so it is given up here rather than left for

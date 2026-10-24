@@ -171,8 +171,8 @@ pub(super) fn note_hosted_player(pid: u32) {
 /// stands in a window of its own. `None` is every other launch: a hover's film, FFmpeg's player,
 /// and the media engine's own frame. FFmpeg's player is not given a window — it is adopted into
 /// the host once it makes its own (see `host_for_the_pins_ffplay`).
-pub(super) fn host_for_the_pins_film(path: &Path) -> Option<HWND> {
-    (the_film_is_shown_in_a_host(path) && video_route(path) == VideoRoute::Mpv)
+pub(super) fn host_for_the_pins_film(path: &Path, kind: Option<MediaType>) -> Option<HWND> {
+    (the_film_is_shown_in_a_host(path, kind) && video_route(path) == VideoRoute::Mpv)
         .then(film_host)
         .flatten()
 }
@@ -180,8 +180,8 @@ pub(super) fn host_for_the_pins_film(path: &Path) -> Option<HWND> {
 /// The host an FFmpeg film begun for `path` is to be adopted into, where this is the pin's own
 /// window and the pin stands in it. `None` is every other launch, where the player keeps its own
 /// window of the desktop's (see `draws_in_a_window_of_its_own`).
-pub(super) fn host_for_the_pins_ffplay(path: &Path) -> Option<HWND> {
-    (the_film_is_shown_in_a_host(path) && video_route(path) == VideoRoute::Ffplay)
+pub(super) fn host_for_the_pins_ffplay(path: &Path, kind: Option<MediaType>) -> Option<HWND> {
+    (the_film_is_shown_in_a_host(path, kind) && video_route(path) == VideoRoute::Ffplay)
         .then(film_host)
         .flatten()
 }
@@ -195,14 +195,33 @@ pub(super) fn the_pin_film_host_stands_in_the_pins_own_window() -> bool {
     unsafe { GetParent(host) }.is_ok_and(|found| found == parent)
 }
 
+/// Take a pinned FFmpeg player that was begun as a window of the desktop's into the pin's host,
+/// rather than beginning it again: the take-up that finds the pin's own player already running
+/// adopts it by the same road the monitor uses once the window exists.
+pub(super) fn adopt_a_stranded_ffplay_into_the_pin_host(pid: u32, path: &Path) -> bool {
+    if pid == 0 || video_route(path) != VideoRoute::Ffplay {
+        return false;
+    }
+    let Some(host) = film_host() else {
+        return false;
+    };
+    let window = ffplay_window::video_window_for(pid);
+    note_the_pins_film_route(path);
+    note_hosted_player(pid);
+    if let Some(window) = window {
+        unsafe { ffplay_window::adopt_the_players_window(window, host) };
+    }
+    true
+}
+
 /// Whether this file is shown in a host this app owns: a film mpv plays or FFmpeg's player draws,
 /// pinned in a window of the pin's own. Asked of the route rather than of the player's process
 /// because it is the *launch* that decides where the picture is drawn (see `start_video_playback`).
-pub(super) fn the_film_is_shown_in_a_host(path: &Path) -> bool {
+pub(super) fn the_film_is_shown_in_a_host(path: &Path, kind: Option<MediaType>) -> bool {
     // A sound's player is FFmpeg's too, and a sound's route would match the film routes below: the
     // media on screen has to be a film before any host road is asked (see `MediaType::is_audio`).
     pin_is_its_own_window()
-        && current_media_type() == Some(MediaType::Video)
+        && kind.or_else(current_media_type) == Some(MediaType::Video)
         && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
 }
 
@@ -370,7 +389,7 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
         return;
     };
 
-    if !the_film_is_shown_in_a_host(&path) {
+    if !the_film_is_shown_in_a_host(&path, None) {
         take_down_the_pin_film_host();
         return;
     }

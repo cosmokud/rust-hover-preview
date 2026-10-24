@@ -284,7 +284,7 @@ fn a_pinned_ffplay_film_stands_in_the_pins_own_window() {
         *current = Some(media);
     }
     assert!(
-        pin_film_host::the_film_is_shown_in_a_host(video),
+        pin_film_host::the_film_is_shown_in_a_host(video, None),
         "and the film-host road is open for it"
     );
 
@@ -305,7 +305,7 @@ fn a_pinned_ffplay_film_stands_in_the_pins_own_window() {
         }
     }
     assert!(
-        !pin_film_host::the_film_is_shown_in_a_host(sound),
+        !pin_film_host::the_film_is_shown_in_a_host(sound, None),
         "an audio pin is never given a film host"
     );
     unsafe { pin_film_host::take_up_the_pin_film_host(None) };

@@ -307,6 +307,10 @@ pub(super) fn bubble_players_box(x: i32, y: i32, width: i32) -> (i32, i32) {
 /// `pin_playback::begin_the_pinned_film_at_the_hovers_frame`). It is mpv's to answer and no other
 /// route's — FFmpeg's player has neither a pause to begin in nor an exact seek, and no take-up of a
 /// hover's film reaches that route (see `pin_film_host::host_for_the_pins_film`).
+///
+/// `kind` is the kind being launched where the caller knows it before the media slot is written —
+/// a swap names the incoming file's own kind, whose host question must not read the emptied slot
+/// (see `swap_pinned_media`) — and `None` asks the media on screen.
 #[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 pub(super) fn start_video_playback(
     path: &PathBuf,
@@ -318,9 +322,10 @@ pub(super) fn start_video_playback(
     hold: bool,
     volume: u32,
     subtitle: Option<usize>,
+    kind: Option<MediaType>,
 ) -> Option<PlayerProcess> {
     start_video_playback_where(
-        path, x, y, width, height, start, hold, volume, subtitle, true,
+        path, x, y, width, height, start, hold, volume, subtitle, kind, true,
     )
 }
 
@@ -339,7 +344,7 @@ pub(super) fn restart_hover_video_without_a_host(
     subtitle: Option<usize>,
 ) -> Option<PlayerProcess> {
     start_video_playback_where(
-        path, x, y, width, height, start, hold, volume, subtitle, false,
+        path, x, y, width, height, start, hold, volume, subtitle, None, false,
     )
 }
 
@@ -354,6 +359,7 @@ fn start_video_playback_where(
     hold: bool,
     volume: u32,
     subtitle: Option<usize>,
+    kind: Option<MediaType>,
     allow_the_hover_host: bool,
 ) -> Option<PlayerProcess> {
     let volume = volume.min(100);
@@ -398,6 +404,7 @@ fn start_video_playback_where(
             volume,
             gain,
             allow_the_hover_host,
+            kind,
         );
     }
 
@@ -411,7 +418,7 @@ fn start_video_playback_where(
     // `-left/-top` and **without `-noborder`**: `-noborder` makes SDL create a non-resizable window
     // whose cached flags then clamp every external resize, so the band could never follow the pin.
     let hosted = if route == VideoRoute::Ffplay {
-        match pin_film_host::host_for_the_pins_ffplay(path) {
+        match pin_film_host::host_for_the_pins_ffplay(path, kind) {
             Some(host) => Some((host, true)),
             None => (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
                 .then(|| unsafe {
@@ -666,8 +673,8 @@ fn start_video_playback_where(
 /// this app's own is told it and no place of its own, and it is owed no topmost ask either: the
 /// pin is the host's order, so the ask that is the desktop's to answer is the top-level road's
 /// alone (see `mpv_ipc::set_ontop`).
-pub(super) fn mpv_launch_host(path: &Path) -> Option<u32> {
-    pin_film_host::host_for_the_pins_film(path).map(|host| host.0 as usize as u32)
+pub(super) fn mpv_launch_host(path: &Path, kind: Option<MediaType>) -> Option<u32> {
+    pin_film_host::host_for_the_pins_film(path, kind).map(|host| host.0 as usize as u32)
 }
 
 /// Begin an mpv video, in a window of its own over the preview box.
@@ -692,6 +699,7 @@ fn start_mpv_video_playback(
     volume: u32,
     gain: Option<f64>,
     allow_the_hover_host: bool,
+    kind: Option<MediaType>,
 ) -> Option<PlayerProcess> {
     // The switches are read here, at the launch, for the reason the ffplay route reads its own
     // here: a film already playing was started with the answer that stood then and is kept
@@ -722,7 +730,7 @@ fn start_mpv_video_playback(
     // child of the pin's own window, and a hover whose Pin Mode is on gets a top-level host of the
     // app's own so that the film can move into the pin without a second launch (see
     // `mpv_launch_host` and `hover_film_host`).
-    let pin_host = mpv_launch_host(path);
+    let pin_host = mpv_launch_host(path, kind);
     // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
     // step from an FFmpeg film must not leave the host answering as FFmpeg's (see
     // `the_pins_film_is_ffplay`).

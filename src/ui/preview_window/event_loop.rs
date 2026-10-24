@@ -3826,7 +3826,7 @@ pub fn run_preview_window() {
                         // than the hover's bookkeeping, which a late `Hide` can empty (see
                         // `the_video_window_is_owed_the_front`). The box is the band the take-up
                         // just gave the window.
-                        if pin_film_host::the_film_is_shown_in_a_host(&path) {
+                        if pin_film_host::the_film_is_shown_in_a_host(&path, None) {
                             current_video_path = Some(path.clone());
                             video_pos = (rect.0, rect.1, rect.2 - rect.0, rect.3 - rect.1);
                         }
@@ -4257,6 +4257,7 @@ pub fn run_preview_window() {
                                     // is its first subtitle stream and the one any relaunch
                                     // reaches again by the same route. Only a pinned window is
                                     // remembering a track of its own (see `next_subtitle`).
+                                    None,
                                     None,
                                 );
                                 let pid = video_process
