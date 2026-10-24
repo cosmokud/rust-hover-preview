@@ -1,4 +1,4 @@
-//! The two windows the pin's chrome is carried in.
+//! The windows the pin's chrome and overlays are carried in.
 //!
 //! **Why they exist.** The film's host is a child of the pin's window standing in the whole of the
 //! client rectangle (see `band_in_the_window`), and a child composites over the layered surface its
@@ -9,11 +9,16 @@
 //! the chrome is painted in, which composite over whatever stands in the band — a hosted film, the
 //! cover, FFmpeg's player, or this app's own picture.
 //!
-//! **What they carry, and when.** Their surfaces are the strips the pin paints — the caption's
-//! surface and the transport's, taken as they were painted (see `CHROME_SURFACE` and
-//! `TRANSPORT_SURFACE`) — and a strip is on the screen while the chrome state asks for that strip,
-//! on every road. They belong to the pin's window rather than to any host: made with it, they stand
-//! wherever the pin's band is, whatever is drawing in it.
+//! **The volume popup needs one for the same reason.** It is painted into the pin's own surface too,
+//! but over a hosted film that surface is under the child, so the panel was invisible while its
+//! pixels still took the press. Its strip is a third one, covering only the popup's footprint, and
+//! it stands over the film while the popup is open.
+//!
+//! **What they carry, and when.** Their surfaces are what the pin paints — the caption's strip, the
+//! transport's, and the volume popup's footprint, taken as they were painted (see `CHROME_SURFACE`,
+//! `TRANSPORT_SURFACE` and `VOLUME_SURFACE`) — and each strip is on the screen while the chrome
+//! state asks for it, on every road. They belong to the pin's window rather than to any host: made
+//! with it, they stand wherever the pin's band is, whatever is drawing in it.
 //!
 //! **Why they take no input.** They are made disabled, and a disabled child is skipped by
 //! `WindowFromPoint`, so a press on the chrome keeps landing on the pin and being answered by its
@@ -59,10 +64,11 @@ unsafe extern "system" fn the_default_answer(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-/// The caption's strip and the transport's, where the pin's chrome has windows of its own, and
-/// nothing while the pin's window has not taken them up.
+/// The caption's strip, the transport's, and the volume popup's, where the pin's chrome has
+/// windows of its own, and nothing while the pin's window has not taken them up.
 static CAPTION_STRIP: AtomicIsize = AtomicIsize::new(0);
 static TRANSPORT_STRIP: AtomicIsize = AtomicIsize::new(0);
+static VOLUME_STRIP: AtomicIsize = AtomicIsize::new(0);
 static STRIP_CLASS_REGISTERED: Once = Once::new();
 
 pub(super) fn caption_strip() -> Option<HWND> {
@@ -72,6 +78,11 @@ pub(super) fn caption_strip() -> Option<HWND> {
 
 pub(super) fn transport_strip() -> Option<HWND> {
     let hwnd = TRANSPORT_STRIP.load(Ordering::SeqCst);
+    (hwnd != 0).then_some(HWND(hwnd as *mut _))
+}
+
+pub(super) fn volume_strip() -> Option<HWND> {
+    let hwnd = VOLUME_STRIP.load(Ordering::SeqCst);
     (hwnd != 0).then_some(HWND(hwnd as *mut _))
 }
 
@@ -86,6 +97,8 @@ struct TheStripsState {
     transport_height: i32,
     caption: bool,
     bar: bool,
+    /// The footprint the volume popup is drawn in, or nothing while it is closed.
+    volume: Option<RECT>,
 }
 
 fn the_strips_state() -> Option<TheStripsState> {
@@ -102,6 +115,10 @@ fn the_strips_state() -> Option<TheStripsState> {
         && pin.chrome.caption
         && pin_chrome::caption_fits(width, pin.dpi, pin.frame != PinFrame::None);
     let bar = transport_height > 0 && pin.chrome.bar;
+    let volume = pin.volume.open.then(|| {
+        pinned_volume_panel(pin).map(|popup| pin_chrome::volume_popup_bounds(&popup, width, height))
+    });
+    let volume = volume.flatten();
 
     Some(TheStripsState {
         width,
@@ -110,10 +127,11 @@ fn the_strips_state() -> Option<TheStripsState> {
         transport_height,
         caption,
         bar,
+        volume,
     })
 }
 
-/// Make the two strips with the pin's own window: children of it, layered from the moment they
+/// Make the strips with the pin's own window: children of it, layered from the moment they
 /// are made (a layered child is the one thing a film's host is allowed to have over it, and it is
 /// measured to work — see the module doc over `pin_film_host`), disabled, and off the screen until
 /// something is carried in them.
@@ -190,15 +208,24 @@ pub(super) unsafe fn take_the_strips_up(parent: HWND) {
             TRANSPORT_STRIP.store(strip.0 as isize, Ordering::SeqCst);
         }
     }
+    if !volume_strip().is_some_and(|strip| unsafe { IsWindow(strip) }.as_bool()) {
+        if let Some(strip) = make(w!("volume strip")) {
+            VOLUME_STRIP.store(strip.0 as isize, Ordering::SeqCst);
+        }
+    }
 }
 
 /// Put the strips back over the host a take-up has just made: making it puts it on top of them,
 /// and the chrome stands over the film rather than under it (see `pin_film_host`).
 ///
-/// The caption first and the transport after it, which is the order the take-up made them in:
-/// the transport stands nearest the top, the caption under it, and the host under both.
+/// The caption first, the transport after it, and the volume popup last, which is the order the
+/// take-up made them in: the popup stands nearest the top, the transport under it, the caption
+/// under that, and the host under them all.
 pub(super) unsafe fn raise_the_chrome_strips_over_the_host() {
-    for strip in [caption_strip(), transport_strip()].into_iter().flatten() {
+    for strip in [caption_strip(), transport_strip(), volume_strip()]
+        .into_iter()
+        .flatten()
+    {
         if unsafe { IsWindow(strip) }.as_bool() {
             let _ = SetWindowPos(
                 strip,
@@ -213,7 +240,7 @@ pub(super) unsafe fn raise_the_chrome_strips_over_the_host() {
     }
 }
 
-/// Take the two strips down: the pin's window they are children of is going, and a strip left
+/// Take the strips down: the pin's window they are children of is going, and a strip left
 /// standing would carry the last pin's chrome into the next pin's band. Windows itself destroys
 /// them with their parent; what is forgotten here are the handles.
 ///
@@ -229,8 +256,12 @@ pub(super) unsafe fn take_the_strips_down() {
     if let Some(strip) = transport_strip() {
         let _ = DestroyWindow(strip);
     }
+    if let Some(strip) = volume_strip() {
+        let _ = DestroyWindow(strip);
+    }
     CAPTION_STRIP.store(0, Ordering::SeqCst);
     TRANSPORT_STRIP.store(0, Ordering::SeqCst);
+    VOLUME_STRIP.store(0, Ordering::SeqCst);
 }
 
 /// Put the strips where the chrome is painted: the caption across the window's first rows and
@@ -268,6 +299,20 @@ pub(super) unsafe fn place_the_chrome_strips() {
                 state.height - state.transport_height,
                 state.width,
                 state.transport_height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    if let Some(volume) = state.volume {
+        if let Some(strip) = volume_strip() {
+            let _ = SetWindowPos(
+                strip,
+                HWND::default(),
+                volume.left,
+                volume.top,
+                (volume.right - volume.left).max(1),
+                (volume.bottom - volume.top).max(1),
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
@@ -375,7 +420,9 @@ pub(super) unsafe fn sync_the_chrome_strips() {
     // resize answers them on the paint it is painted on rather than on the place after it.
     place_the_chrome_strips();
 
-    let (Some(caption), Some(transport)) = (caption_strip(), transport_strip()) else {
+    let (Some(caption), Some(transport), Some(volume)) =
+        (caption_strip(), transport_strip(), volume_strip())
+    else {
         return;
     };
 
@@ -384,6 +431,7 @@ pub(super) unsafe fn sync_the_chrome_strips() {
         // nothing on screen is asking for any of it.
         let _ = unsafe { ShowWindow(caption, SW_HIDE) };
         let _ = unsafe { ShowWindow(transport, SW_HIDE) };
+        let _ = unsafe { ShowWindow(volume, SW_HIDE) };
         return;
     };
 
@@ -406,6 +454,27 @@ pub(super) unsafe fn sync_the_chrome_strips() {
         let surface = cell.borrow();
         unsafe {
             set_the_strip_at(transport, surface.as_ref(), transport_wanted, state.bar);
+        }
+    });
+
+    let volume_wanted = state
+        .volume
+        .map(|rect| {
+            (
+                (rect.right - rect.left).max(1) as u32,
+                (rect.bottom - rect.top).max(1) as u32,
+            )
+        })
+        .unwrap_or((1, 1));
+    VOLUME_SURFACE.with(|cell| {
+        let surface = cell.borrow();
+        unsafe {
+            set_the_strip_at(
+                volume,
+                surface.as_ref(),
+                volume_wanted,
+                state.volume.is_some(),
+            );
         }
     });
 }
