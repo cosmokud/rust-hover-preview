@@ -1275,6 +1275,11 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         hwnd
     };
 
+    // The pin window is reused across pins, so its presentation form is written on every take-up:
+    // a pin holding a hosted FFmpeg film is composed through its own DC and must not be layered,
+    // and every other pin is the layered surface it has always been (see `pin_film_host`).
+    unsafe { pin_real_window::apply_the_pin_window_presentation() };
+
     // Whether the pin's window is on the screen as this is asked, which is what tells a pin standing
     // where the user put it from one being brought back from away — and it is read before the showing
     // below, since that is the call which puts it on the screen. A window the Shell minimized is a

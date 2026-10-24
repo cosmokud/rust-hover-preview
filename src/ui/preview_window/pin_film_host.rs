@@ -214,6 +214,64 @@ pub(super) fn adopt_a_stranded_ffplay_into_the_pin_host(pid: u32, path: &Path) -
     true
 }
 
+/// Whether FFmpeg's player is presented through the composed road — SDL's default D3D9 renderer
+/// blitting into a window DC — rather than through the flip-model DXGI swapchain its D3D11 renderer
+/// makes. It is the default, and the escape hatch `RHP_FFPLAY_PRESENT=flip` restores the old
+/// presentation for a machine where the composed road cannot put a picture up.
+///
+/// **Why it is one answer for the hover and the pin.** A hosted film is begun once, for whatever
+/// window will hold it; the pin it is later moved into has to present it the same way, or the
+/// picture would be drawn into a layered surface its renderer cannot reach. The pin's own form and
+/// the player's renderer are therefore one decision (see `the_pin_presents_an_ffplay_film_composed`).
+static FFPLAY_PRESENT_READ: Once = Once::new();
+static FFPLAY_PRESENT_IS_FLIP: AtomicBool = AtomicBool::new(false);
+
+fn note_the_ffplay_present_choice() {
+    FFPLAY_PRESENT_READ.call_once(|| {
+        let flip = std::env::var("RHP_FFPLAY_PRESENT")
+            .is_ok_and(|value| value.eq_ignore_ascii_case("flip"));
+        FFPLAY_PRESENT_IS_FLIP.store(flip, Ordering::SeqCst);
+    });
+}
+
+pub(super) fn ffplay_is_presented_composed() -> bool {
+    note_the_ffplay_present_choice();
+    !FFPLAY_PRESENT_IS_FLIP.load(Ordering::SeqCst)
+}
+
+/// Stand the presentation choice for a test, rather than mutating the process environment: the two
+/// launch tests that ask it run one at a time under the pin tests' own lock, and an env write would
+/// be seen by every other test's launch.
+#[cfg(test)]
+pub(super) fn stand_ffplay_presentation_for_a_test(flip: bool) {
+    note_the_ffplay_present_choice();
+    FFPLAY_PRESENT_IS_FLIP.store(flip, Ordering::SeqCst);
+}
+
+/// Whether the pin on screen holds a hosted FFmpeg film presented through the composed road. It is
+/// the one predicate behind three things that must never disagree: the player's renderer (composed,
+/// never flip), the pin window's style (no `WS_EX_LAYERED`), and the paint road (`GDI` into the
+/// window DC rather than `UpdateLayeredWindow`).
+pub(super) fn the_pin_presents_an_ffplay_film_composed() -> bool {
+    if !ffplay_is_presented_composed() || !pin_is_its_own_window() {
+        return false;
+    }
+
+    let Some(path) = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.path.clone())) else {
+        return false;
+    };
+
+    // A sound's player is FFmpeg's too: only a film at this pin's band is presented this way, and
+    // a placeholder counts because the pin is taken up before its film is installed.
+    video_route(&path) == VideoRoute::Ffplay
+        && current_media_type().is_none_or(|kind| {
+            matches!(
+                kind,
+                MediaType::Video | MediaType::Loading | MediaType::Unplayable
+            )
+        })
+}
+
 /// Whether this file is shown in a host this app owns: a film mpv plays or FFmpeg's player draws,
 /// pinned in a window of the pin's own. Asked of the route rather than of the player's process
 /// because it is the *launch* that decides where the picture is drawn (see `start_video_playback`).
