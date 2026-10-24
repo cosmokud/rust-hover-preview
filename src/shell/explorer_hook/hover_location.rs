@@ -135,14 +135,6 @@ pub(super) fn is_pressed_or_down_state(state: u16) -> bool {
     (state & 0x8000) != 0 || (state & 0x0001) != 0
 }
 
-/// Whether the resolved off-trigger virtual key is currently held.
-pub(super) fn key_is_down(vk: i32) -> bool {
-    unsafe {
-        let state = GetAsyncKeyState(vk) as u16;
-        (state & 0x8000) != 0
-    }
-}
-
 /// What one tick knows about the pointer: where it is, the scale of the display it is on,
 /// and the window it is over.
 ///

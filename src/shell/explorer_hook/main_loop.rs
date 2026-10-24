@@ -138,7 +138,7 @@ pub fn run_explorer_hook() {
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
     const VIDEO_PROCESS_SWEEP_MS: u64 = 1000;
 
-    let (mut config_snapshot, mut trigger_key_vk, mut trigger_key_seen) = CONFIG
+    let (mut config_snapshot, mut trigger_binding, mut trigger_key_seen) = CONFIG
         .lock()
         .map(|c| {
             let snapshot = (
@@ -155,8 +155,11 @@ pub fn run_explorer_hook() {
             // Resolved once per config change instead of once per tick: what the tick
             // compares is the spelling, and a spelling that has not changed is a key that
             // has not changed (see the snapshot below).
-            let vk = crate::shell::key_input::key_to_vk(&c.trigger_key);
-            (snapshot, vk, c.trigger_key.clone())
+            let binding = crate::shell::key_binding::parse_or_default(
+                &c.trigger_key,
+                crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
+            );
+            (snapshot, binding, c.trigger_key.clone())
         })
         .unwrap_or((
             (
@@ -170,7 +173,10 @@ pub fn run_explorer_hook() {
                 DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
                 DEFAULT_TICK_MS,
             ),
-            Some(0x12),
+            crate::shell::key_binding::parse_or_default(
+                "",
+                crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
+            ),
             "alt".to_string(),
         ));
     let mut explorer_probe_backoff_until: Option<Instant> = None;
@@ -405,7 +411,10 @@ pub fn run_explorer_hook() {
             // behind it happens once per change.
             if config.trigger_key != trigger_key_seen {
                 trigger_key_seen = config.trigger_key.clone();
-                trigger_key_vk = crate::shell::key_input::key_to_vk(&config.trigger_key);
+                trigger_binding = crate::shell::key_binding::parse_or_default(
+                    &config.trigger_key,
+                    crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
+                );
             }
         }
 
@@ -433,7 +442,7 @@ pub fn run_explorer_hook() {
             trigger_key_mode == TriggerKeyMode::Disable && pinned() && !trigger_key_affect_pin_mode;
         let trigger_key_down = trigger_key_enabled
             && !trigger_key_muted_by_pin
-            && trigger_key_vk.is_some_and(key_is_down);
+            && crate::shell::key_binding::binding_is_active(&trigger_binding);
         let previews_allowed =
             !trigger_key_enabled || trigger_key_mode.allows_previews(trigger_key_down);
 
