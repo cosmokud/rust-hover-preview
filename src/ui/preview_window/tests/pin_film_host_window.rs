@@ -1651,16 +1651,18 @@ fn the_chrome_of_a_hosted_film_stands_over_it() {
     let film = StandingFilm::new();
     let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
     let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
+    let volume = pin_chrome_strips::volume_strip().expect("the volume popup's strip of its own");
     assert!(
         !unsafe { IsWindowVisible(caption) }.as_bool()
-            && !unsafe { IsWindowVisible(transport) }.as_bool(),
+            && !unsafe { IsWindowVisible(transport) }.as_bool()
+            && !unsafe { IsWindowVisible(volume) }.as_bool(),
         "a strip comes into the world off the screen, with nothing painted in it yet"
     );
 
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
 
-    for strip in [caption, transport] {
+    for strip in [caption, transport, volume] {
         assert_eq!(
             unsafe { GetParent(strip) }.ok(),
             Some(film.pin_hwnd),
@@ -1688,8 +1690,8 @@ fn the_chrome_of_a_hosted_film_stands_over_it() {
     // with `SWP_NOZORDER` wherever the band goes after that, so the order is the one that sticks.
     assert_eq!(
         unsafe { the_family_above(host) },
-        vec![caption.0 as isize, transport.0 as isize],
-        "the strips stand over the host, nearest above it"
+        vec![caption.0 as isize, transport.0 as isize, volume.0 as isize],
+        "the strips stand over the host, nearest above it, and the volume strip highest"
     );
 }
 
@@ -1884,6 +1886,61 @@ fn the_chrome_strips_of_a_hosted_film_carry_the_chrome_state() {
         unsafe { IsWindowVisible(caption) }.as_bool()
             && unsafe { IsWindowVisible(transport) }.as_bool(),
         "and what the chrome asks for again, the strips carry again"
+    );
+}
+
+/// The volume popup is over a hosted film's picture the way the chrome is: the panel drawn into
+/// the pin's own surface is under the film's child window, so a strip of the popup's footprint
+/// stands over the host while it is open — the panel visible, and the press still the pin's (see
+/// `pin_chrome_strips` and `volume_popup_bounds`).
+#[test]
+fn the_volume_popup_of_a_hosted_film_stands_over_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| {
+        pin.transport_bar = true;
+        pin.volume.open = true;
+        pin.volume.level = 40;
+    });
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let volume = pin_chrome_strips::volume_strip().expect("the volume popup's strip");
+    let _child = unsafe { a_child_of_the_host(host) };
+    unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+
+    assert!(
+        unsafe { IsWindowVisible(volume) }.as_bool(),
+        "an open popup over a hosted film is a popup the strip carries"
+    );
+    assert_eq!(
+        unsafe { the_family_above(host) }.last().copied(),
+        Some(volume.0 as isize),
+        "and the strip stands over the host, highest of the strips"
+    );
+
+    let popup = pinned_volume_geometry().expect("the popup the pin has open");
+    let (width, height) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+        .expect("the pin the popup is placed in");
+    let bounds = pin_chrome::volume_popup_bounds(&popup, width, height);
+    assert_eq!(
+        unsafe { window_rect(volume) },
+        (
+            film.box_.0 + bounds.left,
+            film.box_.1 + bounds.top,
+            film.box_.0 + bounds.right,
+            film.box_.1 + bounds.bottom,
+        ),
+        "the strip is the popup's footprint, shadow and edge margin and all"
+    );
+
+    with_pin(|pin| pin.volume.open = false);
+    unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+    assert!(
+        !unsafe { IsWindowVisible(volume) }.as_bool(),
+        "and a popup put away is a strip off the screen again"
     );
 }
 

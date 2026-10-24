@@ -557,6 +557,59 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 paint.volume.level,
                 paint.volume.dragging,
             );
+
+            // And into a strip of its own, carrying only the popup's footprint: a hosted film is
+            // a child of this window and composites over the surface painted above, so the panel
+            // drawn into this surface is a panel under the picture (see `pin_chrome_strips`). The
+            // popup is shifted to the strip's own corner, and the surface is cleared first because
+            // the paint blends onto a transparency rather than onto the window.
+            let bounds = pin_chrome::volume_popup_bounds(popup, width, height);
+            let wanted = (
+                (bounds.right - bounds.left).max(0) as u32,
+                (bounds.bottom - bounds.top).max(0) as u32,
+            );
+            if wanted.0 > 0 && wanted.1 > 0 {
+                let shifted = pin_chrome::VolumePopup {
+                    panel: RECT {
+                        left: popup.panel.left - bounds.left,
+                        top: popup.panel.top - bounds.top,
+                        right: popup.panel.right - bounds.left,
+                        bottom: popup.panel.bottom - bounds.top,
+                    },
+                    track: RECT {
+                        left: popup.track.left - bounds.left,
+                        top: popup.track.top - bounds.top,
+                        right: popup.track.right - bounds.left,
+                        bottom: popup.track.bottom - bounds.top,
+                    },
+                };
+
+                VOLUME_SURFACE.with(|cell| {
+                    let mut surface = cell.borrow_mut();
+                    if surface
+                        .as_ref()
+                        .map(|surface| (surface.width, surface.height))
+                        != Some(wanted)
+                    {
+                        *surface = DibSurface::create(wanted.0, wanted.1);
+                    }
+                    if let Some(surface) = surface.as_ref() {
+                        let stride = wanted.0 as usize * 4;
+                        let bits = surface.bits();
+                        let whole =
+                            std::slice::from_raw_parts_mut(bits, stride * wanted.1 as usize);
+                        whole.fill(0);
+                        pin_chrome::paint_volume_popup(
+                            whole,
+                            wanted.0 as i32,
+                            &palette,
+                            &shifted,
+                            paint.volume.level,
+                            paint.volume.dragging,
+                        );
+                    }
+                });
+            }
         }
     }
 

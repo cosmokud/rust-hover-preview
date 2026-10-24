@@ -32,12 +32,12 @@ impl Drop for LayeredSurface {
 
 thread_local! {
     /// The surfaces this thread paints layered windows on, one per window and kept between
-    /// repaints. The windows at most are five, and all of them are painted by the preview
+    /// repaints. The windows at most are six, and all of them are painted by the preview
     /// thread: the preview — which is the pinned window while a pin is up — the round bubble a
-    /// collapsed pin leaves, the window of the card's own over the screen, and the two strips of
-    /// chrome a hosted film's pin carries over its film (see `pin_chrome_strips`). A surface
-    /// rebuilt per repaint would be a display's worth of
-    /// pixels allocated for every frame of a video.
+    /// collapsed pin leaves, the window of the card's own over the screen, and the three strips a
+    /// hosted film's pin carries over its film — the caption's, the transport's, and the volume
+    /// popup's while it is open (see `pin_chrome_strips`). A surface rebuilt per repaint would be
+    /// a display's worth of pixels allocated for every frame of a video.
     pub(super) static LAYERED_SURFACES: RefCell<Vec<(isize, LayeredSurface)>> = const { RefCell::new(Vec::new()) };
     /// Mutable box for the corner spinner: the small piece of a frame the arc is drawn into
     /// and then composed back over the frame's own pixels, so that drawing the spinner costs
@@ -54,6 +54,11 @@ thread_local! {
     /// caption's is: a pinned video repaints while it plays, and the two strips are painted one
     /// after the other — so they cannot share one surface without one of them being rebuilt.
     pub(super) static TRANSPORT_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+    /// The membrane a pinned window's volume popup is painted on, for the reason the caption's and
+    /// the transport's are: it is carried by a strip of its own over a hosted film, and it is only
+    /// the popup's footprint rather than the whole window. It is cleared before each use, because
+    /// what is carried off it is the popup on a transparency the strip shows through.
+    pub(super) static VOLUME_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
     /// The membrane a caption's tooltip is written on. It is the size of the whole window rather
     /// than of a strip, because a name is measured and drawn through GDI and needs a device
     /// context of its own, and it is kept between paints for the reason the surfaces above are:
@@ -336,8 +341,8 @@ pub(super) fn screen_pixels(area: RECT) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 /// How many windows keep a surface of their own: the preview — pinned or not — the bubble,
-/// the card's menu, and the two strips of chrome a hosted film's pin carries over it.
-pub(super) const LAYERED_SURFACE_WINDOWS: usize = 5;
+/// the card's menu, and the three strips a hosted film's pin carries over it.
+pub(super) const LAYERED_SURFACE_WINDOWS: usize = 6;
 
 /// DIB bits for a `width` x `height` frame in one window's own surface, reusing what
 /// that window already has when the size is unchanged. `None` means the surface could
