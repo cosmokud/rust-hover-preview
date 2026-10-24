@@ -281,7 +281,7 @@ fn a_portrait_to_landscape_pick_on_ffplay() {
     stand_pin(Some(overlay_pin((ax, ay, ar, ab), PinChrome::always())));
     let mut standing = create_loading_media(360, 480);
     standing.media_type = MediaType::Video;
-    let process_a = start_video_playback(&portrait, ax, ay, ar - ax, ab - ay, 0.0, false, 0, None);
+    let process_a = start_video_playback(&portrait, ax, ay, ar - ax, ab - ay, 0.0, false, 0, None, None);
     let pid_a = process_a.as_ref().map(PlayerProcess::id).unwrap_or(0);
     eprintln!("jigsaw: portrait ffplay pid={pid_a}");
     if process_a.is_none() {

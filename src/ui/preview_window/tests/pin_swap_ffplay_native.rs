@@ -214,7 +214,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
                     video_player::is_playing(),
                 );
                 eprintln!("repro leg 2: start ffplay for the 4K film");
-                let process = start_video_playback(&uhd, 100, 100, 640, 360, 0.0, false, 0, None);
+                let process = start_video_playback(&uhd, 100, 100, 640, 360, 0.0, false, 0, None, None);
                 eprintln!(
                     "repro: ffplay spawned pid={:?}, VIDEO_PID={}",
                     process.as_ref().map(|c| c.id()),

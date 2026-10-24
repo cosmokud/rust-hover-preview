@@ -34,6 +34,16 @@ pub(super) fn transport_clock(transport: &PinTransport) -> Option<f64> {
     })
 }
 
+/// The second a relaunch of the pin's film is begun at: the transport's own playhead, or the
+/// second it started from where the media slot is empty. A pin-hosted player that is already
+/// playing is never begun again at zero by a fallback (see `reload_adopted_subtitles` and
+/// `relaunch_stranded_park`).
+fn pinned_relaunch_second(transport: &PinTransport) -> f64 {
+    pin_playhead(transport)
+        .or_else(|| transport.started.map(|(_, from)| from))
+        .unwrap_or(0.0)
+}
+
 /// Where a pinned preview's playhead is, read out of the pin that is up: the same answer as
 /// above, for a caller that has no transport in hand — a resize deciding where the player it is
 /// about to begin again should start (see `relayout_pinned_media`).
@@ -257,7 +267,7 @@ fn relaunch_pinned_player(
     mpv_ipc::forget_pipe(replaced);
 
     let process = start_video_playback(
-        path, content.0, content.1, width, height, seconds, handover, volume, subtitle,
+        path, content.0, content.1, width, height, seconds, handover, volume, subtitle, None,
     );
     let pid = process.as_ref().map(|player| player.id()).unwrap_or(0);
 
@@ -854,7 +864,7 @@ pub(super) fn reload_pinned_subtitles(path: &Path) -> bool {
     restart_pinned_player(
         &pinned,
         content,
-        pinned_playhead().unwrap_or(0.0),
+        pinned_relaunch_second(&transport),
         transport.paused_at.is_some(),
     );
 
@@ -903,7 +913,7 @@ pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
     restart_pinned_player(
         &pinned,
         content,
-        pinned_playhead().unwrap_or(0.0),
+        pinned_relaunch_second(&transport),
         transport.paused_at.is_some(),
     );
 
@@ -964,7 +974,7 @@ pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
         return false;
     };
 
-    if !pin_film_host::the_film_is_shown_in_a_host(&path)
+    if !pin_film_host::the_film_is_shown_in_a_host(&path, None)
         || pin_film_host::film_host().is_none()
         || pin_film_host::the_pinned_player_was_begun_in_the_host()
         || VIDEO_PID.load(Ordering::SeqCst) == 0
@@ -975,18 +985,40 @@ pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
     let seconds = pin_playhead(&transport).unwrap_or(0.0);
     let holding = transport.paused_at.is_some();
 
-    // **FFmpeg's player cannot prove a frozen frame, so its take-up is an ordinary relaunch.** mpv
-    // is held on the hover's own frame and swapped when it reports that frame drawn (see
-    // `begin_the_pinned_film_at_the_hovers_frame`); FFmpeg's player has no pipe to be asked, and
-    // the host's child appearing is its arrival proof. The relaunch is still host-shaped, at the
-    // pin's own clock second, so the film is in the pin's window rather than left top-level.
+    // **FFmpeg's player cannot prove a frozen frame, so its take-up adopts the player the step
+    // already began.** A player this pin launched unhosted is still the right player at the right
+    // second: taking its window into the host is the same pid and no restart at zero. A player
+    // whose window has not been published yet is noted into the host here, and the monitor adopts
+    // it as it appears (see `adopt_a_stranded_ffplay_into_the_pin_host`).
     if video_route(&path) != VideoRoute::Mpv {
+        if the_pinned_media_holds_the_player(VIDEO_PID.load(Ordering::SeqCst)) {
+            pin_film_host::adopt_a_stranded_ffplay_into_the_pin_host(
+                VIDEO_PID.load(Ordering::SeqCst),
+                &path,
+            );
+            return false;
+        }
+        // A hover's player is not the pin's: the pin begins its own, once, in the host.
         restart_pinned_player(&path, content, seconds, holding);
         return false;
     }
 
     begin_the_pinned_film_at_the_hovers_frame(&path, content, seconds, holding);
     true
+}
+
+/// Whether the pin's media holds the player `pid`: a player a step of this pin began and installed
+/// rather than a hover's, which the take-up still replaces with one of the pin's own.
+fn the_pinned_media_holds_the_player(pid: u32) -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.video_process.as_ref().map(|process| process.id()))
+        })
+        == Some(pid)
 }
 
 /// Write an answer about the transport back into the pin, if there is still one.
@@ -1658,10 +1690,14 @@ pub(super) fn relaunch_stranded_park() {
     if !park_stranded_without_a_player() {
         return;
     }
+    // A player the pin already began in its host is not stranded: there is nothing to begin.
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
+        return;
+    }
     let Some((path, content, transport, _)) = pinned_playback_state() else {
         return;
     };
-    let at = pin_playhead(&transport).unwrap_or(0.0);
+    let at = pinned_relaunch_second(&transport);
     restart_pinned_player(&path, content, at, transport.paused_at.is_some());
 }
 

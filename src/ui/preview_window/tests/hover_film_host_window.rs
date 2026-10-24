@@ -122,7 +122,7 @@ fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() 
             "a film mpv plays, with Pin Mode on, is the route the host is for"
         );
 
-        let process = start_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None)
+        let process = start_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted player");
         let pid = process.id();
         assert!(
@@ -193,7 +193,7 @@ fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() 
             !hover_film_host::the_hover_film_is_kept_in_a_host(&path),
             "with Pin Mode off the hover is begun the way it always was"
         );
-        let process = start_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None)
+        let process = start_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted player");
         assert!(
             hover_film_host::hover_film_host().is_none(),
@@ -390,7 +390,7 @@ fn the_hover_host_goes_down_only_with_the_player_it_holds() {
     let path = a_film();
 
     let first =
-        start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None).expect("a noted player");
+        start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None).expect("a noted player");
     let first_pid = first.id();
     let host = hover_film_host::hover_film_host().expect("the hover's host");
 
@@ -406,7 +406,7 @@ fn the_hover_host_goes_down_only_with_the_player_it_holds() {
 
     // The next hover player is begun into the same host, which now belongs to it.
     let second =
-        start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None).expect("a noted player");
+        start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None).expect("a noted player");
     assert_eq!(
         hover_film_host::hover_film_host(),
         Some(host),
@@ -450,7 +450,7 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
             hover_film_host::the_hover_film_is_kept_in_a_host(&path),
             "an FFmpeg film with Pin Mode on is kept where a pin can take it up"
         );
-        let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None)
+        let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted ffplay");
         assert!(
             hover_film_host::the_hover_player_was_begun_in_the_host(process.id()),
@@ -470,7 +470,7 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
             !hover_film_host::the_hover_film_is_kept_in_a_host(&path),
             "with Pin Mode off an FFmpeg hover keeps its own window of the desktop's"
         );
-        let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None)
+        let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted ffplay");
         assert!(
             hover_film_host::hover_film_host().is_none(),
@@ -518,7 +518,7 @@ fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_vsync_off() {
         let _stand = HoverHostStand::new(true);
         stand_ffplay_in(Some(true));
         stand_mpv_in(Some(false));
-        let _ = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None)
+        let _ = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted ffplay");
         let launched = take_last_spawned_command().expect("the hosted hover launch");
         assert!(
@@ -544,7 +544,7 @@ fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_vsync_off() {
         let _stand = HoverHostStand::new(false);
         stand_ffplay_in(Some(true));
         stand_mpv_in(Some(false));
-        let _ = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None)
+        let _ = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted ffplay");
         let hovered = take_last_spawned_command().expect("the top-level hover launch");
         assert!(
@@ -579,7 +579,7 @@ fn hover_end_takes_the_ffplay_host_down() {
     stand_mpv_in(Some(false));
     let path = a_film();
 
-    let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None)
+    let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
         .expect("a noted ffplay");
     let host = hover_film_host::hover_film_host().expect("the hover's host");
 

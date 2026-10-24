@@ -685,7 +685,7 @@ fn a_hover_that_cannot_be_adopted_falls_back_to_one_pinned_launch() {
     let film = ffplay_standing_film();
     let path = PathBuf::from("a-film.mkv");
     with_pin(|pin| pin.path = path.clone());
-    let hovered = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None)
+    let hovered = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
         .expect("the hover's ffplay");
     assert!(
         hover_film_host::the_hover_film_to_adopt(&path).is_none(),
@@ -900,7 +900,7 @@ fn a_step_after_a_moved_hover_uses_the_same_host() {
 
     let host = pin_film_host::film_host().expect("the host the move took up");
     assert_eq!(
-        mpv_launch_host(&path),
+        mpv_launch_host(&path, None),
         Some(host.0 as usize as u32),
         "the next player launched for the pinned film is given the same host"
     );
@@ -1699,7 +1699,7 @@ fn a_pinned_mpv_film_is_begun_into_the_pins_film_host() {
     let host = pin_film_host::film_host().expect("the film's host");
 
     let path = Path::new("a-film.mkv");
-    let wid = mpv_launch_host(path).expect("the host the film is drawn in");
+    let wid = mpv_launch_host(path, None).expect("the host the film is drawn in");
 
     assert_eq!(
         wid, host.0 as usize as u32,
@@ -1729,7 +1729,7 @@ fn a_pinned_mpv_film_is_begun_into_the_pins_film_host() {
 
     pin_stands_in_its_own_window(false);
     assert!(
-        mpv_launch_host(path).is_none(),
+        mpv_launch_host(path, None).is_none(),
         "a film whose pin stands in the preview's window keeps a window of the desktop's"
     );
 }
@@ -3607,7 +3607,7 @@ fn a_pinned_ffplay_film_is_begun_into_the_pins_film_host() {
     VIDEO_HWND.store(0x1234, Ordering::SeqCst);
 
     let process =
-        start_video_playback(&path, film.box_.0, film.box_.1, 320, 240, 0.0, false, 80, None)
+        start_video_playback(&path, film.box_.0, film.box_.1, 320, 240, 0.0, false, 80, None, None)
             .expect("a noted FFmpeg player");
 
     assert_eq!(
@@ -3639,7 +3639,7 @@ fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window()
     unsafe { show_pinned_window(film.pin_hwnd) };
     let path = PathBuf::from("a-film.mkv");
 
-    let _ = start_video_playback(&path, film.box_.0, film.box_.1, 320, 240, 0.0, false, 80, None)
+    let _ = start_video_playback(&path, film.box_.0, film.box_.1, 320, 240, 0.0, false, 80, None, None)
         .expect("a noted FFmpeg player");
     let launched = take_last_spawned_command().expect("the hosted launch");
     assert!(launched.program.contains("ffplay"), "the pin's player");
@@ -3667,7 +3667,7 @@ fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window()
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_enabled = false;
     }
-    let _ = start_video_playback(&path, film.box_.0, film.box_.1, 320, 240, 0.0, false, 80, None)
+    let _ = start_video_playback(&path, film.box_.0, film.box_.1, 320, 240, 0.0, false, 80, None, None)
         .expect("a noted FFmpeg hover");
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_enabled = pin_enabled_before;
@@ -3873,6 +3873,7 @@ fn a_step_begins_the_next_ffplay_film_into_the_same_host() {
         false,
         0,
         None,
+        None,
     )
     .expect("a noted FFmpeg player");
     let next = start_video_playback(
@@ -3884,6 +3885,7 @@ fn a_step_begins_the_next_ffplay_film_into_the_same_host() {
         12.0,
         false,
         0,
+        None,
         None,
     )
     .expect("the next noted FFmpeg player");
@@ -4354,4 +4356,55 @@ fn an_mpv_pin_put_away_in_the_taskbar_leaves_its_film_standing_for_the_shells_st
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     a_pin_put_away_in_the_taskbar_leaves_its_film_standing(false);
+}
+
+/// A pin's own player that a step began as a window of the desktop's is adopted by the show that
+/// follows, at the same pid, rather than begun again at zero.
+#[test]
+fn a_show_adopts_the_pin_player_a_step_began_unhosted() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    VIDEO_PID.store(0, Ordering::SeqCst);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = None;
+    }
+
+    let path = PathBuf::from("a-stranded-film.mkv");
+    let process =
+        start_video_playback(&path, 0, 0, 320, 240, 0.0, false, 80, None, None)
+            .expect("a noted FFmpeg player");
+    let pid = process.id();
+    let mut media = create_loading_media(320, 240);
+    media.media_type = MediaType::Video;
+    media.video_process = Some(process);
+    with_pin(|pin| pin.path = path);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+    clear_restart_count();
+    let _ = take_last_spawned_command();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        restart_count(),
+        0,
+        "the show adopts the pin's own player rather than beginning it again"
+    );
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        pid,
+        "the adopted player is the same process"
+    );
+    assert!(
+        pin_film_host::the_pinned_player_was_begun_in_the_host(),
+        "and it is the host's player from then on"
+    );
+    assert!(
+        take_last_spawned_command().is_none(),
+        "nothing is spawned for the take-up"
+    );
 }
