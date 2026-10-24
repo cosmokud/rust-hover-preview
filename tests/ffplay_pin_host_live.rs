@@ -50,10 +50,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetParent, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
     IsWindowVisible, RegisterClassExW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     GetAncestor, SetForegroundWindow, UpdateLayeredWindow, WindowFromPoint, GA_ROOT, GWL_EXSTYLE,
-    GWL_STYLE, GW_OWNER, HWND_TOPMOST, HWND_TOP, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+    GWL_STYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, HWND_TOP, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, ULW_ALPHA, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MINIMIZEBOX,
+    WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
 };
 
 const STILL_ACTIVE: u32 = 259;
@@ -549,6 +551,7 @@ fn ffplay_pin_host_live() {
     // band). The frame is stripped by the restyle below anyway.
     let mut child = Command::new(&ffplay)
         .env("SDL_RENDER_DRIVER", "direct3d11")
+        .env("SDL_RENDER_VSYNC", "0")
         .args(["-left", "-32000", "-top", "-32000"])
         .args(["-x", "480", "-y", "300"])
         .args(["-autoexit", "-loglevel", "quiet"])
@@ -1072,5 +1075,238 @@ fn ffplay_pin_host_live() {
     assert!(
         a_pass && b_pass && c_pass && d_pass && e_pass && f_pass,
         "the ffplay pin-host live proof did not pass every point (see the PASS/FAIL lines above)"
+    );
+}
+
+/// LIVE PROOF: a hovered film is taken up into a pin without being begun again.
+///
+/// This is the hover-to-pin shape the app now uses: ffplay is launched off every display with
+/// `SDL_RENDER_DRIVER=direct3d11` and `SDL_RENDER_VSYNC=0` and **without** `-noborder`, its own
+/// window is adopted into a top-level hover host, and the hover is watched there. The pin's
+/// layered window is then put up at the same box and that already-running host is re-styled and
+/// re-parented into it: the same pid, the same child, the same picture, with the band lit and
+/// changing on both sides of the move.
+///
+/// `cargo test --test ffplay_pin_host_live -- --ignored --nocapture`
+#[test]
+#[ignore = "starts a real ffplay and real windows; run by hand for the hover-to-pin proof"]
+fn ffplay_hover_pin_take_up_live() {
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+    let ffplay = find_program("ffplay.exe").expect("ffplay.exe on PATH (or beside this test)");
+    let clip = probe_clip();
+    let hinstance = unsafe { GetModuleHandleW(None) }.expect("this module");
+
+    let class_name = w!("RustHoverPreviewFfplayTakeUpProbe");
+    unsafe {
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(host_proc),
+            hInstance: HINSTANCE::from(hinstance),
+            hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        assert!(RegisterClassExW(&class) != 0, "probe class registration");
+    }
+
+    let box_ = (PIN_X, PIN_Y, HOST_W, HOST_H);
+    // The hover's host: a top-level window of the app's own, shown at the hover's box.
+    let hover = unsafe {
+        CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+            class_name,
+            w!("hover film host"),
+            WS_POPUP | WS_VISIBLE,
+            box_.0,
+            box_.1,
+            box_.2,
+            box_.3,
+            HWND::default(),
+            None,
+            hinstance,
+            None,
+        )
+        .expect("the hover's host")
+    };
+    let _ = unsafe { EnableWindow(hover, false) };
+
+    let mut child = Command::new(&ffplay)
+        .env("SDL_RENDER_DRIVER", "direct3d11")
+        .env("SDL_RENDER_VSYNC", "0")
+        .args(["-left", "-32000", "-top", "-32000"])
+        .args(["-x", "480", "-y", "300"])
+        .args(["-autoexit", "-loglevel", "quiet"])
+        .arg(&clip)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW.0)
+        .spawn()
+        .expect("ffplay to start");
+    let pid = child.id();
+
+    let Some(player) = wait_for_window(pid, Duration::from_secs(8)) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        unsafe { let _ = DestroyWindow(hover); }
+        panic!("FAIL: no visible top-level window for ffplay pid {pid} within 8 s");
+    };
+
+    // Adopt the player's own window into the hover's host, as the monitor does.
+    unsafe {
+        let style = GetWindowLongPtrW(player, GWL_STYLE);
+        let style = style
+            & !(WS_POPUP.0 as isize
+                | WS_CAPTION.0 as isize
+                | WS_THICKFRAME.0 as isize
+                | WS_SYSMENU.0 as isize
+                | WS_MINIMIZEBOX.0 as isize)
+            | (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN).0 as isize;
+        let _ = SetWindowLongPtrW(player, GWL_STYLE, style);
+        let ex = GetWindowLongPtrW(player, GWL_EXSTYLE)
+            & !(WS_EX_TOPMOST.0 as isize | WS_EX_APPWINDOW.0 as isize);
+        let _ = SetWindowLongPtrW(player, GWL_EXSTYLE, ex | WS_EX_ACCEPTFILES.0 as isize);
+        let _ = SetParent(player, hover);
+        let _ = SetWindowLongPtrW(player, GWL_EXSTYLE, ex | WS_EX_ACCEPTFILES.0 as isize);
+        let _ = EnableWindow(player, false);
+        let _ = SetWindowPos(
+            player,
+            HWND::default(),
+            0,
+            0,
+            box_.2,
+            box_.3,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+        );
+        let _ = SetWindowPos(hover, HWND_TOPMOST, box_.0, box_.1, box_.2, box_.3, SWP_SHOWWINDOW);
+    }
+    std::thread::sleep(Duration::from_millis(900));
+
+    let hovered0 = capture_screen_region(box_.0, box_.1, box_.2 as u32, box_.3 as u32);
+    std::thread::sleep(Duration::from_millis(500));
+    let hovered1 = capture_screen_region(box_.0, box_.1, box_.2 as u32, box_.3 as u32);
+    let hover_lit = hovered0.as_ref().map_or(0.0, Captured::lit_ratio);
+    let hover_changed = match (&hovered0, &hovered1) {
+        (Some(a), Some(b)) => a.changed_ratio(b),
+        _ => 0.0,
+    };
+
+    // The pin's own layered window at the same box, painted the way `pin_real_window` paints one.
+    let pin = unsafe {
+        CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            class_name,
+            w!(""),
+            WS_POPUP,
+            box_.0,
+            box_.1,
+            box_.2,
+            box_.3,
+            HWND::default(),
+            None,
+            hinstance,
+            None,
+        )
+        .expect("the layered pin window")
+    };
+    let surface = Dib::create(box_.2 as u32, box_.3 as u32).expect("the pin surface");
+    surface.fill_hit_testable();
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+    let dst = POINT { x: box_.0, y: box_.1 };
+    let size = windows::Win32::Foundation::SIZE { cx: box_.2, cy: box_.3 };
+    let src = POINT { x: 0, y: 0 };
+    assert!(
+        unsafe {
+            UpdateLayeredWindow(
+                pin,
+                None,
+                Some(&dst),
+                Some(&size),
+                surface.dc,
+                Some(&src),
+                COLORREF(0),
+                Some(&blend),
+                ULW_ALPHA,
+            )
+        }
+        .is_ok(),
+        "the pin is painted through UpdateLayeredWindow"
+    );
+    unsafe {
+        let _ = ShowWindow(pin, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(pin, HWND_TOPMOST, box_.0, box_.1, box_.2, box_.3, SWP_SHOWWINDOW);
+    }
+
+    // The take-up: hide the top-level host, restyle it to a child of the pin, re-parent and show.
+    unsafe {
+        let _ = ShowWindow(hover, SW_HIDE);
+        let ex = GetWindowLongPtrW(hover, GWL_EXSTYLE)
+            & !(WS_EX_TOPMOST.0 as isize)
+            & !(WS_EX_TRANSPARENT.0 as isize);
+        let _ = SetWindowLongPtrW(hover, GWL_EXSTYLE, ex);
+        let _ = SetWindowPos(hover, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        let style = GetWindowLongPtrW(hover, GWL_STYLE);
+        let _ = SetWindowLongPtrW(hover, GWL_STYLE, (style & !(WS_POPUP.0 as isize)) | WS_CHILD.0 as isize);
+        let _ = SetParent(hover, pin);
+        let _ = SetWindowLongPtrW(hover, GWL_EXSTYLE, ex);
+        let _ = SetWindowPos(hover, HWND_TOP, 0, 0, box_.2, box_.3, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        let _ = SetWindowPos(
+            player,
+            HWND::default(),
+            0,
+            0,
+            box_.2,
+            box_.3,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+        );
+        let _ = EnableWindow(hover, false);
+    }
+    std::thread::sleep(Duration::from_millis(900));
+
+    let pinned0 = capture_screen_region(box_.0, box_.1, box_.2 as u32, box_.3 as u32);
+    std::thread::sleep(Duration::from_millis(500));
+    let pinned1 = capture_screen_region(box_.0, box_.1, box_.2 as u32, box_.3 as u32);
+    let pin_lit = pinned0.as_ref().map_or(0.0, Captured::lit_ratio);
+    let pin_changed = match (&pinned0, &pinned1) {
+        (Some(a), Some(b)) => a.changed_ratio(b),
+        _ => 0.0,
+    };
+
+    let same_player = player_still_active(pid) && unsafe { IsWindow(player) }.as_bool();
+    let parent = unsafe { GetParent(player) }.unwrap_or_default();
+    let host_parent = unsafe { GetParent(hover) }.unwrap_or_default();
+    let take_up_pass = hover_lit > 0.01
+        && hover_changed > 0.001
+        && pin_lit > 0.01
+        && pin_changed > 0.001
+        && same_player
+        && parent == hover
+        && host_parent == pin;
+    println!(
+        "hover lit={:.2}% changed={:.2}% -> pin lit={:.2}% changed={:.2}% pid={pid} alive={same_player} child-parent={:?} host-parent={:?} {:?}",
+        hover_lit * 100.0,
+        hover_changed * 100.0,
+        pin_lit * 100.0,
+        pin_changed * 100.0,
+        parent,
+        host_parent,
+        if take_up_pass { "PASS" } else { "FAIL" }
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+    unsafe {
+        let _ = DestroyWindow(pin);
+    }
+    assert!(
+        take_up_pass,
+        "the hover-to-pin take-up lost the picture or the player (see the line above)"
     );
 }
