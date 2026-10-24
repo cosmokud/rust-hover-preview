@@ -490,6 +490,62 @@ fn only_a_hosted_mpv_hover_is_moved_into_the_pin() {
     );
 }
 
+/// An FFmpeg hover that was already in the app's host is moved into the pin the same way an mpv
+/// hover is: the same player, the same child, the same host handle, and no second launch. This is
+/// the seam the user asked for — hovering a film and pinning it keeps it playing with no
+/// interruption, restart, or black flash.
+#[test]
+fn an_ffplay_film_taken_up_from_a_hosted_hover_is_moved_not_begun() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    let path = PathBuf::from("a-film.mkv");
+    with_pin(|pin| pin.path = path.clone());
+    let hover = unsafe { HostedHover::up(&film, &path, 7.25) };
+    clear_restart_count();
+
+    assert_eq!(
+        hover_film_host::the_hover_film_to_adopt(&path),
+        Some(hover.host),
+        "a hosted FFmpeg hover is a film the pin can take up without beginning another"
+    );
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        restart_count(),
+        0,
+        "the hover's FFmpeg player is kept, not begun again"
+    );
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover.host),
+        "the hover's own host is the pin's host now"
+    );
+    assert_eq!(pin_film_host::hosted_player_pid(), Some(hover.pid));
+    assert_eq!(VIDEO_PID.load(Ordering::SeqCst), hover.pid);
+    assert!(
+        unsafe { IsWindow(hover.child) }.as_bool(),
+        "the player's child is the same window, still drawing"
+    );
+    assert_eq!(
+        unsafe { GetParent(hover.child) }.ok(),
+        Some(hover.host),
+        "under the same host, now inside the pin"
+    );
+    let child = unsafe { window_rect(hover.child) };
+    let host = unsafe { window_rect(hover.host) };
+    assert_eq!(
+        (child.2 - child.0, child.3 - child.1),
+        (host.2 - host.0, host.3 - host.1),
+        "and fitted to the pin's band rather than left at the hover's box"
+    );
+    assert_eq!(VIDEO_HWND.load(Ordering::SeqCst), 0);
+}
+
 /// **The already-running hosted hover is moved, not begun again.** The same player and the same
 /// child survive; the only window that changes is the host's, and it becomes a disabled child of
 /// the pin. Nothing is frozen, read back, relaunched or held for a handover.
