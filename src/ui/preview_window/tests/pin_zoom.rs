@@ -787,7 +787,7 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     // And the loop that reads that count is woken where it is counted: the count is an atomic written
     // on the hook's own thread, so a loop waiting for a pin would otherwise read it at the end of its
     // own wait — 62 ms measured, which is four frames of a 144 Hz display and the whole of what makes
-    // a zoom start unevenly (see `wake_for_a_wheel_notch`).
+    // a zoom start unevenly (see `wake_preview_loop`).
     unsafe {
         assert_eq!(
             WaitForSingleObject(preview_channel_event(), 0),
