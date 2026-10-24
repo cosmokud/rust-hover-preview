@@ -431,37 +431,61 @@ fn the_hover_host_goes_down_only_with_the_player_it_holds() {
     );
 }
 
-/// FFmpeg's player, the media engine and a picture keep the route they have: a host is mpv's and a
-/// hovered film's, and nothing else enters one.
+/// An FFmpeg hover is kept in the app's top-level host while Pin Mode is on, exactly as mpv's is:
+/// the player is begun off-screen without `-noborder` and adopted into the host once its window
+/// exists, so a pin can move the running picture into its own window without a second launch. With
+/// Pin Mode off there is no host, and the media engine's and a picture's routes are not films.
 #[test]
-fn ffplay_native_and_picture_routes_never_enter_a_host() {
+fn an_ffplay_hover_enters_a_host_with_pin_mode_on_and_not_with_it_off() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
-    let _stand = HoverHostStand::new(true);
     let path = a_film();
 
-    stand_ffplay_in(Some(true));
-    stand_mpv_in(Some(false));
-    assert!(!hover_film_host::the_hover_film_is_kept_in_a_host(&path));
-    let process =
-        start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None).expect("a noted ffplay");
-    assert!(
-        hover_film_host::hover_film_host().is_none(),
-        "an FFmpeg hover is never given a host"
-    );
-    assert!(!hover_film_host::the_hover_player_was_begun_in_the_host(
-        process.id()
-    ));
+    {
+        let _stand = HoverHostStand::new(true);
+        stand_ffplay_in(Some(true));
+        stand_mpv_in(Some(false));
+        assert!(
+            hover_film_host::the_hover_film_is_kept_in_a_host(&path),
+            "an FFmpeg film with Pin Mode on is kept where a pin can take it up"
+        );
+        let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None)
+            .expect("a noted ffplay");
+        assert!(
+            hover_film_host::the_hover_player_was_begun_in_the_host(process.id()),
+            "and the player is recorded against the host, before it has a window to adopt"
+        );
+        assert!(
+            hover_film_host::hover_film_host().is_some(),
+            "the host stands for it"
+        );
+    }
 
-    // The media engine's route is not this launch at all, and a picture is not a film.
+    {
+        let _stand = HoverHostStand::new(false);
+        stand_ffplay_in(Some(true));
+        stand_mpv_in(Some(false));
+        assert!(
+            !hover_film_host::the_hover_film_is_kept_in_a_host(&path),
+            "with Pin Mode off an FFmpeg hover keeps its own window of the desktop's"
+        );
+        let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None)
+            .expect("a noted ffplay");
+        assert!(
+            hover_film_host::hover_film_host().is_none(),
+            "and no host is made for it"
+        );
+        assert!(!hover_film_host::the_hover_player_was_begun_in_the_host(
+            process.id()
+        ));
+    }
+
+    // The media engine's route is not this launch at all: the engine draws its film into this
+    // app's own surface and never into a host.
+    let _stand = HoverHostStand::new(true);
     stand_video_engine_in(Some((VideoEngine::Native, true)));
     assert!(!hover_film_host::the_hover_film_is_kept_in_a_host(&path));
-    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
-    assert!(
-        !hover_film_host::the_hover_film_is_kept_in_a_host(Path::new("a-picture.png")),
-        "a picture has no film to draw into a host"
-    );
 }
 
 /// A hosted hover has exactly one ordinary relaunch behind it: alive, not yet fallen back, and
