@@ -47,6 +47,31 @@ unsafe extern "system" fn watch_the_host_shows(
 /// The place a window of a test's own is put when it must not be on the user's screen.
 const NOWHERE: i32 = -32000;
 
+/// The hover's own window: the preview a `Hide` was posted for, which is not the pin's window.
+///
+/// Safety: the window is the caller's to destroy.
+unsafe fn a_hover_window_of_the_tests_own() -> HWND {
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            NOWHERE,
+            NOWHERE,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a hover window of the test's own");
+    let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+    hwnd
+}
+
 unsafe fn window_rect(hwnd: HWND) -> ScreenRegion {
     let mut rect = RECT::default();
     let _ = GetWindowRect(hwnd, &mut rect);
@@ -3888,6 +3913,7 @@ fn a_late_hide_leaves_the_pins_window_host_and_media_alone() {
     let host = pin_film_host::film_host().expect("the film's host");
     let _child = unsafe { a_child_of_the_host(host) };
     unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+    let hover = unsafe { a_hover_window_of_the_tests_own() };
     let mut path = Some(PathBuf::from("a-film.mkv"));
     let mut pos = (film.box_.0, film.box_.1, 320, 240);
     let media_before = CURRENT_MEDIA.lock().ok().map(|media| media.is_some());
@@ -3897,12 +3923,11 @@ fn a_late_hide_leaves_the_pins_window_host_and_media_alone() {
         "the pin's own window is on screen"
     );
 
-    let taken_down =
-        unsafe { pin_lifecycle::take_the_hover_down(film.pin_hwnd, &mut path, &mut pos) };
+    unsafe { pin_lifecycle::take_the_hover_down(hover, &mut path, &mut pos) };
 
     assert!(
-        !taken_down,
-        "a Hide that a pin owns takes nothing down"
+        !unsafe { IsWindowVisible(hover) }.as_bool(),
+        "the hover this Hide belongs to goes down"
     );
     assert!(
         unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
@@ -3929,6 +3954,66 @@ fn a_late_hide_leaves_the_pins_window_host_and_media_alone() {
     );
     assert_eq!(pos, (film.box_.0, film.box_.1, 320, 240), "nor its box");
 
+    unsafe {
+        let _ = DestroyWindow(hover);
+    }
+    drop(film);
+}
+
+/// With the pin drawn in the preview's own window nothing owns the window the hide takes down, so
+/// the whole old teardown stands: the hover's window, the media it was playing, the film path the
+/// tick follows and the hover's film host all go with it.
+#[test]
+fn a_hide_with_the_pin_in_the_preview_window_takes_the_hover_down() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    // The take-up did not give this pin a window of its own: it is drawn in the preview's.
+    pin_stands_in_its_own_window(false);
+    unsafe {
+        let _ = ShowWindow(film.pin_hwnd, SW_SHOWNOACTIVATE);
+    };
+    let hover = unsafe { a_hover_window_of_the_tests_own() };
+    let _hover_host = unsafe {
+        hover_film_host::take_up_the_hover_film_host((
+            NOWHERE,
+            NOWHERE,
+            NOWHERE + 320,
+            NOWHERE + 240,
+        ))
+    }
+    .expect("the hover's own host");
+    let mut path = Some(PathBuf::from("a-film.mkv"));
+    let mut pos = (film.box_.0, film.box_.1, 320, 240);
+
+    unsafe { pin_lifecycle::take_the_hover_down(hover, &mut path, &mut pos) };
+
+    assert!(
+        !unsafe { IsWindowVisible(hover) }.as_bool(),
+        "the hover's window goes down"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "and the pin window standing in the preview's goes with it"
+    );
+    assert!(
+        CURRENT_MEDIA
+            .lock()
+            .ok()
+            .is_none_or(|media| media.is_none()),
+        "the media is stopped"
+    );
+    assert_eq!(path, None, "the film path the tick follows is cleared");
+    assert_eq!(pos, (0, 0, 0, 0), "and its box");
+    assert!(
+        hover_film_host::hover_film_host().is_none(),
+        "the hover's film host is taken down"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(hover);
+    }
     drop(film);
 }
 

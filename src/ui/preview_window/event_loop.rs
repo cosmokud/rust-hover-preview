@@ -9,6 +9,7 @@
 //! pieces decided, which is a change to the program rather than a move of it. Nothing is
 //! extracted out of it here, and no helper is introduced into it: it is the file as it was.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -1642,7 +1643,7 @@ pub fn run_preview_window() {
                         // The take-down the `Hide` message performs, for the same reason and
                         // in the same order: the wait is over, so its window, its media, the
                         // hold it published and anything it had asked for go with it. A pin
-                        // that owns the window keeps all of it: this hide was posted before
+                        // that owns the window keeps all of that: this hide was posted before
                         // the take-up, and the pin's own end is the only road that takes it
                         // down (see `take_the_hover_down`).
                         current_generation += 1;
@@ -1651,19 +1652,19 @@ pub fn run_preview_window() {
                             cancel.store(true, Ordering::Release);
                         }
 
-                        if pin_lifecycle::take_the_hover_down(
+                        note_pin_trace!("abandoned load hide");
+                        pin_lifecycle::take_the_hover_down(
                             hwnd,
                             &mut current_video_path,
                             &mut video_pos,
-                        ) {
-                            if let Some(path) = current_show.as_ref().and_then(self::show_path) {
-                                office_render::hover_ended(path);
-                            }
-
-                            current_show = None;
-                            page_render_pending = None;
-                            page_upgrade = None;
+                        );
+                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                            office_render::hover_ended(path);
                         }
+
+                        current_show = None;
+                        page_render_pending = None;
+                        page_upgrade = None;
                     } else {
                         pending_load_cancel = None;
                     }
@@ -3658,37 +3659,38 @@ pub fn run_preview_window() {
                     }
                     PreviewMessage::Hide => {
                         // A pin that stands in a window of its own is not the hover this message
-                        // was posted for: the dismissal (or the abandoned load below) can be in
+                        // was posted for: the dismissal (or the abandoned load above) can be in
                         // the channel before the take-up, and a hide already queued must not
                         // clear the media out from under the pin it now belongs to. The pin's own
                         // end is the only road that takes its window down.
-                        if pin_lifecycle::take_the_hover_down(
+                        note_pin_trace!("hover hide");
+                        pin_lifecycle::take_the_hover_down(
                             hwnd,
                             &mut current_video_path,
                             &mut video_pos,
-                        ) {
-                            // Invalidate any pending background loads
-                            current_generation += 1;
-                            pending_load = None;
-                            clear_load_request(&load_request_slot);
-                            if let Some(cancel) = pending_load_cancel.take() {
-                                cancel.store(true, Ordering::Release);
-                            }
+                        );
 
-                            // The page held for the preview that is going away is no
-                            // longer being waited on: at a budget of nothing it is
-                            // dropped here rather than kept until something else is
-                            // rendered to make room for. What is on screen is read from
-                            // the show this message takes down — the message itself is a
-                            // hide, and `show_path` names this message's own path here.
-                            if let Some(path) = current_show.as_ref().and_then(self::show_path) {
-                                office_render::hover_ended(path);
-                            }
-
-                            current_show = None;
-                            page_render_pending = None;
-                            page_upgrade = None;
+                        // Invalidate any pending background loads
+                        current_generation += 1;
+                        pending_load = None;
+                        clear_load_request(&load_request_slot);
+                        if let Some(cancel) = pending_load_cancel.take() {
+                            cancel.store(true, Ordering::Release);
                         }
+
+                        // The page held for the preview that is going away is no
+                        // longer being waited on: at a budget of nothing it is
+                        // dropped here rather than kept until something else is
+                        // rendered to make room for. What is on screen is read from
+                        // the show this message takes down — the message itself is a
+                        // hide, and `show_path` names this message's own path here.
+                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                            office_render::hover_ended(path);
+                        }
+
+                        current_show = None;
+                        page_render_pending = None;
+                        page_upgrade = None;
                     }
                     PreviewMessage::Refresh => {
                         render_layered_preview(hwnd);
