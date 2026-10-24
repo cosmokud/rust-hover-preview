@@ -123,6 +123,23 @@ pub(super) fn cache_size_label(megabytes: u32, default_mb: u32) -> String {
     default_label(&label, megabytes == default_mb)
 }
 
+/// What a pin key setting is called in the menu's `Enable` row: each alternative is named
+/// with its first letter capitalized, so `mouse3,space` reads as `Mouse3, Space`.
+pub(super) fn pin_key_label(pin_key: &str) -> String {
+    pin_key
+        .split(',')
+        .map(|part| {
+            let part = part.trim();
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The label a `Decode Budget` item carries: the ceiling it stands for, in the unit
 /// that reads best for it, with the one the app starts at marked.
 pub(super) fn decode_budget_label(gigabytes: f32) -> String {
