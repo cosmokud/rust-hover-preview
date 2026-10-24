@@ -152,6 +152,8 @@ pub(super) fn hosted_player_pid() -> Option<u32> {
 pub(super) fn note_hosted_player(pid: u32) {
     PIN_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
     PRESENTED_PID.store(0, Ordering::SeqCst);
+    // A hosted player has no window of the desktop's to publish, and this one is the film now.
+    VIDEO_HWND.store(0, Ordering::SeqCst);
 }
 
 /// The host to give a player begun for `path`, where that player is a pinned mpv and the pin

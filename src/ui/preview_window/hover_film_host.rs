@@ -75,6 +75,8 @@ pub(super) fn hover_film_host_player() -> Option<u32> {
 /// Record the player begun into the hover's host, before it has a window of its own in there.
 pub(super) fn note_hover_film_host_player(pid: u32, path: &Path) {
     HOVER_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
+    // A hosted player has no window of the desktop's to publish, and this one is the film now.
+    VIDEO_HWND.store(0, Ordering::SeqCst);
     if let Ok(mut held) = HOVER_FILM_HOST_PATH.lock() {
         *held = Some(path.to_path_buf());
     }

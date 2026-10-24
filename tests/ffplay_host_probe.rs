@@ -1,0 +1,871 @@
+//! PROBE: what the host road for FFmpeg's player had to be shown before it was built.
+//!
+//! It proves, with a real ffplay on this machine, that SDL2 has no embed switch (SDL_WINDOWID is
+//! not read on the Windows backend), so the player's own top-level window must be `SetParent`ed
+//! into a host this app owns *after* it exists. It proves that restyling that window to a disabled
+//! `WS_CHILD` — clearing the frame bits, adding `WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS|WS_CLIPCHILDREN`
+//! — keeps ffplay drawing with the same pid and no second top-level window, so a press falls through
+//! to the pin the way it does through mpv's `--wid` child.
+//!
+//! It also proves the two facts the production launch depends on: `-noborder` makes SDL create a
+//! non-resizable window whose cached flags clamp every external resize, so a hosted launch must not
+//! pass it; and a window born without it accepts a host-size resize and keeps presenting a lit,
+//! moving picture. The host is off every display, so nothing flashes.
+//!
+//! Env-gated and ignored so no ordinary run starts a player or touches the desktop:
+//!
+//! `cargo test --test ffplay_host_probe -- --ignored --nocapture`
+//!
+//! The host is a popup window off every display (`-32000, -32000`), so nothing flashes.
+
+#![cfg(windows)]
+
+use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use windows::core::w;
+use windows::Win32::Foundation::{
+    CloseHandle, BOOL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
+use windows::Win32::Graphics::Gdi::{
+    BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC,
+    GetStockObject, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLACK_BRUSH,
+    DIB_RGB_COLORS, HBITMAP, HBRUSH, HDC, HGDIOBJ, SRCCOPY,
+};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{
+    GetExitCodeProcess, OpenProcess, CREATE_NO_WINDOW, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows::Win32::UI::HiDpi::{
+    AreDpiAwarenessContextsEqual, GetDpiForSystem, GetDpiForWindow, GetThreadDpiAwarenessContext,
+    SetProcessDpiAwareness, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, PROCESS_PER_MONITOR_DPI_AWARE,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DestroyWindow, EnumWindows, GetClassNameW, GetClientRect,
+    GetParent, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
+    IsWindowVisible, RegisterClassExW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_TOP, PW_RENDERFULLCONTENT, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_CAPTION,
+    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+};
+
+// `PrintWindow` lives in the crate's Xps feature, which this app does not build. Declaring it
+// here costs the test one line and keeps the app's feature list untouched.
+#[link(name = "user32")]
+extern "system" {
+    fn PrintWindow(hwnd: HWND, hdc: HDC, flags: u32) -> BOOL;
+}
+
+const STILL_ACTIVE: u32 = 259;
+const HOST_W: i32 = 480;
+const HOST_H: i32 = 300;
+// Physical pixels. At 150% these are what 213x133 logical used to become, so the resize is real
+// for an aware process rather than the DPI-virtualized no-op the last run measured.
+const RESIZED_W: i32 = 320;
+const RESIZED_H: i32 = 200;
+
+struct Found {
+    pid: u32,
+    hwnd: HWND,
+    area: i64,
+}
+
+unsafe extern "system" fn largest_window_of_pid(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let found = &mut *(lparam.0 as *mut Found);
+    let mut window_pid = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
+    if window_pid != found.pid || !IsWindowVisible(hwnd).as_bool() {
+        return BOOL(1);
+    }
+    if let Ok(owner) = GetWindow(hwnd, GW_OWNER) {
+        if !owner.is_invalid() {
+            return BOOL(1);
+        }
+    }
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() {
+        return BOOL(1);
+    }
+    let area = (rect.right - rect.left).max(0) as i64 * (rect.bottom - rect.top).max(0) as i64;
+    if area > found.area {
+        found.area = area;
+        found.hwnd = hwnd;
+    }
+    BOOL(1)
+}
+
+fn largest_top_level_window(pid: u32) -> Option<HWND> {
+    let mut found = Found {
+        pid,
+        hwnd: HWND::default(),
+        area: 0,
+    };
+    unsafe {
+        let _ = EnumWindows(
+            Some(largest_window_of_pid),
+            LPARAM(&mut found as *mut Found as isize),
+        );
+    }
+    (!found.hwnd.is_invalid()).then_some(found.hwnd)
+}
+
+struct ListedWindow {
+    hwnd: HWND,
+    visible: bool,
+    area: i64,
+    class: String,
+}
+
+struct WindowList {
+    pid: u32,
+    windows: Vec<ListedWindow>,
+}
+
+unsafe extern "system" fn list_windows_of_pid(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let list = &mut *(lparam.0 as *mut WindowList);
+    let mut window_pid = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
+    if window_pid != list.pid {
+        return BOOL(1);
+    }
+    let mut rect = RECT::default();
+    let _ = GetWindowRect(hwnd, &mut rect);
+    let mut class = [0u16; 256];
+    let class_len = GetClassNameW(hwnd, &mut class).max(0) as usize;
+    list.windows.push(ListedWindow {
+        hwnd,
+        visible: IsWindowVisible(hwnd).as_bool(),
+        area: (rect.right - rect.left).max(0) as i64 * (rect.bottom - rect.top).max(0) as i64,
+        class: String::from_utf16_lossy(&class[..class_len.min(class.len())]),
+    });
+    BOOL(1)
+}
+
+fn list_top_level_windows(pid: u32) -> Vec<ListedWindow> {
+    let mut list = WindowList {
+        pid,
+        windows: Vec::new(),
+    };
+    unsafe {
+        let _ = EnumWindows(
+            Some(list_windows_of_pid),
+            LPARAM(&mut list as *mut WindowList as isize),
+        );
+    }
+    list.windows
+}
+
+fn client_size(hwnd: HWND) -> (i32, i32) {
+    let mut rect = RECT::default();
+    let _ = unsafe { GetClientRect(hwnd, &mut rect) };
+    (rect.right - rect.left, rect.bottom - rect.top)
+}
+
+fn window_size(hwnd: HWND) -> (i32, i32) {
+    let mut rect = RECT::default();
+    let _ = unsafe { GetWindowRect(hwnd, &mut rect) };
+    (rect.right - rect.left, rect.bottom - rect.top)
+}
+
+fn wait_for_window(pid: u32, timeout: Duration) -> Option<HWND> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(hwnd) = largest_top_level_window(pid) {
+            return Some(hwnd);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+unsafe extern "system" fn host_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+struct Dib {
+    dc: HDC,
+    bitmap: HBITMAP,
+    previous: HGDIOBJ,
+    bits: *mut u8,
+    width: u32,
+    height: u32,
+}
+
+impl Dib {
+    fn create(width: u32, height: u32) -> Option<Self> {
+        unsafe {
+            let dc = CreateCompatibleDC(None);
+            if dc.0.is_null() {
+                return None;
+            }
+            let info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width as i32,
+                    biHeight: -(height as i32),
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+            let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
+            if bits.is_null() {
+                let _ = DeleteObject(bitmap);
+                let _ = DeleteDC(dc);
+                return None;
+            }
+            let previous = SelectObject(dc, bitmap);
+            Some(Self {
+                dc,
+                bitmap,
+                previous,
+                bits: bits as *mut u8,
+                width,
+                height,
+            })
+        }
+    }
+
+    fn pixels(&self) -> Vec<u8> {
+        let length = self.width as usize * self.height as usize * 4;
+        unsafe { std::slice::from_raw_parts(self.bits, length).to_vec() }
+    }
+}
+
+impl Drop for Dib {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = SelectObject(self.dc, self.previous);
+            let _ = DeleteObject(self.bitmap);
+            let _ = DeleteDC(self.dc);
+        }
+    }
+}
+
+struct Captured {
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+impl Captured {
+    /// The share of pixels that are not near-black.
+    fn lit_ratio(&self) -> f64 {
+        if self.pixels.is_empty() {
+            return 0.0;
+        }
+        let lit = self
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8)
+            .count();
+        lit as f64 / (self.width as usize * self.height as usize) as f64
+    }
+
+    /// The share of the outer 2-pixel frame that is not near-black: did the picture fill the
+    /// client box, or is there a black band from a stale surface?
+    fn edge_lit_ratio(&self) -> f64 {
+        let (width, height) = (self.width as usize, self.height as usize);
+        if width < 3 || height < 3 {
+            return self.lit_ratio();
+        }
+        let mut lit = 0usize;
+        let mut total = 0usize;
+        for y in 0..height {
+            for x in 0..width {
+                if x < 2 || y < 2 || x + 2 >= width || y + 2 >= height {
+                    total += 1;
+                    let p = &self.pixels[(y * width + x) * 4..][..4];
+                    if p[0] > 8 || p[1] > 8 || p[2] > 8 {
+                        lit += 1;
+                    }
+                }
+            }
+        }
+        lit as f64 / total.max(1) as f64
+    }
+
+    /// The share of pixels whose colour changed between two captures.
+    fn changed_ratio(&self, other: &Captured) -> f64 {
+        if self.width != other.width || self.height != other.height {
+            return 1.0;
+        }
+        let a = self.pixels.as_chunks::<4>().0;
+        let b = other.pixels.as_chunks::<4>().0;
+        let changed = a
+            .iter()
+            .zip(b)
+            .filter(|(x, y)| x[0] != y[0] || x[1] != y[1] || x[2] != y[2])
+            .count();
+        changed as f64 / a.len().max(1) as f64
+    }
+}
+
+fn capture_with_bitblt(hwnd: HWND, width: u32, height: u32) -> Option<Captured> {
+    unsafe {
+        let source = GetDC(hwnd);
+        if source.0.is_null() {
+            return None;
+        }
+        let dib = Dib::create(width, height);
+        let copied = dib.as_ref().is_some_and(|dib| {
+            BitBlt(
+                dib.dc,
+                0,
+                0,
+                width as i32,
+                height as i32,
+                source,
+                0,
+                0,
+                SRCCOPY,
+            )
+            .is_ok()
+        });
+        let _ = ReleaseDC(hwnd, source);
+        let dib = dib?;
+        copied.then(|| Captured {
+            pixels: dib.pixels(),
+            width,
+            height,
+        })
+    }
+}
+
+fn capture_with_printwindow(hwnd: HWND, width: u32, height: u32) -> Option<Captured> {
+    unsafe {
+        let dib = Dib::create(width, height)?;
+        let printed = PrintWindow(hwnd, dib.dc, PW_RENDERFULLCONTENT).as_bool();
+        printed.then(|| Captured {
+            pixels: dib.pixels(),
+            width,
+            height,
+        })
+    }
+}
+
+fn find_program(name: &str) -> Option<PathBuf> {
+    let mut folders: Vec<PathBuf> = Vec::new();
+    if let Some(own) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
+        folders.push(own);
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        folders.extend(std::env::split_paths(&path));
+    }
+    folders
+        .into_iter()
+        .map(|folder| folder.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn probe_clip() -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    [
+        root.join("probe_clip2.mp4"),
+        root.join(".scratch/probe_clip2.mp4"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .expect("probe_clip2.mp4 (repo root or .scratch/) is needed for this probe")
+}
+
+fn player_still_active(pid: u32) -> bool {
+    unsafe {
+        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return false;
+        };
+        let mut code = 0u32;
+        let read = GetExitCodeProcess(process, &mut code).is_ok();
+        let _ = CloseHandle(process);
+        read && code == STILL_ACTIVE
+    }
+}
+
+#[test]
+#[ignore = "starts a real ffplay and a real window; run by hand for the host spike"]
+fn ffplay_survives_being_reparented_into_our_host() {
+    // One physical pixel per coordinate, so ffplay's `-x/-y` and our captures agree with the
+    // desktop instead of being silently scaled by the caller's DPI virtualization.
+    unsafe {
+        let how;
+        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_ok() {
+            how = "SetProcessDpiAwarenessContext(PMv2)";
+        } else if SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).is_ok() {
+            how = "SetProcessDpiAwareness(PER_MONITOR)";
+        } else if windows::Win32::UI::WindowsAndMessaging::SetProcessDPIAware().as_bool() {
+            how = "SetProcessDPIAware";
+        } else {
+            how = "no DPI call succeeded";
+        }
+        println!("dpi setup: {how}");
+    }
+
+    let ffplay = find_program("ffplay.exe").expect("ffplay.exe on PATH (or beside this test)");
+    let clip = probe_clip();
+    println!("ffplay: {}", ffplay.display());
+    println!("clip:   {}", clip.display());
+
+    let hinstance = unsafe { GetModuleHandleW(None) }.expect("this module");
+
+    let class_name = w!("RustHoverPreviewFfplayHostProbe");
+    let host = unsafe {
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(host_proc),
+            hInstance: HINSTANCE::from(hinstance),
+            hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        assert!(RegisterClassExW(&class) != 0, "host class registration");
+        CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            class_name,
+            w!("ffplay host probe"),
+            WS_POPUP,
+            -32000,
+            -32000,
+            HOST_W,
+            HOST_H,
+            HWND::default(),
+            None,
+            hinstance,
+            None,
+        )
+        .expect("the off-screen host window")
+    };
+    println!("host:   {host:?}");
+
+    // ffplay's SDL window must be created resizable (`-noborder` makes SDL skip
+    // SDL_WINDOW_RESIZABLE, and then SDL keeps its original client size and crops into a smaller
+    // band). The frame is stripped by the restyle below anyway.
+    let mut child = Command::new(&ffplay)
+        .args(["-left", "-32000", "-top", "-32000"])
+        .args(["-x", "480", "-y", "300"])
+        .args(["-autoexit", "-loglevel", "quiet"])
+        .arg(&clip)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW.0)
+        .spawn()
+        .expect("ffplay to start");
+    let pid = child.id();
+    println!("ffplay pid: {pid}");
+
+    let player = wait_for_window(pid, Duration::from_secs(8));
+    let Some(hwnd) = player else {
+        let _ = child.kill();
+        let _ = child.wait();
+        unsafe {
+            let _ = DestroyWindow(host);
+        }
+        panic!("FAIL: no visible top-level window for ffplay pid {pid} within 8 s");
+    };
+    let mut rect = RECT::default();
+    unsafe {
+        let _ = GetWindowRect(hwnd, &mut rect);
+    }
+    println!(
+        "player window: {hwnd:?} rect=({},{})-({},{}){}",
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom,
+        if unsafe { IsWindowVisible(hwnd).as_bool() } {
+            ""
+        } else {
+            " (invisible!)"
+        }
+    );
+
+    let style_before = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+    let ex_style_before = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    println!("style before:       {style_before:#x} ex={ex_style_before:#x}");
+    unsafe {
+        println!(
+            "dpi: thread-aware-v2={} system={} host={} child={}",
+            AreDpiAwarenessContextsEqual(
+                GetThreadDpiAwarenessContext(),
+                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            )
+            .as_bool(),
+            GetDpiForSystem(),
+            GetDpiForWindow(host),
+            GetDpiForWindow(hwnd),
+        );
+    }
+    println!("ex style before:    accept-files={} ({ex_style_before:#x})",
+        ex_style_before & WS_EX_ACCEPTFILES.0 as isize != 0);
+    let top_level_before = list_top_level_windows(pid);
+    println!("top-level before:   {} windows", top_level_before.len());
+    for window in &top_level_before {
+        println!(
+            "  {:?} visible={} area={} class={:?}",
+            window.hwnd, window.visible, window.area, window.class
+        );
+    }
+
+    // Diagnostic: does ffplay honour a resize while still a top-level window, before the
+    // restyle/SetParent? If not, the stale client below is SDL's own fixed size, not the move.
+    {
+        let top_resize = unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND::default(),
+                0,
+                0,
+                RESIZED_W,
+                RESIZED_H,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        println!(
+            "pre-reparent resize {top_resize:?}: client={:?} window={:?}",
+            client_size(hwnd),
+            window_size(hwnd)
+        );
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND::default(),
+                0,
+                0,
+                HOST_W,
+                HOST_H,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        println!(
+            "pre-reparent restored: client={:?} window={:?}",
+            client_size(hwnd),
+            window_size(hwnd)
+        );
+    }
+
+    // The reparent, in the order the spike named: restyle, then re-parent, then disable the
+    // player's side and place it in the host's client box.
+    let mut style = style_before;
+    for bit in [
+        WS_POPUP,
+        WS_CAPTION,
+        WS_THICKFRAME,
+        WS_SYSMENU,
+        WS_MINIMIZEBOX,
+    ] {
+        style &= !(bit.0 as isize);
+    }
+    style |= (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN).0 as isize;
+    unsafe {
+        SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+    }
+    let parent_result = unsafe { SetParent(hwnd, host) };
+    let parent_error = parent_result.as_ref().err().map(|e| e.code().0);
+    let placed = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOP,
+            0,
+            0,
+            HOST_W,
+            HOST_H,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+    };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+    }
+
+    // a. structure after the move.
+    let parent_now = unsafe { GetParent(hwnd) }.unwrap_or_default();
+    let mut window_pid = 0u32;
+    let thread = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut window_pid)) };
+    let style_after = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+    let ex_style_after = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let has_child = style_after & WS_CHILD.0 as isize != 0;
+    let has_popup = style_after & WS_POPUP.0 as isize != 0;
+    let accept_files = ex_style_after & WS_EX_ACCEPTFILES.0 as isize != 0;
+    let is_window = unsafe { IsWindow(hwnd).as_bool() };
+    let parent_ok = parent_now == host;
+    let pid_ok = window_pid == pid;
+    let a_pass = parent_ok && has_child && !has_popup && pid_ok && is_window && placed.is_ok()
+        && accept_files;
+    let mut client = RECT::default();
+    let _ = unsafe { GetClientRect(hwnd, &mut client) };
+    println!(
+        "a. parent={parent_now:?} (wanted {host:?}, SetParent={parent_result:?} err={parent_error:?}) \
+         WS_CHILD={has_child} WS_POPUP={has_popup} window_pid={window_pid} (ffplay {pid}, thread {thread}) \
+         IsWindow={is_window} SetWindowPos={placed:?} client={}x{} dpi={} \
+         ex-accept-files={accept_files} (was {}) ex={ex_style_after:#x}",
+        client.right - client.left,
+        client.bottom - client.top,
+        unsafe { GetDpiForWindow(hwnd) },
+        ex_style_before & WS_EX_ACCEPTFILES.0 as isize != 0,
+    );
+    println!("a. {}", if a_pass { "PASS" } else { "FAIL" });
+
+    // Let the first frame arrive after the restyle; a player needs a moment to present again.
+    let mut first_frame = None;
+    let first_frame_deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < first_frame_deadline {
+        let bitblt = capture_with_bitblt(hwnd, HOST_W as u32, HOST_H as u32);
+        let printed = capture_with_printwindow(hwnd, HOST_W as u32, HOST_H as u32);
+        if bitblt.as_ref().is_some_and(|c| c.lit_ratio() > 0.01)
+            || printed.as_ref().is_some_and(|c| c.lit_ratio() > 0.01)
+        {
+            first_frame = Some((bitblt, printed));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let Some((bb0, pw0)) = first_frame else {
+        println!("b. no capture saw a lit frame within 5 s after the reparent");
+        println!("b. FAIL");
+        println!("d. alive={}", player_still_active(pid));
+        let _ = child.kill();
+        let _ = child.wait();
+        unsafe {
+            let _ = DestroyWindow(host);
+        }
+        panic!("FAIL: the reparented player never drew a lit frame");
+    };
+
+    std::thread::sleep(Duration::from_millis(600));
+    let bb1 = capture_with_bitblt(hwnd, HOST_W as u32, HOST_H as u32);
+    let pw1 = capture_with_printwindow(hwnd, HOST_W as u32, HOST_H as u32);
+
+    let bb_lit0 = bb0.as_ref().map_or(0.0, Captured::lit_ratio);
+    let bb_lit1 = bb1.as_ref().map_or(0.0, Captured::lit_ratio);
+    let pw_lit0 = pw0.as_ref().map_or(0.0, Captured::lit_ratio);
+    let pw_lit1 = pw1.as_ref().map_or(0.0, Captured::lit_ratio);
+    let bb_moved = match (&bb0, &bb1) {
+        (Some(a), Some(b)) => a.changed_ratio(b),
+        _ => 0.0,
+    };
+    let pw_moved = match (&pw0, &pw1) {
+        (Some(a), Some(b)) => a.changed_ratio(b),
+        _ => 0.0,
+    };
+    let bitblt_saw = bb_lit0 > 0.01;
+    let print_saw = pw_lit0 > 0.01;
+    let saw_moving = (bitblt_saw && bb_moved > 0.001) || (print_saw && pw_moved > 0.001);
+    let b_pass = (bitblt_saw || print_saw) && saw_moving;
+    println!(
+        "b. BitBlt(GetDC(child))  lit={:.2}% -> {:.2}% changed={:.2}%",
+        bb_lit0 * 100.0,
+        bb_lit1 * 100.0,
+        bb_moved * 100.0
+    );
+    println!(
+        "b. PrintWindow(PW_RENDERFULLCONTENT) lit={:.2}% -> {:.2}% changed={:.2}%",
+        pw_lit0 * 100.0,
+        pw_lit1 * 100.0,
+        pw_moved * 100.0
+    );
+    println!(
+        "b. capture that saw the film: {}",
+        match (bitblt_saw, print_saw) {
+            (true, true) => "both",
+            (true, false) => "BitBlt only",
+            (false, true) => "PrintWindow only",
+            (false, false) => "none",
+        }
+    );
+    println!("b. {}", if b_pass { "PASS" } else { "FAIL" });
+
+    // c. the real road: the pin's band is the host, so resize the host to the new band size in
+    // physical pixels and tell the child to fill the host's client area exactly.
+    println!(
+        "c. before resize: host client={:?} child client={:?} child window={:?}",
+        client_size(host),
+        client_size(hwnd),
+        window_size(hwnd)
+    );
+    let resized_host = unsafe {
+        SetWindowPos(
+            host,
+            HWND::default(),
+            -32000,
+            -32000,
+            RESIZED_W,
+            RESIZED_H,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+    let host_client = client_size(host);
+    std::thread::sleep(Duration::from_millis(100));
+    let resized = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND::default(),
+            0,
+            0,
+            host_client.0,
+            host_client.1,
+            SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+    println!(
+        "c. right after child resize: client={:?} window={:?}",
+        client_size(hwnd),
+        window_size(hwnd)
+    );
+    std::thread::sleep(Duration::from_millis(600));
+
+    let child_client = client_size(hwnd);
+    let mut child_rect = RECT::default();
+    let _ = unsafe { GetWindowRect(hwnd, &mut child_rect) };
+    let host_origin = {
+        let mut point = POINT { x: 0, y: 0 };
+        let _ = unsafe { ClientToScreen(host, &mut point) };
+        point
+    };
+    let host_client_screen = (
+        host_origin.x,
+        host_origin.y,
+        host_origin.x + host_client.0,
+        host_origin.y + host_client.1,
+    );
+    let child_window_screen = (
+        child_rect.left,
+        child_rect.top,
+        child_rect.right,
+        child_rect.bottom,
+    );
+    println!(
+        "c. host {RESIZED_W}x{RESIZED_H} resized={resized_host:?} client={host_client:?} on-screen={host_client_screen:?}"
+    );
+    println!(
+        "c. child resized={resized:?} client={child_client:?} window-on-screen={child_window_screen:?}"
+    );
+    let boxes_agree = child_client == host_client && child_window_screen == host_client_screen;
+    println!(
+        "c. child client==host client: {}; child window==host client on screen: {}",
+        child_client == host_client,
+        child_window_screen == host_client_screen
+    );
+
+    let w = child_client.0.max(1) as u32;
+    let h = child_client.1.max(1) as u32;
+    let resize_bb0 = capture_with_bitblt(hwnd, w, h);
+    let resize_pw0 = capture_with_printwindow(hwnd, w, h);
+    std::thread::sleep(Duration::from_millis(600));
+    let resize_bb1 = capture_with_bitblt(hwnd, w, h);
+    let resize_pw1 = capture_with_printwindow(hwnd, w, h);
+
+    let rbb_lit = resize_bb0.as_ref().map_or(0.0, Captured::lit_ratio);
+    let rpw_lit = resize_pw0.as_ref().map_or(0.0, Captured::lit_ratio);
+    let rbb_edge = resize_bb0.as_ref().map_or(0.0, Captured::edge_lit_ratio);
+    let rpw_edge = resize_pw0.as_ref().map_or(0.0, Captured::edge_lit_ratio);
+    let rbb_moved = match (&resize_bb0, &resize_bb1) {
+        (Some(a), Some(b)) => a.changed_ratio(b),
+        _ => 0.0,
+    };
+    let rpw_moved = match (&resize_pw0, &resize_pw1) {
+        (Some(a), Some(b)) => a.changed_ratio(b),
+        _ => 0.0,
+    };
+    let pw_matches_bb = match (&resize_bb0, &resize_pw0) {
+        (Some(a), Some(b)) => 1.0 - a.changed_ratio(b),
+        _ => 0.0,
+    };
+    let resize_saw = (rbb_lit > 0.01 || rpw_lit > 0.01) && (rbb_moved > 0.001 || rpw_moved > 0.001);
+    let filled = (rbb_lit > 0.01 && rbb_edge > 0.01) || (rpw_lit > 0.01 && rpw_edge > 0.01);
+    // The film is moving, so compare the spatial coverage each capture sees (lit and edge-lit),
+    // not pixel colours: that is the "same area" question. Pixel agreement is reported only.
+    let pw_sees_same_area = (rbb_lit - rpw_lit).abs() < 0.05
+        && (rbb_edge - rpw_edge).abs() < 0.05
+        && filled;
+    let c_pass = resized_host.is_ok() && resized.is_ok() && boxes_agree && resize_saw
+        && filled
+        && pw_sees_same_area;
+    println!(
+        "c. BitBlt lit={:.2}% edge-lit={:.2}% changed={:.2}%  PrintWindow lit={:.2}% edge-lit={:.2}% changed={:.2}%  BitBlt/PrintWindow agree={:.2}%",
+        rbb_lit * 100.0,
+        rbb_edge * 100.0,
+        rbb_moved * 100.0,
+        rpw_lit * 100.0,
+        rpw_edge * 100.0,
+        rpw_moved * 100.0,
+        pw_matches_bb * 100.0
+    );
+    println!("c. {}", if c_pass { "PASS" } else { "FAIL" });
+
+    // d. style and structure a full second after the resize: does SDL put top-level style back?
+    let style_1s = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+    let ex_1s = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let parent_1s = unsafe { GetParent(hwnd) }.unwrap_or_default();
+    let visible_1s = unsafe { IsWindowVisible(hwnd).as_bool() };
+    let child_1s = style_1s & WS_CHILD.0 as isize != 0;
+    let popup_1s = style_1s & WS_POPUP.0 as isize != 0;
+    let accept_1s = ex_1s & WS_EX_ACCEPTFILES.0 as isize != 0;
+    println!(
+        "d. 1 s+ after resize: style={style_1s:#x} WS_CHILD={child_1s} WS_POPUP={popup_1s} \
+         ex={ex_1s:#x} accept-files={accept_1s} parent={parent_1s:?} visible={visible_1s}"
+    );
+
+    // d. the process and its window set after all of that.
+    let alive = player_still_active(pid);
+    let top_level_after = list_top_level_windows(pid);
+    let new_top_level = top_level_after.len() > top_level_before.len();
+    let visible_top = top_level_after
+        .iter()
+        .filter(|window| window.visible && window.area > 0)
+        .count();
+    let d_pass = alive
+        && !new_top_level
+        && visible_top == 0
+        && parent_1s == host
+        && visible_1s
+        && child_1s
+        && !popup_1s
+        && accept_1s;
+    println!("d. alive={alive} top-level before={} after={} new={new_top_level} visible-with-area={visible_top}",
+        top_level_before.len(), top_level_after.len());
+    for window in &top_level_after {
+        println!(
+            "  {:?} visible={} area={} class={:?}",
+            window.hwnd, window.visible, window.area, window.class
+        );
+    }
+    println!("d. {}", if d_pass { "PASS" } else { "FAIL" });
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let destroyed = unsafe { DestroyWindow(host) };
+    println!("cleanup: host destroyed={destroyed:?}");
+
+    println!(
+        "SUMMARY a={} b={} c={} d={}",
+        if a_pass { "PASS" } else { "FAIL" },
+        if b_pass { "PASS" } else { "FAIL" },
+        if c_pass { "PASS" } else { "FAIL" },
+        if d_pass { "PASS" } else { "FAIL" },
+    );
+
+    assert!(
+        a_pass && b_pass && c_pass && d_pass,
+        "the ffplay host spike did not pass every point (see the PASS/FAIL lines above)"
+    );
+}

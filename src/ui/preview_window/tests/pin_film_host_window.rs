@@ -17,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetParent, GetWindowLongPtrW, IsWindowVisible,
     MoveWindow, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV,
     HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WM_SHOWWINDOW, WINDOW_EX_STYLE,
-    WS_CHILD, WS_DISABLED, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    WS_CHILD, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 /// The show and hide messages the adopted host received, in order: whether it was shown, the style
@@ -3487,4 +3487,307 @@ fn a_paused_moves_cover_is_cleared_by_a_park_and_a_take_down() {
         "nor the frame the next pin would otherwise open on"
     );
     mpv_ipc::forget_pipe(hover.pid);
+}
+
+/// A stand whose film FFmpeg's player draws, rather than mpv's: the route where the player's own
+/// window has to be adopted into the pin's host after SDL makes it.
+fn ffplay_standing_film() -> StandingFilm {
+    let film = StandingFilm::new();
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    film
+}
+
+/// A player's own top-level window of this process, framed and visible, as FFmpeg's player makes
+/// it before the adoption restyles it.
+unsafe fn a_players_own_window() -> HWND {
+    unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP | WS_VISIBLE,
+            NOWHERE,
+            NOWHERE,
+            320,
+            180,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a player's own window")
+}
+
+/// A pinned FFmpeg film is begun into the pin's host and publishes no top-level window: the
+/// monitor adopts the player's own window into the host once it exists (see
+/// `start_video_playback_where` and `ffplay_window::adopt_the_players_window`).
+#[test]
+fn a_pinned_ffplay_film_is_begun_into_the_pins_film_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let path = PathBuf::from("a-film.mkv");
+    VIDEO_HWND.store(0x1234, Ordering::SeqCst);
+
+    let process =
+        start_video_playback(&path, film.box_.0, film.box_.1, 320, 240, 0.0, false, 80, None)
+            .expect("a noted FFmpeg player");
+
+    assert_eq!(
+        pin_film_host::hosted_player_pid(),
+        Some(process.id()),
+        "the host records the FFmpeg player it is to hold"
+    );
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(host),
+        "and it is the pin's host, not a second one"
+    );
+    assert_eq!(
+        VIDEO_HWND.load(Ordering::SeqCst),
+        0,
+        "a hosted FFmpeg player publishes no window of the desktop's"
+    );
+}
+
+/// FFmpeg's own window is restyled to a disabled `WS_CHILD` and re-parented into the host, with
+/// the frame stripped and the picture fitted to the host's client box. The pause key and the
+/// window-by-pid roads then find that child (see `video_window_for`).
+#[test]
+fn an_ffplay_players_window_is_adopted_as_a_disabled_child_filling_the_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let pid = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(pid);
+    let player = unsafe { a_players_own_window() };
+    unsafe {
+        SetWindowLongPtrW(
+            player,
+            GWL_EXSTYLE,
+            WS_EX_TOPMOST.0 as isize | WS_EX_APPWINDOW.0 as isize,
+        )
+    };
+
+    assert!(
+        unsafe { ffplay_window::adopt_the_players_window(player, host) },
+        "the player's window is adopted into the host"
+    );
+
+    assert_eq!(
+        unsafe { GetParent(player) }.ok(),
+        Some(host),
+        "under the pin's own host"
+    );
+    let style = unsafe { GetWindowLongPtrW(player, GWL_STYLE) };
+    assert_ne!(style & WS_CHILD.0 as isize, 0, "a child by style");
+    assert_eq!(style & WS_POPUP.0 as isize, 0, "and no longer a popup");
+    assert!(
+        !unsafe { IsWindowEnabled(player) }.as_bool(),
+        "disabled, so a press on the picture reaches the pin"
+    );
+    let ex = unsafe { GetWindowLongPtrW(player, GWL_EXSTYLE) };
+    assert_eq!(ex & WS_EX_TOPMOST.0 as isize, 0, "no topmost band of its own");
+    assert_eq!(ex & WS_EX_APPWINDOW.0 as isize, 0, "and no taskbar button");
+    let child = unsafe { window_rect(player) };
+    let host_rect = unsafe { window_rect(host) };
+    assert_eq!(
+        (child.2 - child.0, child.3 - child.1),
+        (host_rect.2 - host_rect.0, host_rect.3 - host_rect.1),
+        "fitted to the host's client box rather than left at its born size"
+    );
+    assert_eq!(video_window_for(pid), Some(player));
+    assert!(
+        video_key_pause(),
+        "the pause key is posted to the child under the host"
+    );
+
+    unsafe { DestroyWindow(player) }.expect("the player's window goes");
+}
+
+/// The band moves or resizes: the host follows it and FFmpeg's child is fitted to the host's new
+/// client box, because SDL does not follow its parent's resize on its own.
+#[test]
+fn a_band_resize_fits_the_hosted_ffplay_child() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let player = unsafe { a_players_own_window() };
+    unsafe { ffplay_window::adopt_the_players_window(player, host) };
+
+    let wider = (
+        film.box_.0,
+        film.box_.1,
+        film.box_.0 + 400,
+        film.box_.1 + 300,
+    );
+    with_pin(|pin| pin.content = wider);
+    ensure_pinned_sibling_box(wider);
+
+    assert_eq!(
+        unsafe { window_rect(host) },
+        wider,
+        "the host stands in the band the pin now shows its film through"
+    );
+    let child = unsafe { window_rect(player) };
+    let host_rect = unsafe { window_rect(host) };
+    assert_eq!(
+        (child.2 - child.0, child.3 - child.1),
+        (host_rect.2 - host_rect.0, host_rect.3 - host_rect.1),
+        "and the FFmpeg child is fitted to the new client box"
+    );
+
+    unsafe { DestroyWindow(player) }.expect("the player's window goes");
+}
+
+/// A park hides the host and the unpark shows the same one for FFmpeg's film as for mpv's: the
+/// picture is a child of the pin, so there is no top-level window to hide instead.
+#[test]
+fn a_park_hides_and_the_unpark_shows_the_ffplay_film_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let player = unsafe { a_players_own_window() };
+    unsafe { ffplay_window::adopt_the_players_window(player, host) };
+    let _ = unsafe { ShowWindow(host, SW_SHOWNOACTIVATE) };
+
+    hide_pinned_player_window();
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "a park hides the film host"
+    );
+    show_pinned_player_window();
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "and the unpark shows the same host again"
+    );
+
+    unsafe { DestroyWindow(player) }.expect("the player's window goes");
+}
+
+/// A file step begins the next FFmpeg film into the same host: the host outlives the player, and
+/// the new pid is what the wait for its child is a wait for.
+#[test]
+fn a_step_begins_the_next_ffplay_film_into_the_same_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let path = PathBuf::from("a-film.mkv");
+    let first = start_video_playback(
+        &path,
+        film.box_.0,
+        film.box_.1,
+        320,
+        240,
+        0.0,
+        false,
+        0,
+        None,
+    )
+    .expect("a noted FFmpeg player");
+    let next = start_video_playback(
+        &path,
+        film.box_.0,
+        film.box_.1,
+        320,
+        240,
+        12.0,
+        false,
+        0,
+        None,
+    )
+    .expect("the next noted FFmpeg player");
+
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(host),
+        "the step does not make a second host"
+    );
+    assert_ne!(first.id(), next.id());
+    assert_eq!(
+        pin_film_host::hosted_player_pid(),
+        Some(next.id()),
+        "and the host holds the player the step began"
+    );
+}
+
+/// A pin that ends takes its FFmpeg film host down with it, and the player's child goes too: the
+/// player is ended first, so no window outlives the pin it was drawn for.
+#[test]
+fn a_pin_that_ends_takes_its_ffplay_film_host_with_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let player = unsafe { a_players_own_window() };
+    unsafe { ffplay_window::adopt_the_players_window(player, host) };
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+
+    assert!(
+        !unsafe { IsWindow(host) }.as_bool(),
+        "the host goes down with the pin"
+    );
+    assert!(
+        !unsafe { IsWindow(player) }.as_bool(),
+        "and the player's child with the host that held it"
+    );
+    assert!(pin_film_host::film_host().is_none());
+    assert!(pin_film_host::hosted_player_pid().is_none());
+}
+
+/// The top-level roads leave a hosted FFmpeg player alone: there is no window of the desktop's to
+/// style, publish or re-parent, and the child under the host is not restyled again.
+#[test]
+fn the_top_level_roads_leave_a_hosted_ffplay_player_alone() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let pid = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(pid);
+    let player = unsafe { a_players_own_window() };
+    unsafe { ffplay_window::adopt_the_players_window(player, host) };
+    let style = unsafe { GetWindowLongPtrW(player, GWL_STYLE) };
+    let ex = unsafe { GetWindowLongPtrW(player, GWL_EXSTYLE) };
+
+    assert!(
+        !unsafe { try_apply_noactivate_style(pid) },
+        "the monitor finds nothing of the desktop's to style"
+    );
+    assert!(
+        !unsafe { apply_noactivate_to_hwnd(player) },
+        "and a top-level styling of the child is refused"
+    );
+    assert_eq!(unsafe { GetParent(player) }.ok(), Some(host));
+    assert_eq!(unsafe { GetWindowLongPtrW(player, GWL_STYLE) }, style);
+    assert_eq!(unsafe { GetWindowLongPtrW(player, GWL_EXSTYLE) }, ex);
+    assert_eq!(VIDEO_HWND.load(Ordering::SeqCst), 0);
+
+    unsafe { DestroyWindow(player) }.expect("the player's window goes");
 }
