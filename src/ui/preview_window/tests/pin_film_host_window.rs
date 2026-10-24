@@ -3791,3 +3791,83 @@ fn the_top_level_roads_leave_a_hosted_ffplay_player_alone() {
 
     unsafe { DestroyWindow(player) }.expect("the player's window goes");
 }
+
+/// FFmpeg's player has no pipe to say its video output is configured, so its adopted child is the
+/// frame's proof: that window is the player's whole picture and only arrives after the player made
+/// and showed it (see `the_hosted_frame_is_up`). This is the fresh-pin, step and seek relaunch
+/// road — without it the chrome would stay hidden for the life of the pin.
+#[test]
+fn a_hosted_ffplay_films_frame_is_its_child_and_the_chrome_comes_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+    with_pin(|pin| {
+        pin.chrome = PinChrome::hidden();
+        pin.transport_bar = true;
+    });
+    stand_window_at_point_in(Some(film.pin_hwnd.0 as isize));
+    let window = film.box_;
+    let caption_cursor = Some((window.0 + 5, window.1));
+
+    assert!(
+        pin_film_host::the_hosted_player_is_drawing(pid),
+        "the FFmpeg player's own window is under the host"
+    );
+    assert!(
+        pin_film_host::the_hosted_frame_is_up(pid),
+        "and that window is the whole of its picture, with no pipe to prove it"
+    );
+
+    let shown = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(pin, Instant::now(), caption_cursor))
+    });
+    assert_eq!(
+        shown,
+        Some(true),
+        "the frame is up, so the chrome is not held down as a window without a picture"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((true, false)),
+        "the caption comes back over the live child"
+    );
+
+    stand_window_at_point_in(None);
+    drop(film);
+}
+
+/// The move cover over FFmpeg's film settles on the child that kept drawing through the reparent,
+/// because its player has no clock to read: the adopt road latched the frame and the child is still
+/// shown (see `settle_the_move_cover`). Without this the cover would paint a held frame under the
+/// live child for the life of the pin.
+#[test]
+fn a_move_cover_over_a_hosted_ffplay_film_settles_on_its_child() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+    // No pipe of mpv's at all: there is no captured or moved `time-pos` for this player to read.
+    mpv_ipc::clear_reads();
+
+    pin_film_host::raise_the_move_cover();
+    assert!(pin_film_host::the_move_cover_is_up(), "the move raises it");
+    assert!(
+        pin_film_host::settle_the_move_cover(),
+        "a shown child under the host is the FFmpeg film's proof, with no clock to read"
+    );
+    assert!(
+        !pin_film_host::the_move_cover_is_up(),
+        "so the cover is down and no stale frame is left under the live child"
+    );
+
+    drop(film);
+}

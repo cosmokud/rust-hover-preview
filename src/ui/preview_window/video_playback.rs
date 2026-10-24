@@ -581,6 +581,7 @@ fn start_video_playback_where(
         // `host_for_a_hosted_player`).
         if let Some((_, in_the_pin)) = hosted {
             if in_the_pin {
+                pin_film_host::note_the_pins_film_route(path);
                 pin_film_host::note_hosted_player(player.id());
             } else {
                 hover_film_host::note_hover_film_host_player(player.id(), path);
@@ -665,6 +666,12 @@ fn start_mpv_video_playback(
     // app's own so that the film can move into the pin without a second launch (see
     // `mpv_launch_host` and `hover_film_host`).
     let pin_host = mpv_launch_host(path);
+    // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
+    // step from an FFmpeg film must not leave the host answering as FFmpeg's (see
+    // `the_pins_film_is_ffplay`).
+    if pin_host.is_some() {
+        pin_film_host::note_the_pins_film_route(path);
+    }
     let host = pin_host.or_else(|| {
         (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
             .then(|| unsafe {

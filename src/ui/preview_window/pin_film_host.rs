@@ -67,6 +67,10 @@ static PRESENTED_PID: AtomicU32 = AtomicU32::new(0);
 /// The move cover: the held frame the pin paints in its own bitmap while a hover's host is hidden,
 /// restyled and re-parented into the pin (see `raise_the_move_cover` and `show_pinned_window`).
 static PIN_MOVE_COVER: AtomicBool = AtomicBool::new(false);
+/// Whether the pin's film is FFmpeg's, written where the pin is taken up and where a film is begun
+/// into the host. An atomic rather than a read of the pin's state because the chrome's own road asks
+/// it with the pin's lock already held (see `the_hosted_frame_is_up`).
+static PIN_FILM_IS_FFPLAY: AtomicBool = AtomicBool::new(false);
 /// The second the hover's picture stood at when that cover was raised, so that the cover is only
 /// given up once a frame has been drawn into the moved window (see `settle_the_move_cover`).
 static PIN_MOVE_COVER_SECONDS: Lazy<Mutex<Option<f64>>> = Lazy::new(|| Mutex::new(None));
@@ -110,15 +114,21 @@ pub(super) fn settle_the_move_cover() -> bool {
     }
 
     let pid = VIDEO_PID.load(Ordering::SeqCst);
-    let captured = PIN_MOVE_COVER_SECONDS.lock().ok().and_then(|held| *held);
-    let moved =
-        mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse::<f64>().ok());
-    if !(the_hosted_player_is_drawing(pid)
-        && captured
-            .zip(moved)
-            .is_some_and(|(captured, moved)| moved > captured))
-    {
+    if !the_hosted_player_is_drawing(pid) {
         return false;
+    }
+    // FFplay has no pipe to say its clock moved: its child kept drawing through the reparent, and
+    // the adopt road latched the frame it was drawing (see `adopt_the_hover_film_host`).
+    if !the_pins_film_is_ffplay() {
+        let captured = PIN_MOVE_COVER_SECONDS.lock().ok().and_then(|held| *held);
+        let moved =
+            mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse::<f64>().ok());
+        if !captured
+            .zip(moved)
+            .is_some_and(|(captured, moved)| moved > captured)
+        {
+            return false;
+        }
     }
 
     clear_the_move_cover();
@@ -185,9 +195,13 @@ pub(super) fn the_film_is_shown_in_a_host(path: &Path) -> bool {
 /// Whether the pin's film is FFmpeg's, whose child is fitted to the host's box on every place:
 /// mpv's child sizes itself and is left alone (see `place_the_pin_film_host`).
 pub(super) fn the_pins_film_is_ffplay() -> bool {
-    pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| video_route(&pin.path) == VideoRoute::Ffplay))
-        .unwrap_or(false)
+    PIN_FILM_IS_FFPLAY.load(Ordering::SeqCst)
+}
+
+/// Write down which player the pin's film is drawn by, for the questions asked of the host while the
+/// pin's own lock is held (see `the_pins_film_is_ffplay`).
+pub(super) fn note_the_pins_film_route(path: &Path) {
+    PIN_FILM_IS_FFPLAY.store(video_route(path) == VideoRoute::Ffplay, Ordering::SeqCst);
 }
 
 /// Fit the player's child to the host's client box, where the pin's film is FFmpeg's and the
@@ -317,6 +331,10 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
         take_down_the_pin_film_host();
         return;
     }
+
+    // Written before any road that asks the host a question under the pin's own lock can run (see
+    // `the_pins_film_is_ffplay`).
+    note_the_pins_film_route(&path);
 
     let Some(content) = pinned_content() else {
         return;
@@ -493,6 +511,7 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     // its children with it, and a player whose surface was destroyed under it is a kill the player
     // did not get to answer; the record below is what the ordinary kill road retries to confirmation
     // (see `terminate_player_pid`).
+    PIN_FILM_IS_FFPLAY.store(false, Ordering::SeqCst);
     if let Some(pid) = hosted_player_pid() {
         terminate_player_pid(pid);
     }
@@ -696,13 +715,23 @@ const PIN_HANDOVER_FRAME_SECS: f64 = 1.0;
 /// player because the read is bounded by a pipe timeout rather than free: once this player has
 /// proved a frame it has one, and every later tick answers at once. A step begins a new player, so
 /// `note_hosted_player` clears the latch for it.
+///
+/// **FFmpeg's player has no pipe to answer that word.** For it the frame's proof is its adopted
+/// child: a window that is the player's whole picture, adopted only after the player made and
+/// showed it, is the fact — and a pipe read is mpv's own answer (see `adopt_the_hover_film_host`,
+/// which latches on the same fact). The MPV road is left exactly as it was.
 pub(super) fn the_hosted_frame_is_up(pid: u32) -> bool {
     if pid != 0 && PRESENTED_PID.load(Ordering::SeqCst) == pid {
         return true;
     }
-    if !the_hosted_player_is_drawing(pid)
-        || mpv_ipc::get_property(pid, "vo-configured").as_deref() != Some("true")
-    {
+    if !the_hosted_player_is_drawing(pid) {
+        return false;
+    }
+    if the_pins_film_is_ffplay() {
+        PRESENTED_PID.store(pid, Ordering::SeqCst);
+        return true;
+    }
+    if mpv_ipc::get_property(pid, "vo-configured").as_deref() != Some("true") {
         return false;
     }
     PRESENTED_PID.store(pid, Ordering::SeqCst);
