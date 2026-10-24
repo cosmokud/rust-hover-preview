@@ -117,11 +117,6 @@ pub(crate) fn binding_press_matches(b: &Binding, vk: i32) -> bool {
     press_matches_with(b, vk, key_is_down)
 }
 
-/// Whether a virtual key is one of the mouse buttons a binding may name.
-pub(crate) fn is_mouse_key(vk: i32) -> bool {
-    matches!(vk, 0x04..=0x06)
-}
-
 /// One alternative packed into a number the hook can read without a lock: main key in the
 /// low byte, companion count above it, then one byte per companion.
 pub(crate) fn packed_chord(alternative: &Alternative) -> u64 {
@@ -250,7 +245,6 @@ mod tests {
     #[test]
     fn the_built_in_pin_key_is_the_middle_button() {
         assert_eq!(parse_key(DEFAULT_PIN_KEY), Some(0x04)); // VK_MBUTTON
-        assert!(is_mouse_key(parse_key(DEFAULT_PIN_KEY).unwrap()));
         let binding = parse_or_default("", DEFAULT_PIN_KEY);
         assert_eq!(binding.alternatives[0].main(), 0x04);
         assert_eq!(packed_main(packed_binding(&binding)[0]), 0x04);

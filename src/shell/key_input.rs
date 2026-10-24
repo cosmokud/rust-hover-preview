@@ -413,32 +413,58 @@ pub(crate) fn refresh() {
 /// Pin-key presses since this was last called. The preview loop polls it once a
 /// tick, the way the Explorer hook polls the wheel's own counter.
 ///
-/// The keyboard hook counts keyboard main keys. A mouse main key never reaches that
-/// hook, so its down edge is read here instead, once per tick: one press per physical
-/// press, and none while it is held.
+/// Both low-level hooks count the main key: the keyboard hook for keys, and the mouse
+/// hook for `mouse3` through `mouse5`, which never reach it (see `wheel_input`).
 pub(crate) fn take_presses() -> u32 {
-    let mut presses = PIN_PRESSES.swap(0, Ordering::AcqRel);
+    PIN_PRESSES.swap(0, Ordering::AcqRel)
+}
 
-    for (index, slot) in PIN_CHORDS.iter().enumerate() {
+/// Count a mouse pin button's edge the way the keyboard hook counts a key's.
+///
+/// Called from the mouse hook, so it touches atomics only: no lock, no desktop call.
+pub(crate) fn note_mouse_button(vk: i32, down: bool) {
+    if note_mouse_edge(&PIN_CHORDS, &PIN_MAIN_DOWN, &PIN_PRESSES, vk, down) {
+        crate::ui::preview_window::wake_preview_loop();
+    }
+}
+
+/// Record a main key's down or up edge against a pin table, answering whether it is a
+/// press. Split from `note_mouse_button` so a test can hand it its own table.
+fn note_mouse_edge(
+    chords: &[AtomicU64],
+    main_down: &AtomicU32,
+    presses: &AtomicU32,
+    vk: i32,
+    down: bool,
+) -> bool {
+    let slots = chords.iter().enumerate().fold(0, |slots, (index, slot)| {
         let packed = slot.load(Ordering::Acquire);
-        let main = crate::shell::key_binding::packed_main(packed);
-        if packed == 0 || !crate::shell::key_binding::is_mouse_key(main) {
-            continue;
-        }
-
-        let bit = 1u32 << index;
-        if crate::shell::key_binding::key_is_down(main) {
-            if PIN_MAIN_DOWN.fetch_or(bit, Ordering::AcqRel) & bit == 0
-                && crate::shell::key_binding::packed_press_matches(packed, main)
-            {
-                presses += 1;
-            }
+        if packed != 0 && crate::shell::key_binding::packed_main(packed) == vk {
+            slots | (1u32 << index)
         } else {
-            PIN_MAIN_DOWN.fetch_and(!bit, Ordering::AcqRel);
+            slots
         }
+    });
+    if slots == 0 {
+        return false;
     }
 
-    presses
+    if !down {
+        main_down.fetch_and(!slots, Ordering::AcqRel);
+        return false;
+    }
+
+    // Marked down even when the companions are not held, so an out-of-order press cannot
+    // turn a later repeat into a press (see `key_hook_proc`).
+    let first = main_down.fetch_or(slots, Ordering::AcqRel) & slots == 0;
+    let matched = chords.iter().enumerate().any(|(index, slot)| {
+        slots & (1u32 << index) != 0
+            && crate::shell::key_binding::packed_press_matches(slot.load(Ordering::Acquire), vk)
+    });
+    if first && matched {
+        presses.fetch_add(1, Ordering::AcqRel);
+    }
+    first && matched
 }
 
 /// The `PIN_CHORDS` slots whose main key is `vk`, as one bit each.
@@ -831,5 +857,46 @@ mod tests {
             !pin_owns_caret(0, video, video),
             "a player that outlived its pin by a tick does not own the caret either"
         );
+    }
+
+    /// A mouse pin button is counted where the mouse hook sees it rather than on a later tick:
+    /// the edge rule is the keyboard hook's own, one press per physical press and a release that
+    /// clears it.
+    #[test]
+    fn a_mouse_button_press_is_counted_once_per_edge() {
+        let binding = crate::shell::key_binding::parse_binding("mouse3,mouse3").expect("two slots");
+        let packed = crate::shell::key_binding::packed_binding(&binding);
+        let chords: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
+            std::array::from_fn(|index| AtomicU64::new(packed[index]));
+        let down = AtomicU32::new(0);
+        let presses = AtomicU32::new(0);
+        let note = |vk, is_down| note_mouse_edge(&chords, &down, &presses, vk, is_down);
+
+        assert!(
+            !note(0x05, true),
+            "a button the binding does not name is not a press"
+        );
+        assert!(note(0x04, true), "the middle button is the binding");
+        assert_eq!(presses.load(Ordering::Acquire), 1);
+        assert_eq!(
+            down.load(Ordering::Acquire),
+            0b11,
+            "every slot for that main key is marked down, not just the one that counted"
+        );
+
+        assert!(
+            !note(0x04, true),
+            "a second down with no release in between is not a press"
+        );
+        assert_eq!(presses.load(Ordering::Acquire), 1);
+
+        assert!(!note(0x04, false), "a release counts nothing of its own");
+        assert_eq!(down.load(Ordering::Acquire), 0);
+
+        assert!(
+            note(0x04, true),
+            "and the next press after it is a press again"
+        );
+        assert_eq!(presses.load(Ordering::Acquire), 2);
     }
 }

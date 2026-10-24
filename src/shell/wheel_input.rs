@@ -35,7 +35,8 @@ use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEHWHEEL, WM_MOUSEWHEEL,
+    CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 /// Wheel messages seen since startup; the hook thread is the only writer.
@@ -152,9 +153,40 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // Keep this callback cheap: every wheel message on the desktop waits for it
+    // Keep this callback cheap: every mouse message on the desktop waits for it
     // to return, so it reads one rectangle without blocking and otherwise touches
     // a single atomic.
+    // The pin key may be a mouse button, and a button never reaches the keyboard hook: its edge is
+    // counted here instead, so a click shorter than the preview loop's wait is still a press. The
+    // message is passed on like every other — the button is another window's as much as this app's.
+    if code == HC_ACTION as i32 {
+        match wparam.0 as u32 {
+            WM_MBUTTONDOWN | WM_MBUTTONUP => {
+                crate::shell::key_input::note_mouse_button(
+                    0x04, // VK_MBUTTON
+                    wparam.0 == WM_MBUTTONDOWN as usize,
+                );
+            }
+            WM_XBUTTONDOWN | WM_XBUTTONUP => {
+                // The button id is the high word of mouseData, the same place a notch's delta
+                // sits for the wheel: 1 is XBUTTON1 (mouse4), 2 is XBUTTON2 (mouse5).
+                let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+                let vk = match (info.mouseData >> 16) as u16 {
+                    1 => 0x05, // VK_XBUTTON1
+                    2 => 0x06, // VK_XBUTTON2
+                    _ => 0,
+                };
+                if vk != 0 {
+                    crate::shell::key_input::note_mouse_button(
+                        vk,
+                        wparam.0 == WM_XBUTTONDOWN as usize,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     if code == HC_ACTION as i32
         && (wparam.0 == WM_MOUSEWHEEL as usize || wparam.0 == WM_MOUSEHWHEEL as usize)
     {
@@ -211,12 +243,12 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // atomic and nothing else: a notch turned while that loop is in its own wait for a
         // pin would be read at the end of it — 62 ms, measured, which is four frames of a
         // 144 Hz display and the whole of what makes a zoom start unevenly (see
-        // `wake_for_a_wheel_notch`).
+        // `wake_preview_loop`).
         if let Some(region) = crate::ui::preview_window::pin_zoom_keep_alive_try() {
             if point_in_region(info.pt, region) && preview_takes_the_wheel() {
                 if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
                     PIN_ZOOM_DELTA.fetch_add(notches, Ordering::AcqRel);
-                    crate::ui::preview_window::wake_for_a_wheel_notch();
+                    crate::ui::preview_window::wake_preview_loop();
                 }
                 return LRESULT(1);
             }
