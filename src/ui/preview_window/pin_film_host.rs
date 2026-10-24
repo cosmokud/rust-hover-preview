@@ -30,12 +30,12 @@ use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, SetParent, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT, HWND_NOTOPMOST,
-    HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
-    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-    WS_POPUP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, SetParent,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT,
+    HWND_NOTOPMOST, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -184,6 +184,15 @@ pub(super) fn host_for_the_pins_ffplay(path: &Path) -> Option<HWND> {
     (the_film_is_shown_in_a_host(path) && video_route(path) == VideoRoute::Ffplay)
         .then(film_host)
         .flatten()
+}
+
+/// Whether the pin's film host is a child of the pin's own window, which is where a host made or
+/// adopted by the pin stands. A host still a window of the desktop's is a handover's on its way in.
+pub(super) fn the_pin_film_host_stands_in_the_pins_own_window() -> bool {
+    let (Some(host), Some(parent)) = (film_host(), pin_real_window::real_pin_window()) else {
+        return false;
+    };
+    unsafe { GetParent(host) }.is_ok_and(|found| found == parent)
 }
 
 /// Whether this file is shown in a host this app owns: a film mpv plays or FFmpeg's player draws,

@@ -1469,7 +1469,12 @@ pub(super) unsafe fn hide_pinned_siblings() {
     if pin_film_host::the_pinned_player_was_begun_in_the_host()
         && pin_film_host::the_pins_film_is_ffplay()
     {
-        unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
+        // A host that is a child of the pin's own window goes off the screen with it when the
+        // Shell minimizes the window, so hiding it here would leave the Shell's still of the
+        // window with an empty band. Only a handover host still top-level is hidden.
+        if !pin_film_host::the_pin_film_host_stands_in_the_pins_own_window() {
+            unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
+        }
         if webview_preview::is_showing() {
             webview_preview::hide();
         }

@@ -14,8 +14,9 @@ use super::*;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetParent, GetWindowLongPtrW, IsWindowVisible,
-    MoveWindow, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetParent, GetWindowLongPtrW, IsIconic,
+    IsWindowVisible, MoveWindow, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE,
+    GW_HWNDPREV,
     HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WM_SHOWWINDOW, WINDOW_EX_STYLE,
     WS_CHILD, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
@@ -4226,4 +4227,131 @@ fn a_pinned_ffplay_film_is_revealed_without_a_hover_path() {
     );
 
     drop(film);
+}
+/// A step onto an FFmpeg film begins one player, in the pin's host, and the show that follows
+/// takes that player up rather than beginning a second one at zero.
+///
+/// **The fault this is a regression test for.** The swap takes the standing media down before the
+/// incoming film is begun, and the host question used to read the emptied slot: the first launch
+/// was unhosted, and the take-up that followed began a second player in the host at the start.
+#[test]
+fn a_step_into_an_ffplay_film_begins_it_in_the_pins_host_once() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let _host = pin_film_host::film_host().expect("the film's host");
+
+    // No standing player: this is the swap's own launch, and a park over a player would hold the
+    // file rather than install it (see `cover_step_swap_for_video`).
+    VIDEO_PID.store(0, Ordering::SeqCst);
+    clear_restart_count();
+    let _ = take_last_spawned_command();
+
+    let next = PathBuf::from("the-next-film.mkv");
+    let mut media = create_loading_media(320, 240);
+    media.media_type = MediaType::Video;
+    let swap = swap_pinned_media(PinAnswer {
+        path: next.clone(),
+        update: PinUpdate {
+            content: film.box_,
+            dpi: 96,
+            volume: 0,
+        },
+        media: Some(media),
+        walk: None,
+        arc: PinArc::new(),
+    });
+    let file = match swap {
+        PinSwap::Ready(file) => file,
+        PinSwap::Holding(hold) => hold.file,
+        PinSwap::Refused { .. } => panic!("the next film is a film"),
+    };
+
+    // What the install writes on the tick the swap answers: the file is the pin's own and its
+    // media is what the take-up that follows is about (see `install_pinned_media`).
+    with_pin(|pin| pin.path = next);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(file.media);
+    }
+
+    let launched = take_last_spawned_command().expect("the step begins one player");
+    assert!(
+        !launched.args.iter().any(|arg| arg == "-noborder"),
+        "the step's one launch is hosted, so it keeps SDL's resizable window"
+    );
+    assert!(
+        launched.env.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("SDL_RENDER_DRIVER") && value.as_deref() == Some("direct3d11")
+        }),
+        "and it asks for the renderer a layered pin window needs"
+    );
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert!(
+        pin_film_host::the_pinned_player_was_begun_in_the_host(),
+        "the step's player is the pin's hosted one"
+    );
+    assert_eq!(
+        restart_count(),
+        0,
+        "the show takes that player up rather than beginning a second at zero"
+    );
+    assert!(
+        take_last_spawned_command().is_none(),
+        "and no second player is begun"
+    );
+}
+
+/// A pin put away into the taskbar leaves the film standing for the still the Shell shows of a
+/// minimized window: only a handover host that is still a window of the desktop's is hidden.
+///
+/// **The fault this is a regression test for.** The FFmpeg arm hid the hosted picture before the
+/// minimize, so the last frame the Shell had to show was an empty band.
+fn a_pin_put_away_in_the_taskbar_leaves_its_film_standing(ffplay: bool) {
+    let film = if ffplay {
+        ffplay_standing_film()
+    } else {
+        StandingFilm::new()
+    };
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let _child = unsafe { a_child_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+    }
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "the film's host is the picture the pin is showing"
+    );
+
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+
+    assert!(
+        unsafe { IsIconic(film.pin_hwnd) }.as_bool(),
+        "the pin's own window is the one the Shell minimizes"
+    );
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "and the film is left standing for the still the Shell shows of it"
+    );
+}
+
+#[test]
+fn a_ffplay_pin_put_away_in_the_taskbar_leaves_its_film_standing_for_the_shells_still() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    a_pin_put_away_in_the_taskbar_leaves_its_film_standing(true);
+}
+
+#[test]
+fn an_mpv_pin_put_away_in_the_taskbar_leaves_its_film_standing_for_the_shells_still() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    a_pin_put_away_in_the_taskbar_leaves_its_film_standing(false);
 }
