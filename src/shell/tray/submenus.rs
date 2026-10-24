@@ -140,6 +140,12 @@ pub(super) fn pin_key_label(pin_key: &str) -> String {
         .join(", ")
 }
 
+/// What the preview switch's row is called: its name with the key that throws it, so the
+/// shortcut is visible where the setting it changes is.
+pub(super) fn enable_preview_label(toggle_key: &str) -> String {
+    format!("Enable Preview ({})", pin_key_label(toggle_key))
+}
+
 /// The label a `Decode Budget` item carries: the ceiling it stands for, in the unit
 /// that reads best for it, with the one the app starts at marked.
 pub(super) fn decode_budget_label(gigabytes: f32) -> String {

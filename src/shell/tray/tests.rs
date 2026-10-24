@@ -26,7 +26,17 @@ fn engine_idle_is_offered_longest_first() {
 fn a_pin_key_is_named_with_each_alternative_capitalized() {
     assert_eq!(pin_key_label("mouse3,space"), "Mouse3, Space");
     assert_eq!(pin_key_label("space"), "Space");
+    assert_eq!(pin_key_label("f7"), "F7");
     assert_eq!(pin_key_label(""), "");
+}
+
+#[test]
+fn the_preview_row_names_the_key_that_throws_it() {
+    assert_eq!(enable_preview_label("f7"), "Enable Preview (F7)");
+    assert_eq!(
+        enable_preview_label("ctrl+alt+f8"),
+        "Enable Preview (Ctrl+alt+f8)"
+    );
 }
 
 /// The halves of the `Background` submenu list the backdrops their settings hold, in the

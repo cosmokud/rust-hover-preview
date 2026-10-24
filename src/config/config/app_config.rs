@@ -16,9 +16,9 @@ use super::defaults::{
     DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML,
     DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_SPINNER_DELAY_MS,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TICK_MS,
-    DEFAULT_TTC_FACE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL,
-    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME,
-    DEFAULT_WEBP_PLAYBACK_FPS, DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
+    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES,
+    DEFAULT_VIDEO_VOLUME, DEFAULT_WEBP_PLAYBACK_FPS, DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use super::setting_types::{
     AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile,
@@ -48,6 +48,9 @@ pub struct AppConfig {
     pub check_for_updates: bool,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
+    /// The key that turns previews on or off while File Explorer is the foreground window,
+    /// by the same spellings the trigger and pin keys accept.
+    pub toggle_key: String,
     /// The modifier the trigger key watches, by name.
     pub trigger_key: String,
     /// What holding it does: stop previews, or allow them.
@@ -691,6 +694,7 @@ impl Default for AppConfig {
             check_for_updates: DEFAULT_CHECK_FOR_UPDATES,
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
             preview_enabled: true,
+            toggle_key: DEFAULT_TOGGLE_KEY.to_string(),
             trigger_key: "alt".to_string(),
             trigger_key_mode: TriggerKeyMode::Disable,
             trigger_key_enabled: true,

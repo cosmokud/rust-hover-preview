@@ -497,6 +497,13 @@ pub fn run_preview_window() {
                 cursor_preview_hover().any(),
             );
 
+            // A press of the preview shortcut, counted by the hook only while Explorer was in
+            // front. It is drained here rather than acted on in the hook so that the lock and
+            // the file write behind the setting happen on a thread that may wait.
+            for _ in 0..crate::shell::key_input::take_preview_toggle_presses() {
+                crate::shell::tray::toggle_preview_enabled();
+            }
+
             // The key is drained whether or not it is watched, so that a press made while the
             // feature was off is not acted on when it comes back on.
             let pin_presses = crate::shell::key_input::take_presses();

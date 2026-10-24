@@ -273,7 +273,7 @@ the next place the selection appears, and `Ctrl` and a wheel sizes it.
 
 A setting marked `(Default)` is what an untouched setting would be. The check or radio mark shows what is set now.
 
-- **Enable Preview** — Turn previews on or off.
+- **Enable Preview** — Turn previews on or off. The row names the shortcut that throws the same switch while File Explorer is in front — `Enable Preview (F7)` unless `toggle_key` names another key.
 - **Pin Mode** — Everything about pinning, in one place.
   - **Enable (Mouse3, Space)** — Turn pinning on or off.
     - Pressing the key while a preview is up turns it into a window of its own: captioned, movable, resizable, always on top unless **Always On Top** is off, and still there when the pointer leaves.
@@ -513,6 +513,7 @@ pin_update_on_hover=false
 preview_enabled=true
 run_at_startup=true
 theme=light
+toggle_key=f7
 
 ; Minimize
 pin_minimize_to=bubble
@@ -691,6 +692,9 @@ spinner_delay_ms=250
 ### Trigger and position
 
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
+- `toggle_key`: the key that turns previews on or off while File Explorer is the foreground window. Default `f7`; it takes the same spellings and alternatives as `pin_key` (`ctrl+f7`, `f7,f8`, …).
+  - The key is not a global hotkey: it is only acted on when Explorer is in front, and it is never swallowed, so it still reaches Explorer and other programs as usual.
+  - Holding it down is one toggle, not one per keyboard repeat. The tray's **Enable Preview** row names the configured key.
 - `trigger_key_affect_pin_mode`: whether the trigger key reaches a pinned preview. Default `false` — the key is not read while a preview is pinned, up or collapsed into its bubble, since a pin is a window you put there rather than a hover for the key to hold back. `true` lets holding the key bring the pin down with the previews it stops. It speaks for `disable`; the `enable` mode is left as it is.
 - `pin_key` / `pin_enabled`: the key that pins the preview on screen (`mouse3,space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. See **Pin Mode** above for what a pin does.
   - A binding may name alternatives and chords: `,` separates alternatives (either one matches) and `+` joins keys that must all be held. The last key of a chord is the one whose press counts.

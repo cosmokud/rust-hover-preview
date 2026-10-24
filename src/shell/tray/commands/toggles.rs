@@ -47,7 +47,7 @@ pub(in super::super) fn toggle_startup() {
     }
 }
 
-pub(in super::super) fn toggle_preview_enabled() {
+pub(crate) fn toggle_preview_enabled() {
     if let Ok(mut config) = CONFIG.lock() {
         config.preview_enabled = !config.preview_enabled;
         config.save();

@@ -54,6 +54,7 @@ impl AppConfig {
             "preview_enabled",
             Some(self.preview_enabled.to_string()),
         );
+        ini.set(CONFIG_SECTION, "toggle_key", Some(self.toggle_key.clone()));
         ini.set(
             CONFIG_SECTION,
             "trigger_key",
@@ -592,6 +593,15 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "preview_enabled") {
             self.preview_enabled = value;
+        }
+        // The key that turns previews on or off from Explorer, read the way the trigger and
+        // pin keys are: a name that is empty is nothing to bind, and an unreadable one is left
+        // to the watcher.
+        if let Some(value) = ini.get(CONFIG_SECTION, "toggle_key") {
+            let value = value.trim();
+            if !value.is_empty() {
+                self.toggle_key = value.to_string();
+            }
         }
         // The key the trigger watches, by name. A file that names it says what it is; a name an
         // older build wrote it under is not a name this app reads at all, and the line goes when

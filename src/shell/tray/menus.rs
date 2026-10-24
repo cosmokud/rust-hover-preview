@@ -48,9 +48,9 @@ use super::submenus::{
     append_engine_idle_menu, append_labeled_item, append_loop_item, append_office_engine_menu,
     append_pin_mode_menu, append_pin_nav_menu, append_pin_seek_menu_renamed,
     append_seek_menu_renamed, append_shuffle_item, append_tick_menu, append_video_engine_menu,
-    cache_size_label, decode_budget_label, default_label, pin_key_label, pin_minimize_label, pin_update_label,
-    remember_volume_label, system_menu_label, timing_delay_menu, update_available_label,
-    MF_RADIOCHECK,
+    cache_size_label, decode_budget_label, default_label, enable_preview_label, pin_key_label,
+    pin_minimize_label, pin_update_label, remember_volume_label, system_menu_label,
+    timing_delay_menu, update_available_label, MF_RADIOCHECK,
 };
 
 use crate::app::updates;
@@ -108,19 +108,23 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // `System → Check for Updates` row is the switch (see `check_for_updates`).
     updates::request_check();
 
-    // Add "Enable Preview" with checkmark
-    let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
+    // Add "Enable Preview" with checkmark, naming the key that throws the same switch from
+    // Explorer so the shortcut is visible where the setting is.
+    let (preview_enabled, toggle_key) = CONFIG
+        .lock()
+        .map(|c| (c.preview_enabled, c.toggle_key.clone()))
+        .unwrap_or((true, crate::config::config::DEFAULT_TOGGLE_KEY.to_string()));
     let enable_flags = MF_STRING
         | if preview_enabled {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
-    let _ = AppendMenuW(
+    append_labeled_item(
         menu,
         enable_flags,
-        ID_TRAY_ENABLE as usize,
-        w!("Enable Preview"),
+        ID_TRAY_ENABLE,
+        &enable_preview_label(&toggle_key),
     );
 
     // And the "Pin Mode" submenu below it, which is the pin's own business: whether the key is
