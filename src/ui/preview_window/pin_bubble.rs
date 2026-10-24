@@ -1463,19 +1463,6 @@ pub(super) unsafe fn hide_pinned_windows() {
 /// Windows minimizes, and a hidden window is a window whose taskbar button has gone, so the pin would
 /// be gone from the screen and the taskbar together (see `collapse_pin_to`).
 pub(super) unsafe fn hide_pinned_siblings() {
-    // **A pinned FFmpeg film is the host's child now**, and the host is what is put away: there is
-    // no window of the desktop's behind the band for the enumeration below to find (see
-    // `pin_film_host::adopt_the_players_window`).
-    if pin_film_host::the_pinned_player_was_begun_in_the_host()
-        && pin_film_host::the_pins_film_is_ffplay()
-    {
-        unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
-        if webview_preview::is_showing() {
-            webview_preview::hide();
-        }
-        return;
-    }
-
     let video = VIDEO_HWND.load(Ordering::SeqCst);
     if video != 0 {
         let _ = ShowWindow(HWND(video as *mut _), SW_HIDE);
