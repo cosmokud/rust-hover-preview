@@ -605,6 +605,107 @@ fn a_film_taken_up_from_a_hosted_hover_launches_nothing() {
     );
 }
 
+/// An FFmpeg hover that was already in the app's host is taken up the same way mpv's is: the same
+/// pid, the same child, the same host handle, moved into the pin with nothing begun again. This is
+/// the seamless hover-to-pin take-up: no relaunch, no black flash.
+#[test]
+fn an_ffplay_hover_taken_up_is_moved_into_the_pin_not_begun() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 7.25) };
+    clear_restart_count();
+
+    assert_eq!(
+        hover_film_host::the_hover_film_to_adopt(&path),
+        Some(hover.host),
+        "a hosted FFmpeg hover is a film the pin can take up without beginning another"
+    );
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        restart_count(),
+        0,
+        "the hover's FFmpeg player is kept, not begun again"
+    );
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover.host),
+        "the hover's own host is the pin's host now"
+    );
+    assert_eq!(pin_film_host::hosted_player_pid(), Some(hover.pid));
+    assert_eq!(VIDEO_PID.load(Ordering::SeqCst), hover.pid);
+    assert!(
+        pin_film_host::the_pinned_player_was_begun_in_the_host(),
+        "the player the hover began is the pin's own from here"
+    );
+    assert!(
+        unsafe { IsWindow(hover.child) }.as_bool(),
+        "the player's child is the same window, still drawing"
+    );
+    assert_eq!(
+        unsafe { GetParent(hover.child) }.ok(),
+        Some(hover.host),
+        "under the same host, now inside the pin"
+    );
+    assert_eq!(
+        unsafe { GetParent(hover.host) }.ok(),
+        Some(film.pin_hwnd),
+        "and the host travels as a child of the pin's window"
+    );
+    assert!(
+        unsafe { IsWindowVisible(hover.host) }.as_bool(),
+        "the taken-up host is shown in the pin's band"
+    );
+    let child = unsafe { window_rect(hover.child) };
+    let host = unsafe { window_rect(hover.host) };
+    assert_eq!(
+        (child.2 - child.0, child.3 - child.1),
+        (host.2 - host.0, host.3 - host.1),
+        "and the child is fitted to the pin's band rather than left at the hover's box"
+    );
+    assert_eq!(VIDEO_HWND.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        hover_film_host::hover_film_host(),
+        None,
+        "the hover's handle is handed over rather than left to destroy the pin's host"
+    );
+}
+
+/// A hover whose FFmpeg player has not put its window up at take-up cannot be moved, so the pin
+/// falls back to its own hosted launch: exactly one player is begun, never two.
+#[test]
+fn a_hover_that_cannot_be_adopted_falls_back_to_one_pinned_launch() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    let path = PathBuf::from("a-film.mkv");
+    with_pin(|pin| pin.path = path.clone());
+    let hovered = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None)
+        .expect("the hover's ffplay");
+    assert!(
+        hover_film_host::the_hover_film_to_adopt(&path).is_none(),
+        "a player with no child under the host has nothing to move"
+    );
+    clear_restart_count();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        restart_count(),
+        1,
+        "the pin begins one player of its own, not a second beside the hover's"
+    );
+    assert_ne!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        hovered.id(),
+        "and the hover's player is not the one the pin now holds"
+    );
+}
+
 /// The pin's own level is put on the moved player, and the transport continues from the hover's
 /// playhead rather than from a frozen second.
 #[test]
@@ -3553,11 +3654,23 @@ fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window()
         "and asks for the one renderer that presents inside a layered pin window"
     );
 
-    // The same film with no pin is a hover: SDL's default renderer and the borderless window.
+    // The same film with no pin and Pin Mode off is an unhosted hover: SDL's default renderer
+    // and the borderless window it has always had (see `hover_film_host_window` for the hosted
+    // hover's own launch).
     take_pin_for_a_test();
     pin_stands_in_its_own_window(false);
+    let pin_enabled_before = CONFIG
+        .lock()
+        .map(|config| config.pin_enabled)
+        .unwrap_or(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_enabled = false;
+    }
     let _ = start_video_playback(&path, film.box_.0, film.box_.1, 320, 240, 0.0, false, 80, None)
         .expect("a noted FFmpeg hover");
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_enabled = pin_enabled_before;
+    }
     let hovered = take_last_spawned_command().expect("the hover launch");
     assert!(
         hovered.args.iter().any(|arg| arg == "-noborder"),
