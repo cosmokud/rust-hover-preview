@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, MoveWindow, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE,
     GW_HWNDPREV,
     HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WM_SHOWWINDOW, WINDOW_EX_STYLE,
-    WS_CHILD, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    WS_CHILD, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 /// The show and hide messages the adopted host received, in order: whether it was shown, the style
@@ -3627,11 +3627,155 @@ fn a_pinned_ffplay_film_is_begun_into_the_pins_film_host() {
     );
 }
 
-/// A pinned FFmpeg film is launched for a layered pin window, where only SDL's Direct3D 11
-/// renderer presents, and without `-noborder`, whose non-resizable window would clamp every later
-/// band resize. The hover launch keeps both exactly as they were.
+/// A pin that holds an FFmpeg film is presented through the composed road, so its window drops
+/// `WS_EX_LAYERED`; a pin that holds anything else — mpv's film here — keeps the layered surface it
+/// has always had. The window is reused across pins, so what is asked is the window's own style
+/// after a take-up, not the constants the module is made of.
 #[test]
-fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window() {
+fn a_pin_that_holds_an_ffplay_film_drops_the_layered_style_and_a_pin_that_does_not_keeps_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let layered = |hwnd: HWND| unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32 & WS_EX_LAYERED.0;
+
+    // mpv's film: the layered pin, presented by its own window through `--wid`.
+    {
+        let film = StandingFilm::new();
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        assert_ne!(
+            layered(film.pin_hwnd),
+            0,
+            "an mpv film's pin keeps the layered surface the host is moved into"
+        );
+        assert!(
+            !paints_through_the_window_dc(film.pin_hwnd),
+            "and is presented by `UpdateLayeredWindow`"
+        );
+    }
+
+    // FFmpeg's player: composed through the pin's own DC, so no layered style at all.
+    pin_film_host::stand_ffplay_presentation_for_a_test(false);
+    {
+        let film = ffplay_standing_film();
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        let ex = unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } as u32;
+        assert_eq!(
+            ex & WS_EX_LAYERED.0,
+            0,
+            "a pin that holds an FFmpeg film is painted through its own DC and is not layered"
+        );
+        assert_ne!(
+            ex & WS_EX_APPWINDOW.0,
+            0,
+            "and it is still the window the taskbar button belongs to"
+        );
+        assert_eq!(
+            ex & WS_EX_TOOLWINDOW.0,
+            0,
+            "still listed in Alt+Tab and still activatable"
+        );
+    }
+    pin_film_host::stand_ffplay_presentation_for_a_test(false);
+}
+
+/// The paint road is the window's own style, so it can never disagree with the take-up: a film pin
+/// that is not layered is blitted into its DC, and one that is still layered is painted by
+/// `UpdateLayeredWindow`. The escape hatch is what returns an FFmpeg pin to the layered road.
+#[test]
+fn the_film_pin_paints_through_the_window_dc_when_it_is_not_layered() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+
+    pin_film_host::stand_ffplay_presentation_for_a_test(false);
+    {
+        let film = ffplay_standing_film();
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        assert!(
+            paints_through_the_window_dc(film.pin_hwnd),
+            "the composed film pin paints with GDI into the window DC"
+        );
+    }
+
+    pin_film_host::stand_ffplay_presentation_for_a_test(true);
+    {
+        let film = ffplay_standing_film();
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        assert!(
+            !paints_through_the_window_dc(film.pin_hwnd),
+            "and the escape hatch puts it back on the layered road"
+        );
+    }
+    pin_film_host::stand_ffplay_presentation_for_a_test(false);
+}
+
+/// An mpv film's pin and a native film's pin keep their own presentation: the layered pin, the
+/// host under it for mpv, and no host at all for a picture the media engine draws.
+#[test]
+fn an_mpv_or_native_pin_keeps_the_layered_pin_and_its_own_presentation() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    pin_film_host::stand_ffplay_presentation_for_a_test(false);
+
+    {
+        let film = StandingFilm::new();
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        let ex = unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } as u32;
+        assert_ne!(ex & WS_EX_LAYERED.0, 0, "mpv's pin is layered");
+        assert_eq!(
+            unsafe { GetParent(pin_film_host::film_host().expect("the pin's host")) }.ok(),
+            Some(film.pin_hwnd),
+            "and the picture is a child of its host, exactly as before"
+        );
+    }
+
+    // A native film is this app's own frame: no host, no change of presentation.
+    let previous_pin = take_pin_for_a_test();
+    let previous_own = pin_is_its_own_window();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let box_ = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240);
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.path = PathBuf::from("a-native.mp4");
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+    let hwnd = unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        let mut media = create_loading_media(320, 240);
+        media.media_type = MediaType::NativeVideo;
+        *current = Some(media);
+    }
+
+    unsafe { show_pinned_window(hwnd) };
+    let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    assert_ne!(ex & WS_EX_LAYERED.0, 0, "a native film's pin is layered");
+    assert!(
+        pin_film_host::film_host().is_none(),
+        "and the media engine draws it into this app's own surface, with no host"
+    );
+
+    unsafe {
+        pin_real_window::hide_real_pin_window();
+        let _ = DestroyWindow(hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+    pin_film_host::stand_ffplay_presentation_for_a_test(false);
+}
+
+/// A pinned FFmpeg film is launched for the composed road: SDL's default renderer, whose blt
+/// swapchain is presented by the desktop compositor rather than a flip-model one a driver can drive
+/// VRR from, and without `-noborder`, whose non-resizable window would clamp every later band
+/// resize. `RHP_FFPLAY_PRESENT=flip` is the escape hatch that brings the old renderer back, and the
+/// unhosted hover keeps both of its own answers exactly as they were.
+#[test]
+fn the_hosted_ffplay_launch_uses_the_composed_renderer_and_never_flip() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -3639,6 +3783,7 @@ fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window()
     unsafe { show_pinned_window(film.pin_hwnd) };
     let path = PathBuf::from("a-film.mkv");
 
+    pin_film_host::stand_ffplay_presentation_for_a_test(false);
     let _ = start_video_playback(&path, film.box_.0, film.box_.1, 320, 240, 0.0, false, 80, None, None)
         .expect("a noted FFmpeg player");
     let launched = take_last_spawned_command().expect("the hosted launch");
@@ -3648,12 +3793,32 @@ fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window()
         "a hosted launch keeps SDL's resizable window, or the band could never resize it"
     );
     assert!(
-        launched.env.iter().any(|(key, value)| {
-            key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")
-                && value.as_deref() == Some("direct3d11")
-        }),
-        "and asks for the one renderer that presents inside a layered pin window"
+        !launched
+            .env
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")),
+        "the composed road lets SDL keep its default renderer, never the flip-model one"
     );
+    assert!(
+        launched.env.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("SDL_RENDER_VSYNC") && value.as_deref() == Some("0")
+        }),
+        "with vsync off as well"
+    );
+
+    // The escape hatch: a machine where the composed road cannot present asks for the flip-model
+    // renderer it had before, and the pin keeps its layered surface for it.
+    pin_film_host::stand_ffplay_presentation_for_a_test(true);
+    let _ = start_video_playback(&path, film.box_.0, film.box_.1, 320, 240, 0.0, false, 80, None, None)
+        .expect("a noted FFmpeg player");
+    let flipped = take_last_spawned_command().expect("the flipped launch");
+    assert!(
+        flipped.env.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("SDL_RENDER_DRIVER") && value.as_deref() == Some("direct3d11")
+        }),
+        "the escape hatch asks for the Direct3D 11 renderer again"
+    );
+    pin_film_host::stand_ffplay_presentation_for_a_test(false);
 
     // The same film with no pin and Pin Mode off is an unhosted hover: SDL's default renderer
     // and the borderless window it has always had (see `hover_film_host_window` for the hosted
@@ -4284,10 +4449,11 @@ fn a_step_into_an_ffplay_film_begins_it_in_the_pins_host_once() {
         "the step's one launch is hosted, so it keeps SDL's resizable window"
     );
     assert!(
-        launched.env.iter().any(|(key, value)| {
-            key.eq_ignore_ascii_case("SDL_RENDER_DRIVER") && value.as_deref() == Some("direct3d11")
-        }),
-        "and it asks for the renderer a layered pin window needs"
+        !launched
+            .env
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")),
+        "and it is composed through the window DC, so SDL's default renderer is kept"
     );
 
     unsafe { show_pinned_window(film.pin_hwnd) };

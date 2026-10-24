@@ -502,17 +502,17 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
     );
 }
 
-/// A hosted hover's FFmpeg launch is the same one a hosted pin gets: SDL's Direct3D 11 renderer,
-/// which is the one that presents under the layered pin the host is moved into, without
-/// `-noborder` so a later band resize is not clamped, and with vsync off so a hosted film does not
-/// hold a swapchain the desktop's windowed VRR cannot follow. A plain top-level hover keeps its
-/// borderless window and SDL's own renderer.
+/// A hosted hover's FFmpeg launch is the same one a hosted pin gets: the composed road, with
+/// SDL's default renderer rather than the flip-model Direct3D 11 one, without `-noborder` so a later
+/// band resize is not clamped, and with vsync off. `RHP_FFPLAY_PRESENT=flip` is the escape hatch,
+/// and a plain top-level hover keeps its borderless window and SDL's own renderer either way.
 #[test]
-fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_vsync_off() {
+fn the_hosted_hover_ffplay_launch_uses_the_composed_renderer() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     let path = a_film();
+    pin_film_host::stand_ffplay_presentation_for_a_test(false);
 
     {
         let _stand = HoverHostStand::new(true);
@@ -526,19 +526,39 @@ fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_vsync_off() {
             "a hosted hover keeps SDL's resizable window, or a pin could never resize it"
         );
         assert!(
-            launched.env.iter().any(|(key, value)| {
-                key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")
-                    && value.as_deref() == Some("direct3d11")
-            }),
-            "and asks for the renderer that presents inside the layered pin"
+            !launched
+                .env
+                .iter()
+                .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")),
+            "and lets SDL keep its default renderer, the composed one"
         );
         assert!(
             launched.env.iter().any(|(key, value)| {
                 key.eq_ignore_ascii_case("SDL_RENDER_VSYNC") && value.as_deref() == Some("0")
             }),
-            "with vsync off, so it does not hold a swapchain VRR cannot follow"
+            "with vsync off"
         );
     }
+
+    // The escape hatch: a machine where the composed path cannot present asks for the flip-model
+    // renderer again.
+    pin_film_host::stand_ffplay_presentation_for_a_test(true);
+    {
+        let _stand = HoverHostStand::new(true);
+        stand_ffplay_in(Some(true));
+        stand_mpv_in(Some(false));
+        let _ = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+            .expect("a noted ffplay");
+        let flipped = take_last_spawned_command().expect("the flipped hover launch");
+        assert!(
+            flipped.env.iter().any(|(key, value)| {
+                key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")
+                    && value.as_deref() == Some("direct3d11")
+            }),
+            "the escape hatch asks for the Direct3D 11 renderer again"
+        );
+    }
+    pin_film_host::stand_ffplay_presentation_for_a_test(false);
 
     {
         let _stand = HoverHostStand::new(false);
