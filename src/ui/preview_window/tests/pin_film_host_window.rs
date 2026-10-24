@@ -3871,3 +3871,60 @@ fn a_move_cover_over_a_hosted_ffplay_film_settles_on_its_child() {
 
     drop(film);
 }
+
+/// A sound played by the FFmpeg engine has no picture for a host to hold: Pin Mode leaves it the
+/// card it always was, keeps its `-nodisp` player, and shows the pin's own window. The host road is
+/// a film's, asked of the media and not of the route alone (see `the_film_is_shown_in_a_host`).
+#[test]
+fn an_ffplay_engine_sound_is_not_given_a_pin_film_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    let path = PathBuf::from("a-sound.mp3");
+    with_pin(|pin| pin.path = path.clone());
+    let sound_pid = VIDEO_PID.load(Ordering::SeqCst);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.media_type = MediaType::Audio;
+        }
+    }
+    clear_restart_count();
+
+    assert_eq!(video_route(&path), VideoRoute::Ffplay);
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        pin_film_host::film_host(),
+        None,
+        "a sound's pin makes no host to stand its card behind"
+    );
+    assert!(
+        !pin_film_host::the_film_is_shown_in_a_host(&path),
+        "a sound is not a film, so no host is its picture's whatever player the route names"
+    );
+    assert!(
+        !pin_film_host::the_pins_film_is_ffplay(),
+        "and the pin is not written down as holding an FFmpeg film"
+    );
+    assert_eq!(
+        restart_count(),
+        0,
+        "the sound's own player is left alone rather than replaced by a film's"
+    );
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        sound_pid,
+        "so the sound's player is still the one the pin holds"
+    );
+    assert!(
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "the pin itself is painted and shown, as every app-drawn kind's is"
+    );
+
+    drop(film);
+}
