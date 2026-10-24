@@ -406,16 +406,15 @@ fn ffplay_survives_being_reparented_into_our_host() {
     // One physical pixel per coordinate, so ffplay's `-x/-y` and our captures agree with the
     // desktop instead of being silently scaled by the caller's DPI virtualization.
     unsafe {
-        let how;
-        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_ok() {
-            how = "SetProcessDpiAwarenessContext(PMv2)";
+        let how = if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_ok() {
+            "SetProcessDpiAwarenessContext(PMv2)"
         } else if SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).is_ok() {
-            how = "SetProcessDpiAwareness(PER_MONITOR)";
+            "SetProcessDpiAwareness(PER_MONITOR)"
         } else if windows::Win32::UI::WindowsAndMessaging::SetProcessDPIAware().as_bool() {
-            how = "SetProcessDPIAware";
+            "SetProcessDPIAware"
         } else {
-            how = "no DPI call succeeded";
-        }
+            "no DPI call succeeded"
+        };
         println!("dpi setup: {how}");
     }
 
