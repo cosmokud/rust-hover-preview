@@ -75,8 +75,6 @@ pub(super) fn hover_film_host_player() -> Option<u32> {
 /// Record the player begun into the hover's host, before it has a window of its own in there.
 pub(super) fn note_hover_film_host_player(pid: u32, path: &Path) {
     HOVER_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
-    // A hosted player has no window of the desktop's to publish, and this one is the film now.
-    VIDEO_HWND.store(0, Ordering::SeqCst);
     if let Ok(mut held) = HOVER_FILM_HOST_PATH.lock() {
         *held = Some(path.to_path_buf());
     }
@@ -85,9 +83,7 @@ pub(super) fn note_hover_film_host_player(pid: u32, path: &Path) {
 /// The hover's host, where this player is the one begun into it for this file and is already
 /// drawing there: the host a pin can move into its own window instead of beginning a second player.
 pub(super) fn the_hover_film_to_adopt(path: &Path) -> Option<HWND> {
-    if current_media_type() != Some(MediaType::Video)
-        || !matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
-    {
+    if current_media_type() != Some(MediaType::Video) || video_route(path) != VideoRoute::Mpv {
         return None;
     }
 
@@ -118,14 +114,11 @@ pub(super) fn forget_the_hover_film_host_that_was_handed_over(host: HWND) {
     }
 }
 
-/// Whether this file is a hovered film that a host should hold: mpv's, and FFmpeg's player's while
-/// Pin Mode is on. A film pinned from a hover is drawn in a host by then, so a pin's take-up can
-/// move the running picture into its own window without beginning a second player; every other
-/// route — the engine's own frame, a pin standing in the preview's window — keeps the window it has.
+/// Whether this file is a hovered mpv film that a host should hold: the pins' own route changed
+/// where a hover's player is drawn, and every other route — FFmpeg's player, the engine's own
+/// frame, a pin standing in the preview's window — keeps the window it has today.
 pub(super) fn the_hover_film_is_kept_in_a_host(path: &Path) -> bool {
-    !pinned()
-        && pin_enabled()
-        && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
+    !pinned() && pin_enabled() && video_route(path) == VideoRoute::Mpv
 }
 
 /// Whether the player this app is holding was begun into the hover's host.
@@ -179,26 +172,6 @@ pub(super) unsafe fn place_the_hover_film_host(rect: ScreenRegion) {
         height,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
-    // FFmpeg's child does not follow its parent's resize: fit it to the box the hover is at now.
-    fit_the_hosted_ffplay(host);
-}
-
-/// Fit the hover's hosted FFmpeg child to the host, where the player is the one the host holds and
-/// the film is FFmpeg's. mpv's child sizes itself and is untouched (see `pin_film_host`).
-fn fit_the_hosted_ffplay(host: HWND) {
-    let path = HOVER_FILM_HOST_PATH
-        .lock()
-        .ok()
-        .and_then(|held| held.clone());
-    if !path.is_some_and(|path| video_route(&path) == VideoRoute::Ffplay) {
-        return;
-    }
-    let Some(pid) = hover_film_host_player() else {
-        return;
-    };
-    if let Some(child) = pin_film_host::a_child_of_the_host(host, pid) {
-        unsafe { ffplay_window::fit_the_hosted_player_to_the_host(child, host) };
-    }
 }
 
 /// Show or hide the hover's host: what a player's first frame is revealed by, and what a hover

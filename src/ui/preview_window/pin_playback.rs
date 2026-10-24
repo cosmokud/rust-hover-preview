@@ -964,8 +964,7 @@ pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
         return false;
     };
 
-    if !pin_film_host::the_film_is_shown_in_a_host(&path)
-        || pin_film_host::film_host().is_none()
+    if pin_film_host::host_for_the_pins_film(&path).is_none()
         || pin_film_host::the_pinned_player_was_begun_in_the_host()
         || VIDEO_PID.load(Ordering::SeqCst) == 0
     {
@@ -974,16 +973,6 @@ pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
 
     let seconds = pin_playhead(&transport).unwrap_or(0.0);
     let holding = transport.paused_at.is_some();
-
-    // **FFmpeg's player cannot prove a frozen frame, so its take-up is an ordinary relaunch.** mpv
-    // is held on the hover's own frame and swapped when it reports that frame drawn (see
-    // `begin_the_pinned_film_at_the_hovers_frame`); FFmpeg's player has no pipe to be asked, and
-    // the host's child appearing is its arrival proof. The relaunch is still host-shaped, at the
-    // pin's own clock second, so the film is in the pin's window rather than left top-level.
-    if video_route(&path) != VideoRoute::Mpv {
-        restart_pinned_player(&path, content, seconds, holding);
-        return false;
-    }
 
     begin_the_pinned_film_at_the_hovers_frame(&path, content, seconds, holding);
     true

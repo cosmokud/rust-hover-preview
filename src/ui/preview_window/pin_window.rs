@@ -71,7 +71,6 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use super::pin_trace::note_pin_trace;
 use super::{subtitle_files, PinCommand, PinStep, PinnedPreview, ScreenRegion};
 
 mod window;
@@ -584,15 +583,6 @@ pub(super) enum PinHide {
 pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
     let hwnd = window.hwnd();
     let exit = reason.exit();
-    note_pin_trace!(
-        "pin end {:?} own {} path {}",
-        reason,
-        super::pin_lifecycle::pin_is_its_own_window() as u8,
-        super::pinned_path()
-            .as_deref()
-            .map(super::pin_trace::path_name)
-            .unwrap_or_else(|| "-".to_string()),
-    );
 
     // The pointer goes before the state does, and only where this thread is the one holding
     // it: `ReleaseCapture` delivers `WM_CAPTURECHANGED` back into this thread's own window

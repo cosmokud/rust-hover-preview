@@ -1,7 +1,6 @@
 //! Starting and stopping a film: the launch itself, the wait for its window and for its first
 //! frame, and putting the player's window back in front.
 
-use super::pin_trace::note_pin_trace;
 use super::*;
 
 /// The films whose most recently begun player was drawing subtitles: a sidecar, the film's own
@@ -362,26 +361,6 @@ fn start_video_playback_where(
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = engine_processes::hidden_command("ffplay");
 
-    // **Where this film's picture will be drawn, before the command is built.** mpv is told the host
-    // with `--wid`; FFmpeg's player has no such switch, so it is begun with the frame it will lose
-    // and adopted into the same host once its own window exists (see
-    // `ffplay_window::adopt_the_players_window`). A hosted launch is born off every display with
-    // `-left/-top` and **without `-noborder`**: `-noborder` makes SDL create a non-resizable window
-    // whose cached flags then clamp every external resize, so the band could never follow the pin.
-    let hosted = if route == VideoRoute::Ffplay {
-        match pin_film_host::host_for_the_pins_ffplay(path) {
-            Some(host) => Some((host, true)),
-            None => (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
-                .then(|| unsafe {
-                    hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
-                })
-                .flatten()
-                .map(|host| (host, false)),
-        }
-    } else {
-        None
-    };
-
     // **And no `-hwaccel`, which is not an oversight.** It names a *device* rather than asking
     // for a decoder, and ffplay brings its Vulkan renderer up the moment the flag is present:
     // measured on this machine, every candidate device dies of an access violation in the graphics
@@ -521,38 +500,22 @@ fn start_video_playback_where(
     // to be numbered — which is also the numbering a next-track press walks in, and the one
     // `si=` is given in (see `next_subtitle`).
 
-    let width_arg = width.to_string();
-    let height_arg = height.to_string();
-    let left_arg = if hosted.is_some() {
-        "-32000".to_string()
-    } else {
-        x.to_string()
-    };
-    let top_arg = if hosted.is_some() {
-        "-32000".to_string()
-    } else {
-        y.to_string()
-    };
-    let mut cmd = cmd.args([
-        "-err_detect",
-        "ignore_err", // Ignore header/stream errors
-        "-fflags",
-        "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
-        "-framedrop",                    // Drop undecodable frames instead of stalling
-    ]);
-    if hosted.is_none() {
-        cmd = cmd.arg("-noborder"); // No window border
-    }
     let child = cmd
         .args([
+            "-err_detect",
+            "ignore_err", // Ignore header/stream errors
+            "-fflags",
+            "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
+            "-framedrop",                    // Drop undecodable frames instead of stalling
+            "-noborder",                     // No window border
             "-left",
-            &left_arg,
+            &x.to_string(),
             "-top",
-            &top_arg,
+            &y.to_string(),
             "-x",
-            &width_arg,
+            &width.to_string(),
             "-y",
-            &height_arg,
+            &height.to_string(),
             "-autoexit",
             "-loglevel",
             "quiet",
@@ -577,17 +540,6 @@ fn start_video_playback_where(
     // name is what its id is verified as, and its loop — where the loop is this app's to give — is
     // clocked from here (see `note_player_started`).
     if let Some(ref player) = child {
-        // The host holds this player and no older one, recorded before the player has a window of
-        // its own to adopt: the monitor's wait for that window is a wait for *this* player's (see
-        // `host_for_a_hosted_player`).
-        if let Some((_, in_the_pin)) = hosted {
-            if in_the_pin {
-                pin_film_host::note_the_pins_film_route(path);
-                pin_film_host::note_hosted_player(player.id());
-            } else {
-                hover_film_host::note_hover_film_host_player(player.id(), path);
-            }
-        }
         note_player_started(
             player_image(VideoRoute::Ffplay),
             path,
@@ -667,12 +619,6 @@ fn start_mpv_video_playback(
     // app's own so that the film can move into the pin without a second launch (see
     // `mpv_launch_host` and `hover_film_host`).
     let pin_host = mpv_launch_host(path);
-    // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
-    // step from an FFmpeg film must not leave the host answering as FFmpeg's (see
-    // `the_pins_film_is_ffplay`).
-    if pin_host.is_some() {
-        pin_film_host::note_the_pins_film_route(path);
-    }
     let host = pin_host.or_else(|| {
         (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
             .then(|| unsafe {
@@ -1396,7 +1342,6 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // `bubble_stream`), so there is nothing of the player's to carry into the circle and nothing to
     // put back where something has moved it.
     if pin_is_collapsed() {
-        note_pin_trace!("topmost skipped: pin collapsed");
         return false;
     }
     // **A film drawn into a child of the pin's has no window of the desktop's to order, style or
@@ -1414,12 +1359,9 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         // top-level player's rather than the band's: the band's box is the pin's, and it is given
         // by the roads that read it (see `ensure_pinned_sibling_box`).
         if pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
-            note_pin_trace!("topmost shown: pin host drawing");
             // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
             // takes any window and reports rather than faults.
             unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
-        } else {
-            note_pin_trace!("topmost skipped: pin host not drawing yet");
         }
         return true;
     }
@@ -1432,10 +1374,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid) {
         unsafe { hover_film_host::place_the_hover_film_host((x, y, x + width, y + height)) };
         if hover_film_host::the_hover_player_is_drawing(hover_pid) {
-            note_pin_trace!("topmost shown: hover host drawing");
             unsafe { hover_film_host::set_the_hover_film_host_visible(true) };
-        } else {
-            note_pin_trace!("topmost skipped: hover host not drawing yet");
         }
         return true;
     }
@@ -1456,7 +1395,6 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         false,
     );
     if order == PlayerOrder::Leave {
-        note_pin_trace!("topmost skipped: raise held off");
         // The raise is what is held off and the band is still owed (see the note over this
         // function): a window that is not on screen goes back where it stands in the band, with no
         // raise for anything to be put back over.
@@ -1475,14 +1413,12 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
 
     let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
     if hwnd_val == 0 {
-        note_pin_trace!("topmost skipped: no player hwnd");
         return false;
     }
 
     unsafe {
         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
         if hwnd.is_invalid() {
-            note_pin_trace!("topmost skipped: player hwnd invalid");
             VIDEO_HWND.store(0, Ordering::SeqCst);
             return false;
         }
@@ -1502,27 +1438,9 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        note_pin_trace!("topmost shown: player hwnd {:?}", hwnd);
     }
 
     true
-}
-
-/// What the tick does when the player's window is owed the front: raise the pin when its volume
-/// popup is drawn into it, or put the player's window back over the band. It is one function so
-/// that the pinned hosted film's reveal is the same road as every other one (see
-/// `the_video_window_is_owed_the_front`).
-pub(super) fn bring_the_video_window_to_the_front(video_pos: ScreenRegion) {
-    if pin_volume_open() {
-        unsafe { raise_pinned_window(HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _)) };
-    } else if !pin_player_is_parked() {
-        let _ = ensure_video_window_topmost(
-            video_pos.0,
-            video_pos.1,
-            video_pos.2,
-            video_pos.3,
-        );
-    }
 }
 
 /// Put a player's window back in the band it is owed where it is not on screen, without the raise

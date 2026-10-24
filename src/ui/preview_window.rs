@@ -96,7 +96,6 @@ mod pin_swap;
 mod pin_taskbar;
 mod pin_taskbar_buttons;
 mod pin_taskbar_mirror;
-mod pin_trace;
 mod pin_walk;
 mod pin_window;
 mod pin_zoom;
