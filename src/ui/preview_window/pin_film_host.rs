@@ -218,6 +218,15 @@ pub(super) unsafe fn fit_the_hosted_ffplay_to_the_host(host: HWND) {
     }
 }
 
+/// Whether the tick owes the player's window the front: a film a hover is following, or a pin's
+/// own hosted film. The pin's half is asked of the host rather than of the hover's bookkeeping,
+/// because a hover's `Hide` can empty that bookkeeping while the pin still owns the window (see
+/// `a_pin_owns_the_window_a_hide_would_take_down`).
+pub(super) fn the_video_window_is_owed_the_front(current_video_path: Option<&Path>) -> bool {
+    current_video_path.is_some()
+        || (pinned() && pin_is_its_own_window() && film_host().is_some())
+}
+
 /// Whether the player this app is holding is the one it began into the host — the question every
 /// road that used to find a top-level mpv window by pid asks instead (see
 /// `ensure_video_window_topmost`, `hold_video_window_frame`, `settle_pinned_mpv_ontop`).

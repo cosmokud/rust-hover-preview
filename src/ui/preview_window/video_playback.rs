@@ -1496,6 +1496,23 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     true
 }
 
+/// What the tick does when the player's window is owed the front: raise the pin when its volume
+/// popup is drawn into it, or put the player's window back over the band. It is one function so
+/// that the pinned hosted film's reveal is the same road as every other one (see
+/// `the_video_window_is_owed_the_front`).
+pub(super) fn bring_the_video_window_to_the_front(video_pos: ScreenRegion) {
+    if pin_volume_open() {
+        unsafe { raise_pinned_window(HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _)) };
+    } else if !pin_player_is_parked() {
+        let _ = ensure_video_window_topmost(
+            video_pos.0,
+            video_pos.1,
+            video_pos.2,
+            video_pos.3,
+        );
+    }
+}
+
 /// Put a player's window back in the band it is owed where it is not on screen, without the raise
 /// the hold-off refuses and without touching the order either window stands in.
 ///

@@ -17,6 +17,54 @@ pub(super) static PIN_END_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// the pin itself is left standing, and the loop takes the ask on its next tick.
 pub(super) static PIN_MENU_DISMISS_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// Whether a `Hide` that would take the preview's window down belongs to a hover at all: a pin
+/// standing in a window of its own is the window the user is looking at, and its own end is the
+/// only road that takes it down. A `Hide` posted before the take-up can still be in the channel
+/// when the pin is up, and honouring it there would clear the pin's media out from under it.
+///
+/// The same answer covers a pin collapsed into its bubble: the window is still the pin's, and a
+/// hover's dismissal is still not its end.
+pub(super) fn a_pin_owns_the_window_a_hide_would_take_down() -> bool {
+    pinned() && pin_is_its_own_window()
+}
+
+/// The teardown a hover's `Hide` performs, unless a pin owns the window it would take down.
+///
+/// Returns whether anything was taken down, so the caller can keep its own bookkeeping — the
+/// generation, the pending load and the show it came from — out of a hide the pin owns. The
+/// hover's film host goes with it for the same reason: the host a pin holds is the pin's, and a
+/// hide that arrived late must not destroy the window its film is drawn in.
+pub(super) unsafe fn take_the_hover_down(
+    hwnd: HWND,
+    current_video_path: &mut Option<PathBuf>,
+    video_pos: &mut ScreenRegion,
+) -> bool {
+    if a_pin_owns_the_window_a_hide_would_take_down() {
+        return false;
+    }
+
+    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+    unsafe { pin_real_window::hide_real_pin_window() };
+    clear_pointer_hold();
+
+    // A document the engine is playing goes with the preview: its window is its own, so nothing
+    // else here takes it down.
+    webview_preview::hide();
+
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(ref mut media) = *current {
+            media.cancel_background_work();
+            stop_video_playback(media);
+        }
+        *current = None;
+    }
+    *current_video_path = None;
+    *video_pos = (0, 0, 0, 0);
+
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    true
+}
+
 impl PinnedPreview {
     /// The box the window occupies: the media's own box with the caption above it and the transport
     /// bar below it — or the media's box itself, for a kind whose chrome is drawn over it, since a

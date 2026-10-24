@@ -3871,3 +3871,130 @@ fn a_move_cover_over_a_hosted_ffplay_film_settles_on_its_child() {
 
     drop(film);
 }
+
+/// A `Hide` can already be in the channel when the pin key takes the window up — a hover's
+/// dismissal, or the abandoned load a hover left behind. It is not the pin's end: the window the
+/// pin stands in, the host its film is drawn through, and the media and film path the loop holds
+/// all stay exactly where the take-up put them.
+#[test]
+fn a_late_hide_leaves_the_pins_window_host_and_media_alone() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let pid = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(pid);
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _child = unsafe { a_child_of_the_host(host) };
+    unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+    let mut path = Some(PathBuf::from("a-film.mkv"));
+    let mut pos = (film.box_.0, film.box_.1, 320, 240);
+    let media_before = CURRENT_MEDIA.lock().ok().map(|media| media.is_some());
+
+    assert!(
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "the pin's own window is on screen"
+    );
+
+    let taken_down =
+        unsafe { pin_lifecycle::take_the_hover_down(film.pin_hwnd, &mut path, &mut pos) };
+
+    assert!(
+        !taken_down,
+        "a Hide that a pin owns takes nothing down"
+    );
+    assert!(
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "so the pin's own window is still on screen"
+    );
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(host),
+        "and its film host is still there"
+    );
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "still on the band"
+    );
+    assert_eq!(
+        CURRENT_MEDIA.lock().ok().map(|media| media.is_some()),
+        media_before,
+        "the pin's media was not taken out from under it"
+    );
+    assert_eq!(
+        path,
+        Some(PathBuf::from("a-film.mkv")),
+        "nor was the film path the tick follows cleared"
+    );
+    assert_eq!(pos, (film.box_.0, film.box_.1, 320, 240), "nor its box");
+
+    drop(film);
+}
+
+/// The reveal tick must not depend on the hover's own film path: a pinned hosted film whose
+/// hover bookkeeping is empty is still owed the front, and the host is shown once the player's
+/// child is under it.
+#[test]
+fn a_pinned_hosted_film_is_revealed_without_a_hover_path() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let pid = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(pid);
+    let host = pin_film_host::film_host().expect("the film's host");
+    unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
+    let _child = unsafe { a_child_of_the_host(host) };
+
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host is hidden before the tick runs"
+    );
+    if pin_film_host::the_video_window_is_owed_the_front(None) {
+        video_playback::bring_the_video_window_to_the_front(film.box_);
+    }
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "the tick shows the host the pin's film is drawing in"
+    );
+
+    drop(film);
+}
+
+/// The same for a film FFmpeg's player draws: the pin stands in its own window, the adopted child
+/// is under the host, and both the window and the host are on screen with no hover path at all.
+#[test]
+fn a_pinned_ffplay_film_is_revealed_without_a_hover_path() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let pid = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(pid);
+    let host = pin_film_host::film_host().expect("the film's host");
+    unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
+    let _child = unsafe { a_child_of_the_host(host) };
+    let path: Option<PathBuf> = None;
+
+    if pin_film_host::the_video_window_is_owed_the_front(path.as_deref()) {
+        video_playback::bring_the_video_window_to_the_front(film.box_);
+    }
+
+    assert!(
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "the pin's own window is up"
+    );
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool(),
+        "and the host FFmpeg's child is drawing in is up with it"
+    );
+    assert!(
+        pin_film_host::the_hosted_player_is_drawing(pid),
+        "with the film actually drawing in that host"
+    );
+
+    drop(film);
+}
