@@ -4,6 +4,56 @@
 use super::pin_trace::note_pin_trace;
 use super::*;
 
+/// The one SDL renderer an FFmpeg film is ever begun with, and the escape hatch that names another.
+///
+/// **Direct3D 9 is the composed renderer and Direct3D 11 is the one that makes the panel flicker.**
+/// SDL presents its Direct3D 11 surfaces through a flip-model DXGI swapchain, which Windows may hand
+/// an independent-flip plane of its own; the display's adaptive sync then follows the film's 24-30 fps
+/// cadence, so the panel swings between its floor and its maximum as each frame lands — measured here
+/// with a 24 fps film playing, the blank interval went from 6.9 ms to 20.7 ms and back, mixing 144 Hz
+/// and 48 Hz for as long as the film played. A VA panel's gamma moves with the rate, which is the
+/// whole screen pulsing over a film the user is only watching. Direct3D 9 presents through the blt
+/// model, which the desktop compositor copies into the desktop image: the same film, the same window,
+/// the same launch otherwise, measured 6.95 ms p50 / 7.03 ms max — a steady 144 Hz. It is the same
+/// reason mpv's film and this app's own video route never flicker: nothing of theirs is a flippable
+/// top-level swapchain.
+///
+/// **Why the name is given rather than left to SDL.** SDL picks its own driver when none is named, and
+/// the order is SDL's to change; the composed road is this app's requirement, not a fallback, so it is
+/// asked for by name on every launch — hosted or not, pin or hover, because an unhosted FFmpeg window
+/// is as flippable as a hosted one.
+const FFPLAY_RENDERER_VARIABLE: &str = "RHP_FFPLAY_RENDERER";
+const FFPLAY_COMPOSED_RENDERER: &str = "direct3d";
+
+/// The renderer an FFmpeg film is begun with: the composed one, unless the machine's own hand names
+/// another through `RHP_FFPLAY_RENDERER` (see [`the_renderer_asked_for`]).
+pub(super) fn the_renderer_a_film_is_begun_with() -> String {
+    the_renderer_asked_for(std::env::var(FFPLAY_RENDERER_VARIABLE).ok().as_deref())
+}
+
+/// The decision itself, with the escape hatch as a parameter: the launch is the only place that reads
+/// the environment, and a test is then a call rather than an environment write every other launch in
+/// the process would see.
+///
+/// **The hatch is for a machine the composed road cannot present on at all** — a driver with no usable
+/// Direct3D 9, where the film would otherwise be a black band. Any name SDL knows may be given
+/// (`software`, `opengl`, `direct3d11`, ...); naming a flip-model renderer brings the panel flicker
+/// back with it, which is the trade it exists to make deliberately rather than by accident.
+pub(super) fn the_renderer_asked_for(asked_by_hand: Option<&str>) -> String {
+    match asked_by_hand.map(str::trim) {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => FFPLAY_COMPOSED_RENDERER.to_string(),
+    }
+}
+
+/// Whether the renderer a film is begun with is the composed one, which is the question the pin's own
+/// form and paint road are answered by: a film presented through the composed road is drawn into a pin
+/// that is not layered and paints through its own DC, and a flip-model renderer named by hand keeps the
+/// layered pin its swapchain can present under (see `pin_film_host::ffplay_is_presented_composed`).
+pub(super) fn the_film_is_presented_composed() -> bool {
+    the_renderer_a_film_is_begun_with() == FFPLAY_COMPOSED_RENDERER
+}
+
 /// The films whose most recently begun player was drawing subtitles: a sidecar, the film's own
 /// track, or the small files this app copied out of it (see `subtitle_filter`).
 ///
@@ -431,18 +481,16 @@ fn start_video_playback_where(
         None
     };
 
-    // A hosted FFmpeg film is presented inside a layered pin window — the hover's host for a hover,
-    // and the pin's own after a take-up — and only SDL's Direct3D 11 renderer presents there
-    // (measured: software, opengl and direct3d show nothing). An unhosted launch keeps SDL's own
-    // choice, exactly as it was.
-    if hosted.is_some() {
-        cmd.env("SDL_RENDER_DRIVER", "direct3d11");
-    }
+    // **What the film is presented through, on every launch.** The composed renderer, and the reason
+    // it is Direct3D 9 rather than Direct3D 11 is the whole of this app's answer to the panel
+    // flickering over a pinned film (see `the_renderer_a_film_is_begun_with`).
+    cmd.env("SDL_RENDER_DRIVER", the_renderer_a_film_is_begun_with());
 
-    // **Vsync off on every FFmpeg launch.** SDL's renderer presents with PRESENTVSYNC and this
-    // variable makes SDL clear it, so D3D11 presents with `DO_NOT_WAIT` rather than blocking on a
-    // swapchain the desktop's windowed VRR cannot follow. Hosting the hover takes the swapchain out
-    // of the top-level window anyway, so the plain hover is given it too.
+    // **And vsync off on every FFmpeg launch.** The composed present is a blt into the window's
+    // surface rather than a swap the display waits for, so SDL's `PRESENTVSYNC` would tie ffplay's
+    // loop to the panel's blank and gain nothing by it: the film's own frames are what pace it here,
+    // and a composed window cannot drag the panel's rate along with them (see
+    // `the_renderer_a_film_is_begun_with`). Unchanged from what every previous launch was given.
     cmd.env("SDL_RENDER_VSYNC", "0");
 
     // **And no `-hwaccel`, which is not an oversight.** It names a *device* rather than asking

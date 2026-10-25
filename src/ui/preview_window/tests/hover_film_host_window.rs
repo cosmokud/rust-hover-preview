@@ -9,7 +9,8 @@ use super::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WINDOW_EX_STYLE,
-    WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT, WS_POPUP,
     WS_VISIBLE,
 };
 
@@ -136,6 +137,11 @@ fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() 
             style & WS_POPUP.0 as isize,
             0,
             "the host is a top-level popup"
+        );
+        assert_ne!(
+            style & WS_CLIPCHILDREN.0 as isize,
+            0,
+            "and is clipped around its children, so its own black brush can never erase over the film"
         );
         assert_eq!(
             style & WS_CHILD.0 as isize,
@@ -502,13 +508,13 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
     );
 }
 
-/// A hosted hover's FFmpeg launch is the same one a hosted pin gets: SDL's Direct3D 11 renderer,
-/// which is the one that presents under the layered pin the host is moved into, without
-/// `-noborder` so a later band resize is not clamped, and with vsync off so a hosted film does not
-/// hold a swapchain the desktop's windowed VRR cannot follow. A plain top-level hover keeps its
-/// borderless window and SDL's own renderer.
+/// A hosted hover's FFmpeg launch is the same one a hosted pin gets: the composed renderer, whose
+/// blt-model present the desktop compositor copies and whose swapchain no display's adaptive sync can
+/// follow, without `-noborder` so a later band resize is not clamped, and with vsync off. A plain
+/// top-level hover keeps its borderless window and is begun with the same composed renderer, because
+/// its own window is a top-level one as well.
 #[test]
-fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_vsync_off() {
+fn every_hover_ffplay_launch_asks_for_the_composed_renderer_and_vsync_off() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -525,18 +531,19 @@ fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_vsync_off() {
             !launched.args.iter().any(|arg| arg == "-noborder"),
             "a hosted hover keeps SDL's resizable window, or a pin could never resize it"
         );
+        let composed = video_playback::the_renderer_asked_for(None);
         assert!(
             launched.env.iter().any(|(key, value)| {
                 key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")
-                    && value.as_deref() == Some("direct3d11")
+                    && value.as_deref() == Some(composed.as_str())
             }),
-            "and asks for the renderer that presents inside the layered pin"
+            "and asks for the composed renderer, the one the panel's rate is not driven by"
         );
         assert!(
             launched.env.iter().any(|(key, value)| {
                 key.eq_ignore_ascii_case("SDL_RENDER_VSYNC") && value.as_deref() == Some("0")
             }),
-            "with vsync off, so it does not hold a swapchain VRR cannot follow"
+            "with vsync off, so its own frames pace it rather than the panel's blank"
         );
     }
 
@@ -551,12 +558,13 @@ fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_vsync_off() {
             hovered.args.iter().any(|arg| arg == "-noborder"),
             "an unhosted hover keeps the borderless window it always had"
         );
+        let composed = video_playback::the_renderer_asked_for(None);
         assert!(
-            !hovered
-                .env
-                .iter()
-                .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")),
-            "and SDL's own renderer choice"
+            hovered.env.iter().any(|(key, value)| {
+                key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")
+                    && value.as_deref() == Some(composed.as_str())
+            }),
+            "and the composed renderer, exactly as the hosted launch is given"
         );
         assert!(
             hovered.env.iter().any(|(key, value)| {

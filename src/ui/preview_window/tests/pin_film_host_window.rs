@@ -18,7 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, MoveWindow, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE,
     GW_HWNDPREV,
     HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WM_SHOWWINDOW, WINDOW_EX_STYLE,
-    WS_CHILD, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP,
+    WS_VISIBLE,
 };
 
 /// The show and hide messages the adopted host received, in order: whether it was shown, the style
@@ -553,6 +554,11 @@ fn a_film_taken_up_from_a_hosted_hover_launches_nothing() {
         unsafe { GetWindowLongPtrW(host, GWL_STYLE) } & WS_CHILD.0 as isize,
         0,
         "with the child style it was re-styled to"
+    );
+    assert_ne!(
+        unsafe { GetWindowLongPtrW(host, GWL_STYLE) } & WS_CLIPCHILDREN.0 as isize,
+        0,
+        "and clipped around its children, so its own black brush can never erase over the film"
     );
     assert_eq!(
         unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) } & WS_EX_TOPMOST.0 as isize,
@@ -3627,11 +3633,14 @@ fn a_pinned_ffplay_film_is_begun_into_the_pins_film_host() {
     );
 }
 
-/// A pinned FFmpeg film is launched for a layered pin window, where only SDL's Direct3D 11
-/// renderer presents, and without `-noborder`, whose non-resizable window would clamp every later
-/// band resize. The hover launch keeps both exactly as they were.
+/// A pinned FFmpeg film is begun with the **composed** renderer — SDL's Direct3D 9, whose blt-model
+/// present the desktop compositor copies — and never with the flip-model Direct3D 11 one, whose
+/// swapchain the display's adaptive sync follows: that is what made the whole panel flicker while a
+/// pinned film played (see `video_playback::the_renderer_a_film_is_begun_with`). A hosted launch keeps
+/// SDL's resizable window, and an unhosted hover is begun the same way, because its own top-level
+/// window is as flippable as a hosted one.
 #[test]
-fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window() {
+fn every_ffplay_launch_asks_for_the_composed_renderer_and_a_hosted_one_keeps_its_resizable_window() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -3647,17 +3656,17 @@ fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window()
         !launched.args.iter().any(|arg| arg == "-noborder"),
         "a hosted launch keeps SDL's resizable window, or the band could never resize it"
     );
+    let composed = video_playback::the_renderer_asked_for(None);
     assert!(
         launched.env.iter().any(|(key, value)| {
-            key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")
-                && value.as_deref() == Some("direct3d11")
+            key.eq_ignore_ascii_case("SDL_RENDER_DRIVER") && value.as_deref() == Some(composed.as_str())
         }),
-        "and asks for the one renderer that presents inside a layered pin window"
+        "and asks for the composed renderer, the one no display's adaptive sync can follow"
     );
 
-    // The same film with no pin and Pin Mode off is an unhosted hover: SDL's default renderer
-    // and the borderless window it has always had (see `hover_film_host_window` for the hosted
-    // hover's own launch).
+    // The same film with no pin and Pin Mode off is an unhosted hover: the same renderer, and the
+    // borderless window it has always had (see `hover_film_host_window` for the hosted hover's own
+    // launch).
     take_pin_for_a_test();
     pin_stands_in_its_own_window(false);
     let pin_enabled_before = CONFIG
@@ -3678,11 +3687,39 @@ fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window()
         "the hover launch is unchanged and still asks for no border"
     );
     assert!(
-        !hovered
-            .env
-            .iter()
-            .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")),
-        "and it keeps SDL's own renderer choice"
+        hovered.env.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("SDL_RENDER_DRIVER") && value.as_deref() == Some(composed.as_str())
+        }),
+        "and is begun with the composed renderer too: its own window is a top-level one"
+    );
+}
+
+/// The renderer a film is begun with is the composed one, and it is asked for by name rather than left
+/// to SDL's own driver order: the composed road is this app's requirement, not a fallback (see
+/// `video_playback::the_renderer_a_film_is_begun_with`). The one way it is something else is the
+/// escape hatch a machine names by hand, which is passed through whole so `software`, `opengl` and
+/// `direct3d11` mean what SDL says they mean — a blank name is no name at all.
+#[test]
+fn the_composed_renderer_is_asked_for_unless_a_machine_names_another() {
+    assert_eq!(
+        video_playback::the_renderer_asked_for(None),
+        "direct3d",
+        "the composed renderer, whose present the desktop compositor copies"
+    );
+    assert_eq!(
+        video_playback::the_renderer_asked_for(Some("  ")),
+        "direct3d",
+        "a blank name is no name, and the composed road stands"
+    );
+    assert_eq!(
+        video_playback::the_renderer_asked_for(Some(" software ")),
+        "software",
+        "a name given by hand is passed through, trimmed, to SDL"
+    );
+    assert_eq!(
+        video_playback::the_renderer_asked_for(Some("direct3d11")),
+        "direct3d11",
+        "including the flip-model one, which is the trade the hatch exists to make deliberately"
     );
 }
 
@@ -4283,11 +4320,12 @@ fn a_step_into_an_ffplay_film_begins_it_in_the_pins_host_once() {
         !launched.args.iter().any(|arg| arg == "-noborder"),
         "the step's one launch is hosted, so it keeps SDL's resizable window"
     );
+    let composed = video_playback::the_renderer_asked_for(None);
     assert!(
         launched.env.iter().any(|(key, value)| {
-            key.eq_ignore_ascii_case("SDL_RENDER_DRIVER") && value.as_deref() == Some("direct3d11")
+            key.eq_ignore_ascii_case("SDL_RENDER_DRIVER") && value.as_deref() == Some(composed.as_str())
         }),
-        "and it asks for the renderer a layered pin window needs"
+        "and it is begun with the composed renderer, like every other FFmpeg film"
     );
 
     unsafe { show_pinned_window(film.pin_hwnd) };
