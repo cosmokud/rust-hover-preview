@@ -3821,12 +3821,14 @@ pub fn run_preview_window() {
                             kind, &path,
                         ));
 
-                        // A film the pin draws in its own host is the pin's film from here, not
-                        // the hover's that put it up: the tick's place-and-show reads this rather
-                        // than the hover's bookkeeping, which a late `Hide` can empty (see
+                        // A film the pin draws itself is the pin's film from here, not the
+                        // hover's that put it up: the tick's place-and-show reads this rather than
+                        // the hover's bookkeeping, which a late `Hide` can empty (see
                         // `the_video_window_is_owed_the_front`). The box is the band the take-up
-                        // just gave the window.
-                        if pin_film_host::the_film_is_shown_in_a_host(&path, None) {
+                        // just gave the window — and for an mpv film that window is the desktop's
+                        // own, placed at that band by the pin (see
+                        // `a_pinned_mpv_film_is_drawn_in_a_host`).
+                        if pin_film_host::the_pin_owns_this_films_window(&path) {
                             current_video_path = Some(path.clone());
                             video_pos = (rect.0, rect.1, rect.2 - rect.0, rect.3 - rect.1);
                         }

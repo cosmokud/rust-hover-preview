@@ -1,16 +1,26 @@
-//! The window a pinned mpv film is drawn in: a child of the pin's own window, standing in the
-//! band its picture is shown through.
+//! The windows a film at a pin's band is drawn in: **mpv's own top-level window, placed at the band
+//! by this app**, and — for FFmpeg's player, and for mpv where the machine asked for the hosted road by
+//! hand — a child host of the pin's window that the film is drawn into.
 //!
-//! **Why it is not the pin's window itself.** mpv's `--wid` fills the window it is given, and the
+//! **Why mpv's is a window of its own.** A `--wid` film is two windows deep (the host, then mpv's own
+//! child inside it), and mpv sizes the inner one on its own thread, so a resize has it arriving
+//! several sizes behind the band it stands in. A top-level film is one window: this app sets the size
+//! and mpv renders into it, which is the arrangement a pinned film was smooth in before a host was
+//! adopted for window-ness reasons alone and is the one `a_pinned_mpv_film_is_drawn_in_a_host` returns
+//! to. The window is placed at the band in the same pointer message as the pin's own box, without a
+//! raise, so the two are never inconsistent within a composite (see `ensure_pinned_sibling_box`).
+//!
+//! **Why the host is not the pin's window itself.** mpv's `--wid` fills the window it is given, and the
 //! pin's window is the chrome and the transport as well as the band; pointed at the pin, the film
 //! would be drawn over the caption. So the picture gets a window of its own at the band's client
 //! rectangle, and the pin keeps every other pixel (see `band_in_the_window`, which is the box the
 //! host is given).
 //!
-//! **Why it is a child.** The film has to travel with the pin — on a move, on a resize, and with
+//! **Why the host is a child.** The film has to travel with the pin — on a move, on a resize, and with
 //! the window when it is hidden or put away — and a child does that in the compositor rather than
 //! by this app moving two windows and then repairing their order. That repair is what the topmost
-//! band was for, and it is removed for the host (see `ensure_video_window_topmost`).
+//! band is for, and it is what a film in a window of its own needs: `ensure_pinned_sibling_box`
+//! places it and `place_player_window` puts the pin back over it.
 //!
 //! **Why it is disabled.** A press on the picture is a press on the pin: the pin is dragged by its
 //! film, and the band's alpha-1 claim is already hit-testable (see `fill_band_hit_testable`). A
@@ -182,8 +192,11 @@ pub(super) fn note_hosted_player(pid: u32) {
 
 /// The host to give a player begun for `path`, where that player is a pinned mpv and the pin
 /// stands in a window of its own. `None` is every other launch: a hover's film, FFmpeg's player,
-/// and the media engine's own frame. FFmpeg's player is not given a window — it is adopted into
-/// the host once it makes its own (see `host_for_the_pins_ffplay`).
+/// the media engine's own frame, and **an mpv film at a pin's band** — that film is a window of the
+/// desktop's that the pin places at its band, and it is hosted only where a machine asked for the
+/// hosted road by hand (see `a_pinned_mpv_film_is_drawn_in_a_host`). FFmpeg's player is not given
+/// a window either — it is adopted into the host once it makes its own (see
+/// `host_for_the_pins_ffplay`).
 pub(super) fn host_for_the_pins_film(path: &Path, kind: Option<MediaType>) -> Option<HWND> {
     (the_film_is_shown_in_a_host(path, kind) && video_route(path) == VideoRoute::Mpv)
         .then(film_host)
@@ -259,8 +272,14 @@ const MPV_COMPOSED_PIN_VARIABLE: &str = "RHP_MPV_COMPOSED_PIN";
 
 /// Whether the machine asked a pinned mpv film to take the composed road (see
 /// [`MPV_COMPOSED_PIN_VARIABLE`]).
+///
+/// **And only a hosted mpv film can take it**, because the composed road is a way of presenting a
+/// film *into* this pin's own surface: a film whose window is the desktop's draws into itself and has
+/// no road of this app's at all (see `a_pinned_mpv_film_is_drawn_in_a_host`). Asking for the composed
+/// road there would drop the pin's `WS_EX_LAYERED` for a picture that is a window over it — the band
+/// would be a nearly black rectangle instead of a hole.
 pub(super) fn the_mpv_pin_is_composed() -> bool {
-    std::env::var_os(MPV_COMPOSED_PIN_VARIABLE).is_some()
+    a_pinned_mpv_film_is_drawn_in_a_host() && std::env::var_os(MPV_COMPOSED_PIN_VARIABLE).is_some()
 }
 
 /// Whether the pin on screen holds a hosted film presented through the composed road. It is
@@ -309,14 +328,94 @@ pub(super) fn a_hosted_film_is_presented_composed(
     }
 }
 
-/// Whether this file is shown in a host this app owns: a film mpv plays or FFmpeg's player draws,
-/// pinned in a window of the pin's own. Asked of the route rather than of the player's process
-/// because it is the *launch* that decides where the picture is drawn (see `start_video_playback`).
+/// **A temporary A/B, and not a setting: `RHP_MPV_HOSTED_PIN`, present means hosted.**
+///
+/// A pinned mpv film is presented as a **top-level window of the player's own**, placed at the pin's
+/// band by this app on every step of a drag — the arrangement that was smooth before a pin hosted the
+/// film in a child of its own window. A `--wid` film is two windows deep (this app's host, then mpv's
+/// own child), and mpv sizes the inner one on its own thread, so a fast resize has it arriving several
+/// sizes behind the band. A top-level film is one window: this app sets its size and mpv renders into
+/// it (see `ensure_pinned_sibling_box`, `video_launch::mpv_args`).
+///
+/// **Setting the variable gives the hosted road back** — the child host, mpv told `--wid`, the host's
+/// own `WM_SIZE` fitting the child — for a machine that wants the A/B rather than the argument. It is
+/// read here and nowhere else, and the answer is a fact of the process: flipping it needs the app
+/// restarted, not the film re-pinned.
+const MPV_HOSTED_PIN_VARIABLE: &str = "RHP_MPV_HOSTED_PIN";
+
+/// Whether a pinned mpv film is drawn into a child host of the pin's window rather than in a
+/// top-level window of the player's own (see [`MPV_HOSTED_PIN_VARIABLE`]).
+pub(super) fn a_pinned_mpv_film_is_drawn_in_a_host() -> bool {
+    #[cfg(test)]
+    if let Some(answer) = the_mpv_pin_hosted_stand_in() {
+        return answer;
+    }
+
+    // Read once: the band asks this on every paint, and the answer is a fact of the process.
+    static ANSWER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ANSWER.get_or_init(|| std::env::var_os(MPV_HOSTED_PIN_VARIABLE).is_some())
+}
+
+/// Stand an answer for [`a_pinned_mpv_film_is_drawn_in_a_host`] in place of the machine's own, or give
+/// the machine's own answer back with `None` — the one slot the route stand-ins keep, put back the
+/// same way (see `stand_mpv_in`).
+#[cfg(test)]
+pub(super) fn stand_the_mpv_pin_hosted_in(answer: Option<bool>) {
+    if let Ok(mut held) = MPV_PIN_HOSTED_STAND_IN.lock() {
+        *held = answer;
+    }
+}
+
+/// The answer [`a_pinned_mpv_film_is_drawn_in_a_host`] is given while a test stands one in.
+#[cfg(test)]
+fn the_mpv_pin_hosted_stand_in() -> Option<bool> {
+    MPV_PIN_HOSTED_STAND_IN.lock().ok().and_then(|held| *held)
+}
+
+/// The answer [`a_pinned_mpv_film_is_drawn_in_a_host`] is given while a test stands one in (see
+/// `stand_the_mpv_pin_hosted_in`).
+#[cfg(test)]
+static MPV_PIN_HOSTED_STAND_IN: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+/// Whether this file is shown in a host this app owns: a film FFmpeg's player draws, or one mpv
+/// plays where the machine asked for the hosted road, pinned in a window of the pin's own. Asked of
+/// the route rather than of the player's process because it is the *launch* that decides where the
+/// picture is drawn (see `start_video_playback`).
 pub(super) fn the_film_is_shown_in_a_host(path: &Path, kind: Option<MediaType>) -> bool {
     // A sound's player is FFmpeg's too, and a sound's route would match the film routes below: the
     // media on screen has to be a film before any host road is asked (see `MediaType::is_audio`).
     pin_is_its_own_window()
         && kind.or_else(current_media_type) == Some(MediaType::Video)
+        && a_film_route_is_drawn_in_a_host(
+            video_route(path),
+            a_pinned_mpv_film_is_drawn_in_a_host(),
+        )
+}
+
+/// Whether a film of `route` at a pin's band is drawn into a host this app made, with the machine's
+/// own answer about mpv given as a parameter — the environment is read in one place
+/// ([`a_pinned_mpv_film_is_drawn_in_a_host`]), so a test is a call rather than an environment write
+/// every other test in the process would see. FFmpeg's player is hosted; mpv's is only where the
+/// hosted road was asked for by hand.
+pub(super) fn a_film_route_is_drawn_in_a_host(route: VideoRoute, mpv_hosted: bool) -> bool {
+    match route {
+        VideoRoute::Mpv => mpv_hosted,
+        VideoRoute::Ffplay => true,
+        _ => false,
+    }
+}
+
+/// Whether the pin owns this film's picture: it draws it in a child of a host of its own, or places
+/// the player's own top-level window at its band (see `ensure_pinned_sibling_box`).
+///
+/// **It is the question the roads that used to ask "is this film drawn in a host" are owed now that
+/// mpv's film is a window of the desktop's again.** What they mean is not where the picture is drawn
+/// but who puts it there: a hover's film is a window of the hover's and stays where the hover left it,
+/// and a pin's is the band's and is the pin's to place. It is also the gate a take-up asks before it
+/// begins a player of the pin's own at the band rather than leaving the hover's where it stands.
+pub(super) fn the_pin_owns_this_films_window(path: &Path) -> bool {
+    pin_is_its_own_window()
+        && current_media_type() == Some(MediaType::Video)
         && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
 }
 
@@ -327,10 +426,32 @@ pub(super) fn a_pinned_ffplay_film_is_drawn_in_the_pins_host(path: &Path) -> boo
     pin_is_its_own_window() && video_route(path) == VideoRoute::Ffplay
 }
 
-/// Whether a pinned film is drawn in a host rather than a window of the desktop's: mpv always, and
-/// FFmpeg's player only when this pin hosts it. The drag and relayout roads reuse mpv's host arm.
+/// Whether the film at the pin's band is drawn in a host of the pin's own rather than in a window
+/// the pin places at its band: the question the band's cover is asked (see `paint`), answered before
+/// the media's own lock is taken.
+pub(super) fn a_host_of_the_pin_holds_the_film_at_its_band() -> bool {
+    pinned_path().is_some_and(|path| the_pinned_film_is_drawn_in_a_host(&path))
+}
+
+/// Whether a pinned film is drawn in a host of this app's rather than a window of the desktop's:
+/// FFmpeg's player when this pin hosts it, and mpv's only where the machine asked for the hosted
+/// road (see `a_pinned_mpv_film_is_drawn_in_a_host`).
 pub(super) fn the_pinned_film_is_drawn_in_a_host(path: &Path) -> bool {
-    video_route(path) == VideoRoute::Mpv || a_pinned_ffplay_film_is_drawn_in_the_pins_host(path)
+    match video_route(path) {
+        // The pin's own host's child, where the machine asked for the hosted road (see
+        // `a_pinned_mpv_film_is_drawn_in_a_host`).
+        VideoRoute::Mpv => a_pinned_mpv_film_is_drawn_in_a_host(),
+        _ => a_pinned_ffplay_film_is_drawn_in_the_pins_host(path),
+    }
+}
+
+/// Whether this film runs on through a gesture rather than being held, parked and begun again: a
+/// film drawn into a host of the pin's own, and mpv's whether it is hosted or not — mpv rescales
+/// itself when its window is given a new box, and it is told a pause, a seek and a level over its own
+/// pipe, so a drag and a resize are a move of the window it already has (see `pin_drag`,
+/// `pin_install`, `mpv_ipc`).
+pub(super) fn the_film_runs_on_through_a_gesture(path: &Path) -> bool {
+    video_route(path) == VideoRoute::Mpv || the_pinned_film_is_drawn_in_a_host(path)
 }
 
 /// Whether the pin's film is FFmpeg's, whose child is fitted to the host's box by the road that
@@ -1025,7 +1146,10 @@ pub(super) fn the_hosted_frame_is_up(pid: u32) -> bool {
     if pid != 0 && PRESENTED_PID.load(Ordering::SeqCst) == pid {
         return true;
     }
-    if !the_hosted_player_is_drawing(pid) {
+    // The window question is the player's own, wherever it draws: a child of the pin's host, or —
+    // for an mpv film the pin places at its band — a top-level window of the player's (see
+    // `the_players_window_is_up`).
+    if !the_players_window_is_up(pid) {
         return false;
     }
     if the_pins_film_is_ffplay() {

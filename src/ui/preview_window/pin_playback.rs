@@ -969,13 +969,19 @@ pub(super) fn adopt_the_hovered_film_in_the_host() -> bool {
 /// Nothing is begun for a film the host already holds — every show of a hosted pin would otherwise
 /// be a player begun again — and nothing for a pin with no player up at all, which is a film that
 /// has not started rather than one to move (see `pin_film_host::host_for_the_pins_film`).
+///
+/// **A film the pin draws in a window of its own is begun too, into a host where it is drawn in one.**
+/// A pinned mpv film's window is the desktop's (see `a_pinned_mpv_film_is_drawn_in_a_host`), so the
+/// hover's host cannot become it and the mpv arm below is the pin's: the film is begun again as a
+/// top-level window at the band, with the hover's own frame standing in for it until it draws.
 pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
     let Some((path, content, transport, _)) = pinned_playback_state() else {
         return false;
     };
 
-    if !pin_film_host::the_film_is_shown_in_a_host(&path, None)
-        || pin_film_host::film_host().is_none()
+    let drawn_in_a_host = pin_film_host::the_film_is_shown_in_a_host(&path, None);
+    if !(drawn_in_a_host || pin_film_host::the_pin_owns_this_films_window(&path))
+        || (drawn_in_a_host && pin_film_host::film_host().is_none())
         || pin_film_host::the_pinned_player_was_begun_in_the_host()
         || VIDEO_PID.load(Ordering::SeqCst) == 0
     {

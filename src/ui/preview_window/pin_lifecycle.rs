@@ -1325,14 +1325,16 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // window once the pin is on the screen, and its player keeps the same child and the same
     // playhead — no freeze, no read back of `time-pos`, no second decode. Every other take-up from
     // a hover keeps the freeze/relaunch handover below as the fallback.
+    //
+    // **And only a film the pin draws in a host of its own is moved that way.** A pinned mpv film's
+    // window is the desktop's and is placed at the band by this app (see
+    // `a_pinned_mpv_film_is_drawn_in_a_host`): the hover's host cannot become it, so that take-up
+    // is the freeze/relaunch road below — the pre-host answer — rather than a re-parent.
     let adopts_the_hover_host = pin_is_its_own_window()
-        && pin_state()
-            .and_then(|pinned| {
-                pinned
-                    .pin()
-                    .map(|pin| hover_film_host::the_hover_film_to_adopt(&pin.path).is_some())
-            })
-            .unwrap_or(false);
+        && pinned_path().is_some_and(|path| {
+            pin_film_host::the_pinned_film_is_drawn_in_a_host(&path)
+                && hover_film_host::the_hover_film_to_adopt(&path).is_some()
+        });
     {
         let path = pinned_path();
         let route = path.as_deref().map(video_route);

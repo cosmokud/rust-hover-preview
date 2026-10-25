@@ -900,6 +900,203 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     }
 }
 
+/// A resize of a pin whose film mpv draws leaves the player's window exactly at the band on every
+/// step, and at the band a whole grow and a whole shrink end on.
+///
+/// **What it proves.** The band a resized pin shows is this app's own alpha-1 claim, and the film is
+/// the window under it (see `fill_band_hit_testable`): a step that put the pin at its new box and
+/// left the player's window at an old one leaves the band a hole over the desktop for the whole of
+/// the gesture, and a window that lags the band by a step is that same hole drawn smaller. So the
+/// promise is per step and not per drag, in both directions — the drag that grows and the drag that
+/// shrinks expose and give up a strip on different sides of the box, and a step of either is the
+/// same `SetWindowPos` (see `ensure_pinned_sibling_box`).
+///
+/// The player's window is a stand-in of this app's own (`stand_a_player_window`) and its box is read
+/// back off the machine, because the place a player's window is put at is asked of the machine and
+/// nothing else in this view keeps a record of it.
+///
+/// `cargo test --lib a_resized_mpv_pin_leaves_its_players_window_at_the_band_on_every_step`
+#[test]
+fn a_resized_mpv_pin_leaves_its_players_window_at_the_band_on_every_step() {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let content = (100, 80, 420, 320);
+    let player = unsafe { stand_a_player_window(content) };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+    note_player_process(0, MPV_IMAGE_NAME);
+
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = PathBuf::from("a-resized-pin-whose-player-is-mpv.mkv");
+    pin.transport.begun(30.0, true, false);
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+        *request = None;
+    }
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+
+    let hwnd = HWND(0x1000 as *mut _);
+    let window = a_window_at(content);
+    let corner = edge(false, false, true, true);
+
+    // **The grow.** Four steps out from the box the press found, each one asked where the film is.
+    begin_pin_drag(hwnd, &window, PinDragAction::Resize(corner), true);
+    assert!(
+        !pin_player_is_parked(),
+        "mpv is left drawing through a resize: the window is moved and the film plays on"
+    );
+    for step in 1..=4 {
+        step_the_pin_drag_by(step * 30, step * 24);
+        // Re-asserted per step for the reason the move test gives: the monitor thread of the whole
+        // process follows `VIDEO_PID`, and another test's player ending is a window forgotten.
+        VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+        unsafe { apply_pin_drag(hwnd) };
+
+        let band = pinned_content().expect("a pin with a media band");
+        assert_eq!(
+            window_box_on_screen(player),
+            band,
+            "grow {step}: the player's window is not where the band is — the film has been left \
+             behind and the band's hole is the desktop showing through"
+        );
+    }
+    finish_pin_drag(hwnd, &window);
+    let grown = pinned_content().expect("a pin with a media band");
+    assert!(
+        grown.2 - grown.0 > content.2 - content.0,
+        "the grow really grew: {grown:?} against {content:?}"
+    );
+    assert_eq!(
+        window_box_on_screen(player),
+        grown,
+        "and the drag ends with the window at the band it ended on"
+    );
+
+    // **The shrink**, from the grown box and back past where the whole drag began.
+    begin_pin_drag(hwnd, &window, PinDragAction::Resize(corner), true);
+    for step in 1..=4 {
+        step_the_pin_drag_by(-step * 60, -step * 48);
+        VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+        unsafe { apply_pin_drag(hwnd) };
+
+        let band = pinned_content().expect("a pin with a media band");
+        assert_eq!(
+            window_box_on_screen(player),
+            band,
+            "shrink {step}: the player's window is not where the band is — a window bigger than \
+             the band is the film under the chrome it has just given up"
+        );
+    }
+    finish_pin_drag(hwnd, &window);
+    let shrunk = pinned_content().expect("a pin with a media band");
+    assert!(
+        shrunk.2 - shrunk.0 < content.2 - content.0,
+        "the shrink really shrank, past the box the press found: {shrunk:?} against {content:?}"
+    );
+    assert_eq!(
+        window_box_on_screen(player),
+        shrunk,
+        "and the shrink ends with the window at the band it ended on"
+    );
+
+    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// The window an mpv film is drawn in goes down with the pin and is put back in its band with it,
+/// and it travels with the band on a step of a drag.
+///
+/// **What it proves.** A child of the pin's window is hidden, shown and moved by the compositor for
+/// nothing; a window of the desktop's is the pin's to do all three with, and every road that does one
+/// of them for the pin already exists for a film that is a window of its own (see
+/// `hide_pinned_siblings` and `ensure_pinned_sibling_box`). So what this pins is that an mpv film on
+/// the top-level road is still on all three lists — the failure it guards is a film left standing on
+/// screen after the pin was put away, and a film left behind by a step.
+///
+/// `VIDEO_PID` is left zero, as the placement tests leave it: the roads are read off this app's own
+/// record of the window, and no process of the machine's is enumerated or styled.
+#[test]
+fn an_mpv_pins_player_window_goes_down_with_the_pin_and_travels_with_its_band() {
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, IsWindowVisible};
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let band = (140, 120, 460, 360);
+
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = PathBuf::from("a-pin-whose-player-is-mpv.mkv");
+    stand_pin(Some(pin));
+    note_player_process(0, MPV_IMAGE_NAME);
+
+    let player = unsafe { stand_a_player_window(content) };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+    unsafe {
+        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
+    }
+
+    // The pin is put away: the film goes with it rather than standing alone on the desktop.
+    unsafe { hide_pinned_siblings() };
+    assert!(
+        !unsafe { IsWindowVisible(player) }.as_bool(),
+        "a pin that goes down leaves no film of its own on the screen"
+    );
+
+    // And the band the pin comes back to is the band the film is put back in, which is the same
+    // call a step of a drag makes: the place and the show are one `SetWindowPos`.
+    ensure_pinned_sibling_box(band);
+    assert!(
+        unsafe { IsWindowVisible(player) }.as_bool(),
+        "the band a pin comes back to is a hole until the film is put back in it"
+    );
+    assert_eq!(
+        window_box_on_screen(player),
+        band,
+        "and it is put back where the band is, not where it stood when the pin went away"
+    );
+
+    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
+    stand_pin(previous_pin);
+}
+
 /// A resize drag asks for the pin's band where it begins and where it ends, and never on a step
 /// between the two.
 ///
