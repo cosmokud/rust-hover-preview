@@ -504,11 +504,11 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
 
 /// A hosted hover's FFmpeg launch is the same one a hosted pin gets: SDL's Direct3D 11 renderer,
 /// which is the one that presents under the layered pin the host is moved into, without
-/// `-noborder` so a later band resize is not clamped, and with vsync off so a hosted film does not
-/// hold a swapchain the desktop's windowed VRR cannot follow. A plain top-level hover keeps its
-/// borderless window and SDL's own renderer.
+/// `-noborder` so a later band resize is not clamped, and with no pacing switch at all, so SDL's
+/// vsync default stands as it does for mpv. A plain top-level hover keeps its borderless window,
+/// SDL's own renderer and no pacing switch either.
 #[test]
-fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_vsync_off() {
+fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_no_pacing_switch() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -533,10 +533,11 @@ fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_vsync_off() {
             "and asks for the renderer that presents inside the layered pin"
         );
         assert!(
-            launched.env.iter().any(|(key, value)| {
-                key.eq_ignore_ascii_case("SDL_RENDER_VSYNC") && value.as_deref() == Some("0")
-            }),
-            "with vsync off, so it does not hold a swapchain VRR cannot follow"
+            !launched
+                .env
+                .iter()
+                .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_VSYNC")),
+            "and sets no pacing switch, leaving SDL's vsync default to stand as mpv does"
         );
     }
 
@@ -559,10 +560,11 @@ fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_vsync_off() {
             "and SDL's own renderer choice"
         );
         assert!(
-            hovered.env.iter().any(|(key, value)| {
-                key.eq_ignore_ascii_case("SDL_RENDER_VSYNC") && value.as_deref() == Some("0")
-            }),
-            "with vsync off as well, which is the plain hover's measured present"
+            !hovered
+                .env
+                .iter()
+                .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_VSYNC")),
+            "and no pacing switch as well"
         );
     }
 }

@@ -242,16 +242,33 @@ pub(super) unsafe fn adopt_the_players_window(child: HWND, host: HWND) -> bool {
     unsafe { SetWindowLongPtrW(child, GWL_EXSTYLE, ex) };
     // Disabled, so a press on the picture is a press on the pin (see `pin_film_host`).
     let _ = unsafe { EnableWindow(child, false) };
-    unsafe { fit_the_hosted_player_to_the_host(child, host) };
+    // The styles and the parent have just changed, so the frame bits are settled here, once.
+    unsafe { fit_the_hosted_player_to_the_host_now(child, host, true) };
     true
 }
 
-/// Fit a hosted player's window to the host's client box: the band's box changes and SDL will not
-/// follow its parent on its own.
+/// Fit a hosted player's window to the host's client box, without re-framing it.
+///
+/// **No `SWP_FRAMECHANGED` here, because this is the routine road.** It runs on every take-up, every
+/// placement, every box change and every pointer move of a resize drag. `SWP_FRAMECHANGED` re-sends
+/// `WM_NCCALCSIZE`, which makes SDL rebuild its window-size-dependent resources — a flip swapchain
+/// reset, i.e. a blank frame — and a film resized by the pointer would reset it per move. mpv's
+/// `--wid` child is never re-framed after birth; the frame bits are settled once, at adoption (see
+/// `adopt_the_players_window`).
 pub(super) unsafe fn fit_the_hosted_player_to_the_host(child: HWND, host: HWND) {
+    unsafe { fit_the_hosted_player_to_the_host_now(child, host, false) };
+}
+
+/// The one fit, with the re-frame made a caller's choice: `SWP_FRAMECHANGED` where the style or the
+/// parent was just changed, and never on the routine road above.
+unsafe fn fit_the_hosted_player_to_the_host_now(child: HWND, host: HWND, reframe: bool) {
     let mut client = RECT::default();
     if unsafe { GetClientRect(host, &mut client) }.is_err() {
         return;
+    }
+    let mut flags = SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW;
+    if reframe {
+        flags |= SWP_FRAMECHANGED;
     }
     let _ = unsafe {
         SetWindowPos(
@@ -261,7 +278,7 @@ pub(super) unsafe fn fit_the_hosted_player_to_the_host(child: HWND, host: HWND) 
             0,
             (client.right - client.left).max(1),
             (client.bottom - client.top).max(1),
-            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+            flags,
         )
     };
 }

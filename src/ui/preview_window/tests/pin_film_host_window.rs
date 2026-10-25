@@ -3654,6 +3654,13 @@ fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window()
         }),
         "and asks for the one renderer that presents inside a layered pin window"
     );
+    assert!(
+        !launched
+            .env
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_VSYNC")),
+        "and leaves SDL's vsync default standing, as mpv's own launch does"
+    );
 
     // The same film with no pin and Pin Mode off is an unhosted hover: SDL's default renderer
     // and the borderless window it has always had (see `hover_film_host_window` for the hosted
@@ -3683,6 +3690,13 @@ fn the_hosted_ffplay_launch_asks_for_direct3d11_and_keeps_its_resizable_window()
             .iter()
             .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")),
         "and it keeps SDL's own renderer choice"
+    );
+    assert!(
+        !hovered
+            .env
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_VSYNC")),
+        "and sets no pacing switch either"
     );
 }
 
@@ -4288,6 +4302,13 @@ fn a_step_into_an_ffplay_film_begins_it_in_the_pins_host_once() {
             key.eq_ignore_ascii_case("SDL_RENDER_DRIVER") && value.as_deref() == Some("direct3d11")
         }),
         "and it asks for the renderer a layered pin window needs"
+    );
+    assert!(
+        !launched
+            .env
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_VSYNC")),
+        "and leaves SDL's vsync default alone"
     );
 
     unsafe { show_pinned_window(film.pin_hwnd) };
