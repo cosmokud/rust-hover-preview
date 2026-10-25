@@ -900,6 +900,154 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     }
 }
 
+/// A resize drag asks for the pin's band where it begins and where it ends, and never on a step
+/// between the two.
+///
+/// **The fault this is a regression test for is a `SetWindowPos` per pointer move.** The band a pin
+/// belongs in is a question about the setting rather than about its box (`band_place`), so a resize
+/// that re-asserted it on every step was a DWM reorder per move for a window already in the band it
+/// named. What a drag owes is the band at its press and at its release — so this reads both, one
+/// direction for each setting, and reads the band a step leaves behind in between.
+///
+/// The window is a real one of this app's own (the same stand-in the player placements are read
+/// off), because a band is a fact about a window and nothing in this view keeps a record of it: the
+/// raised state is read back off the machine with `window_holds_the_topmost_band`.
+#[test]
+fn a_resize_drag_bands_the_pin_at_its_two_ends_and_not_on_a_step_between_them() {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_band = PIN_BAND_HELD.swap(false, Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+
+    let content = (100, 80, 420, 320);
+    // A real window of the machine's own, born topmost — the state this test puts the pin in the
+    // wrong band of is its own, so what is read after the press is this app's answer and not the
+    // window's creation.
+    let pin_window = unsafe { stand_a_player_window(content) };
+    assert!(
+        unsafe { window_holds_the_topmost_band(pin_window) },
+        "the stand-in is born in the topmost band, so a window read as ordinary after the press \
+         was put there by the drag"
+    );
+
+    // **`Always On Top` off: the press and the release are the band's, and a step's is not.** The
+    // band is put back in the topmost one by hand mid-drag, which is any road that put the window in
+    // the band `band_place` does not name: a step that re-asked the band would take it away again.
+    let banded = |window: HWND| unsafe { window_holds_the_topmost_band(window) };
+    let band_the_pin = |window: HWND, band: HWND| unsafe {
+        let _ = SetWindowPos(
+            window,
+            band,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        let _ = DwmFlush();
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let hwnd = pin_window;
+    let window = a_window_at(content);
+    begin_pin_drag(
+        hwnd,
+        &window,
+        PinDragAction::Resize(edge(false, false, true, true)),
+        true,
+    );
+    assert!(
+        !banded(pin_window),
+        "the press puts the pin in the band the setting names, which with `Always On Top` off is \
+         the ordinary one"
+    );
+
+    band_the_pin(pin_window, HWND_TOPMOST);
+    assert!(banded(pin_window), "the window is back in the wrong band");
+
+    for step in 1..=3 {
+        step_the_pin_drag_by(step * 12, step * 9);
+        unsafe { apply_pin_drag(hwnd) };
+        assert!(
+            banded(pin_window),
+            "step {step}: a step of a resize asked for the band again, which is a DWM reorder per \
+             pointer move for a window already in it"
+        );
+    }
+
+    finish_pin_drag(hwnd, &window);
+    assert!(
+        !banded(pin_window),
+        "and the release is the other end the band is asked at: the pin goes back to the ordinary \
+         band however a step left it"
+    );
+
+    // **`Always On Top` on: the same two ends, the other way.** The window is put in the ordinary
+    // band first, so the topmost read at each end is the drag's answer rather than the band it began
+    // in.
+    if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+        *request = None;
+    }
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    band_the_pin(pin_window, HWND_NOTOPMOST);
+    assert!(
+        !banded(pin_window),
+        "the window is out of the band the setting names"
+    );
+
+    begin_pin_drag(
+        hwnd,
+        &window,
+        PinDragAction::Resize(edge(false, false, true, true)),
+        true,
+    );
+    assert!(
+        banded(pin_window),
+        "the press of a resize puts the pin in the topmost band where the setting asks for it"
+    );
+    step_the_pin_drag_by(8, 6);
+    unsafe { apply_pin_drag(hwnd) };
+    assert!(
+        banded(pin_window),
+        "and a step leaves the band it found alone"
+    );
+    finish_pin_drag(hwnd, &window);
+    assert!(
+        banded(pin_window),
+        "and the release leaves the pin in the band the setting asks for"
+    );
+
+    if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+        *request = None;
+    }
+    unsafe { DestroyWindow(pin_window).expect("the stand-in window let go of") };
+    PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+    }
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
 /// Only a window mpv is drawing is moved with a dragged pin where the pin's chrome is up: every
 /// other answer the placement can give is the one it gave before.
 ///
