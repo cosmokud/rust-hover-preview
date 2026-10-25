@@ -14,13 +14,12 @@ use super::*;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetParent, GetWindowLongPtrW, IsIconic,
-    IsWindowVisible, MoveWindow, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE,
-    GW_HWNDPREV,
-    HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WM_SHOWWINDOW,
-    WM_WINDOWPOSCHANGING, WINDOW_EX_STYLE,
-    WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP,
-    WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindowLongPtrW,
+    IsIconic, IsWindowVisible, MoveWindow, SendMessageW, SetWindowLongPtrW, ShowWindow,
+    GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOP, SWP_ASYNCWINDOWPOS,
+    SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_SHOWWINDOW, WM_SIZE,
+    WM_WINDOWPOSCHANGING, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 /// The show and hide messages the adopted host received, in order: whether it was shown, the style
@@ -138,6 +137,11 @@ impl StandingFilm {
         // `the_pinned_player_was_begun_in_the_host`).
         pin_film_host::note_hosted_player(unsafe { GetCurrentProcessId() });
 
+        // **The road this stand is for is the child host.** The environment of a run that set the
+        // diagnostic would otherwise hand every test here the other one, and a stand that answers
+        // differently according to how the suite was started is a test of nothing (see
+        // `pin_film_host::stand_the_owned_road_in`).
+        pin_film_host::stand_the_owned_road_in(Some(false));
         stand_mpv_in(Some(true));
         stand_video_engine_in(Some((VideoEngine::Mpv, true)));
 
@@ -196,6 +200,7 @@ impl Drop for StandingFilm {
         VIDEO_HWND.store(self.previous_hwnd, Ordering::SeqCst);
         stand_mpv_in(None);
         stand_video_engine_in(None);
+        pin_film_host::stand_the_owned_road_in(None);
         if let Ok(mut current) = CURRENT_MEDIA.lock() {
             *current = self.previous_media.take();
         }
@@ -4910,4 +4915,264 @@ fn a_show_adopts_the_pin_player_a_step_began_unhosted() {
         take_last_spawned_command().is_none(),
         "nothing is spawned for the take-up"
     );
+}
+
+/// **The road where the host owns the pin's chrome**: the film's host is a window of the desktop's
+/// rather than a child of the pin's, and the pin's own window is owned by it — which is the whole of
+/// what keeps the chrome over the film without this app moving either of them (see
+/// `pin_film_host::the_pin_film_host_is_a_window_of_the_desktop`).
+///
+/// A `WS_CHILD` is always drawn above its parent's client area, and a layered parent cannot clip a
+/// hardware swapchain child; a window of the desktop's below an owned pin has the OS keep the order
+/// instead, so this asserts both halves of that pair rather than the picture, which no test can see.
+#[test]
+fn an_owned_pin_gets_a_window_of_the_desktop_that_owns_its_chrome() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    pin_film_host::stand_the_owned_road_in(Some(true));
+    assert!(
+        pin_film_host::the_pin_film_host_is_a_window_of_the_desktop(&PathBuf::from("a-film.mkv")),
+        "the road is the pin's own window, a film, and mpv's"
+    );
+
+    unsafe { pin_film_host::take_up_the_pin_film_host(None) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    let style = unsafe { GetWindowLongPtrW(host, GWL_STYLE) };
+    assert_eq!(
+        style & WS_CHILD.0 as isize,
+        0,
+        "the host is not a child, which is the whole of what was wrong with the one it replaces"
+    );
+    assert_eq!(
+        style & WS_POPUP.0 as isize,
+        WS_POPUP.0 as isize,
+        "it is a popup: a window of the desktop's at the band the film stands in"
+    );
+    let ex = unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) };
+    assert_eq!(
+        ex & WS_EX_LAYERED.0 as isize,
+        0,
+        "and it is not layered: the film's swapchain needs a real window under it"
+    );
+    assert_eq!(
+        ex & WS_EX_APPWINDOW.0 as isize,
+        WS_EX_APPWINDOW.0 as isize,
+        "it is the window the Shell lists and gives a button to, where the chrome it owns is not"
+    );
+
+    assert_eq!(
+        unsafe { GetWindow(film.pin_hwnd, GW_OWNER) },
+        Ok(host),
+        "the pin's chrome is the host's own window"
+    );
+    assert!(
+        unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize == 0,
+        "and the chrome asks for no taskbar button of its own, because a window it owns carries one"
+    );
+    assert_eq!(
+        unsafe { window_rect(host) },
+        film.box_,
+        "the host stands at the pin's band, on the screen, rather than in its client coordinates"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    assert_eq!(
+        unsafe { GetWindow(film.pin_hwnd, GW_OWNER) },
+        Err(windows::core::Error::from_win32()),
+        "and a host that goes gives the chrome back rather than taking it down with it"
+    );
+    assert!(
+        unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize != 0,
+        "the pin is the Shell's window again"
+    );
+    assert!(
+        unsafe { IsWindow(film.pin_hwnd) }.as_bool(),
+        "and it is a window the hand can still carry, size and close"
+    );
+
+    pin_film_host::stand_the_owned_road_in(None);
+    drop(film);
+}
+
+/// **The host is the band at every step of a grow and a shrink**, whichever of the two the step
+/// committed first: a window of the desktop's is not clipped by the pin, so a host left at the box
+/// the step came from is a film standing outside the chrome it belongs to (see `apply_pin_drag` and
+/// `pin_film_host::the_film_host_box`).
+#[test]
+fn an_owned_pins_host_is_the_band_at_every_step_of_a_grow_and_a_shrink() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+    let film = StandingFilm::new();
+    pin_film_host::stand_the_owned_road_in(Some(true));
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    // A step places the pin on the screen its box is clamped to: the window is hidden so the test
+    // owes the desktop no picture.
+    unsafe {
+        let _ = ShowWindow(film.pin_hwnd, SW_HIDE);
+    }
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    let window = a_window_at(film.box_);
+    begin_pin_drag(
+        film.pin_hwnd,
+        &window,
+        PinDragAction::Resize(edge(false, false, true, false)),
+        true,
+    );
+
+    let mut width = film.box_.2 - film.box_.0;
+    for (travel, growing) in [(120, true), (-160, false)] {
+        super::probes::step_the_pin_drag_by(travel, 0);
+        unsafe { apply_pin_drag(film.pin_hwnd) };
+
+        let band = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+            .expect("a pin up");
+        let now = band.2 - band.0;
+        assert_eq!(
+            now > width,
+            growing,
+            "the step of {travel} took the window {} rather than the other way",
+            if growing { "out" } else { "in" }
+        );
+        width = now;
+
+        assert_eq!(
+            unsafe { window_rect(film.pin_hwnd) },
+            band,
+            "the pin's own window is the box the step asked for"
+        );
+        assert_eq!(
+            unsafe { window_rect(host) },
+            band,
+            "and the host is that band on the screen, and not the box the step came from"
+        );
+    }
+
+    with_pin(|pin| pin.dragging = None);
+    pin_film_host::stand_the_owned_road_in(None);
+    drop(film);
+}
+
+/// **mpv's child is sized from the host's own `WM_SIZE`, and asked for rather than waited on.** The
+/// message that moves the host is the step path, so a synchronous placement of a child in another
+/// process's thread there is this app's thread waiting on mpv's — which is the hang the road exists
+/// to not have (see `pin_film_host::fit_flags`).
+#[test]
+fn an_owned_hosts_resize_fits_mpvs_child_without_waiting_for_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    pin_film_host::stand_the_owned_road_in(Some(true));
+    unsafe { pin_film_host::take_up_the_pin_film_host(None) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    let wider = (
+        film.box_.0,
+        film.box_.1,
+        film.box_.0 + 400,
+        film.box_.1 + 300,
+    );
+    with_pin(|pin| pin.content = wider);
+    place_pinned_siblings();
+    assert_eq!(
+        unsafe { window_rect(host) },
+        wider,
+        "the host is the band it was placed at"
+    );
+
+    assert_eq!(
+        pin_film_host::fit_flags() & SWP_ASYNCWINDOWPOS,
+        SWP_ASYNCWINDOWPOS,
+        "and the box it gives its child is asked for rather than waited on"
+    );
+
+    // The child mpv would have made under it, and the message the resize arrives as: the fit is
+    // posted to the child's own thread, which is this one, so it lands when the queue is read —
+    // and the child is the host's client box by then.
+    let child = unsafe { a_child_of_the_host(host) };
+    let client = {
+        let mut client = RECT::default();
+        let _ = unsafe { GetClientRect(host, &mut client) };
+        (client.right, client.bottom)
+    };
+    unsafe { SendMessageW(host, WM_SIZE, WPARAM(0), LPARAM(0)) };
+    let mut msg = MSG::default();
+    while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+        unsafe { DispatchMessageW(&msg) };
+    }
+    let placed = unsafe { window_rect(child) };
+    assert_eq!(
+        (placed.2 - placed.0, placed.3 - placed.1),
+        client,
+        "mpv's child is the host's client box in the message that gave the host its own"
+    );
+
+    unsafe { DestroyWindow(child) }.expect("the player's child goes");
+    pin_film_host::stand_the_owned_road_in(None);
+    drop(film);
+}
+
+/// **A take-up begins one player, and no road that puts the pin back up begins a second.** The
+/// film's host is the pin's own, so the question every show asks is whether a player is already
+/// drawing in *that* host — and a show that answered it with a launch is a second mpv behind a pin
+/// that is already showing the first, with another wait armed behind it. That is the loop the
+/// reverted commits shipped: two players in Task Manager, the film frozen between them, and a wait
+/// that outlived the pin (see `pin_playback::begin_the_adopted_film_in_the_host`).
+#[test]
+fn an_owned_pin_begins_one_player_and_no_show_begins_a_second() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    pin_film_host::stand_the_owned_road_in(Some(true));
+    let hover = unsafe { StandingHover::up() };
+    // Taken up on a hover's player: the film is not in this pin's host yet, so the take-up is the
+    // road that begins the pin's own.
+    film.taken_up_from_a_hover(101);
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_film_host::disarm_pin_handover();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let begun_by_the_take_up = restart_count();
+    assert_eq!(begun_by_the_take_up, 1, "the take-up begins the pin's player");
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    // The player is now the one drawing in the pin's host, which is what a real launch records
+    // before the player has a window of its own.
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+
+    // The roads that put a pin already on the screen back up: a box change and the tick's restore.
+    with_pin(|pin| pin.content = (film.box_.0, film.box_.1, film.box_.2, film.box_.3));
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    place_pinned_siblings();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert_eq!(
+        restart_count(),
+        begun_by_the_take_up,
+        "a pin already standing over its own player is not a film begun again behind it"
+    );
+    assert!(
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "and the pin is a window the hand can carry, size and close"
+    );
+    assert_eq!(
+        unsafe { GetWindow(film.pin_hwnd, GW_OWNER) },
+        Ok(host),
+        "with the host that holds its film still owning it"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    clear_pending_pinned_relaunch();
+    clear_restart_count();
+    clear_park_trace();
+    pin_film_host::stand_the_owned_road_in(None);
+    drop(hover);
+    drop(film);
 }

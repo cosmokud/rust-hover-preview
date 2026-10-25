@@ -1155,6 +1155,16 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
         return false;
     }
 
+    // **A pin whose chrome is owned by its film host is put down and brought back by its owner.**
+    // Windows hides an owned window with the window that owns it and shows it again with it, so a
+    // pin the Shell has minimized by the host's own taskbar button is a pin that is down *because*
+    // the host is — and a restore here would be this app's window standing over a minimized host,
+    // with the film behind it and no button of its own. What brings the pair back is the host's
+    // button, which is the Shell's to answer (see `pin_film_host::own_the_pin_window`).
+    if pin_film_host::the_pins_chrome_is_owned() {
+        return false;
+    }
+
     if pin_is_its_own_window() {
         return !unsafe { IsWindowVisible(hwnd) }.as_bool();
     }
@@ -1325,12 +1335,19 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // window once the pin is on the screen, and its player keeps the same child and the same
     // playhead — no freeze, no read back of `time-pos`, no second decode. Every other take-up from
     // a hover keeps the freeze/relaunch handover below as the fallback.
+    //
+    // **And a film the host owns the pin for is never moved into it.** Moving the hover's host in
+    // would make it a child of the pin's window, which is the airspace a pin is a window of its own
+    // to be rid of; that take-up makes the host its own and begins the pin's player behind the frozen
+    // hover, like any other film whose window is the desktop's (see
+    // `pin_film_host::the_pin_film_host_is_a_window_of_the_desktop`).
     let adopts_the_hover_host = pin_is_its_own_window()
         && pin_state()
             .and_then(|pinned| {
-                pinned
-                    .pin()
-                    .map(|pin| hover_film_host::the_hover_film_to_adopt(&pin.path).is_some())
+                pinned.pin().map(|pin| {
+                    !pin_film_host::the_pin_film_host_is_a_window_of_the_desktop(&pin.path)
+                        && hover_film_host::the_hover_film_to_adopt(&pin.path).is_some()
+                })
             })
             .unwrap_or(false);
     {
