@@ -33,7 +33,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, GetWindowLongPtrW, MoveWindow, RegisterClassExW, SetWindowLongPtrW,
     SetWindowPos, ShowWindow, GWL_EXSTYLE, SW_HIDE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW,
-    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
 use super::window_proc;
@@ -62,12 +62,19 @@ const REAL_PIN_TITLE: PCWSTR = w!("Rust Preview");
 /// `WS_EX_APPWINDOW`: a taskbar button asked for by the window itself rather than inferred from what
 /// owns it, which is the button this window owes and the one the stand-in used to fake.
 ///
+/// `WS_CLIPCHILDREN`: the band's film is a **child** window standing in this one (see
+/// `pin_film_host`), and a pin that holds an FFmpeg film paints its own surface with `GDI` rather than
+/// by `UpdateLayeredWindow` (see `paint::paints_through_the_window_dc`). Without this bit that paint
+/// covers the client area whole, child included, so the film would be wiped over at the pin's own
+/// repaint cadence — measured: the band showed the pin's flat colour with nothing of the film in it.
+/// With it, the pin's own DC stops at the film's box and the film is left standing.
+///
 /// **What is missing is the answer.** `WS_EX_TOOLWINDOW` is what keeps a window out of Alt+Tab and
 /// out of the taskbar; `WS_EX_NOACTIVATE` is what refuses it the focus; `WS_EX_TOPMOST` is a band,
 /// and the band is the setting's (see `band_place`).
 fn real_pin_style(layered: bool) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
     (
-        WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
+        WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         if layered {
             WS_EX_LAYERED | WS_EX_APPWINDOW
         } else {
@@ -228,12 +235,23 @@ mod tests {
     #[test]
     fn the_pins_own_window_is_listed_and_may_be_activated() {
         let (style, ex) = real_pin_style(true);
-        let (_, bare) = real_pin_style(false);
+        let (bare_style, bare) = real_pin_style(false);
 
         assert_eq!(
             style & WS_POPUP,
             WS_POPUP,
             "the pin's chrome is this app's, so there is nothing of the platform's to wear"
+        );
+        assert_eq!(
+            style & WS_CLIPCHILDREN,
+            WS_CLIPCHILDREN,
+            "the film is a child of this window, and a composed paint that is not clipped over it \
+             wipes the picture out at the pin's own repaint cadence"
+        );
+        assert_eq!(
+            bare_style & WS_CLIPCHILDREN,
+            WS_CLIPCHILDREN,
+            "and the pin that composes a film through its own DC clips it the same way"
         );
         assert_eq!(
             ex & WS_EX_LAYERED,

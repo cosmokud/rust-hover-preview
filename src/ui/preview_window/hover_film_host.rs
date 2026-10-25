@@ -32,8 +32,8 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, ShowWindow, ShowWindowAsync,
-    SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use super::*;
@@ -282,11 +282,16 @@ unsafe fn create() -> Option<HWND> {
     // no topmost band of its own to give back, and no press of its own — the picture is mpv's child
     // and a press on it is the hover's press (see the module doc). Made off every display and
     // without `WS_VISIBLE`: it is shown by the tick that finds the player drawing.
+    //
+    // `WS_CLIPCHILDREN` for the same reason the pin's own window wears it: the class paints a black
+    // background, and an erase that is not clipped to the area outside the player's window is a black
+    // flash over the film at every show and every resize of the band (see
+    // `pin_real_window::real_pin_style`).
     let host = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TRANSPARENT,
         HOVER_FILM_HOST_CLASS,
         w!("hover film host"),
-        WS_POPUP,
+        WS_POPUP | WS_CLIPCHILDREN,
         -32000,
         -32000,
         1,

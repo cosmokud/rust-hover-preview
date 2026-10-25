@@ -34,8 +34,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, SetParent,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT,
     HWND_NOTOPMOST, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+    SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -214,44 +214,25 @@ pub(super) fn adopt_a_stranded_ffplay_into_the_pin_host(pid: u32, path: &Path) -
     true
 }
 
-/// Whether FFmpeg's player is presented through the composed road — SDL's default D3D9 renderer
-/// blitting into a window DC — rather than through the flip-model DXGI swapchain its D3D11 renderer
-/// makes. It is the default, and the escape hatch `RHP_FFPLAY_PRESENT=flip` restores the old
-/// presentation for a machine where the composed road cannot put a picture up.
+/// Whether FFmpeg's player is presented through the composed road — SDL's Direct3D 9 renderer
+/// blitting into a window DC — rather than through a flip-model DXGI swapchain.
 ///
-/// **Why it is one answer for the hover and the pin.** A hosted film is begun once, for whatever
-/// window will hold it; the pin it is later moved into has to present it the same way, or the
-/// picture would be drawn into a layered surface its renderer cannot reach. The pin's own form and
-/// the player's renderer are therefore one decision (see `the_pin_presents_an_ffplay_film_composed`).
-static FFPLAY_PRESENT_READ: Once = Once::new();
-static FFPLAY_PRESENT_IS_FLIP: AtomicBool = AtomicBool::new(false);
-
-fn note_the_ffplay_present_choice() {
-    FFPLAY_PRESENT_READ.call_once(|| {
-        let flip = std::env::var("RHP_FFPLAY_PRESENT")
-            .is_ok_and(|value| value.eq_ignore_ascii_case("flip"));
-        FFPLAY_PRESENT_IS_FLIP.store(flip, Ordering::SeqCst);
-    });
-}
-
+/// **It is the launch's own decision, asked here rather than made here** (see
+/// `video_playback::the_renderer_a_film_is_begun_with`, which is where the flicker and the reason for
+/// the composed road are written out).
+///
+/// **And it is one answer for the hover and the pin.** A hosted film is begun once, for whatever
+/// window will hold it; the pin it is later moved into has to present it the same way, or the picture
+/// would be drawn into a layered surface its renderer cannot reach. The pin's own form and the
+/// player's renderer are therefore one decision (see `the_pin_presents_an_ffplay_film_composed`).
 pub(super) fn ffplay_is_presented_composed() -> bool {
-    note_the_ffplay_present_choice();
-    !FFPLAY_PRESENT_IS_FLIP.load(Ordering::SeqCst)
-}
-
-/// Stand the presentation choice for a test, rather than mutating the process environment: the two
-/// launch tests that ask it run one at a time under the pin tests' own lock, and an env write would
-/// be seen by every other test's launch.
-#[cfg(test)]
-pub(super) fn stand_ffplay_presentation_for_a_test(flip: bool) {
-    note_the_ffplay_present_choice();
-    FFPLAY_PRESENT_IS_FLIP.store(flip, Ordering::SeqCst);
+    video_playback::the_film_is_presented_composed()
 }
 
 /// Whether the pin on screen holds a hosted FFmpeg film presented through the composed road. It is
-/// the one predicate behind three things that must never disagree: the player's renderer (composed,
-/// never flip), the pin window's style (no `WS_EX_LAYERED`), and the paint road (`GDI` into the
-/// window DC rather than `UpdateLayeredWindow`).
+/// the one predicate behind three things that must never disagree: the player's renderer (the composed
+/// one, unless a machine named another by hand), the pin window's style (no `WS_EX_LAYERED`), and the
+/// paint road (`GDI` into the window DC rather than `UpdateLayeredWindow`).
 pub(super) fn the_pin_presents_an_ffplay_film_composed() -> bool {
     if !ffplay_is_presented_composed() || !pin_is_its_own_window() {
         return false;
@@ -694,11 +675,16 @@ unsafe fn create(parent: HWND) -> Option<HWND> {
     // `begin_the_adopted_film_in_the_host`). What shows it is the take-up of a host the player is
     // already drawing in, the tick's own road, and the settle of a park (see
     // `take_up_the_pin_film_host`, `ensure_video_window_topmost`).
+    //
+    // **`WS_CLIPCHILDREN` because the picture is this window's child and this window has a brush.**
+    // The class paints its background black, and an erase that is not clipped to the area outside the
+    // player's window is a black flash over the film at every show and every resize. The pin's own
+    // window is clipped for the same reason, one level up (see `pin_real_window::real_pin_style`).
     let host = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         FILM_HOST_CLASS,
         w!("film host"),
-        WS_CHILD,
+        WS_CHILD | WS_CLIPCHILDREN,
         0,
         0,
         1,
