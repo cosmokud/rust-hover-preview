@@ -1320,35 +1320,34 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // standing over a park, the film is adopted the synchronous way instead: the cover that park
     // raised is the placeholder, and the show below hands the band over through it.
     // **And a film the pin took up from a hover whose player is already in the app's host is
-    // moved rather than begun again.** The host the hover was drawing in is re-parented into this
-    // window once the pin is on the screen, and its player keeps the same child and the same
-    // playhead — no freeze, no read back of `time-pos`, no second decode. Every other take-up from
-    // a hover keeps the freeze/relaunch handover below as the fallback.
-    //
-    // **And a film the host owns the pin for is never moved into it.** Moving the hover's host in
-    // would make it a child of the pin's window, which is the airspace a pin is a window of its own
-    // to be rid of; that take-up makes the host its own and begins the pin's player behind the frozen
-    // hover, like any other film whose window is the desktop's (see
-    // `pin_film_host::the_pin_film_host_is_a_window_of_the_desktop`).
-    let adopts_the_hover_host = pin_is_its_own_window()
-        && pin_state()
-            .and_then(|pinned| {
-                pinned.pin().map(|pin| {
-                    !pin_film_host::the_pin_film_host_is_a_window_of_the_desktop(&pin.path)
-                        && hover_film_host::the_hover_film_to_adopt(&pin.path).is_some()
-                })
-            })
-            .unwrap_or(false);
+    // moved rather than begun again.** The host the hover was drawing in becomes the pin's host with
+    // the same player, the same child and the same playhead — no freeze, no read back of `time-pos`,
+    // no second decode. It is re-parented into this window on the child road, and on the road where
+    // the pin's chrome is owned by its film's host it is that host already: the same window keeps the
+    // picture and takes the chrome (see `pin_film_host::take_up_the_pin_film_host`). Every other
+    // take-up from a hover keeps the freeze/relaunch handover below as the fallback.
+    let the_hover_host = pin_is_its_own_window()
+        .then(pinned_path)
+        .flatten()
+        .and_then(|path| {
+            let a_window_of_the_desktop =
+                pin_film_host::the_pin_film_host_is_a_window_of_the_desktop(&path);
+            hover_film_host::the_hover_film_to_adopt(&path)
+                .map(|host| (host, a_window_of_the_desktop))
+        });
+    let adopts_the_hover_host = the_hover_host.is_some();
+    let promotes_the_hover_host = the_hover_host.is_some_and(|(_, owned)| owned);
     {
         let path = pinned_path();
         let route = path.as_deref().map(video_route);
         note_pin_trace!(
-            "take-up path {} own {} adopt_host {} route {:?} host {} pid {}",
+            "take-up path {} own {} adopt_host {} promoted {} route {:?} host {} pid {}",
             path.as_deref()
                 .map(pin_trace::path_name)
                 .unwrap_or_else(|| "-".to_string()),
             pin_is_its_own_window() as u8,
             adopts_the_hover_host as u8,
+            promotes_the_hover_host as u8,
             route,
             pin_film_host::film_host().is_some() as u8,
             VIDEO_PID.load(Ordering::SeqCst),
@@ -1374,8 +1373,10 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // band: the host is about to leave the desktop's composition as a top-level window and arrive
     // as a child of the pin, and until it presents there the only guaranteed pixels are the pin's
     // own bitmap (see `raise_the_move_cover`). The park flag is deliberately not set: this cover is
-    // not the park machine's.
-    if adopts_the_hover_host {
+    // not the park machine's. **A host that is promoted rather than moved needs none of it**: it stays
+    // on the screen with the film drawing in it from the first call to the last, so there is no
+    // interval in which the band has to stand on anything else.
+    if adopts_the_hover_host && !promotes_the_hover_host {
         surfaces::hold_video_window_frame();
         pin_film_host::raise_the_move_cover();
     }
