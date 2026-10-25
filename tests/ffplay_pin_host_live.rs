@@ -39,12 +39,13 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, EnumWindows, GetAncestor, GetClassNameW,
-    GetParent, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
-    IsWindowVisible, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    UpdateLayeredWindow, WindowFromPoint, GA_ROOT, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
-    ULW_ALPHA, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    GetLayeredWindowAttributes, GetParent, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, RegisterClassExW, SetLayeredWindowAttributes,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, UpdateLayeredWindow, WindowFromPoint, GA_ROOT,
+    GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_SHOWNOACTIVATE, ULW_ALPHA, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 const STILL_ACTIVE: u32 = 259;
@@ -52,6 +53,9 @@ const BAND_W: i32 = 480;
 const BAND_H: i32 = 300;
 const BAND_X: i32 = 80;
 const BAND_Y: i32 = 80;
+/// The box the layered-window measurement watches: one film, one box, every phase.
+const BOX_X: i32 = 120;
+const BOX_Y: i32 = 120;
 
 /// The renderer the production launch names, mirrored here: Direct3D 11 unless `RHP_FFPLAY_RENDERER`
 /// names another driver by hand, or names `default` so that nothing is named at all.
@@ -199,6 +203,25 @@ impl Captured {
             .count();
         lit as f64 / (self.width as usize * self.height as usize) as f64
     }
+
+    /// The share of pixels that moved between two samples of the same box: a film that presents
+    /// keeps changing, a blanked window or the desktop behind it does not.
+    fn changed_ratio(&self, later: &Captured) -> f64 {
+        if self.width != later.width || self.height != later.height {
+            return 0.0;
+        }
+        let moved = self
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(later.pixels.as_chunks::<4>().0)
+            .filter(|(before, after)| {
+                (0..3).any(|channel| before[channel].abs_diff(after[channel]) > 8)
+            })
+            .count();
+        moved as f64 / (self.width as usize * self.height as usize) as f64
+    }
 }
 
 fn capture_screen_region(x: i32, y: i32, width: u32, height: u32) -> Option<Captured> {
@@ -308,6 +331,95 @@ fn window_class_name(hwnd: HWND) -> String {
     let mut class = [0u16; 256];
     let len = unsafe { GetClassNameW(hwnd, &mut class) }.max(0) as usize;
     String::from_utf16_lossy(&class[..len.min(class.len())])
+}
+
+/// One phase of watching the box: how lit it was and how much moved between samples.
+struct Sampled {
+    lit_mean: f64,
+    lit_min: f64,
+    changed_mean: f64,
+    samples: usize,
+}
+
+fn sample_box(x: i32, y: i32, width: u32, height: u32, samples: usize) -> Sampled {
+    let mut lit_sum = 0.0;
+    let mut lit_min = f64::INFINITY;
+    let mut changed_sum = 0.0;
+    let mut previous: Option<Captured> = None;
+    let mut taken = 0usize;
+    let mut pairs = 0usize;
+    for _ in 0..samples {
+        let Some(captured) = capture_screen_region(x, y, width, height) else {
+            continue;
+        };
+        let lit = captured.lit_ratio();
+        lit_sum += lit;
+        lit_min = lit_min.min(lit);
+        if let Some(previous) = previous.as_ref() {
+            changed_sum += previous.changed_ratio(&captured);
+            pairs += 1;
+        }
+        previous = Some(captured);
+        taken += 1;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Sampled {
+        lit_mean: if taken > 0 {
+            lit_sum / taken as f64
+        } else {
+            0.0
+        },
+        lit_min: if taken > 0 { lit_min } else { 0.0 },
+        changed_mean: if pairs > 0 {
+            changed_sum / pairs as f64
+        } else {
+            0.0
+        },
+        samples: taken,
+    }
+}
+
+/// A player that kills itself however the measurement ends, so no film is left on the desktop.
+struct Playing(std::process::Child);
+
+impl Playing {
+    fn pid(&self) -> u32 {
+        self.0.id()
+    }
+}
+
+impl Drop for Playing {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+unsafe extern "system" fn count_visible_windows_of_pid(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let found = &mut *(lparam.0 as *mut (u32, usize));
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    if pid != found.0 || !IsWindowVisible(hwnd).as_bool() {
+        return BOOL(1);
+    }
+    if let Ok(owner) = GetWindow(hwnd, GW_OWNER) {
+        if !owner.is_invalid() {
+            return BOOL(1);
+        }
+    }
+    found.1 += 1;
+    BOOL(1)
+}
+
+fn visible_window_count(pid: u32) -> usize {
+    let mut found = (pid, 0usize);
+    unsafe {
+        let _ = EnumWindows(
+            Some(count_visible_windows_of_pid),
+            LPARAM(&mut found as *mut (u32, usize) as isize),
+        );
+    }
+    found.1
 }
 
 fn player_still_active(pid: u32) -> bool {
@@ -606,5 +718,199 @@ fn an_ffplay_film_stands_in_its_own_window_over_a_layered_pin_band() {
     let _ = child.wait();
     unsafe {
         let _ = DestroyWindow(pin);
+    }
+}
+
+/// What one renderer's three phases measured, kept together so both variants print the same way.
+struct LayeredReport {
+    renderer: String,
+    control: Sampled,
+    layered: Sampled,
+    reverted: Sampled,
+    alive: bool,
+    windows: usize,
+}
+
+impl LayeredReport {
+    fn verdict(&self) -> &'static str {
+        if self.layered.lit_mean > 0.5 * self.control.lit_mean && self.layered.changed_mean > 0.0 {
+            "layered keeps the picture"
+        } else {
+            "layered blanks it"
+        }
+    }
+}
+
+/// One ffplay, one clip, one box: control (plain top-level), simple layered, then reverted.
+fn sample_layered_round_trip(ffplay: &Path, clip: &Path, renderer: &str) -> LayeredReport {
+    let child = with_the_production_renderer(Command::new(ffplay))
+        .args(["-left", &BOX_X.to_string(), "-top", &BOX_Y.to_string()])
+        .args(["-x", &BAND_W.to_string(), "-y", &BAND_H.to_string()])
+        .args(["-noborder", "-autoexit", "-loglevel", "quiet"])
+        .arg(clip)
+        .env("SDL_RENDER_DRIVER", renderer)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW.0)
+        .spawn()
+        .expect("ffplay to start");
+    let player = Playing(child);
+    let pid = player.pid();
+
+    let player_window = wait_for_window(pid, Duration::from_secs(8))
+        .unwrap_or_else(|| panic!("FAIL: no visible top-level window for ffplay pid {pid}"));
+    // Put the film exactly on the watched box, as the app's placement would.
+    unsafe {
+        let _ = SetWindowPos(
+            player_window,
+            HWND_TOPMOST,
+            BOX_X,
+            BOX_Y,
+            BAND_W,
+            BAND_H,
+            SWP_SHOWWINDOW | SWP_NOACTIVATE,
+        );
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    let rect = window_rect(player_window);
+    println!(
+        "[{renderer}] player {:?} class={:?} rect=({},{})-({},{})",
+        player_window,
+        window_class_name(player_window),
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom,
+    );
+
+    let control = sample_box(BOX_X, BOX_Y, BAND_W as u32, BAND_H as u32, 40);
+
+    // **Simple layered.** The window keeps its film but is composed by DWM instead of promoted.
+    let ex = unsafe { GetWindowLongPtrW(player_window, GWL_EXSTYLE) };
+    unsafe {
+        SetWindowLongPtrW(player_window, GWL_EXSTYLE, ex | WS_EX_LAYERED.0 as isize);
+        let _ = SetLayeredWindowAttributes(player_window, COLORREF(0), 255, LWA_ALPHA);
+        let _ = SetWindowPos(
+            player_window,
+            HWND::default(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    let layered_state = unsafe {
+        let mut alpha = 0u8;
+        let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+        let read =
+            GetLayeredWindowAttributes(player_window, None, Some(&mut alpha), Some(&mut flags))
+                .is_ok();
+        let bit = (GetWindowLongPtrW(player_window, GWL_EXSTYLE) & WS_EX_LAYERED.0 as isize) != 0;
+        (bit, read, alpha, flags.0 & LWA_ALPHA.0 != 0)
+    };
+    println!(
+        "[{renderer}] layered ex bit={} attributes={} alpha={} lwa_alpha={}",
+        layered_state.0, layered_state.1, layered_state.2, layered_state.3
+    );
+    assert!(
+        layered_state.0 && layered_state.1 && layered_state.2 == 255 && layered_state.3,
+        "[{renderer}] the window really is simple layered (WS_EX_LAYERED + LWA_ALPHA 255)"
+    );
+    let layered = sample_box(BOX_X, BOX_Y, BAND_W as u32, BAND_H as u32, 40);
+
+    // **Reverted.** The layered bits off again, frame recalculated, so the window can go back.
+    unsafe {
+        SetWindowLongPtrW(player_window, GWL_EXSTYLE, ex);
+        let _ = SetWindowPos(
+            player_window,
+            HWND::default(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    let reverted_bit =
+        unsafe { GetWindowLongPtrW(player_window, GWL_EXSTYLE) & WS_EX_LAYERED.0 as isize } != 0;
+    println!("[{renderer}] reverted ex bit={reverted_bit}");
+    assert!(!reverted_bit, "[{renderer}] the layered bit is off again");
+    let reverted = sample_box(BOX_X, BOX_Y, BAND_W as u32, BAND_H as u32, 40);
+
+    let alive = player_still_active(pid);
+    let windows = visible_window_count(pid);
+    println!("[{renderer}] alive={alive} visible top-level windows={windows}");
+
+    LayeredReport {
+        renderer: renderer.to_string(),
+        control,
+        layered,
+        reverted,
+        alive,
+        windows,
+    }
+}
+
+#[test]
+#[ignore = "starts a real ffplay and watches a real box on the desktop; run by hand"]
+fn a_simple_layered_ffplay_window_keeps_or_loses_the_film() {
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+            .or_else(|_| SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE));
+    }
+
+    let ffplay = find_program("ffplay.exe").expect("ffplay.exe on PATH (or beside this test)");
+    let clip = probe_clip();
+    println!("ffplay: {}", ffplay.display());
+    println!("clip:   {}", clip.display());
+
+    let mut reports = Vec::new();
+    for renderer in ["direct3d9", "direct3d11"] {
+        let report = sample_layered_round_trip(&ffplay, &clip, renderer);
+        assert!(
+            report.control.lit_mean > 0.2,
+            "[{}] the control film is up in the box before any layered bits: {:?}",
+            report.renderer,
+            (
+                report.control.lit_mean,
+                report.control.lit_min,
+                report.control.changed_mean
+            )
+        );
+        assert!(
+            report.alive && report.windows == 1,
+            "[{}] one player, one window, alive through every phase: alive={} windows={}",
+            report.renderer,
+            report.alive,
+            report.windows
+        );
+        reports.push(report);
+    }
+
+    println!("\nvariant    phase     lit_mean  lit_min  changed_mean  samples");
+    for report in &reports {
+        for (phase, sampled) in [
+            ("control", &report.control),
+            ("layered", &report.layered),
+            ("reverted", &report.reverted),
+        ] {
+            println!(
+                "{:<10} {:<9} {:.3}     {:.3}    {:.3}         {}",
+                report.renderer,
+                phase,
+                sampled.lit_mean,
+                sampled.lit_min,
+                sampled.changed_mean,
+                sampled.samples
+            );
+        }
+    }
+    println!();
+    for report in &reports {
+        println!("[{}] {}", report.renderer, report.verdict());
     }
 }

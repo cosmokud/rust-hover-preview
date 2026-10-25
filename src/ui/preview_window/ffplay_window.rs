@@ -146,10 +146,18 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
 /// is the trade: the band is this app's chrome, and this app's bar already carries
 /// a seek that works.
 ///
-/// `WS_EX_LAYERED` is deliberately *not* set with it: a layered window's contents
-/// come from `UpdateLayeredWindow`, and this one is SDL's, which paints and
-/// swaps its own surface. A video that stopped rendering would be a far worse
-/// answer than a click that falls through to the desktop.
+/// **`WS_EX_LAYERED` is set with it, so that DWM composes the film rather than promoting
+/// it.** A top-level window fully visible over the pin's band is what DWM hands to an
+/// overlay plane, and a plane is what the driver drives the panel's variable refresh from:
+/// the flicker a G-SYNC panel started on Alt+Tab back into this app, with Direct3D 11 and
+/// with SDL's Direct3D 9 alike, while mpv's film — a child of the pin's host — never
+/// flickered. A layered window cannot be promoted that way. The window's own painting is
+/// still what is shown, because a window layered with `SetLayeredWindowAttributes` keeps
+/// its own surface; the attributes must therefore always be `LWA_ALPHA` at 255 and never
+/// `UpdateLayeredWindow`, which would take the surface away from the player. Measured, on
+/// both renderers, in `tests/ffplay_pin_host_live.rs`'s layered probe: the picture keeps
+/// presenting (a lit ratio of 1.000 mean and minimum) and frames still change at the same
+/// rate (0.117 to 0.122), so this is safe as well as necessary.
 pub(super) fn player_ex_style_for(current: isize) -> isize {
     // **A film in the pin's own host wears none of this.** The list is a window of the desktop's own
     // wearing bits this app puts on another program's window: a hosted player is mpv's child under a
@@ -162,7 +170,8 @@ pub(super) fn player_ex_style_for(current: isize) -> isize {
     let mut style = current
         | WS_EX_NOACTIVATE.0 as isize
         | WS_EX_TOOLWINDOW.0 as isize
-        | WS_EX_TRANSPARENT.0 as isize;
+        | WS_EX_TRANSPARENT.0 as isize
+        | WS_EX_LAYERED.0 as isize;
     if !pinned() || pin_holds_the_front() {
         style |= WS_EX_TOPMOST.0 as isize;
     } else {
@@ -196,10 +205,14 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
         pin_player_is_parked(),
     );
 
-    // Add WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST and WS_EX_TRANSPARENT to its extended
-    // style (see `player_ex_style_for`).
+    // Add WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT and WS_EX_LAYERED to
+    // its extended style (see `player_ex_style_for`).
     let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, player_ex_style_for(current_style));
+    // The bit and the constant alpha are one fact: a layered window with no attributes set shows
+    // nothing, so this pairing is the whole of why the film survives being layered (see
+    // `player_ex_style_for`).
+    let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
 
     // The style is put on whatever else is happening, and the *raise* is not. This is the one
     // place every raise of the player's window goes through — the monitor thread calls it about
