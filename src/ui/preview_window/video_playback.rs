@@ -1561,6 +1561,9 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         if new_style != current_style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
         }
+        // Set whatever the style answer was: a layered window with no constant alpha shows nothing,
+        // and the style comparison above can skip its own write (see `apply_noactivate_to_hwnd`).
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
 
         place_player_window(
             hwnd,

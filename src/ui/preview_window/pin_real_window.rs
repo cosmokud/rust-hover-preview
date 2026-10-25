@@ -259,6 +259,10 @@ mod tests {
     /// created with them would prove the constants and nothing about this module.
     #[test]
     fn the_window_the_module_makes_wears_them() {
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let box_ = (-20000, -20000, -19680, -19760);
         let hwnd = unsafe { real_pin_window_at(box_) }.expect("the pin's own window");
 
