@@ -802,6 +802,15 @@ fn start_mpv_video_playback(
     } else {
         (x, y)
     };
+    // **The thumbnail road's swapchain is chosen here, per launch** (see `video_launch::mpv_args`):
+    // with the knob on the player is asked for the flip model, whose buffers the compositor scales to
+    // the window, rather than the bitblt one that presents 1:1 and shows a mismatch as crop or black.
+    // The line is written so a run says which of the two it was — an A/B whose flag nobody can read
+    // back is a run nobody can compare.
+    let thumbnail_flip = behind_the_host && video_launch::the_thumbnail_flip_knob();
+    if behind_the_host {
+        note_pin_trace!("thumbnail source launched flip {}", thumbnail_flip as u8);
+    }
     // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
     // step from an FFmpeg film must not leave the host answering as FFmpeg's (see
     // `the_pins_film_is_ffplay`).
@@ -834,6 +843,7 @@ fn start_mpv_video_playback(
             video_launch::mpv_input_conf(),
             &ipc,
             host,
+            thumbnail_flip,
             !behind_the_host,
         ))
         .stdin(Stdio::null())

@@ -1010,7 +1010,22 @@ mod tests {
         // level of zero (see `video_launch::mpv_args`), and the name is the app's own pipe.
         let name = next_pipe_name();
         let args = video_launch::mpv_args(
-            &picture, 0, 0, 320, 240, 0.0, false, 0, None, false, false, None, &name, None, true,
+            &picture,
+            0,
+            0,
+            320,
+            240,
+            0.0,
+            false,
+            0,
+            None,
+            false,
+            false,
+            None,
+            &name,
+            None,
+            false,
+            true,
         );
         let audio_file = format!("--audio-file={}", soundtrack.to_string_lossy());
         let started = engine_processes::hidden_command(&program)
