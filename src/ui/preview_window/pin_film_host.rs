@@ -595,11 +595,18 @@ pub(super) fn a_host_resize_would_place_the_child_for_a_test(host: HWND) -> bool
 /// path, which is the hang this road exists to not have. What it costs is the box landing a message
 /// later, and the film is clipped by the band rather than the band a hole.
 pub(super) fn fit_flags() -> SET_WINDOW_POS_FLAGS {
-    if PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst) {
-        SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_ASYNCWINDOWPOS | SWP_SHOWWINDOW
-    } else {
-        SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_SHOWWINDOW
+    let mut flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
+    // **A film taken off the screen for a resize drag is not put back by the fit that follows its
+    // host's own box**, which is the one thing the temporary `RHP_HIDE_FILM_ON_RESIZE` diagnostic
+    // asked for: a fit that showed the child is a diagnostic that lasts one step (see
+    // `pin_resize_probe`).
+    if !pin_resize_probe::the_film_is_hidden() {
+        flags |= SWP_SHOWWINDOW;
     }
+    if PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst) {
+        flags |= SWP_ASYNCWINDOWPOS;
+    }
+    flags
 }
 
 /// The box the host is placed at, from the band the pin says its picture stands in.
@@ -688,15 +695,19 @@ fn fit_the_hosted_mpv_to_the_host(host: HWND) -> bool {
         return false;
     }
     let (width, height) = (client.right.max(1), client.bottom.max(1));
+    let flags = fit_flags();
     let started = Instant::now();
     let placed =
-        unsafe { SetWindowPos(child, HWND::default(), 0, 0, width, height, fit_flags()) }.is_ok();
+        unsafe { SetWindowPos(child, HWND::default(), 0, 0, width, height, flags) }.is_ok();
 
     note_pin_trace!(
         "hosted mpv fit host {host:?} child {child:?} {width}x{height} {:.3}ms placed {}",
         started.elapsed().as_secs_f64() * 1000.0,
         placed as u8,
     );
+    // What the temporary `RHP_RESIZE_TRACE` diagnostic writes down, and the box a later tick looks for
+    // (see `pin_resize_probe`).
+    pin_resize_probe::note_the_child_fit(host, child, (width, height), flags, started);
     placed
 }
 
@@ -1108,6 +1119,9 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
     };
 
     let (x, y, width, height) = the_film_host_box(content);
+    // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock for this placement, taken only where a
+    // resize step is being measured (see `pin_resize_probe`).
+    let started = pin_resize_probe::a_step_started();
     let _ = SetWindowPos(
         host,
         HWND::default(),
@@ -1117,6 +1131,7 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
         height,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
+    pin_resize_probe::note_the_host_placement(started);
     unsafe { fit_the_hosted_ffplay_to_the_host(host) };
     pin_chrome_strips::place_the_chrome_strips();
 }
@@ -1169,6 +1184,9 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     PIN_FILM_HOST_IS_TOP_LEVEL.store(false, Ordering::SeqCst);
     PRESENTED_PID.store(0, Ordering::SeqCst);
     forget_the_hosted_mpv_child();
+    // The temporary `RHP_HIDE_FILM_ON_RESIZE` diagnostic's film goes with the host that held it, and a
+    // flag left standing is the next film fitted without a show (see `pin_resize_probe`).
+    pin_resize_probe::forget_the_hidden_film();
     clear_the_move_cover();
     // A cover left over from a move must not open the next pin or park on this film's frame. A
     // park's own frame is its to give up, so it is left standing for the park.

@@ -32,6 +32,7 @@
 //! - `pin_chrome_strips` - the windows a hosted film's chrome is carried over it in.
 //! - `pin_geometry` - the box of a pinned window.
 //! - `pin_lifecycle` - a pin's own lifetime, and the window it stands in.
+//! - `pin_resize_probe` - the temporary diagnostics a resize step's film and timings are read by.
 //! - `pin_swap` - what a pin should show next, and what is waited for.
 //! - `pin_install` - putting a loaded media into a pin.
 //! - `pin_walk` - the walk a pin takes through a folder.
@@ -92,6 +93,7 @@ mod pin_menu_window;
 mod pin_model;
 mod pin_playback;
 mod pin_real_window;
+mod pin_resize_probe;
 mod pin_swap;
 mod pin_taskbar;
 mod pin_taskbar_buttons;

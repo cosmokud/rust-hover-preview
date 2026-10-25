@@ -216,6 +216,9 @@ pub(super) fn chrome_rows_are_hit_testable(overlay: bool) -> bool {
 /// A film is the one band that is painted instead, the least a pixel can be, because a
 /// press on a picture is the pin's own (see `film_band_is_hit_testable`).
 pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
+    // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock, taken only where a resize step is being
+    // measured (see `pin_resize_probe`).
+    let started = pin_resize_probe::a_step_started();
     let Some(paint) = pinned_paint() else {
         return;
     };
@@ -685,6 +688,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // surfaces — the bitmap carries none of it (see `pin_chrome_strips`): asked here because the
     // chrome's own show and hide is answered on this paint everywhere else (see `PinChrome`).
     pin_chrome_strips::sync_the_chrome_strips();
+    pin_resize_probe::note_the_paint(started);
 
     // As in `render_layered_preview_at`: the hold is the tick's to publish, because a publish
     // per painted frame is what made the 500 ms throttle suppress nothing.
