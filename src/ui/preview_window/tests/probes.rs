@@ -2402,3 +2402,152 @@ fn a_window_of_the_engines_browser_is_the_page() {
     assert!(!the_engines_window(false, false, 4242, 0));
     assert!(!the_engines_window(false, false, 0, 0));
 }
+
+/// **Every road that puts a player's window somewhere asks for it rather than waiting on the
+/// player's thread**, and says so in the call it makes.
+///
+/// This is the whole of the hang a pinned film had. A `SetWindowPos` on a window another process
+/// owns is a blocking send to the thread that draws it, and that thread is not passive: mpv
+/// reorders and repaints its own top-level window as it plays, and a reorder under a window of this
+/// app's standing in the same band sends a message back into the thread that is waiting. Two
+/// threads waiting on each other is a frozen film and a pin that has stopped following the hand,
+/// with only the tray — a thread of its own — still answering (see `place_a_players_window`).
+///
+/// **What this can and cannot prove from inside one test.** A blocking wait needs a second thread
+/// that will not answer, and the whole of the deadlock is that it never does; so what is asserted
+/// here is the shape of the call the three roads make — the flag that asks for the placement rather
+/// than waiting for it — for the band a drag carries, the band the tick re-asserts, and the place
+/// under the pin a press asks for. The wait itself is asserted by
+/// `a_players_window_is_placed_without_waiting_for_the_thread_that_owns_it`.
+#[test]
+fn every_players_window_placement_is_asked_for_rather_than_waited_on() {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let moved = (140, 120, 460, 360);
+    let player = unsafe { stand_a_player_window(content) };
+    let pin = unsafe { stand_a_player_window(content) };
+
+    // The chrome down, so that the tick's own raise is not held off: what is being read is the
+    // placement each road makes, and a hold-off is a road that makes none.
+    stand_pin(Some(overlay_pin(content, PinChrome::hidden())));
+    PREVIEW_HWND.store(pin.0 as isize, Ordering::SeqCst);
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+    note_player_process(0, MPV_IMAGE_NAME);
+
+    // The band a step of a drag is carried to, which is the road a film frozen under the hand was.
+    let _ = video_playback::take_the_players_window_placement();
+    ensure_pinned_sibling_box(moved);
+    let asked = video_playback::take_the_players_window_placement();
+    assert_ne!(asked, 0, "the mpv arm placed the film's window");
+    assert_ne!(
+        asked & SWP_ASYNCWINDOWPOS.0,
+        0,
+        "and asked for the box rather than waiting for the thread that owns the window: {asked:#x}"
+    );
+
+    // The band the tick re-asserts, which is the same placement from the other raiser.
+    let _ = video_playback::take_the_players_window_placement();
+    assert!(
+        ensure_video_window_topmost(moved.0, moved.1, moved.2 - moved.0, moved.3 - moved.1),
+        "the tick puts the film in its band"
+    );
+    let asked = video_playback::take_the_players_window_placement();
+    assert_ne!(
+        asked & SWP_ASYNCWINDOWPOS.0,
+        0,
+        "and asks for it rather than waiting for it: {asked:#x}"
+    );
+
+    // The place under the pin a press asks for, which is a reorder of the player's window and so
+    // the same wait by another name.
+    let _ = video_playback::take_the_players_window_placement();
+    unsafe { put_player_under_the_pin() };
+    let asked = video_playback::take_the_players_window_placement();
+    assert_ne!(
+        asked & SWP_ASYNCWINDOWPOS.0,
+        0,
+        "and the place under the pin is asked for too: {asked:#x}"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(player);
+        let _ = DestroyWindow(pin);
+    }
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
+    stand_pin(previous_pin);
+}
+
+/// **A placement of a window this app does not own comes back without the thread that owns it.**
+///
+/// The window here belongs to a thread that makes it and then stops reading its own queue — which
+/// is the player's thread on the day the deadlock would happen, with nothing left to hide it. An
+/// `SWP_ASYNCWINDOWPOS` request is posted to that thread and answered here at once; a placement
+/// that waited on it would never come back at all, so the call is made on a thread of the test's
+/// own and joined with a bound: a regression fails this test rather than wedging the suite.
+#[test]
+fn a_players_window_is_placed_without_waiting_for_the_thread_that_owns_it() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let (made_at, made) = mpsc::channel::<isize>();
+    let (held, hold) = mpsc::channel::<()>();
+    let owner = std::thread::spawn(move || {
+        // A window of this thread's own: from here on it is the thread's queue that answers for
+        // it, and this thread never reads that queue again.
+        let hwnd = unsafe { stand_a_player_window((0, 0, 32, 24)) };
+        let _ = made_at.send(hwnd.0 as isize);
+        let _ = hold.recv();
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
+        }
+    });
+    let hwnd = made.recv().expect("a window of the other thread's");
+
+    let (placed_at, placed) = mpsc::channel::<u32>();
+    std::thread::spawn(move || {
+        // A handle is not `Send`, and it is not one of this app's either: the window is another
+        // thread's, which is the whole of what is being asserted.
+        let hwnd = HWND(hwnd as *mut _);
+        let _ = unsafe {
+            video_playback::place_a_players_window(
+                hwnd,
+                HWND::default(),
+                1,
+                2,
+                32,
+                24,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        let _ = placed_at.send(video_playback::take_the_players_window_placement());
+    });
+
+    let asked = placed
+        .recv_timeout(Duration::from_secs(5))
+        .expect("a placement of another thread's window comes back");
+    assert_ne!(
+        asked & SWP_ASYNCWINDOWPOS.0,
+        0,
+        "because it was asked for rather than waited on: {asked:#x}"
+    );
+
+    let _ = held.send(());
+    let _ = owner.join();
+}

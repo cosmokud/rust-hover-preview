@@ -1328,7 +1328,7 @@ pub(super) unsafe fn place_player_window(
     }
 
     let (x, y, width, height) = box_;
-    let _ = SetWindowPos(hwnd, player_insert_after(), x, y, width, height, flags);
+    place_a_players_window(hwnd, player_insert_after(), x, y, width, height, flags);
 
     // A raise with no pin standing is a hover's, and there is nothing to put over it — and a pin
     // that does not hold the front is raised over nothing at all: the film was just put *below* it,
@@ -1376,18 +1376,81 @@ pub(super) fn player_insert_after() -> HWND {
     // back. Asked whether the pin holds the front instead, a demoted pin's film was put back in the
     // topmost band by the next placement — every tick — which is a picture floating over every
     // program with `Always On Top` off.
-    if !pinned() || pin_always_on_top() {
+    if !pinned() {
         return HWND_TOPMOST;
     }
 
+    // **A pin that is Always On Top is answered with its own handle too, and that is the placement
+    // being asynchronous.** The film is placed by its own thread rather than by this one (see
+    // `place_a_players_window`), so it lands *after* the pin has been raised back over it — and a
+    // request for the top of the topmost band would then arrive over the caption and the press. A
+    // pin's window is topmost in that setting, so `HWND_TOPMOST` and the pin's handle are the same
+    // band; what differs is the side of the pin the film ends up on, which is the whole question.
     let pin = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
-    if pin.is_invalid() {
+    if !pin.is_invalid() {
+        return pin;
+    }
+
+    if pin_always_on_top() {
+        HWND_TOPMOST
+    } else {
         // A pin that has no window of its own yet has nothing for the film to go under: it is
         // put in the ordinary band, which is where it was going to be anyway.
         HWND_NOTOPMOST
-    } else {
-        pin
     }
+}
+
+/// Put a window of somebody else's — a player's — where it belongs, asking for the box rather than
+/// waiting for it.
+///
+/// **`SWP_ASYNCWINDOWPOS`, because a placement of another thread's window is a blocking send to that
+/// thread.** The call does not come back until the player's window thread has taken the box, and
+/// that thread is not passive: mpv reorders and repaints its own top-level window as it plays, and a
+/// reorder under a window of this app's standing in the same band sends a message back into this
+/// app's thread — the one that is waiting. Two threads waiting on each other is the whole of the
+/// hang a pinned film had: the film froze, the pin stopped following the hand, and the only thing
+/// that answered was the tray, whose window is a thread of its own.
+///
+/// **What the requested box costs is the order it lands in.** A placement that is asked for is not
+/// ordered against anything this thread does next, so the order the two windows keep has to be in
+/// the request itself (`player_insert_after`, which names the pin) and is re-asserted on later
+/// passes rather than waited for here (see `ensure_video_window_topmost`, once a tick).
+///
+/// Nothing of this app's is locked across the call: the box is read out of this app's own state
+/// before it is asked for, and the return is the machine's answer about a window that may since
+/// have gone rather than an error to recover from.
+pub(super) unsafe fn place_a_players_window(
+    hwnd: HWND,
+    insert_after: HWND,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    flags: SET_WINDOW_POS_FLAGS,
+) -> bool {
+    let flags = flags | SWP_ASYNCWINDOWPOS;
+    #[cfg(test)]
+    note_the_players_window_placement(flags);
+    unsafe { SetWindowPos(hwnd, insert_after, x, y, width, height, flags) }.is_ok()
+}
+
+// The flags the last placement of a player's window asked for on this thread, so that a test reads
+// the call shape of the one above rather than guessing at it (see `place_a_players_window`).
+#[cfg(test)]
+thread_local! {
+    static PLAYERS_WINDOW_PLACEMENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// What the last placement of a player's window on this thread asked for, and nothing once it has
+/// been asked (see `PLAYERS_WINDOW_PLACEMENT`).
+#[cfg(test)]
+pub(super) fn take_the_players_window_placement() -> u32 {
+    PLAYERS_WINDOW_PLACEMENT.with(|held| held.replace(0))
+}
+
+#[cfg(test)]
+fn note_the_players_window_placement(flags: SET_WINDOW_POS_FLAGS) {
+    PLAYERS_WINDOW_PLACEMENT.with(|held| held.set(flags.0));
 }
 
 /// Put a pinned film directly below the pin's own window, so the caption and the transport bar
@@ -1411,7 +1474,7 @@ pub(super) unsafe fn put_player_under_the_pin() {
     // Safety: the handle is a player this app started — or the window the engine draws into — and
     // the place it is put is a z-order position under this app's own window, with neither window
     // moved or sized. A window that has since gone is refused by the call rather than acted on.
-    let _ = SetWindowPos(
+    place_a_players_window(
         player,
         pin,
         0,

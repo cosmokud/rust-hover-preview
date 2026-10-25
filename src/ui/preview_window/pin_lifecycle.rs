@@ -2538,6 +2538,12 @@ pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
             // Moved without a raise: `SWP_NOZORDER` leaves the order alone, so the pin stays
             // over the film it was standing over and no frame puts the film over the chrome.
             //
+            // **And asked for rather than waited on**, because this window is mpv's and this is
+            // the road a drag is on: a synchronous placement of another process's window is a
+            // blocking send into the thread that draws it, and a player whose window is moved
+            // under the hand hundreds of times a second must not be able to wait on the thread
+            // that is moving it (see `place_a_players_window`).
+            //
             // **And a pin that does not hold the front puts the film *under it* while it moves
             // it.** The order still travels with the box — the pair keeps its place in the desktop
             // — but the film is put directly below the pin, which is where the chrome is over it
@@ -2558,7 +2564,7 @@ pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
                 } else {
                     pin
                 };
-                let _ = SetWindowPos(
+                video_playback::place_a_players_window(
                     hwnd,
                     insert_after,
                     content.0,
@@ -2572,7 +2578,7 @@ pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
                     },
                 );
             } else {
-                let _ = SetWindowPos(
+                video_playback::place_a_players_window(
                     hwnd,
                     player_insert_after(),
                     content.0,
