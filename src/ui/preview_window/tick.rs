@@ -455,11 +455,10 @@ pub(super) fn compositor_paced_the_tick(flushed: bool, took: Duration) -> bool {
 /// The display's own frame period, asked of the compositor and kept for a moment: how long the
 /// display takes to put the next frame up, whatever its rate happens to be.
 ///
-/// This is what a live hosted mpv resize is paced at when a flush paced nothing (see
-/// `the_wait_after_a_flush`): a flush that already waited a frame is the pace itself, so the period
-/// is only ever asked for the spin guard's wait — and asking the compositor rather than naming a
-/// number is the difference between a resize that runs at a 144 Hz panel's rate and one held under
-/// it by a figure written for 60.
+/// This is the whole frame a live hosted mpv resize waits on top of its flush (see
+/// `the_wait_after_a_flush`): the flush paces the pin's own surface to the display, and the frame
+/// is the headroom the host is owed on top of it. Asking the compositor rather than naming a number
+/// is what makes that headroom a 144 Hz panel's own 6.94 ms rather than a figure written for 60.
 ///
 /// A display that will not name its rate — no composition on this session, a remote desktop, or a
 /// first call before the first frame was composed — answers `None` and is asked again a second

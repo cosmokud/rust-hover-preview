@@ -1491,23 +1491,23 @@ fn only_a_live_hosted_mpv_resize_is_paced_by_the_compositor() {
         );
     }
 }
-/// A resize that flushed out a frame is already at the display's own rate, and nothing is added on
-/// top of it; a flush that came back at once paced nothing, so the resize waits a whole frame —
-/// the display's own when it names one, and the fallback when it will not.
+/// Every resize waits a whole display frame on top of its flush, because the host needs that
+/// headroom to present the box: a flush that already took a frame is given one too, and a
+/// compositor that names no period is given the fallback.
 #[test]
-fn a_resize_waits_only_for_a_frame_the_flush_did_not_pace() {
+fn every_resize_waits_a_whole_frame_on_top_of_the_flush() {
     let at_144_hz = Duration::from_secs_f64(1.0 / 144.0);
     let at_60_hz = Duration::from_secs_f64(1.0 / 60.0);
 
     assert_eq!(
         pin_geometry::the_wait_after_a_flush(at_144_hz, Some(at_144_hz)),
-        None,
-        "a flush that took a 144 Hz frame paced the resize: it is at the panel's rate already"
+        Some(at_144_hz),
+        "a flush that took a 144 Hz frame is the pin's own pace, and the host is still owed a frame"
     );
     assert_eq!(
         pin_geometry::the_wait_after_a_flush(at_60_hz, Some(at_60_hz)),
-        None,
-        "and so did one that took a 60 Hz frame"
+        Some(at_60_hz),
+        "and so is one that took a 60 Hz frame"
     );
     assert_eq!(
         pin_geometry::the_wait_after_a_flush(Duration::from_micros(200), Some(at_144_hz)),
@@ -1519,16 +1519,18 @@ fn a_resize_waits_only_for_a_frame_the_flush_did_not_pace() {
         Some(pin_geometry::PIN_RESIZE_FRAME_FALLBACK),
         "and a display that will not name its rate is given the fallback"
     );
-    assert!(
-        at_144_hz < pin_geometry::PIN_RESIZE_FRAME_FALLBACK,
-        "which is the point of asking: a 144 Hz panel's frame is shorter than the wait that used \
-         to be the floor under every resize, so the resize no longer runs below the display"
+    assert_eq!(
+        pin_geometry::the_wait_after_a_flush(at_144_hz, None),
+        Some(pin_geometry::PIN_RESIZE_FRAME_FALLBACK),
+        "which does not depend on the flush: a flush that took a frame is no stand-in for a \
+         period nobody named"
     );
 }
 
 /// LIVE PROOF: the pace a live hosted mpv resize turns at on this machine, measured through the
-/// calls the drag makes — a real `DwmFlush` and the wait it leaves behind — rather than asserted
-/// from the numbers written down.
+/// calls the drag makes — a real `DwmFlush` and the whole frame it waits on top — rather than
+/// asserted from the numbers written down. Every pace is the flush plus a frame of headroom, so it
+/// is never faster than the display and never a spin.
 ///
 /// `cargo test -- --ignored --nocapture a_live_hosted_mpv_resize_keeps_the_panels_pace`
 #[test]
@@ -1556,8 +1558,13 @@ fn a_live_hosted_mpv_resize_keeps_the_panels_pace() {
 
     if let Some(period) = period {
         assert!(
-            per_pace < period * 2,
-            "a pace is the display's own frame, not twice it: {per_pace:?} against {period:?}"
+            per_pace >= period,
+            "a pace is a flush plus a whole frame, never less than one: {per_pace:?} against \
+             {period:?}"
+        );
+        assert!(
+            per_pace <= period * 4,
+            "and no more than the timer's rounding of that frame: {per_pace:?} against {period:?}"
         );
     }
 }
