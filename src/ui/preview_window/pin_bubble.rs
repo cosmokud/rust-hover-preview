@@ -1506,8 +1506,15 @@ pub(super) unsafe fn hide_pinned_siblings() {
     // The cached handle alone is not the player: it is stale where the window was recreated and
     // zero where it was never found, and mpv may hold more than one window — so every visible
     // window of the player's process goes too, or a collapse leaves a chrome-less film on screen.
+    //
+    // **A film the Shell is drawing through a thumbnail is not one of those.** Its window is a
+    // window of the desktop's, so this enumeration would hide it with a synchronous `ShowWindow` on
+    // mpv's thread from this one — and it has already gone with the host, which was taken off the
+    // screen above and takes the picture with it (see `pin_film_thumbnail`).
     let pid = VIDEO_PID.load(Ordering::SeqCst);
-    if pid != 0 {
+    let drawn_by_the_shell = pin_film_host::the_pinned_player_was_begun_in_the_host()
+        && pin_film_host::the_pin_shows_its_film_by_thumbnail();
+    if pid != 0 && !drawn_by_the_shell {
         let _ = EnumWindows(Some(hide_player_windows_callback), LPARAM(pid as isize));
     }
 

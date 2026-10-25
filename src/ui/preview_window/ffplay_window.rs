@@ -384,6 +384,29 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
     // FFmpeg's player is the one that is not there yet: it makes its own top-level window, which
     // is adopted into the host here — once, and then never found again by the enumeration below.
     if let Some(host) = host_for_a_hosted_player(pid) {
+        // **The thumbnail road's player is a window of the desktop's and is kept one.** mpv is begun
+        // with no `--wid`, so what is found under this pid is the film's own window rather than a
+        // child of the host's: it is adopted as the picture the host shows by a DWM thumbnail, and
+        // never moved into the host the way FFmpeg's player is (see `pin_film_thumbnail`).
+        if pin_film_host::the_pin_shows_its_film_by_thumbnail() && video_process_image() == MPV_IMAGE_NAME
+        {
+            if !pin_film_thumbnail::the_source_is_up(pid) {
+                let mut data = EnumWindowsData {
+                    target_pid: pid,
+                    found_hwnd: HWND::default(),
+                    best_area: 0,
+                };
+                let _ = EnumWindows(
+                    Some(enum_windows_callback),
+                    LPARAM(&mut data as *mut EnumWindowsData as isize),
+                );
+                if !data.found_hwnd.is_invalid() {
+                    unsafe { pin_film_thumbnail::adopt_the_source(data.found_hwnd, pid) };
+                }
+            }
+            return false;
+        }
+
         let mut data = EnumWindowsData {
             target_pid: pid,
             found_hwnd: HWND::default(),

@@ -201,6 +201,7 @@ impl Drop for StandingFilm {
         stand_mpv_in(None);
         stand_video_engine_in(None);
         pin_film_host::stand_the_owned_road_in(None);
+        pin_film_host::stand_the_thumbnail_road_in(None);
         if let Ok(mut current) = CURRENT_MEDIA.lock() {
             *current = self.previous_media.take();
         }
@@ -2820,6 +2821,7 @@ fn a_pinned_mpv_film_is_begun_into_the_pins_film_host() {
             None,
             "rhp-test",
             Some(wid),
+            true,
         )
         .iter()
         .any(|arg| arg == &format!("--wid={wid}")),
@@ -2830,6 +2832,49 @@ fn a_pinned_mpv_film_is_begun_into_the_pins_film_host() {
     assert!(
         mpv_launch_host(path, None).is_none(),
         "a film whose pin stands in the preview's window keeps a window of the desktop's"
+    );
+}
+
+/// **On the thumbnail road the pin's film is a window of the desktop's and the host only shows it**:
+/// the launch names no window of this app's, and the command line it is given carries the box the
+/// player's own window is made at rather than the order `--ontop` would hold it in over the pin.
+#[test]
+fn a_pin_drawn_through_a_thumbnail_is_begun_with_no_window_of_this_apps() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    pin_film_host::stand_the_thumbnail_road_in(Some(true));
+    let path = Path::new("a-film.mkv");
+    assert_eq!(
+        pin_film_host::host_for_the_pins_film(path, None),
+        Some(host),
+        "the host is still the window the film is shown in, whatever the player is told"
+    );
+    assert!(
+        mpv_launch_host(path, None).is_none(),
+        "and the player is told no window of this app's, because it makes its own"
+    );
+
+    let args = video_launch::mpv_args(
+        path, 0, 0, 320, 240, 0.0, false, 80, None, false, false, None, "rhp-test", None, false,
+    );
+    assert!(
+        args.iter().any(|arg| arg == "--geometry=320x240+0+0"),
+        "the box the player's own window is made at is still named: {args:?}"
+    );
+    assert!(
+        !args.iter().any(|arg| arg == "--ontop"),
+        "and the film is not held over the pin it is seen in: {args:?}"
+    );
+
+    pin_film_host::stand_the_thumbnail_road_in(None);
+    assert!(
+        mpv_launch_host(path, None).is_some(),
+        "and the road with the variable off is the host of the `--wid` road again"
     );
 }
 

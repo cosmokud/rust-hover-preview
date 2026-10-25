@@ -100,6 +100,18 @@ pub(super) fn the_hover_film_to_adopt(path: &Path) -> Option<HWND> {
         return None;
     }
 
+    // **A hover's host is not promoted into a pin whose film is drawn through a thumbnail.** On that
+    // road the picture is a window of mpv's own and the host only shows it, so a host holding mpv's
+    // child is the wrong shape for it: the take-up begins the pin's own player instead, on the frame
+    // the hover was frozen at, which is the road every hover that was never kept in a host takes (see
+    // `pin_film_thumbnail`, `begin_the_pinned_film_at_the_hovers_frame`).
+    if pin_film_host::a_film_is_drawn_by_a_thumbnail(
+        video_route(path),
+        pin_film_host::the_pin_shows_its_film_by_thumbnail(),
+    ) {
+        return None;
+    }
+
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     if !the_hover_player_was_begun_in_the_host(pid) || !the_hover_player_is_drawing(pid) {
         return None;
@@ -255,6 +267,11 @@ pub(super) unsafe fn take_down_the_hover_film_host() {
     }
     if let Some(host) = hover_film_host() {
         let _ = DestroyWindow(host);
+        // A registration the Shell is drawing into this window goes with it, where this road ever
+        // had one: a host of a hover's is a thumbnail destination on no road this prototype takes,
+        // and a registration left behind a destroyed window is the Shell's resource leaking (see
+        // `pin_film_thumbnail`).
+        pin_film_thumbnail::forget_the_thumbnail_of(host);
     }
     HOVER_FILM_HOST.store(0, Ordering::SeqCst);
     HOVER_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);

@@ -33,6 +33,8 @@
 //! - `pin_geometry` - the box of a pinned window.
 //! - `pin_lifecycle` - a pin's own lifetime, and the window it stands in.
 //! - `pin_resize_probe` - the temporary diagnostics a resize step's film and timings are read by.
+//! - `pin_film_thumbnail` - the prototype road a pinned film is drawn on by the Shell's own thumbnail
+//!   of a window of mpv's, rather than by a child of the pin's host.
 //! - `pin_swap` - what a pin should show next, and what is waited for.
 //! - `pin_install` - putting a loaded media into a pin.
 //! - `pin_walk` - the walk a pin takes through a folder.
@@ -84,6 +86,7 @@ mod pin_chrome_layout;
 mod pin_chrome_strips;
 mod pin_drag;
 mod pin_film_host;
+mod pin_film_thumbnail;
 mod pin_geometry;
 mod pin_input;
 mod pin_install;

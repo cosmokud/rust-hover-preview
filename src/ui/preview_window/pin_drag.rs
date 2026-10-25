@@ -1216,6 +1216,11 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
     unsafe {
         pin_film_host::place_the_pin_in_the_band(hwnd, band_place());
     }
+    // **The thumbnail road's one cross-process resize**, made here rather than on any step of the
+    // drag: the film's window takes the box the hand left behind, and the Shell draws it into the
+    // host from here on (see `pin_film_thumbnail`). Nothing is asked on the `--wid` road, where the
+    // host's own fit has already given mpv's child its size.
+    pin_film_host::settle_the_film_source_at_the_band();
     true
 }
 
@@ -1317,4 +1322,10 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
     // menu a press on the card can still put away (see `close_pin_menu` and
     // `pin_menu_window`).
     unsafe { close_pin_menu(HWND(window.hwnd() as *mut _)) };
+
+    // A drag whose capture was taken from under it ends at the box the pin is standing at now, and
+    // the thumbnail road's film's window is asked for that box here: the drag's own release is the
+    // other road that ends it, and the two are one call because the box is read off the host (see
+    // `pin_film_thumbnail`).
+    pin_film_host::settle_the_film_source_at_the_band();
 }

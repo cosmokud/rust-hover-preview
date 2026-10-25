@@ -132,6 +132,7 @@ pub(super) fn mpv_args(
     input_conf: Option<&Path>,
     ipc: &str,
     wid: Option<u32>,
+    ontop: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         // Read before the configuration and before any file the user has: the app's own command
@@ -175,7 +176,13 @@ pub(super) fn mpv_args(
     if let Some(wid) = wid {
         args.push(format!("--wid={wid}"));
     } else {
-        args.push("--ontop".to_string());
+        // **The order the player is held up in, where it is to hold one.** A top-level film is a
+        // window of the desktop's that has to stay over whatever the pin stands in front of; a film
+        // the pin shows through a DWM thumbnail is one that has to stay *behind* the window it is
+        // seen in, so its launch asks for no band at all (see `pin_film_thumbnail`).
+        if ontop {
+            args.push("--ontop".to_string());
+        }
         // The size and the position, always both, and always written `+x+y` whether x and y are
         // negative or not: a box on a monitor left of or above the primary one has a negative
         // coordinate, and `+-2160` is how that coordinate is spelled for a geometry whose offsets
@@ -1331,6 +1338,7 @@ mod tests {
                 Some(Path::new("scratch/mpv-input.conf")),
                 IPC,
             None,
+            true
             ),
             [
                 "films/episode.mkv",
@@ -1379,6 +1387,7 @@ mod tests {
             None,
             IPC,
             Some(0x1234_5678),
+            true
         );
 
         assert!(
@@ -1424,6 +1433,7 @@ mod tests {
             None,
             IPC,
         None,
+        true
         );
         assert!(
             args.iter().any(|arg| arg == "--window-dragging=no"),
@@ -1455,6 +1465,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            true
             ),
             [
                 "a.mkv",
@@ -1501,6 +1512,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            true
             ),
             [
                 "a.mkv",
@@ -1546,6 +1558,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            true
             ),
             [
                 "a.mkv",
@@ -1600,6 +1613,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            true
             ),
             [
                 "a.mkv",
@@ -1644,6 +1658,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            true
             ),
             [
                 "a.mkv",
@@ -1691,6 +1706,7 @@ mod tests {
             None,
             IPC,
             None,
+            true
         );
         assert!(
             held.contains(&"--start=12.500".to_string()),
@@ -1722,6 +1738,7 @@ mod tests {
             None,
             IPC,
             None,
+            true
         );
         assert!(
             !playing
@@ -1762,6 +1779,7 @@ mod tests {
                     None,
                     IPC,
                 None,
+                true
                 ),
                 [
                     "a.mkv",
@@ -1803,6 +1821,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            true
             )
             .contains(&"--geometry=640x360+0+0".to_string()),
             "a box at the primary display's own origin is passed as it stands"
@@ -1852,6 +1871,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            true
             ),
             [
                 "a.mkv",
@@ -1919,6 +1939,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            true
             ),
             [
                 "a.mkv",
