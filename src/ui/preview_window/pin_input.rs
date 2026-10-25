@@ -775,14 +775,19 @@ pub(super) unsafe fn raise_pinned_window(hwnd: HWND) {
     }
 
     if let Some((window, width, height)) = pinned_window_box() {
+        // The pair's band, then the chrome's own box: a film's host that owns the chrome takes the
+        // band and Windows puts the chrome in it, so the picture is raised with the chrome rather than
+        // left under the program the chrome was raised over (see
+        // `pin_film_host::place_the_pin_in_the_band`).
+        pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST);
         let _ = SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            HWND::default(),
             window.0,
             window.1,
             width,
             height,
-            SWP_NOACTIVATE,
+            SWP_NOZORDER | SWP_NOACTIVATE,
         );
     }
 }

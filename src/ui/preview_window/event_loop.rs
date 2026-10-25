@@ -3409,7 +3409,14 @@ pub fn run_preview_window() {
                 // And the band is nobody's to hold any more, so the next placement asks the setting
                 // again rather than keeping a window in a band its hold is over (see `PIN_BAND_HELD`).
                 PIN_BAND_HELD.store(false, Ordering::SeqCst);
-                for window in [hwnd, pinned_window()] {
+                // **The pin's band is the band of the window of the pair that holds it.** Where a
+                // film's host owns the chrome, the band is the host's and Windows takes the chrome
+                // out with it; asking the chrome alone would be the demotion of half a pair (see
+                // `pin_film_host::the_pin_window_that_holds_the_band`).
+                for window in [
+                    hwnd,
+                    pin_film_host::the_pin_window_that_holds_the_band(pinned_window()),
+                ] {
                     if window_holds_the_topmost_band(window) {
                         let _ = SetWindowPos(
                             window,

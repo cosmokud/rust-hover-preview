@@ -5119,6 +5119,112 @@ fn an_owned_hosts_resize_fits_mpvs_child_without_waiting_for_it() {
     drop(film);
 }
 
+/// **A pin and the film it owns stand in one band, whichever window of the pair is asked.**
+///
+/// The fault this is a regression test for: the band was asked of the pin's chrome alone, and
+/// Windows does not carry ownership's band upwards — a chrome put in the topmost band left the host
+/// that owns it in the ordinary one, and a chrome given the ordinary band left the host where it was.
+/// The pair was then half over another program's window and half behind it: the film under the
+/// program, and the chrome above it, taking every press in a band it is nearly transparent in. That
+/// is a pin mode window that looks behind a window and yet answers the hand.
+///
+/// What is asserted here is the pair as one unit: the band bits of the host and the chrome always
+/// agree, the band is taken and given back through the host, and both windows of the pair stand on
+/// the same side of a covering window — which is the order a press is delivered by, and the whole of
+/// what decides whether a click over the covered band is the pin's or that window's. The press
+/// itself, and `WindowFromPoint` over a desktop with somebody else's windows on it, is more than this
+/// suite can answer: what a press does with the order it is given is Windows'.
+#[test]
+fn an_owned_pin_and_its_film_stand_in_one_band() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    pin_film_host::stand_the_owned_road_in(Some(true));
+    let always_on_top = CONFIG
+        .lock()
+        .map(|config| config.pin_always_on_top)
+        .unwrap_or(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+
+    // The pin's band somewhere on the screen, and a picture drawing in the host it is taken up with:
+    // the band is alpha 1 over a film in a window under it, so a press in it is the pin's only while
+    // the pin is the window Windows names at that point.
+    let at = (420, 320, 760, 600);
+    with_pin(|pin| {
+        pin.content = at;
+        pin.overlay = true;
+        pin.caption = 0;
+    });
+    let drawn = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(drawn);
+    unsafe { pin_film_host::take_up_the_pin_film_host(None) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let child = unsafe { a_child_of_the_host(host) };
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    let topmost = |window: HWND| unsafe { window_holds_the_topmost_band(window) };
+    assert!(
+        topmost(host) && topmost(film.pin_hwnd),
+        "a pin that is Always On Top takes the band with the film it owns"
+    );
+
+    // Out of the band together: the chrome's band is the owner's, so one call on the host is the
+    // whole pair, and the chrome is never left standing where the film is not.
+    unsafe { pin_film_host::place_the_pin_in_the_band(film.pin_hwnd, HWND_NOTOPMOST) };
+    assert!(
+        !topmost(host) && !topmost(film.pin_hwnd),
+        "and gives it back with it, rather than the chrome out of it alone"
+    );
+
+    // Another program's window opened over the pin. The pair is moved behind it in one call, and the
+    // window a press over the band would go to is the one at the point — which is that window, because
+    // both windows of the pair are behind it.
+    let cover = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP | WS_VISIBLE,
+            at.0 + 40,
+            at.1 + 40,
+            200,
+            120,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a window of the test's own standing over the pin");
+    unsafe { pin_film_host::place_the_pin_in_the_band(film.pin_hwnd, cover) };
+    assert!(
+        !unsafe { pin_stands_over(film.pin_hwnd, cover) }
+            && !unsafe { pin_stands_over(host, cover) },
+        "a pin put behind another window is behind it as one window: a press in the band is that          window's press, not a press on a pin that is not there"
+    );
+
+    // And the pin put in its band takes the pair over that window: the press is the pin's again, and
+    // the film it is over is on the screen with it.
+    unsafe { pin_film_host::place_the_pin_in_the_band(film.pin_hwnd, HWND_TOPMOST) };
+    assert!(
+        unsafe { pin_stands_over(film.pin_hwnd, cover) } && unsafe { pin_stands_over(host, cover) },
+        "and a pin raised into its band raises the film it owns with it"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(cover);
+        let _ = DestroyWindow(child);
+    };
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+    }
+    pin_film_host::stand_the_owned_road_in(None);
+    drop(film);
+}
+
 /// **A take-up begins one player, and no road that puts the pin back up begins a second.** The
 /// film's host is the pin's own, so the question every show asks is whether a player is already
 /// drawing in *that* host — and a show that answered it with a launch is a second mpv behind a pin

@@ -747,15 +747,7 @@ pub(super) fn begin_pin_drag(
         // SAFETY: the handle is the window the drag is carried in — the pin's own, or the one it
         // stands in — and `SetWindowPos` takes any window and reports rather than faults.
         unsafe {
-            let _ = SetWindowPos(
-                HWND(hwnd as *mut _),
-                band_place(),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
+            pin_film_host::place_the_pin_in_the_band(HWND(hwnd as *mut _), band_place());
         }
         // A newer gesture supersedes whatever relaunch is still in flight behind the cover: the
         // bump kills it before it can publish. After the park rather than before it — the fresh
@@ -1203,15 +1195,7 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
     // SAFETY: `hwnd` is the window the drag was carried in, and `SetWindowPos` takes any window and
     // reports rather than faults.
     unsafe {
-        let _ = SetWindowPos(
-            hwnd,
-            band_place(),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        pin_film_host::place_the_pin_in_the_band(hwnd, band_place());
     }
     true
 }

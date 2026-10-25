@@ -393,24 +393,13 @@ unsafe fn take_the_band_and_give_it_back(hwnd: HWND) {
     // band from the second call on, and a flag left saying otherwise would have the next placement put it
     // back over every program for a hold that is over (see `PIN_BAND_HELD`).
     PIN_BAND_HELD.store(false, Ordering::SeqCst);
-    let _ = SetWindowPos(
-        hwnd,
-        HWND_TOPMOST,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-    );
-    let _ = SetWindowPos(
-        hwnd,
-        HWND_NOTOPMOST,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-    );
+    // The pair's band rather than this window's: a film's host that owns the chrome is what takes and
+    // gives it back, and Windows puts the chrome in it with the host (see
+    // `pin_film_host::place_the_pin_in_the_band`).
+    unsafe {
+        pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST);
+        pin_film_host::place_the_pin_in_the_band(hwnd, HWND_NOTOPMOST);
+    }
 }
 
 /// The pin owes the front: a pick, a take-up or a restore asked for it, and no press that named no
@@ -1396,15 +1385,19 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // that owes neither. The second is no raise — `HWND_NOTOPMOST` asks for the place a window
     // already has, and a pin the user can see is standing in it — but it *is* the one thing that
     // takes the topmost band off a window the Shell had been drawing as a hover's.
-    let place = band_place();
+    //
+    // **The band is the pair's, and one window of it asks.** A film's host holds it where the host
+    // owns this window, so the film is put in the band with the chrome rather than left behind the
+    // program the chrome was about to stand over (see `pin_film_host::place_the_pin_in_the_band`).
+    unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, band_place()) };
     let _ = SetWindowPos(
         hwnd,
-        place,
+        HWND::default(),
         window.0,
         window.1,
         width,
         height,
-        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
     );
 
     // **And a window that was not on the screen is put in front, because the call above leaves it
@@ -1643,44 +1636,10 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND, keep_the_band: bool) {
                 // of. The window is already where the user's pick is to be seen, so this is not a raise
                 // a band is owed for — it is the front kept for the one moment it can be taken away.
                 if !window_holds_the_topmost_band(hwnd) {
-                    let _ = SetWindowPos(
-                        hwnd,
-                        HWND_TOPMOST,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                    );
-
-                    // **A band the desktop is not giving is asked for again, from outside it.** The
-                    // desktop answers a band assignment as made and can still not make it: a window it
-                    // has not laid out yet — one shown this moment — and one whose process has no
-                    // foreground rights are both windows it leaves in the band they were in, which for a
-                    // hold is a pin the click it is held for goes over. Leaving the band and taking it is
-                    // the same front asked a second time, and it is the way the take-and-give raise asks
-                    // for the front on every update (see `take_the_band_and_give_it_back`): one call more
-                    // on a road the first ask did not answer, and none at all where it did.
-                    if !window_holds_the_topmost_band(hwnd) {
-                        let _ = SetWindowPos(
-                            hwnd,
-                            HWND_NOTOPMOST,
-                            0,
-                            0,
-                            0,
-                            0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                        );
-                        let _ = SetWindowPos(
-                            hwnd,
-                            HWND_TOPMOST,
-                            0,
-                            0,
-                            0,
-                            0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                        );
-                    }
+                    // The hold is the band, and it is taken as the pair's: a desktop that answers a
+                    // band as made and has not made it is asked again inside the helper (see
+                    // `pin_film_host::place_the_pin_in_the_band`).
+                    unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST) };
                 }
 
                 // Said out loud as well as done, because the window is placed again before the click it
@@ -1749,15 +1708,7 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
     // the user's own press gives it back (see `pin_holds_the_front`, `lower_pinned_preview`). What
     // stands in the pin's band is put in it too, in the order `place_pinned_siblings` asks for.
     if pin_holds_the_front() {
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST) };
         place_pinned_siblings();
         settle_pinned_mpv_ontop();
         return;
@@ -1853,28 +1804,16 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
     }
 
     PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    // The band is left before the place is asked for, and both are asked of the window of the pair
+    // that holds it: Windows carries the chrome with the host that owns it, so a pin put behind this
+    // window is the film and the chrome together rather than a chrome behind it and a film over it
+    // (see `pin_film_host::place_the_pin_in_the_band`).
     if topmost {
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_NOTOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, HWND_NOTOPMOST) };
     }
 
     if !place.is_invalid() {
-        let _ = SetWindowPos(
-            hwnd,
-            place,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, place) };
     }
 
     let kind = CURRENT_MEDIA
@@ -2170,16 +2109,10 @@ unsafe fn give_the_band_back(hwnd: HWND, behind: HWND) {
     }
 
     // The band goes first, whatever else this road does: the one thing it must never leave is a window in
-    // the topmost band with no debt left to ask about it (see `PinFrontOwed`).
-    let _ = SetWindowPos(
-        hwnd,
-        HWND_NOTOPMOST,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-    );
+    // the topmost band with no debt left to ask about it (see `PinFrontOwed`). It is the pair's band — the
+    // host that owns the chrome gives it back and Windows takes the chrome out of it with the host (see
+    // `pin_film_host::place_the_pin_in_the_band`).
+    unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, HWND_NOTOPMOST) };
 
     if behind.is_invalid() || behind == hwnd || foreground_is_the_desktop(behind) {
         return;
