@@ -980,26 +980,11 @@ pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
     };
 
     let drawn_in_a_host = pin_film_host::the_film_is_shown_in_a_host(&path, None);
-    let owns_the_window = pin_film_host::the_pin_owns_this_films_window(&path);
-    if !(drawn_in_a_host || owns_the_window)
+    if !(drawn_in_a_host || pin_film_host::the_pin_owns_this_films_window(&path))
         || (drawn_in_a_host && pin_film_host::film_host().is_none())
         || pin_film_host::the_pinned_player_was_begun_in_the_host()
-        || pin_film_host::the_show_begins_no_player()
         || VIDEO_PID.load(Ordering::SeqCst) == 0
     {
-        return false;
-    }
-
-    // **A film the pin already owns is not begun again.** The handover that shows a pin taken up on a
-    // hover's film comes back through this road (see `pin_film_host::settle_pin_handover`), and so
-    // does every road that puts a pin already on the screen back up — and on the top-level road the
-    // player at the band is the pin's own and its window is up, so a second launch would be a film
-    // begun again behind the pin that is already showing it, with another handover armed behind it.
-    // What tells the pin's player from the hover's is the pin's own record of the player it began
-    // (see `note_pinned_relaunch`), which no hover ever writes.
-    let the_pins_own_player = pending_pinned_relaunch()
-        .is_some_and(|pending| pending.pid == VIDEO_PID.load(Ordering::SeqCst));
-    if owns_the_window && !drawn_in_a_host && the_pins_own_player {
         return false;
     }
 

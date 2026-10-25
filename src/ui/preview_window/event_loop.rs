@@ -832,11 +832,17 @@ pub fn run_preview_window() {
                 // video FFmpeg plays is something this app asserted (see `settle_pinned_transport`).
                 settle_pinned_transport();
                 settle_video_retirement();
-                // A pin taken up on a hover's film goes up once its player draws — or goes up
-                // without it where that player never does, which is a pin the hand can still move,
-                // resize and close rather than a wait with nothing left on screen to reach (see
-                // `pin_film_host::settle_pin_handover`).
-                pin_film_host::settle_pin_handover();
+                // A pin taken up on a hover's film goes up once its hosted player draws, and comes
+                // down where that player never does: the handover is the only visible swap, and
+                // the teardown for a wait with nothing to swap to goes down the road a dead film
+                // has always gone (see `pin_film_host::settle_pin_handover`).
+                if matches!(
+                    pin_film_host::settle_pin_handover(),
+                    pin_film_host::PinHandover::Failed
+                ) && pin_request.is_none()
+                {
+                    pin_request = Some(end_pin_state(Reason::MediaGone));
+                }
                 // And the band a drag's parking is holding: it is a hole again only once the
                 // player's own window is standing in it, which for a relaunch begun on a resize's
                 // release is the first tick that finds the replacement up (see
