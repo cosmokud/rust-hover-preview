@@ -394,15 +394,26 @@ pub(super) fn a_child_of_the_host(host: HWND, pid: u32) -> Option<HWND> {
 
 /// The band's rectangle in the pin window's own client coordinates: the whole window for a film,
 /// whose chrome is drawn over it, and the content box below the caption where it is not.
-fn band_in_the_window(content: ScreenRegion) -> (i32, i32, i32, i32) {
+///
+/// **The row a resize pushed the picture down by is added to it**, because the window was moved up
+/// by that row (see `the_slack_a_resize_paints_with`): a child is placed in the client's own
+/// coordinates and so rides that move, and adding the row here is what leaves the band on the box
+/// the pin's picture landed on instead of bobbing with the slack.
+pub(super) fn band_in_the_window(content: ScreenRegion) -> (i32, i32, i32, i32) {
     let (overlay, caption) = pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| (pin.overlay, pin.caption)))
         .unwrap_or((true, 0));
 
     let width = (content.2 - content.0).max(1);
     let height = (content.3 - content.1).max(1);
+    let row = paint::the_row_a_resize_paints_the_picture_down();
 
-    (0, if overlay { 0 } else { caption }, width, height)
+    (
+        0,
+        (if overlay { 0 } else { caption }) + row,
+        width,
+        height,
+    )
 }
 
 /// Make the host where the pin has none, or put the one it has at the band it stands at now.
