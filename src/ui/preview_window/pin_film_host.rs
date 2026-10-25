@@ -224,17 +224,39 @@ pub(super) fn adopt_a_stranded_ffplay_into_the_pin_host(pid: u32, path: &Path) -
 /// **And it is one answer for the hover and the pin.** A hosted film is begun once, for whatever
 /// window will hold it; the pin it is later moved into has to present it the same way, or the picture
 /// would be drawn into a layered surface its renderer cannot reach. The pin's own form and the
-/// player's renderer are therefore one decision (see `the_pin_presents_an_ffplay_film_composed`).
+/// player's renderer are therefore one decision (see `the_pin_presents_a_hosted_film_composed`).
 pub(super) fn ffplay_is_presented_composed() -> bool {
     video_playback::the_film_is_presented_composed()
 }
 
-/// Whether the pin on screen holds a hosted FFmpeg film presented through the composed road. It is
+/// **A temporary diagnostic, and not a setting: `RHP_MPV_COMPOSED_PIN`, present means on.**
+///
+/// A pinned mpv film is drawn into a child of a **layered** pin window, so every paint of the pin
+/// re-sends the whole surface through `UpdateLayeredWindow` while the player's swapchain presents
+/// its own frames on top of it. A pinned FFmpeg film takes the composed road instead — a pin window
+/// with no `WS_EX_LAYERED`, painted with `BitBlt` — and is smooth under a drag-resize, while the mpv
+/// pin is shaky. This asks, by hand, whether the road is the whole of that difference: with the
+/// variable set, a hosted mpv film takes the composed road exactly as ffplay's does.
+///
+/// **It should be deleted once the answer is in** — either the composed road is what fixes the
+/// shake and mpv is moved onto it for good, or it is not and this goes. The environment is read
+/// here and nowhere else, and the answer is a fact of the process: flipping the variable needs the
+/// app restarted, not the film re-pinned.
+const MPV_COMPOSED_PIN_VARIABLE: &str = "RHP_MPV_COMPOSED_PIN";
+
+/// Whether the machine asked a pinned mpv film to take the composed road (see
+/// [`MPV_COMPOSED_PIN_VARIABLE`]).
+pub(super) fn the_mpv_pin_is_composed() -> bool {
+    std::env::var_os(MPV_COMPOSED_PIN_VARIABLE).is_some()
+}
+
+/// Whether the pin on screen holds a hosted film presented through the composed road. It is
 /// the one predicate behind three things that must never disagree: the player's renderer (the composed
 /// one, unless a machine named another by hand), the pin window's style (no `WS_EX_LAYERED`), and the
-/// paint road (`GDI` into the window DC rather than `UpdateLayeredWindow`).
-pub(super) fn the_pin_presents_an_ffplay_film_composed() -> bool {
-    if !ffplay_is_presented_composed() || !pin_is_its_own_window() {
+/// paint road (`GDI` into the window DC rather than `UpdateLayeredWindow`, which is chosen from the
+/// style itself — see `paint::paints_through_the_window_dc`).
+pub(super) fn the_pin_presents_a_hosted_film_composed() -> bool {
+    if !pin_is_its_own_window() {
         return false;
     }
 
@@ -244,13 +266,34 @@ pub(super) fn the_pin_presents_an_ffplay_film_composed() -> bool {
 
     // A sound's player is FFmpeg's too: only a film at this pin's band is presented this way, and
     // a placeholder counts because the pin is taken up before its film is installed.
-    video_route(&path) == VideoRoute::Ffplay
-        && current_media_type().is_none_or(|kind| {
-            matches!(
-                kind,
-                MediaType::Video | MediaType::Loading | MediaType::Unplayable
-            )
-        })
+    current_media_type().is_none_or(|kind| {
+        matches!(
+            kind,
+            MediaType::Video | MediaType::Loading | MediaType::Unplayable
+        )
+    }) && a_hosted_film_is_presented_composed(
+        video_route(&path),
+        ffplay_is_presented_composed(),
+        the_mpv_pin_is_composed(),
+    )
+}
+
+/// The decision itself, with each road's own answer as a parameter: the environment is read in one
+/// place ([`the_mpv_pin_is_composed`]), so a test is a call rather than an environment write every
+/// other launch in the process would see.
+///
+/// FFmpeg's player is composed unless a machine named a flip-model renderer by hand; mpv is composed
+/// only where the temporary diagnostic asks for it.
+pub(super) fn a_hosted_film_is_presented_composed(
+    route: VideoRoute,
+    ffplay_presented_composed: bool,
+    mpv_asked_by_hand: bool,
+) -> bool {
+    match route {
+        VideoRoute::Ffplay => ffplay_presented_composed,
+        VideoRoute::Mpv => mpv_asked_by_hand,
+        _ => false,
+    }
 }
 
 /// Whether this file is shown in a host this app owns: a film mpv plays or FFmpeg's player draws,
