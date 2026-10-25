@@ -277,9 +277,10 @@ fn a_hosted_park_holds_the_frame_the_host_is_showing() {
 }
 
 /// Every erase a stand-in host was handed, by window: whether a point inside the child the test gave
-/// it and a point outside it were in the device context's system region (see
-/// `an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be`).
-static ERASE_CLIPS: Lazy<Mutex<Vec<(isize, bool, bool)>>> = Lazy::new(|| Mutex::new(Vec::new()));
+/// it, a point outside that child, and a point beyond the box it was made at were in the device
+/// context's system region (see `an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be`).
+static ERASE_CLIPS: Lazy<Mutex<Vec<(isize, bool, bool, bool)>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
 
 /// A window of a test's own that records what an erase of it is clipped to, and answers the erase the
 /// way the hosts do.
@@ -303,15 +304,20 @@ unsafe extern "system" fn record_the_erase_clip(
             // points the window is asked about are taken from its client box onto the desktop.
             let mut childs_corner = POINT { x: 8, y: 8 };
             let mut outside = POINT { x: 240, y: 200 };
+            // Beyond the box the window is made at, so that a strip a grow has exposed is a point
+            // the erase of it can be asked about.
+            let mut gained = POINT { x: 400, y: 300 };
             let _ = ClientToScreen(hwnd, &mut childs_corner);
             let _ = ClientToScreen(hwnd, &mut outside);
+            let _ = ClientToScreen(hwnd, &mut gained);
             // `1` is a system region copied out; `-1` is an empty one, which is no region at all.
             let copied = GetRandomRgn(dc, region, SYSRGN as i32) > 0;
             let inside = copied && PtInRegion(region, childs_corner.x, childs_corner.y).as_bool();
             let outside = copied && PtInRegion(region, outside.x, outside.y).as_bool();
+            let reached = copied && PtInRegion(region, gained.x, gained.y).as_bool();
             let _ = DeleteObject(HGDIOBJ(region.0));
             if let Ok(mut clips) = ERASE_CLIPS.lock() {
-                clips.push((hwnd.0 as isize, inside, outside));
+                clips.push((hwnd.0 as isize, inside, outside, reached));
             }
         }
         return LRESULT(1);
@@ -415,8 +421,8 @@ fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
     let erases_of = |parent: HWND| {
         clips
             .iter()
-            .filter(|(window, _, _)| *window == parent.0 as isize)
-            .map(|(_, inside, outside)| (*inside, *outside))
+            .filter(|(window, ..)| *window == parent.0 as isize)
+            .map(|(_, inside, outside, _)| (*inside, *outside))
             .collect::<Vec<_>>()
     };
     let clipped = erases_of(stands[0].0);
@@ -434,6 +440,40 @@ fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
     assert!(
         unclipped.iter().any(|(inside, outside)| *inside && *outside),
         "while a window wearing no such bit is erased right across its child, which is the bit doing          it: {unclipped:?}"
+    );
+
+    // **And a window that grows is erased of the strip it has gained.** The band a drag grows is
+    // filled by this message and nothing else: the box is put wider and taller, and the erase that
+    // follows it is asked which of the box it covered.
+    let (grown, _, _) = stands[0];
+    let counted = clips.len();
+    drop(clips);
+    // SAFETY: the window is this test's own, and the box is inside the desktop it stands on.
+    unsafe {
+        let _ = SetWindowPos(
+            grown,
+            HWND::default(),
+            0,
+            0,
+            480,
+            360,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        let _ = UpdateWindow(grown);
+    }
+    let clips = ERASE_CLIPS.lock().unwrap_or_else(|held| held.into_inner());
+    let after = clips[counted..]
+        .iter()
+        .filter(|(window, ..)| *window == grown.0 as isize)
+        .map(|(_, inside, _, gained)| (*inside, *gained))
+        .collect::<Vec<_>>();
+    assert!(
+        after.iter().any(|(_, gained)| *gained),
+        "a grown window is handed an erase of the strip it gained, which is the message the fill          answers: {after:?}"
+    );
+    assert!(
+        after.iter().all(|(inside, _)| !inside),
+        "and none of it covers the child it grew around: {after:?}"
     );
     drop(clips);
 
