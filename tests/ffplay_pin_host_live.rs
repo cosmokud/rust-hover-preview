@@ -30,10 +30,10 @@ use windows::Win32::Foundation::{
     CloseHandle, BOOL, COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC,
-    GetStockObject, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLACK_BRUSH,
-    BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HBRUSH, HDC, HGDIOBJ, SRCCOPY, AC_SRC_ALPHA,
-    AC_SRC_OVER,
+    BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DeleteDC,
+    DeleteObject, GetDC, GetStockObject, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
+    BI_RGB, BLACK_BRUSH, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HBRUSH, HDC, HGDIOBJ, SRCCOPY,
+    AC_SRC_ALPHA, AC_SRC_OVER,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
@@ -50,7 +50,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetParent, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
     IsWindowVisible, RegisterClassExW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     GetAncestor, SetForegroundWindow, UpdateLayeredWindow, WindowFromPoint, GA_ROOT, GWL_EXSTYLE,
-    GWL_STYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, HWND_TOP, SWP_FRAMECHANGED,
+    GWL_STYLE, GW_CHILD, GW_HWNDNEXT, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, HWND_TOP,
+    SWP_FRAMECHANGED,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
     SW_SHOWNOACTIVATE, ULW_ALPHA, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
     WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW, WS_EX_LAYERED,
@@ -256,6 +257,18 @@ impl Dib {
             pixel[3] = 255;
         }
     }
+
+    /// A solid BGRA fill, so a band that does not paint is unmistakable on screen.
+    fn fill_solid(&self, blue: u8, green: u8, red: u8, alpha: u8) {
+        let length = self.width as usize * self.height as usize * 4;
+        let pixels = unsafe { std::slice::from_raw_parts_mut(self.bits, length) };
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel[0] = blue;
+            pixel[1] = green;
+            pixel[2] = red;
+            pixel[3] = alpha;
+        }
+    }
 }
 
 impl Drop for Dib {
@@ -311,6 +324,58 @@ impl Captured {
             }
         }
         lit as f64 / total.max(1) as f64
+    }
+
+    /// The share of pixels that are magenta-ish (r > 200, g < 80, b > 200). On a band painted
+    /// solid magenta this is the share the film did not cover: the player handed the band back.
+    fn magenta_ratio(&self) -> f64 {
+        if self.pixels.is_empty() {
+            return 0.0;
+        }
+        let magenta = self
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[2] > 200 && p[1] < 80 && p[0] > 200)
+            .count();
+        magenta as f64 / (self.width as usize * self.height as usize) as f64
+    }
+
+    /// The share of pixels exactly the pin's own fill colour. The pin is painted that exact solid
+    /// colour and its child covers it 1:1, so this is the noise-free "the film handed the band
+    /// back" signal: the clip's own magenta bars are not the pin's exact colour.
+    fn exact_pin_ratio(&self) -> f64 {
+        if self.pixels.is_empty() {
+            return 0.0;
+        }
+        let exact = self
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| {
+                p[0] == (MAGENTA & 0xFF) as u8
+                    && p[1] == ((MAGENTA >> 8) & 0xFF) as u8
+                    && p[2] == ((MAGENTA >> 16) & 0xFF) as u8
+            })
+            .count();
+        exact as f64 / (self.width as usize * self.height as usize) as f64
+    }
+
+    /// The share of near-black pixels, the other way a band "goes blank" can look.
+    fn black_ratio(&self) -> f64 {
+        if self.pixels.is_empty() {
+            return 0.0;
+        }
+        let black = self
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] < 8 && p[1] < 8 && p[2] < 8)
+            .count();
+        black as f64 / (self.width as usize * self.height as usize) as f64
     }
 
     /// The share of pixels whose colour changed between two captures.
@@ -1307,4 +1372,600 @@ fn ffplay_hover_pin_take_up_live() {
         take_up_pass,
         "the hover-to-pin take-up lost the picture or the player (see the line above)"
     );
+}
+
+const BAND_X: i32 = 100;
+const BAND_Y: i32 = 100;
+
+/// The band's screen rect is painted solid magenta (0xFFFF00FF) wherever the pin or the host
+/// background shows through, so a magenta pixel in a capture is literally "the film did not
+/// present that instant".
+const MAGENTA: u32 = 0xFFFF_00FF;
+
+struct BandStats {
+    samples: usize,
+    mean: f64,
+    median: f64,
+    p95: f64,
+    max: f64,
+    over10: f64,
+    over50: f64,
+}
+
+fn band_stats(mut ratios: Vec<f64>) -> BandStats {
+    if ratios.is_empty() {
+        return BandStats {
+            samples: 0,
+            mean: 0.0,
+            median: 0.0,
+            p95: 0.0,
+            max: 0.0,
+            over10: 0.0,
+            over50: 0.0,
+        };
+    }
+    let samples = ratios.len();
+    let mean = ratios.iter().sum::<f64>() / samples as f64;
+    ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = ratios[samples / 2];
+    let p95 = ratios[(((samples - 1) as f64) * 0.95).round() as usize];
+    let max = ratios[samples - 1];
+    let over10 = ratios.iter().filter(|r| **r > 0.10).count() as f64 / samples as f64;
+    let over50 = ratios.iter().filter(|r| **r > 0.50).count() as f64 / samples as f64;
+    BandStats {
+        samples,
+        mean,
+        median,
+        p95,
+        max,
+        over10,
+        over50,
+    }
+}
+
+struct BandRun {
+    label: String,
+    handback: BandStats,
+    magentaish: BandStats,
+    black_mean: f64,
+    moved_mean: f64,
+    baseline_pin: f64,
+    player_windows_seen: usize,
+    adopted: bool,
+    alive: bool,
+    child_visible: bool,
+    child_box: (i32, i32),
+    host_children: usize,
+    parent_ok: bool,
+}
+
+fn host_child_count(hwnd: HWND) -> usize {
+    let Ok(mut child) = (unsafe { GetWindow(hwnd, GW_CHILD) }) else {
+        return 0;
+    };
+    let mut count = 0;
+    while !child.is_invalid() && count < 64 {
+        count += 1;
+        child = match unsafe { GetWindow(child, GW_HWNDNEXT) } {
+            Ok(next) => next,
+            Err(_) => break,
+        };
+    }
+    count
+}
+
+fn player_windows(windows: &[ListedWindow]) -> usize {
+    windows.iter().filter(|w| w.visible && w.area > 0).count()
+}
+
+fn window_class_name(hwnd: HWND) -> String {
+    let mut class = [0u16; 128];
+    let len = unsafe { GetClassNameW(hwnd, &mut class) }.max(0) as usize;
+    String::from_utf16_lossy(&class[..len.min(class.len())])
+}
+
+/// True when `hit` is the pin or anything inside it.
+fn belongs_to(hit: HWND, pin: HWND) -> bool {
+    hit.is_invalid() || hit == pin || unsafe { GetAncestor(hit, GA_ROOT) } == pin
+}
+
+/// The first foreign top-level window over any of nine points across the band, if any. The pin is
+/// never interacted with beyond being raised again, so another app's window is never touched.
+fn band_occluder(pin: HWND) -> Option<(HWND, String)> {
+    for iy in 0..3 {
+        for ix in 0..3 {
+            let point = POINT {
+                x: BAND_X + HOST_W * (2 * ix + 1) / 6,
+                y: BAND_Y + HOST_H * (2 * iy + 1) / 6,
+            };
+            let hit = unsafe { WindowFromPoint(point) };
+            if !belongs_to(hit, pin) {
+                let root = unsafe { GetAncestor(hit, GA_ROOT) };
+                return Some((root, window_class_name(root)));
+            }
+        }
+    }
+    None
+}
+
+fn raise_band(pin: HWND, host: HWND) {
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(pin, SW_SHOWNOACTIVATE);
+        let raised = SetWindowPos(
+            pin,
+            HWND_TOPMOST,
+            BAND_X,
+            BAND_Y,
+            HOST_W,
+            HOST_H,
+            SWP_SHOWWINDOW | SWP_NOACTIVATE,
+        );
+        if raised.is_err() {
+            println!(
+                "raise_band: SetWindowPos={raised:?} err={:?} ex={:#x} topmost={}",
+                raised.as_ref().err().map(|e| e.code().0),
+                GetWindowLongPtrW(pin, GWL_EXSTYLE),
+                GetWindowLongPtrW(pin, GWL_EXSTYLE) & WS_EX_TOPMOST.0 as isize != 0,
+            );
+        }
+    }
+}
+
+/// Kills the player and destroys both windows on every path, including a panic.
+struct BandGuard {
+    child: std::process::Child,
+    host: HWND,
+    pin: HWND,
+}
+
+impl BandGuard {
+    fn player_pid(&self) -> u32 {
+        self.child.id()
+    }
+}
+
+impl Drop for BandGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        unsafe {
+            // Destroying the pin also destroys its hosted child.
+            let _ = DestroyWindow(self.host);
+            let _ = DestroyWindow(self.pin);
+        }
+        println!("cleanup: player killed, host and pin destroyed");
+    }
+}
+
+/// Runs one variant: same pin, same host, same clip, same sampling; only the child's
+/// `SDL_RENDER_VSYNC` differs (`None` = the production launch, which sets no pacing env).
+fn measure_band_run(
+    ffplay: &Path,
+    clip: &Path,
+    hinstance: HINSTANCE,
+    class_name: windows::core::PCWSTR,
+    vsync: Option<&str>,
+) -> BandRun {
+    let label = match vsync {
+        None => "no SDL_RENDER_VSYNC (production launch)".to_string(),
+        Some("0") => "SDL_RENDER_VSYNC=0 (old unthrottled launch)".to_string(),
+        Some(other) => other.to_string(),
+    };
+
+    // The pin's own layered window, painted solid magenta until the film covers it.
+    let pin = unsafe {
+        CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+            class_name,
+            w!(""),
+            WS_POPUP,
+            BAND_X,
+            BAND_Y,
+            HOST_W,
+            HOST_H,
+            HWND::default(),
+            None,
+            hinstance,
+            None,
+        )
+        .expect("the layered magenta pin window")
+    };
+    let surface = Dib::create(HOST_W as u32, HOST_H as u32).expect("the pin surface");
+    surface.fill_solid(
+        (MAGENTA & 0xFF) as u8,
+        ((MAGENTA >> 8) & 0xFF) as u8,
+        ((MAGENTA >> 16) & 0xFF) as u8,
+        255,
+    );
+    let blend = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+    let dst = POINT {
+        x: BAND_X,
+        y: BAND_Y,
+    };
+    let size = windows::Win32::Foundation::SIZE {
+        cx: HOST_W,
+        cy: HOST_H,
+    };
+    let src = POINT { x: 0, y: 0 };
+    assert!(
+        unsafe {
+            UpdateLayeredWindow(
+                pin,
+                None,
+                Some(&dst),
+                Some(&size),
+                surface.dc,
+                Some(&src),
+                COLORREF(0),
+                Some(&blend),
+                ULW_ALPHA,
+            )
+        }
+        .is_ok(),
+        "the pin is painted through UpdateLayeredWindow"
+    );
+
+    let host = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            class_name,
+            w!("ffplay film host"),
+            WS_CHILD,
+            0,
+            0,
+            HOST_W,
+            HOST_H,
+            pin,
+            None,
+            hinstance,
+            None,
+        )
+        .expect("the pin's film host")
+    };
+
+    raise_band(pin, host);
+
+    // Detector sanity: with no player yet the band must read as ~100% exact pin magenta. If it
+    // does not, a later low reading would mean "not measured", not "no hand-back". Only our own
+    // window is re-raised; a foreign window is never touched, and if it will not yield the band
+    // cannot be measured.
+    let mut baseline_capture = None;
+    let mut attempts = 0;
+    for _ in 0..10 {
+        attempts += 1;
+        raise_band(pin, host);
+        std::thread::sleep(Duration::from_millis(200));
+        if let Some((window, class)) = band_occluder(pin) {
+            println!("band occluded by {window:?} class={class:?}; re-raising the pin");
+            continue;
+        }
+        let captured = capture_screen_region(BAND_X, BAND_Y, HOST_W as u32, HOST_H as u32);
+        let magenta = captured
+            .as_ref()
+            .map_or(0.0, |captured| captured.exact_pin_ratio());
+        baseline_capture = captured;
+        if magenta > 0.90 {
+            break;
+        }
+    }
+    if attempts > 1 {
+        println!("baseline needed {attempts} attempts");
+    }
+    let baseline_pin = baseline_capture
+        .as_ref()
+        .map_or(0.0, |captured| captured.exact_pin_ratio());
+    println!("\n== {label} ==");
+    println!(
+        "baseline before any player: exact pin magenta={:.2}% (wanted ~100%)",
+        baseline_pin * 100.0
+    );
+    assert!(
+        baseline_pin > 0.90,
+        "the magenta pin is not visible on screen before the player starts ({:.2}%); \
+         the band cannot be measured",
+        baseline_pin * 100.0
+    );
+
+    let mut command = Command::new(ffplay);
+    command.env("SDL_RENDER_DRIVER", "direct3d11");
+    if let Some(value) = vsync {
+        command.env("SDL_RENDER_VSYNC", value);
+    }
+    let child = command
+        .args(["-left", "-32000", "-top", "-32000"])
+        .args(["-x", "480", "-y", "300"])
+        .args(["-autoexit", "-loglevel", "quiet"])
+        .arg(clip)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW.0)
+        .spawn()
+        .expect("ffplay to start");
+    let player_band = pin;
+    let player_host = host;
+    let guard = BandGuard { child, host, pin };
+    let pid = guard.player_pid();
+    println!("ffplay pid {pid}");
+
+    let Some(player) = wait_for_window(pid, Duration::from_secs(8)) else {
+        panic!("FAIL: no visible top-level window for ffplay pid {pid} within 8 s");
+    };
+    // ffplay owns one real player window (plus SDL's hidden, zero-area helper windows).
+    let top_level_before = list_top_level_windows(pid);
+    let players_before = player_windows(&top_level_before);
+    println!(
+        "top-level windows before adoption: {} total, {players_before} visible-with-area {:?}",
+        top_level_before.len(),
+        top_level_before
+            .iter()
+            .map(|w| (w.hwnd, w.visible, w.area))
+            .collect::<Vec<_>>()
+    );
+
+    // Adopt exactly as production does: restyle to a disabled WS_CHILD, re-parent, fill the host.
+    unsafe {
+        let style = GetWindowLongPtrW(player, GWL_STYLE)
+            & !(WS_POPUP.0 as isize
+                | WS_CAPTION.0 as isize
+                | WS_THICKFRAME.0 as isize
+                | WS_SYSMENU.0 as isize
+                | WS_MINIMIZEBOX.0 as isize)
+            | (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN).0 as isize;
+        let _ = SetWindowLongPtrW(player, GWL_STYLE, style);
+        let ex = GetWindowLongPtrW(player, GWL_EXSTYLE)
+            & !(WS_EX_TOPMOST.0 as isize | WS_EX_APPWINDOW.0 as isize);
+        let _ = SetWindowLongPtrW(player, GWL_EXSTYLE, ex | WS_EX_ACCEPTFILES.0 as isize);
+        let _ = SetParent(player, host);
+        let _ = SetWindowLongPtrW(player, GWL_EXSTYLE, ex | WS_EX_ACCEPTFILES.0 as isize);
+        let _ = EnableWindow(host, false);
+        let _ = EnableWindow(player, false);
+        let _ = SetWindowPos(
+            player,
+            HWND::default(),
+            0,
+            0,
+            HOST_W,
+            HOST_H,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+        );
+    }
+    raise_band(player_band, player_host);
+
+    // Wait for the child to be visible with a box, then let the film warm up ~1 s.
+    let mut child_visible = false;
+    let mut child_box = (0, 0);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        child_box = client_size(player);
+        child_visible = unsafe { IsWindowVisible(player) }.as_bool();
+        if child_visible && child_box.0 > 0 && child_box.1 > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let parent_ok = unsafe { GetParent(player) }.unwrap_or_default() == host;
+    println!(
+        "adopted: visible={child_visible} client={}x{} parent-is-host={parent_ok} host-children={}",
+        child_box.0,
+        child_box.1,
+        host_child_count(host)
+    );
+    std::thread::sleep(Duration::from_millis(1000));
+
+    // ~200 samples over ~5 s, as fast as BitBlt allows.
+    let mut handback_ratios = Vec::with_capacity(200);
+    let mut magenta_ratios = Vec::with_capacity(200);
+    let mut black_sum = 0.0f64;
+    let mut moved = Vec::new();
+    let mut previous: Option<Captured> = None;
+    let mut skipped = 0usize;
+    let started = Instant::now();
+    while handback_ratios.len() < 200 && started.elapsed() < Duration::from_secs(6) {
+        if handback_ratios.len() % 10 == 0 && band_occluder(player_band).is_some() {
+            raise_band(player_band, player_host);
+            std::thread::sleep(Duration::from_millis(30));
+            if let Some((window, class)) = band_occluder(player_band) {
+                println!("sample skipped: band occluded by {window:?} class={class:?}");
+                skipped += 1;
+                continue;
+            }
+        }
+        if let Some(captured) =
+            capture_screen_region(BAND_X, BAND_Y, HOST_W as u32, HOST_H as u32)
+        {
+            handback_ratios.push(captured.exact_pin_ratio());
+            magenta_ratios.push(captured.magenta_ratio());
+            black_sum += captured.black_ratio();
+            if let Some(prev) = &previous {
+                moved.push(prev.changed_ratio(&captured));
+            }
+            previous = Some(captured);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let elapsed = started.elapsed();
+    let handback = band_stats(handback_ratios);
+    let magentaish = band_stats(magenta_ratios);
+    let black_mean = black_sum / handback.samples.max(1) as f64;
+    let moved_mean = if moved.is_empty() {
+        0.0
+    } else {
+        moved.iter().sum::<f64>() / moved.len() as f64
+    };
+
+    let alive = player_still_active(pid);
+    let top_level_after = list_top_level_windows(pid);
+    let players_after = player_windows(&top_level_after);
+    let adopted = unsafe { GetParent(player) }.unwrap_or_default() == host
+        && unsafe { IsWindow(player) }.as_bool();
+    let host_children = host_child_count(host);
+    // "Ever owns": the adopted window stops being top-level, so the most it ever had is the max.
+    let player_windows_seen = players_before.max(players_after);
+
+    let fmt = |stats: &BandStats| {
+        format!(
+            "samples={} mean={:.2}% median={:.2}% p95={:.2}% max={:.2}% >10%={:.1}% >50%={:.1}%",
+            stats.samples,
+            stats.mean * 100.0,
+            stats.median * 100.0,
+            stats.p95 * 100.0,
+            stats.max * 100.0,
+            stats.over10 * 100.0,
+            stats.over50 * 100.0,
+        )
+    };
+    println!("over {:.2}s", elapsed.as_secs_f64());
+    println!(
+        "pin-visible (exact 0x{MAGENTA:08X}, the hand-back): {} skipped-occluded={skipped}",
+        fmt(&handback)
+    );
+    println!("magenta-ish (includes the clip's own magenta bars):    {}", fmt(&magentaish));
+    println!(
+        "black mean={:.2}%  screen changed between samples mean={:.2}%",
+        black_mean * 100.0,
+        moved_mean * 100.0
+    );
+    println!(
+        "structure: alive={alive} adopted={adopted} player-windows-seen={player_windows_seen} host-children={host_children} visible={child_visible} box={}x{}",
+        child_box.0, child_box.1
+    );
+
+    BandRun {
+        label,
+        handback,
+        magentaish,
+        black_mean,
+        moved_mean,
+        baseline_pin,
+        player_windows_seen,
+        adopted,
+        alive,
+        child_visible,
+        child_box,
+        host_children,
+        parent_ok,
+    }
+}
+
+/// LIVE MEASUREMENT: does dropping `SDL_RENDER_VSYNC=0` from the hosted ffplay launch stop the
+/// film's band going blank and showing the desktop (or the pin) through?
+///
+/// The same layered pin, magenta band, `WS_CHILD` host, clip and screen sampling are used twice;
+/// only the child's `SDL_RENDER_VSYNC` differs (absent, then `0`). A capture is scored by the share
+/// of pixels that are *exactly* the pin's magenta (the clip's own magenta bars are a separate,
+/// constant ~13.6% floor reported alongside), so a non-zero score is literally "the film did not
+/// present and the pin showed through". A pre-player baseline proves the pin is visible and the
+/// detector reads ~100%.
+///
+/// `cargo test --test ffplay_pin_host_live a_hosted_ffplay_film_never_hands_its_band_back_to_the_desktop -- --ignored --exact --nocapture`
+#[test]
+#[ignore = "starts real ffplay players and real windows; measures band flicker by hand"]
+fn a_hosted_ffplay_film_never_hands_its_band_back_to_the_desktop() {
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+    let ffplay = find_program("ffplay.exe").expect("ffplay.exe on PATH (or beside this test)");
+    let clip = probe_clip();
+    let hinstance = unsafe { GetModuleHandleW(None) }.expect("this module");
+    println!("ffplay: {}", ffplay.display());
+    println!("clip:   {}", clip.display());
+
+    let class_name = w!("RustHoverPreviewFfplayBandProbe");
+    unsafe {
+        // A magenta class background too, so a hosted child that paints nothing still hands the
+        // band back as magenta rather than as an anonymous black rectangle.
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(host_proc),
+            hInstance: HINSTANCE::from(hinstance),
+            hbrBackground: HBRUSH(CreateSolidBrush(COLORREF(0x00FF_00FF)).0),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        assert!(RegisterClassExW(&class) != 0, "band probe class registration");
+    }
+    println!(
+        "band: solid magenta 0x{MAGENTA:08X} at ({BAND_X},{BAND_Y}) {HOST_W}x{HOST_H}; magenta in a capture = film did not present"
+    );
+
+    let production = measure_band_run(&ffplay, &clip, HINSTANCE::from(hinstance), class_name, None);
+    let unthrottled =
+        measure_band_run(&ffplay, &clip, HINSTANCE::from(hinstance), class_name, Some("0"));
+
+    let row = |label: &str, stats: &BandStats| {
+        format!(
+            "{label:<42} samples={:<3} mean={:>6.2}% median={:>6.2}% p95={:>6.2}% max={:>6.2}% >10%={:>5.1}% >50%={:>5.1}%",
+            stats.samples,
+            stats.mean * 100.0,
+            stats.median * 100.0,
+            stats.p95 * 100.0,
+            stats.max * 100.0,
+            stats.over10 * 100.0,
+            stats.over50 * 100.0,
+        )
+    };
+    println!("\nPIN-VISIBLE BAND FRACTION (exact pin magenta; higher = band handed back):");
+    println!("{}", row(&production.label, &production.handback));
+    println!("{}", row(&unthrottled.label, &unthrottled.handback));
+    println!("\nMAGENTA-ISH BAND FRACTION (as specified; includes the clip's own magenta bars):");
+    println!("{}", row(&production.label, &production.magentaish));
+    println!("{}", row(&unthrottled.label, &unthrottled.magentaish));
+
+    for run in [&production, &unthrottled] {
+        println!(
+            "{}: pin-visible-baseline={:.2}% black-mean={:.2}% screen-moved-mean={:.2}% player-windows-seen={} child-adopted={} parent-is-host={} host-children={} visible={} box={}x{} alive={}",
+            run.label,
+            run.baseline_pin * 100.0,
+            run.black_mean * 100.0,
+            run.moved_mean * 100.0,
+            run.player_windows_seen,
+            run.adopted,
+            run.parent_ok,
+            run.host_children,
+            run.child_visible,
+            run.child_box.0,
+            run.child_box.1,
+            run.alive,
+        );
+    }
+
+    // The measurement itself must not have broken the embedding it measures.
+    for run in [&production, &unthrottled] {
+        assert!(
+            run.player_windows_seen == 1,
+            "{}: ffplay owned {} visible player windows, wanted exactly 1",
+            run.label,
+            run.player_windows_seen
+        );
+        assert!(
+            run.host_children == 1,
+            "{}: the host held {} children, wanted exactly 1",
+            run.label,
+            run.host_children
+        );
+        assert!(
+            run.adopted && run.parent_ok && run.child_visible,
+            "{}: the player did not stay adopted into its host",
+            run.label
+        );
+        assert!(
+            run.handback.samples > 0,
+            "{}: no screen sample saw the band at all",
+            run.label
+        );
+        assert!(
+            run.moved_mean > 0.001,
+            "{}: the band never changed on screen; the film may not have been playing",
+            run.label
+        );
+    }
+
+    println!("cleaned up: both players killed, both pins and hosts destroyed, nothing left running");
 }
