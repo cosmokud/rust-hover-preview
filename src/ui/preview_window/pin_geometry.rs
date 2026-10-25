@@ -845,26 +845,32 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // was decoded with, which is what the paint below scales into that band, as it always did.
         relayout_text_for_the_box(content);
 
-        // **Which of the two is committed first is the direction's to say, and it is the strip a
-        // growing step exposes that says it.** A box that grew leaves a strip the window did not
-        // have, and the only thing that may stand in it is the film: the host is put at the new band
-        // while the pin's own window is still the old one, so the oversized host is clipped by the
-        // smaller parent and the growth then reveals a band that is already the right size. Painted
-        // first, the strip stands as this app's own band — the alpha-1 claim on the pixel, which is
-        // the desktop showing through it — until the host catches up, once per pointer move.
+        // **The two commits keep the film inside the pin's own box, and the direction of the step
+        // says which of them goes first.** The host is a window of the desktop's standing *below* the
+        // chrome rather than a child of it, so nothing clips it to the pin: a host put at a band the
+        // pin's window does not cover is film on the screen outside its own frame, and a step that
+        // committed the larger of the two boxes first would show exactly that, once per pointer move.
+        // So a step that grows commits the pin first — the new box holds the old one, and the film at
+        // its old band stays inside it — and a step that shrinks commits the host first, which is the
+        // same fact the other way round (see `a_resize_step_grows`).
         //
-        // A box that shrank exposes nothing: the strip it gives up is clipped away by the parent, so
-        // the pin's own surface is committed first there and the host follows it, which is the milder
-        // of the two mismatches — a film briefly cropped rather than a hole where the film should be
-        // (see `a_resize_step_grows`).
+        // **The order was the other one while the host was a `WS_CHILD` of this window.** A child is
+        // clipped by its parent, so an oversized host showed nothing of itself, and putting it down
+        // first on a growth was free: the strip the growth revealed was already the film's. An owned
+        // host is shown in full, so that order was the film standing outside the chrome instead, and
+        // what the order below costs is the mirror of what the old one bought — on a growth the newly
+        // exposed strip stands as this app's own band, the alpha-1 claim on the pixel that the desktop
+        // shows through, until the host catches up. That is milder than a strip of picture outside the
+        // window, and it cannot be painted out: the chrome is above the film, so an opaque band would
+        // hide the picture for the whole of the step rather than for the instant the strip is bare.
         let grew = a_resize_step_grows(was, content);
         pin_resize_probe::begin_step(window, grew);
         if grew {
-            place_pinned_siblings();
             render_pinned_preview_at(hwnd, window.0, window.1);
+            place_pinned_siblings();
         } else {
-            render_pinned_preview_at(hwnd, window.0, window.1);
             place_pinned_siblings();
+            render_pinned_preview_at(hwnd, window.0, window.1);
         }
         pin_resize_probe::end_step();
 
@@ -888,7 +894,7 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
 
         // Whatever stands in the media band travels with it — after the box it stands in is the
         // window's, so that a player's window is never put where the surface has not caught up. A
-        // resize is the other way round on a step that grows, where the film is put down first (see
+        // resize takes that order where it grows; a step that shrinks puts the film down first (see
         // above).
         place_pinned_siblings();
     }
@@ -897,11 +903,12 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
 /// Whether a resize step grows the window, which is the whole of what decides the order its two
 /// commits go in (see `apply_pin_drag`).
 ///
-/// **Per axis rather than by area**, because the strip a step exposes is per axis: a box pulled wider
-/// and shorter at once gives up a strip along the bottom and exposes one along the side, and the side
-/// is the one the order is about. A step that changed neither extent is not a growth and takes the
-/// shrinking order — the two commits then write the same boxes in either order, so there is nothing
-/// for the choice to be seen in.
+/// **Per axis rather than by area**, because it is per axis that one box holds another: a box pulled
+/// wider and shorter at once makes the two boxes cross rather than nest, so no order keeps the film
+/// inside the window there, and the side that grew is the one the order is about — the side whose new
+/// strip the film would fill rather than the side the window gave up. A step that changed neither
+/// extent is not a growth and takes the shrinking order: the two commits then write the same boxes in
+/// either order, so there is nothing for the choice to be seen in.
 pub(super) fn a_resize_step_grows(was: ScreenRegion, now: ScreenRegion) -> bool {
     (now.2 - now.0) > (was.2 - was.0) || (now.3 - now.1) > (was.3 - was.1)
 }
