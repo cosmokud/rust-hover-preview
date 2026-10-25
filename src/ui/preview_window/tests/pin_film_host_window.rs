@@ -1467,32 +1467,29 @@ fn a_resize_of_a_pin_with_a_film_host_asks_the_surface_for_no_row_of_slack() {
     );
 }
 
-/// Only a resize of a hosted mpv film that is really drawing is frozen for the drag: FFmpeg's player
-/// is parked by the kill road instead, a move carries the window the film already has, and a film in
-/// a window of the desktop's has no host to hide (see `a_resize_freezes_the_hosted_film` and
-/// `park_pinned_player`).
+/// A resize of a live hosted mpv film is held to a compositor frame, and no other resize is: FFmpeg's
+/// hosted child is fitted to its host in the same call, a film in a window of the desktop's has no
+/// host to keep up with, and a parked host is hidden with nothing drawing in it (see
+/// `a_live_hosted_mpv_resize_is_paced`).
 #[test]
-fn only_a_resize_of_a_drawing_hosted_mpv_film_is_frozen_for_the_drag() {
-    assert!(
-        pin_drag::a_resize_freezes_the_hosted_film(true, VideoRoute::Mpv, true, true),
-        "a resize of a hosted mpv film freezes its picture for the length of the drag"
-    );
-    assert!(
-        !pin_drag::a_resize_freezes_the_hosted_film(false, VideoRoute::Mpv, true, true),
-        "a move is the window's own move and freezes nothing"
-    );
-    assert!(
-        !pin_drag::a_resize_freezes_the_hosted_film(true, VideoRoute::Ffplay, true, true),
-        "FFmpeg's player is parked by the kill road rather than by this one"
-    );
-    assert!(
-        !pin_drag::a_resize_freezes_the_hosted_film(true, VideoRoute::Mpv, false, true),
-        "a film in a window of the desktop's is the window the drag is already moving"
-    );
-    assert!(
-        !pin_drag::a_resize_freezes_the_hosted_film(true, VideoRoute::Mpv, true, false),
-        "a player that has drawn no child of the host yet has no picture to hold"
-    );
+fn only_a_live_hosted_mpv_resize_is_paced_by_the_compositor() {
+    for (a_film_host_stands, the_film_is_ffplay, parked, paced) in [
+        (true, false, false, true),
+        (false, false, false, false),
+        (true, true, false, false),
+        (true, false, true, false),
+    ] {
+        assert_eq!(
+            pin_geometry::a_live_hosted_mpv_resize_is_paced(
+                a_film_host_stands,
+                the_film_is_ffplay,
+                parked
+            ),
+            paced,
+            "a resize with a host standing {a_film_host_stands}, ffplay {the_film_is_ffplay}, \
+             parked {parked}"
+        );
+    }
 }
 
 /// The topmost road is for players placed from the outside; the host is already where the pin is,
