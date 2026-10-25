@@ -202,7 +202,7 @@ use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
     WAIT_TIMEOUT, WPARAM,
 };
-use windows::Win32::Graphics::Dwm::DwmFlush;
+use windows::Win32::Graphics::Dwm::{DwmFlush, DwmGetCompositionTimingInfo, DWM_TIMING_INFO};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
     EndPaint, GdiFlush, GetDC, MonitorFromWindow, ReleaseDC, SelectObject, AC_SRC_ALPHA,
@@ -215,6 +215,7 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::Performance::QueryPerformanceFrequency;
 use windows::Win32::System::Threading::{
     CreateEventW, GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, ResetEvent,
     SetEvent, TerminateProcess, WaitForSingleObject, PROCESS_NAME_WIN32,

@@ -334,3 +334,47 @@ fn a_compositor_frame_is_only_the_pace_of_a_tick_that_was_drawn() {
         "the floor is under any display's period, so a frame a display drew is never refused"
     );
 }
+
+/// The compositor names the display's frame period in performance-counter ticks, so what a resize
+/// waits is the display's own rate rather than one written for a 60 Hz panel — and a pair of ticks
+/// that names no rate a display can show is not a period at all.
+#[test]
+fn the_compositor_names_a_displays_frame_period() {
+    const QPC_FREQUENCY: i64 = 10_000_000;
+
+    let at_144_hz = the_frame_period_a_timing_info_names(QPC_FREQUENCY / 144, QPC_FREQUENCY)
+        .expect("a 144 Hz display names its period");
+    assert!(
+        (at_144_hz.as_secs_f64() - 1.0 / 144.0).abs() < 1e-5,
+        "144 Hz is 6.944 ms a frame, not {at_144_hz:?}"
+    );
+    let at_60_hz = the_frame_period_a_timing_info_names(QPC_FREQUENCY / 60, QPC_FREQUENCY)
+        .expect("a 60 Hz display names its period");
+    assert!(
+        (at_60_hz.as_secs_f64() - 1.0 / 60.0).abs() < 1e-5,
+        "and 60 Hz is 16.667 ms, not {at_60_hz:?}"
+    );
+
+    for (ticks, frequency, why) in [
+        (0, QPC_FREQUENCY, "a field the compositor never filled in"),
+        (-QPC_FREQUENCY / 144, QPC_FREQUENCY, "a negative tick count"),
+        (QPC_FREQUENCY / 144, 0, "a counter with no frequency"),
+        (QPC_FREQUENCY / 144, -QPC_FREQUENCY, "a negative frequency"),
+        (
+            QPC_FREQUENCY / 1000,
+            QPC_FREQUENCY,
+            "a kilohertz, faster than any display",
+        ),
+        (
+            QPC_FREQUENCY,
+            QPC_FREQUENCY,
+            "a second a frame, slower than any display",
+        ),
+    ] {
+        assert_eq!(
+            the_frame_period_a_timing_info_names(ticks, frequency),
+            None,
+            "{why} is not a display's frame period"
+        );
+    }
+}

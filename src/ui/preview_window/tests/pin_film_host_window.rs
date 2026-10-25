@@ -1491,6 +1491,77 @@ fn only_a_live_hosted_mpv_resize_is_paced_by_the_compositor() {
         );
     }
 }
+/// A resize that flushed out a frame is already at the display's own rate, and nothing is added on
+/// top of it; a flush that came back at once paced nothing, so the resize waits a whole frame —
+/// the display's own when it names one, and the fallback when it will not.
+#[test]
+fn a_resize_waits_only_for_a_frame_the_flush_did_not_pace() {
+    let at_144_hz = Duration::from_secs_f64(1.0 / 144.0);
+    let at_60_hz = Duration::from_secs_f64(1.0 / 60.0);
+
+    assert_eq!(
+        pin_geometry::the_wait_after_a_flush(at_144_hz, Some(at_144_hz)),
+        None,
+        "a flush that took a 144 Hz frame paced the resize: it is at the panel's rate already"
+    );
+    assert_eq!(
+        pin_geometry::the_wait_after_a_flush(at_60_hz, Some(at_60_hz)),
+        None,
+        "and so did one that took a 60 Hz frame"
+    );
+    assert_eq!(
+        pin_geometry::the_wait_after_a_flush(Duration::from_micros(200), Some(at_144_hz)),
+        Some(at_144_hz),
+        "a flush that came back at once paced nothing, so the resize waits the display's own frame"
+    );
+    assert_eq!(
+        pin_geometry::the_wait_after_a_flush(Duration::from_micros(200), None),
+        Some(pin_geometry::PIN_RESIZE_FRAME_FALLBACK),
+        "and a display that will not name its rate is given the fallback"
+    );
+    assert!(
+        at_144_hz < pin_geometry::PIN_RESIZE_FRAME_FALLBACK,
+        "which is the point of asking: a 144 Hz panel's frame is shorter than the wait that used \
+         to be the floor under every resize, so the resize no longer runs below the display"
+    );
+}
+
+/// LIVE PROOF: the pace a live hosted mpv resize turns at on this machine, measured through the
+/// calls the drag makes — a real `DwmFlush` and the wait it leaves behind — rather than asserted
+/// from the numbers written down.
+///
+/// `cargo test -- --ignored --nocapture a_live_hosted_mpv_resize_keeps_the_panels_pace`
+#[test]
+#[ignore = "flushes the compositor 300 times and measures the pace against the display's period"]
+fn a_live_hosted_mpv_resize_keeps_the_panels_pace() {
+    const PACES: u32 = 300;
+
+    let period = the_displays_frame_period();
+    let began = Instant::now();
+    for _ in 0..PACES {
+        let flush_began = Instant::now();
+        // Safety: a call with no arguments and no state of its own, which asks the compositor to
+        // flush the frame it has and answers whether it could.
+        let _ = unsafe { DwmFlush() };
+        if let Some(wait) = pin_geometry::the_wait_after_a_flush(flush_began.elapsed(), period) {
+            std::thread::sleep(wait);
+        }
+    }
+    let took = began.elapsed();
+    let per_pace = took / PACES;
+    println!(
+        "{PACES} paces at {per_pace:?} each, {:.1} boxes a second; the display names {period:?}",
+        PACES as f64 / took.as_secs_f64()
+    );
+
+    if let Some(period) = period {
+        assert!(
+            per_pace < period * 2,
+            "a pace is the display's own frame, not twice it: {per_pace:?} against {period:?}"
+        );
+    }
+}
+
 
 /// The topmost road is for players placed from the outside; the host is already where the pin is,
 /// and it is the band that says where the picture goes. So the box the road was handed is not the
