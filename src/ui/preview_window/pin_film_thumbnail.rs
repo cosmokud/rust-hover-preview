@@ -94,7 +94,8 @@ pub(super) enum SourcePlacement {
 const SOURCE_PLACEMENT_VARIABLE: &str = "RHP_THUMBNAIL_SOURCE";
 /// How far beyond the virtual screen's left and bottom an `offscreen` source is put: a whole desktop
 /// worth, which no monitor arrangement reaches, and well inside the ±32 767 that a window message's
-/// packed coordinates can carry.
+/// packed coordinates can carry — past which Windows silently clamps the position (see
+/// `the_source_launch_origin`).
 const OFFSCREEN_GAP: i32 = 1_000;
 /// How much of an `edge` source is inside the virtual screen: the 2×2 pixels of its corner that stand
 /// over the screen's bottom-right one.
@@ -200,6 +201,15 @@ fn the_band_moves_the_source(placement: SourcePlacement) -> bool {
 /// window's bounds are initialized), so a negative or a far-off-screen box lands where it says. The
 /// one clamp left is the *size*: mpv limits it to 100% of the screen it picks, which a pin's box is
 /// at or under.
+///
+/// **Measured, mpv 0.41.0, on a 3440×1440 virtual screen.** `--geometry=640x360+-4440+3880` and
+/// `--geometry=640x360+3438+1438` are both applied exactly: Windows reads the windows back at
+/// `-4440,3880` and `3438,1438`, 640×360, so mpv neither refuses a negative box nor fits it back onto
+/// a screen. What is clamped is the *distance* — `--geometry=640x360+-1000000+-1000000` is handed to
+/// `SetWindowPos` by mpv and read back at `-32768,-32768`, the signed 16-bit floor a window message's
+/// packed coordinates carry. That is why an off-screen placement is one virtual desktop plus
+/// `OFFSCREEN_GAP` rather than a megapixel: past ±32 767 the window is somewhere other than the box
+/// that was asked for, and mpv's own idea of where its window is goes with it.
 pub(super) fn the_source_launch_origin(at: (i32, i32), size: (i32, i32)) -> (i32, i32) {
     let screen = displays::the_virtual_screen();
     let (x, y) = source_origin(
@@ -243,7 +253,7 @@ impl Thumbnail {
 }
 
 /// Take a player's own window as the film the pin's host shows: out of the Shell's lists, at the
-/// bottom of the desktop's order, and registered in the host it stands behind.
+/// bottom of the desktop's order, and registered in the host that shows it.
 ///
 /// **The style is put on once, at adoption.** `WS_EX_TOOLWINDOW` is the window's leaving the taskbar
 /// and Alt+Tab, `WS_EX_NOACTIVATE` is it never taking the keyboard from the file being renamed, and
@@ -255,7 +265,8 @@ impl Thumbnail {
 /// window belongs to mpv's process, and a synchronous reorder is this thread waiting on mpv's — the
 /// road that deadlocked this app once already (see `fit_the_hosted_mpv_to_the_host`). What a post
 /// costs is the window standing on its own for the moment it takes mpv to pump it, which is behind
-/// the hover the pin is being taken up from.
+/// the hover the pin is being taken up from — or nowhere at all, on the two off-screen placements (see
+/// `the_source_placement`).
 ///
 /// Safety: `source` is a window the caller found by `pid` and this app did not make.
 pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32) {
