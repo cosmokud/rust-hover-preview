@@ -388,7 +388,9 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
         // with no `--wid`, so what is found under this pid is the film's own window rather than a
         // child of the host's: it is adopted as the picture the host shows by a DWM thumbnail, and
         // never moved into the host the way FFmpeg's player is (see `pin_film_thumbnail`).
-        if pin_film_host::the_pin_shows_its_film_by_thumbnail() && video_process_image() == MPV_IMAGE_NAME
+        if pin_film_host::hosted_player_pid() == Some(pid)
+            && pin_film_host::the_pin_shows_its_film_by_thumbnail()
+            && video_process_image() == MPV_IMAGE_NAME
         {
             if !pin_film_thumbnail::the_source_is_up(pid) {
                 let mut data = EnumWindowsData {
