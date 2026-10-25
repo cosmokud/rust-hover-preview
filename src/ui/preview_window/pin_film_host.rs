@@ -212,26 +212,29 @@ pub(super) fn host_for_the_pins_ffplay(path: &Path, kind: Option<MediaType>) -> 
         .flatten()
 }
 
-/// **A temporary diagnostic, and not a setting: `RHP_MPV_OWNED_PIN`, present means on.**
+/// **Which road a pin's mpv film is drawn on: the default is the film's host owning the pin's
+/// chrome, and `RHP_MPV_CHILD_HOST_PIN`, present, asks for the hosted child host instead.**
 ///
 /// A `WS_CHILD` is always drawn above its parent's client area, and a `WS_EX_LAYERED` parent — the
 /// pin's chrome, painted through `UpdateLayeredWindow` — cannot clip or synchronise a hardware
-/// swapchain child. So the film is given not a child of the pin but a **window of the desktop's of
-/// its own, which owns the pin's chrome**: Windows then keeps the chrome above the film, hides it
-/// with the host, keeps it out of Alt+Tab, and moves neither for this app (see
-/// `the_pin_film_host_is_a_window_of_the_desktop`). Unset, every road here is exactly as it was.
-const MPV_OWNED_PIN_VARIABLE: &str = "RHP_MPV_OWNED_PIN";
+/// swapchain child. So with nothing set the film is given not a child of the pin but a **window of
+/// the desktop's of its own, which owns the pin's chrome**: Windows then keeps the chrome above the
+/// film, hides it with the host, keeps it out of Alt+Tab, and moves neither for this app (see
+/// `the_pin_film_host_is_a_window_of_the_desktop`). **Not a setting**: the variable brings the child
+/// host this app stood in before it back for an A/B that needs no rebuild.
+const MPV_CHILD_HOST_PIN_VARIABLE: &str = "RHP_MPV_CHILD_HOST_PIN";
 
-/// Whether the machine asked for the film host to own the pin's chrome (see
-/// [`MPV_OWNED_PIN_VARIABLE`]). The environment is read here and nowhere else, and the answer is a
-/// fact of the process: flipping the variable needs the app restarted, not the film re-pinned.
+/// Whether the film host owns the pin's chrome, which is the road unless a machine asked for the
+/// child host (see [`MPV_CHILD_HOST_PIN_VARIABLE`]). The environment is read here and nowhere else,
+/// and the answer is a fact of the process: flipping the variable needs the app restarted, not the
+/// film re-pinned.
 pub(super) fn the_film_host_owns_the_pin() -> bool {
     #[cfg(test)]
     if let Some(answer) = the_owned_road_stand_in() {
         return answer;
     }
 
-    std::env::var_os(MPV_OWNED_PIN_VARIABLE).is_some()
+    std::env::var_os(MPV_CHILD_HOST_PIN_VARIABLE).is_none()
 }
 
 /// Stand an answer for [`the_film_host_owns_the_pin`] on this thread in place of the machine's own, or
@@ -239,8 +242,8 @@ pub(super) fn the_film_host_owns_the_pin() -> bool {
 ///
 /// **Per thread because the tests run at once**, and because every road that asks the question in a
 /// test asks it from the thread the test is on: one test standing the road off is not another — and a
-/// run whose environment set the diagnostic would otherwise hand every test written against the
-/// child host the other road (see `pin_film_host::stand_the_mpv_pin_hosted_in` for the process-wide
+/// run whose environment set the opt-out would otherwise hand every test written against the owned
+/// road the child host (see `pin_film_host::stand_the_mpv_pin_hosted_in` for the process-wide
 /// form, which is the right one only where the answer is read from no thread in particular).
 #[cfg(test)]
 pub(super) fn stand_the_owned_road_in(answer: Option<bool>) {
