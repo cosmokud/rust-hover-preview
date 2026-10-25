@@ -1,6 +1,6 @@
 use super::*;
 
-/// **A step that grows is a step whose film has to be down before its window is**, and one that
+/// **A step that grows is a step whose window has to be down before its film is**, and one that
 /// shrinks is the other way round (see `apply_pin_drag`). The direction is read off the box the step
 /// came from against the one it goes to, on either axis.
 #[test]
@@ -18,7 +18,8 @@ fn a_resize_step_grows_where_either_side_of_it_is_pulled_out() {
     assert!(
         a_resize_step_grows(at, (200, 100, 700, 400)),
         "and a box pulled wider and shorter at once, because the side it exposes is the one the \
-         order is about — the side it gives up is clipped away by the window either way"
+         order is about — the two boxes cross rather than nest there, so no order keeps the film \
+         inside and the side that grew is the one the order can still get right"
     );
     assert!(
         !a_resize_step_grows(at, (100, 100, 400, 300)),
