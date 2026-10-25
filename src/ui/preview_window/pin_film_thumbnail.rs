@@ -41,13 +41,25 @@
 //!
 //! **A placement is made once at each end of a drag and never between.** The source takes the box the
 //! pin began the drag at, is left exactly there while the hand is on the edge, and is asked for the
-//! box the drag settled at when the hand lets go. What the two off-screen placements buy is the
-//! shrink a `behind` source cannot follow: the destination shrinks, the source does not, and there is
-//! nothing of a source that is not on the screen for the host to leave behind.
+//! box the drag settled at when the hand lets go. What the two off-screen placements were wanted for
+//! is the shrink a `behind` source cannot follow: the destination shrinks, the source does not, and
+//! there is nothing of a source that is not on the screen for the host to leave behind — which is the
+//! one thing they are no good for, since a source that is not on the screen is not drawn at all.
 //!
 //! **Only `behind` is moved with the host between those ends** (see `the_band_moves_the_source`),
 //! because it is the only placement that has to stay under the pin to stay unseen; the two off-screen
 //! placements have nothing to follow, and not asking is the point.
+//!
+//! **A settle is verified, not assumed.** One ask is not a proof that mpv kept the box: the player
+//! makes its window, configures its output for the frame, and can drop or overwrite a placement made
+//! under it (measured: a source adopted at a pin's band still read back at mpv's own default box).
+//! The Shell stretches whatever box the source is really in into the destination, so a source left at
+//! another box is a picture stretched out of its shape — which is what a pin that is *zoomed in* or
+//! *small in a field of black* after a resize drag is looking at, and it stands until the next box
+//! settles. So the tick compares the source's own box with the pin's and asks again where they differ:
+//! throttled by `SETTLE_RETRY`, capped at `SETTLE_ASKS` per settle, traced per look, and with the
+//! player's `vo-configured` read once at adoption rather than per tick (see `ask_the_source_for`,
+//! `keep_the_source_at_the_band` and `the_players_output_is_configured`).
 //!
 //! **The source is never hidden.** The Shell draws nothing for a source it considers hidden — the
 //! thumbnail of a `SW_HIDE` window is frozen at its last frame — so the source is *left on the
@@ -66,6 +78,7 @@
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
@@ -116,6 +129,21 @@ const OFFSCREEN_GAP: i32 = 1_000;
 /// How much of an `edge` source is inside the virtual screen: the 2×2 pixels of its corner that stand
 /// over the screen's bottom-right one.
 const EDGE_INSIDE_PIXELS: i32 = 2;
+
+/// How long a settle waits between one ask at the source and the next one: long enough for the
+/// `SWP_ASYNCWINDOWPOS` post to have been pumped and for a player that is still configuring its
+/// output to have finished, and short enough that a source left at another box is not on the screen
+/// for a hand's notice.
+const SETTLE_RETRY: Duration = Duration::from_millis(150);
+/// How many asks one settle makes of the source.
+///
+/// **One ask is not a proof that a window went where it was told.** mpv makes its window, configures
+/// its output for the frame and only then keeps the box it was given, so a placement made into that
+/// is one it can drop or overwrite (measured: a source adopted at a pin's band still read back
+/// 1920x1080 at mpv's own corner). A handful of asks covers a configure; a source that has not taken
+/// its box after them is one the player or the Shell is overruling, which is a fact for the trace and
+/// not something the tick may spin on.
+const SETTLE_ASKS: u8 = 4;
 
 /// The placement a `RHP_THUMBNAIL_SOURCE` value names, or nothing for a value that names none.
 ///
@@ -184,13 +212,15 @@ fn source_origin(
         // Under the host, which is the only placement that has anything over it to keep it unseen.
         SourcePlacement::Behind => host_origin,
         // A desktop's width left of the virtual screen and a desktop's height below it, so that no
-        // arrangement of monitors can reach any part of it.
+        // arrangement of monitors can reach any part of it. **Measured dead as well**: nothing of it
+        // is composed, so there is no picture to show (see the module note).
         SourcePlacement::Offscreen => (
             left - (right - left).max(width) - OFFSCREEN_GAP,
             bottom + (bottom - top).max(height) + OFFSCREEN_GAP,
         ),
-        // The screen's bottom-right corner with the source's own corner over it: the Shell sees a
-        // window on the screen, and what it sees of it is `EDGE_INSIDE_PIXELS` square.
+        // The screen's bottom-right corner with the source's own corner over it. **Measured dead**:
+        // 2 px in bounds is not a window the Shell is drawing, so the thumbnail of it is empty (see
+        // the module note).
         SourcePlacement::Edge => (right - EDGE_INSIDE_PIXELS, bottom - EDGE_INSIDE_PIXELS),
     }
 }
@@ -258,6 +288,13 @@ struct Thumbnail {
     registration: isize,
     /// The size of the host's client area the registration was last given, as a width and a height.
     destination: (i32, i32),
+    /// The box the source was last asked for at a settle, how many asks of it have been made, when the
+    /// last of them was, and whether that settle has already reported the box as never taken: what
+    /// the tick reads to tell a placement that landed from one that did not (see `ask_the_source_for`).
+    asked: (i32, i32, i32, i32),
+    asks: u8,
+    asked_at: Option<Instant>,
+    gave_up: bool,
 }
 
 impl Thumbnail {
@@ -265,6 +302,10 @@ impl Thumbnail {
         host: 0,
         registration: 0,
         destination: (0, 0),
+        asked: (0, 0, 0, 0),
+        asks: 0,
+        asked_at: None,
+        gave_up: false,
     };
 }
 
@@ -340,7 +381,18 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32) {
         // Styling, the bottom insert and this are one pass, and for the two off-screen placements the
         // launch already put the window where nothing of it can be seen — this only corrects the box
         // to the host's (see `place_the_source`).
-        place_the_source(host);
+        //
+        // **And it counts against the settle only where the player has said its output is
+        // configured.** mpv makes its window and then configures its output for the first frame, and a
+        // placement made into that is one the configure can drop or overwrite — measured: a source
+        // adopted at a pin's band still read back 1920x1080 at mpv's own corner, with the ask answered
+        // as made. The ask is made anyway, because it is what puts the film under the host in the
+        // meantime; where the word is not yet given it is a free try and the tick asks again at once
+        // instead of trusting it (see `keep_the_source_at_the_band`). The word is read here, once — a
+        // pipe read per tick is not a thing this road may spend.
+        if let Some(box_) = the_box_the_placement_names(host) {
+            ask_the_source_for(source, host, box_, the_players_output_is_configured(pid));
+        }
         the_band_was_placed(host);
     }
 }
@@ -362,6 +414,14 @@ pub(super) fn note_the_source(source: HWND, pid: u32) {
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(number, Ordering::SeqCst);
     SOURCE_PROCESS.store(pid, Ordering::SeqCst);
+}
+
+/// The window the Shell is drawing the pin's film from, where there is one: the window of mpv's the
+/// pin's picture is a thumbnail of, which is the third window a press can land in on this road (see
+/// `the_band_was_placed` and `key_input::pin_owns_caret`).
+pub(super) fn the_source_window() -> Option<HWND> {
+    let number = SOURCE.load(Ordering::SeqCst);
+    (number != 0).then_some(HWND(number as *mut _))
 }
 
 /// Whether this player's window is up as the pin's picture: still a window, and still one of the
@@ -431,38 +491,147 @@ pub(super) fn the_band_was_placed(host: HWND) {
     settle_the_registration(&mut held, host, destination);
 }
 
-/// Put the source where its placement wants it, at the box the host is at: the one ask a drag makes of
-/// a window of mpv's, made at the drag's two ends and at every box that settles without one.
+/// Put the source where its placement wants it, at the box the host is at: the ask a drag makes at its
+/// two ends and at every box that settles without one.
 ///
 /// **Its size is the box the pin is at, and it is not asked for again until the box settles.** A drag
 /// that shrinks the pin leaves a `behind` source at the box the drag began at, and the part of it the
 /// host no longer covers stands on the desktop until the drag ends — which is the leak the two
-/// off-screen placements exist to leave behind (see the module note and `source_origin`).
+/// off-screen placements were wanted for and do not draw (see the module note and `source_origin`).
 ///
 /// Nothing is asked of a window already at the box the placement names, which is what makes the call
 /// at a drag's beginning free where the source has not left its placement since the last one.
 pub(super) fn place_the_source(host: HWND) {
-    let number = SOURCE.load(Ordering::SeqCst);
-    if number == 0 {
+    let Some(source) = the_source_window() else {
+        return;
+    };
+    let Some(box_) = the_box_the_placement_names(host) else {
+        return;
+    };
+    ask_the_source_for(source, host, box_, true);
+}
+
+/// Whether the player whose window is the pin's picture has said its video output is configured for a
+/// frame, which is the one fact that says a placement made now will be kept.
+///
+/// **Read once, at adoption, where the answer is cheap and means something** (see `adopt_the_source`).
+/// Nothing on the tick's road asks it: a pipe read per tick is not a thing this road may spend, and the
+/// tick's own question is where the source's box actually is (see `keep_the_source_at_the_band`).
+pub(super) fn the_players_output_is_configured(pid: u32) -> bool {
+    pid != 0 && mpv_ipc::get_property(pid, "vo-configured").as_deref() == Some("true")
+}
+
+/// Ask again for a box the source did not take: the tick's proof that a settle landed rather than its
+/// assumption that it did.
+///
+/// **A hand on an edge asks nothing.** A drag leaves the source at the box the drag began at and moves
+/// only the destination rectangle, which is the whole of why a step is cheap (see the module note), so
+/// a check that ran between the two ends of a drag would be asking for a resize on every tick — the
+/// thrash this road exists not to have.
+///
+/// **Nothing here is a cross-process call.** The source's corner and size are Windows' answer about a
+/// window, and the one ask that reaches the player is posted (see `ask_the_source_for`).
+pub(super) fn keep_the_source_at_the_band(host: HWND) {
+    if pin_drag::pin_is_dragging() {
         return;
     }
-    let source = HWND(number as *mut _);
-    let Some(origin) = (unsafe { client_origin(host) }) else {
+    let Some(source) = the_source_window() else {
         return;
     };
-    let Some(size) = (unsafe { client_size(host) }) else {
+    let Some(box_) = the_box_the_placement_names(host) else {
         return;
     };
+    ask_the_source_for(source, host, box_, true);
+}
+
+/// The box a placement wants the source at: the corner the placement puts it at, at the size of the
+/// host's client area, both in the virtual desktop's coordinates. `None` for a host that has gone.
+fn the_box_the_placement_names(host: HWND) -> Option<(i32, i32, i32, i32)> {
+    let origin = unsafe { client_origin(host) }?;
+    let size = unsafe { client_size(host) }?;
     let size = (size.0.max(1), size.1.max(1));
-    let placement = the_source_placement();
     let screen = displays::the_virtual_screen();
     let (x, y) = source_origin(
-        placement,
+        the_source_placement(),
         (screen.left, screen.top, screen.right, screen.bottom),
         origin,
         size,
     );
+    Some((x, y, size.0, size.1))
+}
 
+/// What one look at the source answers, as a rule with no window in it so that the timing and the cap
+/// can be asked without one (see `ask_the_source_for`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SettleLook {
+    /// At the box the settle asks for, after this many asks of it.
+    Matched(u8),
+    /// Not at the box, and the last ask is too recent to make another.
+    TooSoon,
+    /// Not at the box, and this settle's next ask is due.
+    Due,
+    /// Not at the box after every ask one settle makes: the box is not being taken.
+    Never,
+    /// A settle that has already said the box is not being taken: nothing more to say.
+    Nothing,
+}
+
+/// The look one settle makes at a source: the counts advanced where a new box begins a new settle, and
+/// whether this look may ask.
+fn the_settle_look(
+    held: &mut Thumbnail,
+    box_: (i32, i32, i32, i32),
+    now_at: (i32, i32, i32, i32),
+    now: Instant,
+) -> SettleLook {
+    if held.asked != box_ {
+        held.asked = box_;
+        held.asks = 0;
+        held.asked_at = None;
+        held.gave_up = false;
+    }
+    if now_at == box_ {
+        let asks = held.asks;
+        held.asks = 0;
+        held.asked_at = None;
+        return SettleLook::Matched(asks);
+    }
+    if held.gave_up {
+        return SettleLook::Nothing;
+    }
+    if held.asks >= SETTLE_ASKS {
+        held.gave_up = true;
+        return SettleLook::Never;
+    }
+    if held
+        .asked_at
+        .is_some_and(|at| now.duration_since(at) < SETTLE_RETRY)
+    {
+        return SettleLook::TooSoon;
+    }
+    SettleLook::Due
+}
+
+/// Ask the source for `box_`, at most as often as a settle allows, and say in the trace what the look
+/// answered: the placement, the count it is at, the box the window is actually in, and the one line
+/// that says the box was taken.
+///
+/// **A placement is a guess about another process's window**, so this is the one place that reads the
+/// answer back: mpv can drop or overwrite a box it was given before its output was configured, and the
+/// Shell stretches whatever box the source is really in into the destination — a stale source is a
+/// picture stretched in the wrong shape, not a picture that is late (see the module note).
+///
+/// The ask is posted and never waited on: the read that follows it is Windows' answer about the
+/// window, so nothing here waits on the player's thread.
+///
+/// **The box measured is the window's own and not its client area's**, because that is what a
+/// placement names and what `SetWindowPos` places; mpv is launched `--no-border`, so the two are one
+/// area and the trace reads as the picture's box.
+///
+/// **`count_the_ask` is the player's own word about whether the ask will be kept** (see
+/// `adopt_the_source`): an ask made before the output is configured is a try, not one of the settle's
+/// attempts, so the settle's next look is due at once rather than a retry away.
+fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), count_the_ask: bool) {
     // Safety: the handle is a window this module adopted, and both questions are about the window.
     if !unsafe { IsWindow(source) }.as_bool() {
         return;
@@ -471,36 +640,90 @@ pub(super) fn place_the_source(host: HWND) {
     if unsafe { GetWindowRect(source, &mut current) }.is_err() {
         return;
     }
-    if (current.left, current.top, current.right - current.left, current.bottom - current.top)
-        == (x, y, size.0, size.1)
-    {
-        return;
-    }
-
-    let placed = unsafe {
-        SetWindowPos(
-            source,
-            HWND::default(),
-            x,
-            y,
-            size.0,
-            size.1,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
-        )
-    };
-    // The ask and its answer, because a placement is the one thing on this road that is a guess about
-    // another process's window: a `--geometry` mpv did not honour shows up as a `placed` of zero here.
-    note_pin_trace!(
-        "source placed {:?} {:?} {}x{}+{}+{} host {:?} ok {}",
-        source,
-        placement,
-        size.0,
-        size.1,
-        x,
-        y,
-        host,
-        placed.is_ok() as u8,
+    let now_at = (
+        current.left,
+        current.top,
+        current.right - current.left,
+        current.bottom - current.top,
     );
+    let now = Instant::now();
+
+    let Ok(mut held) = THUMBNAIL.lock() else {
+        return;
+    };
+    let (x, y, width, height) = box_;
+    let placement = the_source_placement();
+    match the_settle_look(&mut held, box_, now_at, now) {
+        SettleLook::Matched(0) | SettleLook::TooSoon | SettleLook::Nothing => {}
+        SettleLook::Matched(asks) => {
+            note_pin_trace!(
+                "source settled {:?} {:?} {}x{}+{}+{} host {:?} after {} asks",
+                source,
+                placement,
+                width,
+                height,
+                x,
+                y,
+                host,
+                asks,
+            );
+        }
+        SettleLook::Never => {
+            note_pin_trace!(
+                "source never took its box {:?} {:?} wanted {}x{}+{}+{} has {}x{}+{}+{} host {:?} after {} asks",
+                source,
+                placement,
+                width,
+                height,
+                x,
+                y,
+                now_at.2,
+                now_at.3,
+                now_at.0,
+                now_at.1,
+                host,
+                held.asks,
+            );
+        }
+        SettleLook::Due => {
+            let asks = if count_the_ask {
+                held.asks += 1;
+                held.asked_at = Some(now);
+                held.asks
+            } else {
+                0
+            };
+            let placed = unsafe {
+                SetWindowPos(
+                    source,
+                    HWND::default(),
+                    x,
+                    y,
+                    width,
+                    height,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+                )
+            };
+            note_pin_trace!(
+                "source placed {:?} {:?} {}x{}+{}+{} host {:?} ask {}/{} counted {} from {}x{}+{}+{} ok {}",
+                source,
+                placement,
+                width,
+                height,
+                x,
+                y,
+                host,
+                asks,
+                SETTLE_ASKS,
+                count_the_ask as u8,
+                now_at.2,
+                now_at.3,
+                now_at.0,
+                now_at.1,
+                placed.is_ok() as u8,
+            );
+        }
+    }
 }
 
 /// Take the picture off the screen with the host it is seen in, or put it back.
@@ -515,11 +738,12 @@ pub(super) fn place_the_source(host: HWND) {
 /// seen in is about to want back (see `the_source_placement`). A source at the bottom of the z-order
 /// is the only one there is a reason to hide, so `behind` is the only placement that asks.
 pub(super) fn set_the_source_visible(visible: bool) {
-    let number = SOURCE.load(Ordering::SeqCst);
-    if number == 0 || the_source_placement() != SourcePlacement::Behind {
+    let Some(source) = the_source_window() else {
+        return;
+    };
+    if the_source_placement() != SourcePlacement::Behind {
         return;
     }
-    let source = HWND(number as *mut _);
     // Safety: the handle is a window this module adopted, and the question is about it rather than a
     // change to it. A window already where it is wanted is left alone: a host's show runs on every
     // tick of a pin that is drawing, and a `ShowWindow` a tick is a message mpv's thread owes nothing.
@@ -664,6 +888,7 @@ mod tests {
             host: 0x2000,
             registration: 9,
             destination: (320, 240),
+            ..Thumbnail::NOTHING
         };
 
         assert!(holding.host == 0x2000 && holding.destination == (320, 240));
@@ -762,5 +987,63 @@ mod tests {
         assert!(the_band_moves_the_source(SourcePlacement::Behind));
         assert!(!the_band_moves_the_source(SourcePlacement::Offscreen));
         assert!(!the_band_moves_the_source(SourcePlacement::Edge));
+    }
+
+    /// A settle asks a bounded number of times, waits between two asks, and says once that the box was
+    /// not taken — which is what tells a placement that landed from one that did not (see
+    /// `ask_the_source_for`).
+    #[test]
+    fn a_settle_asks_a_bounded_number_of_times_and_waits_between_them() {
+        let band = (10, 20, 640, 360);
+        let elsewhere = (0, 0, 1920, 1080);
+        let mut held = Thumbnail::NOTHING;
+        let mut now = Instant::now();
+
+        assert_eq!(
+            the_settle_look(&mut held, band, elsewhere, now),
+            SettleLook::Due,
+            "a fresh settle asks at once"
+        );
+        held.asks += 1;
+        held.asked_at = Some(now);
+        assert_eq!(
+            the_settle_look(&mut held, band, elsewhere, now),
+            SettleLook::TooSoon,
+            "and is not asked again inside the retry"
+        );
+        assert_eq!(
+            the_settle_look(&mut held, band, band, now),
+            SettleLook::Matched(1),
+            "a box the source is in is the settle, and the count says what it took"
+        );
+        assert_eq!(held.asks, 0, "and the count is given up with it");
+
+        now += SETTLE_RETRY;
+        for ask in 1..=SETTLE_ASKS {
+            assert_eq!(
+                the_settle_look(&mut held, band, elsewhere, now),
+                SettleLook::Due,
+                "ask {ask} of a source that never takes the box"
+            );
+            held.asks = ask;
+            held.asked_at = Some(now);
+            now += SETTLE_RETRY;
+        }
+        assert_eq!(
+            the_settle_look(&mut held, band, elsewhere, now),
+            SettleLook::Never,
+            "the cap is where the settle says the box is not being taken"
+        );
+        assert_eq!(
+            the_settle_look(&mut held, band, elsewhere, now),
+            SettleLook::Nothing,
+            "and says it once, so a pin that is up does not fill the trace with it"
+        );
+
+        assert_eq!(
+            the_settle_look(&mut held, (11, 20, 640, 360), elsewhere, now),
+            SettleLook::Due,
+            "another box is another settle, with its own count"
+        );
     }
 }

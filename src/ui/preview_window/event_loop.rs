@@ -476,9 +476,24 @@ pub fn run_preview_window() {
             // the tick publishing what it already knows. Zero for both says there is no such pin,
             // which is what leaves the arrows alone in the listing behind a preview that is not
             // one (see `key_input::pin_owns_caret`).
-            let pin_keys_owner = if pinned() { hwnd.0 as u64 } else { 0 };
+            //
+            // **The owner is the pin's own window**, which is the window Windows activates and the
+            // one the hook reads as the foreground. The preview's window is where a pin that stands
+            // in it draws, and it is the same window in that case; a pinned film's is not (see
+            // `pinned_window`).
+            let pin_keys_owner = if pinned() {
+                pinned_window().0 as u64
+            } else {
+                0
+            };
+            // And the third window a press can land in, where the pin's film is drawn by the Shell
+            // from a window of the player's own: mpv's window, which takes the pointer when the film
+            // is pressed and would otherwise be a foreground the hook knows nothing about (see
+            // `pin_film_host::the_films_own_window`).
             let pin_keys_video = if pin_keys_owner != 0 {
-                VIDEO_HWND.load(Ordering::SeqCst) as u64
+                pin_film_host::the_films_own_window()
+                    .map_or(VIDEO_HWND.load(Ordering::SeqCst), |film| film.0 as isize)
+                    as u64
             } else {
                 0
             };
@@ -852,6 +867,12 @@ pub fn run_preview_window() {
                 // until a frame has been drawn into the moved window, then gives the band back to
                 // the film's alpha-1 claim before any later park can see a stale frame.
                 pin_film_host::settle_the_move_cover();
+                // And whether the box a thumbnail's source was asked for is the box it is in: a
+                // placement can be dropped while a player's output is still configuring, and a
+                // source left at another box is one the Shell stretches out of its shape — the
+                // pin that is zoomed in, or small in a field of black, until the next box settles
+                // (see `pin_film_host::keep_the_film_source_in_the_band`).
+                pin_film_host::keep_the_film_source_in_the_band();
                 settle_pending_hold();
 
                 // And what the taskbar button's own hover is offering, which is settled by the same
