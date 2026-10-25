@@ -276,13 +276,20 @@ pub(super) unsafe fn place_the_chrome_strips() {
         return;
     };
 
+    // The row a resize pushed the pin's picture down by, which is the row the window was moved up by:
+    // a strip is placed in the client's own coordinates and so rides that move, and adding the row
+    // here is what keeps the chrome on the box the pin's picture landed on (see
+    // `the_slack_a_resize_paints_with`). The sizes are the pin's own and not the surface's, so only
+    // the place moves.
+    let row = paint::the_row_a_resize_paints_the_picture_down();
+
     if state.caption_height > 0 {
         if let Some(strip) = caption_strip() {
             let _ = SetWindowPos(
                 strip,
                 HWND::default(),
                 0,
-                0,
+                row,
                 state.width,
                 state.caption_height,
                 SWP_NOZORDER | SWP_NOACTIVATE,
@@ -296,7 +303,7 @@ pub(super) unsafe fn place_the_chrome_strips() {
                 strip,
                 HWND::default(),
                 0,
-                state.height - state.transport_height,
+                state.height - state.transport_height + row,
                 state.width,
                 state.transport_height,
                 SWP_NOZORDER | SWP_NOACTIVATE,
@@ -310,7 +317,7 @@ pub(super) unsafe fn place_the_chrome_strips() {
                 strip,
                 HWND::default(),
                 volume.left,
-                volume.top,
+                volume.top + row,
                 (volume.right - volume.left).max(1),
                 (volume.bottom - volume.top).max(1),
                 SWP_NOZORDER | SWP_NOACTIVATE,

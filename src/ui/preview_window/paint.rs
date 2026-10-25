@@ -720,19 +720,51 @@ pub(super) fn the_slack_a_resize_paints_with(resizing: bool) -> (i32, i32) {
     static STANDING_ON: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
     if !resizing {
+        THE_ROW_A_RESIZE_PAINTS_THE_PICTURE_DOWN.store(0, Ordering::SeqCst);
         return (0, 0);
     }
 
     let Ok(mut on) = STANDING_ON.lock() else {
+        THE_ROW_A_RESIZE_PAINTS_THE_PICTURE_DOWN.store(0, Ordering::SeqCst);
         return (0, 0);
     };
     *on = !*on;
 
-    if *on {
-        (1, 1)
-    } else {
-        (0, 1)
+    let chosen = if *on { (1, 1) } else { (0, 1) };
+    THE_ROW_A_RESIZE_PAINTS_THE_PICTURE_DOWN.store(chosen.0, Ordering::SeqCst);
+    chosen
+}
+
+/// The row the last paint chose to push the pin's own picture down into the slack, which is the row
+/// the window itself was moved up by (see `the_slack_a_resize_paints_with`).
+///
+/// **It exists for the children of the pin's window.** A hosted film and the chrome strips are placed
+/// in the pin's client coordinates, so they ride every move of the window — and the slack moves the
+/// window a pixel on every paint of a resize, which leaves the film and the chrome bobbing at paint
+/// rate while the hand's own resize should be smooth. Asked here so both can put themselves back
+/// down by the same row and stay on the band (see `pin_film_host::band_in_the_window` and
+/// `pin_chrome_strips::place_the_chrome_strips`).
+///
+/// **It answers nothing unless a resize is the drag in flight**, so a release or a lost capture that
+/// never repaints cannot leave a row standing over children whose window has stopped moving. The
+/// cost of that guard is the single paint at a drag's end: between the release and the last paint of
+/// it the window is still a row up while the row asked for is already zero.
+static THE_ROW_A_RESIZE_PAINTS_THE_PICTURE_DOWN: AtomicI32 = AtomicI32::new(0);
+
+pub(super) fn the_row_a_resize_paints_the_picture_down() -> i32 {
+    let resizing = pin_state()
+        .and_then(|pinned| {
+            pinned
+                .pin()
+                .and_then(|pin| pin.dragging.map(|drag| drag.action))
+        })
+        .is_some_and(|action| matches!(action, PinDragAction::Resize(_)));
+
+    if !resizing {
+        return 0;
     }
+
+    THE_ROW_A_RESIZE_PAINTS_THE_PICTURE_DOWN.load(Ordering::SeqCst)
 }
 
 /// Everything a repaint of a pinned window needs, taken in one look: what the caption says and
