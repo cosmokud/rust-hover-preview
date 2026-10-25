@@ -64,6 +64,12 @@ windows = { version = "0.58", features = [
     # other way to ask — the compositor is the only thing that knows (see
     # `wait_for_the_compositor`).
     "Win32_Graphics_Dwm",
+    # The display's own frame period, which is what a live hosted mpv resize is paced to:
+    # `DwmGetCompositionTimingInfo` names it in performance-counter ticks and
+    # `QueryPerformanceFrequency` is the clock those ticks are counted in, so a resize on a 144 Hz
+    # panel is paced at 144 rather than at a number written here for 60 (see
+    # `the_displays_frame_period`).
+    "Win32_System_Performance",
     "Foundation",
     "Data_Pdf",
     "Storage_Streams",
