@@ -17,8 +17,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindowLongPtrW,
     IsIconic, IsWindowVisible, MoveWindow, SendMessageW, SetWindowLongPtrW, ShowWindow,
     GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOP, SWP_ASYNCWINDOWPOS,
-    SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_SHOWWINDOW, WM_SIZE,
-    WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED,
+    SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_ERASEBKGND, WM_SHOWWINDOW,
+    WM_SIZE, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED,
     WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
@@ -274,6 +274,366 @@ fn a_hosted_park_holds_the_frame_the_host_is_showing() {
         (64, 48),
         "read at the band the film is drawn in rather than at a box of the desktop's"
     );
+}
+
+/// Every erase a stand-in host was handed, by window: whether a point inside the child the test gave
+/// it and a point outside it were in the device context's system region (see
+/// `an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be`).
+static ERASE_CLIPS: Lazy<Mutex<Vec<(isize, bool, bool)>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// A window of a test's own that records what an erase of it is clipped to, and answers the erase the
+/// way the hosts do.
+unsafe extern "system" fn record_the_erase_clip(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    use windows::Win32::Graphics::Gdi::{
+        CreateRectRgn, DeleteObject, GetRandomRgn, PtInRegion, HGDIOBJ, SYSRGN,
+    };
+
+    if msg == WM_ERASEBKGND {
+        let dc = HDC(wparam.0 as *mut _);
+        // SAFETY: the region is this call's own, and the context is the one Windows handed the erase
+        // with; both are given up before this answers.
+        unsafe {
+            let region = CreateRectRgn(0, 0, 0, 0);
+            // The system region a window is erased within is in screen coordinates, so the two
+            // points the window is asked about are taken from its client box onto the desktop.
+            let mut childs_corner = POINT { x: 8, y: 8 };
+            let mut outside = POINT { x: 240, y: 200 };
+            let _ = ClientToScreen(hwnd, &mut childs_corner);
+            let _ = ClientToScreen(hwnd, &mut outside);
+            // `1` is a system region copied out; `-1` is an empty one, which is no region at all.
+            let copied = GetRandomRgn(dc, region, SYSRGN as i32) > 0;
+            let inside = copied && PtInRegion(region, childs_corner.x, childs_corner.y).as_bool();
+            let outside = copied && PtInRegion(region, outside.x, outside.y).as_bool();
+            let _ = DeleteObject(HGDIOBJ(region.0));
+            if let Ok(mut clips) = ERASE_CLIPS.lock() {
+                clips.push((hwnd.0 as isize, inside, outside));
+            }
+        }
+        return LRESULT(1);
+    }
+
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// **`WS_CLIPCHILDREN` is the whole of why the fill cannot touch the live film, and this is that
+/// premise measured rather than assumed.** A window painted the way the hosts are — nothing but an
+/// erase of its own, wearing `NULL_BRUSH` — is handed a device context by Windows whose system
+/// region has no pixel of its child in it, which is what lets `paint_the_host_behind_the_film`
+/// stretch a picture over the whole client box. The second window here wears no such bit and answers
+/// the other way, so it is the bit and not the box that does it.
+///
+/// It is a window of the test's own rather than a host, because what is being joined is Windows' own
+/// behaviour: the message arriving to a class with no brush at all, and the context it brings.
+#[test]
+fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
+    use windows::Win32::Graphics::Gdi::{
+        GetStockObject, InvalidateRect, UpdateWindow, HBRUSH, NULL_BRUSH,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IsWindowVisible, RegisterClassExW, ShowWindow, WS_VISIBLE,
+    };
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    const ERASE_PROBE_CLASS: windows::core::PCWSTR = w!("RustHoverPreviewTestEraseProbe");
+    let hinstance = unsafe { GetModuleHandleW(None) }.expect("the module's own handle");
+    let registered = unsafe {
+        RegisterClassExW(&WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(record_the_erase_clip),
+            hInstance: hinstance.into(),
+            hbrBackground: HBRUSH(GetStockObject(NULL_BRUSH).0),
+            lpszClassName: ERASE_PROBE_CLASS,
+            ..Default::default()
+        })
+    };
+    assert_ne!(registered, 0, "a class of the test's own to erase");
+    ERASE_CLIPS.lock().expect("the clips recorded").clear();
+
+    let mut stands = Vec::new();
+    for (index, clipped) in [true, false].into_iter().enumerate() {
+        let style = if clipped {
+            WS_POPUP | WS_CLIPCHILDREN
+        } else {
+            WS_POPUP
+        };
+        // SAFETY: both windows are this test's own, and both are destroyed below.
+        unsafe {
+            let parent = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                ERASE_PROBE_CLASS,
+                w!("erase probe"),
+                style,
+                // Side by side, so that neither stands over the other's band.
+                index as i32 * 320,
+                0,
+                320,
+                240,
+                None,
+                None,
+                hinstance,
+                None,
+            )
+            .expect("a window to erase");
+            // The child before the show, so that every erase this window is handed is one with a
+            // child in it.
+            let child = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!(""),
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                160,
+                120,
+                parent,
+                None,
+                None,
+                None,
+            )
+            .expect("a child of the window's, in this process");
+            // Shown, because a window's visible region — which is what it is erased within — is the
+            // desktop's, and a window off it has none to be asked about.
+            let _ = ShowWindow(parent, SW_SHOWNOACTIVATE);
+            assert!(
+                IsWindowVisible(parent).as_bool(),
+                "a window off the desktop has no visible region to be erased within"
+            );
+            let _ = InvalidateRect(parent, None, true);
+            let _ = UpdateWindow(parent);
+            stands.push((parent, child, clipped));
+        }
+    }
+
+    let clips = ERASE_CLIPS.lock().unwrap_or_else(|held| held.into_inner());
+    let erases_of = |parent: HWND| {
+        clips
+            .iter()
+            .filter(|(window, _, _)| *window == parent.0 as isize)
+            .map(|(_, inside, outside)| (*inside, *outside))
+            .collect::<Vec<_>>()
+    };
+    let clipped = erases_of(stands[0].0);
+    let unclipped = erases_of(stands[1].0);
+    // Every erase of it, because a window is erased in pieces and an erase that covered its child
+    // in any of them is a fill over the film.
+    assert!(
+        !clipped.is_empty() && clipped.iter().all(|(inside, _)| !inside),
+        "no erase of a window wearing the bit covers its child: {clipped:?}"
+    );
+    assert!(
+        clipped.iter().any(|(_, outside)| *outside),
+        "and the rest of its client box is erased: {clipped:?}"
+    );
+    assert!(
+        unclipped.iter().any(|(inside, outside)| *inside && *outside),
+        "while a window wearing no such bit is erased right across its child, which is the bit doing          it: {unclipped:?}"
+    );
+    drop(clips);
+
+    for (parent, child, _) in stands {
+        // SAFETY: the two windows are this test's own, and the child goes with its parent.
+        unsafe {
+            let _ = DestroyWindow(child);
+            let _ = DestroyWindow(parent);
+        }
+    }
+}
+
+/// A surface of `width` by `height` pixels in one colour, for an erase to be handed: what is left in
+/// it afterwards is the whole of what an erase did.
+fn a_surface_of(width: u32, height: u32, colour: [u8; 4]) -> DibSurface {
+    let surface = DibSurface::create(width, height).expect("a surface to erase into");
+    // SAFETY: the surface was made by this call, of the size asked for, and nothing else holds a
+    // pointer to what is behind it.
+    unsafe {
+        let bits =
+            std::slice::from_raw_parts_mut(surface.bits(), width as usize * height as usize * 4);
+        for pixel in bits.as_chunks_mut::<4>().0 {
+            pixel.copy_from_slice(&colour);
+        }
+    }
+    surface
+}
+
+/// **The host erases itself, and with the frame a drag is holding rather than with black.** This is
+/// the strip a band that has just grown shows while mpv's child catches up to it (see
+/// `paint_the_host_behind_the_film`): with no frame in hand the strip is the black it always was, and
+/// with one it is the picture the drag began on.
+///
+/// The colour underneath is a surface nothing else paints, and the class brush is `NULL_BRUSH`, so a
+/// surface still wearing it is one `DefWindowProcW` handled — the answer `1` is what the rest of the
+/// erase stands on, since the default procedure answers that too.
+#[test]
+fn the_host_erases_with_the_held_frame_and_with_black_where_there_is_none() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    forget_video_frame();
+
+    let mut client = RECT::default();
+    assert!(
+        unsafe { GetClientRect(host, &mut client) }.is_ok(),
+        "the host has a client box to be erased"
+    );
+    let (width, height) = (client.right.max(1) as u32, client.bottom.max(1) as u32);
+    let erase = |surface: &DibSurface| unsafe {
+        SendMessageW(
+            host,
+            WM_ERASEBKGND,
+            WPARAM(surface.dc.0 as usize),
+            LPARAM(0),
+        )
+    };
+
+    let underneath = [0u8, 0, 255, 255];
+    let erased = a_surface_of(width, height, underneath);
+    assert_eq!(
+        erase(&erased),
+        LRESULT(1),
+        "the host answers its own erase rather than passing it to the default procedure"
+    );
+    assert!(
+        erased
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[..3] == [0, 0, 0]),
+        "with no frame in hand the strip is black, which is what the class brush filled it with"
+    );
+
+    // The frame a drag holds is stretched into the box: a two-pixel red picture is the strip's
+    // colour everywhere, halftone filtering and all.
+    stand_video_frame_for_a_test([0u8, 0, 255, 255].repeat(4), 2, 2);
+    let painted = a_surface_of(width, height, underneath);
+    assert_eq!(
+        erase(&painted),
+        LRESULT(1),
+        "and the answer is the same one"
+    );
+    assert!(
+        painted
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[2] > 200 && pixel[1] < 60),
+        "the strip is the frame the drag is holding, rather than an erase at all"
+    );
+
+    forget_video_frame();
+}
+
+/// **A hover's own host is erased black whatever a pin is holding.** The two hosts share one erase
+/// road — a pin taken up on a hover's running film keeps that window (see `hover_film_host`) — and
+/// the road paints the picture only for the window the pin is drawing through, so a hover's band is
+/// the black it always was.
+#[test]
+fn a_hovers_own_host_is_erased_black_with_a_pins_frame_in_hand() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    // No pin and no pin's host: this window is a hover's, and nothing else's.
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 64, 48)) }
+        .expect("the hover's host");
+
+    let mut client = RECT::default();
+    assert!(
+        unsafe { GetClientRect(host, &mut client) }.is_ok(),
+        "the hover's host has a client box to be erased"
+    );
+    let surface = a_surface_of(
+        client.right.max(1) as u32,
+        client.bottom.max(1) as u32,
+        [0u8, 0, 255, 255],
+    );
+
+    stand_video_frame_for_a_test([0u8, 0, 255, 255].repeat(4), 2, 2);
+    assert_eq!(
+        unsafe {
+            SendMessageW(
+                host,
+                WM_ERASEBKGND,
+                WPARAM(surface.dc.0 as usize),
+                LPARAM(0),
+            )
+        },
+        LRESULT(1),
+        "the hover's host answers its own erase too"
+    );
+    assert!(
+        surface
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[..3] == [0, 0, 0]),
+        "and the pin's frame is not painted into a hover's band, which stays black"
+    );
+
+    forget_video_frame();
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+}
+
+/// **A resize drag takes the frame its host paints with, and gives it up when the drag ends.** The
+/// picture is read off the screen where the film is, on the pointer message that begins the drag (see
+/// `hold_the_frame_a_growing_host_paints`), and one kept past the drag's end is a picture the next
+/// erase would paint a strip with.
+#[test]
+fn a_resize_drag_holds_the_frame_its_host_paints_with_and_gives_it_up_at_its_end() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    // On the screen, because a frame is read off it rather than asked of the player: a host put off
+    // every display has no picture for a `BitBlt` to take (see `hold_video_window_frame`).
+    unsafe {
+        let _ = MoveWindow(film.pin_hwnd, 100, 100, 320, 240, true);
+        let _ = SetWindowPos(host, HWND_TOP, 0, 0, 64, 48, SWP_NOZORDER | SWP_NOACTIVATE);
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+    }
+    forget_video_frame();
+
+    let window = a_window_at(film.box_);
+    begin_pin_drag(
+        film.pin_hwnd,
+        &window,
+        PinDragAction::Resize(edge(false, false, true, false)),
+        true,
+    );
+    let held = held_video_frame();
+    assert_eq!(
+        held.as_ref().map(|frame| (frame.width, frame.height)),
+        Some((64, 48)),
+        "the frame the drag holds is the picture its host was showing when the drag began"
+    );
+    drop(held);
+
+    finish_pin_drag(film.pin_hwnd, &window);
+    assert!(
+        held_video_frame().is_none(),
+        "and the drag's own end gives it up, so no later erase paints a strip with it"
+    );
+
+    // A resize's release asks the pin for a box, which is another test's relaunch to answer.
+    if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+        *request = None;
+    }
 }
 
 /// A film in the pin's own host is a child of the pin's window: it has no place in the desktop's

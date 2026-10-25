@@ -26,14 +26,14 @@ use std::sync::Once;
 
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
+use windows::Win32::Graphics::Gdi::{GetStockObject, HBRUSH, NULL_BRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, ShowWindow, ShowWindowAsync,
-    SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    SW_HIDE, SW_SHOWNOACTIVATE, WM_ERASEBKGND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use super::*;
@@ -49,6 +49,15 @@ unsafe extern "system" fn the_default_answer(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // **This window can be a pin's host, so it is erased by the pin's own road.** A pin taken up on
+    // a hover's running film keeps this window rather than making another one (see
+    // `pin_film_host`), and the strip its band gains while mpv's child catches up is filled with the
+    // frame the drag holds (see `pin_film_host::paint_the_host_behind_the_film`). A host that is a
+    // hover's is not the pin's and that road erases it black — the picture it wore as a class brush.
+    if msg == WM_ERASEBKGND {
+        unsafe { pin_film_host::paint_the_host_behind_the_film(hwnd, HDC(wparam.0 as *mut _)) };
+        return LRESULT(1);
+    }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
@@ -270,7 +279,10 @@ unsafe fn create() -> Option<HWND> {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(the_default_answer),
             hInstance: hinstance.into(),
-            hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+            // **No background brush, because the window procedure paints its own erase** — black
+            // for a hover's band, and the picture a drag holds where a pin took this window up (see
+            // `the_default_answer`).
+            hbrBackground: HBRUSH(GetStockObject(NULL_BRUSH).0),
             lpszClassName: HOVER_FILM_HOST_CLASS,
             ..Default::default()
         };
@@ -283,10 +295,10 @@ unsafe fn create() -> Option<HWND> {
     // and a press on it is the hover's press (see the module doc). Made off every display and
     // without `WS_VISIBLE`: it is shown by the tick that finds the player drawing.
     //
-    // `WS_CLIPCHILDREN` for the same reason the pin's own window wears it: the class paints a black
-    // background, and an erase that is not clipped to the area outside the player's window is a black
-    // flash over the film at every show and every resize of the band (see
-    // `pin_real_window::real_pin_style`).
+    // `WS_CLIPCHILDREN` for the same reason the pin's own window wears it: the window procedure
+    // fills the band behind the film on every erase, and an erase that is not clipped to the area
+    // outside the player's window is that fill drawn over the film at every show and every resize of
+    // the band (see `pin_real_window::real_pin_style`).
     let host = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TRANSPARENT,
         HOVER_FILM_HOST_CLASS,
