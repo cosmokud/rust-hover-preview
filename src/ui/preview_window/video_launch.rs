@@ -101,10 +101,10 @@ pub(super) fn mpv_launched_without_audio(volume: u32) -> bool {
 }
 
 /// The arguments an mpv video is begun with, which is the command line the spec settles on
-/// (`--vo` and `--focus-on` deliberately not among them: mpv's default video output is the
-/// wanted answer on every build this decade, and a `--focus-on` is a hard start failure on a
-/// build old enough not to have it, while the app applies `WS_EX_NOACTIVATE` by pid straight
-/// after the launch anyway).
+/// (`--focus-on` deliberately not among them: a `--focus-on` is a hard start failure on a build old
+/// enough not to have it, while the app applies `WS_EX_NOACTIVATE` by pid straight after the launch
+/// anyway). A video output is named, which it was not for years — why is on the flag itself (see
+/// below).
 ///
 /// The switches are passed in rather than read here, because reading one at a hover's beginning
 /// reads it for the *next* hover: a film already playing was launched with the answer that stood
@@ -186,6 +186,15 @@ pub(super) fn mpv_args(
         // primary at (1520,570).
         args.push(format!("--geometry={width}x{height}+{x}+{y}"));
     }
+    // **`--vo=gpu-next` is being measured here, not chosen.** It is libplacebo's renderer rather than
+    // `vo=gpu`'s, with its own swapchain and its own present path, and what it is being tried for is
+    // the two things the bitblt swapchain below has not settled: a band that goes black while a grown
+    // host waits for the player to redraw its child at the new size, and a picture that judders inside
+    // a box that is otherwise standing still. `--gpu-api=d3d11` and `--d3d11-flip=no` apply to it as
+    // they did to `vo=gpu`, and `--wid` names the same window. One flag, reverted by deleting it; what
+    // a run of it wants looked at is the resize, the colours and the scale against `vo=gpu`, HDR files,
+    // and `--hwdec=auto`.
+    args.push("--vo=gpu-next".to_string());
     args.push("--gpu-api=d3d11".to_string());
     // **And the swapchain is the bitblt model rather than the flip one**: a flip-model swapchain
     // re-derives its buffers for a new size — a `ResizeBuffers` and a drain of the present queue,
@@ -1333,6 +1342,7 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=640x360+10+20",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
                 "--d3d11-flip=no",
                 "--hwdec=auto",
@@ -1343,8 +1353,9 @@ mod tests {
                 IPC_ARG,
             ],
             "the film, then the configuration off, the mouse off, the chrome off, the order it is\
-             held up in, the box, the three Direct3D options and the level — `--vo` is deliberately\
-             not passed and no `--start` is asked for at the beginning of a file (see `mpv_args`)"
+             held up in, the box, the video output being measured, the three Direct3D options \
+             and the level — the output is named at all only as a measurement, and no \
+             `--start` is asked for at the beginning of a file (see `mpv_args`)"
         );
     }
 
@@ -1453,6 +1464,7 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
                 "--d3d11-flip=no",
                 "--hwdec=auto",
@@ -1498,6 +1510,7 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
                 "--d3d11-flip=no",
                 "--hwdec=no",
@@ -1542,6 +1555,7 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
                 "--d3d11-flip=no",
                 "--hwdec=auto",
@@ -1595,6 +1609,7 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
                 "--d3d11-flip=no",
                 "--hwdec=auto",
@@ -1638,6 +1653,7 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
                 "--d3d11-flip=no",
                 "--hwdec=auto",
@@ -1755,6 +1771,7 @@ mod tests {
                     "--window-dragging=no",
                     "--ontop",
                     &geometry,
+                    "--vo=gpu-next",
                     "--gpu-api=d3d11",
                     "--d3d11-flip=no",
                     "--hwdec=auto",
@@ -1844,6 +1861,7 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=1432x806+4416+-2160",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
                 "--d3d11-flip=no",
                 "--hwdec=auto",
@@ -1910,6 +1928,7 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
                 "--d3d11-flip=no",
                 "--hwdec=auto",
