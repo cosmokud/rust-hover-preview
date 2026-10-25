@@ -33,8 +33,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, SetParent,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_CHILD,
-    GW_HWNDNEXT, HWND_NOTOPMOST, HWND_TOP, SC_CLOSE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
-    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    GW_HWNDNEXT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SC_CLOSE, SWP_ASYNCWINDOWPOS,
+    SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
     SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_CLOSE, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CHILD,
     WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
@@ -290,6 +290,69 @@ static PIN_FILM_HOST_IS_TOP_LEVEL: AtomicBool = AtomicBool::new(false);
 /// gives a taskbar button to: the host is that window on this road (see `own_the_pin_window`).
 pub(super) fn the_pins_chrome_is_owned() -> bool {
     PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst) && film_host().is_some()
+}
+
+/// The window of a pin that holds the band the pair belongs in: the host that owns the pin's chrome,
+/// on the road that has a pair, and the pin's own window on every other.
+///
+/// **One window of the pair owns the band, and it is the host.** Windows keeps an owned window in its
+/// owner's band — the owner put in the topmost band puts the chrome in it, and the owner taken out
+/// takes the chrome out with it (measured) — so a band asked of the chrome alone leaves the pair half
+/// over another program's window and half behind it: the chrome in front, answering every press in
+/// the band it is nearly transparent in, with the film it belongs to still under that program. That
+/// is a pin that looks behind a window and yet takes the hand, and it is the one thing this window is
+/// asked for (see `place_the_pin_in_the_band`).
+pub(super) fn the_pin_window_that_holds_the_band(pin: HWND) -> HWND {
+    the_pins_chrome_is_owned()
+        .then(film_host)
+        .flatten()
+        .unwrap_or(pin)
+}
+
+/// Put a pin in a band — the topmost one, the ordinary one, or the place behind another window — as
+/// **one window**, so that every road that raises, demotes or lowers a pin moves the film and the
+/// chrome together (see `the_pin_window_that_holds_the_band`).
+///
+/// **A topmost band the desktop did not give is asked for again, from outside it**, and this is the one
+/// place that answer lives rather than in each raise (see `raise_pinned_preview`, which used to ask it
+/// for a held band): the desktop answers a band assignment as made and can still not make it for a
+/// window it has not laid out yet — one shown this moment — and a pair the desktop banded on one side
+/// only is the split this window exists to end (measured: the chrome in the band and the host out of
+/// it).
+///
+/// Both windows are this app's own: nothing here is a call into another process.
+pub(super) unsafe fn place_the_pin_in_the_band(pin: HWND, after: HWND) {
+    let window = the_pin_window_that_holds_the_band(pin);
+    let _ = SetWindowPos(
+        window,
+        after,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+
+    if after == HWND_TOPMOST && !pin_lifecycle::window_holds_the_topmost_band(window) {
+        let _ = SetWindowPos(
+            window,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        let _ = SetWindowPos(
+            window,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
 }
 
 /// Whether the pin's film host is a child of the pin's own window, which is where a host made or
@@ -580,6 +643,25 @@ unsafe fn own_the_pin_window(owned: bool) {
         unsafe { SetWindowLongPtrW(pin, GWLP_HWNDPARENT, owner) };
     }
     unsafe { pin_real_window::set_the_pin_window_appwindow(pin, !owned) };
+
+    // **The chrome carries no band of its own**, and a window given an owner or given back keeps
+    // whatever band it wore before (measured): a bit left on it by the pin before this one, or the
+    // band it held while its last host owned it, is a pair that disagrees about where it stands (see
+    // `the_pin_window_that_holds_the_band`). A host that owns the chrome bands it with itself, so what
+    // is written here is the band a window of its own belongs in, and every placement after this
+    // asks the setting again (see `band_place`).
+    let band = if owned { HWND_NOTOPMOST } else { band_place() };
+    let _ = unsafe {
+        SetWindowPos(
+            pin,
+            band,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    };
 }
 
 /// Put the film mpv draws at the host's client box, from the message that gave the host its own.
