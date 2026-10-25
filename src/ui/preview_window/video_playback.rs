@@ -431,13 +431,11 @@ fn start_video_playback_where(
         None
     };
 
-    // A hosted FFmpeg film is presented through the composed road: SDL's default Direct3D 9
-    // renderer, whose blt swapchain the desktop compositor presents, rather than the Direct3D 11
-    // flip-model one the driver can drive VRR from. The pin window it is moved into drops its
-    // layered style for the same reason, and the two answers are one predicate (see
-    // `pin_film_host::the_pin_presents_an_ffplay_film_composed`). An unhosted launch keeps SDL's
-    // own choice, exactly as it was, and `RHP_FFPLAY_PRESENT=flip` asks for the old renderer.
-    if hosted.is_some() && !pin_film_host::ffplay_is_presented_composed() {
+    // A hosted FFmpeg film is presented inside a layered pin window — the hover's host for a hover,
+    // and the pin's own after a take-up — and only SDL's Direct3D 11 renderer presents there
+    // (measured: software, opengl and direct3d show nothing). An unhosted launch keeps SDL's own
+    // choice, exactly as it was.
+    if hosted.is_some() {
         cmd.env("SDL_RENDER_DRIVER", "direct3d11");
     }
 

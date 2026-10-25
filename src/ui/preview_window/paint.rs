@@ -640,39 +640,17 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     };
 
     if let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) {
-        if paints_through_the_window_dc(hwnd) {
-            // **The composed road.** A pin that holds a hosted FFmpeg film has no `WS_EX_LAYERED`:
-            // the same 32bpp DIB is blitted into the window's own DC, alpha ignored, which is what
-            // keeps the film off a flip-model swapchain and off a path a driver can drive VRR from.
-            // The window is placed here as `UpdateLayeredWindow` places it, so the picture lands on
-            // the same box (see `the_slack_a_resize_paints_with`).
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                place.0,
-                place.1,
-                width,
-                rows,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-            let dc = GetDC(hwnd);
-            if !dc.is_invalid() {
-                let _ = BitBlt(dc, 0, 0, width, rows, mem_dc, 0, 0, SRCCOPY);
-                ReleaseDC(hwnd, dc);
-            }
-        } else {
-            let _ = UpdateLayeredWindow(
-                hwnd,
-                None,
-                Some(&dst_point),
-                Some(&size),
-                mem_dc,
-                Some(&src_point),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            );
-        }
+        let _ = UpdateLayeredWindow(
+            hwnd,
+            None,
+            Some(&dst_point),
+            Some(&size),
+            mem_dc,
+            Some(&src_point),
+            COLORREF(0),
+            Some(&blend),
+            ULW_ALPHA,
+        );
     }
 
     // And the strips the chrome stands in, which carry what this paint just painted into their own
@@ -682,13 +660,6 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
 
     // As in `render_layered_preview_at`: the hold is the tick's to publish, because a publish
     // per painted frame is what made the 500 ms throttle suppress nothing.
-}
-
-/// Whether a pin window is painted through its own DC — the composed road — rather than by
-/// `UpdateLayeredWindow`. It is asked of the window rather than of the state so that the paint can
-/// never disagree with the style the take-up wrote (see `pin_real_window` and `pin_film_host`).
-pub(super) fn paints_through_the_window_dc(hwnd: HWND) -> bool {
-    unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED.0 as isize == 0 }
 }
 
 /// How many rows of the surface stand above the pin's own picture, and how many rows the surface has

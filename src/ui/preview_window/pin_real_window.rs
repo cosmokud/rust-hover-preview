@@ -30,10 +30,9 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetWindowLongPtrW, MoveWindow, RegisterClassExW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, GWL_EXSTYLE, SW_HIDE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW,
-    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    CreateWindowExW, MoveWindow, RegisterClassExW, ShowWindow, SW_HIDE, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP,
+    WS_SYSMENU,
 };
 
 use super::window_proc;
@@ -55,9 +54,7 @@ const REAL_PIN_TITLE: PCWSTR = w!("Rust Preview");
 /// to treat like any other, and a window without them wears a button that refuses both.
 ///
 /// `WS_EX_LAYERED`: the pin's corners and the shadow around its chrome are alpha, and a layered
-/// window is a window in every other respect, including activation. **A pin that holds a hosted
-/// FFmpeg film drops it**, because that film is presented through the composed renderer into this
-/// window's own DC rather than through a flip-model swapchain (see `real_pin_style`).
+/// window is a window in every other respect, including activation.
 ///
 /// `WS_EX_APPWINDOW`: a taskbar button asked for by the window itself rather than inferred from what
 /// owns it, which is the button this window owes and the one the stand-in used to fake.
@@ -65,61 +62,11 @@ const REAL_PIN_TITLE: PCWSTR = w!("Rust Preview");
 /// **What is missing is the answer.** `WS_EX_TOOLWINDOW` is what keeps a window out of Alt+Tab and
 /// out of the taskbar; `WS_EX_NOACTIVATE` is what refuses it the focus; `WS_EX_TOPMOST` is a band,
 /// and the band is the setting's (see `band_place`).
-fn real_pin_style(layered: bool) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
+fn real_pin_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
     (
         WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
-        if layered {
-            WS_EX_LAYERED | WS_EX_APPWINDOW
-        } else {
-            WS_EX_APPWINDOW
-        },
+        WS_EX_LAYERED | WS_EX_APPWINDOW,
     )
-}
-
-/// Put the pin's own window in the layered or the non-layered form its presentation asks for, now.
-/// The window is reused across pins, so the form is written on every take-up: a hosted FFmpeg film
-/// is composed through this window's own DC and must not wear `WS_EX_LAYERED`, and every other pin
-/// keeps the layered surface it has always had (see `pin_film_host`).
-pub(super) unsafe fn set_the_pin_window_layered(hwnd: HWND, layered: bool) {
-    let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    if style == 0 {
-        return;
-    }
-
-    let wanted = if layered {
-        style | WS_EX_LAYERED.0 as isize
-    } else {
-        style & !(WS_EX_LAYERED.0 as isize)
-    };
-    if wanted == style {
-        return;
-    }
-
-    if SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted) == 0 {
-        return;
-    }
-
-    // The style is not a thing a window is told about live: without being asked to re-read it, a
-    // window keeps presenting the surface it was made with.
-    let _ = SetWindowPos(
-        hwnd,
-        None,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-    );
-}
-
-/// Write the form the pin now asks for, wherever its own window exists: asked on a take-up and on
-/// a file swapped into a standing pin, so a film stepped to or away from changes presentation with
-/// the file rather than waiting for the next show.
-pub(super) unsafe fn apply_the_pin_window_presentation() {
-    if let Some(hwnd) = real_pin_window() {
-        let layered = !super::pin_film_host::the_pin_presents_an_ffplay_film_composed();
-        unsafe { set_the_pin_window_layered(hwnd, layered) };
-    }
 }
 
 /// The pin's own window, where one has been made.
@@ -177,9 +124,7 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
     }
 
     register_real_pin_class();
-    let (style, ex_style) = real_pin_style(
-        !super::pin_film_host::the_pin_presents_an_ffplay_film_composed(),
-    );
+    let (style, ex_style) = real_pin_style();
     let hinstance = GetModuleHandleW(None).ok()?;
     let hwnd = CreateWindowExW(
         ex_style,
@@ -227,8 +172,7 @@ mod tests {
     /// window after the fact.
     #[test]
     fn the_pins_own_window_is_listed_and_may_be_activated() {
-        let (style, ex) = real_pin_style(true);
-        let (_, bare) = real_pin_style(false);
+        let (style, ex) = real_pin_style();
 
         assert_eq!(
             style & WS_POPUP,
@@ -239,21 +183,6 @@ mod tests {
             ex & WS_EX_LAYERED,
             WS_EX_LAYERED,
             "the pin's edges are alpha"
-        );
-        assert_eq!(
-            bare & WS_EX_LAYERED,
-            WINDOW_EX_STYLE::default(),
-            "but a pin that composes a hosted film through its own DC is not layered"
-        );
-        assert_eq!(
-            bare & WS_EX_APPWINDOW,
-            WS_EX_APPWINDOW,
-            "and it is still the window the taskbar button belongs to"
-        );
-        assert_eq!(
-            bare & WS_EX_TOOLWINDOW,
-            WINDOW_EX_STYLE::default(),
-            "still listed, still activatable, either way"
         );
         assert_eq!(
             ex & WS_EX_APPWINDOW,
@@ -327,8 +256,7 @@ mod tests {
     }
 
     /// The styles above are the styles of the window that is actually made: a plain `STATIC` window
-    /// created with them would prove the constants and nothing about this module. A pin with no
-    /// hosted FFmpeg film over it is the layered window it always was.
+    /// created with them would prove the constants and nothing about this module.
     #[test]
     fn the_window_the_module_makes_wears_them() {
         let box_ = (-20000, -20000, -19680, -19760);
