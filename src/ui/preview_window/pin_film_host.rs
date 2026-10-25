@@ -89,6 +89,20 @@ static HOSTED_MPV_CHILD_PID: AtomicU32 = AtomicU32::new(0);
 /// The move cover: the held frame the pin paints in its own bitmap while a hover's host is hidden,
 /// restyled and re-parented into the pin (see `raise_the_move_cover` and `show_pinned_window`).
 static PIN_MOVE_COVER: AtomicBool = AtomicBool::new(false);
+/// Whether the show being made is a given-up take-up's, which begins no player (see
+/// `give_the_pin_up_without_its_film`).
+///
+/// **It is a flag rather than a parameter on the show, because the film is the only thing the two
+/// shows differ in.** Everything else a show does — the band it is placed at, the paint, the chrome,
+/// and the hover that goes with it — is the same, and a second way into the show would be two roads
+/// that must agree about all of it. What this says is the one thing that does differ: the wait for a
+/// player that is not coming does not begin another one.
+static PIN_SHOW_BEGINS_NO_PLAYER: AtomicBool = AtomicBool::new(false);
+
+/// Whether the show being made begins no player (see [`PIN_SHOW_BEGINS_NO_PLAYER`]).
+pub(super) fn the_show_begins_no_player() -> bool {
+    PIN_SHOW_BEGINS_NO_PLAYER.load(Ordering::SeqCst)
+}
 /// Whether the pin's film is FFmpeg's, written where the pin is taken up and where a film is begun
 /// into the host. An atomic rather than a read of the pin's state because the chrome's own road asks
 /// it with the pin's lock already held (see `the_hosted_frame_is_up`).
@@ -1112,11 +1126,11 @@ pub(super) enum PinHandover {
     /// The film is not on screen yet and the player is still starting: the pin stays down and
     /// the hover stays up, and the wait goes on.
     Waiting,
-    /// The hosted player drew: the pin went up over its live film with the chrome arriving,
-    /// and the hover came down in the same pass.
+    /// The player begun for the pin drew: the pin went up over its live film with the chrome
+    /// arriving, and the hover came down in the same pass.
     HandedOver,
-    /// The player errored or never drew inside the player-start timeout: the hidden pin is for
-    /// the teardown, and the hover it never took down is what is kept.
+    /// The player errored or never drew inside the player-start timeout: the wait is over, the pin
+    /// was shown on its band without the film, and nothing is left to swap to.
     Failed,
 }
 
@@ -1189,8 +1203,8 @@ pub(super) fn the_hosted_frame_is_presented(pid: u32, at: f64) -> bool {
     the_hosted_frame_is_up(pid) && (seconds - at).abs() <= PIN_HANDOVER_FRAME_SECS
 }
 
-/// Hand a pin taken up on a hover's film over once its hosted player has the frame on screen, and
-/// tear the hidden pin down where that player never does.
+/// Hand a pin taken up on a hover's film over once the player begun for it has the frame on screen,
+/// and give the pin up without it where that player never does.
 ///
 /// The only visible swap, and it is one frame: the pin's window appears with the film already showing
 /// the frame the hover was frozen on — no cover, no black stage — the arrival starts over that live
@@ -1198,9 +1212,9 @@ pub(super) fn the_hosted_frame_is_presented(pid: u32, at: f64) -> bool {
 /// in the same pass (see `show_pinned_window`). What the wait waits on is the player's own word that
 /// the frame is drawn and not a window that has been made (see `the_hosted_frame_is_presented`), and
 /// nothing here is a timer: a player that takes its time is waited for, up to the player-start bound.
-/// Where the player errored or the start timeout ran out, the wait is over the other way: the pin
-/// never appears, the hover it never took down is what is kept, and the hover's own player is ended
-/// rather than left frozen for a handover that is never coming (see `Reason::MediaGone`).
+/// Where the player errored or the start timeout ran out, the wait is over the other way: the pin is
+/// shown on the band it was taken up at rather than left down, so the film that never came costs the
+/// picture and not the pin (see `give_the_pin_up_without_its_film`).
 ///
 /// One shot: the arm goes down however the wait ends, so a handover never fires twice and a
 /// failure never sticks behind a hidden pin.
@@ -1223,8 +1237,14 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     // The film's own frame on screen is the handover: the wait is over, and what is on screen from
     // here is the pin over that picture rather than the hover as its placeholder. A frame this app
     // cannot prove is a frame it waits for — the read failing is not an error, it is not-yet.
+    //
+    // **The window is the player's, wherever the film is drawn**, and that is the question this gate
+    // is: a hosted player's child under the pin's host, or the top-level window of a player whose
+    // film the pin places at its band (see `the_players_window_is_up`). Asked of the host alone, a
+    // top-level film could never satisfy it — the pin has no host on that road — and the take-up
+    // would wait out the whole start bound for a frame that was on screen the whole time.
     let pid = VIDEO_PID.load(Ordering::SeqCst);
-    if the_hosted_player_is_drawing(pid)
+    if the_players_window_is_up(pid)
         && frozen.is_some_and(|frozen| the_hosted_frame_is_presented(pid, frozen.seconds))
     {
         disarm_pin_handover();
@@ -1250,11 +1270,13 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
         return PinHandover::HandedOver;
     }
 
-    // No player behind the wait is a player that errored rather than one still starting: the
-    // pin it was begun for never appears, and the hover it never took down is what is kept.
+    // No player behind the wait is a player that errored rather than one still starting: the pin it
+    // was begun for is shown on its band with no picture in it, and the hover it never took down is
+    // the picture no longer.
     if !is_video_process_running() {
         disarm_pin_handover();
         retire_the_frozen_hover(frozen);
+        give_the_pin_up_without_its_film();
         return PinHandover::Failed;
     }
 
@@ -1263,8 +1285,37 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     if since.elapsed() >= Duration::from_secs(VIDEO_START_WAIT_SECS) {
         disarm_pin_handover();
         retire_the_frozen_hover(frozen);
+        give_the_pin_up_without_its_film();
         return PinHandover::Failed;
     }
 
     PinHandover::Waiting
+}
+
+/// Show the pin a take-up was holding down, for a wait that ended without a film to swap to.
+///
+/// **A pin left down is a pin nobody can reach.** The take-up keeps the pin's own window off the
+/// screen for as long as it waits (see `show_pinned_window`), so a wait that gives up while leaving
+/// it down leaves nothing of the pin on screen at all: no window to carry, no edge to resize, no
+/// caption to close it by, and the tray is the only way out. So the pin is shown on the band it was
+/// taken up at, exactly as a handover shows it, and the band is whatever it is without a film — the
+/// hole between films that a park gives up to as well (see `ParkSwap::Abandoned`).
+///
+/// **It is not a teardown, and the film may still arrive.** The player begun for the pin was not
+/// waited out, only given up on, and where its window turns up late the tick puts it in the band
+/// like any other (see `ensure_video_window_topmost`) — the pin is usable in the meantime rather
+/// than missing, which is the whole of what a failure this app cannot repair owes the hand.
+unsafe fn give_the_pin_up_without_its_film() {
+    // **The hover's film is the picture no longer.** The pin is, film or no film, so the host the
+    // hover was drawn in goes rather than standing on the desktop beside the pin — and a player the
+    // take-up froze and could not end in time is not left to be taken up a second time by the show
+    // below (see `begin_the_adopted_film_in_the_host`).
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    // The chrome is not spent on the band: a picture that is not there is not an arrival, and the
+    // pointer brings the caption and the bar up as it does over any other still (see
+    // `refresh_pin_chrome`).
+    with_pin(|pin| pin.chrome = PinChrome::hidden());
+    PIN_SHOW_BEGINS_NO_PLAYER.store(true, Ordering::SeqCst);
+    unsafe { show_pinned_window(pinned_window()) };
+    PIN_SHOW_BEGINS_NO_PLAYER.store(false, Ordering::SeqCst);
 }

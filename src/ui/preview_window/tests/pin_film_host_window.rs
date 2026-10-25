@@ -3777,10 +3777,15 @@ fn a_step_handover_starts_the_new_film_with_the_chrome_hidden() {
     drop(film);
 }
 
-/// A film that never draws hands the pin back: the replacement is dead, so the wait is over and
-/// the hidden pin comes down with the hover still up.
+/// A film that never draws still leaves a pin: the replacement is dead, so the wait is over — and
+/// the pin is shown on its band without it rather than left down.
+///
+/// **A pin left down is a pin nobody can reach.** A take-up keeps its window off the screen for as
+/// long as it waits, so a wait that gives up with the pin still down leaves nothing of it on
+/// screen: no frame to carry, no edge to resize and no caption to close it by, and the tray is the
+/// only way out (see `settle_pin_handover`).
 #[test]
-fn a_film_that_never_draws_hands_the_pin_back() {
+fn a_film_that_never_draws_leaves_the_pin_standing_and_usable() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -3796,6 +3801,7 @@ fn a_film_that_never_draws_hands_the_pin_back() {
         pin_film_host::pin_handover_armed(),
         "the take-up arms the handover"
     );
+    let begun_by_the_take_up = restart_count();
 
     // No player behind the wait: the relaunch the take-up began errored rather than starting -
     // headless runs note the player instead of beginning one, so the errored player is stood in
@@ -3823,13 +3829,24 @@ fn a_film_that_never_draws_hands_the_pin_back() {
         "and the hover it froze is let go of rather than left frozen for a swap that is never \
          coming"
     );
-    assert!(
-        !unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
-        "the pin never appears"
+    assert_eq!(
+        restart_count(),
+        begun_by_the_take_up,
+        "and the show that gives the pin up begins no player of its own: a second launch would be \
+         another wait behind a pin that is already standing"
     );
     assert!(
-        hover.shown(),
-        "and the hover is still up for the teardown to keep"
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "the pin stands on its band, so the hand can carry it, size it and close it"
+    );
+    assert!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.path.clone()))
+            == Some(PathBuf::from("a-film.mkv")),
+        "as the same pin of the same file it was taken up as"
+    );
+    assert!(
+        !hover.shown(),
+        "and the hover it never took the picture from is not left standing beside it"
     );
 
     pin_film_host::disarm_pin_handover();
@@ -3839,10 +3856,11 @@ fn a_film_that_never_draws_hands_the_pin_back() {
     drop(film);
 }
 
-/// A film that keeps starting hands the pin back at the start timeout: a player that never draws
-/// is one that will not, and a hidden pin waiting past the start ever does is a stuck one.
+/// A film that keeps starting leaves the pin standing at the start timeout: a player that never
+/// draws is one that will not, and a pin waiting past the start ever takes is a stuck one (see
+/// `VIDEO_START_WAIT_SECS`).
 #[test]
-fn a_film_that_keeps_starting_hands_the_pin_back_at_the_start_timeout() {
+fn a_film_that_keeps_starting_gives_the_pin_up_at_the_start_timeout() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -3854,6 +3872,7 @@ fn a_film_that_keeps_starting_hands_the_pin_back_at_the_start_timeout() {
     clear_pending_pinned_relaunch();
     pin_film_host::disarm_pin_handover();
     unsafe { show_pinned_window(film.pin_hwnd) };
+    let begun_by_the_take_up = restart_count();
     // A player still starting, past the start timeout: alive, but with no frame in the host.
     let _player = LiveStandInPlayer::stand();
     pin_film_host::stand_pin_handover_armed_at(Some(
@@ -3876,13 +3895,18 @@ fn a_film_that_keeps_starting_hands_the_pin_back_at_the_start_timeout() {
         None,
         "and the hover it froze is ended rather than left frozen behind a pin that never came"
     );
-    assert!(
-        !unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
-        "the pin never appears"
+    assert_eq!(
+        restart_count(),
+        begun_by_the_take_up,
+        "and the show that gives the pin up begins no player of its own behind the pin it shows"
     );
     assert!(
-        hover.shown(),
-        "and the hover is still up for the teardown to keep"
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "the pin stands on its band rather than staying down for a film that never came"
+    );
+    assert!(
+        !hover.shown(),
+        "with the hover it never took the picture from gone from the screen"
     );
 
     pin_film_host::disarm_pin_handover();
@@ -4300,6 +4324,83 @@ fn a_pin_taken_up_on_a_hover_begins_its_own_player_where_the_film_is_a_window_of
     mpv_ipc::forget_pipe(VIDEO_PID.load(Ordering::SeqCst));
     mpv_ipc::clear_noted();
     mpv_ipc::clear_reads();
+    clear_restart_count();
+    drop(film);
+}
+
+/// **The handover arrives for a film whose window is the desktop's own.** The wait is one question —
+/// is the player's window up and is the frame it was begun on the frame it is showing — and a hosted
+/// player answers it with a child of the pin's host while a top-level one answers it with a window of
+/// the player's (see `the_players_window_is_up`). Asked of the host alone, a top-level film could
+/// never satisfy it: the pin has no host on that road, so the take-up waited out the whole start
+/// bound for a frame that was on the screen the whole time, and gave up on a film that had arrived.
+#[test]
+fn a_pin_over_a_film_in_a_window_of_its_own_hands_over_without_a_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let hovered = 0x7FFF_FFF8;
+    film.taken_up_from_a_hover(hovered);
+    pin_film_host::stand_the_mpv_pin_hosted_in(Some(false));
+    let hover = unsafe { StandingHover::up() };
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    mpv_ipc::remember_pipe(hovered, "the-hovers-pipe", false);
+    mpv_ipc::answer_a_read(hovered, "time-pos", Some("412.500000"));
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let begun_by_the_take_up = restart_count();
+    assert!(
+        pin_film_host::film_host().is_none(),
+        "no host is taken up for a film whose window is the desktop's own"
+    );
+
+    // The player the take-up began, stood in by a window of this test's own: a top-level window of
+    // this process's, which is the picture and the pid the pin began it as (see `video_window_for`).
+    let pin_player = unsafe { GetCurrentProcessId() };
+    let picture = unsafe { a_hover_window_of_the_tests_own() };
+    VIDEO_PID.store(pin_player, Ordering::SeqCst);
+    VIDEO_HWND.store(picture.0 as isize, Ordering::SeqCst);
+    pin_playback::note_pinned_relaunch(pin_player);
+    the_hosted_player_has_the_frame(pin_player, "412.500000");
+
+    assert!(
+        matches!(
+            unsafe { pin_film_host::settle_pin_handover() },
+            pin_film_host::PinHandover::HandedOver
+        ),
+        "the frame the hover froze is the frame the pin's own player is standing on"
+    );
+    assert!(
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "so the pin goes up over it"
+    );
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        None,
+        "and the hover it froze is let go of"
+    );
+    assert!(
+        !hover.shown(),
+        "with the window it was shown in coming down in the same pass"
+    );
+    assert_eq!(
+        restart_count(),
+        begun_by_the_take_up,
+        "and the show the handover makes begins no player behind the pin: the film at the band is          the pin's own, and a second launch would be another wait behind a picture that is already          on the screen"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    unsafe { DestroyWindow(picture) }.expect("the stand-in picture let go of");
+    mpv_ipc::forget_pipe(hovered);
+    mpv_ipc::forget_pipe(pin_player);
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    clear_pending_pinned_relaunch();
     clear_restart_count();
     drop(film);
 }
