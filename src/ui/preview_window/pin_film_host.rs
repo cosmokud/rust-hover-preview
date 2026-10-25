@@ -1456,6 +1456,33 @@ pub(super) fn place_the_film_source_at_the_band() {
     }
 }
 
+/// Ask the film's window again for the box it did not take, on a box that has settled.
+///
+/// The settled boxes a drag cannot reach already ask (see `place_the_film_source_at_the_band`); this is
+/// the tick's proof that the ask landed, and the only road that catches a placement the player dropped
+/// or overwrote while its output was configuring (see `pin_film_thumbnail`). It asks nothing while a
+/// hand is on an edge, nothing on any other road, and nothing of the player's own pipe.
+pub(super) fn keep_the_film_source_in_the_band() {
+    if !the_pin_shows_its_film_by_thumbnail() {
+        return;
+    }
+    if let Some(host) = film_host() {
+        pin_film_thumbnail::keep_the_source_at_the_band(host);
+    }
+}
+
+/// The window the pin's film is drawn from, where the Shell is drawing it: mpv's own window on the
+/// thumbnail road, which is the third window a press can land in and the one the keyboard hook has to
+/// know about (see `key_input::pin_owns_caret`).
+///
+/// `None` on every other road, where the film is a child of the host (or a window of FFmpeg's player's
+/// that the hook is already told) and there is nothing of mpv's of the desktop's to publish.
+pub(super) fn the_films_own_window() -> Option<HWND> {
+    (the_pin_shows_its_film_by_thumbnail() && film_host().is_some())
+        .then(pin_film_thumbnail::the_source_window)
+        .flatten()
+}
+
 /// A client box as a trace reads it, or nothing where the window has already gone.
 fn a_client_box(hwnd: HWND) -> Option<(i32, i32)> {
     let mut rect = RECT::default();
@@ -1770,6 +1797,12 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
         // until the pointer asks for a strip (see `refresh_pin_chrome`).
         with_pin(|pin| pin.chrome = PinChrome::hidden());
         unsafe { show_pinned_window(pinned_window()) };
+
+        // **And the film's own window is asked for the box the pin has now**, which is the one settle a
+        // tick cannot be relied on to run inside the wait: the host took its band before the player's
+        // window existed, so a source adopted for a box the pin no longer has is a picture the Shell
+        // stretches out of its shape (see `pin_film_thumbnail`).
+        place_the_film_source_at_the_band();
 
         // **The hover is ended before the pin's player is let go of.** The two are the same sound at
         // the same second, and the unpause is a post to one process while the kill is a termination of
