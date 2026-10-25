@@ -27,13 +27,6 @@ pub(super) const PIN_MIN_MEDIA_PIXELS: f32 = 48.0;
 /// playhead is a thing that moves on its own, and a quarter of a second is what a sound's card is
 /// repainted at for the same reason (see `AUDIO_CARD_REPAINT`).
 pub(super) const PIN_TRANSPORT_REPAINT_MS: u64 = 250;
-/// The wait a live hosted mpv resize is given when the display will not name its rate: about a
-/// frame at 125 Hz. Every resize waits a whole frame on top of its flush, because the host needs
-/// that much headroom to present a box (see `the_wait_after_a_flush`), and this is what stands in
-/// for the frame where the compositor will not say how long one is — no composition on this
-/// session, a remote desktop, or a first call before the first frame was composed. It is a cadence
-/// rather than a spin, and a display that does name its period is given that period instead.
-pub(super) const PIN_RESIZE_FRAME_FALLBACK: Duration = Duration::from_millis(8);
 
 /// What a pinned window's edges and caption do, which is a question about the kind of thing
 /// inside it.
@@ -668,88 +661,12 @@ pub(super) unsafe fn release_pin_capture(hwnd: HWND) {
     }
 }
 
-/// Hold a live hosted mpv resize to one box a display frame: wait out the compositor, then out a
-/// whole frame for the host to present the box in.
-///
-/// The flush asks for the display's own next frame rather than the system timer's tick (see
-/// `wait_for_the_compositor`), and that is only half the pace. **The rest is headroom for mpv.**
-/// The host's child resizes on mpv's own thread, so a box submitted at the flush's own rate is a
-/// box presented after the pointer has moved again, and the picture reads as a frame bouncing
-/// inside a window that is not — which is exactly what a flush and no wait gave at 144 Hz. So a
-/// whole frame is waited on top, the display's own period when the compositor names one and
-/// `PIN_RESIZE_FRAME_FALLBACK` when it will not (see `the_displays_frame_period` and
-/// `the_wait_after_a_flush`). Both happen on the thread that applies the drag, so the pointer
-/// positions that arrive during the wait are coalesced by Windows into the next `WM_MOUSEMOVE`
-/// rather than queued up as boxes for the host to catch up on. The pin's own surface and the host
-/// have both been submitted by the time this is asked (see `apply_pin_drag`).
-pub(super) fn pace_a_live_hosted_mpv_resize() {
-    if !a_live_hosted_mpv_resize_is_paced(
-        pin_film_host::film_host().is_some(),
-        pin_film_host::the_pins_film_is_ffplay(),
-        pin_player_is_parked(),
-    ) {
-        return;
-    }
-
-    let began = Instant::now();
-    // Safety: a call with no arguments and no state of its own, which asks the compositor to flush
-    // the frame it has and answers whether it could.
-    let _ = unsafe { DwmFlush() };
-    if let Some(wait) = the_wait_after_a_flush(began.elapsed(), the_displays_frame_period()) {
-        std::thread::sleep(wait);
-    }
-}
-
-/// What a resize waits, once a flush has been made, before the next pointer move may become another
-/// box: a whole display frame, always.
-///
-/// **Nothing is taken off for the frame the flush spent.** The flush is the pin's own surface asked
-/// for at the display's rate; the wait is the headroom the host needs on top of it, because mpv
-/// resizes its child on a thread of its own and a box handed over at the flush alone arrives after
-/// the pointer has moved on — the pin overshoots the cursor and springs back. A flush that came
-/// straight back is given the same wait, which is what keeps a compositor with nothing to draw a
-/// cadence rather than a spin.
-///
-/// The frame is the display's own period when the compositor names it and
-/// `PIN_RESIZE_FRAME_FALLBACK` when it will not. `_flushed` is the flush's measured length, kept so
-/// the caller asks and the tests show one shape of answer: a flush that took a whole frame waits
-/// exactly what a flush that took none does.
-///
-/// It is a whole frame rather than the part of one the flush did not spend, deliberately: this app
-/// never asks for a finer system timer, so a sub-millisecond `thread::sleep` is rounded up to the
-/// system's own tick of 15.6 ms, which on a 144 Hz panel would be a slower resize than the one this
-/// replaced. The rounding is the timer's; the rule stays a whole frame.
-pub(super) fn the_wait_after_a_flush(
-    _flushed: Duration,
-    display_period: Option<Duration>,
-) -> Option<Duration> {
-    Some(display_period.unwrap_or(PIN_RESIZE_FRAME_FALLBACK))
-}
-
-/// Whether a resize of a film is held to a compositor frame before the next pointer move is applied.
-///
-/// **A hosted mpv film is a player of its own, and it takes its new box on its own thread.** Every
-/// pointer move hands the host a box, and the child mpv draws in sizes itself a moment later — so at
-/// the pace of a fast hand the picture arrives several sizes behind the band it stands in, which
-/// reads as a frame bouncing inside a window that is not. Holding the next move until the compositor
-/// has had a frame lets Windows coalesce the pointer positions in between, so the host is asked for
-/// at most one box per frame rather than once per pointer message — and that frame is the display's
-/// own, so the resize runs at the panel's rate and no faster. It is the resize that is paced and
-/// never the move: a move carries the window the film is already drawing in.
-///
-/// FFmpeg's hosted film is left out because its child is fitted to the host's box in the same call
-/// that places the host (see `fit_the_hosted_ffplay_to_the_host`). A film in a window of the
-/// desktop's has no host to keep up with, and a parked one is hidden with nothing drawing in it.
-pub(super) fn a_live_hosted_mpv_resize_is_paced(
-    a_film_host_stands: bool,
-    the_film_is_ffplay: bool,
-    parked: bool,
-) -> bool {
-    a_film_host_stands && !the_film_is_ffplay && !parked
-}
-
 /// Carry a pinned window's drag on: the pointer has moved, and what the press began is applied to
 /// the box the window had when it began.
+///
+/// Nothing here waits. A resize applies wherever the pointer is now, every pass, and a pass that is
+/// skipped costs nothing because the next one reads the pointer again — the positions in between are
+/// coalesced by Windows and never arrive as boxes of their own.
 pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     let (drag, dpi, transport, overlay, frame, caption) = {
         let Some(pinned) = pin_state() else {
@@ -958,13 +875,6 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     // Whatever stands in the media band travels with it — after the box it stands in is the
     // window's, so that a player's window is never put where the surface has not caught up.
     place_pinned_siblings();
-
-    // Both the pin's own surface and the host have been submitted, so a resize of a live hosted mpv
-    // film holds the next pointer move until the compositor has had this frame (see
-    // `pace_a_live_hosted_mpv_resize`).
-    if matches!(drag.action, PinDragAction::Resize(_)) {
-        pace_a_live_hosted_mpv_resize();
-    }
 }
 
 /// Put a pinned window in the middle of the screen it stands on, its size untouched: what a
