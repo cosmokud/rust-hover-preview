@@ -1393,6 +1393,11 @@ fn a_hosted_films_park_is_settled_by_the_host_it_was_hidden_in() {
     );
     assert!(pin_player_is_parked(), "with the cover standing");
 
+    // The band the hand settled on is the band the host goes back at rather than the one it was
+    // hidden at: the settle places it before the cover comes down (see `unpark_player_window`).
+    let moved = (NOWHERE + 40, NOWHERE + 30, NOWHERE + 200, NOWHERE + 150);
+    with_pin(|pin| pin.content = moved);
+
     assert!(
         settle_pinned_park(),
         "the settle hands the band back to the child the player is drawing in"
@@ -1401,6 +1406,14 @@ fn a_hosted_films_park_is_settled_by_the_host_it_was_hidden_in() {
         unsafe { IsWindowVisible(host) }.as_bool(),
         "which is the same host shown again"
     );
+    assert_eq!(
+        {
+            let placed = unsafe { window_rect(host) };
+            (placed.2 - placed.0, placed.3 - placed.1)
+        },
+        (moved.2 - moved.0, moved.3 - moved.1),
+        "at the band the pin stands at now, and not the band the park was painted into"
+    );
     assert!(!pin_player_is_parked(), "with the cover down");
 
     unsafe {
@@ -1408,9 +1421,84 @@ fn a_hosted_films_park_is_settled_by_the_host_it_was_hidden_in() {
     };
 }
 
+/// A hosted film's resize asks the surface for no row of slack, and a pin with no host still does.
+/// The slack's whole mechanism is the *window* moving a pixel on every paint, so that the desk under
+/// a strip a shrink gives up is drawn again — and a film's host is a child of that window, which
+/// rides the move and bobs at paint rate with it (see
+/// `a_resize_asks_the_surface_for_a_row_of_slack`). A native strip's picture is this app's own
+/// pixels, so it lands on the box the hand asked for either way and keeps the ghost-clearing row.
+#[test]
+fn a_resize_of_a_pin_with_a_film_host_asks_the_surface_for_no_row_of_slack() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+
+    // A pin with no host standing is the native road: its picture is this app's own pixels and lands
+    // on the box the hand asked for either way, so it keeps the row that clears its ghost.
+    assert!(
+        pin_film_host::film_host().is_none(),
+        "a pin that has not been shown has no host yet"
+    );
+    assert!(paint::a_resize_asks_the_surface_for_a_row_of_slack(
+        true,
+        pin_film_host::film_host().is_some()
+    ));
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert!(
+        pin_film_host::film_host().is_some(),
+        "the pin's film is drawn in a host"
+    );
+
+    assert!(
+        !paint::a_resize_asks_the_surface_for_a_row_of_slack(
+            true,
+            pin_film_host::film_host().is_some()
+        ),
+        "the row a resize paints with is the row a hosted film's window would bob by"
+    );
+    assert!(
+        !paint::a_resize_asks_the_surface_for_a_row_of_slack(
+            false,
+            pin_film_host::film_host().is_some()
+        ),
+        "and a paint that is not a resize asks for nothing at all"
+    );
+}
+
+/// Only a resize of a hosted mpv film that is really drawing is frozen for the drag: FFmpeg's player
+/// is parked by the kill road instead, a move carries the window the film already has, and a film in
+/// a window of the desktop's has no host to hide (see `a_resize_freezes_the_hosted_film` and
+/// `park_pinned_player`).
+#[test]
+fn only_a_resize_of_a_drawing_hosted_mpv_film_is_frozen_for_the_drag() {
+    assert!(
+        pin_drag::a_resize_freezes_the_hosted_film(true, VideoRoute::Mpv, true, true),
+        "a resize of a hosted mpv film freezes its picture for the length of the drag"
+    );
+    assert!(
+        !pin_drag::a_resize_freezes_the_hosted_film(false, VideoRoute::Mpv, true, true),
+        "a move is the window's own move and freezes nothing"
+    );
+    assert!(
+        !pin_drag::a_resize_freezes_the_hosted_film(true, VideoRoute::Ffplay, true, true),
+        "FFmpeg's player is parked by the kill road rather than by this one"
+    );
+    assert!(
+        !pin_drag::a_resize_freezes_the_hosted_film(true, VideoRoute::Mpv, false, true),
+        "a film in a window of the desktop's is the window the drag is already moving"
+    );
+    assert!(
+        !pin_drag::a_resize_freezes_the_hosted_film(true, VideoRoute::Mpv, true, false),
+        "a player that has drawn no child of the host yet has no picture to hold"
+    );
+}
+
 /// The topmost road is for players placed from the outside; the host is already where the pin is,
 /// and it is the band that says where the picture goes. So the box the road was handed is not the
-/// host's, and the host still comes back when a park left it hidden.
+/// host's, and a host hidden by something that is not a park is still shown by it — the band is owed
+/// its picture back (see `pin_player_is_parked`, which is what keeps the road off a park's hide).
 #[test]
 fn the_topmost_road_neither_moves_nor_raises_the_host() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME

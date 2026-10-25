@@ -720,10 +720,11 @@ pub(super) fn begin_pin_drag(
             // nothing ever shows (see `MediaType::draws_in_a_window_of_its_own`). A move or a resize
             // of a media-engine video is the same window work as any other pin's, with nothing of
             // FFmpeg's in it.
-            // **mpv's window is left exactly where the film is drawing**, because the film is not
-            // being held for this gesture: parking it would hide a playing film behind a still and
-            // let it run on unwatched, so a drag or a resize is a move of the window it already has
-            // (see `video_drag_hold_apply` and `mpv_ipc`).
+            // **mpv's window is left exactly where the film is drawing**, because a move is not a
+            // gesture the film is held for: parking it would hide a playing film behind a still, so a
+            // drag is a move of the window it already has (see `video_drag_hold_apply` and
+            // `mpv_ipc`). A *resize* of a hosted mpv film is the one exception, and it is taken
+            // below rather than here.
             let pinned_film = pinned_media_owner();
             let a_host_is_drawing = pinned_film
                 .as_ref()
@@ -739,6 +740,24 @@ pub(super) fn begin_pin_drag(
                     matches!(action, PinDragAction::Resize(_)),
                 );
             }
+            // **A hosted mpv film is frozen for the length of a resize.** Every pointer move of one
+            // puts the host to a new box, and the child mpv draws in re-sizes itself on its own
+            // thread: at a fast hand the picture arrives several sizes behind the band it stands in,
+            // which reads as a frame bouncing inside a window that is not. The park is the cover a
+            // move or a resize of FFmpeg's film already gets — the frame the band last had, painted
+            // opaque and scaled into the box being dragged to, with the player hidden (see
+            // `park_pinned_player`). `false` is its Carry arm: nothing is being replaced, so the
+            // player keeps playing behind the cover and is *not* relaunched when the drag ends.
+            if let Some((path, _)) = pinned_film.as_ref() {
+                if a_resize_freezes_the_hosted_film(
+                    matches!(action, PinDragAction::Resize(_)),
+                    video_route(path),
+                    a_host_is_drawing,
+                    pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
+                ) {
+                    park_pinned_player(HWND(hwnd as *mut _), (window_box.0, window_box.1), false);
+                }
+            }
         }
         // A newer gesture supersedes whatever relaunch is still in flight behind the cover: the
         // bump kills it before it can publish. After the park rather than before it — the fresh
@@ -747,6 +766,21 @@ pub(super) fn begin_pin_drag(
     } else {
         window.release_capture(hwnd);
     }
+}
+
+/// Whether a press on an edge freezes the film for the length of the drag.
+///
+/// Only a hosted mpv film that is really drawing has a picture with nothing of this app's in it to
+/// hold: FFmpeg's player takes the kill road instead (see `gesture_press_freeze`), a film in a window
+/// of the desktop's is the window the drag is already moving, and a move is the window's own move and
+/// nothing of the film's (see `park_pinned_player` and `video_drag_hold_apply`).
+pub(super) fn a_resize_freezes_the_hosted_film(
+    resizing: bool,
+    route: VideoRoute,
+    drawn_in_the_host: bool,
+    drawing: bool,
+) -> bool {
+    resizing && route == VideoRoute::Mpv && drawn_in_the_host && drawing
 }
 
 /// Put the player's window back where it was parked from, at where the band is *now*.
