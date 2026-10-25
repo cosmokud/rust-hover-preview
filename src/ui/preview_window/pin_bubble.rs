@@ -677,7 +677,17 @@ pub(super) fn the_pin_is_being_put_down() -> bool {
 /// taken for one is a picture of nothing (see `keep_the_pin_for_the_taskbar`).
 unsafe fn put_the_pins_window_in_the_taskbar() {
     hide_pinned_siblings();
-    ask_the_pin_down(pinned_window());
+    // **A pin whose chrome is owned by its film host is put away by the host.** The host is the
+    // window the Shell's button belongs to on this road, and minimizing it hides the pin with it —
+    // the owned window goes down with its owner — while a minimized pin over a host on the screen
+    // would be a chrome gone and a film left standing on the desktop (see
+    // `pin_film_host::own_the_pin_window`).
+    let window = if pin_film_host::the_pins_chrome_is_owned() {
+        pin_film_host::film_host().unwrap_or_else(pinned_window)
+    } else {
+        pinned_window()
+    };
+    ask_the_pin_down(window);
 }
 
 /// Put the pin away into the taskbar rather than the bubble: the bubble goes, the stand-in comes
@@ -1484,6 +1494,13 @@ pub(super) unsafe fn hide_pinned_siblings() {
     let video = VIDEO_HWND.load(Ordering::SeqCst);
     if video != 0 {
         let _ = ShowWindow(HWND(video as *mut _), SW_HIDE);
+    }
+
+    // **A film host that is a window of the desktop's goes down with the pin it belongs to.** Nothing
+    // else takes it down: a child host goes with its parent, and this one has no parent to go with —
+    // it is the window that owns the chrome (see `pin_film_host`).
+    if pin_film_host::the_pins_chrome_is_owned() {
+        unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
     }
 
     // The cached handle alone is not the player: it is stale where the window was recreated and

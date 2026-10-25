@@ -91,35 +91,56 @@ fn real_pin_style(layered: bool) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
 /// through this window's own DC and must not wear `WS_EX_LAYERED`, and every other pin keeps the
 /// layered surface it has always had (see `pin_film_host`).
 pub(super) unsafe fn set_the_pin_window_layered(hwnd: HWND, layered: bool) {
-    let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    if style == 0 {
-        return;
+    if unsafe { set_an_ex_style(hwnd, WS_EX_LAYERED, layered) } {
+        unsafe { ask_the_window_to_re_read_its_style(hwnd) };
     }
+}
 
-    let wanted = if layered {
-        style | WS_EX_LAYERED.0 as isize
+/// Ask for or give back the pin's own taskbar button and Alt+Tab entry: what a pin whose chrome is
+/// owned by its film host gives up, and what it takes back where no host owns it (see
+/// `pin_film_host::own_the_pin_window`). A window's place in the Shell's lists is asked of the window
+/// rather than of the asker, so it is written with the road and not with the setting.
+pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) {
+    if unsafe { set_an_ex_style(hwnd, WS_EX_APPWINDOW, app_window) } {
+        unsafe { ask_the_window_to_re_read_its_style(hwnd) };
+    }
+}
+
+/// Put a bit of the pin window's extended style on or off, answering whether it changed.
+///
+/// **A style of zero is a style, and not a window that has gone.** The pin's own window wears one
+/// extended bit at a time on some roads — the app-window bit alone, the layered bit alone — so
+/// clearing it leaves nothing at all, and an early answer for that case is a bit nothing ever puts
+/// back (see `set_the_pin_window_appwindow`).
+unsafe fn set_an_ex_style(hwnd: HWND, bit: WINDOW_EX_STYLE, on: bool) -> bool {
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let wanted = if on {
+        style | bit.0 as isize
     } else {
-        style & !(WS_EX_LAYERED.0 as isize)
+        style & !(bit.0 as isize)
     };
     if wanted == style {
-        return;
+        return false;
     }
 
-    if SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted) == 0 {
-        return;
-    }
+    let _ = unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted) };
+    true
+}
 
-    // The style is not a thing a window is told about live: without being asked to re-read it, a
-    // window keeps presenting the surface it was made with.
-    let _ = SetWindowPos(
-        hwnd,
-        None,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-    );
+/// A style is not a thing a window is told about live: without being asked to re-read it, a window
+/// keeps presenting the surface it was made with, and the Shell goes on listing it as it was.
+unsafe fn ask_the_window_to_re_read_its_style(hwnd: HWND) {
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+    };
 }
 
 /// Write the form the pin now asks for, wherever its own window exists: asked on a take-up and on

@@ -32,10 +32,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, SetParent,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT,
-    HWND_NOTOPMOST, HWND_TOP, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_SIZE, WNDCLASSEXW, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_CHILD,
+    GW_HWNDNEXT, HWND_NOTOPMOST, HWND_TOP, SC_CLOSE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_CLOSE, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -62,6 +63,18 @@ unsafe extern "system" fn the_default_answer(
     if msg == WM_SIZE {
         fit_the_hosted_mpv_to_the_host(hwnd);
     }
+
+    // **A host that is the Shell's window is the Shell's close too.** Its taskbar button's Close
+    // arrives here as a `WM_CLOSE` or an `SC_CLOSE`, and taken it would destroy the window the pin's
+    // chrome is owned by — the pin with it, under a state that still believes a pin is up. What a
+    // close means for the pin is the pin's own road's answer (see `window_proc`).
+    if PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst)
+        && (msg == WM_CLOSE || (msg == WM_SYSCOMMAND && (wparam.0 & 0xFFF0) as u32 == SC_CLOSE))
+    {
+        request_pin_end();
+        return LRESULT(0);
+    }
+
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
@@ -199,9 +212,90 @@ pub(super) fn host_for_the_pins_ffplay(path: &Path, kind: Option<MediaType>) -> 
         .flatten()
 }
 
+/// **A temporary diagnostic, and not a setting: `RHP_MPV_OWNED_PIN`, present means on.**
+///
+/// A `WS_CHILD` is always drawn above its parent's client area, and a `WS_EX_LAYERED` parent — the
+/// pin's chrome, painted through `UpdateLayeredWindow` — cannot clip or synchronise a hardware
+/// swapchain child. So the film is given not a child of the pin but a **window of the desktop's of
+/// its own, which owns the pin's chrome**: Windows then keeps the chrome above the film, hides it
+/// with the host, keeps it out of Alt+Tab, and moves neither for this app (see
+/// `the_pin_film_host_is_a_window_of_the_desktop`). Unset, every road here is exactly as it was.
+const MPV_OWNED_PIN_VARIABLE: &str = "RHP_MPV_OWNED_PIN";
+
+/// Whether the machine asked for the film host to own the pin's chrome (see
+/// [`MPV_OWNED_PIN_VARIABLE`]). The environment is read here and nowhere else, and the answer is a
+/// fact of the process: flipping the variable needs the app restarted, not the film re-pinned.
+pub(super) fn the_film_host_owns_the_pin() -> bool {
+    #[cfg(test)]
+    if let Some(answer) = the_owned_road_stand_in() {
+        return answer;
+    }
+
+    std::env::var_os(MPV_OWNED_PIN_VARIABLE).is_some()
+}
+
+/// Stand an answer for [`the_film_host_owns_the_pin`] on this thread in place of the machine's own, or
+/// give the machine's own answer back with `None`.
+///
+/// **Per thread because the tests run at once**, and because every road that asks the question in a
+/// test asks it from the thread the test is on: one test standing the road off is not another — and a
+/// run whose environment set the diagnostic would otherwise hand every test written against the
+/// child host the other road (see `pin_film_host::stand_the_mpv_pin_hosted_in` for the process-wide
+/// form, which is the right one only where the answer is read from no thread in particular).
+#[cfg(test)]
+pub(super) fn stand_the_owned_road_in(answer: Option<bool>) {
+    OWNED_ROAD_STAND_IN.with(|held| held.set(answer));
+}
+
+/// The answer [`the_film_host_owns_the_pin`] is given while a test stands one in.
+#[cfg(test)]
+fn the_owned_road_stand_in() -> Option<bool> {
+    OWNED_ROAD_STAND_IN.with(|held| held.get())
+}
+
+#[cfg(test)]
+thread_local! {
+    static OWNED_ROAD_STAND_IN: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether a film of `route` at a pin's band is drawn in a window of the desktop's that owns the
+/// pin's chrome, with the machine's own answer given as a parameter: so a test is a call rather
+/// than an environment write every other test in the process would see.
+///
+/// mpv's only. FFmpeg's player is drawn into a host of the pin's for its renderer's sake and keeps
+/// the road it has (see `a_hosted_film_is_presented_composed`).
+pub(super) fn a_film_route_is_drawn_in_a_host_of_its_own(route: VideoRoute, owned: bool) -> bool {
+    owned && route == VideoRoute::Mpv
+}
+
+/// Whether the film at this pin's band is drawn in a window of the desktop's that owns the pin's
+/// chrome: the pin stands in a window of its own, its media is a film, and the film is mpv's.
+pub(super) fn the_pin_film_host_is_a_window_of_the_desktop(path: &Path) -> bool {
+    pin_is_its_own_window()
+        && a_film_route_is_drawn_in_a_host_of_its_own(
+            video_route(path),
+            the_film_host_owns_the_pin(),
+        )
+}
+
+/// Whether the host that is up is a window of the desktop's — written where it is made, because a
+/// host's level is a fact about the window and not about the setting that asked for it: a file
+/// stepped between mpv and FFmpeg is another level, and the host is made again for it.
+static PIN_FILM_HOST_IS_TOP_LEVEL: AtomicBool = AtomicBool::new(false);
+
+/// Whether the pin's chrome is owned by its film host, and so is not the window Windows lists and
+/// gives a taskbar button to: the host is that window on this road (see `own_the_pin_window`).
+pub(super) fn the_pins_chrome_is_owned() -> bool {
+    PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst) && film_host().is_some()
+}
+
 /// Whether the pin's film host is a child of the pin's own window, which is where a host made or
-/// adopted by the pin stands. A host still a window of the desktop's is a handover's on its way in.
+/// adopted by the pin stands. A host still a window of the desktop's is a handover's on its way in,
+/// or the host of a pin whose chrome is owned by it (see `the_pin_film_host_is_a_window_of_the_desktop`).
 pub(super) fn the_pin_film_host_stands_in_the_pins_own_window() -> bool {
+    if PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst) {
+        return false;
+    }
     let (Some(host), Some(parent)) = (film_host(), pin_real_window::real_pin_window()) else {
         return false;
     };
@@ -276,6 +370,16 @@ pub(super) fn the_pin_presents_a_hosted_film_composed() -> bool {
     let Some(path) = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.path.clone())) else {
         return false;
     };
+
+    // **A pin whose film is drawn in a window of the desktop's is the layered surface over it,
+    // whatever else a machine asked for.** The picture stands below this one, so the band has to be
+    // an alpha the host shows through and a press falls on — a composed pin is blitted through its
+    // own DC and is opaque over the whole of itself, which is the film gone. Asked of the road rather
+    // than of the host that is up, because the form is written at a take-up, before there is one (see
+    // `the_pin_film_host_is_a_window_of_the_desktop`).
+    if the_pin_film_host_is_a_window_of_the_desktop(&path) {
+        return false;
+    }
 
     // A sound's player is FFmpeg's too: only a film at this pin's band is presented this way, and
     // a placeholder counts because the pin is taken up before its film is installed.
@@ -417,6 +521,64 @@ pub(super) fn a_host_resize_would_place_the_child_for_a_test(host: HWND) -> bool
     the_hosted_mpv_child(host).is_some()
 }
 
+/// The flags a host's `WM_SIZE` fits mpv's child with.
+///
+/// **A host that is a window of the desktop's asks for the box rather than waiting for it.** Its
+/// child is still mpv's, but the message doing the asking is the host's own `WM_SIZE`, which is the
+/// window being moved — a synchronous fit there is this app's thread waiting on mpv's, on the step
+/// path, which is the hang this road exists to not have. What it costs is the box landing a message
+/// later, and the film is clipped by the band rather than the band a hole.
+pub(super) fn fit_flags() -> SET_WINDOW_POS_FLAGS {
+    if PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst) {
+        SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_ASYNCWINDOWPOS | SWP_SHOWWINDOW
+    } else {
+        SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_SHOWWINDOW
+    }
+}
+
+/// The box the host is placed at, from the band the pin says its picture stands in.
+///
+/// A child host is placed in the pin window's own client coordinates, and a host that is a window of
+/// the desktop's is placed at the band itself — the band *is* a screen region (see
+/// `PinnedPreview::content`), so the two roads differ in nothing but which coordinates the number is
+/// in.
+fn the_film_host_box(content: ScreenRegion) -> (i32, i32, i32, i32) {
+    if PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst) {
+        (
+            content.0,
+            content.1,
+            (content.2 - content.0).max(1),
+            (content.3 - content.1).max(1),
+        )
+    } else {
+        band_in_the_window(content)
+    }
+}
+
+/// Make the pin's chrome window owned by its film host, or give it back to the Shell, and take the
+/// taskbar button and the Alt+Tab entry with it.
+///
+/// **Who Windows lists and activates is asked of a window once, when it is made, and ownership is the
+/// answer that can still be written later.** An owned window stands above its owner, hides with it,
+/// and is out of Alt+Tab and the taskbar — which is the whole of what the new road needs from the OS,
+/// and the whole of what the pin owes the host for holding its film (see
+/// `the_pin_film_host_is_a_window_of_the_desktop`). `WS_EX_APPWINDOW` is what asks for a taskbar
+/// button regardless of ownership, so it goes with the road that owns the pin and comes back with the
+/// one that does not (see `pin_real_window::real_pin_style`).
+///
+/// Both are same-process calls into a window of this app's own: there is no cross-process send here,
+/// and nothing of this app's is locked across either.
+unsafe fn own_the_pin_window(owned: bool) {
+    let Some(pin) = pin_real_window::real_pin_window() else {
+        return;
+    };
+    let owner = if owned { film_host() } else { None }.map_or(0, |owner| owner.0 as isize);
+    if unsafe { GetWindowLongPtrW(pin, GWLP_HWNDPARENT) } != owner {
+        unsafe { SetWindowLongPtrW(pin, GWLP_HWNDPARENT, owner) };
+    }
+    unsafe { pin_real_window::set_the_pin_window_appwindow(pin, !owned) };
+}
+
 /// Put the film mpv draws at the host's client box, from the message that gave the host its own.
 ///
 /// **This is what makes a hosted mpv film follow a resize instead of trailing it.** FFmpeg's child is
@@ -442,18 +604,8 @@ fn fit_the_hosted_mpv_to_the_host(host: HWND) -> bool {
     }
     let (width, height) = (client.right.max(1), client.bottom.max(1));
     let started = Instant::now();
-    let placed = unsafe {
-        SetWindowPos(
-            child,
-            HWND::default(),
-            0,
-            0,
-            width,
-            height,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_SHOWWINDOW,
-        )
-    }
-    .is_ok();
+    let placed =
+        unsafe { SetWindowPos(child, HWND::default(), 0, 0, width, height, fit_flags()) }.is_ok();
 
     note_pin_trace!(
         "hosted mpv fit host {host:?} child {child:?} {width}x{height} {:.3}ms placed {}",
@@ -612,6 +764,18 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
         return;
     };
 
+    // **The road's level is the film's, and a host of the other level is not this host.** A file
+    // stepped between mpv and FFmpeg keeps the host on the road that draws into it, and the two
+    // levels cannot be reached through one window: "mpv is drawn in a window of the desktop's"
+    // answers true for one film and false for the next, so a host already made for the other road
+    // is taken down and made again (see `the_pin_film_host_is_a_window_of_the_desktop`).
+    let a_window_of_the_desktop = the_pin_film_host_is_a_window_of_the_desktop(&path);
+    if film_host().is_some()
+        && PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst) != a_window_of_the_desktop
+    {
+        unsafe { take_down_the_pin_film_host() };
+    }
+
     if let Some(host) = adopted.filter(|host| unsafe { IsWindow(*host) }.as_bool()) {
         let pid = hover_film_host::hover_film_host_player().unwrap_or(0);
         note_pin_trace!(
@@ -631,12 +795,13 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
             let Some(parent) = pin_real_window::real_pin_window() else {
                 return;
             };
-            let Some(host) = create(parent) else {
+            let Some(host) = create(parent, a_window_of_the_desktop) else {
                 return;
             };
             note_pin_trace!(
-                "host created {:?} parent {:?} pid {} child {:?} client {:?}",
+                "host created {:?} desktop {} parent {:?} pid {} child {:?} client {:?}",
                 host,
+                a_window_of_the_desktop as u8,
                 parent,
                 VIDEO_PID.load(Ordering::SeqCst),
                 a_child_of_the_host(host, VIDEO_PID.load(Ordering::SeqCst)),
@@ -646,7 +811,11 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
         }
     };
 
-    let (x, y, width, height) = band_in_the_window(content);
+    // **The pin's chrome is the host's to own on this road**, and the Shell's to list on the other
+    // (see `own_the_pin_window`). Written here because this is the road that knows both windows.
+    unsafe { own_the_pin_window(PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst)) };
+
+    let (x, y, width, height) = the_film_host_box(content);
     let _ = SetWindowPos(
         host,
         HWND::default(),
@@ -763,7 +932,7 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
         return;
     };
 
-    let (x, y, width, height) = band_in_the_window(content);
+    let (x, y, width, height) = the_film_host_box(content);
     let _ = SetWindowPos(
         host,
         HWND::default(),
@@ -783,6 +952,14 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
 /// host's, and a park hides the picture rather than the chrome (see `pin_chrome_strips`).
 pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
     if let Some(host) = film_host() {
+        // **A host the Shell has minimized is the Shell's to bring back.** Showing a minimized
+        // window restores it, so a tick that showed the host it is watching would undo the user's own
+        // minimize of it every tick — and the button that minimized it is the host's own on this road
+        // (see `own_the_pin_window`). A host the app hid for a park is not iconic, and is shown here as
+        // it always was.
+        if visible && unsafe { IsIconic(host) }.as_bool() {
+            return;
+        }
         note_pin_trace!("host visible {} {:?}", visible as u8, host);
         let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
     }
@@ -796,6 +973,11 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
 /// strips stay: they are the pin's window's, and the next take-up places them again (see
 /// `pin_chrome_strips`).
 pub(super) unsafe fn take_down_the_pin_film_host() {
+    // **The pin's chrome is given back to the Shell before the host that owns it goes.** Destroying
+    // a window destroys the windows it owns, and the pin's window is kept between pins — so a
+    // teardown that destroyed the owner first would take the pin's own window with it (see
+    // `own_the_pin_window`).
+    unsafe { own_the_pin_window(false) };
     // **The player is ended before the window it draws in is destroyed.** Destroying a parent takes
     // its children with it, and a player whose surface was destroyed under it is a kill the player
     // did not get to answer; the record below is what the ordinary kill road retries to confirmation
@@ -809,6 +991,7 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     }
     PIN_FILM_HOST.store(0, Ordering::SeqCst);
     PIN_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
+    PIN_FILM_HOST_IS_TOP_LEVEL.store(false, Ordering::SeqCst);
     PRESENTED_PID.store(0, Ordering::SeqCst);
     forget_the_hosted_mpv_child();
     clear_the_move_cover();
@@ -825,7 +1008,7 @@ fn a_client_box(hwnd: HWND) -> Option<(i32, i32)> {
     (unsafe { GetClientRect(hwnd, &mut rect) }.is_ok()).then_some((rect.right, rect.bottom))
 }
 
-unsafe fn create(parent: HWND) -> Option<HWND> {
+unsafe fn create(parent: HWND, a_window_of_the_desktop: bool) -> Option<HWND> {
     FILM_HOST_CLASS_REGISTERED.call_once(|| {
         let hinstance = GetModuleHandleW(None).expect("the module's own handle");
         let class = WNDCLASSEXW {
@@ -853,15 +1036,29 @@ unsafe fn create(parent: HWND) -> Option<HWND> {
     // player's window is a black flash over the film at every show and every resize. The pin's own
     // window is clipped for the same reason, one level up (see `pin_real_window::real_pin_style`).
     let host = CreateWindowExW(
-        WINDOW_EX_STYLE::default(),
+        if a_window_of_the_desktop {
+            WS_EX_APPWINDOW
+        } else {
+            WINDOW_EX_STYLE::default()
+        },
         FILM_HOST_CLASS,
         w!("film host"),
-        WS_CHILD | WS_CLIPCHILDREN,
+        if a_window_of_the_desktop {
+            WS_POPUP | WS_CLIPCHILDREN
+        } else {
+            WS_CHILD | WS_CLIPCHILDREN
+        },
         0,
         0,
         1,
         1,
-        parent,
+        // A window of the desktop's has no parent — it is the one that has an *owner*, and the
+        // owner is the pin's chrome (see `own_the_pin_window`). Nothing here is a `WS_CHILD`.
+        if a_window_of_the_desktop {
+            HWND::default()
+        } else {
+            parent
+        },
         None,
         hinstance,
         None,
@@ -872,6 +1069,12 @@ unsafe fn create(parent: HWND) -> Option<HWND> {
     // the picture has to reach the pin (see the module doc).
     let _ = EnableWindow(host, false);
     PIN_FILM_HOST.store(host.0 as isize, Ordering::SeqCst);
+    PIN_FILM_HOST_IS_TOP_LEVEL.store(a_window_of_the_desktop, Ordering::SeqCst);
+    // **A host that is a window of the desktop's is the one the Shell lists**, so the button the pin
+    // used to carry names the file the pin is of (see `pin_taskbar::set_pin_taskbar_title`).
+    if a_window_of_the_desktop {
+        unsafe { pin_taskbar::set_pin_taskbar_title(host) };
+    }
     // And the chrome is put back over it: making the host puts it on top of the strips, which are
     // the pin's window's and were standing before it, so the order is re-asserted here (see
     // `pin_chrome_strips`).
