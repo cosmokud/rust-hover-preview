@@ -137,9 +137,9 @@ impl StandingFilm {
         // `the_pinned_player_was_begun_in_the_host`).
         pin_film_host::note_hosted_player(unsafe { GetCurrentProcessId() });
 
-        // **The road this stand is for is the child host.** The environment of a run that set the
-        // diagnostic would otherwise hand every test here the other one, and a stand that answers
-        // differently according to how the suite was started is a test of nothing (see
+        // **The road this stand is for is the child host, which is no longer the default.** A run
+        // with no variable set would otherwise hand every test here the owned road, and a stand that
+        // answers differently according to how the suite was started is a test of nothing (see
         // `pin_film_host::stand_the_owned_road_in`).
         pin_film_host::stand_the_owned_road_in(Some(false));
         stand_mpv_in(Some(true));
