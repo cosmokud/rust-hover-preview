@@ -1074,19 +1074,15 @@ fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
     );
     PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
 
-    // `Always On Top` keeps the band it kept before any of this — and the answer is the pin's own
-    // handle rather than the top of the band, because the film's placement is asked for rather than
-    // waited on (see `place_a_players_window`): a request that lands after the pin's own raise has
-    // to name the side of it the film belongs on, and a pin in that setting is topmost, so "after
-    // the pin" is that band and not the ordinary one.
+    // `Always On Top` keeps the band it kept before any of this.
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = true;
     }
     assert_eq!(
         player_insert_after(),
-        pin_hwnd,
+        HWND_TOPMOST,
         "a pin that is Always On Top holds its band whatever any press said, and its film holds \
-         the band directly under it"
+         the band under it"
     );
 
     // Safety: the window is this test's own, and the handles the app holds are put back as they
