@@ -349,6 +349,14 @@ mod tests {
     /// hosted FFmpeg film over it is the layered window it always was.
     #[test]
     fn the_window_the_module_makes_wears_them() {
+        // The window is the process's one pin window and the slot it stands in is cleared at the end:
+        // another test holding the lock while it asks for the same window is a test handed a handle
+        // this one took away, so the two are one at a time like every other stand of a pin
+        // (see `PIN_TESTS_ONE_AT_A_TIME`).
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let box_ = (-20000, -20000, -19680, -19760);
         let hwnd = unsafe { real_pin_window_at(box_) }.expect("the pin's own window");
 

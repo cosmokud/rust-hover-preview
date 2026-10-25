@@ -222,7 +222,11 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
 
     let (width, height) = (paint.width, paint.height);
     let caption_height = paint.caption_height;
-    let (padding, slack) = the_slack_a_resize_paints_with(paint.resizing);
+    let (padding, slack) =
+        the_slack_a_resize_paints_with(a_resize_asks_the_surface_for_a_row_of_slack(
+            paint.resizing,
+            pin_film_host::film_host().is_some(),
+        ));
     let rows = height + slack;
     let Some(bits) = ensure_layered_surface(hwnd.0 as isize, width as u32, rows as u32) else {
         return;
@@ -691,6 +695,20 @@ pub(super) fn paints_through_the_window_dc(hwnd: HWND) -> bool {
     unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED.0 as isize == 0 }
 }
 
+/// Whether a resize's paint asks the surface for the row of slack it paints with.
+///
+/// **A pin whose film is drawn in a host asks for none.** The picture there is a child window, so the
+/// row the slack moves the pin's window by is a row that child rides — the film moving on every
+/// paint is exactly the jitter the hand sees. A native strip's picture is this app's own pixels and
+/// lands on the box the paint gives it, so it keeps the slack that clears the ghost of a shrink (see
+/// `the_slack_a_resize_paints_with`).
+pub(super) fn a_resize_asks_the_surface_for_a_row_of_slack(
+    resizing: bool,
+    a_film_host_stands: bool,
+) -> bool {
+    resizing && !a_film_host_stands
+}
+
 /// How many rows of the surface stand above the pin's own picture, and how many rows the surface has
 /// more than the pin has: the row of slack a resize is painted with, and where the picture stands in
 /// it.
@@ -777,8 +795,8 @@ pub(super) struct PinnedPaint {
     pub(super) width: i32,
     pub(super) height: i32,
     /// Whether a resize is the drag in flight, which is the one thing that makes a paint of this
-    /// window a paint that may give part of it up — and so the one thing that asks the surface for a
-    /// row of slack (see `the_slack_a_resize_paints_with`).
+    /// window a paint that may give part of it up — and so, where no film host stands, the one thing
+    /// that asks the surface for a row of slack (see `a_resize_asks_the_surface_for_a_row_of_slack`).
     pub(super) resizing: bool,
     pub(super) caption_height: i32,
     pub(super) transport_height: i32,

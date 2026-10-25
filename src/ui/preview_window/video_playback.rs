@@ -1525,6 +1525,14 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         // **Where the host stands is not this road's to say**, and the box it was handed is a
         // top-level player's rather than the band's: the band's box is the pin's, and it is given
         // by the roads that read it (see `ensure_pinned_sibling_box`).
+        // **A park is the band's to hand back, and this road would take it back on every tick.**
+        // The host is hidden for the length of a drag and shown by the swap that ends it, which
+        // places it at the band the hand settled on before the flag comes down (see
+        // `unpark_player_window`). A show here is the tick undoing the cover at its own pace.
+        if pin_player_is_parked() {
+            note_pin_trace!("topmost skipped: pin host parked");
+            return true;
+        }
         if pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
             note_pin_trace!("topmost shown: pin host drawing");
             // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
