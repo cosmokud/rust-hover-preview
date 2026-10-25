@@ -3783,6 +3783,62 @@ fn the_composed_renderer_is_asked_for_unless_a_machine_names_another() {
     );
 }
 
+/// **A temporary diagnostic.** A hosted mpv film keeps the layered pin its window has always had,
+/// and the composed road is FFmpeg's player's alone — unless the machine asks otherwise through
+/// `RHP_MPV_COMPOSED_PIN`, which exists to answer by hand whether the road is the whole of the
+/// difference between an mpv pin's shaky drag-resize and an ffplay pin's smooth one (see
+/// `pin_film_host::the_mpv_pin_is_composed`). Both arms are a call with each road's answer given,
+/// so the test writes no environment the rest of the process would see.
+#[test]
+fn the_composed_road_is_ffplays_alone_unless_the_mpv_diagnostic_asks_for_it() {
+    assert!(
+        !pin_film_host::a_hosted_film_is_presented_composed(VideoRoute::Mpv, true, false),
+        "with the diagnostic unset an mpv film is exactly what it was: a layered pin"
+    );
+    assert!(
+        !pin_film_host::a_hosted_film_is_presented_composed(VideoRoute::Mpv, false, false),
+        "and no renderer FFmpeg's player would be begun with changes that"
+    );
+    assert!(
+        pin_film_host::a_hosted_film_is_presented_composed(VideoRoute::Mpv, false, true),
+        "with it set, the mpv pin takes the composed road: no WS_EX_LAYERED, and BitBlt"
+    );
+    assert!(
+        pin_film_host::a_hosted_film_is_presented_composed(VideoRoute::Ffplay, true, false),
+        "FFmpeg's player is composed as it always was"
+    );
+    assert!(
+        pin_film_host::a_hosted_film_is_presented_composed(VideoRoute::Ffplay, true, true),
+        "and the diagnostic does not take that road away from it"
+    );
+    assert!(
+        !pin_film_host::a_hosted_film_is_presented_composed(VideoRoute::Ffplay, false, true),
+        "a machine that named a flip-model renderer by hand keeps the layered pin either way"
+    );
+    assert!(
+        !pin_film_host::a_hosted_film_is_presented_composed(VideoRoute::MediaEngine, true, true),
+        "and a film no player of ours draws is never composed"
+    );
+
+    // With the diagnostic unset, the answer is the expression this predicate carried before it
+    // existed, for every route and both of FFmpeg's renderer answers — the toggle-off arm is no
+    // behaviour change at all.
+    for route in [
+        VideoRoute::Ffplay,
+        VideoRoute::Mpv,
+        VideoRoute::MediaEngine,
+        VideoRoute::NoPreview,
+    ] {
+        for ffplay in [true, false] {
+            assert_eq!(
+                pin_film_host::a_hosted_film_is_presented_composed(route, ffplay, false),
+                route == VideoRoute::Ffplay && ffplay,
+                "unset, the diagnostic leaves the composed road to FFmpeg's player alone"
+            );
+        }
+    }
+}
+
 /// FFmpeg's own window is restyled to a disabled `WS_CHILD` and re-parented into the host, with
 /// the frame stripped and the picture fitted to the host's client box. The pause key and the
 /// window-by-pid roads then find that child (see `video_window_for`).

@@ -57,7 +57,9 @@ const REAL_PIN_TITLE: PCWSTR = w!("Rust Preview");
 /// `WS_EX_LAYERED`: the pin's corners and the shadow around its chrome are alpha, and a layered
 /// window is a window in every other respect, including activation. **A pin that holds a hosted
 /// FFmpeg film drops it**, because that film is presented through the composed renderer into this
-/// window's own DC rather than through a flip-model swapchain (see `real_pin_style`).
+/// window's own DC rather than through a flip-model swapchain — and, under the temporary
+/// `RHP_MPV_COMPOSED_PIN` diagnostic, a pin that holds a hosted mpv film drops it too (see
+/// `pin_film_host::the_mpv_pin_is_composed` and `real_pin_style`).
 ///
 /// `WS_EX_APPWINDOW`: a taskbar button asked for by the window itself rather than inferred from what
 /// owns it, which is the button this window owes and the one the stand-in used to fake.
@@ -85,8 +87,9 @@ fn real_pin_style(layered: bool) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
 
 /// Put the pin's own window in the layered or the non-layered form its presentation asks for, now.
 /// The window is reused across pins, so the form is written on every take-up: a hosted FFmpeg film
-/// is composed through this window's own DC and must not wear `WS_EX_LAYERED`, and every other pin
-/// keeps the layered surface it has always had (see `pin_film_host`).
+/// — and, under the temporary `RHP_MPV_COMPOSED_PIN` diagnostic, a hosted mpv film — is composed
+/// through this window's own DC and must not wear `WS_EX_LAYERED`, and every other pin keeps the
+/// layered surface it has always had (see `pin_film_host`).
 pub(super) unsafe fn set_the_pin_window_layered(hwnd: HWND, layered: bool) {
     let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     if style == 0 {
@@ -124,7 +127,7 @@ pub(super) unsafe fn set_the_pin_window_layered(hwnd: HWND, layered: bool) {
 /// the file rather than waiting for the next show.
 pub(super) unsafe fn apply_the_pin_window_presentation() {
     if let Some(hwnd) = real_pin_window() {
-        let layered = !super::pin_film_host::the_pin_presents_an_ffplay_film_composed();
+        let layered = !super::pin_film_host::the_pin_presents_a_hosted_film_composed();
         unsafe { set_the_pin_window_layered(hwnd, layered) };
     }
 }
@@ -184,9 +187,8 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
     }
 
     register_real_pin_class();
-    let (style, ex_style) = real_pin_style(
-        !super::pin_film_host::the_pin_presents_an_ffplay_film_composed(),
-    );
+    let (style, ex_style) =
+        real_pin_style(!super::pin_film_host::the_pin_presents_a_hosted_film_composed());
     let hinstance = GetModuleHandleW(None).ok()?;
     let hwnd = CreateWindowExW(
         ex_style,
