@@ -1161,8 +1161,10 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
 /// [`a_pin_of_this_file_stands_in_its_own_window`]).
 pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: &Path) -> bool {
     match kind {
-        // A pinned FFmpeg film is hosted in the pin's own window from the moment it is taken up,
-        // before `pin_is_its_own_window` has been written (see `pin_film_host`).
+        // A pinned FFmpeg film stands in the pin's own window from the moment it is taken up, before
+        // `pin_is_its_own_window` has been written. What draws in the band is the player's own window
+        // over it rather than a child of it (see `pin_film_host`), which is a film of the desktop's
+        // for every other question a drag or a park asks, and never the preview's answer.
         Some(MediaType::Video) if video_route(path) == VideoRoute::Ffplay => true,
         Some(kind) if !matches!(kind, MediaType::Loading | MediaType::Unplayable) => {
             !kind.draws_in_a_window_of_its_own(path)

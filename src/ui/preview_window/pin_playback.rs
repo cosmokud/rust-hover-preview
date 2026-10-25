@@ -969,6 +969,9 @@ pub(super) fn adopt_the_hovered_film_in_the_host() -> bool {
 /// Nothing is begun for a film the host already holds — every show of a hosted pin would otherwise
 /// be a player begun again — and nothing for a pin with no player up at all, which is a film that
 /// has not started rather than one to move (see `pin_film_host::host_for_the_pins_film`).
+///
+/// Only mpv reaches this: FFmpeg's player is never hosted, so a pinned ffplay film keeps the
+/// running window the hover left at the band (see `pin_film_host`).
 pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
     let Some((path, content, transport, _)) = pinned_playback_state() else {
         return false;
@@ -985,40 +988,8 @@ pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
     let seconds = pin_playhead(&transport).unwrap_or(0.0);
     let holding = transport.paused_at.is_some();
 
-    // **FFmpeg's player cannot prove a frozen frame, so its take-up adopts the player the step
-    // already began.** A player this pin launched unhosted is still the right player at the right
-    // second: taking its window into the host is the same pid and no restart at zero. A player
-    // whose window has not been published yet is noted into the host here, and the monitor adopts
-    // it as it appears (see `adopt_a_stranded_ffplay_into_the_pin_host`).
-    if video_route(&path) != VideoRoute::Mpv {
-        if the_pinned_media_holds_the_player(VIDEO_PID.load(Ordering::SeqCst)) {
-            pin_film_host::adopt_a_stranded_ffplay_into_the_pin_host(
-                VIDEO_PID.load(Ordering::SeqCst),
-                &path,
-            );
-            return false;
-        }
-        // A hover's player is not the pin's: the pin begins its own, once, in the host.
-        restart_pinned_player(&path, content, seconds, holding);
-        return false;
-    }
-
     begin_the_pinned_film_at_the_hovers_frame(&path, content, seconds, holding);
     true
-}
-
-/// Whether the pin's media holds the player `pid`: a player a step of this pin began and installed
-/// rather than a hover's, which the take-up still replaces with one of the pin's own.
-fn the_pinned_media_holds_the_player(pid: u32) -> bool {
-    CURRENT_MEDIA
-        .lock()
-        .ok()
-        .and_then(|media| {
-            media
-                .as_ref()
-                .and_then(|media| media.video_process.as_ref().map(|process| process.id()))
-        })
-        == Some(pid)
 }
 
 /// Write an answer about the transport back into the pin, if there is still one.
