@@ -433,17 +433,15 @@ fn start_video_playback_where(
 
     // A hosted FFmpeg film is presented inside a layered pin window — the hover's host for a hover,
     // and the pin's own after a take-up — and only SDL's Direct3D 11 renderer presents there
-    // (measured: software, opengl and direct3d show nothing). An unhosted launch keeps SDL's own
-    // choice, exactly as it was.
+    // (measured: software, opengl and direct3d show nothing). It is the direct analogue of mpv's
+    // `--gpu-api=d3d11`: both routes pin the player to the same Direct3D 11 device path. An
+    // unhosted launch keeps SDL's own choice, exactly as it was.
     if hosted.is_some() {
         cmd.env("SDL_RENDER_DRIVER", "direct3d11");
     }
 
-    // **Vsync off on every FFmpeg launch.** SDL's renderer presents with PRESENTVSYNC and this
-    // variable makes SDL clear it, so D3D11 presents with `DO_NOT_WAIT` rather than blocking on a
-    // swapchain the desktop's windowed VRR cannot follow. Hosting the hover takes the swapchain out
-    // of the top-level window anyway, so the plain hover is given it too.
-    cmd.env("SDL_RENDER_VSYNC", "0");
+    // **No pacing switch on either road.** ffplay asks SDL for `SDL_RENDERER_PRESENTVSYNC` and that
+    // default is left to stand, which is what mpv does too (`mpv_args` never turns vsync off).
 
     // **And no `-hwaccel`, which is not an oversight.** It names a *device* rather than asking
     // for a decoder, and ffplay brings its Vulkan renderer up the moment the flag is present:

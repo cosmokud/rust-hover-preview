@@ -551,7 +551,6 @@ fn ffplay_pin_host_live() {
     // band). The frame is stripped by the restyle below anyway.
     let mut child = Command::new(&ffplay)
         .env("SDL_RENDER_DRIVER", "direct3d11")
-        .env("SDL_RENDER_VSYNC", "0")
         .args(["-left", "-32000", "-top", "-32000"])
         .args(["-x", "480", "-y", "300"])
         .args(["-autoexit", "-loglevel", "quiet"])
@@ -1081,7 +1080,7 @@ fn ffplay_pin_host_live() {
 /// LIVE PROOF: a hovered film is taken up into a pin without being begun again.
 ///
 /// This is the hover-to-pin shape the app now uses: ffplay is launched off every display with
-/// `SDL_RENDER_DRIVER=direct3d11` and `SDL_RENDER_VSYNC=0` and **without** `-noborder`, its own
+/// `SDL_RENDER_DRIVER=direct3d11` and no pacing switch and **without** `-noborder`, its own
 /// window is adopted into a top-level hover host, and the hover is watched there. The pin's
 /// layered window is then put up at the same box and that already-running host is re-styled and
 /// re-parented into it: the same pid, the same child, the same picture, with the band lit and
@@ -1134,7 +1133,6 @@ fn ffplay_hover_pin_take_up_live() {
 
     let mut child = Command::new(&ffplay)
         .env("SDL_RENDER_DRIVER", "direct3d11")
-        .env("SDL_RENDER_VSYNC", "0")
         .args(["-left", "-32000", "-top", "-32000"])
         .args(["-x", "480", "-y", "300"])
         .args(["-autoexit", "-loglevel", "quiet"])
