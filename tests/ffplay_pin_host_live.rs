@@ -53,14 +53,15 @@ const BAND_H: i32 = 300;
 const BAND_X: i32 = 80;
 const BAND_Y: i32 = 80;
 
-/// The renderer the production launch names, mirrored here: none, unless `RHP_FFPLAY_RENDERER`
-/// asks for one by hand. SDL picks its own renderer otherwise.
+/// The renderer the production launch names, mirrored here: Direct3D 11 unless `RHP_FFPLAY_RENDERER`
+/// names another driver by hand, or names `default` so that nothing is named at all.
 fn with_the_production_renderer(mut command: Command) -> Command {
-    if let Some(renderer) = std::env::var("RHP_FFPLAY_RENDERER")
+    let named = std::env::var("RHP_FFPLAY_RENDERER")
         .ok()
         .filter(|renderer| !renderer.is_empty())
-    {
-        command.env("SDL_RENDER_DRIVER", renderer);
+        .unwrap_or_else(|| "direct3d11".to_string());
+    if !named.eq_ignore_ascii_case("default") {
+        command.env("SDL_RENDER_DRIVER", named);
     }
     command
 }
