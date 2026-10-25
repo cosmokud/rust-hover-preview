@@ -17,17 +17,27 @@
 //! between (see `place_the_source`), and that ask is `SWP_ASYNCWINDOWPOS` like every other call made
 //! on a window of another process's here.
 //!
-//! **Where the source stands is a knob, because the one unknown is whether the Shell keeps a
-//! thumbnail live for a window the user cannot see.** `RHP_THUMBNAIL_SOURCE` names three placements
-//! and that is the whole of what they exist to A/B:
+//! **Where the source stands is a knob, and the answer is measured: it has to be on the screen.**
+//! `RHP_THUMBNAIL_SOURCE` names three placements, and two of them are known dead:
 //!
-//! - `offscreen` (the default) puts the whole source outside the virtual screen, a desktop's width
-//!   to its left and a desktop's height below it.
-//! - `edge` leaves exactly 2 px of it over the virtual screen's bottom-right corner — enough for the
-//!   Shell to count the window as one it is drawing, and not enough to read.
-//! - `behind` is the road this started as: the source stands at the pin's own box, under the host,
-//!   and the host covers it. **It is the control, and it is the only one that can spill** — see the
-//!   `shortcut` note below.
+//! - `behind` (the default) is the road this started as: the source stands at the pin's own box,
+//!   under the host, and the host covers it. **It is the only placement that draws.** Measured on
+//!   this machine: a resize drag through it is perfectly smooth with live video in the pin.
+//! - `offscreen` puts the whole source outside the virtual screen, a desktop's width to its left and
+//!   a desktop's height below it. **Known dead, kept for archaeology.** The registration succeeds and
+//!   nothing is drawn: traced as `source adopted … placed by mpv 1920x1080+-4440+3880 placement
+//!   Offscreen`, with the picture adopted and no error anywhere.
+//! - `edge` leaves exactly 2 px of it over the virtual screen's bottom-right corner. **Known dead as
+//!   well, and for the same reason** — `… 1920x1080+3438+1438 placement Edge`, registered, nothing
+//!   drawn. Two pixels in bounds are not enough to count as a window the Shell is drawing; the
+//!   composition surface of a source that is not genuinely on screen is not composed, so its
+//!   thumbnail is empty.
+//!
+//! So the answer to the question the knob was built to ask is **no: the Shell does not keep a
+//! thumbnail live for a window the user cannot see.** A source of a pin's film must be a window the
+//! compositor is drawing, which is why the default is the one that stands under the host and why the
+//! other two stay only as the evidence. A misspelt value is answered with `behind` too — a value that
+//! names none of the three must never fall back to a placement that cannot draw.
 //!
 //! **A placement is made once at each end of a drag and never between.** The source takes the box the
 //! pin began the drag at, is left exactly there while the hand is on the edge, and is asked for the
@@ -49,8 +59,10 @@
 //!
 //! shortcut: a `behind` source keeps the size a drag began at while the hand is on the edge, so a hand
 //! that *shrinks* the box leaves the part of the source the host no longer covers standing on the
-//! desktop until the drag ends. That is the leak the knob exists to leave behind; `behind` stays as
-//! the control and is upgraded only by being deleted once the Shell's answer is in.
+//! desktop until the drag ends. That was the leak the two off-screen placements were wanted for, and
+//! they do not draw at all — so this is the shipped default and the leak is the price of a picture;
+//! upgrade it by clipping the source where a window of this app's can clip it, not by moving it off
+//! the screen.
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -77,20 +89,24 @@ use super::*;
 /// (see [`the_source_placement`] and the module note on the three).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum SourcePlacement {
-    /// Outside the virtual screen entirely: nothing of it can ever be seen.
+    /// Outside the virtual screen entirely: nothing of it can ever be seen — **and nothing of it is
+    /// composed either, so its thumbnail is empty (measured, see the module note).**
     Offscreen,
-    /// Exactly two of its pixels over the virtual screen's bottom-right corner.
+    /// Exactly two of its pixels over the virtual screen's bottom-right corner: **not enough to be
+    /// composed, so its thumbnail is empty (measured, see the module note).**
     Edge,
-    /// At the pin's own box, under the host that covers it.
+    /// At the pin's own box, under the host that covers it: the one placement the Shell draws.
     Behind,
 }
 
 /// **A prototype's second knob, and not a setting: `RHP_THUMBNAIL_SOURCE`, absent meaning
-/// `offscreen`.**
+/// `behind`.**
 ///
-/// The three are an A/B of the one thing this road cannot ask Windows without a screen to look at:
-/// whether the Shell keeps the thumbnail of a source it is not drawing anywhere. A misspelt value is
-/// traced and answered with the default rather than read as a road it does not name.
+/// The three were an A/B of the one thing this road cannot ask Windows without a screen to look at:
+/// whether the Shell keeps the thumbnail of a source it is not drawing anywhere. It does not (see the
+/// module note), so the one that draws is the default. A misspelt value is traced and answered with
+/// `behind` rather than read as a road it does not name, and rather than falling back to a placement
+/// the Shell will not draw.
 const SOURCE_PLACEMENT_VARIABLE: &str = "RHP_THUMBNAIL_SOURCE";
 /// How far beyond the virtual screen's left and bottom an `offscreen` source is put: a whole desktop
 /// worth, which no monitor arrangement reaches, and well inside the ±32 767 that a window message's
@@ -103,12 +119,12 @@ const EDGE_INSIDE_PIXELS: i32 = 2;
 
 /// The placement a `RHP_THUMBNAIL_SOURCE` value names, or nothing for a value that names none.
 ///
-/// `None` is the variable being absent, which is `offscreen` — the placement that cannot spill.
+/// `None` is the variable being absent, which is `behind` — the placement that draws.
 fn source_placement_from(value: Option<&std::ffi::OsStr>) -> Option<SourcePlacement> {
     match value.and_then(|value| value.to_str()) {
-        None | Some("offscreen") => Some(SourcePlacement::Offscreen),
+        None | Some("behind") => Some(SourcePlacement::Behind),
+        Some("offscreen") => Some(SourcePlacement::Offscreen),
         Some("edge") => Some(SourcePlacement::Edge),
-        Some("behind") => Some(SourcePlacement::Behind),
         Some(_) => None,
     }
 }
@@ -130,11 +146,11 @@ fn the_source_placement() -> SourcePlacement {
         let placement = source_placement_from(asked.as_deref());
         if placement.is_none() {
             note_pin_trace!(
-                "thumbnail source placement {:?} names none of offscreen/edge/behind; offscreen",
+                "thumbnail source placement {:?} names none of behind/offscreen/edge; behind",
                 asked
             );
         }
-        placement.unwrap_or(SourcePlacement::Offscreen)
+        placement.unwrap_or(SourcePlacement::Behind)
     }
 }
 
@@ -148,7 +164,7 @@ pub(super) fn stand_the_source_placement_in(placement: SourcePlacement) {
 #[cfg(test)]
 thread_local! {
     static PLACEMENT_STAND_IN: std::cell::Cell<SourcePlacement> =
-        const { std::cell::Cell::new(SourcePlacement::Offscreen) };
+        const { std::cell::Cell::new(SourcePlacement::Behind) };
 }
 
 /// The corner a placement puts the source at, given the virtual screen's box (`left, top, right,
@@ -670,11 +686,11 @@ mod tests {
         assert_eq!(Thumbnail::NOTHING.host, 0);
     }
 
-    /// The knob names three roads, and the one that cannot spill is the one a machine that says
-    /// nothing gets. A misspelling is answered by the default above and traced, rather than read as a
+    /// The knob names three roads, and the one that draws is the one a machine that says nothing
+    /// gets. A misspelling is answered by the default above and traced, rather than read as a
     /// placement it does not name.
     #[test]
-    fn the_source_placement_knob_names_three_roads_and_defaults_to_offscreen() {
+    fn the_source_placement_knob_names_three_roads_and_defaults_to_behind() {
         assert_eq!(
             SOURCE_PLACEMENT_VARIABLE, "RHP_THUMBNAIL_SOURCE",
             "the knob is the name the branch's notes and the report give it"
@@ -682,13 +698,20 @@ mod tests {
         let named = |value: Option<&str>| {
             source_placement_from(value.map(std::ffi::OsStr::new))
         };
-        assert_eq!(named(None), Some(SourcePlacement::Offscreen));
+        assert_eq!(named(None), Some(SourcePlacement::Behind));
+        assert_eq!(named(Some("behind")), Some(SourcePlacement::Behind));
         assert_eq!(named(Some("offscreen")), Some(SourcePlacement::Offscreen));
         assert_eq!(named(Some("edge")), Some(SourcePlacement::Edge));
-        assert_eq!(named(Some("behind")), Some(SourcePlacement::Behind));
         assert_eq!(named(Some("Edge")), None);
         assert_eq!(named(Some("on-screen")), None);
         assert_eq!(named(Some("")), None);
+        // A value that names no placement is answered with the one that draws, never with a
+        // placement the Shell will not compose.
+        assert_eq!(
+            source_placement_from(Some(std::ffi::OsStr::new("bhind")))
+                .unwrap_or(SourcePlacement::Behind),
+            SourcePlacement::Behind,
+        );
     }
 
     /// Each placement puts the source exactly where its name says, and the two off-screen ones leave
@@ -720,16 +743,16 @@ mod tests {
         assert_eq!((x, y), (1918, 1078), "a screen that starts left of the primary is its own box");
     }
 
-    /// A test stands the placement it is about in, and is answered with the one that cannot spill
-    /// otherwise — the shipped binary's own answer when the variable says nothing.
+    /// A test stands the placement it is about in, and is answered with the one that draws otherwise
+    /// — the shipped binary's own answer when the variable says nothing.
     #[test]
     fn a_test_stands_the_placement_it_is_about_in() {
-        assert_eq!(the_source_placement(), SourcePlacement::Offscreen);
-        stand_the_source_placement_in(SourcePlacement::Behind);
         assert_eq!(the_source_placement(), SourcePlacement::Behind);
+        stand_the_source_placement_in(SourcePlacement::Offscreen);
+        assert_eq!(the_source_placement(), SourcePlacement::Offscreen);
         stand_the_source_placement_in(SourcePlacement::Edge);
         assert_eq!(the_source_placement(), SourcePlacement::Edge);
-        stand_the_source_placement_in(SourcePlacement::Offscreen);
+        stand_the_source_placement_in(SourcePlacement::Behind);
     }
 
     /// A step of a drag asks nothing of the source on the two off-screen placements: what follows the
