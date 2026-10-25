@@ -1,4 +1,4 @@
-//! LIVE PROOF: a real FFmpeg film standing in a real layered pin window's host.
+//! LIVE PROOF: a real FFmpeg film standing in a real composed pin window's host.
 //!
 //! It proves, with a real ffplay on this machine, that SDL2 has no embed switch (SDL_WINDOWID is
 //! not read on the Windows backend), so the player's own top-level window must be `SetParent`ed
@@ -27,15 +27,15 @@ use std::time::{Duration, Instant};
 
 use windows::core::w;
 use windows::Win32::Foundation::{
-    CloseHandle, BOOL, COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    CloseHandle, BOOL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC,
     GetStockObject, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLACK_BRUSH,
-    BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HBRUSH, HDC, HGDIOBJ, SRCCOPY, AC_SRC_ALPHA,
-    AC_SRC_OVER,
+    DIB_RGB_COLORS, HBITMAP, HBRUSH, HDC, HGDIOBJ, SRCCOPY,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, CREATE_NO_WINDOW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -49,11 +49,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, EnumWindows, GetClassNameW, GetClientRect,
     GetParent, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
     IsWindowVisible, RegisterClassExW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    GetAncestor, SetForegroundWindow, UpdateLayeredWindow, WindowFromPoint, GA_ROOT, GWL_EXSTYLE,
+    GetAncestor, SetForegroundWindow, WindowFromPoint, GA_ROOT, GWL_EXSTYLE,
     GWL_STYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, HWND_TOP, SWP_FRAMECHANGED,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
-    SW_SHOWNOACTIVATE, ULW_ALPHA, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MINIMIZEBOX,
     WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
 };
@@ -362,6 +362,19 @@ fn capture_screen_region(x: i32, y: i32, width: u32, height: u32) -> Option<Capt
     }
 }
 
+/// Paint a pin the way the composed road paints one: the same 32bpp DIB the layered road hands to
+/// `UpdateLayeredWindow`, blitted into the window's own DC with its alpha ignored. It is the paint
+/// that covers the whole client box unless the window is clipped around its children (see
+/// `pin_real_window::real_pin_style`).
+fn paint_the_pin_through_its_dc(pin: HWND, surface: &Dib, width: i32, height: i32) {
+    unsafe {
+        let dc = GetDC(pin);
+        assert!(!dc.0.is_null(), "the pin's own DC");
+        let _ = BitBlt(dc, 0, 0, width, height, surface.dc, 0, 0, SRCCOPY);
+        let _ = ReleaseDC(pin, dc);
+    }
+}
+
 fn find_program(name: &str) -> Option<PathBuf> {
     let mut folders: Vec<PathBuf> = Vec::new();
     if let Some(own) = std::env::current_exe()
@@ -451,14 +464,17 @@ fn ffplay_pin_host_live() {
         assert!(RegisterClassExW(&class) != 0, "host class registration");
     }
 
-    // **The pin's own window**, layered and per-pixel painted exactly as `pin_real_window` makes
-    // it: this is the window a hosted FFmpeg film has to present inside.
+    // **The pin's own window, composed exactly as `pin_real_window` makes it**: not layered, and
+    // clipped around its children so its own paint cannot cover the film standing in it. This is the
+    // window a hosted FFmpeg film has to present inside — a blt-model present has nowhere to land in a
+    // layered window, and the composed road is what keeps the display's adaptive sync out of the film
+    // (see `video_playback::the_renderer_a_film_is_begun_with`).
     let pin = unsafe {
         CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WS_EX_APPWINDOW | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class_name,
             w!(""),
-            WS_POPUP,
+            WS_POPUP | WS_CLIPCHILDREN,
             PIN_X,
             PIN_Y,
             HOST_W,
@@ -468,39 +484,11 @@ fn ffplay_pin_host_live() {
             hinstance,
             None,
         )
-        .expect("the layered pin window")
+        .expect("the composed pin window")
     };
     let surface = Dib::create(HOST_W as u32, HOST_H as u32).expect("the pin surface");
     surface.fill_hit_testable();
-    let blend = BLENDFUNCTION {
-        BlendOp: AC_SRC_OVER as u8,
-        BlendFlags: 0,
-        SourceConstantAlpha: 255,
-        AlphaFormat: AC_SRC_ALPHA as u8,
-    };
-    let dst = POINT { x: PIN_X, y: PIN_Y };
-    let size = windows::Win32::Foundation::SIZE {
-        cx: HOST_W,
-        cy: HOST_H,
-    };
-    let src = POINT { x: 0, y: 0 };
-    assert!(
-        unsafe {
-            UpdateLayeredWindow(
-                pin,
-                None,
-                Some(&dst),
-                Some(&size),
-                surface.dc,
-                Some(&src),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            )
-        }
-        .is_ok(),
-        "the pin is painted through UpdateLayeredWindow"
-    );
+    paint_the_pin_through_its_dc(pin, &surface, HOST_W, HOST_H);
     let raised = unsafe {
         let _ = ShowWindow(pin, SW_SHOWNOACTIVATE);
         // The probe owns the desktop for a few seconds: the pin must be the window the screen shows
@@ -531,7 +519,7 @@ fn ffplay_pin_host_live() {
             WINDOW_EX_STYLE::default(),
             class_name,
             w!("ffplay film host"),
-            WS_CHILD,
+            WS_CHILD | WS_CLIPCHILDREN,
             0,
             0,
             HOST_W,
@@ -550,7 +538,7 @@ fn ffplay_pin_host_live() {
     // SDL_WINDOW_RESIZABLE, and then SDL keeps its original client size and crops into a smaller
     // band). The frame is stripped by the restyle below anyway.
     let mut child = Command::new(&ffplay)
-        .env("SDL_RENDER_DRIVER", "direct3d11")
+        .env("SDL_RENDER_DRIVER", "direct3d")
         .env("SDL_RENDER_VSYNC", "0")
         .args(["-left", "-32000", "-top", "-32000"])
         .args(["-x", "480", "-y", "300"])
@@ -802,6 +790,32 @@ fn ffplay_pin_host_live() {
         }
     );
     println!("b. {}", if b_pass { "PASS" } else { "FAIL" });
+
+    // b2. The pin's own repaint must not take the film with it. The composed road paints the pin's
+    // whole bitmap through the pin's own DC at the pin's cadence, and the film stands in a child of
+    // the pin: **without `WS_CLIPCHILDREN` on the pin that paint covers the child whole**, and the band
+    // goes back to the pin's flat colour — which is exactly what the composed road looked like before
+    // the style was written. Three paints, then the film is asked for again.
+    for _ in 0..3 {
+        paint_the_pin_through_its_dc(pin, &surface, HOST_W, HOST_H);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let after_paint0 = capture_screen_region(PIN_X, PIN_Y, HOST_W as u32, HOST_H as u32);
+    std::thread::sleep(Duration::from_millis(500));
+    let after_paint1 = capture_screen_region(PIN_X, PIN_Y, HOST_W as u32, HOST_H as u32);
+    let after_lit = after_paint0.as_ref().map_or(0.0, Captured::lit_ratio);
+    let after_moved = match (&after_paint0, &after_paint1) {
+        (Some(a), Some(b)) => a.changed_ratio(b),
+        _ => 0.0,
+    };
+    let b2_pass = after_lit > 0.01 && after_moved > 0.001;
+    println!(
+        "b2. band after three pin paints: lit={:.2}% changed={:.2}%",
+        after_lit * 100.0,
+        after_moved * 100.0
+    );
+    println!("b2. {}", if b2_pass { "PASS" } else { "FAIL" });
 
     // c. the real road: the pin's band is the host, so resize the host to the new band size in
     // physical pixels and tell the child to fill the host's client area exactly.
@@ -1073,7 +1087,7 @@ fn ffplay_pin_host_live() {
     );
 
     assert!(
-        a_pass && b_pass && c_pass && d_pass && e_pass && f_pass,
+        a_pass && b_pass && b2_pass && c_pass && d_pass && e_pass && f_pass,
         "the ffplay pin-host live proof did not pass every point (see the PASS/FAIL lines above)"
     );
 }
@@ -1081,7 +1095,7 @@ fn ffplay_pin_host_live() {
 /// LIVE PROOF: a hovered film is taken up into a pin without being begun again.
 ///
 /// This is the hover-to-pin shape the app now uses: ffplay is launched off every display with
-/// `SDL_RENDER_DRIVER=direct3d11` and `SDL_RENDER_VSYNC=0` and **without** `-noborder`, its own
+/// `SDL_RENDER_DRIVER=direct3d` and `SDL_RENDER_VSYNC=0` and **without** `-noborder`, its own
 /// window is adopted into a top-level hover host, and the hover is watched there. The pin's
 /// layered window is then put up at the same box and that already-running host is re-styled and
 /// re-parented into it: the same pid, the same child, the same picture, with the band lit and
@@ -1118,7 +1132,7 @@ fn ffplay_hover_pin_take_up_live() {
             WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
             class_name,
             w!("hover film host"),
-            WS_POPUP | WS_VISIBLE,
+            WS_POPUP | WS_CLIPCHILDREN | WS_VISIBLE,
             box_.0,
             box_.1,
             box_.2,
@@ -1133,7 +1147,7 @@ fn ffplay_hover_pin_take_up_live() {
     let _ = unsafe { EnableWindow(hover, false) };
 
     let mut child = Command::new(&ffplay)
-        .env("SDL_RENDER_DRIVER", "direct3d11")
+        .env("SDL_RENDER_DRIVER", "direct3d")
         .env("SDL_RENDER_VSYNC", "0")
         .args(["-left", "-32000", "-top", "-32000"])
         .args(["-x", "480", "-y", "300"])
@@ -1193,13 +1207,14 @@ fn ffplay_hover_pin_take_up_live() {
         _ => 0.0,
     };
 
-    // The pin's own layered window at the same box, painted the way `pin_real_window` paints one.
+    // The pin's own composed window at the same box, painted the way `pin_real_window` paints one:
+    // not layered, clipped around its children, its own DIB blitted into its DC.
     let pin = unsafe {
         CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WS_EX_APPWINDOW | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class_name,
             w!(""),
-            WS_POPUP,
+            WS_POPUP | WS_CLIPCHILDREN,
             box_.0,
             box_.1,
             box_.2,
@@ -1209,36 +1224,11 @@ fn ffplay_hover_pin_take_up_live() {
             hinstance,
             None,
         )
-        .expect("the layered pin window")
+        .expect("the composed pin window")
     };
     let surface = Dib::create(box_.2 as u32, box_.3 as u32).expect("the pin surface");
     surface.fill_hit_testable();
-    let blend = BLENDFUNCTION {
-        BlendOp: AC_SRC_OVER as u8,
-        BlendFlags: 0,
-        SourceConstantAlpha: 255,
-        AlphaFormat: AC_SRC_ALPHA as u8,
-    };
-    let dst = POINT { x: box_.0, y: box_.1 };
-    let size = windows::Win32::Foundation::SIZE { cx: box_.2, cy: box_.3 };
-    let src = POINT { x: 0, y: 0 };
-    assert!(
-        unsafe {
-            UpdateLayeredWindow(
-                pin,
-                None,
-                Some(&dst),
-                Some(&size),
-                surface.dc,
-                Some(&src),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            )
-        }
-        .is_ok(),
-        "the pin is painted through UpdateLayeredWindow"
-    );
+    paint_the_pin_through_its_dc(pin, &surface, box_.2, box_.3);
     unsafe {
         let _ = ShowWindow(pin, SW_SHOWNOACTIVATE);
         let _ = SetWindowPos(pin, HWND_TOPMOST, box_.0, box_.1, box_.2, box_.3, SWP_SHOWWINDOW);
@@ -1308,5 +1298,286 @@ fn ffplay_hover_pin_take_up_live() {
     assert!(
         take_up_pass,
         "the hover-to-pin take-up lost the picture or the player (see the line above)"
+    );
+}
+
+/// Ask the OS for the display's real blank timing rather than a virtualized fraction of it.
+///
+/// `DXGIDisableVBlankVirtualization` (Windows 11 22502 and later) is what makes
+/// `IDXGIOutput::WaitForVBlank` see the changing refresh rate instead of a rate pinned to an integer
+/// fraction of the mode's; the call is taken from `dxgi.dll` rather than linked, so that an older
+/// Windows runs this probe with the count it has rather than failing to load.
+fn ask_for_the_real_blank_timing() -> bool {
+    unsafe {
+        let Ok(module) = LoadLibraryW(w!("dxgi.dll")) else {
+            return false;
+        };
+        let Some(address) =
+            GetProcAddress(module, windows::core::PCSTR(c"DXGIDisableVBlankVirtualization".as_ptr().cast()))
+        else {
+            return false;
+        };
+        let disable: unsafe extern "system" fn() -> windows::core::HRESULT =
+            std::mem::transmute(address);
+        disable().is_ok()
+    }
+}
+
+/// The panel's own scanout for a while: one entry per vertical blank, in milliseconds.
+///
+/// This is the panel and not the mode — `EnumDisplaySettings` would answer 144 Hz for the whole of a
+/// film that has dragged the display down to 48 — which is why it is what the flicker is measured
+/// with. A steady panel gives a tight cluster around its period; a panel whose rate an application is
+/// dragging around gives a mix of both, and the brightness follows it.
+fn panel_blank_intervals_ms(duration: Duration) -> Vec<f64> {
+    unsafe {
+        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else {
+            return Vec::new();
+        };
+        let Ok(adapter) = factory.EnumAdapters1(0) else {
+            return Vec::new();
+        };
+        let Ok(output) = adapter.EnumOutputs(0) else {
+            return Vec::new();
+        };
+        let _ = output.WaitForVBlank();
+
+        let mut previous = Instant::now();
+        let mut intervals = Vec::new();
+        let started = Instant::now();
+        while started.elapsed() < duration {
+            if output.WaitForVBlank().is_err() {
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+            let now = Instant::now();
+            intervals.push(now.duration_since(previous).as_secs_f64() * 1000.0);
+            previous = now;
+        }
+        intervals
+    }
+}
+
+/// The share of blanks that came at or below `p50`, and the longest one: the pair a panel dragging
+/// its rate around cannot keep tight.
+fn blank_summary(intervals: &mut [f64]) -> (f64, f64, f64) {
+    intervals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let at = |fraction: f64| {
+        intervals[((intervals.len().saturating_sub(1)) as f64 * fraction) as usize]
+    };
+    (at(0.50), at(0.99), intervals.last().copied().unwrap_or(0.0))
+}
+
+/// LIVE PROOF: a pinned FFmpeg film does not drag the panel's refresh rate with it.
+///
+/// This is the whole of the panel-flicker answer, measured on the display itself. ffplay is begun
+/// exactly as the app begins it (`SDL_RENDER_DRIVER=direct3d`, `SDL_RENDER_VSYNC=0`, no `-noborder`)
+/// and adopted into a composed pin — not layered, clipped around its children — and the panel's own
+/// blank interval is counted before the film and while it plays.
+///
+/// **The numbers this was written against, on a 3440x1440 VA panel at 144 Hz with G-SYNC on:** the
+/// composed renderer holds 6.95 ms p50 / 7.03 ms max with the film playing, the same as the desktop
+/// with nothing up; the flip-model Direct3D 11 renderer swings between 6.9 ms and 20.7 ms, mixing
+/// 144 Hz and 48 Hz for as long as the film plays, and that mix is the whole screen pulsing. A panel
+/// with no adaptive sync at all answers its own fixed period in both halves and passes this too, which
+/// is the point: the claim is that the film does not change what the panel does.
+///
+/// `cargo test --test ffplay_pin_host_live -- --ignored --nocapture`
+#[test]
+#[ignore = "starts a real ffplay and a real window, and watches the display's own scanout"]
+fn a_pinned_ffplay_film_does_not_drag_the_panels_refresh_rate() {
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+    let real_timing = ask_for_the_real_blank_timing();
+    println!("real blank timing: {real_timing}");
+
+    let mut idle = panel_blank_intervals_ms(Duration::from_secs(3));
+    let idle_summary = blank_summary(&mut idle);
+    println!(
+        "idle:    p50={:.2} ms p99={:.2} ms max={:.2} ms ({} blanks)",
+        idle_summary.0,
+        idle_summary.1,
+        idle_summary.2,
+        idle.len()
+    );
+
+    let ffplay = find_program("ffplay.exe").expect("ffplay.exe on PATH (or beside this test)");
+    let clip = probe_clip();
+    let hinstance = unsafe { GetModuleHandleW(None) }.expect("this module");
+    let class_name = w!("RustHoverPreviewFfplayPanelProbe");
+    unsafe {
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(host_proc),
+            hInstance: HINSTANCE::from(hinstance),
+            hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        assert!(RegisterClassExW(&class) != 0, "probe class registration");
+    }
+
+    let box_ = (PIN_X, PIN_Y, HOST_W, HOST_H);
+    let pin = unsafe {
+        CreateWindowExW(
+            WS_EX_APPWINDOW | WS_EX_TOOLWINDOW,
+            class_name,
+            w!(""),
+            WS_POPUP | WS_CLIPCHILDREN,
+            box_.0,
+            box_.1,
+            box_.2,
+            box_.3,
+            HWND::default(),
+            None,
+            hinstance,
+            None,
+        )
+        .expect("the composed pin window")
+    };
+    let surface = Dib::create(box_.2 as u32, box_.3 as u32).expect("the pin surface");
+    surface.fill_hit_testable();
+    paint_the_pin_through_its_dc(pin, &surface, box_.2, box_.3);
+    let host = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            class_name,
+            w!("ffplay film host"),
+            WS_CHILD | WS_CLIPCHILDREN,
+            0,
+            0,
+            box_.2,
+            box_.3,
+            pin,
+            None,
+            hinstance,
+            None,
+        )
+        .expect("the pin's film host")
+    };
+    unsafe {
+        let _ = ShowWindow(pin, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(
+            pin,
+            HWND_TOPMOST,
+            box_.0,
+            box_.1,
+            box_.2,
+            box_.3,
+            SWP_SHOWWINDOW,
+        );
+        let _ = SetForegroundWindow(pin);
+    }
+
+    // The renderer the app asks SDL for, with the app's own escape hatch: `RHP_FFPLAY_RENDERER`
+    // names another one, which is how this probe is made to fail on purpose: the flip-model
+    // Direct3D 11 renderer is what the panel follows, and the assertions below are what say so.
+    let renderer = std::env::var("RHP_FFPLAY_RENDERER").unwrap_or_else(|_| "direct3d".to_string());
+    println!("renderer: {renderer}");
+    let mut child = Command::new(&ffplay)
+        .env("SDL_RENDER_DRIVER", &renderer)
+        .env("SDL_RENDER_VSYNC", "0")
+        .args(["-left", "-32000", "-top", "-32000"])
+        .args(["-x", "480", "-y", "300"])
+        .args(["-autoexit", "-loglevel", "quiet"])
+        .arg(&clip)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW.0)
+        .spawn()
+        .expect("ffplay to start");
+    let pid = child.id();
+    let Some(player) = wait_for_window(pid, Duration::from_secs(8)) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        unsafe {
+            let _ = DestroyWindow(host);
+            let _ = DestroyWindow(pin);
+        }
+        panic!("no visible window for ffplay pid {pid} within 8 s");
+    };
+
+    unsafe {
+        let style = GetWindowLongPtrW(player, GWL_STYLE);
+        let style = style
+            & !(WS_POPUP.0 as isize
+                | WS_CAPTION.0 as isize
+                | WS_THICKFRAME.0 as isize
+                | WS_SYSMENU.0 as isize
+                | WS_MINIMIZEBOX.0 as isize)
+            | (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN).0 as isize;
+        let _ = SetWindowLongPtrW(player, GWL_STYLE, style);
+        let ex = GetWindowLongPtrW(player, GWL_EXSTYLE)
+            & !(WS_EX_TOPMOST.0 as isize | WS_EX_APPWINDOW.0 as isize);
+        let _ = SetWindowLongPtrW(player, GWL_EXSTYLE, ex | WS_EX_ACCEPTFILES.0 as isize);
+        let _ = SetParent(player, host);
+        let _ = SetWindowLongPtrW(player, GWL_EXSTYLE, ex | WS_EX_ACCEPTFILES.0 as isize);
+        let _ = EnableWindow(player, false);
+        let _ = SetWindowPos(
+            player,
+            HWND::default(),
+            0,
+            0,
+            box_.2,
+            box_.3,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+        );
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+    }
+
+    // The film has to be up before what the panel does is worth counting: a black band would be a
+    // clean measurement of nothing.
+    let mut lit = 0.0;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Some(capture) = capture_screen_region(box_.0, box_.1, box_.2 as u32, box_.3 as u32) {
+            lit = capture.lit_ratio();
+            if lit > 0.01 {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let mut playing = panel_blank_intervals_ms(Duration::from_secs(3));
+    let playing_summary = blank_summary(&mut playing);
+    println!(
+        "playing: p50={:.2} ms p99={:.2} ms max={:.2} ms ({} blanks), band lit={:.2}%",
+        playing_summary.0,
+        playing_summary.1,
+        playing_summary.2,
+        playing.len(),
+        lit * 100.0
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+    unsafe {
+        let _ = DestroyWindow(host);
+        let _ = DestroyWindow(pin);
+    }
+
+    // The film changes nothing about the panel: its own period and the desktop's have to be the same
+    // period. A tenth either way is more than the jitter of a fixed panel and far less than the 3x a
+    // display being dragged down to 48 Hz moves by.
+    let slack = 1.10;
+    assert!(
+        lit > 0.01,
+        "the film never reached the screen, so nothing about the panel was measured"
+    );
+    assert!(
+        playing_summary.0 <= idle_summary.0 * slack,
+        "the film dragged the panel's blank period from {:.2} ms to {:.2} ms (p50): the display is \
+         following the film's frames, which is the flicker",
+        idle_summary.0,
+        playing_summary.0
+    );
+    assert!(
+        playing_summary.1 <= idle_summary.1 * slack,
+        "the film stretched the panel's blank period from {:.2} ms to {:.2} ms (p99)",
+        idle_summary.1,
+        playing_summary.1
     );
 }
