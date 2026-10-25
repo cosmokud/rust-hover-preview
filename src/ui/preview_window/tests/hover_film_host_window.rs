@@ -482,14 +482,15 @@ fn an_ffplay_video_hover_is_never_kept_in_a_host_and_an_audio_hover_is_not() {
 }
 
 /// An FFmpeg hover's launch is the same shape with Pin Mode on or off: borderless, at the hover's
-/// own box, with no renderer named and no pacing switch — SDL chooses its own renderer and keeps
-/// its own vsync, as mpv's launch does.
+/// own box, asking for Direct3D 11 and naming no pacing switch, as mpv's launch does. The hatch
+/// still answers: a hand measurement's driver is passed through unchanged, and `default` names
+/// nothing at all so SDL chooses its own renderer.
 #[test]
-fn an_unhosted_ffplay_hover_launch_keeps_its_border_and_names_no_renderer() {
+fn an_unhosted_ffplay_hover_launch_keeps_its_border_and_asks_for_the_measured_renderer() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
-    stand_the_renderer_asked_for_by_hand(Some(None));
+    stand_the_renderer_the_player_is_given(Some(Some("direct3d11".to_string())));
     let path = a_film();
 
     for pin_mode in [true, false] {
@@ -507,12 +508,10 @@ fn an_unhosted_ffplay_hover_launch_keeps_its_border_and_names_no_renderer() {
             !hovered.args.iter().any(|arg| arg == "-32000"),
             "and is born at the hover's box rather than off every display"
         );
-        assert!(
-            !hovered
-                .env
-                .iter()
-                .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")),
-            "and SDL's own renderer choice"
+        assert_eq!(
+            renderer_named_by(&hovered),
+            Some("direct3d11".to_string()),
+            "and Direct3D 11, the road measured on this machine, with Pin Mode {pin_mode}"
         );
         assert!(
             !hovered
@@ -522,6 +521,34 @@ fn an_unhosted_ffplay_hover_launch_keeps_its_border_and_names_no_renderer() {
             "and no pacing switch either"
         );
     }
+
+    // The one hatch: a hand measurement asks for another driver, and `default` asks for none.
+    for (stood, expected) in [
+        (Some("opengl"), Some("opengl")),
+        (Some("default"), None),
+    ] {
+        stand_the_renderer_the_player_is_given(Some(stood.map(str::to_string)));
+        let _stand = HoverHostStand::new(true);
+        stand_ffplay_in(Some(true));
+        stand_mpv_in(Some(false));
+        let _ = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+            .expect("a noted ffplay");
+        let hovered = take_last_spawned_command().expect("the hand-held launch");
+        assert_eq!(
+            renderer_named_by(&hovered),
+            expected.map(str::to_string),
+            "the hatch answers {stood:?} and the launch carries exactly that"
+        );
+    }
+}
+
+/// The renderer a launch under test named, if any.
+fn renderer_named_by(launched: &LaunchedCommand) -> Option<String> {
+    launched
+        .env
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_DRIVER"))
+        .and_then(|(_, value)| value.clone())
 }
 
 /// A hosted hover has exactly one ordinary relaunch behind it: alive, not yet fallen back, and

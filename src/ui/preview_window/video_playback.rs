@@ -349,10 +349,17 @@ pub(super) fn restart_hover_video_without_a_host(
     )
 }
 
-/// The renderer SDL is asked for by hand, where the environment names one: `RHP_FFPLAY_RENDERER`
-/// read once, so every launch in a run gets one answer. An unset or empty value is no answer, and
-/// that is the default the app ships with (see the launch below).
-fn the_renderer_asked_for_by_hand() -> Option<String> {
+/// The renderer the player is given for every FFmpeg launch: Direct3D 11 unless the hatch below
+/// answers otherwise (see the launch, and `the_hatch_answer` for what the environment may say).
+fn the_renderer_the_player_is_given() -> Option<String> {
+    the_hatch_answer().filter(|renderer| !renderer.eq_ignore_ascii_case("default"))
+}
+
+/// What `RHP_FFPLAY_RENDERER` names, read once so every launch in a run gets one answer: a
+/// non-empty value is a hand measurement asking for another driver, and an unset or empty one is
+/// the shipped default, Direct3D 11. `default` itself is not named here but filtered out above,
+/// because it means "name no renderer" rather than "name the driver called default".
+fn the_hatch_answer() -> Option<String> {
     #[cfg(test)]
     if let Some(stood) = THE_STOOD_RENDERER.with(|stood| stood.borrow().clone()) {
         return stood;
@@ -360,9 +367,12 @@ fn the_renderer_asked_for_by_hand() -> Option<String> {
     static ASKED_FOR: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     ASKED_FOR
         .get_or_init(|| {
-            std::env::var("RHP_FFPLAY_RENDERER")
-                .ok()
-                .filter(|renderer| !renderer.is_empty())
+            Some(
+                std::env::var("RHP_FFPLAY_RENDERER")
+                    .ok()
+                    .filter(|renderer| !renderer.is_empty())
+                    .unwrap_or_else(|| "direct3d11".to_string()),
+            )
         })
         .clone()
 }
@@ -379,7 +389,7 @@ thread_local! {
 
 /// Stand the renderer answer a launch under test must see, or `None` to let the environment answer.
 #[cfg(test)]
-pub(super) fn stand_the_renderer_asked_for_by_hand(answer: Option<Option<String>>) {
+pub(super) fn stand_the_renderer_the_player_is_given(answer: Option<Option<String>>) {
     THE_STOOD_RENDERER.with(|stood| *stood.borrow_mut() = answer);
 }
 
@@ -448,12 +458,17 @@ fn start_video_playback_where(
     // it is seen through (see `pin_film_host`, where only mpv's `--wid` road is hosted).
     let mut cmd = engine_processes::hidden_command("ffplay");
 
-    // **No renderer is named here, and neither Direct3D 11 nor Direct3D 9 may be.** SDL is left
-    // to choose its own, the old road: Direct3D 11 is the flip-model DXGI swapchain the driver
-    // drives VRR from, which the user's panel flickers on, and Direct3D 9 is the composed road
-    // that was tried and reverted. `RHP_FFPLAY_RENDERER` is only a hand-held hatch — nothing in
-    // the app sets it — so an alternative can be measured where SDL's own choice is wrong.
-    if let Some(renderer) = the_renderer_asked_for_by_hand() {
+    // **Direct3D 11 is asked for by name, now that the film is a window of its own.** The road was
+    // measured on this machine once the film stood in its own top-level window: Direct3D 11 — the
+    // flip-model DXGI swapchain the driver drives VRR from — presents normally and leaves the
+    // user's G-SYNC panel perfectly still, where the same renderer flickered badly while the film
+    // was an adopted child of the pin's host. So the flicker that once condemned Direct3D 11
+    // belonged to the adopted child's shape rather than to the renderer, and the renderer may be
+    // asked for again. Direct3D 9 is not named: it is the composed road that was tried and
+    // reverted. `RHP_FFPLAY_RENDERER` remains the one hand-held hatch — a non-empty value names
+    // another driver for a hand measurement, and `default` names none at all so SDL chooses its
+    // own, which keeps a way back without a rebuild.
+    if let Some(renderer) = the_renderer_the_player_is_given() {
         cmd.env("SDL_RENDER_DRIVER", renderer);
     }
 

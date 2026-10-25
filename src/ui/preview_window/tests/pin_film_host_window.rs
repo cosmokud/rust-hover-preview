@@ -3624,13 +3624,14 @@ fn ffplay_standing_film() -> StandingFilm {
 
 /// A pinned FFmpeg film is begun at the band's own screen box, borderless and unhosted: its window
 /// is the picture's, placed over the pin's alpha-1 band rather than parented inside the pin's own
-/// window. No renderer or pacing switch is named, and no host records the player.
+/// window. Every launch asks for Direct3D 11 and names no pacing switch, and no host records the
+/// player.
 #[test]
-fn a_pinned_ffplay_film_is_launched_at_the_pins_band_with_no_host_and_no_border() {
+fn a_pinned_ffplay_film_is_launched_at_the_pins_band_with_no_host_and_the_measured_renderer() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
-    stand_the_renderer_asked_for_by_hand(Some(None));
+    stand_the_renderer_the_player_is_given(Some(Some("direct3d11".to_string())));
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let path = PathBuf::from("a-film.mkv");
@@ -3673,12 +3674,14 @@ fn a_pinned_ffplay_film_is_launched_at_the_pins_band_with_no_host_and_no_border(
         !launched.args.iter().any(|arg| arg == "-32000"),
         "never the off-display box an adopted window needed"
     );
-    assert!(
-        !launched
+    assert_eq!(
+        launched
             .env
             .iter()
-            .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")),
-        "and no renderer is named, leaving SDL to choose its own"
+            .find(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_DRIVER"))
+            .and_then(|(_, value)| value.clone()),
+        Some("direct3d11".to_string()),
+        "and Direct3D 11 is asked for, the road measured on this machine"
     );
     assert!(
         !launched
