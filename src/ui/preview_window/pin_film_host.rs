@@ -1441,18 +1441,18 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     }
 }
 
-/// Ask mpv's window for the box the host is at now, where the pin's film is drawn through the
-/// Shell's own thumbnail of it: the one cross-process resize a drag makes, and it is made when the
-/// hand has let go of the edge rather than on every step of it (see `pin_film_thumbnail`).
+/// Put mpv's window where the pin's film is drawn from, where the pin's film is drawn through the
+/// Shell's own thumbnail of it: the box the pin is at, once at each end of a drag and at every box
+/// that settles without one (see `pin_film_thumbnail`).
 ///
 /// Nothing is asked on any other road: there the film is a child of the host, and it is the host's
 /// own `WM_SIZE` that fits it.
-pub(super) fn settle_the_film_source_at_the_band() {
+pub(super) fn place_the_film_source_at_the_band() {
     if !the_pin_shows_its_film_by_thumbnail() {
         return;
     }
     if let Some(host) = film_host() {
-        pin_film_thumbnail::settle_the_source_at_the_band(host);
+        pin_film_thumbnail::place_the_source(host);
     }
 }
 
@@ -1764,11 +1764,20 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     if the_hosted_player_is_drawing(pid)
         && frozen.is_some_and(|frozen| the_hosted_frame_is_presented(pid, frozen.seconds))
     {
+        note_pin_trace!("handover handed over after {}ms", since.elapsed().as_millis());
         disarm_pin_handover();
         // The handover is the pin's first frame, not an arrival: the chrome stays hidden over it
         // until the pointer asks for a strip (see `refresh_pin_chrome`).
         with_pin(|pin| pin.chrome = PinChrome::hidden());
         unsafe { show_pinned_window(pinned_window()) };
+
+        // **The hover is ended before the pin's player is let go of.** The two are the same sound at
+        // the same second, and the unpause is a post to one process while the kill is a termination of
+        // another: asked in the other order, both are audible until the kill lands, which is heard as
+        // an echo of the frame the handover is standing on. The pin's window is already up over that
+        // frame (see `show_pinned_window`), so the hover's going is the picture no longer and nothing
+        // is left on screen for the order to change.
+        retire_the_frozen_hover(frozen);
 
         // **And the film is playing from here, unless the user had held it.** The player was begun
         // paused so that the frame the hover froze is the frame it has; letting it go of that hold is
@@ -1780,10 +1789,6 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
             video_hw::rebase_video_loop_clock_to(pid, frozen.seconds);
             update_pin_transport(|transport| transport.released(frozen.seconds));
         }
-
-        // The pin has the picture, so the hover's player is the picture no longer: ended now that its
-        // window is behind the pin's, rather than left frozen and unowned (see `FrozenHover`).
-        retire_the_frozen_hover(frozen);
         return PinHandover::HandedOver;
     }
 
@@ -1798,6 +1803,10 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     // And a player that never draws inside the player-start timeout is one that will not: a
     // hidden pin waiting past a start ever takes is a stuck one (see `VIDEO_START_WAIT_SECS`).
     if since.elapsed() >= Duration::from_secs(VIDEO_START_WAIT_SECS) {
+        note_pin_trace!(
+            "handover failed: no frame after {}ms",
+            since.elapsed().as_millis()
+        );
         disarm_pin_handover();
         retire_the_frozen_hover(frozen);
         return PinHandover::Failed;

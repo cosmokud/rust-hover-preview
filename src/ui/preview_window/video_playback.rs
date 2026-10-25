@@ -791,6 +791,17 @@ fn start_mpv_video_playback(
     let pin_host = pin_film_host::host_for_the_pins_film(path, kind);
     let behind_the_host =
         pin_host.is_some() && pin_film_host::the_pin_shows_its_film_by_thumbnail();
+    // **The source is launched where its placement wants it rather than at the band.** mpv shows its
+    // own window as soon as it has opened the file — before this app has found the window and adopted
+    // it — so a launch at the band is a window of mpv's standing over the pin for the moment that
+    // takes, and over a hover's frozen frame on a take-up from one (see `pin_film_thumbnail` and
+    // `begin_the_pinned_film_at_the_hovers_frame`). `behind` is the band itself, which is what this
+    // launch always was.
+    let (launch_x, launch_y) = if behind_the_host {
+        pin_film_thumbnail::the_source_launch_origin((x, y), (width, height))
+    } else {
+        (x, y)
+    };
     // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
     // step from an FFmpeg film must not leave the host answering as FFmpeg's (see
     // `the_pins_film_is_ffplay`).
@@ -810,8 +821,8 @@ fn start_mpv_video_playback(
     command
         .args(video_launch::mpv_args(
             path,
-            x,
-            y,
+            launch_x,
+            launch_y,
             asked_width,
             asked_height,
             start,
