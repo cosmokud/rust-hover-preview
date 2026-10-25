@@ -740,6 +740,23 @@ pub(super) fn begin_pin_drag(
                 );
             }
         }
+        // **The band is asserted once per drag rather than on every step of it.** Which band a pin
+        // belongs in is a question about the setting (`band_place`), and the box a drag is applying is
+        // not a fact it is asked about — so re-asking it on every pointer move was a DWM reorder per
+        // move for a window already where it names (see `apply_pin_drag` and `finish_pin_drag`).
+        // SAFETY: the handle is the window the drag is carried in — the pin's own, or the one it
+        // stands in — and `SetWindowPos` takes any window and reports rather than faults.
+        unsafe {
+            let _ = SetWindowPos(
+                HWND(hwnd as *mut _),
+                band_place(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
         // A newer gesture supersedes whatever relaunch is still in flight behind the cover: the
         // bump kills it before it can publish. After the park rather than before it — the fresh
         // park's capture reads the live window, and there is nothing to read once it has gone.
@@ -1181,6 +1198,21 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
     // drag's end used to have: the flag goes down, the band is transparent, and what is behind it is
     // a window whose first composited frame has not landed yet.
     window.repaint();
+    // The drag's other end asks for the band its beginning asked for, which is the whole of what a
+    // drag re-asserts: a step of it does not ask at all (see `begin_pin_drag` and `apply_pin_drag`).
+    // SAFETY: `hwnd` is the window the drag was carried in, and `SetWindowPos` takes any window and
+    // reports rather than faults.
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            band_place(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
     true
 }
 

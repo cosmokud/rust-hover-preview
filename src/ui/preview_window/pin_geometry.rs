@@ -846,17 +846,10 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
 
         render_pinned_preview_at(hwnd, window.0, window.1);
 
-        // The box is already the one the paint applied; what is re-asserted here is only the
-        // place in the z-order a carried window gets from its own `SetWindowPos`.
-        let _ = SetWindowPos(
-            hwnd,
-            band_place(),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        // The band is not re-asked here. It is a question about the setting rather than about the
+        // box (`band_place`), so a step that re-asked it was a DWM reorder per pointer move for a
+        // window already in the band it named — and the drag's own two ends ask it once each (see
+        // `begin_pin_drag` and `finish_pin_drag`).
     } else {
         // Kept in its band without touching the z-order: the order (engine above preview) is
         // established where the pin comes up, and re-asserting TOPMOST per move fights the
