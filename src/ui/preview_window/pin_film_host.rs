@@ -26,7 +26,10 @@ use std::sync::Once;
 
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
+use windows::Win32::Graphics::Gdi::{
+    FillRect, GetStockObject, SetBrushOrgEx, SetStretchBltMode, StretchDIBits, BLACK_BRUSH,
+    HALFTONE, HBRUSH, NULL_BRUSH, STRETCH_BLT_MODE,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -35,8 +38,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_CHILD,
     GW_HWNDNEXT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SC_CLOSE, SWP_ASYNCWINDOWPOS,
     SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
-    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_CLOSE, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_CLOSE, WM_ERASEBKGND, WM_SIZE, WM_SYSCOMMAND,
+    WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    WS_POPUP, WS_VISIBLE,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -47,9 +51,10 @@ use super::*;
 /// window procedure is the pin's (see `pin_real_window`).
 const FILM_HOST_CLASS: windows::core::PCWSTR = w!("RustHoverPreviewPinFilmHost");
 
-/// The default answer is the whole of what the host does: it draws nothing of its own and no press
-/// lands on it, because the picture is mpv's child (see the module doc) — and on `WM_SIZE` it puts
-/// that child at its own client box. This bindings version exposes `DefWindowProcW` as a
+/// The default answer is most of what the host does: it draws nothing of the film's own and no
+/// press lands on it, because the picture is mpv's child (see the module doc) — and on `WM_SIZE` it
+/// puts that child at its own client box, and on `WM_ERASEBKGND` it fills the band the child leaves
+/// (see `paint_the_host_behind_the_film`). This bindings version exposes `DefWindowProcW` as a
 /// Rust-callable function, so the class still needs a system-ABI shim around it.
 unsafe extern "system" fn the_default_answer(
     hwnd: HWND,
@@ -57,6 +62,15 @@ unsafe extern "system" fn the_default_answer(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // **The strip a grown band has gained is painted here rather than erased to black**, and the
+    // class wears `NULL_BRUSH` so that this is the only hand that draws it (see
+    // `paint_the_host_behind_the_film` and `create`). `1` is "handled": it is what keeps
+    // `DefWindowProcW` from erasing the same pixels a second time.
+    if msg == WM_ERASEBKGND {
+        unsafe { paint_the_host_behind_the_film(hwnd, HDC(wparam.0 as *mut _)) };
+        return LRESULT(1);
+    }
+
     // **The child's box is given in the message that gave the host its own**, so the film is the
     // band's size before this app composites the pin over it rather than a size or more behind (see
     // `fit_the_hosted_mpv_to_the_host`).
@@ -76,6 +90,147 @@ unsafe extern "system" fn the_default_answer(
     }
 
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// Paint the part of the host the film's child does not cover: the frame a drag is holding,
+/// stretched into the box, or black where there is none in hand.
+///
+/// **A band that has just grown is this app's to fill until the child is its size.** mpv gives its
+/// child the host's new box from the message that gave the host its own, and does it on its own
+/// thread (see `fit_the_hosted_mpv_to_the_host`), so the strip the band has gained is drawn by
+/// nobody until then — and it used to be erased black, which is the flash this fills over.
+///
+/// **The destination is the whole client box and not the strip**, because the frame is a picture of
+/// the band and is scaled *into* the band; the host's `WS_CLIPCHILDREN` clips the part of it the
+/// live child stands over, which is what keeps the film untouched (see `create`).
+///
+/// Both hosts a pin can be showing its film through are erased through here — the pin's own class,
+/// and the hover's a pin took up (see `hover_film_host`) — and a host that is not the pin's is
+/// erased black, which is what the class brush did before it.
+pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(host, &mut client) }.is_err() {
+        return;
+    }
+
+    if film_host() == Some(host)
+        && !the_pins_film_is_ffplay()
+        && unsafe { stretch_the_held_frame(dc, client.right, client.bottom) }
+    {
+        return;
+    }
+
+    // SAFETY: the brush is a stock object this app neither made nor owns, and the rectangle is the
+    // client box read above; GDI reports rather than faults for a device context that has gone.
+    let brush = HBRUSH(unsafe { GetStockObject(BLACK_BRUSH) }.0);
+    unsafe { FillRect(dc, &client, brush) };
+}
+
+/// Stretch the frame a drag is holding over a `width` by `height` client box, answering whether GDI
+/// drew it.
+///
+/// The frame is stretched out of its own bits rather than through a surface made for it: it is
+/// already a block of BGRA pixels, and a device context and bitmap made for the width of one erase
+/// and thrown away after it is two handles and a display's worth of memory per pointer move.
+unsafe fn stretch_the_held_frame(dc: HDC, width: i32, height: i32) -> bool {
+    let held = held_video_frame();
+    let Some(frame) = held.as_ref() else {
+        return false;
+    };
+    if frame.width == 0
+        || frame.height == 0
+        || frame.pixels.len() != frame.width as usize * frame.height as usize * 4
+    {
+        return false;
+    }
+
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: frame.width as i32,
+            biHeight: -(frame.height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // SAFETY: the bits are the held frame's own, of the size checked above, and `dc` is the one the
+    // host was asked to erase with; GDI reports rather than faults for a DC that has gone.
+    unsafe {
+        // GDI's own filtering rather than a nearest-neighbour stretch, the way the taskbar's peek
+        // is scaled: the strip is a few pixels of growth at a time, and a soft edge is the picture
+        // where a hard one is a stair (see `pin_taskbar_mirror`). The brush origin travels with the
+        // mode, because halftone measures the destination from it.
+        let mode = SetStretchBltMode(dc, HALFTONE);
+        let _ = SetBrushOrgEx(dc, 0, 0, None);
+        let drawn = StretchDIBits(
+            dc,
+            0,
+            0,
+            width,
+            height,
+            0,
+            0,
+            frame.width as i32,
+            frame.height as i32,
+            Some(frame.pixels.as_ptr().cast()),
+            &info,
+            DIB_RGB_COLORS,
+            SRCCOPY,
+        );
+        if mode != 0 {
+            let _ = SetStretchBltMode(dc, STRETCH_BLT_MODE(mode));
+        }
+        drawn > 0
+    }
+}
+
+/// Whether the resize drag in flight took the frame the host paints with, so that its own end gives
+/// it up and no road's frame is dropped with it (see `hold_the_frame_a_growing_host_paints`).
+static HOST_FILL_HELD: AtomicBool = AtomicBool::new(false);
+
+/// Capture the frame a growing host paints the strip it gains with.
+///
+/// **Taken on the pointer message that begins a resize drag**, before the band has moved: what is
+/// wanted is the picture that was on screen when the hand took the edge. It is the held-frame road
+/// a park paints its band from rather than a capture of this app's own, because a frame read any
+/// other way — `PrintWindow`, a decode — is a black rectangle or a whole decode on the message a
+/// drag begins on (see `hold_video_window_frame`).
+///
+/// Only mpv's film, and only where the host is on screen: FFmpeg's child is given the host's new box
+/// by the call that gives the host its own (see `fit_the_hosted_ffplay_to_the_host`), and a host
+/// that is not on screen has no picture of the film's to read — the desktop where it stands is the
+/// pin's chrome or somebody else's window.
+pub(super) fn hold_the_frame_a_growing_host_paints() {
+    HOST_FILL_HELD.store(false, Ordering::SeqCst);
+    if the_pins_film_is_ffplay() || !the_pinned_player_was_begun_in_the_host() {
+        return;
+    }
+    if !film_host().is_some_and(|host| unsafe { IsWindowVisible(host) }.as_bool()) {
+        return;
+    }
+
+    let taken = hold_video_window_frame();
+    HOST_FILL_HELD.store(taken, Ordering::SeqCst);
+}
+
+/// Give up the frame a growing host painted with, where this drag took one: the band is the film's
+/// again by the time a drag ends, and a frame kept past it is a picture a later erase would paint
+/// the strip with.
+///
+/// A frame a park or the move cover is painting from is theirs and is left standing — their roads
+/// give it up when the band has a player in it again (see `settle_the_move_cover`,
+/// `take_the_park_down`).
+pub(super) fn give_up_the_frame_a_growing_host_paints() {
+    if !HOST_FILL_HELD.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    if !the_move_cover_is_up() && !pin_player_is_parked() {
+        forget_video_frame();
+    }
 }
 
 /// The host of the pin that is up, and the player this app has attached to it.
@@ -1208,7 +1363,10 @@ unsafe fn create(parent: HWND, a_window_of_the_desktop: bool) -> Option<HWND> {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(the_default_answer),
             hInstance: hinstance.into(),
-            hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+            // **No background brush, because the host paints its own erase** (see
+            // `paint_the_host_behind_the_film`): the class's brush is what erased a grown band
+            // black, and the one erase road is the window procedure's.
+            hbrBackground: HBRUSH(GetStockObject(NULL_BRUSH).0),
             lpszClassName: FILM_HOST_CLASS,
             ..Default::default()
         };
@@ -1224,10 +1382,11 @@ unsafe fn create(parent: HWND, a_window_of_the_desktop: bool) -> Option<HWND> {
     // already drawing in, the tick's own road, and the settle of a park (see
     // `take_up_the_pin_film_host`, `ensure_video_window_topmost`).
     //
-    // **`WS_CLIPCHILDREN` because the picture is this window's child and this window has a brush.**
-    // The class paints its background black, and an erase that is not clipped to the area outside the
-    // player's window is a black flash over the film at every show and every resize. The pin's own
-    // window is clipped for the same reason, one level up (see `pin_real_window::real_pin_style`).
+    // **`WS_CLIPCHILDREN` because the picture is this window's child and this window paints its own
+    // erase.** The band is filled with the frame a drag holds (or black), and an erase that is not
+    // clipped to the area outside the player's window is that fill drawn over the film at every show
+    // and every resize. The pin's own window is clipped for the same reason, one level up (see
+    // `pin_real_window::real_pin_style`).
     let host = CreateWindowExW(
         if a_window_of_the_desktop {
             WS_EX_APPWINDOW
