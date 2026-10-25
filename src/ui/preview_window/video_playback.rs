@@ -722,7 +722,13 @@ fn start_video_playback_where(
 /// pin is the host's order, so the ask that is the desktop's to answer is the top-level road's
 /// alone (see `mpv_ipc::set_ontop`).
 pub(super) fn mpv_launch_host(path: &Path, kind: Option<MediaType>) -> Option<u32> {
-    pin_film_host::host_for_the_pins_film(path, kind).map(|host| host.0 as usize as u32)
+    let host = pin_film_host::host_for_the_pins_film(path, kind)?;
+    // **The thumbnail road names no window of this app's**: the player makes its own and the host
+    // shows it (see `pin_film_thumbnail`).
+    if pin_film_host::the_pin_shows_its_film_by_thumbnail() {
+        return None;
+    }
+    Some(host.0 as usize as u32)
 }
 
 /// Begin an mpv video, in a window of its own over the preview box.
@@ -778,14 +784,20 @@ fn start_mpv_video_playback(
     // child of the pin's own window, and a hover whose Pin Mode is on gets a top-level host of the
     // app's own so that the film can move into the pin without a second launch (see
     // `mpv_launch_host` and `hover_film_host`).
-    let pin_host = mpv_launch_host(path, kind);
+    //
+    // **On the thumbnail road the pin's host is the destination of a picture that is mpv's own
+    // window**, so no window of this app's is named and no place in the desktop's order is asked for:
+    // the host shows the player rather than holding it (see `pin_film_thumbnail`).
+    let pin_host = pin_film_host::host_for_the_pins_film(path, kind);
+    let behind_the_host =
+        pin_host.is_some() && pin_film_host::the_pin_shows_its_film_by_thumbnail();
     // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
     // step from an FFmpeg film must not leave the host answering as FFmpeg's (see
     // `the_pins_film_is_ffplay`).
     if pin_host.is_some() {
         pin_film_host::note_the_pins_film_route(path);
     }
-    let host = pin_host.or_else(|| {
+    let host = mpv_launch_host(path, kind).or_else(|| {
         (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
             .then(|| unsafe {
                 hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
@@ -811,6 +823,7 @@ fn start_mpv_video_playback(
             video_launch::mpv_input_conf(),
             &ipc,
             host,
+            !behind_the_host,
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())

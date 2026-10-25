@@ -108,6 +108,13 @@ unsafe extern "system" fn the_default_answer(
 /// and the hover's a pin took up (see `hover_film_host`) — and a host that is not the pin's is
 /// erased black, which is what the class brush did before it.
 pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
+    // **A host the Shell is drawing the film into has nothing of this app's to fill.** A DWM
+    // thumbnail is composed under the destination window's own content, so an erase here is this app
+    // painting over the picture it asked for (see `pin_film_thumbnail`).
+    if pin_film_thumbnail::the_host_shows_a_thumbnail(host) {
+        return;
+    }
+
     let mut client = RECT::default();
     if unsafe { GetClientRect(host, &mut client) }.is_err() {
         return;
@@ -206,6 +213,13 @@ static HOST_FILL_HELD: AtomicBool = AtomicBool::new(false);
 /// pin's chrome or somebody else's window.
 pub(super) fn hold_the_frame_a_growing_host_paints() {
     HOST_FILL_HELD.store(false, Ordering::SeqCst);
+    // **The thumbnail road has no strip to paint**: the film is a window of the desktop's shown
+    // through the Shell's own thumbnail, so a frame taken for the band's new rows would never be
+    // drawn, and taking one is a read of the film's window that road does not need (see
+    // `pin_film_thumbnail`).
+    if the_pin_shows_its_film_by_thumbnail() {
+        return;
+    }
     if the_pins_film_is_ffplay() || !the_pinned_player_was_begun_in_the_host() {
         return;
     }
@@ -384,12 +398,70 @@ const MPV_CHILD_HOST_PIN_VARIABLE: &str = "RHP_MPV_CHILD_HOST_PIN";
 /// and the answer is a fact of the process: flipping the variable needs the app restarted, not the
 /// film re-pinned.
 pub(super) fn the_film_host_owns_the_pin() -> bool {
+    // **A thumbnail is drawn into a window of the desktop's**, never into a child's composition, so
+    // the thumbnail road takes the host that owns the pin's chrome whatever a machine asked the child
+    // host for (see `pin_film_thumbnail`).
+    if the_pin_shows_its_film_by_thumbnail() {
+        return true;
+    }
+
     #[cfg(test)]
     if let Some(answer) = the_owned_road_stand_in() {
         return answer;
     }
 
     std::env::var_os(MPV_CHILD_HOST_PIN_VARIABLE).is_none()
+}
+
+/// **A prototype, and not a setting: `RHP_MPV_THUMBNAIL_PIN`, present means on.**
+///
+/// The film mpv plays for a pin is drawn in a window of the desktop's of its own — launched with no
+/// `--wid` — and the pin's host shows it by a DWM thumbnail of that window rather than by holding
+/// mpv's child (see `pin_film_thumbnail`, and `video_launch::mpv_args`, which drops `--ontop` for
+/// it). A resize step then moves this app's own windows and nothing of mpv's.
+///
+/// **It should be deleted once the answer is in.** What it exists to ask is whether a resize can be
+/// followed by the Shell stretching a crisp source into the new box, rather than by asking mpv's
+/// thread for a new geometry on every pointer move.
+const MPV_THUMBNAIL_PIN_VARIABLE: &str = "RHP_MPV_THUMBNAIL_PIN";
+
+/// Whether the machine asked for the thumbnail road (see [`MPV_THUMBNAIL_PIN_VARIABLE`]).
+///
+/// **The environment is read by the shipped binary and not by a test run.** A suite that read it
+/// would answer every test written against the `--wid` road with this one whenever the variable was
+/// set — and both of those runs are what this prototype is measured by — so a test stands the road in
+/// where it wants it and gets the `--wid` road otherwise (see [`stand_the_thumbnail_road_in`]).
+pub(super) fn the_pin_shows_its_film_by_thumbnail() -> bool {
+    #[cfg(test)]
+    {
+        THUMBNAIL_ROAD_STAND_IN.with(|held| held.get()).unwrap_or(false)
+    }
+    #[cfg(not(test))]
+    {
+        std::env::var_os(MPV_THUMBNAIL_PIN_VARIABLE).is_some()
+    }
+}
+
+/// Whether a film of `route` is drawn by the Shell rather than by a child of the pin's host: mpv's
+/// only, because the road is mpv's launch told not to take a window of this app's, and FFmpeg's
+/// player has no such switch.
+///
+/// With the machine's own answer as a parameter, so a test is a call rather than an environment write
+/// every other test in the process would see.
+pub(super) fn a_film_is_drawn_by_a_thumbnail(route: VideoRoute, asked: bool) -> bool {
+    asked && route == VideoRoute::Mpv
+}
+
+/// Stand an answer for [`the_pin_shows_its_film_by_thumbnail`] on this thread, or give the road back
+/// its default with `None` (see `stand_the_owned_road_in`, which is the same arrangement).
+#[cfg(test)]
+pub(super) fn stand_the_thumbnail_road_in(answer: Option<bool>) {
+    THUMBNAIL_ROAD_STAND_IN.with(|held| held.set(answer));
+}
+
+#[cfg(test)]
+thread_local! {
+    static THUMBNAIL_ROAD_STAND_IN: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// Stand an answer for [`the_film_host_owns_the_pin`] on this thread in place of the machine's own, or
@@ -906,8 +978,10 @@ pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
         note_pin_trace!("hosted drawing pid {pid} host none false");
         return false;
     };
-    let drawing =
-        pid != 0 && hosted_player_pid() == Some(pid) && a_child_of_the_host(host, pid).is_some();
+    let drawing = pid != 0
+        && hosted_player_pid() == Some(pid)
+        && (a_child_of_the_host(host, pid).is_some()
+            || pin_film_thumbnail::the_source_is_up(pid));
     note_pin_trace!(
         "hosted drawing pid {pid} host {host:?} drawing {}",
         drawing as u8
@@ -1084,6 +1158,9 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
         height,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
+    // A picture the Shell is already drawing into this host goes with the box it was placed at, even
+    // where the host was made and the film's window found in the same pass (see `pin_film_thumbnail`).
+    pin_film_thumbnail::the_band_was_placed(host);
     unsafe { fit_the_hosted_ffplay_to_the_host(host) };
     pin_chrome_strips::place_the_chrome_strips();
 
@@ -1286,6 +1363,10 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
         height,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
+    // **What a resize step costs on the thumbnail road is this one call**: the destination is the
+    // host's new client area, and the film's window is moved with the host's corner and not resized
+    // (see `pin_film_thumbnail`).
+    pin_film_thumbnail::the_band_was_placed(host);
     pin_resize_probe::note_the_host_placement(started);
     unsafe { fit_the_hosted_ffplay_to_the_host(host) };
     pin_chrome_strips::place_the_chrome_strips();
@@ -1307,6 +1388,10 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
         }
         note_pin_trace!("host visible {} {:?}", visible as u8, host);
         let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        // **The film follows the host off the screen and back**, which is the one road a source is
+        // hidden on: the Shell stops drawing the thumbnail of a hidden window, and there is no host
+        // to draw it in while the host is down (see `pin_film_thumbnail`).
+        pin_film_thumbnail::set_the_source_visible(visible);
     }
     // The strips carry the chrome on every road, whatever the host is doing: the sync answers
     // what the chrome state asks for over the picture or over the cover (see `pin_chrome_strips`).
@@ -1318,6 +1403,12 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
 /// strips stay: they are the pin's window's, and the next take-up places them again (see
 /// `pin_chrome_strips`).
 pub(super) unsafe fn take_down_the_pin_film_host() {
+    // **The picture the Shell is drawing goes before the window it is drawn in.** The film's window is
+    // mpv's own on the thumbnail road, so a registration left behind a host that is gone is the
+    // Shell's resource leaking, and the source is taken off the screen with the host it was seen in
+    // (see `pin_film_thumbnail`).
+    pin_film_thumbnail::set_the_source_visible(false);
+    pin_film_thumbnail::forget_the_thumbnail();
     // **The pin's chrome is given back to the Shell before the host that owns it goes.** Destroying
     // a window destroys the windows it owns, and the pin's window is kept between pins — so a
     // teardown that destroyed the owner first would take the pin's own window with it (see
@@ -1347,6 +1438,21 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     // park's own frame is its to give up, so it is left standing for the park.
     if !pin_player_is_parked() {
         forget_video_frame();
+    }
+}
+
+/// Ask mpv's window for the box the host is at now, where the pin's film is drawn through the
+/// Shell's own thumbnail of it: the one cross-process resize a drag makes, and it is made when the
+/// hand has let go of the edge rather than on every step of it (see `pin_film_thumbnail`).
+///
+/// Nothing is asked on any other road: there the film is a child of the host, and it is the host's
+/// own `WM_SIZE` that fits it.
+pub(super) fn settle_the_film_source_at_the_band() {
+    if !the_pin_shows_its_film_by_thumbnail() {
+        return;
+    }
+    if let Some(host) = film_host() {
+        pin_film_thumbnail::settle_the_source_at_the_band(host);
     }
 }
 
@@ -1698,4 +1804,22 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     }
 
     PinHandover::Waiting
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The thumbnail road is mpv's alone: a film FFmpeg's player draws has no switch that tells it not
+    /// to take a window of this app's, so a thumbnail of one is a picture this app could never launch.
+    #[test]
+    fn a_film_is_drawn_by_a_thumbnail_only_where_mpv_is_told_to_make_its_own_window() {
+        assert!(a_film_is_drawn_by_a_thumbnail(VideoRoute::Mpv, true));
+        assert!(!a_film_is_drawn_by_a_thumbnail(VideoRoute::Mpv, false));
+        assert!(!a_film_is_drawn_by_a_thumbnail(VideoRoute::Ffplay, true));
+        assert_eq!(
+            MPV_THUMBNAIL_PIN_VARIABLE, "RHP_MPV_THUMBNAIL_PIN",
+            "the knob is the name the branch's notes and the report give it"
+        );
+    }
 }
