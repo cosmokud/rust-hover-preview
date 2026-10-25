@@ -2647,13 +2647,12 @@ fn an_unpark_places_the_player_before_it_drops_the_flag_on_a_replacement() {
     }
 }
 
-/// WS-F R4: the gesture's hold is taken, and a hosted film leaves nothing behind it to park.
+/// WS-F R4: the gesture's hold is taken before the park it belongs to.
 ///
-/// The hold is a pause key and a park would read the picture off the screen, so a hold that lands
-/// a tick later is a band holding a frame the player has already moved on from. But a film FFmpeg's
-/// player draws is adopted into the pin's own host now, exactly as mpv's is, so the picture travels
-/// with the band and there is no window to capture, paint over or hide (see
-/// `MediaType::draws_in_a_window_of_its_own`).
+/// The hold is a pause key and the park reads the picture off the screen, so a hold that lands a
+/// tick later is a band holding a frame the player has already moved on from. A film FFmpeg's
+/// player draws is a window of its own at the band, so the park that follows the hold captures,
+/// paints and hides that window (see `MediaType::draws_in_a_window_of_its_own`).
 #[test]
 fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
@@ -2663,7 +2662,7 @@ fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
     let holding = video_drag_holding();
 
     // A player id of zero keeps the press on the hold road the trace below is written by. A film
-    // FFmpeg's player draws is hosted now, so nothing is parked for it (see
+    // FFmpeg's player draws is a window of its own, so the park after the hold puts it away (see
     // `MediaType::draws_in_a_window_of_its_own`).
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
@@ -2706,8 +2705,8 @@ fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
         begin_pin_drag(HWND(0x1000 as *mut _), &window, action, true);
         assert_eq!(
             park_trace(),
-            vec!["hold"],
-            "a hosted {name}'s hold is taken, and its picture travels with the band rather than              being parked"
+            vec!["hold", "capture", "paint", "hide"],
+            "a {name}'s hold is taken before the park captures, paints and hides the film's own window"
         );
 
         video_drag_hold_set(false);

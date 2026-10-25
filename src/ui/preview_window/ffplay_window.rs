@@ -1,12 +1,7 @@
 //! The window FFmpeg draws a film into, and the process standing behind it: finding the
 //! window, keeping it out of the foreground, sending it a key, and killing what is left over.
 
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetParent, SetParent, GWL_STYLE, SWP_FRAMECHANGED, SWP_SHOWWINDOW, WS_CAPTION,
-    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_ACCEPTFILES,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
-};
+use windows::Win32::UI::WindowsAndMessaging::SWP_SHOWWINDOW;
 
 use super::*;
 
@@ -176,113 +171,6 @@ pub(super) fn player_ex_style_for(current: isize) -> isize {
     style
 }
 
-/// The host this app has recorded as holding the player `pid`, where it has recorded one.
-///
-/// It is where a player begun for a host is to be adopted from its own top-level window: mpv is
-/// given the host as `--wid` and already draws there, while FFmpeg's player only gets a window of
-/// the desktop's of its own, which is moved in once it exists.
-pub(super) fn host_for_a_hosted_player(pid: u32) -> Option<HWND> {
-    if pid == 0 {
-        return None;
-    }
-    if pin_film_host::hosted_player_pid() == Some(pid) {
-        return pin_film_host::film_host();
-    }
-    if hover_film_host::hover_film_host_player() == Some(pid) {
-        return hover_film_host::hover_film_host();
-    }
-    None
-}
-
-/// Adopt a player's own top-level window into a host this app owns: the button press that begins an
-/// FFmpeg film is already on screen at `child`, and the pin's (or hover's) band is `host`.
-///
-/// SDL2 has no embed switch on Windows, so the window cannot be asked to draw into the host — it is
-/// restyled to a disabled `WS_CHILD` and re-parented after it exists, which is the `--wid` shape mpv
-/// is given at its launch. The frame the window was born with is stripped here, and it was born off
-/// every display (see `start_video_playback_where`), so no border is ever seen.
-///
-/// Idempotent: a window already parented to the host is only fitted to it, so the monitor that runs
-/// every few milliseconds while a film plays can ask again without restyling a child the compositor
-/// is drawing.
-pub(super) unsafe fn adopt_the_players_window(child: HWND, host: HWND) -> bool {
-    if child.is_invalid() || host.is_invalid() {
-        return false;
-    }
-
-    if unsafe { GetParent(child) }.is_ok_and(|parent| parent == host) {
-        unsafe { fit_the_hosted_player_to_the_host(child, host) };
-        return true;
-    }
-
-    let style = unsafe { GetWindowLongPtrW(child, GWL_STYLE) };
-    let style = style
-        & !(WS_POPUP.0 as isize
-            | WS_CAPTION.0 as isize
-            | WS_THICKFRAME.0 as isize
-            | WS_SYSMENU.0 as isize
-            | WS_MINIMIZEBOX.0 as isize
-            | WS_MAXIMIZEBOX.0 as isize)
-        | (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN).0 as isize;
-    unsafe { SetWindowLongPtrW(child, GWL_STYLE, style) };
-
-    // The bits that make a window of the desktop's one of the Shell's go; ACCEPTFILES is ffplay's
-    // own and is left exactly as it was found.
-    let ex = unsafe { GetWindowLongPtrW(child, GWL_EXSTYLE) };
-    let ex = ex
-        & !(WS_EX_TOPMOST.0 as isize
-            | WS_EX_APPWINDOW.0 as isize
-            | WS_EX_TOOLWINDOW.0 as isize
-            | WS_EX_NOACTIVATE.0 as isize)
-        | WS_EX_ACCEPTFILES.0 as isize;
-    unsafe { SetWindowLongPtrW(child, GWL_EXSTYLE, ex) };
-
-    let _ = unsafe { SetParent(child, host) };
-    // `SetParent` puts the topmost bit back for a window that had one; the host wears none.
-    unsafe { SetWindowLongPtrW(child, GWL_EXSTYLE, ex) };
-    // Disabled, so a press on the picture is a press on the pin (see `pin_film_host`).
-    let _ = unsafe { EnableWindow(child, false) };
-    // The styles and the parent have just changed, so the frame bits are settled here, once.
-    unsafe { fit_the_hosted_player_to_the_host_now(child, host, true) };
-    true
-}
-
-/// Fit a hosted player's window to the host's client box, without re-framing it.
-///
-/// **No `SWP_FRAMECHANGED` here, because this is the routine road.** It runs on every take-up, every
-/// placement, every box change and every pointer move of a resize drag. `SWP_FRAMECHANGED` re-sends
-/// `WM_NCCALCSIZE`, which makes SDL rebuild its window-size-dependent resources — a flip swapchain
-/// reset, i.e. a blank frame — and a film resized by the pointer would reset it per move. mpv's
-/// `--wid` child is never re-framed after birth; the frame bits are settled once, at adoption (see
-/// `adopt_the_players_window`).
-pub(super) unsafe fn fit_the_hosted_player_to_the_host(child: HWND, host: HWND) {
-    unsafe { fit_the_hosted_player_to_the_host_now(child, host, false) };
-}
-
-/// The one fit, with the re-frame made a caller's choice: `SWP_FRAMECHANGED` where the style or the
-/// parent was just changed, and never on the routine road above.
-unsafe fn fit_the_hosted_player_to_the_host_now(child: HWND, host: HWND, reframe: bool) {
-    let mut client = RECT::default();
-    if unsafe { GetClientRect(host, &mut client) }.is_err() {
-        return;
-    }
-    let mut flags = SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW;
-    if reframe {
-        flags |= SWP_FRAMECHANGED;
-    }
-    let _ = unsafe {
-        SetWindowPos(
-            child,
-            HWND::default(),
-            0,
-            0,
-            (client.right - client.left).max(1),
-            (client.bottom - client.top).max(1),
-            flags,
-        )
-    };
-}
-
 /// Style and raise a player's known window.
 pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // **A hosted player's window is not this app's to style or to publish.** It is mpv's child under
@@ -398,21 +286,9 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
     // **A player in a host of this app's has no window of the desktop's to style.** mpv's child
     // under the host is already disabled, and there is nothing to enumerate or to publish: the
     // host stands in every top-level road instead (see `pin_film_host` and `hover_film_host`).
-    // FFmpeg's player is the one that is not there yet: it makes its own top-level window, which
-    // is adopted into the host here — once, and then never found again by the enumeration below.
-    if let Some(host) = host_for_a_hosted_player(pid) {
-        let mut data = EnumWindowsData {
-            target_pid: pid,
-            found_hwnd: HWND::default(),
-            best_area: 0,
-        };
-        let _ = EnumWindows(
-            Some(enum_windows_callback),
-            LPARAM(&mut data as *mut EnumWindowsData as isize),
-        );
-        if !data.found_hwnd.is_invalid() {
-            unsafe { adopt_the_players_window(data.found_hwnd, host) };
-        }
+    if pin_film_host::the_pinned_player_was_begun_in_the_host()
+        || hover_film_host::the_hover_player_was_begun_in_the_host(pid)
+    {
         return false;
     }
 
@@ -644,8 +520,8 @@ pub(super) fn video_window_for(pid: u32) -> Option<HWND> {
         return Some(child);
     }
 
-    // The pin's host holds the film the same way: a hosted FFmpeg player is its child, and a key
-    // has to reach that window rather than a top-level one that no longer exists (see
+    // The pin's host holds the film the same way: a pinned mpv player is its child, and a key has
+    // to reach that window rather than a top-level one that no longer exists (see
     // `pin_film_host::a_child_of_the_host`).
     if pin_film_host::hosted_player_pid() == Some(pid) {
         return pin_film_host::film_host()

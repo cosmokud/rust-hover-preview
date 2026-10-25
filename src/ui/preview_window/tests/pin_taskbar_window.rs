@@ -1103,8 +1103,8 @@ fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
 
     assert_eq!(
         mirror_source(Some(MediaType::Video)),
-        Some(pin_hwnd),
-        "a hosted film is drawn by the pin's own window, so the pin is its picture: a stale player \
+        None,
+        "a film FFmpeg's player draws is pictured only by the player's own window, and a player \
          window that is not on the screen is no picture of a film"
     );
     assert_eq!(

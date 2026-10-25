@@ -8,9 +8,10 @@ use super::*;
 /// track, or the small files this app copied out of it (see `subtitle_filter`).
 ///
 /// What asks is the pin's take-up, and it asks because a pin does not begin a player of its
-/// own over a hover's: the `ffplay` a hover began is adopted as it stands, subtitles and all —
-/// so a player that was begun *without* them is one a pinned window would keep drawing without
-/// them, and the take-up is the moment to begin it again (see `reload_adopted_subtitles`). The
+/// own over a hover's: the `ffplay` a hover began is kept as it stands, its own window re-placed
+/// at the band, subtitles and all — so a player that was begun *without* them is one a pinned
+/// window would keep drawing without them, and the take-up is the moment to begin it again (see
+/// `reload_adopted_subtitles`). The
 /// list holds only the films whose player is drawing; an absence is the answer that the player
 /// last begun for that film is not — which is also the answer for a film no player was begun
 /// for at all, and the one the take-up wants for it, because a film with no player up has
@@ -348,6 +349,40 @@ pub(super) fn restart_hover_video_without_a_host(
     )
 }
 
+/// The renderer SDL is asked for by hand, where the environment names one: `RHP_FFPLAY_RENDERER`
+/// read once, so every launch in a run gets one answer. An unset or empty value is no answer, and
+/// that is the default the app ships with (see the launch below).
+fn the_renderer_asked_for_by_hand() -> Option<String> {
+    #[cfg(test)]
+    if let Some(stood) = THE_STOOD_RENDERER.with(|stood| stood.borrow().clone()) {
+        return stood;
+    }
+    static ASKED_FOR: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ASKED_FOR
+        .get_or_init(|| {
+            std::env::var("RHP_FFPLAY_RENDERER")
+                .ok()
+                .filter(|renderer| !renderer.is_empty())
+        })
+        .clone()
+}
+
+// The answer a test stands in place of the environment's, so the machine's own
+// `RHP_FFPLAY_RENDERER` cannot decide what a launch under test carries. Thread-local because the
+// suite runs in parallel and one test's answer must not reach another's launch; a test's own
+// thread carries it for the whole test and no further. The release binary carries no part of it.
+#[cfg(test)]
+thread_local! {
+    static THE_STOOD_RENDERER: std::cell::RefCell<Option<Option<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Stand the renderer answer a launch under test must see, or `None` to let the environment answer.
+#[cfg(test)]
+pub(super) fn stand_the_renderer_asked_for_by_hand(answer: Option<Option<String>>) {
+    THE_STOOD_RENDERER.with(|stood| *stood.borrow_mut() = answer);
+}
+
 #[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 fn start_video_playback_where(
     path: &PathBuf,
@@ -408,36 +443,18 @@ fn start_video_playback_where(
         );
     }
 
-    // Use ffplay for video playback - borderless, positioned at preview location
+    // Use ffplay for video playback - borderless, positioned at preview location. FFmpeg's player
+    // is never given a window of this app's: it keeps its own top-level window, placed at the band
+    // it is seen through (see `pin_film_host`, where only mpv's `--wid` road is hosted).
     let mut cmd = engine_processes::hidden_command("ffplay");
 
-    // **Where this film's picture will be drawn, before the command is built.** mpv is told the host
-    // with `--wid`; FFmpeg's player has no such switch, so it is begun with the frame it will lose
-    // and adopted into the same host once its own window exists (see
-    // `ffplay_window::adopt_the_players_window`). A hosted launch is born off every display with
-    // `-left/-top` and **without `-noborder`**: `-noborder` makes SDL create a non-resizable window
-    // whose cached flags then clamp every external resize, so the band could never follow the pin.
-    let hosted = if route == VideoRoute::Ffplay {
-        match pin_film_host::host_for_the_pins_ffplay(path, kind) {
-            Some(host) => Some((host, true)),
-            None => (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
-                .then(|| unsafe {
-                    hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
-                })
-                .flatten()
-                .map(|host| (host, false)),
-        }
-    } else {
-        None
-    };
-
-    // A hosted FFmpeg film is presented inside a layered pin window — the hover's host for a hover,
-    // and the pin's own after a take-up — and only SDL's Direct3D 11 renderer presents there
-    // (measured: software, opengl and direct3d show nothing). It is the direct analogue of mpv's
-    // `--gpu-api=d3d11`: both routes pin the player to the same Direct3D 11 device path. An
-    // unhosted launch keeps SDL's own choice, exactly as it was.
-    if hosted.is_some() {
-        cmd.env("SDL_RENDER_DRIVER", "direct3d11");
+    // **No renderer is named here, and neither Direct3D 11 nor Direct3D 9 may be.** SDL is left
+    // to choose its own, the old road: Direct3D 11 is the flip-model DXGI swapchain the driver
+    // drives VRR from, which the user's panel flickers on, and Direct3D 9 is the composed road
+    // that was tried and reverted. `RHP_FFPLAY_RENDERER` is only a hand-held hatch — nothing in
+    // the app sets it — so an alternative can be measured where SDL's own choice is wrong.
+    if let Some(renderer) = the_renderer_asked_for_by_hand() {
+        cmd.env("SDL_RENDER_DRIVER", renderer);
     }
 
     // **No pacing switch on either road.** ffplay asks SDL for `SDL_RENDERER_PRESENTVSYNC` and that
@@ -584,26 +601,16 @@ fn start_video_playback_where(
 
     let width_arg = width.to_string();
     let height_arg = height.to_string();
-    let left_arg = if hosted.is_some() {
-        "-32000".to_string()
-    } else {
-        x.to_string()
-    };
-    let top_arg = if hosted.is_some() {
-        "-32000".to_string()
-    } else {
-        y.to_string()
-    };
-    let mut cmd = cmd.args([
+    let left_arg = x.to_string();
+    let top_arg = y.to_string();
+    let cmd = cmd.args([
         "-err_detect",
         "ignore_err", // Ignore header/stream errors
         "-fflags",
         "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
         "-framedrop",                    // Drop undecodable frames instead of stalling
+        "-noborder",                     // No window border
     ]);
-    if hosted.is_none() {
-        cmd = cmd.arg("-noborder"); // No window border
-    }
     let child = cmd
         .args([
             "-left",
@@ -638,17 +645,6 @@ fn start_video_playback_where(
     // name is what its id is verified as, and its loop — where the loop is this app's to give — is
     // clocked from here (see `note_player_started`).
     if let Some(ref player) = child {
-        // The host holds this player and no older one, recorded before the player has a window of
-        // its own to adopt: the monitor's wait for that window is a wait for *this* player's (see
-        // `host_for_a_hosted_player`).
-        if let Some((_, in_the_pin)) = hosted {
-            if in_the_pin {
-                pin_film_host::note_the_pins_film_route(path);
-                pin_film_host::note_hosted_player(player.id());
-            } else {
-                hover_film_host::note_hover_film_host_player(player.id(), path);
-            }
-        }
         note_player_started(
             player_image(VideoRoute::Ffplay),
             path,
@@ -729,12 +725,6 @@ fn start_mpv_video_playback(
     // app's own so that the film can move into the pin without a second launch (see
     // `mpv_launch_host` and `hover_film_host`).
     let pin_host = mpv_launch_host(path, kind);
-    // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
-    // step from an FFmpeg film must not leave the host answering as FFmpeg's (see
-    // `the_pins_film_is_ffplay`).
-    if pin_host.is_some() {
-        pin_film_host::note_the_pins_film_route(path);
-    }
     let host = pin_host.or_else(|| {
         (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
             .then(|| unsafe {

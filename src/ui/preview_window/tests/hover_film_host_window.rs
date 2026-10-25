@@ -431,50 +431,29 @@ fn the_hover_host_goes_down_only_with_the_player_it_holds() {
     );
 }
 
-/// An FFmpeg video hover is kept in the app's top-level host while Pin Mode is on, exactly as
-/// mpv's is: the player is begun off-screen without `-noborder` and adopted into the host once its
-/// window exists, so a pin can move the running picture into its own window without a second
-/// launch. A sound, the media engine and a picture keep the route they have.
+/// An FFmpeg video hover is never kept in a host, with Pin Mode on or off: FFmpeg's player has no
+/// embed switch, so it keeps its own borderless top-level window at the hover's box, the road it
+/// has always had. An audio hover is not a film to take up either.
 #[test]
-fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
+fn an_ffplay_video_hover_is_never_kept_in_a_host_and_an_audio_hover_is_not() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
-    let _stand = HoverHostStand::new(true);
     let path = a_film();
 
-    {
-        stand_ffplay_in(Some(true));
-        stand_mpv_in(Some(false));
-        assert!(
-            hover_film_host::the_hover_film_is_kept_in_a_host(&path),
-            "an FFmpeg film with Pin Mode on is kept where a pin can take it up"
-        );
-        let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
-            .expect("a noted ffplay");
-        assert!(
-            hover_film_host::the_hover_player_was_begun_in_the_host(process.id()),
-            "and the player is recorded against the host, before it has a window to adopt"
-        );
-        assert!(
-            hover_film_host::hover_film_host().is_some(),
-            "the host stands for it"
-        );
-    }
-
-    {
-        let _stand = HoverHostStand::new(false);
+    for pin_mode in [true, false] {
+        let _stand = HoverHostStand::new(pin_mode);
         stand_ffplay_in(Some(true));
         stand_mpv_in(Some(false));
         assert!(
             !hover_film_host::the_hover_film_is_kept_in_a_host(&path),
-            "with Pin Mode off an FFmpeg hover keeps its own window of the desktop's"
+            "an FFmpeg hover keeps its own window of the desktop's with Pin Mode {pin_mode}"
         );
         let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted ffplay");
         assert!(
             hover_film_host::hover_film_host().is_none(),
-            "and no host is made for it"
+            "so no host is made for it"
         );
         assert!(!hover_film_host::the_hover_player_was_begun_in_the_host(
             process.id()
@@ -488,7 +467,7 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
     stand_mpv_in(Some(false));
     let pid = unsafe { GetCurrentProcessId() };
     let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 320, 180)) }
-        .expect("a host standing for an FFmpeg player");
+        .expect("a host standing for a film");
     hover_film_host::note_hover_film_host_player(pid, &path);
     let _child = unsafe { a_child_of_the_host(host) };
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -502,55 +481,31 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
     );
 }
 
-/// A hosted hover's FFmpeg launch is the same one a hosted pin gets: SDL's Direct3D 11 renderer,
-/// which is the one that presents under the layered pin the host is moved into, without
-/// `-noborder` so a later band resize is not clamped, and with no pacing switch at all, so SDL's
-/// vsync default stands as it does for mpv. A plain top-level hover keeps its borderless window,
-/// SDL's own renderer and no pacing switch either.
+/// An FFmpeg hover's launch is the same shape with Pin Mode on or off: borderless, at the hover's
+/// own box, with no renderer named and no pacing switch — SDL chooses its own renderer and keeps
+/// its own vsync, as mpv's launch does.
 #[test]
-fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_no_pacing_switch() {
+fn an_unhosted_ffplay_hover_launch_keeps_its_border_and_names_no_renderer() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
+    stand_the_renderer_asked_for_by_hand(Some(None));
     let path = a_film();
 
-    {
-        let _stand = HoverHostStand::new(true);
+    for pin_mode in [true, false] {
+        let _stand = HoverHostStand::new(pin_mode);
         stand_ffplay_in(Some(true));
         stand_mpv_in(Some(false));
         let _ = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted ffplay");
-        let launched = take_last_spawned_command().expect("the hosted hover launch");
-        assert!(
-            !launched.args.iter().any(|arg| arg == "-noborder"),
-            "a hosted hover keeps SDL's resizable window, or a pin could never resize it"
-        );
-        assert!(
-            launched.env.iter().any(|(key, value)| {
-                key.eq_ignore_ascii_case("SDL_RENDER_DRIVER")
-                    && value.as_deref() == Some("direct3d11")
-            }),
-            "and asks for the renderer that presents inside the layered pin"
-        );
-        assert!(
-            !launched
-                .env
-                .iter()
-                .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_VSYNC")),
-            "and sets no pacing switch, leaving SDL's vsync default to stand as mpv does"
-        );
-    }
-
-    {
-        let _stand = HoverHostStand::new(false);
-        stand_ffplay_in(Some(true));
-        stand_mpv_in(Some(false));
-        let _ = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
-            .expect("a noted ffplay");
-        let hovered = take_last_spawned_command().expect("the top-level hover launch");
+        let hovered = take_last_spawned_command().expect("the hover launch");
         assert!(
             hovered.args.iter().any(|arg| arg == "-noborder"),
-            "an unhosted hover keeps the borderless window it always had"
+            "an unhosted hover keeps the borderless window it always had with Pin Mode {pin_mode}"
+        );
+        assert!(
+            !hovered.args.iter().any(|arg| arg == "-32000"),
+            "and is born at the hover's box rather than off every display"
         );
         assert!(
             !hovered
@@ -564,39 +519,9 @@ fn the_hosted_hover_ffplay_launch_asks_for_direct3d11_and_no_pacing_switch() {
                 .env
                 .iter()
                 .any(|(key, _)| key.eq_ignore_ascii_case("SDL_RENDER_VSYNC")),
-            "and no pacing switch as well"
+            "and no pacing switch either"
         );
     }
-}
-
-/// A hover that ends without a pin takes the FFmpeg host and its player down with it, and only the
-/// player the host holds may do so.
-#[test]
-fn hover_end_takes_the_ffplay_host_down() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
-    let _stand = HoverHostStand::new(true);
-    stand_ffplay_in(Some(true));
-    stand_mpv_in(Some(false));
-    let path = a_film();
-
-    let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
-        .expect("a noted ffplay");
-    let host = hover_film_host::hover_film_host().expect("the hover's host");
-
-    let mut media = video_media();
-    media.video_process = Some(process);
-    kill_player_process(&mut media);
-
-    assert!(
-        hover_film_host::hover_film_host().is_none(),
-        "the host goes down with the player it held"
-    );
-    assert!(
-        !unsafe { IsWindow(host) }.as_bool(),
-        "and its window is destroyed rather than left as a black rectangle"
-    );
 }
 
 /// A hosted hover has exactly one ordinary relaunch behind it: alive, not yet fallen back, and

@@ -1,6 +1,7 @@
 //! Which window a taken-up pin stands in: every kind this app draws the whole way stands in the
-//! pin's own window, and the three kinds something else draws in a window of its own keep the
-//! preview's.
+//! pin's own window, and the kinds something else draws in a window of its own keep the preview's.
+//! A film is the pin's own window whoever plays it: mpv draws into a child host of that window, and
+//! FFmpeg's player draws in a top-level window of its own over the pin's band.
 
 use super::*;
 
@@ -45,12 +46,12 @@ fn every_kind_the_pin_draws_whole_stands_in_the_pins_own_window() {
     }
 }
 
-/// A film is drawn into a host this app owns under the pin's own window, whichever player draws
-/// it: mpv through `--wid`, FFmpeg's player adopted as a disabled child after it makes its own
-/// window. So a pin of one stands in the pin's own window. The kind on screen and the file's own
-/// route answer the same way, placeholder or not (see `pin_film_host`).
+/// A film's pin window is the pin's own, whoever plays it: mpv draws into a host this app owns
+/// under that window, while FFmpeg's player keeps a top-level window of its own over the pin's
+/// band. What differs between the routes is what draws in the band, not which window the pin
+/// stands in. The kind on screen and the file's own route answer the same way, placeholder or not.
 #[test]
-fn a_film_stands_in_the_pins_own_window_whichever_player_draws_it() {
+fn an_mpv_film_and_an_ffplay_film_both_stand_in_the_pins_own_window() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -71,7 +72,7 @@ fn a_film_stands_in_the_pins_own_window_whichever_player_draws_it() {
         ] {
             assert!(
                 pin_should_stand_in_its_own_window(kind, Path::new("a.mp4")),
-                "{kind:?} of a film {engine:?} draws is drawn in a host of the pin's own, so the                  pin is the pin's own window"
+                "{kind:?} of a film {engine:?} draws belongs in the pin's own window"
             );
         }
     }
@@ -81,11 +82,11 @@ fn a_film_stands_in_the_pins_own_window_whichever_player_draws_it() {
     stand_video_engine_in(None);
 }
 
-/// A drag parks the window behind the band, and a film drawn into the pin's own host leaves no
-/// window of the desktop's behind it to park, whichever player draws it (see
-/// `MediaType::draws_in_a_window_of_its_own`).
+/// A drag parks the window behind the band, and a film mpv draws into the pin's own host leaves no
+/// window of the desktop's behind it to park. FFmpeg's player is the opposite: its picture is a
+/// window of its own at the band, so a drag parks it (see `MediaType::draws_in_a_window_of_its_own`).
 #[test]
-fn a_hosted_film_leaves_nothing_for_a_drag_to_park() {
+fn only_a_hosted_film_leaves_nothing_for_a_drag_to_park() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -101,14 +102,14 @@ fn a_hosted_film_leaves_nothing_for_a_drag_to_park() {
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     assert!(
         !MediaType::Video.draws_in_a_window_of_its_own(path),
-        "a hosted film's picture is a child of the pin's own window, not a window of the desktop's"
+        "a hosted mpv film's picture is a child of the pin's own window, not a window of the desktop's"
     );
 
     stand_mpv_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     assert!(
-        !MediaType::Video.draws_in_a_window_of_its_own(path),
-        "and a film FFmpeg's player draws is adopted into the same host, so it is no window to park"
+        MediaType::Video.draws_in_a_window_of_its_own(path),
+        "while FFmpeg's player keeps a window of its own over the band, which a park puts away"
     );
     assert!(
         !MediaType::NativeVideo.draws_in_a_window_of_its_own(path),
@@ -122,11 +123,13 @@ fn a_hosted_film_leaves_nothing_for_a_drag_to_park() {
     stand_pin(previous_pin);
 }
 
-/// A film's answer about a window of its own is the same whichever player the route names now: an
-/// engine row can change under a pin that is already up, and both players draw into the pin's own
-/// host (see `MediaType::draws_in_a_window_of_its_own`).
+/// A film's answer about a window of its own follows the live route: an engine row can change under
+/// a pin that is already up, and the two players draw in different windows — mpv's picture is a
+/// child host of the pin's own window, FFmpeg's a top-level window of the desktop's (see
+/// `MediaType::draws_in_a_window_of_its_own`). What does not change is the window the pin was taken
+/// up in, which is why `pin_is_its_own_window()` alone is not asked here.
 #[test]
-fn a_pins_film_is_a_host_child_whichever_route_it_is_drawn_by_now() {
+fn a_pins_film_follows_its_live_route_while_the_pin_keeps_the_window_it_was_taken_up_in() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -147,22 +150,22 @@ fn a_pins_film_is_a_host_child_whichever_route_it_is_drawn_by_now() {
     assert!(!MediaType::Video.draws_in_a_window_of_its_own(path));
     assert!(pin_should_stand_in_its_own_window(Some(MediaType::Video), path));
 
-    // The engine row changes to FFmpeg's player under the same pin: the film is adopted into the
-    // same host, not left as a window of the desktop's.
+    // The engine row changes to FFmpeg's player under the same pin: the film now keeps a window of
+    // its own over the band, but the pin stays in the window it was taken up in.
     stand_mpv_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     assert_eq!(video_route(path), VideoRoute::Ffplay);
     assert!(
         pin_is_its_own_window(),
-        "which the take-up decision has not heard about"
+        "the engine row changing under a live pin does not move it to another window"
     );
     assert!(
-        !MediaType::Video.draws_in_a_window_of_its_own(path),
-        "the film FFmpeg's player draws stands in the pin's host too"
+        MediaType::Video.draws_in_a_window_of_its_own(path),
+        "the film FFmpeg's player draws is a window of the desktop's"
     );
     assert!(
         pin_should_stand_in_its_own_window(Some(MediaType::Video), path),
-        "so a pin taken up again on it is the pin's own window"
+        "and a pin taken up on it stands in the pin's own window, as any film's does"
     );
 
     stand_mpv_in(None);
@@ -173,9 +176,8 @@ fn a_pins_film_is_a_host_child_whichever_route_it_is_drawn_by_now() {
 }
 
 /// The kind on screen is the answer where there is one, and the file's name is not asked again:
-/// a picture is the pin's own window whatever it is called, and a film FFmpeg's player draws is
-/// hosted like every other film even under a picture's name (see
-/// `pin_should_stand_in_its_own_window`).
+/// a picture is the pin's own window whatever it is called, and a film FFmpeg's player draws stands
+/// in the pin's own window under a picture's name too (see `pin_should_stand_in_its_own_window`).
 #[test]
 fn a_known_kind_is_not_re_read_from_the_path() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -192,7 +194,7 @@ fn a_known_kind_is_not_re_read_from_the_path() {
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     assert!(
         pin_should_stand_in_its_own_window(Some(MediaType::Video), Path::new("a.png")),
-        "and a film is still hosted under a picture's name"
+        "and a film is the pin's own window whatever the name beside it says"
     );
     stand_mpv_in(None);
     stand_ffplay_in(None);
@@ -231,10 +233,11 @@ fn a_placeholder_pin_stands_where_its_files_route_says() {
     }
 }
 
-/// A failed film is the cross, but it is a failed *film*: a player of its own is drawn in the pin's
-/// host like any film, so its pin is still the pin's own window.
+/// A failed film is the cross, but it is a failed *film*: its pin window is the pin's own on every
+/// route, and only what draws in the band differs — a child host for mpv, a window over the band
+/// for FFmpeg's player.
 #[test]
-fn a_failed_film_a_player_draws_stands_in_the_pins_own_window() {
+fn a_failed_films_pin_window_is_the_pins_own_on_every_route() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -245,7 +248,14 @@ fn a_failed_film_a_player_draws_stands_in_the_pins_own_window() {
 
     assert!(
         pin_should_stand_in_its_own_window(Some(MediaType::Unplayable), Path::new("a.mp4")),
-        "the cross over a film a player draws is still a pin of a hosted film"
+        "the cross over an FFmpeg film is still a pin of a film, and its window is the pin's own"
+    );
+
+    stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    assert!(
+        pin_should_stand_in_its_own_window(Some(MediaType::Unplayable), Path::new("a.mp4")),
+        "and the cross over an mpv film is a pin of a hosted film, standing in the same window"
     );
 
     stand_mpv_in(None);
@@ -253,10 +263,11 @@ fn a_failed_film_a_player_draws_stands_in_the_pins_own_window() {
     stand_video_engine_in(None);
 }
 
-/// A pinned FFmpeg video now stands in the pin's own window, while an audio pin is unchanged: its
-/// card keeps the pin's window and never a film host, and its Space stays the card's own toggle.
+/// A pinned FFmpeg video stands in the pin's own window — its player's top-level window draws over
+/// the band — and is never given a host, while an audio pin keeps the pin's own window as it always
+/// did: its card is this app's own frame.
 #[test]
-fn a_pinned_ffplay_film_stands_in_the_pins_own_window() {
+fn a_pinned_ffplay_film_stands_in_the_pins_own_window_and_is_given_no_host() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -271,7 +282,7 @@ fn a_pinned_ffplay_film_stands_in_the_pins_own_window() {
     let video = Path::new("a-film.mkv");
     assert!(
         pin_should_stand_in_its_own_window(Some(MediaType::Video), video),
-        "a pinned FFmpeg film is hosted in the pin's own window"
+        "a pinned FFmpeg film is a top-level window over the band, so the pin stands in its own"
     );
 
     let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
@@ -284,12 +295,18 @@ fn a_pinned_ffplay_film_stands_in_the_pins_own_window() {
         *current = Some(media);
     }
     assert!(
-        pin_film_host::the_film_is_shown_in_a_host(video, None),
-        "and the film-host road is open for it"
+        !pin_film_host::the_film_is_shown_in_a_host(video, None),
+        "and the film-host road is closed for it"
+    );
+    unsafe { pin_film_host::take_up_the_pin_film_host(None) };
+    assert_eq!(
+        pin_film_host::film_host(),
+        None,
+        "taking that pin up leaves no host standing"
     );
 
-    // A sound is the card this app paints: no host, and the film-host road refuses it even where
-    // the file's route names the same FFmpeg player (see `the_film_is_shown_in_a_host`).
+    // A sound is the card this app paints: the pin's own window, and no host either (see
+    // `the_film_is_shown_in_a_host`).
     let sound = Path::new("a-sound.mp3");
     assert!(
         pin_should_stand_in_its_own_window(Some(MediaType::Audio), sound),
