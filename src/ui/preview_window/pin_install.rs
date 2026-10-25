@@ -1364,10 +1364,10 @@ pub(super) fn relayout_pinned_media(
                     // player are both hosted here (see `pin_film_host`).
                     //
                     // **And a box that settled is where a film drawn through a thumbnail is asked
-                    // for its size**, which is the one cross-process geometry on that road: a
-                    // maximize, a restore, a zoom and the end of a drag all arrive here, and none of
-                    // them is a hand still on an edge (see `pin_film_thumbnail`).
-                    pin_film_host::settle_the_film_source_at_the_band();
+                    // for its box**, which is the one cross-process geometry on that road: a maximize,
+                    // a restore, a zoom and the end of a drag all arrive here, and none of them is a
+                    // hand still on an edge (see `pin_film_thumbnail`).
+                    pin_film_host::place_the_film_source_at_the_band();
                 }
                 Some((path, _)) => {
                     // And with no press behind it the hold is the pin's own: what the transport says

@@ -130,6 +130,18 @@ pub(super) fn work_area_at(x: i32, y: i32) -> ScreenBounds {
     display_at(&DESKTOPS, x, y).work_area
 }
 
+/// Every display in one rectangle, for the one placement that has to put a window *outside* all of
+/// them rather than somewhere on one (see `pin_film_thumbnail`).
+pub(super) fn the_virtual_screen() -> ScreenBounds {
+    DESKTOPS.virtual_screen()
+}
+
+/// The primary display's work area, which is the corner a player's `--geometry` is measured from
+/// rather than the monitor's own (see `pin_film_thumbnail::the_source_launch_origin`).
+pub(super) fn the_primary_work_area() -> ScreenBounds {
+    work_area_at(0, 0)
+}
+
 /// The scale of the display a point is on, for the callers that size rather than place.
 pub(super) fn dpi_at(x: i32, y: i32) -> u32 {
     display_at(&DESKTOPS, x, y).dpi
@@ -176,7 +188,7 @@ impl Desktop {
 
     /// Every display in one rectangle, for the fallback that cannot do better than the primary
     /// display and find it missing.
-    fn virtual_screen(&self) -> ScreenBounds {
+    pub(super) fn virtual_screen(&self) -> ScreenBounds {
         unsafe {
             let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
             let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
