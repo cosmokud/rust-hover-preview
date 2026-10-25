@@ -744,6 +744,12 @@ pub(super) fn begin_pin_drag(
         // belongs in is a question about the setting (`band_place`), and the box a drag is applying is
         // not a fact it is asked about — so re-asking it on every pointer move was a DWM reorder per
         // move for a window already where it names (see `apply_pin_drag` and `finish_pin_drag`).
+        //
+        // The temporary `RHP_HIDE_FILM_ON_RESIZE` diagnostic takes the film off the screen for the
+        // length of a resize and puts it back when the drag ends (see `pin_resize_probe`).
+        if matches!(action, PinDragAction::Resize(_)) {
+            pin_resize_probe::hide_the_film_for_a_resize_drag();
+        }
         // SAFETY: the handle is the window the drag is carried in — the pin's own, or the one it
         // stands in — and `SetWindowPos` takes any window and reports rather than faults.
         unsafe {
@@ -1119,6 +1125,9 @@ impl Carry {
 /// than off `GetCapture` — the two ends of a capture are one list, and a list that had to be
 /// read out of the machine in two places is a list whose two halves can disagree.
 pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
+    // The temporary `RHP_HIDE_FILM_ON_RESIZE` diagnostic's film comes back before anything else is
+    // asked of the drag's end (see `pin_resize_probe`).
+    pin_resize_probe::show_the_film_after_a_resize_drag();
     let drag =
         pin_state().and_then(|mut pinned| pinned.pin_mut().and_then(|pin| pin.dragging.take()));
     let Some(drag) = drag else {
@@ -1238,6 +1247,10 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
 /// of them can carry — whether a player is standing in the band to see through it (see
 /// `settle_pinned_park`).
 pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
+    // The temporary `RHP_HIDE_FILM_ON_RESIZE` diagnostic's film comes back with the capture: this is
+    // the road a drag that did not end at this window's own release leaves by (see
+    // `pin_resize_probe`).
+    pin_resize_probe::show_the_film_after_a_resize_drag();
     // **The gesture's hold is let go of here as well, and before the record is dropped rather than
     // on the tick that notices it is gone.** A capture taken from under a drag ends the drag, and a
     // claim left standing is a claim the next film to be dragged is answered with — so the drag

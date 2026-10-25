@@ -857,13 +857,16 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // the pin's own surface is committed first there and the host follows it, which is the milder
         // of the two mismatches — a film briefly cropped rather than a hole where the film should be
         // (see `a_resize_step_grows`).
-        if a_resize_step_grows(was, content) {
+        let grew = a_resize_step_grows(was, content);
+        pin_resize_probe::begin_step(window, grew);
+        if grew {
             place_pinned_siblings();
             render_pinned_preview_at(hwnd, window.0, window.1);
         } else {
             render_pinned_preview_at(hwnd, window.0, window.1);
             place_pinned_siblings();
         }
+        pin_resize_probe::end_step();
 
         // The band is not re-asked here. It is a question about the setting rather than about the
         // box (`band_place`), so a step that re-asked it was a DWM reorder per pointer move for a
