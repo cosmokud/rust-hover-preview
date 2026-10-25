@@ -17,7 +17,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetParent, GetWindowLongPtrW, IsIconic,
     IsWindowVisible, MoveWindow, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE,
     GW_HWNDPREV,
-    HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WM_SHOWWINDOW, WINDOW_EX_STYLE,
+    HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WM_SHOWWINDOW,
+    WM_WINDOWPOSCHANGING, WINDOW_EX_STYLE,
     WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP,
     WS_VISIBLE,
 };
@@ -485,6 +486,172 @@ fn the_film_mpv_draws_is_given_the_hosts_box_in_the_hosts_own_resize() {
     );
 
     unsafe { DestroyWindow(child) }.expect("the player's child goes");
+}
+
+/// **A step ends with the pin's window, the film's host and the player's child at the box the step
+/// asked for — whichever of the two orders the step committed them in.** A step that grew puts the
+/// host down first and one that shrank puts the pin's own surface down first (see `apply_pin_drag`),
+/// and a direction that left any of the three at the box the step came from is a strip of this app's
+/// band where the film should be, or a film hanging off the window it stands in.
+#[test]
+fn a_grow_and_a_shrink_each_end_with_the_pin_the_host_and_the_child_at_one_box() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    // The boxes are the whole of what this asserts, and a step of a drag places the pin on the
+    // screen its box is clamped to: the window is hidden so the test owes the desktop no picture.
+    unsafe {
+        let _ = ShowWindow(film.pin_hwnd, SW_HIDE);
+    }
+    let host = pin_film_host::film_host().expect("the film's host");
+    let child = unsafe { a_child_of_the_host(host) };
+
+    let window = a_window_at(film.box_);
+    begin_pin_drag(
+        film.pin_hwnd,
+        &window,
+        PinDragAction::Resize(edge(false, false, true, false)),
+        true,
+    );
+
+    let mut width = film.box_.2 - film.box_.0;
+    for (travel, growing) in [(120, true), (-160, false)] {
+        super::probes::step_the_pin_drag_by(travel, 0);
+        unsafe { apply_pin_drag(film.pin_hwnd) };
+
+        let band = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+            .expect("a pin up");
+        let now = band.2 - band.0;
+        assert_eq!(
+            now > width,
+            growing,
+            "the step of {travel} took the window {} rather than the other way, which is the \
+             direction the order under it is read off",
+            if growing { "out" } else { "in" }
+        );
+        width = now;
+
+        assert_eq!(
+            unsafe { window_rect(film.pin_hwnd) },
+            band,
+            "the pin's own window is the box the step asked for"
+        );
+        assert_eq!(
+            unsafe { window_rect(host) },
+            band,
+            "and the host is that window's band, not the box the step came from"
+        );
+        assert_eq!(
+            unsafe { window_rect(child) },
+            band,
+            "and the player's child is the host's own box"
+        );
+    }
+
+    with_pin(|pin| pin.dragging = None);
+    unsafe { DestroyWindow(child) }.expect("the player's child goes");
+}
+
+/// The pin's own window box at every box the host was given: which of the two a step commits first is
+/// read off the pin's box as the host is placed.
+static HOST_PLACES: Lazy<Mutex<Vec<ScreenRegion>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+unsafe extern "system" fn watch_the_host_places(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_WINDOWPOSCHANGING {
+        let pin = unsafe { GetParent(hwnd) }
+            .ok()
+            .map(|pin| unsafe { window_rect(pin) });
+        if let (Some(pin), Ok(mut places)) = (pin, HOST_PLACES.lock()) {
+            places.push(pin);
+        }
+    }
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// **A step that grows puts the film down before the window, and a step that shrinks puts it down
+/// after it.** The order is the whole of what a growth is about: the strip a grown box exposes must be
+/// the film's rather than this app's own band, and the only way it is the film's is for the host to be
+/// at the new band before the window is the size that shows it (see `apply_pin_drag` and
+/// `a_resize_step_grows`).
+#[test]
+fn a_step_commits_the_film_before_the_window_where_it_grows_and_after_it_where_it_shrinks() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    unsafe {
+        let _ = ShowWindow(film.pin_hwnd, SW_HIDE);
+    }
+    let host = pin_film_host::film_host().expect("the film's host");
+    let previous = unsafe {
+        SetWindowLongPtrW(
+            host,
+            GWLP_WNDPROC,
+            watch_the_host_places as *const () as isize,
+        )
+    };
+
+    let window = a_window_at(film.box_);
+    begin_pin_drag(
+        film.pin_hwnd,
+        &window,
+        PinDragAction::Resize(edge(false, false, true, false)),
+        true,
+    );
+
+    for (travel, growing) in [(120, true), (-160, false)] {
+        let before = unsafe { window_rect(film.pin_hwnd) };
+        HOST_PLACES
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .clear();
+        super::probes::step_the_pin_drag_by(travel, 0);
+        unsafe { apply_pin_drag(film.pin_hwnd) };
+
+        let band = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+            .expect("a pin up");
+        assert_ne!(
+            (before.2 - before.0, before.3 - before.1),
+            (band.2 - band.0, band.3 - band.1),
+            "the step gave the window another box"
+        );
+
+        // A step places the host once and nothing else in it puts a box on it, so the pin's box at
+        // that one placement is the order the two commits went in.
+        let places = HOST_PLACES.lock().unwrap_or_else(|held| held.into_inner());
+        assert_eq!(
+            places.len(),
+            1,
+            "a step gives the host its band once: {places:?}"
+        );
+        let placed = places[0];
+        assert_eq!(
+            placed,
+            if growing { before } else { band },
+            "the pin's window stood {} when the host was put at this step's band: a step that \
+             grows has the film down first, and one that shrinks has the window down first",
+            if growing {
+                "at the box the step came from"
+            } else {
+                "at the box the step asked for"
+            }
+        );
+    }
+
+    with_pin(|pin| pin.dragging = None);
+    unsafe { SetWindowLongPtrW(host, GWLP_WNDPROC, previous) };
 }
 
 /// The window mpv has made is a child of the host and this app's to box only while this host holds a

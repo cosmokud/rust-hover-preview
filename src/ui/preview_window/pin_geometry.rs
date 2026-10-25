@@ -770,7 +770,7 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     let window = clamp_pinned_box(asked, dpi, &DESKTOPS);
     let content = content_box_of(window, dpi, transport, overlay, caption);
 
-    {
+    let was = {
         let Some(mut pinned) = pin_state() else {
             return;
         };
@@ -815,7 +815,8 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         if let Some(drag) = pin.dragging.as_mut() {
             drag.carried = point;
         }
-    }
+        was
+    };
 
     let (width, height) = (window.2 - window.0, window.3 - window.1);
 
@@ -844,7 +845,25 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // was decoded with, which is what the paint below scales into that band, as it always did.
         relayout_text_for_the_box(content);
 
-        render_pinned_preview_at(hwnd, window.0, window.1);
+        // **Which of the two is committed first is the direction's to say, and it is the strip a
+        // growing step exposes that says it.** A box that grew leaves a strip the window did not
+        // have, and the only thing that may stand in it is the film: the host is put at the new band
+        // while the pin's own window is still the old one, so the oversized host is clipped by the
+        // smaller parent and the growth then reveals a band that is already the right size. Painted
+        // first, the strip stands as this app's own band — the alpha-1 claim on the pixel, which is
+        // the desktop showing through it — until the host catches up, once per pointer move.
+        //
+        // A box that shrank exposes nothing: the strip it gives up is clipped away by the parent, so
+        // the pin's own surface is committed first there and the host follows it, which is the milder
+        // of the two mismatches — a film briefly cropped rather than a hole where the film should be
+        // (see `a_resize_step_grows`).
+        if a_resize_step_grows(was, content) {
+            place_pinned_siblings();
+            render_pinned_preview_at(hwnd, window.0, window.1);
+        } else {
+            render_pinned_preview_at(hwnd, window.0, window.1);
+            place_pinned_siblings();
+        }
 
         // The band is not re-asked here. It is a question about the setting rather than about the
         // box (`band_place`), so a step that re-asked it was a DWM reorder per pointer move for a
@@ -863,11 +882,25 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             height,
             SWP_NOACTIVATE | SWP_NOZORDER,
         );
-    }
 
-    // Whatever stands in the media band travels with it — after the box it stands in is the
-    // window's, so that a player's window is never put where the surface has not caught up.
-    place_pinned_siblings();
+        // Whatever stands in the media band travels with it — after the box it stands in is the
+        // window's, so that a player's window is never put where the surface has not caught up. A
+        // resize is the other way round on a step that grows, where the film is put down first (see
+        // above).
+        place_pinned_siblings();
+    }
+}
+
+/// Whether a resize step grows the window, which is the whole of what decides the order its two
+/// commits go in (see `apply_pin_drag`).
+///
+/// **Per axis rather than by area**, because the strip a step exposes is per axis: a box pulled wider
+/// and shorter at once gives up a strip along the bottom and exposes one along the side, and the side
+/// is the one the order is about. A step that changed neither extent is not a growth and takes the
+/// shrinking order — the two commits then write the same boxes in either order, so there is nothing
+/// for the choice to be seen in.
+pub(super) fn a_resize_step_grows(was: ScreenRegion, now: ScreenRegion) -> bool {
+    (now.2 - now.0) > (was.2 - was.0) || (now.3 - now.1) > (was.3 - was.1)
 }
 
 /// Put a pinned window in the middle of the screen it stands on, its size untouched: what a

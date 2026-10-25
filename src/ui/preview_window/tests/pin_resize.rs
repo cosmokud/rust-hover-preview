@@ -1,5 +1,36 @@
 use super::*;
 
+/// **A step that grows is a step whose film has to be down before its window is**, and one that
+/// shrinks is the other way round (see `apply_pin_drag`). The direction is read off the box the step
+/// came from against the one it goes to, on either axis.
+#[test]
+fn a_resize_step_grows_where_either_side_of_it_is_pulled_out() {
+    let at = (100, 100, 500, 400);
+
+    assert!(
+        a_resize_step_grows(at, (100, 100, 600, 400)),
+        "a box pulled wider grew"
+    );
+    assert!(
+        a_resize_step_grows(at, (100, 100, 500, 500)),
+        "and so did one pulled taller"
+    );
+    assert!(
+        a_resize_step_grows(at, (200, 100, 700, 400)),
+        "and a box pulled wider and shorter at once, because the side it exposes is the one the \
+         order is about — the side it gives up is clipped away by the window either way"
+    );
+    assert!(
+        !a_resize_step_grows(at, (100, 100, 400, 300)),
+        "a box smaller on both sides shrank"
+    );
+    assert!(
+        !a_resize_step_grows(at, at),
+        "and a step that changed neither side is no growth, so it takes the shrinking order: the two \
+         commits then write the same box whichever goes first"
+    );
+}
+
 #[test]
 fn a_resize_keeps_the_shape_of_what_is_pinned() {
     // A media box 400 x 300, dragged by its right edge 200 to the right: the media grows by
