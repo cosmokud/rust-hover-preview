@@ -132,6 +132,7 @@ pub(super) fn mpv_args(
     input_conf: Option<&Path>,
     ipc: &str,
     wid: Option<u32>,
+    flip: bool,
     ontop: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
@@ -211,7 +212,27 @@ pub(super) fn mpv_args(
     // no such queue to drain, which is the classic cure for resize shimmer in an embedded child
     // window. What it gives up is the independent flip the compositor hands straight to the
     // display: a film here costs a copy per frame and can sit a step behind a moving pin.
-    args.push("--d3d11-flip=no".to_string());
+    //
+    // **Except on the thumbnail road, where `flip` asks for the other model as an experiment.**
+    // There the player makes a top-level window of its own and the pin shows it through a DWM
+    // thumbnail, and a flip-model swapchain has a property the bitblt one does not: the compositor
+    // scales the buffer to the window's client area, so the picture fills the window *by
+    // construction* rather than because mpv caught a `WM_SIZE` and resized its buffer. With the
+    // bitblt model a buffer that is a size behind the window is presented 1:1 — cropped where it is
+    // larger, a small picture in black where it is smaller (see `pin_film_thumbnail`). It is asked
+    // for by the knob and never by default, and **never on the `--wid` road**: `flip` there would
+    // be a swapchain model a child window cannot have, which is the hitch the paragraph above is
+    // about. No other flag conflicts: `--gpu-api=d3d11` is the context the flag names,
+    // `--vo=gpu-next` presents through the same DXGI swapchain, and `--hwdec=auto`'s d3d11va
+    // interop is what a flip model is designed for.
+    args.push(
+        if flip && wid.is_none() {
+            "--d3d11-flip=yes"
+        } else {
+            "--d3d11-flip=no"
+        }
+        .to_string(),
+    );
 
     // mpv decodes on the card by its own safe list with its own software fallback, so the switch
     // is the whole of the answer here: there is no device for this side to measure and none to
@@ -290,6 +311,28 @@ pub(super) fn mpv_args(
     args.push(format!(r#"--input-ipc-server=\\.\pipe\{ipc}"#));
 
     args
+}
+
+/// **A prototype's knob, and not a setting: `RHP_THUMBNAIL_FLIP=1`.**
+///
+/// The thumbnail road asks mpv for a flip-model swapchain instead of the bitblt one (see `mpv_args`),
+/// which makes the picture fill its window by construction rather than by catching a `WM_SIZE`: the
+/// compositor scales the buffer to the client area. The value is exactly `1`, because this is an A/B
+/// of two runs and anything else must be the default road — a run that spells it otherwise is a run
+/// whose flags did not change, which is a wasted measurement and not a surprise to be discovered
+/// later.
+const THUMBNAIL_FLIP_VARIABLE: &str = "RHP_THUMBNAIL_FLIP";
+
+/// Whether the machine asked for the flip-model swapchain on the thumbnail road (see
+/// [`THUMBNAIL_FLIP_VARIABLE`]). Read once per launch, which is the moment the answer is true for:
+/// a player already begun keeps the model it was begun with.
+pub(super) fn the_thumbnail_flip_knob() -> bool {
+    thumbnail_flip_from(std::env::var_os(THUMBNAIL_FLIP_VARIABLE).as_deref())
+}
+
+/// The knob's answer for one value: `1` is on and every other value — including none — is off.
+fn thumbnail_flip_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == std::ffi::OsStr::new("1"))
 }
 
 /// The size a film's box is asked for, so that the window the film is drawn in is that box.
@@ -1338,6 +1381,7 @@ mod tests {
                 Some(Path::new("scratch/mpv-input.conf")),
                 IPC,
             None,
+            false,
             true
             ),
             [
@@ -1387,6 +1431,7 @@ mod tests {
             None,
             IPC,
             Some(0x1234_5678),
+            false,
             true
         );
 
@@ -1402,6 +1447,79 @@ mod tests {
             !args.iter().any(|arg| arg == "--ontop"),
             "and a child has no place in the desktop's order to hold: {args:?}"
         );
+    }
+
+    /// **The flip-model swapchain is the thumbnail road's, and the knob is the only thing that asks
+    /// for it.** A pinned mpv whose window is a window of the desktop's is the one place a flip-model
+    /// swapchain fixes what the bitblt model gets wrong: the compositor scales the buffer to the
+    /// window's client area, so the picture fills the window by construction rather than by mpv
+    /// catching a `WM_SIZE` (see `mpv_args` and `pin_film_thumbnail`).
+    #[test]
+    fn the_flip_model_swapchain_is_asked_for_only_on_the_thumbnail_road() {
+        let with_flip = mpv_args(
+            Path::new("a.mkv"),
+            0,
+            0,
+            640,
+            360,
+            0.0,
+            false,
+            80,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+            None,
+            true,
+            false,
+        );
+        assert!(
+            with_flip.iter().any(|arg| arg == "--d3d11-flip=yes"),
+            "a player that makes a window of its own on the thumbnail road is asked for the flip \
+             model when the knob is on: {with_flip:?}"
+        );
+
+        let in_a_host = mpv_args(
+            Path::new("a.mkv"),
+            0,
+            0,
+            640,
+            360,
+            0.0,
+            false,
+            80,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+            Some(0x1234_5678),
+            true,
+            true,
+        );
+        assert!(
+            in_a_host.iter().any(|arg| arg == "--d3d11-flip=no"),
+            "and the `--wid` road keeps the bitblt model even with the knob on, because a \
+             flip-model swapchain cannot be a child of another window's: {in_a_host:?}"
+        );
+        assert!(
+            !in_a_host.iter().any(|arg| arg == "--d3d11-flip=yes"),
+            "the knob never reaches a child: {in_a_host:?}"
+        );
+    }
+
+    /// The flip knob is exactly `1`: the A/B is two runs, and a value that is not the one named must
+    /// be the default road rather than a third one nobody wrote down (see
+    /// `RHP_THUMBNAIL_FLIP`).
+    #[test]
+    fn the_flip_knob_is_on_for_one_and_off_for_everything_else() {
+        assert_eq!(THUMBNAIL_FLIP_VARIABLE, "RHP_THUMBNAIL_FLIP");
+        assert!(!thumbnail_flip_from(None));
+        assert!(thumbnail_flip_from(Some(std::ffi::OsStr::new("1"))));
+        assert!(!thumbnail_flip_from(Some(std::ffi::OsStr::new("0"))));
+        assert!(!thumbnail_flip_from(Some(std::ffi::OsStr::new("yes"))));
+        assert!(!thumbnail_flip_from(Some(std::ffi::OsStr::new(""))));
     }
 
     /// **The one flag the drag story rests on without anything else**: mpv is launched told not to
@@ -1433,6 +1551,7 @@ mod tests {
             None,
             IPC,
         None,
+        false,
         true
         );
         assert!(
@@ -1465,6 +1584,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            false,
             true
             ),
             [
@@ -1512,6 +1632,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            false,
             true
             ),
             [
@@ -1558,6 +1679,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            false,
             true
             ),
             [
@@ -1613,6 +1735,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            false,
             true
             ),
             [
@@ -1658,6 +1781,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            false,
             true
             ),
             [
@@ -1706,6 +1830,7 @@ mod tests {
             None,
             IPC,
             None,
+            false,
             true
         );
         assert!(
@@ -1738,6 +1863,7 @@ mod tests {
             None,
             IPC,
             None,
+            false,
             true
         );
         assert!(
@@ -1779,6 +1905,7 @@ mod tests {
                     None,
                     IPC,
                 None,
+                false,
                 true
                 ),
                 [
@@ -1821,6 +1948,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            false,
             true
             )
             .contains(&"--geometry=640x360+0+0".to_string()),
@@ -1871,6 +1999,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            false,
             true
             ),
             [
@@ -1939,6 +2068,7 @@ mod tests {
                 None,
                 IPC,
             None,
+            false,
             true
             ),
             [

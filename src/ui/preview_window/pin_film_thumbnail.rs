@@ -10,12 +10,13 @@
 //! film that is to be thumbnailed cannot be mpv's child under the host. That is the whole of why
 //! this road launches mpv without `--wid` (see `video_launch::mpv_args`).
 //!
-//! **Why a resize step asks nothing of mpv.** The Shell stretches the source's client area into the
+//! **Why a resize step asks little of mpv.** The Shell stretches the source's client area into the
 //! destination rectangle whatever the two sizes are, so a step is this app moving its own two
 //! windows and re-pointing the destination at the host's new client area (see
-//! `the_band_was_placed`). mpv's window is asked for a box once at each end of a drag and never
-//! between (see `place_the_source`), and that ask is `SWP_ASYNCWINDOWPOS` like every other call made
-//! on a window of another process's here.
+//! `the_band_was_placed`). The source is resized only as a coarse catch-up while the hand moves and
+//! exactly at each end of the drag (see `follow_the_band_while_dragging` and `place_the_source`),
+//! and every ask is `SWP_ASYNCWINDOWPOS` like every other call made on a window of another
+//! process's here.
 //!
 //! **Where the source stands is a knob, and the answer is measured: it has to be on the screen.**
 //! `RHP_THUMBNAIL_SOURCE` names three placements, and two of them are known dead:
@@ -39,16 +40,21 @@
 //! other two stay only as the evidence. A misspelt value is answered with `behind` too — a value that
 //! names none of the three must never fall back to a placement that cannot draw.
 //!
-//! **A placement is made once at each end of a drag and never between.** The source takes the box the
-//! pin began the drag at, is left exactly there while the hand is on the edge, and is asked for the
-//! box the drag settled at when the hand lets go. What the two off-screen placements were wanted for
-//! is the shrink a `behind` source cannot follow: the destination shrinks, the source does not, and
-//! there is nothing of a source that is not on the screen for the host to leave behind — which is the
-//! one thing they are no good for, since a source that is not on the screen is not drawn at all.
+//! **A placement is made exactly at each end of a drag**, and between them only the coarse catch-up
+//! the hand's own resizing is owed (see above). The source takes the box the pin began the drag at and
+//! is asked for the box the drag settled at when the hand lets go. What the two off-screen placements
+//! were wanted for is the shrink a `behind` source cannot follow: the destination shrinks, the source
+//! does not, and there is nothing of a source that is not on the screen for the host to leave behind —
+//! which is the one thing they are no good for, since a source that is not on the screen is not drawn
+//! at all.
 //!
-//! **Only `behind` is moved with the host between those ends** (see `the_band_moves_the_source`),
-//! because it is the only placement that has to stay under the pin to stay unseen; the two off-screen
-//! placements have nothing to follow, and not asking is the point.
+//! **Only `behind` is moved with the host** (see `the_band_moves_the_source`), because it is the only
+//! placement that has to stay under the pin to stay unseen; the two off-screen placements have nothing
+//! to follow, and not asking is the point.
+//!
+//! **The picture's fill is read at a settle, never during a drag**: the read is a bounded pipe
+//! request, and the middle of a resize is the one moment this road must not spend ten milliseconds
+//! waiting on another process (see `settle_the_fill`).
 //!
 //! **A settle is verified, not assumed.** One ask is not a proof that mpv kept the box: the player
 //! makes its window, configures its output for the frame, and can drop or overwrite a placement made
@@ -61,6 +67,34 @@
 //! player's `vo-configured` read once at adoption rather than per tick (see `ask_the_source_for`,
 //! `keep_the_source_at_the_band` and `the_players_output_is_configured`).
 //!
+//! **But a box that matches is not yet a picture that fills it.** Measured on the glass: every settle
+//! succeeded on its first ask, the source's window box always equalled the host's, and the pin still
+//! came out zoomed in (cropped) or small in a field of black. The mismatch is inside mpv — its
+//! rendered picture (`dwidth`/`dheight`, the fitted display size) is not its window's client size —
+//! and with `--d3d11-flip=no` the bitblt swapchain is presented 1:1, so a picture larger than the
+//! window is cropped and one smaller leaves black. So a settle also **reads the player's own idea of
+//! the picture over the existing pipe, once per settle** (`source fills … render …`), and treats the
+//! settle as taken only when the box matches *and* the picture fills it (see `the_picture_fills`).
+//! Where the box matched and the picture did not, the source is **nudged**: the same box is asked for
+//! one pixel larger and then exactly, because a repeated identical size produces no `WM_SIZE` and a
+//! VO stuck at an old buffer has nothing else to make it reconfigure. One nudge per settle, capped,
+//! and a source that still disagrees says `source never filled …` once and is left alone (see
+//! `settle_the_fill` and `nudge_the_source`).
+//!
+//! **The structural version of that invariant is a flip-model swapchain**, which the compositor
+//! scales to the window's client area by construction instead of relying on mpv catching a
+//! `WM_SIZE`: `RHP_THUMBNAIL_FLIP=1` passes `--d3d11-flip=yes` to a pinned mpv on this road and
+//! this road only, so the user can A/B the two runs. It is never asked for on the `--wid` road,
+//! where a flip-model swapchain cannot be a child of another window's (see
+//! `video_launch::mpv_args`).
+//!
+//! **The source follows the box while a drag resizes it**, because a frozen source grown from 680 px
+//! to 2263 px is a 3.3× upscale no swapchain model can hide. It follows asymmetrically: a *growing*
+//! box is chased only once it is a tenth larger than the source (a coarse catch-up, a handful of asks
+//! over a long drag, soft in between), while a *shrinking* one is asked for ahead of itself by a small
+//! margin so a step of lag cannot leave the source spilling out from under the host (see
+//! `follow_the_band_while_dragging`).
+//!
 //! **The source is never hidden.** The Shell draws nothing for a source it considers hidden — the
 //! thumbnail of a `SW_HIDE` window is frozen at its last frame — so the source is *left on the
 //! screen* at a placement where nothing of it shows, and it is taken off only where the host it is
@@ -69,12 +103,10 @@
 //! shows its window when it opens the file, which is before this app has found it (see
 //! `the_source_launch_origin`).
 //!
-//! shortcut: a `behind` source keeps the size a drag began at while the hand is on the edge, so a hand
-//! that *shrinks* the box leaves the part of the source the host no longer covers standing on the
-//! desktop until the drag ends. That was the leak the two off-screen placements were wanted for, and
-//! they do not draw at all — so this is the shipped default and the leak is the price of a picture;
-//! upgrade it by clipping the source where a window of this app's can clip it, not by moving it off
-//! the screen.
+//! shortcut: a shrink is led by a small inset and a grow lags a tenth, so between two asks a shrinking
+//! source can still stand a step outside the host and a growing one is stretched and soft; the two
+//! off-screen placements that would have hidden the spill do not draw at all. Upgrade it by clipping
+//! the source where a window of this app's can clip it, not by moving it off the screen.
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -144,6 +176,27 @@ const SETTLE_RETRY: Duration = Duration::from_millis(150);
 /// its box after them is one the player or the Shell is overruling, which is a fact for the trace and
 /// not something the tick may spin on.
 const SETTLE_ASKS: u8 = 4;
+
+/// The most a picture may be off its window's client box and still count as filling it: one pixel of
+/// rounding either way, which is where an aspect worked out in integers lands (see
+/// `the_picture_fills`).
+const FILL_SLACK: i32 = 1;
+
+/// How often a drag may ask the source for a new box: often enough that a hand's own pace is not what
+/// the picture lags by, and rare enough that a long drag is a handful of asks rather than one per
+/// pointer move (see `follow_the_band_while_dragging`).
+const DRAG_ASK_EVERY: Duration = Duration::from_millis(120);
+
+/// A growing box is chased once it is more than this many tenths larger than the source, in integers
+/// (`box * 10 > source * 11`): a coarse catch-up, so the softness of a frozen source is what a drag
+/// pays for between asks rather than what it pays for all of them (see `the_drag_catch_up`).
+const GROWTH_OUT_OF_TENTHS: i32 = 11;
+
+/// How far ahead of a shrinking box the source is asked for, as pixels of inset per this many pixels
+/// of the box: 8 px per axis at a 680 px box, scaled from the box itself so a large pin gets a lead a
+/// step can land in, and never under [`SHRINK_LEAD_MIN`] (see `the_shrink_lead`).
+const SHRINK_LEAD_PER: i32 = 85;
+const SHRINK_LEAD_MIN: i32 = 8;
 
 /// The placement a `RHP_THUMBNAIL_SOURCE` value names, or nothing for a value that names none.
 ///
@@ -281,6 +334,39 @@ static REGISTERED_HOST: AtomicIsize = AtomicIsize::new(0);
 /// The registration, and the box it was last told the picture goes in.
 static THUMBNAIL: Mutex<Thumbnail> = Mutex::new(Thumbnail::NOTHING);
 
+/// A box as a placement, a trace and an ask carry it: origin, width and height.
+type SourceBox = (i32, i32, i32, i32);
+
+/// The last box a drag asked the source for, and when: the throttle, and the test that the ask
+/// before it has landed (see `follow_the_band_while_dragging`).
+static DRAG_ASK: Mutex<Option<(Instant, SourceBox)>> = Mutex::new(None);
+
+/// What a settle knows about the player's picture filling its own window (see `the_picture_fills`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fill {
+    /// Not looked at yet for this settle.
+    Unlooked,
+    /// The picture is the window's size, or the window's shape letterboxed by the film's own aspect.
+    Filled,
+    /// The player did not answer the question: nothing to judge and nothing to nudge.
+    Unknown,
+    /// The nudge was made at this instant; the picture is looked at again after `SETTLE_RETRY`.
+    Nudged(Instant),
+    /// Nudged and still not filled: the settle's one line has been said and nothing more is asked.
+    NeverFilled,
+}
+
+/// What the fill side of a settle is owed on one look (see `the_fill_look`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FillLook {
+    /// Read the player's picture size: this settle has not looked yet, or a nudge is due its look.
+    Look,
+    /// The nudge is still inside `SETTLE_RETRY`.
+    Wait,
+    /// Nothing left to look at: the settle has an answer.
+    Done,
+}
+
 #[derive(Clone, Copy)]
 struct Thumbnail {
     /// The host the Shell is drawing into, and the registration it answered with.
@@ -295,6 +381,11 @@ struct Thumbnail {
     asks: u8,
     asked_at: Option<Instant>,
     gave_up: bool,
+    /// How many asks the settle's box took when it landed, for the line the fill proof writes (the
+    /// box look resets its own count the moment the box matches).
+    matched_after: u8,
+    /// The fill invariant of this settle (see `settle_the_fill`).
+    fill: Fill,
 }
 
 impl Thumbnail {
@@ -306,6 +397,8 @@ impl Thumbnail {
         asks: 0,
         asked_at: None,
         gave_up: false,
+        matched_after: 0,
+        fill: Fill::Unlooked,
     };
 }
 
@@ -453,17 +546,20 @@ pub(super) fn the_host_shows_a_thumbnail(host: HWND) -> bool {
 /// Follow the host: register the picture where there is none, and point it at the host's whole client
 /// area.
 ///
-/// **The source is not resized here**, which is the whole of what makes a resize step cheap: the
-/// destination is the host's box and the Shell stretches whatever the source's box is into it. It is
-/// asked for a box once at each end of a drag and never between (see `place_the_source`).
+/// **The source is not resized on every step here**, which is the whole of what makes a step cheap:
+/// the destination is the host's box and the Shell stretches whatever the source's box is into it.
+/// The source is resized exactly at each end of a drag (see `place_the_source`) and, between them,
+/// only by the coarse catch-up a hand that is resizing it is owed (see
+/// `follow_the_band_while_dragging`).
 ///
 /// **Nor is it moved here, on the two off-screen placements** — the point of those is that a step of a
 /// drag asks mpv's process for nothing at all. A `behind` source does follow the host's corner, which
 /// is the only thing keeping it under the host rather than standing where the pin used to be (see
 /// `the_band_moves_the_source`).
 ///
-/// **What a drag step costs is what follows**: one comparison, and a `DwmUpdateThumbnailProperties`
-/// only where the host's client box changed.
+/// **What a drag step costs is what follows**: one comparison, a `DwmUpdateThumbnailProperties` only
+/// where the host's client box changed, and — a handful of times over a long drag — one posted ask for
+/// a new source size (see `follow_the_band_while_dragging`).
 pub(super) fn the_band_was_placed(host: HWND) {
     let number = SOURCE.load(Ordering::SeqCst);
     if number == 0 {
@@ -478,6 +574,11 @@ pub(super) fn the_band_was_placed(host: HWND) {
             move_the_source(HWND(number as *mut _), origin);
         }
     }
+    // **And how big the source is, where a hand is pulling the box.** A step is this app's two windows
+    // and a destination rectangle, but a source left at the size a drag began at is a picture the
+    // Shell stretches by however far the hand has come — so a resize is followed, coarsely and ahead
+    // of itself on the way down (see `follow_the_band_while_dragging`).
+    follow_the_band_while_dragging(host);
 
     let Ok(mut held) = THUMBNAIL.lock() else {
         return;
@@ -494,13 +595,15 @@ pub(super) fn the_band_was_placed(host: HWND) {
 /// Put the source where its placement wants it, at the box the host is at: the ask a drag makes at its
 /// two ends and at every box that settles without one.
 ///
-/// **Its size is the box the pin is at, and it is not asked for again until the box settles.** A drag
-/// that shrinks the pin leaves a `behind` source at the box the drag began at, and the part of it the
-/// host no longer covers stands on the desktop until the drag ends — which is the leak the two
-/// off-screen placements were wanted for and do not draw (see the module note and `source_origin`).
+/// **Its size is the box the pin is at.** A drag between two placements leaves a `behind` source at the
+/// size the follow last asked for rather than at the box the drag began at (see
+/// `follow_the_band_while_dragging`), so what the settle here corrects is the lead it was asked for
+/// ahead of the box and the softness of a catch-up still behind it.
 ///
-/// Nothing is asked of a window already at the box the placement names, which is what makes the call
-/// at a drag's beginning free where the source has not left its placement since the last one.
+/// Nothing is posted to a window already at the box the placement names, which is what makes the call
+/// at a drag's beginning cheap where the source has not left its placement since the last one; the
+/// one thing it does spend is the fill read, because a placement is a fresh settle even where it names
+/// the same box (see `settle_the_fill`).
 pub(super) fn place_the_source(host: HWND) {
     let Some(source) = the_source_window() else {
         return;
@@ -508,7 +611,19 @@ pub(super) fn place_the_source(host: HWND) {
     let Some(box_) = the_box_the_placement_names(host) else {
         return;
     };
+    // **A placement is a fresh settle even where it names the box the last settle did**: a drag
+    // between the two may have left the player's output at another size, so the picture is looked at
+    // again rather than taken on trust from the settle before it (see `settle_the_fill`).
+    if let Ok(mut held) = THUMBNAIL.lock() {
+        held.fill = Fill::Unlooked;
+    }
     ask_the_source_for(source, host, box_, true);
+    // **The settle is the drag follow's previous ask**: nothing follows a box that has not landed, and
+    // this is the ask whose landing the next drag's first step waits on (see
+    // `follow_the_band_while_dragging`).
+    if let Ok(mut last) = DRAG_ASK.lock() {
+        *last = Some((Instant::now(), box_));
+    }
 }
 
 /// Whether the player whose window is the pin's picture has said its video output is configured for a
@@ -524,10 +639,11 @@ pub(super) fn the_players_output_is_configured(pid: u32) -> bool {
 /// Ask again for a box the source did not take: the tick's proof that a settle landed rather than its
 /// assumption that it did.
 ///
-/// **A hand on an edge asks nothing.** A drag leaves the source at the box the drag began at and moves
-/// only the destination rectangle, which is the whole of why a step is cheap (see the module note), so
-/// a check that ran between the two ends of a drag would be asking for a resize on every tick — the
-/// thrash this road exists not to have.
+/// **A hand on an edge asks nothing here.** The drag's own follow is what a resize asks of the player
+/// (see `follow_the_band_while_dragging`), and this check would be a second writer asking for the same
+/// resize on every tick — the thrash this road exists not to have. A drag between the two ends is a
+/// destination rectangle and a handful of catch-ups, and the box it settled at is this function's on
+/// the tick after it (see the module note).
 ///
 /// **Nothing here is a cross-process call.** The source's corner and size are Windows' answer about a
 /// window, and the one ask that reaches the player is posted (see `ask_the_source_for`).
@@ -589,6 +705,8 @@ fn the_settle_look(
         held.asks = 0;
         held.asked_at = None;
         held.gave_up = false;
+        held.matched_after = 0;
+        held.fill = Fill::Unlooked;
     }
     if now_at == box_ {
         let asks = held.asks;
@@ -631,21 +749,17 @@ fn the_settle_look(
 /// **`count_the_ask` is the player's own word about whether the ask will be kept** (see
 /// `adopt_the_source`): an ask made before the output is configured is a try, not one of the settle's
 /// attempts, so the settle's next look is due at once rather than a retry away.
+///
+/// **A box the source took is half a settle**: the other half is the fill invariant, proved once for
+/// the settle and once more after a nudge (see `settle_the_fill`).
 fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), count_the_ask: bool) {
     // Safety: the handle is a window this module adopted, and both questions are about the window.
     if !unsafe { IsWindow(source) }.as_bool() {
         return;
     }
-    let mut current = RECT::default();
-    if unsafe { GetWindowRect(source, &mut current) }.is_err() {
+    let Some(now_at) = (unsafe { window_box(source) }) else {
         return;
-    }
-    let now_at = (
-        current.left,
-        current.top,
-        current.right - current.left,
-        current.bottom - current.top,
-    );
+    };
     let now = Instant::now();
 
     let Ok(mut held) = THUMBNAIL.lock() else {
@@ -654,19 +768,29 @@ fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), coun
     let (x, y, width, height) = box_;
     let placement = the_source_placement();
     match the_settle_look(&mut held, box_, now_at, now) {
-        SettleLook::Matched(0) | SettleLook::TooSoon | SettleLook::Nothing => {}
+        SettleLook::TooSoon | SettleLook::Nothing => {}
         SettleLook::Matched(asks) => {
-            note_pin_trace!(
-                "source settled {:?} {:?} {}x{}+{}+{} host {:?} after {} asks",
-                source,
-                placement,
-                width,
-                height,
-                x,
-                y,
-                host,
-                asks,
-            );
+            if asks > 0 {
+                held.matched_after = asks;
+            }
+            let was_filled = held.fill == Fill::Filled;
+            let proved = settle_the_fill(&mut held, source, host, box_, now, count_the_ask);
+            // **`source settled` means both halves**: the box matched and the picture fills it. A box
+            // taken again on a settle whose fill was already proved is a settle too, which is what the
+            // `asks > 0` half says (the box look resets its count as soon as the box matches).
+            if proved && (asks > 0 || !was_filled) {
+                note_pin_trace!(
+                    "source settled {:?} {:?} {}x{}+{}+{} host {:?} after {} asks",
+                    source,
+                    placement,
+                    width,
+                    height,
+                    x,
+                    y,
+                    host,
+                    held.matched_after,
+                );
+            }
         }
         SettleLook::Never => {
             note_pin_trace!(
@@ -724,6 +848,331 @@ fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), coun
             );
         }
     }
+}
+
+/// Prove the fill invariant for this settle, and nudge the player's output once where it does not
+/// hold (see the module note and `the_picture_fills`).
+///
+/// **The read is mpv's and the comparison is with the source's own client size**, which is the box the
+/// Shell stretches into the destination: a picture that is not that box is a picture the destination
+/// shows cropped (larger), or small in a field of black (smaller), because the bitblt swapchain is
+/// presented 1:1 (see the module note). `dwidth`/`dheight` are the fitted display size and are the
+/// numbers wanted; a build without them is asked for `osd-dimensions`' instead, and the line says
+/// which answered (see `the_picture_size`).
+///
+/// **One read per settle, and one more after the nudge it makes.** A settle is the only moment on this
+/// road that asks the player anything: the tick's own questions are Windows' about a window, and the
+/// read is a bounded pipe request rather than a conversation (see `mpv_ipc::get_property`).
+///
+/// Answers whether the settle is proved: the box matched *and* the picture fills it. The caller says
+/// `source settled` on that answer rather than here, because a box re-taken on a settle whose fill was
+/// already proved is a settle too (see `ask_the_source_for`).
+fn settle_the_fill(
+    held: &mut Thumbnail,
+    source: HWND,
+    host: HWND,
+    box_: SourceBox,
+    now: Instant,
+    count_the_ask: bool,
+) -> bool {
+    // **A free try is not the settle whose picture is judged**: the player has not yet said its
+    // output is configured, so what it would answer now is about a window rather than a picture. The
+    // ask that counts, on the next tick, is the one that reads (see `adopt_the_source`).
+    if !count_the_ask {
+        return held.fill == Fill::Filled;
+    }
+    let was_nudged = matches!(held.fill, Fill::Nudged(_));
+    if the_fill_look(held.fill, now) != FillLook::Look {
+        return held.fill == Fill::Filled;
+    }
+    let Some(client) = (unsafe { client_size(source) }) else {
+        return held.fill == Fill::Filled;
+    };
+    let placement = the_source_placement();
+    let (x, y, width, height) = box_;
+    let render = the_picture_size(SOURCE_PROCESS.load(Ordering::SeqCst));
+    match render {
+        Some((render_width, render_height, property)) => note_pin_trace!(
+            "source fills {:?} {:?} client {}x{} render {}x{} ({})",
+            source,
+            placement,
+            client.0,
+            client.1,
+            render_width,
+            render_height,
+            property,
+        ),
+        None => note_pin_trace!(
+            "source fills {:?} {:?} client {}x{} render unknown",
+            source,
+            placement,
+            client.0,
+            client.1,
+        ),
+    }
+
+    if render.is_some_and(|(render_width, render_height, _)| {
+        the_picture_fills((render_width, render_height), client)
+    }) {
+        held.fill = Fill::Filled;
+        return true;
+    }
+    let Some((render_width, render_height, _)) = render else {
+        // A player that cannot say is not a picture proven wrong: nothing to nudge and nothing to
+        // retry, so the settle is written down as unproved rather than as taken.
+        held.fill = Fill::Unknown;
+        note_pin_trace!(
+            "source box settled, picture unread {:?} {:?} {}x{}+{}+{} host {:?} after {} asks",
+            source,
+            placement,
+            width,
+            height,
+            x,
+            y,
+            host,
+            held.matched_after,
+        );
+        return false;
+    };
+    if was_nudged {
+        held.fill = Fill::NeverFilled;
+        note_pin_trace!(
+            "source never filled {:?} {:?} render {}x{} wanted {}x{} host {:?}",
+            source,
+            placement,
+            render_width,
+            render_height,
+            client.0,
+            client.1,
+            host,
+        );
+        return false;
+    }
+    let nudged = nudge_the_source(source, box_, client);
+    held.fill = Fill::Nudged(now);
+    note_pin_trace!(
+        "source nudged {:?} {:?} {}x{}+{}+{} render {}x{} client {}x{} host {:?} ok {}",
+        source,
+        placement,
+        width,
+        height,
+        x,
+        y,
+        render_width,
+        render_height,
+        client.0,
+        client.1,
+        host,
+        nudged as u8,
+    );
+    false
+}
+
+/// What the fill side of a settle is owed on one look: a read, a wait for the nudge's retry, or
+/// nothing at all (see `settle_the_fill`).
+fn the_fill_look(fill: Fill, now: Instant) -> FillLook {
+    match fill {
+        Fill::Unlooked => FillLook::Look,
+        Fill::Nudged(at) if now.duration_since(at) < SETTLE_RETRY => FillLook::Wait,
+        Fill::Nudged(_) => FillLook::Look,
+        Fill::Filled | Fill::Unknown | Fill::NeverFilled => FillLook::Done,
+    }
+}
+
+/// Whether a rendered picture fills the window it is in, given the source's client size: **the fill
+/// invariant**, and the one question that tells a picture the Shell may stretch from one it may not.
+///
+/// Exact is the answer for a band of the film's own shape, which is the shape this app keeps a pin's
+/// media box at (see `pin_geometry::resize_pinned_content`). A picture that touches two opposite
+/// edges and fits inside them is that same picture **letterboxed** by an aspect the band does not
+/// share, which is mpv fitting the film to a box of another shape and not an output that never
+/// resized. Anything else — smaller than the window on both axes, or larger than it — is a buffer
+/// that was not resized with the window, which with `--d3d11-flip=no` DXGI presents 1:1: a larger
+/// picture is cropped and a smaller one leaves black. One pixel of slack either way is where an
+/// aspect worked out in integers lands.
+///
+/// shortcut: a one-axis stale picture whose live axis still spans the window exactly is
+/// indistinguishable from a letterbox without asking the film's own size, and reads as filled; the
+/// band keeps the media's shape, so a stale buffer spans neither axis. Upgrade by asking `width` and
+/// `height` and fitting them to the client box.
+fn the_picture_fills(render: (i32, i32), client: (i32, i32)) -> bool {
+    let spans_the_width = (render.0 - client.0).abs() <= FILL_SLACK;
+    let spans_the_height = (render.1 - client.1).abs() <= FILL_SLACK;
+    let fits_inside = render.0 <= client.0 + FILL_SLACK && render.1 <= client.1 + FILL_SLACK;
+    (spans_the_width && spans_the_height) || (fits_inside && (spans_the_width || spans_the_height))
+}
+
+/// mpv's own idea of the picture it renders, in pixels, and which property answered.
+///
+/// **`dwidth`/`dheight` are the fitted display size** — what the player draws, after scaling — which
+/// is the number to compare with the client box (see `the_picture_fills`). A build without them is
+/// asked for `osd-dimensions`' width and height instead, and the caller's trace says which answered.
+/// Both are read through the helper the app's other questions use, with its ten-millisecond bound, so
+/// a player that does not answer costs a settle a bounded wait and no more (see
+/// `mpv_ipc::get_property`).
+fn the_picture_size(pid: u32) -> Option<(i32, i32, &'static str)> {
+    if pid == 0 {
+        return None;
+    }
+    let read = |property: &str| {
+        mpv_ipc::get_property(pid, property)
+            .as_deref()
+            .and_then(a_pixel_count)
+    };
+    if let (Some(width), Some(height)) = (read("dwidth"), read("dheight")) {
+        return Some((width, height, "dwidth/dheight"));
+    }
+    match (read("osd-dimensions/w"), read("osd-dimensions/h")) {
+        (Some(width), Some(height)) => Some((width, height, "osd-dimensions/w+h")),
+        _ => None,
+    }
+}
+
+/// A property's answer as a pixel count, or nothing where it is not a number this app can use: mpv
+/// answers a scalar with a bare number, and may write a whole one as a float.
+fn a_pixel_count(answer: &str) -> Option<i32> {
+    answer
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(|value| value.round() as i32)
+}
+
+/// Ask the player's window for a size one pixel off the box and then for the box itself: the
+/// excursion that makes a `WM_SIZE` a VO stuck at an old buffer must answer.
+///
+/// **mpv reconfigures its output on `WM_SIZE`, and a repeated identical size produces no message**, so
+/// a source whose window already reads back at the band's box can have a swapchain a size behind it
+/// with nothing left to correct it (see the module note). One pixel is the smallest difference that
+/// guarantees the message; the ask that follows puts the window back, and both are posted rather
+/// than made (see `ask_the_source_for`). The excursion leaves 1 px of the source outside the host for
+/// the retry window, which is the price of forcing the message with a size the window will take.
+fn nudge_the_source(source: HWND, box_: (i32, i32, i32, i32), client: (i32, i32)) -> bool {
+    let (x, y, width, height) = box_;
+    let flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+    let excursion = unsafe {
+        SetWindowPos(
+            source,
+            HWND::default(),
+            x,
+            y,
+            client.0.max(1) + 1,
+            client.1.max(1) + 1,
+            flags,
+        )
+    };
+    let exact = unsafe { SetWindowPos(source, HWND::default(), x, y, width, height, flags) };
+    excursion.is_ok() && exact.is_ok()
+}
+
+/// Follow a box a hand is resizing, coarsely and asymmetrically: a growing box is chased only once it
+/// is a tenth larger than the source, and a shrinking one is asked for ahead of itself so a step of
+/// lag cannot leave the source spilling out from under the host.
+///
+/// **A frozen source is not free, it is an upscale.** A source left at the size a drag began at is a
+/// picture the Shell stretches into every box the hand passes through — 680 px grown to 2263 px is a
+/// 3.3× upscale for the whole of the growth — and no swapchain model hides that. So the source does
+/// follow, but only as a catch-up: a handful of asks over a long drag, throttled to one per
+/// `DRAG_ASK_EVERY`, and never while the ask before it has not been taken (a second ask into an output
+/// that has not configured is what the settle's cap exists to avoid).
+///
+/// **Grow may lag and shrink may not**, because the two are not the same defect on this placement: a
+/// source smaller than the box is hidden behind the host and stretched *into* the box (geometry stays
+/// right, the picture is soft), while a source larger than the box is picture standing outside the
+/// pin until the next ask — the spill a `behind` source is known for. So a shrink's ask is inset from
+/// the box by `the_shrink_lead` and a grow's is the box itself.
+///
+/// Nothing is asked on any other placement, where the source is not a window that follows the host at
+/// all, and nothing while no hand is on an edge (see `pin_drag::pin_is_dragging`).
+fn follow_the_band_while_dragging(host: HWND) {
+    if !pin_drag::pin_is_dragging() || !the_band_moves_the_source(the_source_placement()) {
+        return;
+    }
+    let Some(source) = the_source_window() else {
+        return;
+    };
+    let Some(box_) = the_box_the_placement_names(host) else {
+        return;
+    };
+    let Some(current) = (unsafe { window_box(source) }) else {
+        return;
+    };
+    let Some(((width, height), reason)) =
+        the_drag_catch_up((box_.2, box_.3), (current.2, current.3))
+    else {
+        return;
+    };
+    let now = Instant::now();
+    let Ok(mut last) = DRAG_ASK.lock() else {
+        return;
+    };
+    if last.is_some_and(|(asked_at, asked_box)| {
+        let since = now.duration_since(asked_at);
+        since < DRAG_ASK_EVERY || (current != asked_box && since < SETTLE_RETRY)
+    }) {
+        return;
+    }
+    let asked_box = (box_.0, box_.1, width, height);
+    let placed = unsafe {
+        SetWindowPos(
+            source,
+            HWND::default(),
+            asked_box.0,
+            asked_box.1,
+            asked_box.2,
+            asked_box.3,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+        )
+    };
+    *last = Some((now, asked_box));
+    note_pin_trace!(
+        "source followed {:?} {}x{}+{}+{} host {:?} from {}x{} {} ok {}",
+        source,
+        width,
+        height,
+        asked_box.0,
+        asked_box.1,
+        host,
+        current.2,
+        current.3,
+        reason,
+        placed.is_ok() as u8,
+    );
+}
+
+/// What a drag step asks the source for, if anything: the size to ask for and the reason a trace
+/// gives for it.
+///
+/// The two answers are the two defects of a frozen source: a box more than a tenth larger is a picture
+/// the Shell stretches, and a box smaller than the source is picture the host no longer covers (see
+/// `follow_the_band_while_dragging`). Shrink is asked about first, because spill is the worse of the
+/// two, and a box that is neither is a source already close enough to leave alone.
+fn the_drag_catch_up(
+    box_size: (i32, i32),
+    source_size: (i32, i32),
+) -> Option<((i32, i32), &'static str)> {
+    let (box_width, box_height) = box_size;
+    let (source_width, source_height) = source_size;
+    if source_width > box_width || source_height > box_height {
+        return Some((
+            (
+                (box_width - the_shrink_lead(box_width)).max(1),
+                (box_height - the_shrink_lead(box_height)).max(1),
+            ),
+            "shrink lead",
+        ));
+    }
+    if box_width * 10 > source_width * GROWTH_OUT_OF_TENTHS
+        || box_height * 10 > source_height * GROWTH_OUT_OF_TENTHS
+    {
+        return Some(((box_width, box_height), "grow catch-up"));
+    }
+    None
+}
+
+/// How far ahead of a shrinking box the source is asked for, per axis (see `the_drag_catch_up`).
+fn the_shrink_lead(extent: i32) -> i32 {
+    (extent / SHRINK_LEAD_PER).max(SHRINK_LEAD_MIN)
 }
 
 /// Take the picture off the screen with the host it is seen in, or put it back.
@@ -874,6 +1323,17 @@ unsafe fn client_size(hwnd: HWND) -> Option<(i32, i32)> {
     let mut client = RECT::default();
     (unsafe { GetClientRect(hwnd, &mut client) }.is_ok())
         .then_some((client.right - client.left, client.bottom - client.top))
+}
+
+/// A window's whole box, as the `SetWindowPos` that places it names: origin, width and height.
+unsafe fn window_box(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
+    let mut rect = RECT::default();
+    (unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok()).then_some((
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+    ))
 }
 
 #[cfg(test)]
@@ -1045,5 +1505,172 @@ mod tests {
             SettleLook::Due,
             "another box is another settle, with its own count"
         );
+    }
+
+    /// **The fill invariant, which is the second half of a settle**: a picture the size of the window
+    /// fills it, a picture letterboxed by the film's own shape fills it too, and a buffer a size behind
+    /// the window does not — the two symptoms being crop (larger than the window) and a small picture
+    /// in a field of black (smaller on both axes), which is what the bitblt swapchain presents
+    /// (see `the_picture_fills`).
+    #[test]
+    fn a_picture_fills_its_window_exactly_or_as_a_letterbox_of_it() {
+        let window = (2396, 1349);
+        assert!(
+            the_picture_fills(window, window),
+            "the picture is the window it is drawn in"
+        );
+        assert!(
+            the_picture_fills((2395, 1348), window),
+            "and an aspect worked out in integers may land a pixel out"
+        );
+        assert!(
+            the_picture_fills((2396, 1013), window),
+            "a wider film letterboxed in the box touches its width, which is mpv fitting it and \
+             not an output that never resized"
+        );
+        assert!(
+            the_picture_fills((1800, 1349), window),
+            "and a taller one touches its height"
+        );
+
+        assert!(
+            !the_picture_fills((1920, 1080), window),
+            "a picture on neither witness is a buffer at the size the window used to be: smaller \
+             than the window on both axes, which the Shell presents as black around a small picture"
+        );
+        assert!(
+            !the_picture_fills((3840, 2160), window),
+            "or larger than it, which it presents cropped"
+        );
+        assert!(
+            the_picture_fills((1920, 1349), window),
+            "and a one-axis difference that still spans an axis reads as a letterbox: without the \
+             film's own shape a one-axis stale buffer is the same picture (see the shortcut on \
+             `the_picture_fills`)"
+        );
+    }
+
+    /// A settle reads the picture once and, where it does not fill, exactly one nudge is made and the
+    /// retry is what waits between the two reads — the cap that keeps a stuck output from being asked
+    /// for the same excursion for the life of the pin (see `the_fill_look`).
+    #[test]
+    fn a_settle_reads_the_fill_once_and_once_more_after_its_one_nudge() {
+        let now = Instant::now();
+        assert_eq!(
+            the_fill_look(Fill::Unlooked, now),
+            FillLook::Look,
+            "a fresh settle reads the picture"
+        );
+        assert_eq!(
+            the_fill_look(Fill::Filled, now),
+            FillLook::Done,
+            "and a picture that fills it needs nothing more"
+        );
+        assert_eq!(
+            the_fill_look(Fill::Unknown, now),
+            FillLook::Done,
+            "a player that cannot say is not read again: there is nothing to act on"
+        );
+        assert_eq!(
+            the_fill_look(Fill::Nudged(now), now),
+            FillLook::Wait,
+            "the nudge's own retry is how long the VO is given to answer it"
+        );
+        assert_eq!(
+            the_fill_look(Fill::Nudged(now), now + SETTLE_RETRY),
+            FillLook::Look,
+            "and after it the one look that says whether the nudge took"
+        );
+        assert_eq!(
+            the_fill_look(Fill::NeverFilled, now),
+            FillLook::Done,
+            "a source that never filled says so once and is left alone"
+        );
+    }
+
+    /// A drag follows the box coarsely on the way up and leads it on the way down: a source that is a
+    /// little smaller is left for the drag's end, a source a tenth smaller is chased, and a source
+    /// larger than the box is asked for a box inset so a step of lag cannot spill
+    /// (see `the_drag_catch_up`).
+    #[test]
+    fn a_drag_chases_a_growing_box_coarsely_and_leads_a_shrinking_one() {
+        let source = (680, 383);
+        assert_eq!(
+            the_drag_catch_up(source, source),
+            None,
+            "a source already at the box is asked for nothing"
+        );
+        assert_eq!(
+            the_drag_catch_up((740, 383), source),
+            None,
+            "and a box under a tenth larger is left for the drag's own end"
+        );
+        assert_eq!(
+            the_drag_catch_up((760, 383), source),
+            Some(((760, 383), "grow catch-up")),
+            "past a tenth the source is chased, and for the box itself"
+        );
+        assert_eq!(
+            the_drag_catch_up((680, 430), source),
+            Some(((680, 430), "grow catch-up")),
+            "on either axis: a stretch is a stretch whichever way the hand came"
+        );
+        assert_eq!(
+            the_drag_catch_up((2263, 1274), source),
+            Some(((2263, 1274), "grow catch-up")),
+            "a long drag is a handful of asks and not one per step"
+        );
+        assert_eq!(
+            the_drag_catch_up((600, 340), source),
+            Some(((592, 332), "shrink lead")),
+            "a shrink is asked for ahead of the box, so one step of lag cannot leave the source \
+             outside the host"
+        );
+        assert_eq!(
+            the_drag_catch_up((680, 340), source),
+            Some(((672, 332), "shrink lead")),
+            "and the lead is per axis: a box pulled shorter only leads on its height"
+        );
+    }
+
+    /// The lead grows with the box and never falls under the minimum, so a pin too small for a scaled
+    /// lead still gets one (`the_shrink_lead`).
+    #[test]
+    fn the_shrink_lead_scales_from_the_box_and_has_a_floor() {
+        assert_eq!(the_shrink_lead(680), SHRINK_LEAD_MIN);
+        assert!(the_shrink_lead(2263) > SHRINK_LEAD_MIN, "a big box gets a bigger lead");
+        assert_eq!(the_shrink_lead(10), SHRINK_LEAD_MIN, "and a small one is not less than it");
+    }
+
+    /// The picture size is asked of `dwidth`/`dheight` first and of `osd-dimensions` only where they
+    /// do not answer, and the name that answered is part of the answer so the trace says which
+    /// property a run was reading (see `the_picture_size`).
+    #[test]
+    fn the_picture_size_prefers_dwidth_and_names_the_property_that_answered() {
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+        let pid = 0x5eed;
+        mpv_ipc::remember_pipe(pid, "rhp-test-picture-size", false);
+        mpv_ipc::clear_reads();
+
+        mpv_ipc::answer_a_read(pid, "dwidth", Some("1920"));
+        mpv_ipc::answer_a_read(pid, "dheight", Some("1080"));
+        mpv_ipc::answer_a_read(pid, "osd-dimensions/w", Some("640"));
+        mpv_ipc::answer_a_read(pid, "osd-dimensions/h", Some("360"));
+        assert_eq!(the_picture_size(pid), Some((1920, 1080, "dwidth/dheight")));
+        assert_eq!(
+            mpv_ipc::noted_reads(),
+            vec![format!("{pid}:dwidth"), format!("{pid}:dheight")],
+            "a player that has them is asked for those two and nothing else"
+        );
+
+        mpv_ipc::answer_a_read(pid, "dwidth", None);
+        mpv_ipc::answer_a_read(pid, "dheight", None);
+        assert_eq!(the_picture_size(pid), Some((640, 360, "osd-dimensions/w+h")));
+
+        assert_eq!(the_picture_size(0), None, "a player this app does not hold is not asked");
+        mpv_ipc::forget_pipe(pid);
+        mpv_ipc::clear_reads();
     }
 }

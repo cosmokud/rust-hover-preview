@@ -2821,6 +2821,7 @@ fn a_pinned_mpv_film_is_begun_into_the_pins_film_host() {
             None,
             "rhp-test",
             Some(wid),
+            false,
             true,
         )
         .iter()
@@ -2860,7 +2861,22 @@ fn a_pin_drawn_through_a_thumbnail_is_begun_with_no_window_of_this_apps() {
     );
 
     let args = video_launch::mpv_args(
-        path, 0, 0, 320, 240, 0.0, false, 80, None, false, false, None, "rhp-test", None, false,
+        path,
+        0,
+        0,
+        320,
+        240,
+        0.0,
+        false,
+        80,
+        None,
+        false,
+        false,
+        None,
+        "rhp-test",
+        None,
+        false,
+        false,
     );
     assert!(
         args.iter().any(|arg| arg == "--geometry=320x240+0+0"),

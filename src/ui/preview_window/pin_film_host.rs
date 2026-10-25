@@ -958,6 +958,57 @@ pub(super) fn the_pinned_player_was_begun_in_the_host() -> bool {
     pid != 0 && film_host().is_some() && hosted_player_pid() == Some(pid)
 }
 
+/// How often an unchanged `the_hosted_player_is_drawing` answer is written down: the tick asks it
+/// hundreds of times a second, and on-change plus this heartbeat is what makes the trace readable
+/// (see `trace_the_hosted_drawing`).
+const HOSTED_DRAWING_TRACE_EVERY: Duration = Duration::from_secs(1);
+
+/// One `the_hosted_player_is_drawing` answer as the trace last wrote it: the player, the host (zero
+/// for none), the answer, and when it was written.
+type HostedDrawingTrace = (u32, isize, bool, Instant);
+
+/// The last answer `the_hosted_player_is_drawing` wrote down (see `trace_the_hosted_drawing`).
+static LAST_HOSTED_DRAWING: Lazy<Mutex<Option<HostedDrawingTrace>>> = Lazy::new(|| Mutex::new(None));
+
+/// Write the answer of one look at the hosted film's window, on change and at most once a second.
+///
+/// **The line is asked for by every tick, several times, and used to write some 3 MB a run** — which
+/// is a trace nothing can be read out of. A state transition is the interesting part and is never
+/// missed; an answer that has not moved is repeated only as the heartbeat that says the tick is
+/// still asking it.
+fn trace_the_hosted_drawing(pid: u32, host: Option<HWND>, drawing: bool) {
+    let Ok(mut last) = LAST_HOSTED_DRAWING.lock() else {
+        return;
+    };
+    let now = Instant::now();
+    let host_number = host.map_or(0, |host| host.0 as isize);
+    let answer = (pid, host_number, drawing, now);
+    if !the_drawing_trace_is_due(*last, answer, now) {
+        return;
+    }
+    *last = Some(answer);
+    match host {
+        Some(host) => note_pin_trace!(
+            "hosted drawing pid {pid} host {host:?} drawing {}",
+            drawing as u8
+        ),
+        None => note_pin_trace!("hosted drawing pid {pid} host none false"),
+    }
+}
+
+/// Whether an answer is due a line: a change of player, host or answer, and otherwise no more than
+/// the heartbeat `HOSTED_DRAWING_TRACE_EVERY` after the last one (see `trace_the_hosted_drawing`).
+fn the_drawing_trace_is_due(
+    last: Option<HostedDrawingTrace>,
+    answer: HostedDrawingTrace,
+    now: Instant,
+) -> bool {
+    last.is_none_or(|(pid, host, drawing, at)| {
+        (pid, host, drawing) != (answer.0, answer.1, answer.2)
+            || now.duration_since(at) >= HOSTED_DRAWING_TRACE_EVERY
+    })
+}
+
 /// Whether this player has put a child of its own under the host, which is what a film's window
 /// arriving *is* for a player that has no window of the desktop's.
 ///
@@ -975,17 +1026,14 @@ pub(super) fn the_pinned_player_was_begun_in_the_host() -> bool {
 /// timer poll invents it and nothing shown is hidden again.
 pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
     let Some(host) = film_host() else {
-        note_pin_trace!("hosted drawing pid {pid} host none false");
+        trace_the_hosted_drawing(pid, None, false);
         return false;
     };
     let drawing = pid != 0
         && hosted_player_pid() == Some(pid)
         && (a_child_of_the_host(host, pid).is_some()
             || pin_film_thumbnail::the_source_is_up(pid));
-    note_pin_trace!(
-        "hosted drawing pid {pid} host {host:?} drawing {}",
-        drawing as u8
-    );
+    trace_the_hosted_drawing(pid, Some(host), drawing);
     drawing
 }
 
@@ -1442,8 +1490,9 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
 }
 
 /// Put mpv's window where the pin's film is drawn from, where the pin's film is drawn through the
-/// Shell's own thumbnail of it: the box the pin is at, once at each end of a drag and at every box
-/// that settles without one (see `pin_film_thumbnail`).
+/// Shell's own thumbnail of it: the box the pin is at, at each end of a drag and at every box that
+/// settles without one (see `pin_film_thumbnail`). Between the two ends the source follows the box
+/// coarsely by itself (see `pin_film_thumbnail::follow_the_band_while_dragging`).
 ///
 /// Nothing is asked on any other road: there the film is a child of the host, and it is the host's
 /// own `WM_SIZE` that fits it.
@@ -1862,6 +1911,52 @@ mod tests {
         assert_eq!(
             MPV_THUMBNAIL_PIN_VARIABLE, "RHP_MPV_THUMBNAIL_PIN",
             "the knob is the name the branch's notes and the report give it"
+        );
+    }
+
+    /// **The per-tick line is written on change and at most once a second otherwise**, which is what
+    /// keeps a run's trace readable: the tick asks `the_hosted_player_is_drawing` hundreds of times a
+    /// second and each answer it has not moved is one line an unchanged answer owes nobody.
+    #[test]
+    fn a_hosted_drawing_answer_is_traced_on_change_and_once_a_second_otherwise() {
+        let now = Instant::now();
+        let answer = (7, 0x2000, true, now);
+        assert!(
+            the_drawing_trace_is_due(None, answer, now),
+            "the first answer of a run is the state it began in"
+        );
+        assert!(
+            !the_drawing_trace_is_due(Some(answer), answer, now + Duration::from_millis(200)),
+            "and an answer that has not moved is not written on every tick"
+        );
+        assert!(
+            the_drawing_trace_is_due(Some(answer), answer, now + HOSTED_DRAWING_TRACE_EVERY),
+            "the heartbeat is what says the tick is still asking it"
+        );
+        assert!(
+            the_drawing_trace_is_due(
+                Some(answer),
+                (7, 0x2000, false, now + Duration::from_millis(1)),
+                now + Duration::from_millis(1)
+            ),
+            "a transition is never missed, however soon after the last line it is: a player that
+             draws and stops and draws again is three answers and not one"
+        );
+        assert!(
+            the_drawing_trace_is_due(
+                Some(answer),
+                (8, 0x2000, true, now + Duration::from_millis(1)),
+                now + Duration::from_millis(1)
+            ),
+            "and another player is another answer"
+        );
+        assert!(
+            the_drawing_trace_is_due(
+                Some(answer),
+                (7, 0x3000, true, now + Duration::from_millis(1)),
+                now + Duration::from_millis(1)
+            ),
+            "as is the same player in another host"
         );
     }
 }
