@@ -27,12 +27,12 @@ pub(super) const PIN_MIN_MEDIA_PIXELS: f32 = 48.0;
 /// playhead is a thing that moves on its own, and a quarter of a second is what a sound's card is
 /// repainted at for the same reason (see `AUDIO_CARD_REPAINT`).
 pub(super) const PIN_TRANSPORT_REPAINT_MS: u64 = 250;
-/// The wait a flush that paced nothing is given when the display will not name its rate: about a
-/// frame at 125 Hz. `DwmFlush` normally holds a live hosted resize to the display's own period
-/// (6.94 ms a frame at 144 Hz, 16.7 at 60), and this is what stands under a compositor with nothing
-/// to draw — one that returns from a flush at once — so the resize is a cadence handing the host one
-/// box a frame rather than a spin handing it more than any display can show. It is not the pace of a
-/// resize whose flush worked: that one is the display's, whatever it is.
+/// The wait a live hosted mpv resize is given when the display will not name its rate: about a
+/// frame at 125 Hz. Every resize waits a whole frame on top of its flush, because the host needs
+/// that much headroom to present a box (see `the_wait_after_a_flush`), and this is what stands in
+/// for the frame where the compositor will not say how long one is — no composition on this
+/// session, a remote desktop, or a first call before the first frame was composed. It is a cadence
+/// rather than a spin, and a display that does name its period is given that period instead.
 pub(super) const PIN_RESIZE_FRAME_FALLBACK: Duration = Duration::from_millis(8);
 
 /// What a pinned window's edges and caption do, which is a question about the kind of thing
@@ -668,14 +668,16 @@ pub(super) unsafe fn release_pin_capture(hwnd: HWND) {
     }
 }
 
-/// Hold a live hosted mpv resize to the display's own frame: wait out the compositor, then out a
-/// frame for a flush that paced nothing.
+/// Hold a live hosted mpv resize to one box a display frame: wait out the compositor, then out a
+/// whole frame for the host to present the box in.
 ///
 /// The flush asks for the display's own next frame rather than the system timer's tick (see
-/// `wait_for_the_compositor`), and while there is a frame to draw that flush is the whole of the
-/// pace: a resize on a 144 Hz panel runs at 144 boxes a second, one on 60 at 60. The wait under it is
-/// only for a compositor with nothing to draw, and it is the display's own period rather than a
-/// number written here when the compositor will name one (see `the_displays_frame_period` and
+/// `wait_for_the_compositor`), and that is only half the pace. **The rest is headroom for mpv.**
+/// The host's child resizes on mpv's own thread, so a box submitted at the flush's own rate is a
+/// box presented after the pointer has moved again, and the picture reads as a frame bouncing
+/// inside a window that is not — which is exactly what a flush and no wait gave at 144 Hz. So a
+/// whole frame is waited on top, the display's own period when the compositor names one and
+/// `PIN_RESIZE_FRAME_FALLBACK` when it will not (see `the_displays_frame_period` and
 /// `the_wait_after_a_flush`). Both happen on the thread that applies the drag, so the pointer
 /// positions that arrive during the wait are coalesced by Windows into the next `WM_MOUSEMOVE`
 /// rather than queued up as boxes for the host to catch up on. The pin's own surface and the host
@@ -699,23 +701,28 @@ pub(super) fn pace_a_live_hosted_mpv_resize() {
 }
 
 /// What a resize waits, once a flush has been made, before the next pointer move may become another
-/// box: nothing when the flush itself took a frame, and a whole frame otherwise.
+/// box: a whole display frame, always.
 ///
-/// A flush that waited a frame is the display's own pace, so nothing is added on top of it. A flush
-/// that came straight back paced nothing, and the resize owes a frame — the display's own period when
-/// the compositor names it, and the fallback when it will not.
+/// **Nothing is taken off for the frame the flush spent.** The flush is the pin's own surface asked
+/// for at the display's rate; the wait is the headroom the host needs on top of it, because mpv
+/// resizes its child on a thread of its own and a box handed over at the flush alone arrives after
+/// the pointer has moved on — the pin overshoots the cursor and springs back. A flush that came
+/// straight back is given the same wait, which is what keeps a compositor with nothing to draw a
+/// cadence rather than a spin.
+///
+/// The frame is the display's own period when the compositor names it and
+/// `PIN_RESIZE_FRAME_FALLBACK` when it will not. `_flushed` is the flush's measured length, kept so
+/// the caller asks and the tests show one shape of answer: a flush that took a whole frame waits
+/// exactly what a flush that took none does.
 ///
 /// It is a whole frame rather than the part of one the flush did not spend, deliberately: this app
 /// never asks for a finer system timer, so a sub-millisecond `thread::sleep` is rounded up to the
 /// system's own tick of 15.6 ms, which on a 144 Hz panel would be a slower resize than the one this
-/// replaced. A whole frame is only ever the spin guard's wait, where a coarse timer costs nothing.
+/// replaced. The rounding is the timer's; the rule stays a whole frame.
 pub(super) fn the_wait_after_a_flush(
-    flushed: Duration,
+    _flushed: Duration,
     display_period: Option<Duration>,
 ) -> Option<Duration> {
-    if compositor_paced_the_tick(true, flushed) {
-        return None;
-    }
     Some(display_period.unwrap_or(PIN_RESIZE_FRAME_FALLBACK))
 }
 
