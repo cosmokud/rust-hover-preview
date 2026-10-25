@@ -172,11 +172,6 @@ pub(super) fn mpv_args(
     // stands in is the pin's own order to keep: `--wid` names the window and mpv draws into it,
     // while a `--geometry` would be a top-level box nobody asked for and an `--ontop` a place in
     // the desktop's order the pin is the owner of (see `pin_film_host`).
-    //
-    // **Everything else is a window of the player's own, and the two flags above are its own too.**
-    // That is the hover, and it is a pinned mpv film: the pin places that window at its band on every
-    // step and keeps the order underneath itself (see `ensure_pinned_sibling_box`), so nothing about
-    // a child or a `--wid` belongs on this road.
     if let Some(wid) = wid {
         args.push(format!("--wid={wid}"));
     } else {
@@ -192,22 +187,15 @@ pub(super) fn mpv_args(
         args.push(format!("--geometry={width}x{height}+{x}+{y}"));
     }
     args.push("--gpu-api=d3d11".to_string());
-    // **And a hosted child's swapchain is the bitblt model rather than the flip one**: a flip-model
-    // swapchain re-derives its buffers for a new size — a `ResizeBuffers` and a drain of the present
-    // queue, at a cost proportional to the buffer's size — and a pin is resized on every pointer
-    // move, so that re-derivation is a hitch on every step in a child window this app does not own
-    // (see `pin_film_host`). The bitblt model presents by copying at the window's current size and
-    // has no such queue to drain, which is the classic cure for resize shimmer in an embedded child
+    // **And the swapchain is the bitblt model rather than the flip one**: a flip-model swapchain
+    // re-derives its buffers for a new size — a `ResizeBuffers` and a drain of the present queue,
+    // at a cost proportional to the buffer's size — and a pin is resized on every pointer move, so
+    // that re-derivation is a hitch on every step in a child window this app does not own (see
+    // `pin_film_host`). The bitblt model presents by copying at the window's current size and has
+    // no such queue to drain, which is the classic cure for resize shimmer in an embedded child
     // window. What it gives up is the independent flip the compositor hands straight to the
     // display: a film here costs a copy per frame and can sit a step behind a moving pin.
-    //
-    // **A top-level window is given the flip model, which is mpv's own default.** The window is the
-    // film's own and the compositor resizes it; there is no second window for a re-derivation to
-    // fall behind, and the copy the bitblt model costs would be paid for nothing (see
-    // `a_pinned_mpv_film_is_drawn_in_a_host`, which is the one thing that decides this).
-    if wid.is_some() {
-        args.push("--d3d11-flip=no".to_string());
-    }
+    args.push("--d3d11-flip=no".to_string());
 
     // mpv decodes on the card by its own safe list with its own software fallback, so the switch
     // is the whole of the answer here: there is no device for this side to measure and none to
@@ -1346,6 +1334,7 @@ mod tests {
                 "--ontop",
                 "--geometry=640x360+10+20",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1392,11 +1381,6 @@ mod tests {
         assert!(
             !args.iter().any(|arg| arg == "--ontop"),
             "and a child has no place in the desktop's order to hold: {args:?}"
-        );
-        assert!(
-            args.iter().any(|arg| arg == "--d3d11-flip=no"),
-            "and the child's swapchain is the bitblt model rather than the flip one, which is the \
-             one flag whose cost is the embedded child's and never a top-level window's: {args:?}"
         );
     }
 
@@ -1470,6 +1454,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sid=no",
                 "--sub-auto=no",
@@ -1514,6 +1499,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=no",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1557,6 +1543,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1609,6 +1596,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1651,6 +1639,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1767,6 +1756,7 @@ mod tests {
                     "--ontop",
                     &geometry,
                     "--gpu-api=d3d11",
+                    "--d3d11-flip=no",
                     "--hwdec=auto",
                     "--sub-auto=fuzzy",
                     "--keep-open=yes",
@@ -1855,6 +1845,7 @@ mod tests {
                 "--ontop",
                 "--geometry=1432x806+4416+-2160",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1920,6 +1911,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",

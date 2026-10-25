@@ -137,11 +137,6 @@ impl StandingFilm {
         // drawn in the host only when the player begun into it is the one this app recorded (see
         // `the_pinned_player_was_begun_in_the_host`).
         pin_film_host::note_hosted_player(unsafe { GetCurrentProcessId() });
-        // **And this is the hosted road, stood in for the run of the test.** A pinned mpv film's
-        // window is a window of the desktop's unless the machine asks for the hosted road by hand
-        // (see `a_pinned_mpv_film_is_drawn_in_a_host`), and every test in this file is about the
-        // host — so the one slot is put in here and given back with the rest of the stand.
-        pin_film_host::stand_the_mpv_pin_hosted_in(Some(true));
 
         stand_mpv_in(Some(true));
         stand_video_engine_in(Some((VideoEngine::Mpv, true)));
@@ -197,7 +192,6 @@ impl Drop for StandingFilm {
         }
         pin_stands_in_its_own_window(self.previous_own);
         stand_pin(self.previous_pin.take());
-        pin_film_host::stand_the_mpv_pin_hosted_in(None);
         VIDEO_PID.store(self.previous_pid, Ordering::SeqCst);
         VIDEO_HWND.store(self.previous_hwnd, Ordering::SeqCst);
         stand_mpv_in(None);
@@ -2155,64 +2149,6 @@ fn a_pinned_mpv_film_is_begun_into_the_pins_film_host() {
     );
 }
 
-/// A pinned mpv film is begun as a window of the desktop's by default: given its box and the topmost
-/// band, and told nothing about a host (see `a_pinned_mpv_film_is_drawn_in_a_host`).
-///
-/// It is the mirror of the test above, and the two are the whole of the launch's answer: the pin's
-/// film is one window this app sizes and places at its band, or it is a child of a host of this
-/// app's, and never both.
-#[test]
-fn a_pinned_mpv_film_is_begun_as_a_window_of_its_own() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
-    let film = StandingFilm::new();
-    // The machine's own answer rather than this file's: the hosted road the fixture stands in is the
-    // A/B, and the film's window is the desktop's for everything else.
-    pin_film_host::stand_the_mpv_pin_hosted_in(Some(false));
-    unsafe { show_pinned_window(film.pin_hwnd) };
-
-    let path = Path::new("a-film.mkv");
-    assert!(
-        pin_film_host::film_host().is_none(),
-        "a pin whose film is a window of its own takes up no host at all"
-    );
-    assert_eq!(
-        mpv_launch_host(path, None),
-        None,
-        "so the player is told no window to draw into"
-    );
-
-    let args = video_launch::mpv_args(
-        path,
-        10,
-        20,
-        320,
-        240,
-        0.0,
-        false,
-        80,
-        None,
-        false,
-        false,
-        None,
-        "rhp-test",
-        mpv_launch_host(path, None),
-    );
-    assert!(
-        args.iter().any(|arg| arg == "--geometry=320x240+10+20"),
-        "the pin's box is the launch's, in the spelling a box is given in: {args:?}"
-    );
-    assert!(
-        args.iter().any(|arg| arg == "--ontop"),
-        "and the window holds the topmost band itself until the pin is placed over it: {args:?}"
-    );
-    assert!(
-        !args.iter().any(|arg| arg.starts_with("--wid")),
-        "while a child's `--wid` is the one thing this launch is not: {args:?}"
-    );
-}
-
 /// The geometry the strips of chrome are carried in, read the way the paint and the placement read
 /// it: the window's own size, and the two strips' heights as the pin settled them.
 fn the_strips_geometry() -> (i32, i32, i32, i32) {
@@ -3242,61 +3178,6 @@ fn a_hosted_band_with_no_film_in_it_is_opaque_never_a_hole() {
     );
 }
 
-/// The band over a film the pin places at it itself is this app's thinnest claim, never a cover: the
-/// picture is a window of the desktop's standing under the band and is seen through it.
-///
-/// **It is the mirror of the test above, and the two are the difference the road makes.** A hosted
-/// film's band is opaque until the host's child arrives, because what stands behind it would be the
-/// desktop; a film in a window of its own is behind it from the first frame this app places, so the
-/// band must be the alpha-1 claim a press lands on and a picture shows through (see
-/// `fill_band_hit_testable`).
-///
-/// **The host a take-up made is deliberately left standing.** A pin can hold a host from a hosted film
-/// it showed before — a file step to an mpv film does not take it down — and a band painted opaque
-/// over the film of that step is a pin whose picture is a flat black rectangle, with the film drawing
-/// behind it. The route is what decides, and this reads the route.
-#[test]
-fn a_band_over_a_film_in_a_window_of_its_own_is_the_hole_the_film_shows_through() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
-    let film = StandingFilm::new();
-    unsafe { show_pinned_window(film.pin_hwnd) };
-    assert!(
-        pin_film_host::film_host().is_some(),
-        "the hosted road's take-up made a host, which is the stale host this test keeps"
-    );
-
-    // And the machine asks for the other road after all: the film is a window of the desktop's now.
-    pin_film_host::stand_the_mpv_pin_hosted_in(Some(false));
-    assert!(
-        !pin_film_host::a_host_of_the_pin_holds_the_film_at_its_band(),
-        "no host holds the film the pin is showing"
-    );
-
-    let hwnd = film.pin_hwnd;
-    unsafe { render_pinned_preview_at(hwnd, film.box_.0, film.box_.1) };
-    let (width, height) = pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
-        .expect("a pin to have a size");
-    let bits = ensure_layered_surface(hwnd.0 as isize, width as u32, height as u32)
-        .expect("the surface the paint drew into");
-    let painted = unsafe { std::slice::from_raw_parts(bits, width as usize * height as usize * 4) };
-    let (band_top, band_height) = pinned_band_rows(
-        height,
-        pinned_caption_height(96, None),
-        0,
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.overlay)) == Some(true),
-    );
-    let row = (band_top.max(0) as usize + band_height as usize / 2).min(height as usize - 1);
-    let pixel = &painted[row * width as usize * 4..row * width as usize * 4 + 4];
-    assert_eq!(
-        pixel[3], 1,
-        "the band over a film of its own is the least a pixel can be, so the film is seen through \
-         it and a press lands on it (row {row}: {pixel:?})"
-    );
-}
-
 /// A step holds the old cover until the new film's first frame: parked over a band with no
 /// visible child, the settle keeps the frame standing; the tick the child arrives hands the
 /// band back with nothing transparent in between (see `settle_pinned_park`).
@@ -4249,91 +4130,6 @@ fn the_composed_renderer_is_asked_for_unless_a_machine_names_another() {
         "direct3d11",
         "including the flip-model one, which is the trade the hatch exists to make deliberately"
     );
-}
-
-/// **A pin taken up on a hover's mpv film begins its own player where that film's window is the
-/// desktop's.** The hover's host cannot become the pin's window — the film would be a child of a host
-/// the pin did not make, which is the arrangement a pin's mpv film is not drawn in (see
-/// `a_pinned_mpv_film_is_drawn_in_a_host`) — so the take-up is the relaunch every take-up from a hover
-/// that is not a host move takes: the hover frozen where it stands, the pin's own top-level player
-/// begun on that frame, and the handover the only visible swap (see
-/// `begin_the_adopted_film_in_the_host`).
-#[test]
-fn a_pin_taken_up_on_a_hover_begins_its_own_player_where_the_film_is_a_window_of_its_own() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
-    let film = StandingFilm::new();
-    let hovered = 0x7FFF_FFF9;
-    film.taken_up_from_a_hover(hovered);
-    pin_film_host::stand_the_mpv_pin_hosted_in(Some(false));
-    clear_restart_count();
-    pin_film_host::disarm_pin_handover();
-    mpv_ipc::clear_noted();
-    mpv_ipc::clear_reads();
-    mpv_ipc::remember_pipe(hovered, "the-hovers-pipe", false);
-    mpv_ipc::answer_a_read(hovered, "time-pos", Some("412.500000"));
-
-    unsafe { show_pinned_window(film.pin_hwnd) };
-
-    assert!(
-        pin_film_host::film_host().is_none(),
-        "no host is taken up for a film whose window is the desktop's own"
-    );
-    assert_eq!(
-        restart_count(),
-        1,
-        "and the pin begins one player of its own at its band"
-    );
-    assert!(
-        pin_film_host::pin_handover_armed(),
-        "the hover stays the picture until that player has the same frame"
-    );
-    assert_eq!(
-        pin_film_host::held_hover_for_a_test(),
-        Some((hovered, 412.5)),
-        "frozen at the second its own picture is at, which is the second the pin begins on"
-    );
-
-    pin_film_host::disarm_pin_handover();
-    mpv_ipc::forget_pipe(hovered);
-    mpv_ipc::forget_pipe(VIDEO_PID.load(Ordering::SeqCst));
-    mpv_ipc::clear_noted();
-    mpv_ipc::clear_reads();
-    clear_restart_count();
-    drop(film);
-}
-
-/// A pinned mpv film is a **top-level window of the player's own**, which the pin places at its band,
-/// and the hosted road is the machine's to ask for by hand.
-///
-/// **Why this is the default and the hosted road is not.** A `--wid` film is two windows deep — the
-/// pin's host, and mpv's own child inside it — and mpv sizes that inner window on its own thread, so
-/// a resize has it arriving several sizes behind the band it stands in. A top-level film is one
-/// window: this app sets the size and mpv renders into it, which is what a pinned film was before a
-/// host was adopted and is what `RHP_MPV_HOSTED_PIN` gives back for the A/B (see
-/// `a_pinned_mpv_film_is_drawn_in_a_host`). Both arms are a call with the machine's answer given, so
-/// the test writes no environment the rest of the process would see.
-#[test]
-fn the_route_a_film_is_drawn_in_is_the_machines_to_choose_for_mpv_alone() {
-    assert!(
-        !pin_film_host::a_film_route_is_drawn_in_a_host(VideoRoute::Mpv, false),
-        "an mpv film is a window of the desktop's unless the machine asked for the hosted road"
-    );
-    assert!(
-        pin_film_host::a_film_route_is_drawn_in_a_host(VideoRoute::Mpv, true),
-        "and it is the pin's host's child where it did"
-    );
-    for mpv_hosted in [true, false] {
-        assert!(
-            pin_film_host::a_film_route_is_drawn_in_a_host(VideoRoute::Ffplay, mpv_hosted),
-            "FFmpeg's player is hosted whatever the mpv road is doing"
-        );
-        assert!(
-            !pin_film_host::a_film_route_is_drawn_in_a_host(VideoRoute::MediaEngine, mpv_hosted),
-            "and a film no player of ours draws is in nobody's host"
-        );
-    }
 }
 
 /// **A temporary diagnostic.** A hosted mpv film keeps the layered pin its window has always had,
