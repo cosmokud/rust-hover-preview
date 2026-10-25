@@ -254,6 +254,12 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     let band_width = width.max(1) as u32;
     let mem_dc = layered_surface_dc(hwnd.0 as isize);
 
+    // Whether a host of the pin's own holds this band's film, asked before the media's lock is taken
+    // below: the two locks are taken in one order in this file, and the band's cover is the host's
+    // (see `a_host_of_the_pin_holds_the_film_at_its_band`).
+    let held_by_a_host = pin_film_host::film_host().is_some()
+        && pin_film_host::a_host_of_the_pin_holds_the_film_at_its_band();
+
     // Where in that band the media lands. A picture is the band's own box unless the wheel has
     // zoomed it into a window that stopped growing, in which case it lands on a box larger than the
     // band and is carried around inside it — and a box outside the band is left to GDI to clip, since
@@ -421,10 +427,11 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     // rather than over the desktop (see `pin_film_host`).
                     // shortcut: opaque black where a held frame would be; upgrade to the held frame
                     // where one is in hand if this ever shows.
-                    // Only where the host stands: a pin never shown has no host yet, and its
-                    // bitmap keeps the pin's claim the way the strips' own test reads it (see
-                    // `the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows`).
-                    let hosted_needs_cover = pin_film_host::film_host().is_some()
+                    // Only where the host holds this film: a pin never shown has no host yet, and a
+                    // film the pin places at its band itself — mpv's own top-level window — has no
+                    // host at all and is the picture this band is a hole for (see
+                    // `a_host_of_the_pin_holds_the_film_at_its_band`).
+                    let hosted_needs_cover = held_by_a_host
                         && !paint.parked
                         && !pin_film_host::the_hosted_player_is_drawing(
                             VIDEO_PID.load(Ordering::Acquire),

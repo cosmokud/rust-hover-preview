@@ -221,12 +221,13 @@ pub(super) fn video_drag_hold_apply(dragging: bool) -> bool {
         return false;
     }
 
-    // **mpv is left running through a gesture.** It is told everything it needs over its pipe
-    // while it plays and a drag or a resize only moves the window it is already drawing in (see
-    // `mpv_ipc`), so there is no pause key to post and no hold to write: a hold written here would
-    // leave the bar claiming a pause the film never took. The claim above is still reconciled, so
-    // nothing of a film this app held before survives into this one.
-    if pin_film_host::the_pinned_film_is_drawn_in_a_host(&path) {
+    // **mpv is left running through a gesture**, and so is a film the pin draws into a host of its
+    // own. mpv is told everything it needs over its pipe while it plays, and a drag or a resize only
+    // moves the window it is already drawing in (see `mpv_ipc`) — and a hosted film follows its host.
+    // So there is no pause key to post and no hold to write: a hold written here would leave the bar
+    // claiming a pause the film never took. The claim above is still reconciled, so nothing of a film
+    // this app held before survives into this one.
+    if pin_film_host::the_film_runs_on_through_a_gesture(&path) {
         return false;
     }
 
@@ -723,12 +724,13 @@ pub(super) fn begin_pin_drag(
             // **mpv's window is left exactly where the film is drawing**, because the film is not
             // being held for this gesture: parking it would hide a playing film behind a still and
             // let it run on unwatched, so a drag or a resize is a move of the window it already has
-            // (see `video_drag_hold_apply` and `mpv_ipc`).
+            // (see `video_drag_hold_apply` and `mpv_ipc`). A film the pin draws into a host of its
+            // own follows that host and is not parked either.
             let pinned_film = pinned_media_owner();
-            let a_host_is_drawing = pinned_film
+            let runs_on = pinned_film
                 .as_ref()
-                .is_some_and(|(path, _)| pin_film_host::the_pinned_film_is_drawn_in_a_host(path));
-            if !a_host_is_drawing
+                .is_some_and(|(path, _)| pin_film_host::the_film_runs_on_through_a_gesture(path));
+            if !runs_on
                 && pinned_film.as_ref().is_some_and(|(path, _)| {
                     current_media_type().is_some_and(|kind| kind.draws_in_a_window_of_its_own(path))
                 })

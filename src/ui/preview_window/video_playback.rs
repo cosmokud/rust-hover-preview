@@ -713,9 +713,11 @@ fn start_video_playback_where(
 }
 
 /// The window an mpv player begun for this film is told to draw into, as `--wid` is given it: the
-/// pin's own child for a pinned mpv film, and nothing for every other launch — a hover's film, a
-/// pin standing in the preview's window, and FFmpeg's player and the media engine's own frame,
-/// which are not this route at all (see `pin_film_host::host_for_the_pins_film`).
+/// pin's own child for a pinned FFmpeg film's host — and for a pinned mpv film only where the machine
+/// asked for the hosted road by hand (see `a_pinned_mpv_film_is_drawn_in_a_host`) — and nothing for
+/// every other launch: a hover's film, a pinned mpv film's own top-level window, a pin standing in the
+/// preview's window, and FFmpeg's player and the media engine's own frame, which are not this route at
+/// all (see `pin_film_host::host_for_the_pins_film`).
 ///
 /// **The one answer both of the launch's questions are read from.** A player given a window of
 /// this app's own is told it and no place of its own, and it is owed no topmost ask either: the
@@ -774,10 +776,12 @@ fn start_mpv_video_playback(
     let (asked_width, asked_height) =
         video_launch::mpv_box_size(width, height, dpi_at(x, y), dpi_at(0, 0));
 
-    // The window this player draws into, where it is this app's to give: a pinned mpv film is a
-    // child of the pin's own window, and a hover whose Pin Mode is on gets a top-level host of the
-    // app's own so that the film can move into the pin without a second launch (see
-    // `mpv_launch_host` and `hover_film_host`).
+    // The window this player draws into, where it is this app's to give: a pinned FFmpeg film's host,
+    // and a pinned mpv film's only where the machine asked for the hosted road — an mpv film at a
+    // pin's band is a window of the desktop's otherwise, placed at that band by this app (see
+    // `mpv_launch_host` and `a_pinned_mpv_film_is_drawn_in_a_host`). A hover whose Pin Mode is on gets
+    // a top-level host of the app's own so that the film can move into the pin without a second launch
+    // (see `hover_film_host`).
     let pin_host = mpv_launch_host(path, kind);
     // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
     // step from an FFmpeg film must not leave the host answering as FFmpeg's (see
