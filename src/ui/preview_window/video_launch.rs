@@ -187,6 +187,15 @@ pub(super) fn mpv_args(
         args.push(format!("--geometry={width}x{height}+{x}+{y}"));
     }
     args.push("--gpu-api=d3d11".to_string());
+    // **And the swapchain is the bitblt model rather than the flip one**: a flip-model swapchain
+    // re-derives its buffers for a new size — a `ResizeBuffers` and a drain of the present queue,
+    // at a cost proportional to the buffer's size — and a pin is resized on every pointer move, so
+    // that re-derivation is a hitch on every step in a child window this app does not own (see
+    // `pin_film_host`). The bitblt model presents by copying at the window's current size and has
+    // no such queue to drain, which is the classic cure for resize shimmer in an embedded child
+    // window. What it gives up is the independent flip the compositor hands straight to the
+    // display: a film here costs a copy per frame and can sit a step behind a moving pin.
+    args.push("--d3d11-flip=no".to_string());
 
     // mpv decodes on the card by its own safe list with its own software fallback, so the switch
     // is the whole of the answer here: there is no device for this side to measure and none to
@@ -1325,6 +1334,7 @@ mod tests {
                 "--ontop",
                 "--geometry=640x360+10+20",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1333,7 +1343,7 @@ mod tests {
                 IPC_ARG,
             ],
             "the film, then the configuration off, the mouse off, the chrome off, the order it is\
-             held up in, the box, the two Direct3D options and the level — `--vo` is deliberately\
+             held up in, the box, the three Direct3D options and the level — `--vo` is deliberately\
              not passed and no `--start` is asked for at the beginning of a file (see `mpv_args`)"
         );
     }
@@ -1444,6 +1454,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sid=no",
                 "--sub-auto=no",
@@ -1488,6 +1499,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=no",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1531,6 +1543,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1583,6 +1596,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1625,6 +1639,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1741,6 +1756,7 @@ mod tests {
                     "--ontop",
                     &geometry,
                     "--gpu-api=d3d11",
+                    "--d3d11-flip=no",
                     "--hwdec=auto",
                     "--sub-auto=fuzzy",
                     "--keep-open=yes",
@@ -1829,6 +1845,7 @@ mod tests {
                 "--ontop",
                 "--geometry=1432x806+4416+-2160",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1894,6 +1911,7 @@ mod tests {
                 "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
