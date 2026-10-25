@@ -27,6 +27,11 @@ pub(super) const PIN_MIN_MEDIA_PIXELS: f32 = 48.0;
 /// playhead is a thing that moves on its own, and a quarter of a second is what a sound's card is
 /// repainted at for the same reason (see `AUDIO_CARD_REPAINT`).
 pub(super) const PIN_TRANSPORT_REPAINT_MS: u64 = 250;
+/// The least a live hosted resize may take: at most ~125 boxes a second. `DwmFlush` already holds a
+/// resize to the display's own rate (6.94 ms a frame at 144 Hz, 16.7 at 60), and this is the floor
+/// under it — a compositor with nothing to draw returns from a flush at once, and without the floor
+/// the resize would be a spin handing the host more boxes than any display can show.
+pub(super) const PIN_RESIZE_FRAME_FLOOR: Duration = Duration::from_millis(8);
 
 /// What a pinned window's edges and caption do, which is a question about the kind of thing
 /// inside it.
@@ -661,6 +666,51 @@ pub(super) unsafe fn release_pin_capture(hwnd: HWND) {
     }
 }
 
+/// Hold a live hosted mpv resize to a frame: wait out the compositor, then out the floor under it.
+///
+/// The flush asks for the display's own next frame rather than the system timer's tick (see
+/// `wait_for_the_compositor`), and the floor keeps a compositor with nothing to draw from turning
+/// the wait into a spin (see `PIN_RESIZE_FRAME_FLOOR`). Both happen on the thread that applies the
+/// drag, so the pointer positions that arrive during the wait are coalesced by Windows into the next
+/// `WM_MOUSEMOVE` rather than queued up as boxes for the host to catch up on. The pin's own surface
+/// and the host have both been submitted by the time this is asked (see `apply_pin_drag`).
+pub(super) fn pace_a_live_hosted_mpv_resize() {
+    if !a_live_hosted_mpv_resize_is_paced(
+        pin_film_host::film_host().is_some(),
+        pin_film_host::the_pins_film_is_ffplay(),
+        pin_player_is_parked(),
+    ) {
+        return;
+    }
+
+    let began = Instant::now();
+    // Safety: a call with no arguments and no state of its own, which asks the compositor to flush
+    // the frame it has and answers whether it could.
+    let _ = unsafe { DwmFlush() };
+    std::thread::sleep(PIN_RESIZE_FRAME_FLOOR.saturating_sub(began.elapsed()));
+}
+
+/// Whether a resize of a film is held to a compositor frame before the next pointer move is applied.
+///
+/// **A hosted mpv film is a player of its own, and it takes its new box on its own thread.** Every
+/// pointer move hands the host a box, and the child mpv draws in sizes itself a moment later — so at
+/// the pace of a fast hand the picture arrives several sizes behind the band it stands in, which
+/// reads as a frame bouncing inside a window that is not. Holding the next move until the compositor
+/// has had a frame lets Windows coalesce the pointer positions in between, so the host is asked for
+/// at most one box per frame rather than once per pointer message. It is the resize that is paced and
+/// never the move: a move carries the window the film is already drawing in.
+///
+/// FFmpeg's hosted film is left out because its child is fitted to the host's box in the same call
+/// that places the host (see `fit_the_hosted_ffplay_to_the_host`). A film in a window of the
+/// desktop's has no host to keep up with, and a parked one is hidden with nothing drawing in it.
+pub(super) fn a_live_hosted_mpv_resize_is_paced(
+    a_film_host_stands: bool,
+    the_film_is_ffplay: bool,
+    parked: bool,
+) -> bool {
+    a_film_host_stands && !the_film_is_ffplay && !parked
+}
+
 /// Carry a pinned window's drag on: the pointer has moved, and what the press began is applied to
 /// the box the window had when it began.
 pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
@@ -871,6 +921,13 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     // Whatever stands in the media band travels with it — after the box it stands in is the
     // window's, so that a player's window is never put where the surface has not caught up.
     place_pinned_siblings();
+
+    // Both the pin's own surface and the host have been submitted, so a resize of a live hosted mpv
+    // film holds the next pointer move until the compositor has had this frame (see
+    // `pace_a_live_hosted_mpv_resize`).
+    if matches!(drag.action, PinDragAction::Resize(_)) {
+        pace_a_live_hosted_mpv_resize();
+    }
 }
 
 /// Put a pinned window in the middle of the screen it stands on, its size untouched: what a

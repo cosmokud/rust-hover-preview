@@ -1283,5 +1283,13 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
         return true;
     }
 
+    // The hand's last move may still have been waiting on a compositor frame (see
+    // `pace_a_live_hosted_mpv_resize`), so a resize applies the pointer's final place once more: the
+    // window is owed the box the hand actually let go on, and `apply_pin_drag` reads the pointer
+    // itself and passes for one that has not shifted since the last apply.
+    if carried_drag().is_some_and(|drag| matches!(drag.action, PinDragAction::Resize(_))) {
+        apply_pin_drag(hwnd);
+    }
+
     finish_pin_drag(hwnd, window)
 }
