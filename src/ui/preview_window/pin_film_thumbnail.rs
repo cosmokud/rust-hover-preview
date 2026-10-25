@@ -39,10 +39,11 @@ use windows::Win32::Graphics::Dwm::{
     DWM_TNP_VISIBLE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
-    IsWindow, IsWindowVisible, SetWindowLongPtrW, SetWindowPos, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, SW_HIDE,
-    SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNOACTIVATE,
-    WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    GetClientRect, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
+    IsWindow, IsWindowVisible, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+    ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, SW_HIDE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 
 use super::*;
@@ -112,6 +113,17 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32) {
         )
     };
 
+    // **A window that made itself the foreground gives it back.** mpv shows its own window when it has
+    // opened the file, which is after the click that made the pin, and the style above stops it taking
+    // the keyboard but not from having taken it already: the pin is asked for it here where the Shell
+    // says the player's window is the one in front. A window of this app's own was the foreground a
+    // moment ago, so the ask is one Windows grants.
+    if unsafe { GetForegroundWindow() } == source {
+        if let Some(pin) = pin_real_window::real_pin_window() {
+            let _ = unsafe { SetForegroundWindow(pin) };
+        }
+    }
+
     note_the_source(source, pid);
     if let Some(host) = pin_film_host::film_host() {
         the_band_was_placed(host);
@@ -137,8 +149,8 @@ pub(super) fn note_the_source(source: HWND, pid: u32) {
     SOURCE_PROCESS.store(pid, Ordering::SeqCst);
 }
 
-/// Whether this player's window is up as the pin's picture: a window that is still a window, still
-/// of the player this app records, and not one mpv has hidden behind a new video output.
+/// Whether this player's window is up as the pin's picture: still a window, and still one of the
+/// player this app records rather than one given the number of a window it replaced.
 pub(super) fn the_source_is_up(pid: u32) -> bool {
     let number = SOURCE.load(Ordering::SeqCst);
     if number == 0 || pid == 0 || SOURCE_PROCESS.load(Ordering::SeqCst) != pid {
@@ -247,18 +259,12 @@ pub(super) fn set_the_source_visible(visible: bool) {
     }
     let source = HWND(number as *mut _);
     // Safety: the handle is a window this module adopted, and the question is about it rather than a
-    // change to it. A window already where it is wanted is left alone: the host's show runs on every
+    // change to it. A window already where it is wanted is left alone: a host's show runs on every
     // tick of a pin that is drawing, and a `ShowWindow` a tick is a message mpv's thread owes nothing.
-    if unsafe { IsWindowVisible(source) }.as_bool() == visible {
-        return;
-    }
-    let _ = unsafe {
-        ShowWindowAsync(source, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE })
-    };
-    if visible {
-        if let Some(host) = pin_film_host::film_host() {
-            settle_the_source_at_the_band(host);
-        }
+    if unsafe { IsWindowVisible(source) }.as_bool() != visible {
+        let _ = unsafe {
+            ShowWindowAsync(source, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE })
+        };
     }
 }
 
