@@ -33,9 +33,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, SetParent,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_CHILD, GW_HWNDNEXT,
-    HWND_NOTOPMOST, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+    HWND_NOTOPMOST, HWND_TOP, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_SIZE, WNDCLASSEXW, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -47,15 +47,21 @@ use super::*;
 const FILM_HOST_CLASS: windows::core::PCWSTR = w!("RustHoverPreviewPinFilmHost");
 
 /// The default answer is the whole of what the host does: it draws nothing of its own and no press
-/// lands on it, because the picture is mpv's child (see the module doc). This bindings version
-/// exposes `DefWindowProcW` as a Rust-callable function, so the class still needs a system-ABI shim
-/// around it.
+/// lands on it, because the picture is mpv's child (see the module doc) — and on `WM_SIZE` it puts
+/// that child at its own client box. This bindings version exposes `DefWindowProcW` as a
+/// Rust-callable function, so the class still needs a system-ABI shim around it.
 unsafe extern "system" fn the_default_answer(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // **The child's box is given in the message that gave the host its own**, so the film is the
+    // band's size before this app composites the pin over it rather than a size or more behind (see
+    // `fit_the_hosted_mpv_to_the_host`).
+    if msg == WM_SIZE {
+        fit_the_hosted_mpv_to_the_host(hwnd);
+    }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
@@ -65,6 +71,11 @@ static PIN_FILM_HOST_PLAYER: AtomicU32 = AtomicU32::new(0);
 /// The hosted player whose frame this app has proved on screen, so the pipe read that proves it is
 /// asked once and not on every tick (see `the_hosted_frame_is_up`).
 static PRESENTED_PID: AtomicU32 = AtomicU32::new(0);
+/// mpv's own child under the host, and the host and player it was found under and for: a resize step
+/// asks it on every pointer move, and the handle is only ever a hint (see `the_hosted_mpv_child`).
+static HOSTED_MPV_CHILD: AtomicIsize = AtomicIsize::new(0);
+static HOSTED_MPV_CHILD_HOST: AtomicIsize = AtomicIsize::new(0);
+static HOSTED_MPV_CHILD_PID: AtomicU32 = AtomicU32::new(0);
 /// The move cover: the held frame the pin paints in its own bitmap while a hover's host is hidden,
 /// restyled and re-parented into the pin (see `raise_the_move_cover` and `show_pinned_window`).
 static PIN_MOVE_COVER: AtomicBool = AtomicBool::new(false);
@@ -163,6 +174,8 @@ pub(super) fn hosted_player_pid() -> Option<u32> {
 pub(super) fn note_hosted_player(pid: u32) {
     PIN_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
     PRESENTED_PID.store(0, Ordering::SeqCst);
+    // Another player draws another window, whatever handle the last one left behind.
+    forget_the_hosted_mpv_child();
     // A hosted player has no window of the desktop's to publish, and this one is the film now.
     VIDEO_HWND.store(0, Ordering::SeqCst);
 }
@@ -320,8 +333,9 @@ pub(super) fn the_pinned_film_is_drawn_in_a_host(path: &Path) -> bool {
     video_route(path) == VideoRoute::Mpv || a_pinned_ffplay_film_is_drawn_in_the_pins_host(path)
 }
 
-/// Whether the pin's film is FFmpeg's, whose child is fitted to the host's box on every place:
-/// mpv's child sizes itself and is left alone (see `place_the_pin_film_host`).
+/// Whether the pin's film is FFmpeg's, whose child is fitted to the host's box by the road that
+/// placed the host: mpv's child is fitted by the host's own `WM_SIZE`, because mpv sizes it on its
+/// own thread and at its own pace (see `fit_the_hosted_mpv_to_the_host`).
 pub(super) fn the_pins_film_is_ffplay() -> bool {
     PIN_FILM_IS_FFPLAY.load(Ordering::SeqCst)
 }
@@ -330,6 +344,8 @@ pub(super) fn the_pins_film_is_ffplay() -> bool {
 /// pin's own lock is held (see `the_pins_film_is_ffplay`).
 pub(super) fn note_the_pins_film_route(path: &Path) {
     PIN_FILM_IS_FFPLAY.store(video_route(path) == VideoRoute::Ffplay, Ordering::SeqCst);
+    // The film a step is on is another film: its player may have made itself another child.
+    forget_the_hosted_mpv_child();
 }
 
 /// Fit the player's child to the host's client box, where the pin's film is FFmpeg's and the
@@ -344,6 +360,107 @@ pub(super) unsafe fn fit_the_hosted_ffplay_to_the_host(host: HWND) {
     if let Some(child) = a_child_of_the_host(host, pid) {
         unsafe { ffplay_window::fit_the_hosted_player_to_the_host(child, host) };
     }
+}
+
+/// Forget the child mpv was drawing in: called where this app writes down which player draws the
+/// pin's film, because a film a step is on — or another player begun into the same host — is another
+/// window of mpv's (see `the_hosted_mpv_child`).
+fn forget_the_hosted_mpv_child() {
+    HOSTED_MPV_CHILD.store(0, Ordering::SeqCst);
+    HOSTED_MPV_CHILD_HOST.store(0, Ordering::SeqCst);
+    HOSTED_MPV_CHILD_PID.store(0, Ordering::SeqCst);
+}
+
+/// The window mpv draws the pin's film in under `host`, where this host holds a player of mpv's.
+///
+/// **It is found the way FFmpeg's child is found** — a shown child of the host owned by the player
+/// this app began into it (`a_child_of_the_host`) — and the shown-with-a-box rule is what picks the
+/// picture rather than a window mpv has made and not yet drawn in. The handle is then kept, because
+/// a resize step asks for it on every pointer move and looking it up is a walk of the host's
+/// children.
+///
+/// **The kept handle is only ever a hint.** mpv makes itself a new child when its video output is
+/// reinitialised, so a handle that is no longer a window is re-found, and the host and player it was
+/// found for are kept beside it: an adopted host, a host made again, and a player begun over the
+/// last one are all other answers, and none of them inherits the box of the film before it.
+fn the_hosted_mpv_child(host: HWND) -> Option<HWND> {
+    // Only a film mpv was begun into this host for has a child of mpv's under it: FFmpeg's is fitted
+    // by the road that places the host (see `fit_the_hosted_ffplay_to_the_host`), and a picture, a
+    // preview and a park hold no player at all.
+    if the_pins_film_is_ffplay() || !the_pinned_player_was_begun_in_the_host() {
+        return None;
+    }
+
+    let pid = hosted_player_pid()?;
+    let kept = HOSTED_MPV_CHILD.load(Ordering::SeqCst);
+    if kept != 0
+        && HOSTED_MPV_CHILD_HOST.load(Ordering::SeqCst) == host.0 as isize
+        && HOSTED_MPV_CHILD_PID.load(Ordering::SeqCst) == pid
+    {
+        let child = HWND(kept as *mut _);
+        if unsafe { IsWindow(child) }.as_bool() {
+            return Some(child);
+        }
+    }
+
+    let child = a_child_of_the_host(host, pid)?;
+    HOSTED_MPV_CHILD_PID.store(pid, Ordering::SeqCst);
+    HOSTED_MPV_CHILD_HOST.store(host.0 as isize, Ordering::SeqCst);
+    HOSTED_MPV_CHILD.store(child.0 as isize, Ordering::SeqCst);
+    Some(child)
+}
+
+/// Whether a resize of this host would place mpv's child at its box, as a test reads the gate the
+/// host's `WM_SIZE` asks before it places anything (see `the_hosted_mpv_child`).
+#[cfg(test)]
+pub(super) fn a_host_resize_would_place_the_child_for_a_test(host: HWND) -> bool {
+    the_hosted_mpv_child(host).is_some()
+}
+
+/// Put the film mpv draws at the host's client box, from the message that gave the host its own.
+///
+/// **This is what makes a hosted mpv film follow a resize instead of trailing it.** FFmpeg's child is
+/// fitted in the same call that places the host (see `fit_the_hosted_ffplay_to_the_host`); mpv's is
+/// sized by mpv's own thread, and at the pace of a fast hand it arrives several sizes behind the
+/// band it stands in.
+///
+/// **The call blocks on purpose.** `SetWindowPos` on a window of another process's is a `SendMessage`
+/// to the thread that owns it and returns once that thread has taken the box, which is the whole
+/// point: the child is the band's size *before* the pin's own surface is composited over it, where a
+/// box applied later (`SWP_ASYNCWINDOWPOS`) would be the defect still there for a frame. Nothing of
+/// this app's is locked across it — the pin's state is read and given up in `band_in_the_window`
+/// before the host is placed — so what is waited on is mpv pumping its own queue. How long it took
+/// is written to the pin trace, so a step that stalls is a number to report rather than a guess.
+fn fit_the_hosted_mpv_to_the_host(host: HWND) -> bool {
+    let Some(child) = the_hosted_mpv_child(host) else {
+        return false;
+    };
+
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(host, &mut client) }.is_err() {
+        return false;
+    }
+    let (width, height) = (client.right.max(1), client.bottom.max(1));
+    let started = Instant::now();
+    let placed = unsafe {
+        SetWindowPos(
+            child,
+            HWND::default(),
+            0,
+            0,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_SHOWWINDOW,
+        )
+    }
+    .is_ok();
+
+    note_pin_trace!(
+        "hosted mpv fit host {host:?} child {child:?} {width}x{height} {:.3}ms placed {}",
+        started.elapsed().as_secs_f64() * 1000.0,
+        placed as u8,
+    );
+    placed
 }
 
 /// Whether the tick owes the player's window the front: a film a hover is following, or a pin's
@@ -693,6 +810,7 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     PIN_FILM_HOST.store(0, Ordering::SeqCst);
     PIN_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
     PRESENTED_PID.store(0, Ordering::SeqCst);
+    forget_the_hosted_mpv_child();
     clear_the_move_cover();
     // A cover left over from a move must not open the next pin or park on this film's frame. A
     // park's own frame is its to give up, so it is left standing for the park.

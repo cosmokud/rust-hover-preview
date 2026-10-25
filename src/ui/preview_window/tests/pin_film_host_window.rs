@@ -447,6 +447,188 @@ fn the_film_host_follows_the_pins_band() {
     );
 }
 
+/// **The film's box arrives with the host's own.** mpv sizes its child on its own thread, and at the
+/// pace of a fast hand that child arrived several sizes behind the band it stood in — which is the
+/// shake a hosted mpv resize had and the hosted FFmpeg one did not, because FFmpeg's child is fitted
+/// in the call that placed the host. The host's `WM_SIZE` is that call for mpv's child: the step that
+/// gives the host a box gives the child the same one, before anything is composited over the band.
+#[test]
+fn the_film_mpv_draws_is_given_the_hosts_box_in_the_hosts_own_resize() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let child = unsafe { a_child_of_the_host(host) };
+
+    let wider = (
+        film.box_.0,
+        film.box_.1,
+        film.box_.0 + 400,
+        film.box_.1 + 300,
+    );
+    with_pin(|pin| pin.content = wider);
+    place_pinned_siblings();
+
+    let host_rect = unsafe { window_rect(host) };
+    assert_eq!(
+        (host_rect.2 - host_rect.0, host_rect.3 - host_rect.1),
+        (400, 300),
+        "the host is the band it was placed at"
+    );
+    assert_eq!(
+        unsafe { window_rect(child) },
+        host_rect,
+        "and mpv's child is the host's own box in the same message that gave it, rather than the \
+         size mpv's thread gets round to"
+    );
+
+    unsafe { DestroyWindow(child) }.expect("the player's child goes");
+}
+
+/// The window mpv has made is a child of the host and this app's to box only while this host holds a
+/// player of mpv's: FFmpeg's child is fitted by its own road, and a band another process's window
+/// stands in — the state a pin is taken up on a hover in — has nothing here to place.
+#[test]
+fn the_mpv_child_is_left_alone_where_the_host_holds_no_film_of_mpvs() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+
+    // FFmpeg's film: its child is fitted in the call that placed the host (`fit_the_hosted_ffplay_to_the_host`),
+    // and the host's own resize is not a second hand on it.
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    pin_film_host::note_the_pins_film_route(&PathBuf::from("a-film.mkv"));
+    let child = unsafe { a_child_of_the_host(host) };
+    with_pin(|pin| {
+        pin.content = (
+            film.box_.0,
+            film.box_.1,
+            film.box_.0 + 400,
+            film.box_.1 + 300,
+        )
+    });
+    place_pinned_siblings();
+    let host_rect = unsafe { window_rect(host) };
+    assert_eq!(
+        unsafe { window_rect(child) },
+        host_rect,
+        "an FFmpeg film's child is fitted to the host by the road that placed the host, as it \
+         always was"
+    );
+    assert!(
+        !pin_film_host::a_host_resize_would_place_the_child_for_a_test(host),
+        "and the host's own resize does not take a second hand on it"
+    );
+    unsafe { DestroyWindow(child) }.expect("the player's child goes");
+}
+
+/// A host that holds no player of the pin's — the band another process's window stands in, which is
+/// the state a pin is taken up on a hover in — is not this app's to box.
+#[test]
+fn the_mpv_child_is_left_alone_where_the_host_holds_no_player_of_the_pins() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    // The hover's player is drawing the pin's band, and this host holds a player of nobody's.
+    film.taken_up_from_a_hover(0x7FFF_FFFD);
+    let child = unsafe { a_child_of_the_host(host) };
+
+    with_pin(|pin| {
+        pin.content = (
+            film.box_.0,
+            film.box_.1,
+            film.box_.0 + 400,
+            film.box_.1 + 300,
+        )
+    });
+    place_pinned_siblings();
+    let host_rect = unsafe { window_rect(host) };
+
+    assert_eq!(
+        unsafe { window_rect(child) },
+        (host_rect.0, host_rect.1, host_rect.0 + 16, host_rect.1 + 16),
+        "nothing under a host that holds no player of the pin's is placed or shown"
+    );
+    assert!(
+        !pin_film_host::a_host_resize_would_place_the_child_for_a_test(host),
+        "and the resize road has no child of mpv's to place at all"
+    );
+    unsafe { DestroyWindow(child) }.expect("the player's child goes");
+}
+
+/// A film whose child is not there yet is a step with nothing to place, and the handle mpv left behind
+/// when it replaced its window — a video output reinit does that — is not the window that took its
+/// place: the box is found again on the next step, and a step with no child at all is silent rather
+/// than a call on a handle of nothing.
+#[test]
+fn the_mpv_child_is_found_again_where_mpv_replaced_its_window() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    // No child under the host at all: the step places the host and is answered by nothing.
+    with_pin(|pin| {
+        pin.content = (
+            film.box_.0,
+            film.box_.1,
+            film.box_.0 + 400,
+            film.box_.1 + 300,
+        )
+    });
+    place_pinned_siblings();
+    let placed = unsafe { window_rect(host) };
+    assert_eq!(
+        (placed.2 - placed.0, placed.3 - placed.1),
+        (400, 300),
+        "a host with no child in it is placed all the same"
+    );
+
+    let child = unsafe { a_child_of_the_host(host) };
+    let taller = (
+        film.box_.0,
+        film.box_.1,
+        film.box_.0 + 400,
+        film.box_.1 + 500,
+    );
+    with_pin(|pin| pin.content = taller);
+    place_pinned_siblings();
+    assert_eq!(
+        unsafe { window_rect(child) },
+        unsafe { window_rect(host) },
+        "a child that is there is given the new box"
+    );
+
+    // mpv's window replaced by another: the one it kept is no window at all by now.
+    unsafe { DestroyWindow(child) }.expect("mpv's window goes");
+    let replaced = unsafe { a_child_of_the_host(host) };
+    let widest = (
+        film.box_.0,
+        film.box_.1,
+        film.box_.0 + 500,
+        film.box_.1 + 500,
+    );
+    with_pin(|pin| pin.content = widest);
+    place_pinned_siblings();
+    assert_eq!(
+        unsafe { window_rect(replaced) },
+        unsafe { window_rect(host) },
+        "and the window that took its place is the one given the host's box, rather than the \
+         handle of the one mpv let go of"
+    );
+
+    unsafe { DestroyWindow(replaced) }.expect("mpv's window goes");
+}
+
 /// A hover's mpv film drawn in the app-owned top-level host, with its player's child under it:
 /// the state a take-up can move into the pin rather than begin again.
 struct HostedHover {
