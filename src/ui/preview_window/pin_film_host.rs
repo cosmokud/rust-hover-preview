@@ -864,13 +864,21 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
     if let Some(host) = adopted.filter(|host| unsafe { IsWindow(*host) }.as_bool()) {
         let pid = hover_film_host::hover_film_host_player().unwrap_or(0);
         note_pin_trace!(
-            "host adopted {:?} pid {} child {:?} client {:?}",
+            "host adopted {:?} pid {} child {:?} client {:?} desktop {}",
             host,
             pid,
             a_child_of_the_host(host, pid),
             a_client_box(host),
+            a_window_of_the_desktop as u8,
         );
-        unsafe { adopt_the_hover_film_host(host, content) };
+        if a_window_of_the_desktop {
+            // **The hover's host is already the window this road wants**, so it is the pin's host
+            // rather than a window moved into one: the player keeps drawing into the same child and
+            // not a frame of the film leaves the screen (see `promote_the_hover_film_host`).
+            unsafe { promote_the_hover_film_host(host, content) };
+        } else {
+            unsafe { adopt_the_hover_film_host(host, content) };
+        }
         return;
     }
 
@@ -1008,6 +1016,88 @@ unsafe fn adopt_the_hover_film_host(host: HWND, content: ScreenRegion) {
 
     pin_chrome_strips::place_the_chrome_strips();
     unsafe { pin_chrome_strips::raise_the_chrome_strips_over_the_host() };
+}
+
+/// Take a hover's already-running top-level host up as the pin's own: **the same window, the same
+/// player, the same child, and not one frame of the film off the screen.**
+///
+/// **Why it can be done at all.** A hover's film is given a host only so that it can be handed to a
+/// pin without a second launch, and that host is made the one shape a pin's host has to be: a
+/// top-level, non-layered window of this app's — `WS_POPUP | WS_CLIPCHILDREN`, the picture a child
+/// of mpv's inside it (see `hover_film_host`). What a hover's host is *for a hover* is the rest of
+/// its style — the topmost band nothing may cover, transparent to the press, out of the Shell's
+/// lists — and the pin's is none of that (see `create`).
+///
+/// **Why it is not the re-parent the child road does.** A `WS_EX_LAYERED` chrome cannot clip or
+/// synchronise a hardware swapchain child, which is the whole reason the pin's host is a window of
+/// the desktop's on this road (see `the_pin_film_host_is_a_window_of_the_desktop`). Moving the
+/// hover's host into the pin's window would undo exactly that; the host takes the pin's chrome as
+/// its own window instead (see `own_the_pin_window`).
+///
+/// **Nothing is begun, frozen or read back**, so there is no pause between the hover and the pin and
+/// no second decode of the file: what changes is a style, an owner, a band and a box, and what does
+/// not is the player inside it.
+unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
+    let pid = hover_film_host::hover_film_host_player().unwrap_or(0);
+
+    // The pin's host from here, written before the roads that ask the host questions through the
+    // pin's own lock can run: the player the hover began is the pin's own, and the frame it is
+    // drawing is already on the screen — the hover had proved it.
+    PIN_FILM_HOST.store(host.0 as isize, Ordering::SeqCst);
+    PIN_FILM_HOST_IS_TOP_LEVEL.store(true, Ordering::SeqCst);
+    PIN_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
+    PRESENTED_PID.store(pid, Ordering::SeqCst);
+    VIDEO_HWND.store(0, Ordering::SeqCst);
+    unsafe { pin_taskbar::set_pin_taskbar_title(host) };
+
+    // **The hover's band and the press that falls through it go, and the pin's bits come on**: a host
+    // the Shell lists wears neither `WS_EX_TOOLWINDOW` nor `WS_EX_NOACTIVATE`, and the app-window bit
+    // is what gives the pair its button (see `create` and `own_the_pin_window`).
+    let ex = unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) };
+    let ex = (ex
+        & !(WS_EX_TOPMOST.0 as isize)
+        & !(WS_EX_TRANSPARENT.0 as isize)
+        & !(WS_EX_TOOLWINDOW.0 as isize)
+        & !(WS_EX_NOACTIVATE.0 as isize))
+        | WS_EX_APPWINDOW.0 as isize;
+    let _ = unsafe { SetWindowLongPtrW(host, GWL_EXSTYLE, ex) };
+    // A style written behind a window's back is not one it presents with until it is asked to read it,
+    // and the band it was in goes with the same call.
+    let _ = unsafe {
+        SetWindowPos(
+            host,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+    };
+
+    // The chrome is the host's own window from here, and the pair is put in the band the setting
+    // names in one call — the host taking it and the chrome following it (see
+    // `place_the_pin_in_the_band`). The host keeps the picture: it was the hover's window on the
+    // screen and it is the pin's window on the screen, moved to the band the pin was painted around.
+    unsafe { own_the_pin_window(true) };
+    unsafe { place_the_pin_film_host(content) };
+    let pin = pin_real_window::real_pin_window().unwrap_or(host);
+    unsafe { place_the_pin_in_the_band(pin, band_place()) };
+
+    // The hover's handle is given up rather than left to destroy the pin's host (see
+    // `forget_the_hover_film_host_that_was_handed_over`), and the strips are put back over the
+    // window that is the film's now.
+    hover_film_host::forget_the_hover_film_host_that_was_handed_over(host);
+    unsafe { pin_chrome_strips::raise_the_chrome_strips_over_the_host() };
+
+    note_pin_trace!(
+        "host promoted {:?} pid {} child {:?} client {:?} band {:?}",
+        host,
+        pid,
+        a_child_of_the_host(host, pid),
+        a_client_box(host),
+        band_place(),
+    );
 }
 
 /// Put the host at the pin's band, without showing it: the band-change road, where the window is

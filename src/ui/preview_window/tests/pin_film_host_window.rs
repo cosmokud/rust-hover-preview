@@ -1035,6 +1035,165 @@ fn an_ffplay_hover_taken_up_is_moved_into_the_pin_not_begun() {
     );
 }
 
+/// **A take-up on a hover's mpv film takes the hover's own host up as the pin's host**: the same
+/// window, the same player, the same child, and no second decode.
+///
+/// The fault this is a regression test for: the take-up on the road where the pin's chrome is owned
+/// by its film's host refused to re-parent a hover's host into the pin — that was the airspace the
+/// road exists to be rid of — and fell back to freezing the hover and beginning the pin's own player.
+/// The pin appeared a pause after the key, and the file was opened twice. The hover's host is already
+/// the window this road wants (top-level, not layered, holding the player this app began into it), so
+/// the take-up promotes it instead: a style, an owner, a band and a box change, and the picture on
+/// the screen is the same player's from the key to the film.
+#[test]
+fn an_owned_pin_takes_a_hovered_film_up_by_promoting_its_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    pin_film_host::stand_the_owned_road_in(Some(true));
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 9.5) };
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_film_host::disarm_pin_handover();
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    clear_park_trace();
+    let _ = take_last_spawned_command();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        restart_count(),
+        0,
+        "the hover's player is the pin's player: nothing is begun again behind it"
+    );
+    assert!(
+        take_last_spawned_command().is_none(),
+        "and no player process is begun for the take-up at all"
+    );
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover.host),
+        "the hover's own host is the pin's host now"
+    );
+    assert_eq!(
+        pin_film_host::hosted_player_pid(),
+        Some(hover.pid),
+        "holding the player the hover began"
+    );
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        hover.pid,
+        "which is still the player on screen"
+    );
+    assert!(
+        pin_film_host::the_pinned_player_was_begun_in_the_host(),
+        "and it is the host's own from here"
+    );
+    assert!(
+        unsafe { IsWindow(hover.child) }.as_bool(),
+        "the player's child is the same window, still drawing"
+    );
+    assert_eq!(
+        unsafe { GetParent(hover.child) }.ok(),
+        Some(hover.host),
+        "under the same host rather than a second one"
+    );
+
+    // The host a hover had is the host a pin has: a window of the desktop's, the Shell's to list, and
+    // not the band nothing may cover or the press that falls through it.
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(hover.host, GWL_STYLE) } & WS_CHILD.0 as isize,
+        0,
+        "a window of the desktop's, not a child of the pin's window"
+    );
+    let ex = unsafe { GetWindowLongPtrW(hover.host, GWL_EXSTYLE) };
+    assert_eq!(
+        ex & WS_EX_APPWINDOW.0 as isize,
+        WS_EX_APPWINDOW.0 as isize,
+        "the window the Shell lists for the pin"
+    );
+    assert_eq!(
+        ex & (WS_EX_TRANSPARENT.0 | WS_EX_TOOLWINDOW.0) as isize,
+        0,
+        "with the press-through it wore for a hover, and its place out of the Shell's lists, gone"
+    );
+    assert_eq!(
+        ex & WS_EX_LAYERED.0 as isize,
+        0,
+        "and not layered, which is the whole of why the pin's host is a window of its own"
+    );
+    assert_eq!(
+        unsafe { GetWindow(film.pin_hwnd, GW_OWNER) },
+        Ok(hover.host),
+        "the pin's chrome is the host's own window"
+    );
+    assert_eq!(
+        unsafe { window_rect(hover.host) },
+        unsafe { window_rect(film.pin_hwnd) },
+        "and the host is the band the pin's window is at"
+    );
+    assert_eq!(
+        unsafe { window_holds_the_topmost_band(hover.host) },
+        unsafe { window_holds_the_topmost_band(film.pin_hwnd) },
+        "the pair is in one band, whichever band the setting names"
+    );
+    assert!(
+        unsafe { IsWindowVisible(hover.host) }.as_bool(),
+        "the picture never left the screen"
+    );
+
+    // Nothing of the relaunch road ran: no player was held frozen, no handover waited, no pause was
+    // sent and no frame read back.
+    assert!(
+        !pin_film_host::pin_handover_armed(),
+        "no wait for a second player's first frame"
+    );
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        None,
+        "and no frozen hover behind the pin"
+    );
+    assert!(
+        !mpv_ipc::noted_lines()
+            .iter()
+            .any(|line| line.contains("pause")),
+        "the film is neither frozen nor released: it simply carries on"
+    );
+    assert!(
+        mpv_ipc::noted_reads().is_empty(),
+        "and no frame is read back off it for a second launch"
+    );
+    assert_eq!(
+        hover_film_host::hover_film_host(),
+        None,
+        "the hover's handle is handed over rather than left to destroy the pin's host"
+    );
+
+    // And a show of the pin already standing over its film — a box change, the tick's restore — is not
+    // a second launch either.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert_eq!(
+        restart_count(),
+        0,
+        "a pin already standing over its own player is not a film begun again behind it"
+    );
+    assert!(
+        take_last_spawned_command().is_none(),
+        "and nothing is spawned for it"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    clear_pending_pinned_relaunch();
+    clear_restart_count();
+    clear_park_trace();
+    pin_film_host::stand_the_owned_road_in(None);
+    drop(hover);
+    drop(film);
+}
+
 /// A hover whose FFmpeg player has not put its window up at take-up cannot be moved, so the pin
 /// falls back to its own hosted launch: exactly one player is begun, never two.
 #[test]
