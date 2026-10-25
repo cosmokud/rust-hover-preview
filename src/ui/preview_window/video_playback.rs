@@ -8,10 +8,9 @@ use super::*;
 /// track, or the small files this app copied out of it (see `subtitle_filter`).
 ///
 /// What asks is the pin's take-up, and it asks because a pin does not begin a player of its
-/// own over a hover's: the `ffplay` a hover began is kept as it stands, its own window re-placed
-/// at the band, subtitles and all — so a player that was begun *without* them is one a pinned
-/// window would keep drawing without them, and the take-up is the moment to begin it again (see
-/// `reload_adopted_subtitles`). The
+/// own over a hover's: the `ffplay` a hover began is adopted as it stands, subtitles and all —
+/// so a player that was begun *without* them is one a pinned window would keep drawing without
+/// them, and the take-up is the moment to begin it again (see `reload_adopted_subtitles`). The
 /// list holds only the films whose player is drawing; an absence is the answer that the player
 /// last begun for that film is not — which is also the answer for a film no player was begun
 /// for at all, and the one the take-up wants for it, because a film with no player up has
@@ -349,50 +348,6 @@ pub(super) fn restart_hover_video_without_a_host(
     )
 }
 
-/// The renderer the player is given for every FFmpeg launch: Direct3D 11 unless the hatch below
-/// answers otherwise (see the launch, and `the_hatch_answer` for what the environment may say).
-fn the_renderer_the_player_is_given() -> Option<String> {
-    the_hatch_answer().filter(|renderer| !renderer.eq_ignore_ascii_case("default"))
-}
-
-/// What `RHP_FFPLAY_RENDERER` names, read once so every launch in a run gets one answer: a
-/// non-empty value is a hand measurement asking for another driver, and an unset or empty one is
-/// the shipped default, Direct3D 11. `default` itself is not named here but filtered out above,
-/// because it means "name no renderer" rather than "name the driver called default".
-fn the_hatch_answer() -> Option<String> {
-    #[cfg(test)]
-    if let Some(stood) = THE_STOOD_RENDERER.with(|stood| stood.borrow().clone()) {
-        return stood;
-    }
-    static ASKED_FOR: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    ASKED_FOR
-        .get_or_init(|| {
-            Some(
-                std::env::var("RHP_FFPLAY_RENDERER")
-                    .ok()
-                    .filter(|renderer| !renderer.is_empty())
-                    .unwrap_or_else(|| "direct3d11".to_string()),
-            )
-        })
-        .clone()
-}
-
-// The answer a test stands in place of the environment's, so the machine's own
-// `RHP_FFPLAY_RENDERER` cannot decide what a launch under test carries. Thread-local because the
-// suite runs in parallel and one test's answer must not reach another's launch; a test's own
-// thread carries it for the whole test and no further. The release binary carries no part of it.
-#[cfg(test)]
-thread_local! {
-    static THE_STOOD_RENDERER: std::cell::RefCell<Option<Option<String>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Stand the renderer answer a launch under test must see, or `None` to let the environment answer.
-#[cfg(test)]
-pub(super) fn stand_the_renderer_the_player_is_given(answer: Option<Option<String>>) {
-    THE_STOOD_RENDERER.with(|stood| *stood.borrow_mut() = answer);
-}
-
 #[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 fn start_video_playback_where(
     path: &PathBuf,
@@ -453,27 +408,42 @@ fn start_video_playback_where(
         );
     }
 
-    // Use ffplay for video playback - borderless, positioned at preview location. FFmpeg's player
-    // is never given a window of this app's: it keeps its own top-level window, placed at the band
-    // it is seen through (see `pin_film_host`, where only mpv's `--wid` road is hosted).
+    // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = engine_processes::hidden_command("ffplay");
 
-    // **Direct3D 11 is asked for by name, now that the film is a window of its own.** The road was
-    // measured on this machine once the film stood in its own top-level window: Direct3D 11 — the
-    // flip-model DXGI swapchain the driver drives VRR from — presents normally and leaves the
-    // user's G-SYNC panel perfectly still, where the same renderer flickered badly while the film
-    // was an adopted child of the pin's host. So the flicker that once condemned Direct3D 11
-    // belonged to the adopted child's shape rather than to the renderer, and the renderer may be
-    // asked for again. Direct3D 9 is not named: it is the composed road that was tried and
-    // reverted. `RHP_FFPLAY_RENDERER` remains the one hand-held hatch — a non-empty value names
-    // another driver for a hand measurement, and `default` names none at all so SDL chooses its
-    // own, which keeps a way back without a rebuild.
-    if let Some(renderer) = the_renderer_the_player_is_given() {
-        cmd.env("SDL_RENDER_DRIVER", renderer);
+    // **Where this film's picture will be drawn, before the command is built.** mpv is told the host
+    // with `--wid`; FFmpeg's player has no such switch, so it is begun with the frame it will lose
+    // and adopted into the same host once its own window exists (see
+    // `ffplay_window::adopt_the_players_window`). A hosted launch is born off every display with
+    // `-left/-top` and **without `-noborder`**: `-noborder` makes SDL create a non-resizable window
+    // whose cached flags then clamp every external resize, so the band could never follow the pin.
+    let hosted = if route == VideoRoute::Ffplay {
+        match pin_film_host::host_for_the_pins_ffplay(path, kind) {
+            Some(host) => Some((host, true)),
+            None => (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
+                .then(|| unsafe {
+                    hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
+                })
+                .flatten()
+                .map(|host| (host, false)),
+        }
+    } else {
+        None
+    };
+
+    // A hosted FFmpeg film is presented inside a layered pin window — the hover's host for a hover,
+    // and the pin's own after a take-up — and only SDL's Direct3D 11 renderer presents there
+    // (measured: software, opengl and direct3d show nothing). An unhosted launch keeps SDL's own
+    // choice, exactly as it was.
+    if hosted.is_some() {
+        cmd.env("SDL_RENDER_DRIVER", "direct3d11");
     }
 
-    // **No pacing switch on either road.** ffplay asks SDL for `SDL_RENDERER_PRESENTVSYNC` and that
-    // default is left to stand, which is what mpv does too (`mpv_args` never turns vsync off).
+    // **Vsync off on every FFmpeg launch.** SDL's renderer presents with PRESENTVSYNC and this
+    // variable makes SDL clear it, so D3D11 presents with `DO_NOT_WAIT` rather than blocking on a
+    // swapchain the desktop's windowed VRR cannot follow. Hosting the hover takes the swapchain out
+    // of the top-level window anyway, so the plain hover is given it too.
+    cmd.env("SDL_RENDER_VSYNC", "0");
 
     // **And no `-hwaccel`, which is not an oversight.** It names a *device* rather than asking
     // for a decoder, and ffplay brings its Vulkan renderer up the moment the flag is present:
@@ -616,16 +586,26 @@ fn start_video_playback_where(
 
     let width_arg = width.to_string();
     let height_arg = height.to_string();
-    let left_arg = x.to_string();
-    let top_arg = y.to_string();
-    let cmd = cmd.args([
+    let left_arg = if hosted.is_some() {
+        "-32000".to_string()
+    } else {
+        x.to_string()
+    };
+    let top_arg = if hosted.is_some() {
+        "-32000".to_string()
+    } else {
+        y.to_string()
+    };
+    let mut cmd = cmd.args([
         "-err_detect",
         "ignore_err", // Ignore header/stream errors
         "-fflags",
         "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
         "-framedrop",                    // Drop undecodable frames instead of stalling
-        "-noborder",                     // No window border
     ]);
+    if hosted.is_none() {
+        cmd = cmd.arg("-noborder"); // No window border
+    }
     let child = cmd
         .args([
             "-left",
@@ -660,6 +640,17 @@ fn start_video_playback_where(
     // name is what its id is verified as, and its loop — where the loop is this app's to give — is
     // clocked from here (see `note_player_started`).
     if let Some(ref player) = child {
+        // The host holds this player and no older one, recorded before the player has a window of
+        // its own to adopt: the monitor's wait for that window is a wait for *this* player's (see
+        // `host_for_a_hosted_player`).
+        if let Some((_, in_the_pin)) = hosted {
+            if in_the_pin {
+                pin_film_host::note_the_pins_film_route(path);
+                pin_film_host::note_hosted_player(player.id());
+            } else {
+                hover_film_host::note_hover_film_host_player(player.id(), path);
+            }
+        }
         note_player_started(
             player_image(VideoRoute::Ffplay),
             path,
@@ -740,6 +731,12 @@ fn start_mpv_video_playback(
     // app's own so that the film can move into the pin without a second launch (see
     // `mpv_launch_host` and `hover_film_host`).
     let pin_host = mpv_launch_host(path, kind);
+    // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
+    // step from an FFmpeg film must not leave the host answering as FFmpeg's (see
+    // `the_pins_film_is_ffplay`).
+    if pin_host.is_some() {
+        pin_film_host::note_the_pins_film_route(path);
+    }
     let host = pin_host.or_else(|| {
         (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
             .then(|| unsafe {
@@ -1561,9 +1558,6 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         if new_style != current_style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
         }
-        // Set whatever the style answer was: a layered window with no constant alpha shows nothing,
-        // and the style comparison above can skip its own write (see `apply_noactivate_to_hwnd`).
-        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
 
         place_player_window(
             hwnd,

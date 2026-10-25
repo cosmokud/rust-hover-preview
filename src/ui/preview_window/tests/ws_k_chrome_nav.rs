@@ -2171,9 +2171,9 @@ fn the_player_window_is_mouse_transparent() {
     );
     assert_eq!(
         style & WS_EX_LAYERED.0 as isize,
-        WS_EX_LAYERED.0 as isize,
-        "and it is layered, so the compositor composes the film instead of promoting its own \
-         window to a plane the driver drives the panel's variable refresh from"
+        0,
+        "and it is not made layered: a layered window draws from UpdateLayeredWindow and this \
+         one is SDL's own surface, so this is the bit that could stop a film rendering"
     );
     // Idempotent, and everything the window was created with is kept: the monitor
     // thread asserts this list about five times a millisecond.
