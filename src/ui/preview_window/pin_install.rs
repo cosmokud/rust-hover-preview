@@ -1356,13 +1356,12 @@ pub(super) fn relayout_pinned_media(
                 Some(_) if covered => {
                     relaunch_gesture_end_at(content, None);
                 }
-                Some((path, _)) if pin_film_host::the_film_runs_on_through_a_gesture(&path) => {
-                    // **mpv rescales itself when its window is given a new box**, and the tick
-                    // re-asserts that box every two hundred milliseconds (see
-                    // `ensure_video_window_topmost`), so a resize is a move and not a relaunch:
-                    // nothing is begun again and the film plays on through the settle. And a hosted
-                    // film is the same answer for a different reason: what changed is its host's box
-                    // (see `place_the_pin_film_host`), so there is nothing to begin again either.
+                Some((path, _)) if pin_film_host::the_pinned_film_is_drawn_in_a_host(&path) => {
+                    // **A hosted film rescales itself when its host is given a new box**, and the
+                    // host is fitted by `ensure_pinned_sibling_box` above (see
+                    // `place_the_pin_film_host`), so a resize is a move and not a relaunch: nothing
+                    // is begun again and the film plays on through the settle. mpv and FFmpeg's
+                    // player are both hosted here (see `pin_film_host`).
                 }
                 Some((path, _)) => {
                     // And with no press behind it the hold is the pin's own: what the transport says
