@@ -204,10 +204,10 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EndPaint, GdiFlush, MonitorFromWindow, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
+    BeginPaint, BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
+    EndPaint, GdiFlush, GetDC, MonitorFromWindow, ReleaseDC, SelectObject, AC_SRC_ALPHA,
+    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC,
+    HGDIOBJ, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -234,11 +234,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
     GetTopWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
     IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, MsgWaitForMultipleObjectsEx, PeekMessageW,
-    PostMessageW, RegisterClassExW, SetCursor, SetForegroundWindow, SetLayeredWindowAttributes,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, TrackPopupMenu, TranslateMessage,
+    PostMessageW, RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, ShowWindowAsync, TrackPopupMenu, TranslateMessage,
     UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER,
     HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
-    IDC_SIZENWSE, IDC_SIZEWE, LWA_ALPHA, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
+    IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
     PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT,
     SC_CLOSE, SET_WINDOW_POS_FLAGS, SIZE_RESTORED, SM_CXDOUBLECLK, SM_CYDOUBLECLK,
     SM_XVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,

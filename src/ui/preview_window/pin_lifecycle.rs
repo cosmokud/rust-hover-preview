@@ -1161,10 +1161,8 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
 /// [`a_pin_of_this_file_stands_in_its_own_window`]).
 pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: &Path) -> bool {
     match kind {
-        // A pinned FFmpeg film stands in the pin's own window from the moment it is taken up, before
-        // `pin_is_its_own_window` has been written. What draws in the band is the player's own window
-        // over it rather than a child of it (see `pin_film_host`), which is a film of the desktop's
-        // for every other question a drag or a park asks, and never the preview's answer.
+        // A pinned FFmpeg film is hosted in the pin's own window from the moment it is taken up,
+        // before `pin_is_its_own_window` has been written (see `pin_film_host`).
         Some(MediaType::Video) if video_route(path) == VideoRoute::Ffplay => true,
         Some(kind) if !matches!(kind, MediaType::Loading | MediaType::Unplayable) => {
             !kind.draws_in_a_window_of_its_own(path)
@@ -1276,6 +1274,11 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         pin_real_window::hide_real_pin_window();
         hwnd
     };
+
+    // The pin window is reused across pins, so its presentation form is written on every take-up:
+    // a pin holding a hosted FFmpeg film is composed through its own DC and must not be layered,
+    // and every other pin is the layered surface it has always been (see `pin_film_host`).
+    unsafe { pin_real_window::apply_the_pin_window_presentation() };
 
     // Whether the pin's window is on the screen as this is asked, which is what tells a pin standing
     // where the user put it from one being brought back from away — and it is read before the showing

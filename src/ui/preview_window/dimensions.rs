@@ -221,10 +221,9 @@ pub(super) fn video_subtitles(path: &Path) -> SubtitleStreams {
 /// take-up, so the gate is answered here too rather than only in the geometry the
 /// probe caches.
 ///
-/// What asks is the pin's take-up: the `ffplay` a hover began is kept by the pin as it stands,
-/// its own window re-placed at the band (see `take_up_pinned_window`), so a player begun while the
-/// copy was still coming is one a pinned window would draw on without the subtitles — and the
-/// take-up begins it again where
+/// What asks is the pin's take-up: the `ffplay` a hover began is adopted by the pin as it stands
+/// (see `take_up_pinned_window`), so a player begun while the copy was still coming is one a
+/// pinned window would draw on without the subtitles — and the take-up begins it again where
 /// this answers yes and the player was one of those (see `reload_adopted_subtitles`). A film no
 /// probe has answered for is answered `false` here on the same terms as `video_subtitles`: an
 /// answer nothing read is not a copy, and a player begun for such a film has nothing to correct.

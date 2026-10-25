@@ -394,12 +394,16 @@ impl MediaType {
     ///
     /// **A film's answer is the route of the film it is showing now**, rather than the window the
     /// pin was taken up in: an engine row can change under a pin that is already up, and the pin is
-    /// not taken up again for it (see `video_route`). A pinned mpv film is a child of this app's
-    /// own host (see `pin_film_host`), which leaves no window of the desktop's for a drag to park;
-    /// FFmpeg's player keeps a window of its own at the band in every state.
+    /// not taken up again for it (see `video_route`). A film FFmpeg's player draws is a window of
+    /// the desktop's in every state but the one pin that hosts it (see
+    /// `pin_film_host::a_pinned_ffplay_film_is_drawn_in_the_pins_host`), so the hover road keeps
+    /// the answer it always had.
     pub(super) fn draws_in_a_window_of_its_own(&self, path: &Path) -> bool {
         match self {
-            Self::Video => video_route(path) != VideoRoute::Mpv,
+            Self::Video => {
+                video_route(path) != VideoRoute::Mpv
+                    && !super::pin_film_host::a_pinned_ffplay_film_is_drawn_in_the_pins_host(path)
+            }
             _ => self.is_engine(),
         }
     }
