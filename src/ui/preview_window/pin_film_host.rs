@@ -1030,13 +1030,13 @@ unsafe fn own_the_pin_window(owned: bool) {
 /// sized by mpv's own thread, and at the pace of a fast hand it arrives several sizes behind the
 /// band it stands in.
 ///
-/// **The call blocks on purpose.** `SetWindowPos` on a window of another process's is a `SendMessage`
-/// to the thread that owns it and returns once that thread has taken the box, which is the whole
-/// point: the child is the band's size *before* the pin's own surface is composited over it, where a
-/// box applied later (`SWP_ASYNCWINDOWPOS`) would be the defect still there for a frame. Nothing of
-/// this app's is locked across it — the pin's state is read and given up in `band_in_the_window`
-/// before the host is placed — so what is waited on is mpv pumping its own queue. How long it took
-/// is written to the pin trace, so a step that stalls is a number to report rather than a guess.
+/// **And on the road a pin's film host is on, the box is asked for rather than waited for**
+/// (`SWP_ASYNCWINDOWPOS`, see `fit_flags`): that host is a window of the desktop's, and a fit that
+/// blocked from inside its own `WM_SIZE` would be this app's thread waiting on mpv's. Nothing of this
+/// app's is locked across it — the pin's state is read and given up in `band_in_the_window` before the
+/// host is placed — so what it costs is not a stall but a lag: the child takes its new box a message
+/// behind the band it stands in, which is the strip the host paints and is the number the step's own
+/// trace writes down (see `pin_resize_probe`). How long the ask took goes to the pin trace with it.
 fn fit_the_hosted_mpv_to_the_host(host: HWND) -> bool {
     let mut client = RECT::default();
     if unsafe { GetClientRect(host, &mut client) }.is_err() {
