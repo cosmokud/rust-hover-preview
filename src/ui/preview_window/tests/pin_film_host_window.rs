@@ -138,10 +138,11 @@ impl StandingFilm {
         pin_film_host::note_hosted_player(unsafe { GetCurrentProcessId() });
 
         // **The road this stand is for is the child host, which is no longer the default.** A run
-        // with no variable set would otherwise hand every test here the owned road, and a stand that
-        // answers differently according to how the suite was started is a test of nothing (see
-        // `pin_film_host::stand_the_owned_road_in`).
+        // would otherwise hand every test here the thumbnail road, and a stand that answers
+        // differently according to how the suite was started is a test of nothing (see
+        // `pin_film_host::stand_the_owned_road_in` and `pin_film_host::stand_the_thumbnail_road_in`).
         pin_film_host::stand_the_owned_road_in(Some(false));
+        pin_film_host::stand_the_thumbnail_road_in(Some(false));
         stand_mpv_in(Some(true));
         stand_video_engine_in(Some((VideoEngine::Mpv, true)));
 
@@ -2887,10 +2888,10 @@ fn a_pin_drawn_through_a_thumbnail_is_begun_with_no_window_of_this_apps() {
         "and the film is not held over the pin it is seen in: {args:?}"
     );
 
-    pin_film_host::stand_the_thumbnail_road_in(None);
+    pin_film_host::stand_the_thumbnail_road_in(Some(false));
     assert!(
         mpv_launch_host(path, None).is_some(),
-        "and the road with the variable off is the host of the `--wid` road again"
+        "and the child road is the host of the `--wid` road again"
     );
 }
 

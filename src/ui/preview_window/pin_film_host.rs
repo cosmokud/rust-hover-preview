@@ -1,5 +1,12 @@
-//! The window a pinned mpv film is drawn in: a child of the pin's own window, standing in the
-//! band its picture is shown through.
+//! The window a pinned mpv film is drawn in: a window of the pin's own or of the desktop's, standing
+//! in the band its picture is shown through.
+//!
+//! **Two roads share it.** By default the film mpv plays is a window of the desktop's of its own and
+//! this host shows it through a DWM thumbnail of that window (see `pin_film_thumbnail`); with
+//! `RHP_MPV_THUMBNAIL_PIN=0` the film is mpv's `WS_CHILD` of this host, and the host's own `WM_SIZE`
+//! fits it (see `fit_the_hosted_mpv_to_the_host`). Which one the host is, child or window of the
+//! desktop's, is a fact written down at the window when it is made (see
+//! `the_pin_film_host_is_a_window_of_the_desktop`).
 //!
 //! **Why it is not the pin's window itself.** mpv's `--wid` fills the window it is given, and the
 //! pin's window is the chrome and the transport as well as the band; pointed at the pin, the film
@@ -7,10 +14,13 @@
 //! rectangle, and the pin keeps every other pixel (see `band_in_the_window`, which is the box the
 //! host is given).
 //!
-//! **Why it is a child.** The film has to travel with the pin — on a move, on a resize, and with
-//! the window when it is hidden or put away — and a child does that in the compositor rather than
-//! by this app moving two windows and then repairing their order. That repair is what the topmost
-//! band was for, and it is removed for the host (see `ensure_video_window_topmost`).
+//! **Why it is a child on the child road.** The film has to travel with the pin — on a move, on a
+//! resize, and with the window when it is hidden or put away — and a child does that in the
+//! compositor rather than by this app moving two windows and then repairing their order. That repair
+//! is what the topmost band was for, and it is removed for the host (see
+//! `ensure_video_window_topmost`). That road is not the default any more, and nothing is lost with
+//! it: on the default road the film's own window is not carried across a step at all — only the host
+//! is moved and the Shell re-points the thumbnail (see `pin_film_thumbnail`).
 //!
 //! **Why it is disabled.** A press on the picture is a press on the pin: the pin is dragged by its
 //! film, and the band's alpha-1 claim is already hit-testable (see `fill_band_hit_testable`). A
@@ -403,7 +413,10 @@ pub(super) fn host_for_the_pins_ffplay(path: &Path, kind: Option<MediaType>) -> 
 /// the desktop's of its own, which owns the pin's chrome**: Windows then keeps the chrome above the
 /// film, hides it with the host, keeps it out of Alt+Tab, and moves neither for this app (see
 /// `the_pin_film_host_is_a_window_of_the_desktop`). **Not a setting**: the variable brings the child
-/// host this app stood in before it back for an A/B that needs no rebuild.
+/// host this app stood in before it back for an A/B that needs no rebuild. **It is answered on the
+/// child road alone**, because a film drawn through a thumbnail has no child of this app's under the
+/// host at all: `RHP_MPV_THUMBNAIL_PIN=0` is what brings that road back (see
+/// `the_film_host_owns_the_pin` and [`MPV_THUMBNAIL_PIN_VARIABLE`]).
 const MPV_CHILD_HOST_PIN_VARIABLE: &str = "RHP_MPV_CHILD_HOST_PIN";
 
 /// Whether the film host owns the pin's chrome, which is the road unless a machine asked for the
@@ -412,8 +425,8 @@ const MPV_CHILD_HOST_PIN_VARIABLE: &str = "RHP_MPV_CHILD_HOST_PIN";
 /// film re-pinned.
 pub(super) fn the_film_host_owns_the_pin() -> bool {
     // **A thumbnail is drawn into a window of the desktop's**, never into a child's composition, so
-    // the thumbnail road takes the host that owns the pin's chrome whatever a machine asked the child
-    // host for (see `pin_film_thumbnail`).
+    // the thumbnail road — which is the default road — takes the host that owns the pin's chrome
+    // whatever a machine asked the child host for (see `pin_film_thumbnail`).
     if the_pin_shows_its_film_by_thumbnail() {
         return true;
     }
@@ -426,33 +439,64 @@ pub(super) fn the_film_host_owns_the_pin() -> bool {
     std::env::var_os(MPV_CHILD_HOST_PIN_VARIABLE).is_none()
 }
 
-/// **A prototype, and not a setting: `RHP_MPV_THUMBNAIL_PIN`, present means on.**
+/// **The road a pin's mpv film is drawn on: the thumbnail, unless `RHP_MPV_THUMBNAIL_PIN` says
+/// exactly `0`.**
 ///
 /// The film mpv plays for a pin is drawn in a window of the desktop's of its own — launched with no
 /// `--wid` — and the pin's host shows it by a DWM thumbnail of that window rather than by holding
 /// mpv's child (see `pin_film_thumbnail`, and `video_launch::mpv_args`, which drops `--ontop` for
-/// it). A resize step then moves this app's own windows and nothing of mpv's.
+/// it). A resize step then moves this app's own windows and nothing of mpv's, which is the road
+/// measured as the one with nothing to see in a drag (see the note on `pin_film_thumbnail`).
 ///
-/// **It should be deleted once the answer is in.** What it exists to ask is whether a resize can be
-/// followed by the Shell stretching a crisp source into the new box, rather than by asking mpv's
-/// thread for a new geometry on every pointer move.
+/// **`0` is the escape hatch back to the child road, byte for byte the road the app stood in
+/// before**: mpv is given the host's window with `--wid`, and every step of a resize asks mpv's
+/// thread for the child's new box (see `fit_the_hosted_mpv_to_the_host`). `1` is the default
+/// written out and changes nothing, and any other value leaves the thumbnail road standing, because
+/// only `0` names the other road.
 const MPV_THUMBNAIL_PIN_VARIABLE: &str = "RHP_MPV_THUMBNAIL_PIN";
 
-/// Whether the machine asked for the thumbnail road (see [`MPV_THUMBNAIL_PIN_VARIABLE`]).
+/// Whether the pin's film is drawn through the Shell's own thumbnail of mpv's window, which is the
+/// road unless the machine asked for the child road (see [`MPV_THUMBNAIL_PIN_VARIABLE`]).
+///
+/// **Read once for the process**, because the answer is a fact about the run and not about a film:
+/// flipping the variable needs the app restarted, not the film re-pinned. The reading writes the
+/// road's own line to the pin trace, so a run's trace always says which of the two roads ran.
 ///
 /// **The environment is read by the shipped binary and not by a test run.** A suite that read it
 /// would answer every test written against the `--wid` road with this one whenever the variable was
-/// set — and both of those runs are what this prototype is measured by — so a test stands the road in
-/// where it wants it and gets the `--wid` road otherwise (see [`stand_the_thumbnail_road_in`]).
+/// set — and both of those runs are what the two roads are measured by — so a test stands the road in
+/// where it wants it (see [`stand_the_thumbnail_road_in`]).
 pub(super) fn the_pin_shows_its_film_by_thumbnail() -> bool {
     #[cfg(test)]
     {
-        THUMBNAIL_ROAD_STAND_IN.with(|held| held.get()).unwrap_or(false)
+        THUMBNAIL_ROAD_STAND_IN.with(|held| held.get()).unwrap_or(true)
     }
     #[cfg(not(test))]
     {
-        std::env::var_os(MPV_THUMBNAIL_PIN_VARIABLE).is_some()
+        *THE_THUMBNAIL_ROAD
     }
+}
+
+/// The road this run is on, read once (see [`the_pin_shows_its_film_by_thumbnail`]).
+#[cfg(not(test))]
+static THE_THUMBNAIL_ROAD: Lazy<bool> = Lazy::new(|| {
+    let asked = std::env::var_os(MPV_THUMBNAIL_PIN_VARIABLE);
+    let thumbnail = the_thumbnail_road_from(asked.as_deref());
+    note_pin_trace!(
+        "pin film road {}",
+        if thumbnail {
+            "thumbnail"
+        } else {
+            "child (RHP_MPV_THUMBNAIL_PIN=0)"
+        }
+    );
+    thumbnail
+});
+
+/// The knob's own reading: the child road only where the value is exactly `0` (see
+/// [`MPV_THUMBNAIL_PIN_VARIABLE`]).
+fn the_thumbnail_road_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value.and_then(|value| value.to_str()) != Some("0")
 }
 
 /// Whether a film of `route` is drawn by the Shell rather than by a child of the pin's host: mpv's
@@ -465,8 +509,8 @@ pub(super) fn a_film_is_drawn_by_a_thumbnail(route: VideoRoute, asked: bool) -> 
     asked && route == VideoRoute::Mpv
 }
 
-/// Stand an answer for [`the_pin_shows_its_film_by_thumbnail`] on this thread, or give the road back
-/// its default with `None` (see `stand_the_owned_road_in`, which is the same arrangement).
+/// Stand an answer for [`the_pin_shows_its_film_by_thumbnail`] on this thread, or give the road the
+/// app ships back with `None` (see `stand_the_owned_road_in`, which is the same arrangement).
 #[cfg(test)]
 pub(super) fn stand_the_thumbnail_road_in(answer: Option<bool>) {
     THUMBNAIL_ROAD_STAND_IN.with(|held| held.set(answer));
@@ -2012,6 +2056,19 @@ mod tests {
             MPV_THUMBNAIL_PIN_VARIABLE, "RHP_MPV_THUMBNAIL_PIN",
             "the knob is the name the branch's notes and the report give it"
         );
+    }
+
+    /// **The knob's two roads: unset is the thumbnail road the pin ships on, and only `0` names the
+    /// child road it stood in before.** `1` is the default written out, and a value that names
+    /// neither road is not read as the one it does not name (see `the_thumbnail_road_from`).
+    #[test]
+    fn the_thumbnail_road_is_the_default_and_zero_is_the_child_road() {
+        let named = |value: Option<&str>| the_thumbnail_road_from(value.map(std::ffi::OsStr::new));
+        assert!(named(None), "unset is the road a pin's film is drawn on");
+        assert!(named(Some("1")), "and `1` is that same road written out");
+        assert!(!named(Some("0")), "`0` is the child road, byte for byte");
+        assert!(named(Some("")), "a value that names nothing is not read as `0`");
+        assert!(named(Some("off")), "only the one value asks for the child road");
     }
 
     /// **The per-tick line is written on change and at most once a second otherwise**, which is what
