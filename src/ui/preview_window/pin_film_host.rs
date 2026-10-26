@@ -1047,9 +1047,9 @@ fn fit_the_hosted_mpv_to_the_host(host: HWND) -> bool {
 
 /// **Ask mpv's child for the box the host is about to take before the host takes it**, where
 /// `RHP_FILM_CHILD_LEADS` asked for it and a resize drag is live: a step's band is then the child's
-/// before it is the host's, so on a shrink the child is never the smaller of the two and is clipped
-/// by the window it is a child of instead of seen cropped, and on a grow the child is a step ahead
-/// of where it would have been rather than a step behind.
+/// before it is the host's, so on a shrink the child is never the smaller of the two and is clipped by
+/// the window it is a child of instead of seen cropped, and on a grow its ask is made a step earlier
+/// than the one the host's own `WM_SIZE` would make it.
 ///
 /// **The ask is asynchronous on the road a pin's host is on** (see `fit_flags`), so leading puts the
 /// ask before the host's move and does not make it land before it: a step still pays for whatever the
@@ -1102,10 +1102,11 @@ static CHILD_HELD_OVER_THE_BAND: AtomicBool = AtomicBool::new(false);
 /// on the tick that finds no drag: the slack is what a hand on an edge asks for, and a child left over
 /// a settled pin is a picture cropped by a knob that has nothing left to hide.
 ///
-/// **Asked of the tick rather than of a drag's own end**, because a drag ends down roads that do not
-/// all know they are one — a release, a capture somebody else took, a pin rebuilt under a hand — and
-/// the tick is where all of them arrive (see `settle_video_drag_hold`, which is the same shape). The
-/// flag is what keeps it free: a tick with nothing over the band pays one atomic read.
+/// **Asked on the tick, and on the release that ends the drag.** The tick because a drag ends down
+/// roads that do not all know they are one — a capture somebody else took, a pin rebuilt under a hand
+/// — and the release because that is the end a hand sees, where a tick's wait would be one frame of
+/// the oversized box. The flag is what keeps both free: a tick with nothing over the band pays one
+/// atomic read.
 pub(super) fn settle_the_hosted_child_back_at_the_band(dragging: bool) {
     if dragging || !CHILD_HELD_OVER_THE_BAND.swap(false, Ordering::SeqCst) {
         return;
@@ -1117,7 +1118,7 @@ pub(super) fn settle_the_hosted_child_back_at_the_band(dragging: bool) {
 
 /// The rect mpv's child is given in its host's client coordinates for a `width` x `height` band: the
 /// band itself at no slack, and otherwise the band grown by `slack` of itself and left centred on it,
-/// so an equal strip stands over each edge.
+/// so the same strip stands over each edge — give or take the pixel an odd strip cannot split in two.
 ///
 /// **The picture inside a child is scaled to the child**, because a player fills the window it was
 /// given: a child held 8% over a 1000-pixel band shows the middle 1000/1080 of the film inside the
