@@ -225,6 +225,10 @@ pub(super) fn mpv_args(
     // about. No other flag conflicts: `--gpu-api=d3d11` is the context the flag names,
     // `--vo=gpu-next` presents through the same DXGI swapchain, and `--hwdec=auto`'s d3d11va
     // interop is what a flip model is designed for.
+    //
+    // **And never on a window made invisible either**: a layered window cannot have a flip-model
+    // swapchain, so `flip` is `false` there by the caller's own decision and the launch says the knob
+    // was overruled rather than dropping it (see `the_thumbnail_swapchain_flip`).
     args.push(
         if flip && wid.is_none() {
             "--d3d11-flip=yes"
@@ -333,6 +337,19 @@ pub(super) fn the_thumbnail_flip_knob() -> bool {
 /// The knob's answer for one value: `1` is on and every other value — including none — is off.
 fn thumbnail_flip_from(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|value| value == std::ffi::OsStr::new("1"))
+}
+
+/// **The swapchain a thumbnail road's player is really asked for**, which is the knob *unless* the source
+/// is made invisible.
+///
+/// A flip-model swapchain is not a thing a layered window can have: DXGI creates a flip-model swapchain
+/// for the window and the compositor hands it straight to the display, which is the arrangement
+/// `WS_EX_LAYERED`'s own blending is the opposite of. So where the invisible road is on
+/// (`RHP_THUMBNAIL_INVISIBLE`, see `pin_film_thumbnail`) the bitblt swapchain is asked for whatever
+/// `RHP_THUMBNAIL_FLIP` says, and the launch traces that the knob was read and overruled rather than
+/// dropping it on the floor (see `video_playback::start_mpv_video_playback`).
+pub(super) fn the_thumbnail_swapchain_flip(asked: bool, invisible: bool) -> bool {
+    asked && !invisible
 }
 
 /// The size a film's box is asked for, so that the window the film is drawn in is that box.
@@ -1520,6 +1537,25 @@ mod tests {
         assert!(!thumbnail_flip_from(Some(std::ffi::OsStr::new("0"))));
         assert!(!thumbnail_flip_from(Some(std::ffi::OsStr::new("yes"))));
         assert!(!thumbnail_flip_from(Some(std::ffi::OsStr::new(""))));
+    }
+
+    /// **A flip-model swapchain is not a thing a layered window can have**, so the invisible road asks
+    /// for the bitblt one whatever the knob says — and the knob is overruled out loud, in the launch's
+    /// own trace, rather than dropped on the floor (see `the_thumbnail_swapchain_flip`). A knob nobody
+    /// can read back is a run nobody can compare, and this is the one case where the run's flag is not
+    /// the one asked for.
+    #[test]
+    fn a_layered_source_is_never_asked_for_the_flip_model_whatever_the_knob_says() {
+        assert!(!the_thumbnail_swapchain_flip(false, true));
+        assert!(!the_thumbnail_swapchain_flip(false, false));
+        assert!(
+            the_thumbnail_swapchain_flip(true, false),
+            "a visible source with the knob on is the run the knob is for"
+        );
+        assert!(
+            !the_thumbnail_swapchain_flip(true, true),
+            "and an invisible one cannot have the model at all"
+        );
     }
 
     /// **The one flag the drag story rests on without anything else**: mpv is launched told not to

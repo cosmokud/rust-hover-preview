@@ -804,12 +804,27 @@ fn start_mpv_video_playback(
     };
     // **The thumbnail road's swapchain is chosen here, per launch** (see `video_launch::mpv_args`):
     // with the knob on the player is asked for the flip model, whose buffers the compositor scales to
-    // the window, rather than the bitblt one that presents 1:1 and shows a mismatch as crop or black.
-    // The line is written so a run says which of the two it was — an A/B whose flag nobody can read
-    // back is a run nobody can compare.
-    let thumbnail_flip = behind_the_host && video_launch::the_thumbnail_flip_knob();
+    // the window, rather than the bitblt one that presents 1:1. **A source that is made invisible cannot
+    // have the flip model at all** — a layered window is not a window DXGI will hand a flip swapchain
+    // to — so the invisible road keeps the bitblt swapchain and the line below says the knob was read
+    // and overruled, rather than dropping it silently. The line is written so a run says which of the
+    // two it was, and whether the source is invisible: an A/B whose flags nobody can read back is a run
+    // nobody can compare.
+    let invisible = behind_the_host && pin_film_thumbnail::the_source_is_invisible();
+    let asked_flip = behind_the_host && video_launch::the_thumbnail_flip_knob();
+    let thumbnail_flip = video_launch::the_thumbnail_swapchain_flip(asked_flip, invisible);
     if behind_the_host {
-        note_pin_trace!("thumbnail source launched flip {}", thumbnail_flip as u8);
+        note_pin_trace!(
+            "thumbnail source launched flip {} invisible {}",
+            thumbnail_flip as u8,
+            invisible as u8
+        );
+    }
+    if asked_flip && !thumbnail_flip {
+        note_pin_trace!(
+            "RHP_THUMBNAIL_FLIP was ignored: a layered window has no flip-model swapchain, so this \
+             player is the bitblt one"
+        );
     }
     // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
     // step from an FFmpeg film must not leave the host answering as FFmpeg's (see

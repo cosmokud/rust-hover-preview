@@ -405,6 +405,13 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
                 if !data.found_hwnd.is_invalid() {
                     unsafe { pin_film_thumbnail::adopt_the_source(data.found_hwnd, pid) };
                 }
+            } else {
+                // **And this is the pass that keeps the source invisible**: the style is put on at
+                // adoption and mpv can come back from a video output reinit without it, so a source
+                // whose layered bit is gone is a film standing over the pin until the next adopt — and
+                // a window that is *the same handle* styled again is never adopted again (see
+                // `pin_film_thumbnail::keep_the_source_invisible`).
+                unsafe { pin_film_thumbnail::keep_the_source_invisible() };
             }
             return false;
         }

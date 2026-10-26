@@ -116,16 +116,38 @@
 //! shows its window when it opens the file, which is before this app has found it (see
 //! `the_source_launch_origin`).
 //!
+//! **On this road it is also made invisible rather than merely covered** (`RHP_THUMBNAIL_INVISIBLE`,
+//! on by default and off with `=0`): the source wears `WS_EX_LAYERED` with
+//! `SetLayeredWindowAttributes(…, 1, LWA_ALPHA)`, so the compositor still draws it — a source the
+//! Shell is not drawing has no picture to thumbnail at all (measured, see the three placements above)
+//! — while nothing of it reaches the screen. That is the same one-step-from-nothing band this app's
+//! own chrome used to wear, and it is what lets the source be *larger than the box* without spilling
+//! (see `the_generous_source_size`): a window nobody can see cannot stand outside a pin, so a resize
+//! does not have to chase it, and a source that is not chased is a source that is not mid-reconfigure
+//! while the Shell is thumbnailing it. It is put on in the adoption pass and re-asserted by the style
+//! monitor if mpv's window comes back without it (see `keep_the_source_invisible`).
+//!
+//! **The bet this road is:** the Shell's thumbnail of a layered window is the window's own content at
+//! full opacity, so the film still draws in the pin with the source itself invisible. It has two ways to
+//! lose, and the run says which: a pin that goes black while the player is still alive — still answering
+//! `source fills` with the source's own size — is a Shell sampling the blended (1/255) result instead of
+//! the window's content, while a pin that goes black and takes the player with it is a present that
+//! cannot target a layered window at all. That is also why nothing here hides the window to achieve the
+//! invisibility: the two failures are told apart by whether the player is still there, and a hidden
+//! source would answer that question with itself.
+//!
 //! shortcut: a shrink is led by a small inset and a grow lags a tenth, so between two asks a shrinking
 //! source can still stand a step outside the host and a growing one is stretched and soft; the two
-//! off-screen placements that would have hidden the spill do not draw at all. Upgrade it by clipping
-//! the source where a window of this app's can clip it, not by moving it off the screen.
+//! off-screen placements that would have hidden the spill do not draw at all. That is the *visible*
+//! placement's price and the invisible road pays none of it, which is what `RHP_THUMBNAIL_INVISIBLE=0`
+//! is for: the two behaviours are one variable apart. Upgrade the visible road by clipping the source
+//! where a window of this app's can clip it, not by moving it off the screen.
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::Graphics::Dwm::{
     DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
@@ -134,10 +156,10 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
-    IsWindow, IsWindowVisible, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, SW_HIDE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    IsWindow, IsWindowVisible, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW,
+    SetWindowPos, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, LWA_ALPHA, SW_HIDE, SWP_ASYNCWINDOWPOS,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -166,6 +188,69 @@ pub(super) enum SourcePlacement {
 /// `behind` rather than read as a road it does not name, and rather than falling back to a placement
 /// the Shell will not draw.
 const SOURCE_PLACEMENT_VARIABLE: &str = "RHP_THUMBNAIL_SOURCE";
+
+/// **A third knob, and not a setting either: `RHP_THUMBNAIL_INVISIBLE`, on unless it says `0`.**
+///
+/// It is the one variable this road's experiment is run by: with it on the source wears layered
+/// alpha 1, so nothing of it reaches the screen and it may stand larger than the box (see the module
+/// note and `the_generous_source_size`); with it off the source is the covered window it always was and
+/// a drag chases it as it always did. Only `0` turns it off — a value that names no road is not read as
+/// one it does not name — and the launch line says which of the two a run was.
+const INVISIBLE_VARIABLE: &str = "RHP_THUMBNAIL_INVISIBLE";
+/// The alpha the invisible source is drawn at: 1 of 255, the one step that is composited rather than
+/// absent, which is what keeps the Shell drawing it (see the module note).
+const INVISIBLE_ALPHA: u8 = 1;
+
+/// Whether the machine asked this road to make its source invisible (see [`INVISIBLE_VARIABLE`]).
+///
+/// Read by the shipped binary and stood in by a test, for the reason the placement knob above is.
+pub(super) fn the_source_is_invisible() -> bool {
+    #[cfg(test)]
+    {
+        INVISIBLE_STAND_IN.with(|held| held.get())
+    }
+    #[cfg(not(test))]
+    {
+        source_is_invisible_from(std::env::var_os(INVISIBLE_VARIABLE).as_deref())
+    }
+}
+
+/// The knob's own reading: invisible unless the value is exactly `0`.
+fn source_is_invisible_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value.and_then(|value| value.to_str()) != Some("0")
+}
+
+/// Stand the invisible road (or the visible one) in place of the machine's own answer on this
+/// thread, which is the default where nothing is stood in (see `the_source_is_invisible`).
+#[cfg(test)]
+pub(super) fn stand_the_invisible_road_in(invisible: bool) {
+    INVISIBLE_STAND_IN.with(|held| held.set(invisible));
+}
+
+#[cfg(test)]
+thread_local! {
+    static INVISIBLE_STAND_IN: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// The extended styles this road puts on a player's own window (see `adopt_the_source`).
+///
+/// `WS_EX_TOOLWINDOW` is the window's leaving the taskbar and Alt+Tab, `WS_EX_NOACTIVATE` is it never
+/// taking the keyboard from the file being renamed, and `WS_EX_TRANSPARENT` is a press falling through
+/// it should it ever be in front of anything. `WS_EX_LAYERED` is the invisibility itself, and the app
+/// and topmost bits mpv opens with are cleared: this window is behind the pin and must never be held
+/// over it (see `video_launch::mpv_args`, which no longer asks for `--ontop` here).
+fn source_ex_style(current: isize, invisible: bool) -> isize {
+    let style = (current & !(WS_EX_APPWINDOW.0 as isize) & !(WS_EX_TOPMOST.0 as isize))
+        | WS_EX_TOOLWINDOW.0 as isize
+        | WS_EX_NOACTIVATE.0 as isize
+        | WS_EX_TRANSPARENT.0 as isize;
+    if invisible {
+        style | WS_EX_LAYERED.0 as isize
+    } else {
+        style & !(WS_EX_LAYERED.0 as isize)
+    }
+}
+
 /// How far beyond the virtual screen's left and bottom an `offscreen` source is put: a whole desktop
 /// worth, which no monitor arrangement reaches, and well inside the ±32 767 that a window message's
 /// packed coordinates can carry — past which Windows silently clamps the position (see
@@ -420,11 +505,11 @@ impl Thumbnail {
 /// Take a player's own window as the film the pin's host shows: out of the Shell's lists, at the
 /// bottom of the desktop's order, and registered in the host that shows it.
 ///
-/// **The style is put on once, at adoption.** `WS_EX_TOOLWINDOW` is the window's leaving the taskbar
-/// and Alt+Tab, `WS_EX_NOACTIVATE` is it never taking the keyboard from the file being renamed, and
-/// `WS_EX_TRANSPARENT` is a press falling through it should it ever be in front of anything. The
-/// app-window and topmost bits mpv opens with are cleared: this window is behind the pin and must
-/// never be held over it (see `video_launch::mpv_args`, which no longer asks for `--ontop` here).
+/// **The style is put on once, at adoption** (see `source_ex_style`), and **the invisibility with it**:
+/// `WS_EX_LAYERED` and `SetLayeredWindowAttributes(…, 1, LWA_ALPHA)` in the same pass, so the window is
+/// composited at one step from nothing rather than covered by the host. Nothing is hidden to do it and
+/// `WS_VISIBLE` is never cleared — a hidden source is a thumbnail the Shell stops drawing at all (see
+/// the module note).
 ///
 /// **The z-order insert is one post rather than a wait**, `SWP_ASYNCWINDOWPOS` to the bottom: the
 /// window belongs to mpv's process, and a synchronous reorder is this thread waiting on mpv's — the
@@ -436,11 +521,27 @@ impl Thumbnail {
 /// Safety: `source` is a window the caller found by `pid` and this app did not make.
 pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32) {
     let ex = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
-    let ex = (ex & !(WS_EX_APPWINDOW.0 as isize) & !(WS_EX_TOPMOST.0 as isize))
-        | WS_EX_TOOLWINDOW.0 as isize
-        | WS_EX_NOACTIVATE.0 as isize
-        | WS_EX_TRANSPARENT.0 as isize;
-    let _ = unsafe { SetWindowLongPtrW(source, GWL_EXSTYLE, ex) };
+    let invisible = the_source_is_invisible();
+    let _ = unsafe { SetWindowLongPtrW(source, GWL_EXSTYLE, source_ex_style(ex, invisible)) };
+    if invisible {
+        // Safety: as above, and the alpha is this app's own to give a window of another process's. The
+        // one step from nothing, `LWA_ALPHA`, is what keeps the window drawn (and therefore
+        // thumbnailable) while nothing of it reaches the screen.
+        let applied = unsafe {
+            SetLayeredWindowAttributes(source, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA)
+        };
+        note_pin_trace!(
+            "source invisible {:?} layered alpha {} applied ok {} (RHP_THUMBNAIL_INVISIBLE)",
+            source,
+            INVISIBLE_ALPHA,
+            applied.is_ok() as u8,
+        );
+    } else {
+        note_pin_trace!(
+            "source invisible {:?} off: the source is a covered window (RHP_THUMBNAIL_INVISIBLE=0)",
+            source,
+        );
+    }
     let _ = unsafe {
         SetWindowPos(
             source,
@@ -556,6 +657,40 @@ pub(super) fn the_source_is_up(pid: u32) -> bool {
 /// own erase is answered from: a host wearing a thumbnail has nothing of this app's to fill.
 pub(super) fn the_host_shows_a_thumbnail(host: HWND) -> bool {
     REGISTERED_HOST.load(Ordering::SeqCst) == host.0 as isize
+}
+
+/// Put the invisibility back where something took it off the source: the style monitor's pass over a
+/// player's window asks this, and it is the only caller.
+///
+/// **A video output reinitialised is a window that can come back without the style** — mpv recreates
+/// its window on a VO reinit, and a new window is one this app has not adopted (so it is found and
+/// adopted by the monitor's own pass) while a window that is the same handle can still have its
+/// extended style reset under it. Either way what has to be true afterwards is one fact, and it is
+/// cheap to ask: a window without `WS_EX_LAYERED` is a film standing over the pin. Every re-application
+/// is traced, so a run says how often the player un-did it instead of leaving it to be guessed.
+///
+/// Safety: the handle is the source this module adopted, if there is one, and the two calls only put a
+/// style on a window of another process's — the same pair the adoption pass makes.
+pub(super) unsafe fn keep_the_source_invisible() {
+    if !the_source_is_invisible() {
+        return;
+    }
+    let Some(source) = the_source_window() else {
+        return;
+    };
+    let ex = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
+    if ex & (WS_EX_LAYERED.0 as isize) != 0 {
+        return;
+    }
+    let _ = unsafe { SetWindowLongPtrW(source, GWL_EXSTYLE, source_ex_style(ex, true)) };
+    let applied =
+        unsafe { SetLayeredWindowAttributes(source, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA) };
+    note_pin_trace!(
+        "source invisible {:?} re-applied: the layered style had gone, alpha {} ok {}",
+        source,
+        INVISIBLE_ALPHA,
+        applied.is_ok() as u8,
+    );
 }
 
 /// Follow the host: register the picture where there is none, and point it at the host's whole client
@@ -1502,6 +1637,55 @@ mod tests {
         stand_the_source_placement_in(SourcePlacement::Edge);
         assert_eq!(the_source_placement(), SourcePlacement::Edge);
         stand_the_source_placement_in(SourcePlacement::Behind);
+    }
+
+    /// **The invisibility knob, and the style it is the whole of.** It is on unless it says exactly `0`;
+    /// on, the source wears `WS_EX_LAYERED` beside the three bits this road always asserts and keeps the
+    /// app-window and topmost bits off; off, the layered bit is not on it at all (see
+    /// `source_is_invisible_from` and `source_ex_style`).
+    #[test]
+    fn the_invisible_knob_is_on_unless_it_says_zero_and_is_the_layered_bit() {
+        assert_eq!(INVISIBLE_VARIABLE, "RHP_THUMBNAIL_INVISIBLE");
+        let named = |value: Option<&str>| source_is_invisible_from(value.map(std::ffi::OsStr::new));
+        assert!(named(None), "this road's default is the source nothing of which is seen");
+        assert!(named(Some("1")));
+        assert!(!named(Some("0")), "and `0` is the visible road, byte for byte");
+        assert!(named(Some("")), "a value that names nothing is not read as off");
+        assert!(named(Some("off")), "only the one value turns it off, and it is `0`");
+
+        let inert = WS_EX_APPWINDOW.0 as isize | WS_EX_TOPMOST.0 as isize;
+        let invisible = source_ex_style(inert, true);
+        assert_eq!(invisible & (WS_EX_LAYERED.0 as isize), WS_EX_LAYERED.0 as isize);
+        for bit in [WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT] {
+            assert_eq!(invisible & (bit.0 as isize), bit.0 as isize, "{bit:?} is kept");
+        }
+        assert_eq!(
+            invisible & (WS_EX_APPWINDOW.0 as isize),
+            0,
+            "and the app-window bit mpv opens with is gone: this film is not a window of the user's"
+        );
+        assert_eq!(
+            invisible & (WS_EX_TOPMOST.0 as isize),
+            0,
+            "nor is it held over the pin it is seen in"
+        );
+
+        let visible = source_ex_style(WS_EX_LAYERED.0 as isize | inert, false);
+        assert_eq!(
+            visible & (WS_EX_LAYERED.0 as isize),
+            0,
+            "the visible road's source is not layered, whatever it was wearing"
+        );
+    }
+
+    /// The invisible road is stood in by a test, and is the default where nothing is stood in (see
+    /// `the_source_is_invisible`).
+    #[test]
+    fn a_test_stands_the_invisible_road_it_is_about_in() {
+        assert!(the_source_is_invisible());
+        stand_the_invisible_road_in(false);
+        assert!(!the_source_is_invisible());
+        stand_the_invisible_road_in(true);
     }
 
     /// A step of a drag asks nothing of the source on the two off-screen placements: what follows the
