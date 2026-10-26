@@ -16,8 +16,8 @@
 //! on a later tick, because the question there is when the film's window *arrived* rather than how
 //! long asking for it took (see `observe_the_film`). **And the line carries the box the child was
 //! standing at as the step's own commits ended, with the strip of its host that box did not cover** —
-//! the lag itself, which is the thing the three `RHP_FILM_*` knobs of `pin_film_host` are measured by
-//! (see `measure_the_film` and `the_uncovered_strip`).
+//! the lag itself, which is what the leading ask of `pin_film_host` is measured by (see
+//! `measure_the_film` and `the_uncovered_strip`).
 //!
 //! **Neither is a setting.** Both are presence-style `RHP_*` variables read once, a run with neither
 //! set builds no line, hides nothing and pays one thread-local read per paint, and a pin's road is

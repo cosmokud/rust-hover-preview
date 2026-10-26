@@ -92,109 +92,8 @@ unsafe extern "system" fn the_default_answer(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-/// **`RHP_FILM_UNCOVERED`: what is painted in the strip of a film host its child does not cover.**
-/// Unset or `stretch` is the frame a resize drag took at its beginning, stretched over the box,
-/// which is what the host has always painted; `black` is the class's own brush, so a picture taken
-/// before the drag began is never seen stretched over a box the film has left.
-const FILM_UNCOVERED_VARIABLE: &str = "RHP_FILM_UNCOVERED";
-
-/// **`RHP_FILM_CHILD_LEADS`: `1` asks mpv's child for the box the host is about to take before the
-/// host takes it.** A step's band is then the child's before it is the host's, so on a shrink the
-/// child is never the smaller of the two — a child standing over its parent is clipped by it rather
-/// than seen cropped (see `lead_the_hosted_mpv_to_the_box`).
-const FILM_CHILD_LEADS_VARIABLE: &str = "RHP_FILM_CHILD_LEADS";
-
-/// **`RHP_FILM_CHILD_SLACK`: how far over its band the child is held, as a share of the band per
-/// side, for the length of a resize drag.** The strip a child that has not taken its new box yet
-/// leaves is then live picture rather than black — at the cost of the picture inside the child being
-/// scaled to the child, so the band shows the centre of the film (see `the_child_rect`).
-const FILM_CHILD_SLACK_VARIABLE: &str = "RHP_FILM_CHILD_SLACK";
-
-/// What is painted in the strip a film host's child does not cover, while a resize drag is live.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Uncovered {
-    /// The frame the drag's beginning took, stretched over the box: today's road.
-    Stretch,
-    /// The brush and nothing else.
-    Black,
-}
-
-/// The knobs as this run was started with: read once, because they are facts about the run and not
-/// about a pin — a variable set after the app has started changes nothing, which is what makes two
-/// runs comparable and not two halves of one. Every road asks them through `the_film_knobs`, so what
-/// an erase or a step pays for them is a copy of three small fields.
-///
-/// **Read by the shipped binary and not by a test run**, the way the thumbnail road's own knob is
-/// (see `the_pin_shows_its_film_by_thumbnail`): a suite that read the machine's variables would move
-/// the geometry these knobs move under a knob and not without one, and both of those runs are what
-/// is measured. What a test asks instead is the function, with the variable's own text as a
-/// parameter (see `the_uncovered_fill`).
-static THE_FILM_KNOBS: Lazy<FilmKnobs> = Lazy::new(read_the_film_knobs);
-
-/// What the `RHP_FILM_*` knobs came to.
-#[derive(Clone, Copy)]
-struct FilmKnobs {
-    uncovered: Uncovered,
-    child_leads: bool,
-    slack: f32,
-}
-
-fn the_film_knobs() -> FilmKnobs {
-    *THE_FILM_KNOBS
-}
-
-#[cfg(not(test))]
-fn read_the_film_knobs() -> FilmKnobs {
-    FilmKnobs {
-        uncovered: the_uncovered_fill(std::env::var(FILM_UNCOVERED_VARIABLE).ok().as_deref()),
-        child_leads: a_child_leads_its_host(
-            std::env::var(FILM_CHILD_LEADS_VARIABLE).ok().as_deref(),
-        ),
-        slack: the_slack_of_a_child(std::env::var(FILM_CHILD_SLACK_VARIABLE).ok().as_deref()),
-    }
-}
-
-#[cfg(test)]
-fn read_the_film_knobs() -> FilmKnobs {
-    // A suite reads the default road whatever the machine was started with (see `THE_FILM_KNOBS`).
-    FilmKnobs {
-        uncovered: Uncovered::Stretch,
-        child_leads: false,
-        slack: 0.0,
-    }
-}
-
-/// What `RHP_FILM_UNCOVERED` asked for: `black` is the brush, and today's stretched frame is every
-/// other answer — nothing set, `stretch`, and a word this app does not know.
-fn the_uncovered_fill(asked: Option<&str>) -> Uncovered {
-    match asked.map(str::trim) {
-        Some(value) if value.eq_ignore_ascii_case("black") => Uncovered::Black,
-        _ => Uncovered::Stretch,
-    }
-}
-
-/// Whether `RHP_FILM_CHILD_LEADS` asked for the child's box to be committed before the host's: `1`
-/// and nothing else, because a child that leads a host is not a thing to be guessed at from any other
-/// word.
-fn a_child_leads_its_host(asked: Option<&str>) -> bool {
-    asked.map(str::trim) == Some("1")
-}
-
-/// The slack `RHP_FILM_CHILD_SLACK` asked for: unset, unreadable, negative or infinite is no slack at
-/// all, and anything over `1` is capped there — a child twice its band is a picture of a corner of the
-/// film and a corner of nothing.
-fn the_slack_of_a_child(asked: Option<&str>) -> f32 {
-    let Ok(slack) = asked.unwrap_or_default().trim().parse::<f32>() else {
-        return 0.0;
-    };
-    if !slack.is_finite() {
-        return 0.0;
-    }
-    slack.clamp(0.0, 1.0)
-}
-
-/// Whether a resize drag is in flight: the one gesture the `RHP_FILM_*` knobs may change, so that a
-/// pin standing still is the pin it was before any of them was named.
+/// Whether a resize drag is in flight: the one gesture a step leads its host in, so that a pin standing
+/// still is the pin it always was (see `lead_the_hosted_mpv_to_the_box`).
 ///
 /// **Asked without waiting for the pin's own lock**, because both askers run inside calls that may
 /// hold it — the host's erase, and the fit its `WM_SIZE` runs — and a lock that cannot be taken here
@@ -204,13 +103,6 @@ fn a_resize_drag_is_live() -> bool {
         .and_then(|pinned| pinned.pin().map(|pin| pin.dragging))
         .flatten()
         .is_some_and(|drag| matches!(drag.action, PinDragAction::Resize(_)))
-}
-
-/// Whether the strip the film's child does not cover is to be left to the brush rather than filled
-/// with the frame the drag is holding: `RHP_FILM_UNCOVERED=black`, and only while a resize drag is
-/// live — a pin at rest is erased exactly as it was before this knob existed.
-fn the_strip_is_left_to_the_brush() -> bool {
-    the_film_knobs().uncovered == Uncovered::Black && a_resize_drag_is_live()
 }
 
 /// Paint the part of the host the film's child does not cover: the frame a drag is holding,
@@ -241,12 +133,8 @@ pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
         return;
     }
 
-    // **A live drag may be told to leave this strip black**, so that the pre-drag picture the frame
-    // holds is never seen stretched over a box the film has since left (see `the_uncovered_fill` and
-    // `the_strip_is_left_to_the_brush`).
     if film_host() == Some(host)
         && !the_pins_film_is_ffplay()
-        && !the_strip_is_left_to_the_brush()
         && unsafe { stretch_the_held_frame(dc, client.right, client.bottom) }
     {
         return;
@@ -1045,31 +933,66 @@ fn fit_the_hosted_mpv_to_the_host(host: HWND) -> bool {
     place_the_hosted_mpv_in(host, client.right.max(1), client.bottom.max(1))
 }
 
-/// **Ask mpv's child for the box the host is about to take before the host takes it**, where
-/// `RHP_FILM_CHILD_LEADS` asked for it and a resize drag is live: a step's band is then the child's
-/// before it is the host's, so on a shrink the child is never the smaller of the two and is clipped by
-/// the window it is a child of instead of seen cropped, and on a grow its ask is made a step earlier
-/// than the one the host's own `WM_SIZE` would make it.
+/// **Ask mpv's child for the box the host is about to take before the host takes it**, while a resize
+/// drag is live: a step's band is then the child's before it is the host's, so on a shrink the child is
+/// never the smaller of the two and is clipped by the window it is a child of instead of seen cropped,
+/// and on a grow its ask is made a step earlier than the one the host's own `WM_SIZE` would make it.
 ///
 /// **The ask is asynchronous on the road a pin's host is on** (see `fit_flags`), so leading puts the
-/// ask before the host's move and does not make it land before it: a step still pays for whatever the
-/// child has not taken, which is what the slack is for and what the step's own line measures (see
-/// `pin_resize_probe`).
+/// ask before the host's move and does not make it land before it: what a step still pays for is the
+/// residual bounce of mpv redrawing into its grown or lowered window, which the step's own line
+/// measures (see `pin_resize_probe`). The road does not block for that — no wait, no spin, no
+/// synchronous fit — because a wait there is this app's thread waiting on mpv's.
 fn lead_the_hosted_mpv_to_the_box(host: HWND, width: i32, height: i32) {
-    if the_film_knobs().child_leads && a_resize_drag_is_live() {
+    if a_resize_drag_is_live() {
         place_the_hosted_mpv_in(host, width, height);
     }
 }
 
-/// Give mpv's child the `width` x `height` box in its host's own client coordinates, standing over
-/// the band by the slack a live resize drag asked for (see `the_child_rect`), and write down what it
-/// cost.
+/// One resize step's two commits, in the order it commits them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum StepCommit {
+    /// The hosted child's box, asked for the band the host is about to take.
+    TheChild,
+    /// The host's own move, which the child is already on its way to.
+    TheHost,
+}
+
+/// **The child's box before the host's, on both a grow and a shrink**: a child standing over its
+/// parent is clipped by it rather than the band seen cropped, and a grow is a step ahead of where the
+/// host's own `WM_SIZE` would have it (see `lead_the_hosted_mpv_to_the_box`).
+const A_STEP_COMMITS: [StepCommit; 2] = [StepCommit::TheChild, StepCommit::TheHost];
+
+/// Run a step's two commits in the order `A_STEP_COMMITS` names, so the order the trace and this
+/// module's own notes describe is the order that runs.
+fn commit_a_step(ask_the_child: impl FnOnce(), move_the_host: impl FnOnce()) {
+    // Each commit is taken out as the loop reaches it: the order is the constant's and not the
+    // compiler's to guess at.
+    let (mut ask_the_child, mut move_the_host) = (Some(ask_the_child), Some(move_the_host));
+    for commit in A_STEP_COMMITS {
+        match commit {
+            StepCommit::TheChild => {
+                if let Some(ask) = ask_the_child.take() {
+                    ask();
+                }
+            }
+            StepCommit::TheHost => {
+                if let Some(move_) = move_the_host.take() {
+                    move_();
+                }
+            }
+        }
+    }
+}
+
+/// Give mpv's child the `width` x `height` box in its host's own client coordinates — exactly the box,
+/// never a pixel over it — and write down what it cost.
 fn place_the_hosted_mpv_in(host: HWND, width: i32, height: i32) -> bool {
     let Some(child) = the_hosted_mpv_child(host) else {
         return false;
     };
 
-    let rect = the_child_rect(width, height, the_slack_a_live_drag_asks_for());
+    let rect = (0, 0, width, height);
     let flags = fit_flags();
     let started = Instant::now();
     let placed =
@@ -1088,57 +1011,7 @@ fn place_the_hosted_mpv_in(host: HWND, width: i32, height: i32) -> bool {
     // What the temporary `RHP_RESIZE_TRACE` diagnostic writes down, and the box a later tick looks for
     // (see `pin_resize_probe`).
     pin_resize_probe::note_the_child_fit(host, child, rect, flags, started);
-    // Whether the band is owed itself back once the drag that asked for this is over (see
-    // `settle_the_hosted_child_back_at_the_band`).
-    CHILD_HELD_OVER_THE_BAND.store(rect.2 > width || rect.3 > height, Ordering::SeqCst);
     placed
-}
-
-/// Whether the child was last given more than its band, which is the one thing a drag's end owes the
-/// band back (see `settle_the_hosted_child_back_at_the_band`).
-static CHILD_HELD_OVER_THE_BAND: AtomicBool = AtomicBool::new(false);
-
-/// Put mpv's child back at exactly the band once the drag that had it standing over the band is over,
-/// on the tick that finds no drag: the slack is what a hand on an edge asks for, and a child left over
-/// a settled pin is a picture cropped by a knob that has nothing left to hide.
-///
-/// **Asked on the tick, and on the release that ends the drag.** The tick because a drag ends down
-/// roads that do not all know they are one — a capture somebody else took, a pin rebuilt under a hand
-/// — and the release because that is the end a hand sees, where a tick's wait would be one frame of
-/// the oversized box. The flag is what keeps both free: a tick with nothing over the band pays one
-/// atomic read.
-pub(super) fn settle_the_hosted_child_back_at_the_band(dragging: bool) {
-    if dragging || !CHILD_HELD_OVER_THE_BAND.swap(false, Ordering::SeqCst) {
-        return;
-    }
-    if let Some(host) = film_host() {
-        let _ = fit_the_hosted_mpv_to_the_host(host);
-    }
-}
-
-/// The rect mpv's child is given in its host's client coordinates for a `width` x `height` band: the
-/// band itself at no slack, and otherwise the band grown by `slack` of itself and left centred on it,
-/// so the same strip stands over each edge — give or take the pixel an odd strip cannot split in two.
-///
-/// **The picture inside a child is scaled to the child**, because a player fills the window it was
-/// given: a child held 8% over a 1000-pixel band shows the middle 1000/1080 of the film inside the
-/// band and not the whole of it. That is what the slack trades for live picture over the strip a
-/// lagging child has not reached, and it is why the child is exactly the band again the moment the
-/// drag is over (see `settle_the_hosted_child_back_at_the_band`).
-fn the_child_rect(width: i32, height: i32, slack: f32) -> (i32, i32, i32, i32) {
-    let over = |extent: i32| ((extent as f32 * slack).round() as i32).max(0);
-    let (over_w, over_h) = (over(width), over(height));
-    (-(over_w / 2), -(over_h / 2), width + over_w, height + over_h)
-}
-
-/// The slack a live resize drag asked the child to stand over its band by, and none at all on a pin
-/// standing still — which is the whole of what keeps this knob out of every other road.
-fn the_slack_a_live_drag_asks_for() -> f32 {
-    if a_resize_drag_is_live() {
-        the_film_knobs().slack
-    } else {
-        0.0
-    }
 }
 
 /// Whether the tick owes the player's window the front: a film a hover is following, or a pin's
@@ -1602,21 +1475,23 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
     };
 
     let (x, y, width, height) = the_film_host_box(content);
-    // **The child's box before the host's, where a machine asked for it** (see
-    // `lead_the_hosted_mpv_to_the_box`): a step's film is asked for the band it is about to be given,
-    // rather than once the band has already moved out from under it.
-    lead_the_hosted_mpv_to_the_box(host, width, height);
     // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock for this placement, taken only where a
     // resize step is being measured (see `pin_resize_probe`).
-    let started = pin_resize_probe::a_step_started();
-    let _ = SetWindowPos(
-        host,
-        HWND::default(),
-        x,
-        y,
-        width,
-        height,
-        SWP_NOZORDER | SWP_NOACTIVATE,
+    let mut started = None;
+    commit_a_step(
+        || lead_the_hosted_mpv_to_the_box(host, width, height),
+        || {
+            started = pin_resize_probe::a_step_started();
+            let _ = SetWindowPos(
+                host,
+                HWND::default(),
+                x,
+                y,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        },
     );
     // **What a resize step costs on the thumbnail road is this one call**: the destination is the
     // host's new client area, and the film's window is moved with the host's corner and not resized
@@ -2110,78 +1985,18 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
 mod tests {
     use super::*;
 
-    /// **The strip knob names the brush and defaults to the road the host was already on**, which is
-    /// what makes `cargo test` and a run with no variable the same run: only `black` moves anything,
-    /// and a word this app does not know is not a second way to ask for it.
+    /// **A drag step asks the child before it moves the host**, in both directions: the host is moved
+    /// only after the child's box has been committed, so a shrink is a child clipped by its parent and
+    /// not a band cropped by a child that has not caught up yet.
     #[test]
-    fn the_uncovered_strip_is_black_only_where_the_knob_says_so() {
-        assert_eq!(
-            FILM_UNCOVERED_VARIABLE, "RHP_FILM_UNCOVERED",
-            "the knob is the name the report and the run's own trace give it"
+    fn a_drag_step_asks_the_child_before_it_moves_the_host() {
+        let ran = RefCell::new(Vec::new());
+        commit_a_step(
+            || ran.borrow_mut().push("child"),
+            || ran.borrow_mut().push("host"),
         );
-        assert_eq!(the_uncovered_fill(None), Uncovered::Stretch);
-        assert_eq!(the_uncovered_fill(Some("stretch")), Uncovered::Stretch);
-        assert_eq!(the_uncovered_fill(Some("black")), Uncovered::Black);
-        assert_eq!(
-            the_uncovered_fill(Some(" Black ")),
-            Uncovered::Black,
-            "a value pasted with its whitespace is still the word"
-        );
-        assert_eq!(
-            the_uncovered_fill(Some("purple")),
-            Uncovered::Stretch,
-            "and a word this app does not know is the road it always had"
-        );
-    }
-
-    /// **The other two knobs default to the road the film's child was already on, and each says what
-    /// it was asked for and nothing more** — no variable, a value pasted with its whitespace, and a
-    /// number that is not a box this app could ask a window for.
-    #[test]
-    fn the_child_knobs_ask_for_the_default_road_until_they_are_named() {
-        assert_eq!(FILM_CHILD_LEADS_VARIABLE, "RHP_FILM_CHILD_LEADS");
-        assert_eq!(FILM_CHILD_SLACK_VARIABLE, "RHP_FILM_CHILD_SLACK");
-
-        assert!(!a_child_leads_its_host(None), "a child follows its host unless told otherwise");
-        assert!(a_child_leads_its_host(Some("1")));
-        assert!(a_child_leads_its_host(Some(" 1 ")));
-        assert!(!a_child_leads_its_host(Some("0")));
-        assert!(!a_child_leads_its_host(Some("true")));
-
-        assert_eq!(the_slack_of_a_child(None), 0.0);
-        assert!((the_slack_of_a_child(Some("0.08")) - 0.08).abs() < f32::EPSILON);
-        assert_eq!(
-            the_slack_of_a_child(Some("-0.5")),
-            0.0,
-            "a child smaller than its band is the crop this exists to not be"
-        );
-        assert_eq!(the_slack_of_a_child(Some("4")), 1.0, "and twice the band is the cap");
-        assert_eq!(the_slack_of_a_child(Some("half")), 0.0);
-        assert_eq!(the_slack_of_a_child(Some("inf")), 0.0, "an infinite box is not a box");
-        assert_eq!(the_slack_of_a_child(Some("NaN")), 0.0);
-    }
-
-    /// **A child held over its band hangs over every edge by an equal share, and is the band itself at
-    /// no slack** — the box a step is committed at, and the box a drag's end owes the band back.
-    #[test]
-    fn a_child_over_its_band_is_the_band_grown_and_centred_on_it() {
-        assert_eq!(the_child_rect(1000, 500, 0.0), (0, 0, 1000, 500));
-        assert_eq!(the_child_rect(1000, 500, 0.08), (-40, -20, 1080, 540));
-
-        // The band shows the middle of the child, so the two strips it hangs over are equal: what the
-        // slack costs is the same share of the film off each edge.
-        let (left, top, width, height) = the_child_rect(1000, 500, 0.06);
-        assert_eq!(-left, width + left - 1000);
-        assert_eq!(-top, height + top - 500);
-
-        // An odd strip cannot be split in two, so it is off centre by the pixel that is left over.
-        let (left, top, width, height) = the_child_rect(7, 11, 0.5);
-        assert!((-left - (width + left - 7)).abs() <= 1);
-        assert!((-top - (height + top - 11)).abs() <= 1);
-
-        // A box too small for the slack to round to a pixel is the box itself, and never less than it.
-        assert_eq!(the_child_rect(3, 3, 0.08), (0, 0, 3, 3));
-        assert_eq!(the_child_rect(7, 11, 1.0), (-3, -5, 14, 22));
+        assert_eq!(*ran.borrow(), ["child", "host"]);
+        assert_eq!(A_STEP_COMMITS, [StepCommit::TheChild, StepCommit::TheHost]);
     }
 
     /// The thumbnail road is mpv's alone: a film FFmpeg's player draws has no switch that tells it not
