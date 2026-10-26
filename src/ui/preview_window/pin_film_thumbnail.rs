@@ -69,17 +69,30 @@
 //!
 //! **But a box that matches is not yet a picture that fills it.** Measured on the glass: every settle
 //! succeeded on its first ask, the source's window box always equalled the host's, and the pin still
-//! came out zoomed in (cropped) or small in a field of black. The mismatch is inside mpv — its
-//! rendered picture (`dwidth`/`dheight`, the fitted display size) is not its window's client size —
-//! and with `--d3d11-flip=no` the bitblt swapchain is presented 1:1, so a picture larger than the
-//! window is cropped and one smaller leaves black. So a settle also **reads the player's own idea of
-//! the picture over the existing pipe, once per settle** (`source fills … render …`), and treats the
-//! settle as taken only when the box matches *and* the picture fills it (see `the_picture_fills`).
-//! Where the box matched and the picture did not, the source is **nudged**: the same box is asked for
-//! one pixel larger and then exactly, because a repeated identical size produces no `WM_SIZE` and a
-//! VO stuck at an old buffer has nothing else to make it reconfigure. One nudge per settle, capped,
-//! and a source that still disagrees says `source never filled …` once and is left alone (see
-//! `settle_the_fill` and `nudge_the_source`).
+//! came out zoomed in (cropped) or small in a field of black. The mismatch is inside mpv — the output
+//! it is presenting is not the size of the window it is presenting into. So a settle also **reads the
+//! player's own output over the existing pipe, once per settle**, and treats the settle as taken only
+//! when the box matches *and* the output fills it (see `the_picture_fills`). Where the box matched and
+//! the output did not, the source is **nudged**: the same box is asked for one pixel larger and then
+//! exactly, because a repeated identical size produces no `WM_SIZE` and a VO stuck at an old buffer has
+//! nothing else to make it reconfigure. One nudge per settle, capped, and a source that still
+//! disagrees says `source never filled …` once and is left alone — and not asked again for that box at
+//! all (see `settle_the_fill`, `nudge_the_source` and `place_the_source`).
+//!
+//! **The numbers are `osd-dimensions`, and the first attempt at them was wrong in a way worth writing
+//! down.** This settle used to read `dwidth`/`dheight` and call them the drawn picture; they are the
+//! film's *display* size — what it would be drawn at were it not fitted to a window — so they read
+//! `1920x1080` for every box this road ever asked for, the comparison could never pass, and the nudge
+//! fired on every settle in the run. `osd-dimensions` is the player's own answer about its output:
+//! `w`/`h` are the window the VO configured for, and `mt`/`mb`/`ml`/`mr` are the margins the film's own
+//! shape leaves, so the picture drawn inside them is `w` less the two horizontal margins by `h` less
+//! the two vertical ones. Measured on mpv 0.41.0, a 1920×1080 film in a 640×300 window:
+//! `{"w":640,"h":300,"par":1.000000,"aspect":2.133333,"mt":0,"mb":0,"ml":53,"mr":54}` — 53 + 533 +
+//! 54 = 640, which is the letterbox of a film the box does not share the shape of. **The invariant is
+//! therefore the picture plus its margins covering the client area, and that same configured window
+//! being the client area**: a film wider than the box passes because its margins are the black it is
+//! honestly shown with, and only an output configured for another size fails (see `Drawn` and
+//! `the_drawn_picture`).
 //!
 //! **The structural version of that invariant is a flip-model swapchain**, which the compositor
 //! scales to the window's client area by construction instead of relying on mpv catching a
@@ -341,18 +354,20 @@ type SourceBox = (i32, i32, i32, i32);
 /// before it has landed (see `follow_the_band_while_dragging`).
 static DRAG_ASK: Mutex<Option<(Instant, SourceBox)>> = Mutex::new(None);
 
-/// What a settle knows about the player's picture filling its own window (see `the_picture_fills`).
+/// What a settle knows about the player's output filling its own window (see `the_picture_fills`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Fill {
     /// Not looked at yet for this settle.
     Unlooked,
-    /// The picture is the window's size, or the window's shape letterboxed by the film's own aspect.
+    /// The picture, with the margins it is drawn in, covers the client area, and the window the output
+    /// configured for is that client area — letterboxed films included.
     Filled,
     /// The player did not answer the question: nothing to judge and nothing to nudge.
     Unknown,
     /// The nudge was made at this instant; the picture is looked at again after `SETTLE_RETRY`.
     Nudged(Instant),
-    /// Nudged and still not filled: the settle's one line has been said and nothing more is asked.
+    /// Nudged and still not filled: the settle's one line has been said and nothing more is asked for
+    /// this box, however many settles name it again.
     NeverFilled,
 }
 
@@ -614,8 +629,16 @@ pub(super) fn place_the_source(host: HWND) {
     // **A placement is a fresh settle even where it names the box the last settle did**: a drag
     // between the two may have left the player's output at another size, so the picture is looked at
     // again rather than taken on trust from the settle before it (see `settle_the_fill`).
+    //
+    // **Except where that settle already ended on `source never filled` for this very box.** The nudge
+    // was made, it did not fix it, and the trace has said so — so a source a player or the Shell is
+    // overruling is left alone until the box changes (a drag that ends at another box, a maximize, a
+    // zoom) or the window is made again, which resets this whole record (see `note_the_source`). That
+    // is what makes a repeated nudge impossible by construction rather than by the cap alone.
     if let Ok(mut held) = THUMBNAIL.lock() {
-        held.fill = Fill::Unlooked;
+        if the_settle_is_fresh(&held, box_) {
+            held.fill = Fill::Unlooked;
+        }
     }
     ask_the_source_for(source, host, box_, true);
     // **The settle is the drag follow's previous ask**: nothing follows a box that has not landed, and
@@ -624,6 +647,13 @@ pub(super) fn place_the_source(host: HWND) {
     if let Ok(mut last) = DRAG_ASK.lock() {
         *last = Some((Instant::now(), box_));
     }
+}
+
+/// Whether a placement naming `box_` judges the player's picture again: always, unless the last
+/// settle ended on `source never filled` for that same box — the one state a nudge has already failed
+/// in, and the one state a repeated nudge must not be made from (see `place_the_source`).
+fn the_settle_is_fresh(held: &Thumbnail, box_: SourceBox) -> bool {
+    held.fill != Fill::NeverFilled || held.asked != box_
 }
 
 /// Whether the player whose window is the pin's picture has said its video output is configured for a
@@ -854,11 +884,11 @@ fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), coun
 /// hold (see the module note and `the_picture_fills`).
 ///
 /// **The read is mpv's and the comparison is with the source's own client size**, which is the box the
-/// Shell stretches into the destination: a picture that is not that box is a picture the destination
-/// shows cropped (larger), or small in a field of black (smaller), because the bitblt swapchain is
-/// presented 1:1 (see the module note). `dwidth`/`dheight` are the fitted display size and are the
-/// numbers wanted; a build without them is asked for `osd-dimensions`' instead, and the line says
-/// which answered (see `the_picture_size`).
+/// Shell stretches into the destination: an output configured for another size is a picture the
+/// destination shows cropped (larger), or small in a field of black (smaller), because the bitblt
+/// swapchain is presented 1:1 (see the module note). `osd-dimensions` is the player's own answer about
+/// the window it configured and the margins the film is drawn inside, in one read of one node (see
+/// `the_drawn_picture` and `Drawn`).
 ///
 /// **One read per settle, and one more after the nudge it makes.** A settle is the only moment on this
 /// road that asks the player anything: the tick's own questions are Windows' about a window, and the
@@ -890,20 +920,26 @@ fn settle_the_fill(
     };
     let placement = the_source_placement();
     let (x, y, width, height) = box_;
-    let render = the_picture_size(SOURCE_PROCESS.load(Ordering::SeqCst));
-    match render {
-        Some((render_width, render_height, property)) => note_pin_trace!(
-            "source fills {:?} {:?} client {}x{} render {}x{} ({})",
+    let drawn = the_drawn_picture(SOURCE_PROCESS.load(Ordering::SeqCst));
+    let (ml, mt, mr, mb) = drawn.map_or((0, 0, 0, 0), |drawn| drawn.margins);
+    match drawn {
+        Some(drawn) => note_pin_trace!(
+            "source fills {:?} {:?} client {}x{} drawn {}x{} picture {}x{} margins l{}t{}r{}b{} (osd-dimensions)",
             source,
             placement,
             client.0,
             client.1,
-            render_width,
-            render_height,
-            property,
+            drawn.window.0,
+            drawn.window.1,
+            drawn.picture.0,
+            drawn.picture.1,
+            ml,
+            mt,
+            mr,
+            mb,
         ),
         None => note_pin_trace!(
-            "source fills {:?} {:?} client {}x{} render unknown",
+            "source fills {:?} {:?} client {}x{} drawn unknown (osd-dimensions)",
             source,
             placement,
             client.0,
@@ -911,13 +947,11 @@ fn settle_the_fill(
         ),
     }
 
-    if render.is_some_and(|(render_width, render_height, _)| {
-        the_picture_fills((render_width, render_height), client)
-    }) {
+    if drawn.is_some_and(|drawn| the_picture_fills(drawn, client)) {
         held.fill = Fill::Filled;
         return true;
     }
-    let Some((render_width, render_height, _)) = render else {
+    let Some(drawn) = drawn else {
         // A player that cannot say is not a picture proven wrong: nothing to nudge and nothing to
         // retry, so the settle is written down as unproved rather than as taken.
         held.fill = Fill::Unknown;
@@ -937,11 +971,13 @@ fn settle_the_fill(
     if was_nudged {
         held.fill = Fill::NeverFilled;
         note_pin_trace!(
-            "source never filled {:?} {:?} render {}x{} wanted {}x{} host {:?}",
+            "source never filled {:?} {:?} drawn {}x{} picture {}x{} wanted {}x{} host {:?}",
             source,
             placement,
-            render_width,
-            render_height,
+            drawn.window.0,
+            drawn.window.1,
+            drawn.picture.0,
+            drawn.picture.1,
             client.0,
             client.1,
             host,
@@ -951,15 +987,15 @@ fn settle_the_fill(
     let nudged = nudge_the_source(source, box_, client);
     held.fill = Fill::Nudged(now);
     note_pin_trace!(
-        "source nudged {:?} {:?} {}x{}+{}+{} render {}x{} client {}x{} host {:?} ok {}",
+        "source nudged {:?} {:?} {}x{}+{}+{} drawn {}x{} client {}x{} host {:?} ok {}",
         source,
         placement,
         width,
         height,
         x,
         y,
-        render_width,
-        render_height,
+        drawn.window.0,
+        drawn.window.1,
         client.0,
         client.1,
         host,
@@ -979,53 +1015,81 @@ fn the_fill_look(fill: Fill, now: Instant) -> FillLook {
     }
 }
 
-/// Whether a rendered picture fills the window it is in, given the source's client size: **the fill
-/// invariant**, and the one question that tells a picture the Shell may stretch from one it may not.
+/// Whether what the player is presenting fills the source window the Shell is thumbnailing it
+/// through: **the fill invariant**, and the one question that tells a picture the Shell may stretch
+/// from one it may not.
 ///
-/// Exact is the answer for a band of the film's own shape, which is the shape this app keeps a pin's
-/// media box at (see `pin_geometry::resize_pinned_content`). A picture that touches two opposite
-/// edges and fits inside them is that same picture **letterboxed** by an aspect the band does not
-/// share, which is mpv fitting the film to a box of another shape and not an output that never
-/// resized. Anything else — smaller than the window on both axes, or larger than it — is a buffer
-/// that was not resized with the window, which with `--d3d11-flip=no` DXGI presents 1:1: a larger
-/// picture is cropped and a smaller one leaves black. One pixel of slack either way is where an
-/// aspect worked out in integers lands.
+/// Two halves, and both are the same claim from two sides. The picture the player draws *plus the
+/// margins it draws it in* has to cover the client area — that is what makes a film wider than the box
+/// pass: its margins are the black it is honestly shown with (see `Drawn`) — and the window the video
+/// output configured for has to *be* that client area, because an output a size behind the window is
+/// what mpv presents 1:1 with `--d3d11-flip=no`: a larger surface is cropped and a smaller one leaves
+/// black. One pixel of slack either way is where an aspect worked out in integers lands.
 ///
-/// shortcut: a one-axis stale picture whose live axis still spans the window exactly is
-/// indistinguishable from a letterbox without asking the film's own size, and reads as filled; the
-/// band keeps the media's shape, so a stale buffer spans neither axis. Upgrade by asking `width` and
-/// `height` and fitting them to the client box.
-fn the_picture_fills(render: (i32, i32), client: (i32, i32)) -> bool {
-    let spans_the_width = (render.0 - client.0).abs() <= FILL_SLACK;
-    let spans_the_height = (render.1 - client.1).abs() <= FILL_SLACK;
-    let fits_inside = render.0 <= client.0 + FILL_SLACK && render.1 <= client.1 + FILL_SLACK;
-    (spans_the_width && spans_the_height) || (fits_inside && (spans_the_width || spans_the_height))
+/// shortcut: the margins are read as the player reports them, so a film the player crops with
+/// `--video-crop`-style margins outside the OSD rectangle would read as one that does not fill; nothing
+/// on this road sets a crop the box is not already at. Upgrade it by asking `video-params` for the
+/// frame's own shape and comparing the fitted rectangle with it.
+fn the_picture_fills(drawn: Drawn, client: (i32, i32)) -> bool {
+    let (ml, mt, mr, mb) = drawn.margins;
+    let covered = (drawn.picture.0 + ml + mr, drawn.picture.1 + mt + mb);
+    let a_picture = drawn.picture.0 > 0 && drawn.picture.1 > 0;
+    let covers_the_client = (covered.0 - client.0).abs() <= FILL_SLACK
+        && (covered.1 - client.1).abs() <= FILL_SLACK;
+    let is_the_client = (drawn.window.0 - client.0).abs() <= FILL_SLACK
+        && (drawn.window.1 - client.1).abs() <= FILL_SLACK;
+    a_picture && covers_the_client && is_the_client
 }
 
-/// mpv's own idea of the picture it renders, in pixels, and which property answered.
+/// What mpv says its video output is presenting, in the source window's own pixels: the window the
+/// output configured for, the picture it fitted inside that window, and the letterbox margins around
+/// it — `osd-dimensions`, one node property and therefore one read (see `the_drawn_picture`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Drawn {
+    /// The VO's window in pixels: the surface it is presenting from.
+    window: (i32, i32),
+    /// The rectangle the film is drawn in: the window less its four margins.
+    picture: (i32, i32),
+    /// The margins the film's own shape leaves, as left, top, right and bottom.
+    margins: (i32, i32, i32, i32),
+}
+
+/// mpv's own answer about the output it is presenting, in one read of `osd-dimensions` — or nothing
+/// where the player has no value for it, which is a player with no configured output (see `Drawn`).
 ///
-/// **`dwidth`/`dheight` are the fitted display size** — what the player draws, after scaling — which
-/// is the number to compare with the client box (see `the_picture_fills`). A build without them is
-/// asked for `osd-dimensions`' width and height instead, and the caller's trace says which answered.
-/// Both are read through the helper the app's other questions use, with its ten-millisecond bound, so
-/// a player that does not answer costs a settle a bounded wait and no more (see
-/// `mpv_ipc::get_property`).
-fn the_picture_size(pid: u32) -> Option<(i32, i32, &'static str)> {
+/// **`w`/`h` are the VO window, and `dwidth`/`dheight` are not.** `dwidth`/`dheight` are the film's
+/// *display* size — what it would be drawn at were it not fitted to a window — which is why reading
+/// them as the drawn picture made this settle's test impossible to pass and the nudge fire on every
+/// settle (see the module note). `osd-dimensions` is the output's own geometry: measured on mpv 0.41.0
+/// with a 1920×1080 film in a 640×300 window it answers
+/// `{"w":640,"h":300,"par":1.000000,"aspect":2.133333,"mt":0,"mb":0,"ml":53,"mr":54}`, and the same
+/// player still answers 640×300 after that window's client was made 800×400 — which is exactly the
+/// stale surface this settle exists to see.
+fn the_drawn_picture(pid: u32) -> Option<Drawn> {
     if pid == 0 {
         return None;
     }
-    let read = |property: &str| {
-        mpv_ipc::get_property(pid, property)
-            .as_deref()
-            .and_then(a_pixel_count)
-    };
-    if let (Some(width), Some(height)) = (read("dwidth"), read("dheight")) {
-        return Some((width, height, "dwidth/dheight"));
-    }
-    match (read("osd-dimensions/w"), read("osd-dimensions/h")) {
-        (Some(width), Some(height)) => Some((width, height, "osd-dimensions/w+h")),
-        _ => None,
-    }
+    let node = mpv_ipc::get_property(pid, "osd-dimensions")?;
+    let (width, height) = (a_node_field(&node, "w")?, a_node_field(&node, "h")?);
+    let (ml, mt, mr, mb) = (
+        a_node_field(&node, "ml").unwrap_or(0),
+        a_node_field(&node, "mt").unwrap_or(0),
+        a_node_field(&node, "mr").unwrap_or(0),
+        a_node_field(&node, "mb").unwrap_or(0),
+    );
+    Some(Drawn {
+        window: (width, height),
+        picture: ((width - ml - mr).max(0), (height - mt - mb).max(0)),
+        margins: (ml, mt, mr, mb),
+    })
+}
+
+/// One field out of a node property's answer: mpv writes an object as `{"w":640,"h":300,…}`, so the
+/// field is the number after its own key and up to the field beside it (see `mpv_ipc::reply_data`).
+fn a_node_field(object: &str, name: &str) -> Option<i32> {
+    let key = format!("\"{name}\":");
+    let after = object.find(&key)? + key.len();
+    a_pixel_count(object[after..].split([',', '}']).next()?)
 }
 
 /// A property's answer as a pixel count, or nothing where it is not a number this app can use: mpv
@@ -1508,45 +1572,69 @@ mod tests {
     }
 
     /// **The fill invariant, which is the second half of a settle**: a picture the size of the window
-    /// fills it, a picture letterboxed by the film's own shape fills it too, and a buffer a size behind
-    /// the window does not — the two symptoms being crop (larger than the window) and a small picture
-    /// in a field of black (smaller on both axes), which is what the bitblt swapchain presents
-    /// (see `the_picture_fills`).
+    /// fills it, a picture letterboxed by the film's own shape fills it too, and an output configured
+    /// for another window does not — the two symptoms being crop (a surface larger than the window) and
+    /// a small picture in a field of black (smaller on both axes), which is what the bitblt swapchain
+    /// presents (see `the_picture_fills`).
     #[test]
     fn a_picture_fills_its_window_exactly_or_as_a_letterbox_of_it() {
         let window = (2396, 1349);
+        let drawn = |window: (i32, i32), margins: (i32, i32, i32, i32)| Drawn {
+            window,
+            picture: (
+                window.0 - margins.0 - margins.2,
+                window.1 - margins.1 - margins.3,
+            ),
+            margins,
+        };
+
         assert!(
-            the_picture_fills(window, window),
+            the_picture_fills(drawn(window, (0, 0, 0, 0)), window),
             "the picture is the window it is drawn in"
         );
         assert!(
-            the_picture_fills((2395, 1348), window),
+            the_picture_fills(drawn((2395, 1348), (0, 0, 0, 0)), window),
             "and an aspect worked out in integers may land a pixel out"
         );
         assert!(
-            the_picture_fills((2396, 1013), window),
-            "a wider film letterboxed in the box touches its width, which is mpv fitting it and \
-             not an output that never resized"
+            the_picture_fills(drawn(window, (0, 108, 0, 108)), window),
+            "a wider film letterboxed in the box still covers it once its margins are counted: that \
+             is mpv fitting the film and not an output that never resized"
         );
         assert!(
-            the_picture_fills((1800, 1349), window),
-            "and a taller one touches its height"
+            the_picture_fills(drawn(window, (300, 0, 300, 0)), window),
+            "and a taller one letterboxes on the other axis"
         );
 
+        // Measured on mpv 0.41.0: a 1920x1080 film in a 640x300 window.
+        assert!(the_picture_fills(
+            Drawn {
+                window: (640, 300),
+                picture: (533, 300),
+                margins: (53, 0, 54, 0),
+            },
+            (640, 300)
+        ));
+
         assert!(
-            !the_picture_fills((1920, 1080), window),
-            "a picture on neither witness is a buffer at the size the window used to be: smaller \
-             than the window on both axes, which the Shell presents as black around a small picture"
+            !the_picture_fills(drawn((1920, 1080), (0, 0, 0, 0)), (867, 487)),
+            "an output configured for another window is a surface a size behind it, which the Shell \
+             presents cropped"
         );
         assert!(
-            !the_picture_fills((3840, 2160), window),
-            "or larger than it, which it presents cropped"
+            !the_picture_fills(drawn((441, 248), (0, 0, 0, 0)), (867, 487)),
+            "or smaller, which it presents as black around a small picture"
         );
         assert!(
-            the_picture_fills((1920, 1349), window),
-            "and a one-axis difference that still spans an axis reads as a letterbox: without the \
-             film's own shape a one-axis stale buffer is the same picture (see the shortcut on \
-             `the_picture_fills`)"
+            !the_picture_fills(
+                Drawn {
+                    window: (867, 487),
+                    picture: (0, 0),
+                    margins: (0, 0, 0, 0),
+                },
+                (867, 487)
+            ),
+            "and a player with no picture in its window has not filled it with one"
         );
     }
 
@@ -1642,34 +1730,79 @@ mod tests {
         assert_eq!(the_shrink_lead(10), SHRINK_LEAD_MIN, "and a small one is not less than it");
     }
 
-    /// The picture size is asked of `dwidth`/`dheight` first and of `osd-dimensions` only where they
-    /// do not answer, and the name that answered is part of the answer so the trace says which
-    /// property a run was reading (see `the_picture_size`).
+    /// A box a settle already gave up on is not judged again — which is what makes the nudge fire
+    /// once for a box and never again — while any other box (or a settled picture) is a fresh settle
+    /// (see `the_settle_is_fresh`).
     #[test]
-    fn the_picture_size_prefers_dwidth_and_names_the_property_that_answered() {
+    fn a_box_that_never_filled_is_not_judged_again_until_it_changes() {
+        let band = (10, 20, 640, 360);
+        let gone_to = Thumbnail {
+            asked: band,
+            fill: Fill::NeverFilled,
+            ..Thumbnail::NOTHING
+        };
+        assert!(
+            !the_settle_is_fresh(&gone_to, band),
+            "the nudge was made and did not fix it: the same box is not asked again"
+        );
+        assert!(
+            the_settle_is_fresh(&gone_to, (11, 20, 640, 360)),
+            "a box that changed is a new settle"
+        );
+        assert!(
+            the_settle_is_fresh(
+                &Thumbnail {
+                    asked: band,
+                    fill: Fill::Filled,
+                    ..Thumbnail::NOTHING
+                },
+                band
+            ),
+            "and a picture that filled last time is worth one more look at the same box"
+        );
+    }
+
+    /// The player's geometry is read once per settle, as one node: `osd-dimensions` carries the
+    /// window, the margins and the picture in one answer, and a settle may spend one property read
+    /// (see `the_drawn_picture`).
+    #[test]
+    fn the_drawn_picture_is_one_read_of_the_osd_dimensions_node() {
         let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
             .lock()
             .unwrap_or_else(|held| held.into_inner());
         let pid = 0x5eed;
-        mpv_ipc::remember_pipe(pid, "rhp-test-picture-size", false);
+        mpv_ipc::remember_pipe(pid, "rhp-test-drawn-picture", false);
         mpv_ipc::clear_reads();
 
-        mpv_ipc::answer_a_read(pid, "dwidth", Some("1920"));
-        mpv_ipc::answer_a_read(pid, "dheight", Some("1080"));
-        mpv_ipc::answer_a_read(pid, "osd-dimensions/w", Some("640"));
-        mpv_ipc::answer_a_read(pid, "osd-dimensions/h", Some("360"));
-        assert_eq!(the_picture_size(pid), Some((1920, 1080, "dwidth/dheight")));
+        // The answer mpv 0.41.0 gives a 1920x1080 film in a 640x300 window, verbatim.
+        mpv_ipc::answer_a_read(
+            pid,
+            "osd-dimensions",
+            Some(
+                r#"{"w":640,"h":300,"par":1.000000,"aspect":2.133333,"mt":0,"mb":0,"ml":53,"mr":54}"#,
+            ),
+        );
+        assert_eq!(
+            the_drawn_picture(pid),
+            Some(Drawn {
+                window: (640, 300),
+                picture: (533, 300),
+                margins: (53, 0, 54, 0),
+            }),
+            "the window, the picture inside the letterbox and the letterbox itself come out of the \
+             one answer"
+        );
         assert_eq!(
             mpv_ipc::noted_reads(),
-            vec![format!("{pid}:dwidth"), format!("{pid}:dheight")],
-            "a player that has them is asked for those two and nothing else"
+            vec![format!("{pid}:osd-dimensions")],
+            "asked once, and for the node: a read per field is three more round trips on a settle"
         );
 
-        mpv_ipc::answer_a_read(pid, "dwidth", None);
-        mpv_ipc::answer_a_read(pid, "dheight", None);
-        assert_eq!(the_picture_size(pid), Some((640, 360, "osd-dimensions/w+h")));
+        // A player that cannot answer is a player whose picture is not judged.
+        mpv_ipc::answer_a_read(pid, "osd-dimensions", None);
+        assert_eq!(the_drawn_picture(pid), None);
+        assert_eq!(the_drawn_picture(0), None, "a player this app does not hold is not asked");
 
-        assert_eq!(the_picture_size(0), None, "a player this app does not hold is not asked");
         mpv_ipc::forget_pipe(pid);
         mpv_ipc::clear_reads();
     }
