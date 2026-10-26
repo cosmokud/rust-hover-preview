@@ -417,16 +417,37 @@ fn read_reply(name: &str, request: String) -> Option<String> {
 /// The value out of one JSON reply line: what stands after `"data":`, and nothing where the reply
 /// carries none.
 ///
-/// It is a read of the one field rather than a parser, and the properties it is used for are a number
-/// and a boolean, so the value is taken up to the next `,` or `}` and handed back as the text it is.
-/// A property mpv has no value for is answered with an error and no `data` at all, which is the `None`
-/// a caller reads as "not known yet" (see `get_property`).
+/// It is a read of the one field rather than a parser, and the scalar properties it is used for are
+/// numbers and booleans, so the value is taken up to the next `,` or `}` and handed back as the text
+/// it is. A property mpv has no value for is answered with an error and no `data` at all, which is the
+/// `None` a caller reads as "not known yet" (see `get_property`).
 ///
-/// shortcut: a string value with a `,` in it would be cut at it, which neither property read here is;
-/// upgrade to a parser when one that is is.
+/// **A `data` that opens an object is handed back whole**, up to the brace that closes it: a node
+/// property (`osd-dimensions`, see `pin_film_thumbnail::the_drawn_picture`) is the one answer on this
+/// pipe with more than one field in it, and cutting it at its first `,` would be handing the caller the
+/// first field of a film's geometry and calling it the geometry.
+///
+/// shortcut: a string value with a `,` in it would be cut at it, and a brace inside a string would
+/// close an object early, which no property read here is; upgrade to a parser when one that is is.
 fn reply_data(line: &str) -> Option<String> {
     let at = line.find(r#""data""#)? + r#""data""#.len();
     let rest = line[at..].trim_start().strip_prefix(':')?.trim_start();
+    if rest.starts_with('{') {
+        let mut depth = 0usize;
+        for (index, byte) in rest.bytes().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(rest[..=index].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        return None;
+    }
     let end = rest.find([',', '}']).unwrap_or(rest.len());
     let value = rest[..end].trim();
     (!value.is_empty() && value != "null").then(|| value.trim_matches('"').to_string())
@@ -737,6 +758,22 @@ mod tests {
             reply_data(r#"{"error":"success","data":null,"request_id":4}"#),
             None,
             "and a null is a value of nothing, which is the same answer here"
+        );
+        // A node property's answer is one object, and the whole of it: `osd-dimensions` is how this
+        // app asks mpv what its output is really drawing (see `pin_film_thumbnail`), and a reply cut
+        // at its first field would be a geometry of which only the width was read.
+        assert_eq!(
+            reply_data(
+                r#"{"data":{"w":640,"h":300,"par":1.000000,"aspect":2.133333,"mt":0,"mb":0,"ml":53,"mr":54},"request_id":5,"error":"success"}"#
+            )
+            .as_deref(),
+            Some(r#"{"w":640,"h":300,"par":1.000000,"aspect":2.133333,"mt":0,"mb":0,"ml":53,"mr":54}"#),
+            "an object is handed back to the brace that closes it, and the braces inside it with it"
+        );
+        assert_eq!(
+            reply_data(r#"{"data":{"w":640,"h":300"#),
+            None,
+            "and an object that never closes is not an answer"
         );
     }
 
