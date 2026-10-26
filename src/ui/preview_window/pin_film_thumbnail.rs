@@ -41,16 +41,26 @@
 //! names none of the three must never fall back to a placement that cannot draw.
 //!
 //! **A placement is made exactly at each end of a drag**, and between them only the coarse catch-up
-//! the hand's own resizing is owed (see above). The source takes the box the pin began the drag at and
-//! is asked for the box the drag settled at when the hand lets go. What the two off-screen placements
-//! were wanted for is the shrink a `behind` source cannot follow: the destination shrinks, the source
-//! does not, and there is nothing of a source that is not on the screen for the host to leave behind —
+//! the hand's own resizing is owed — on the visible placement (see above, and
+//! `follow_the_band_while_dragging`). The source takes the box the pin began the drag at and is asked
+//! for the box the drag settled at when the hand lets go. What the two off-screen placements were
+//! wanted for is the shrink a `behind` source cannot follow: the destination shrinks, the source does
+//! not, and there is nothing of a source that is not on the screen for the host to leave behind —
 //! which is the one thing they are no good for, since a source that is not on the screen is not drawn
 //! at all.
 //!
 //! **Only `behind` is moved with the host** (see `the_band_moves_the_source`), because it is the only
 //! placement that has to stay under the pin to stay unseen; the two off-screen placements have nothing
 //! to follow, and not asking is the point.
+//!
+//! **The invisible road's drag asks the source nothing between its two ends.** One ask while the Shell
+//! is thumbnailing a window is a window mid-reconfigure — part of its surface holds the previous scale
+//! and part the next, and the pin shows both at once, which is the flicker measured on the glass. So on
+//! that road a resize asks once at its beginning for a box nothing of which can be seen and which the
+//! whole gesture can be drawn down from (see `the_box_a_placement_asks_for`), then asks nothing until
+//! the settle at its end, and neither a corner nor a size follows the hand in between (see
+//! `the_band_was_placed`). `0 asks while dragging` in the settle line is the proof, and
+//! `RHP_THUMBNAIL_INVISIBLE=0` is the run it is compared with.
 //!
 //! **The picture's fill is read at a settle, never during a drag**: the read is a bounded pipe
 //! request, and the middle of a resize is the one moment this road must not spend ten milliseconds
@@ -99,14 +109,18 @@
 //! `WM_SIZE`: `RHP_THUMBNAIL_FLIP=1` passes `--d3d11-flip=yes` to a pinned mpv on this road and
 //! this road only, so the user can A/B the two runs. It is never asked for on the `--wid` road,
 //! where a flip-model swapchain cannot be a child of another window's (see
-//! `video_launch::mpv_args`).
+//! `video_launch::mpv_args`), **and never on a source made invisible**: a layered window has no
+//! flip-model swapchain, so `RHP_THUMBNAIL_FLIP` is read, overruled and traced as overruled rather than
+//! dropped on the floor (see `video_launch::the_thumbnail_swapchain_flip`).
 //!
-//! **The source follows the box while a drag resizes it**, because a frozen source grown from 680 px
-//! to 2263 px is a 3.3× upscale no swapchain model can hide. It follows asymmetrically: a *growing*
-//! box is chased only once it is a tenth larger than the source (a coarse catch-up, a handful of asks
-//! over a long drag, soft in between), while a *shrinking* one is asked for ahead of itself by a small
-//! margin so a step of lag cannot leave the source spilling out from under the host (see
-//! `follow_the_band_while_dragging`).
+//! **A visible source follows the box while a drag resizes it**, because a frozen source grown from
+//! 680 px to 2263 px is a 3.3× upscale no swapchain model can hide. It follows asymmetrically: a
+//! *growing* box is chased only once it is a tenth larger than the source (a coarse catch-up, a handful
+//! of asks over a long drag, soft in between), while a *shrinking* one is asked for ahead of itself by a
+//! small margin so a step of lag cannot leave the source spilling out from under the host (see
+//! `follow_the_band_while_dragging`). **The invisible road buys the same picture the other way round** —
+//! one generous box at the drag's beginning instead of a handful of catch-ups — for the reason the next
+//! paragraph gives.
 //!
 //! **The source is never hidden.** The Shell draws nothing for a source it considers hidden — the
 //! thumbnail of a `SW_HIDE` window is frozen at its last frame — so the source is *left on the
@@ -282,7 +296,8 @@ const FILL_SLACK: i32 = 1;
 
 /// How often a drag may ask the source for a new box: often enough that a hand's own pace is not what
 /// the picture lags by, and rare enough that a long drag is a handful of asks rather than one per
-/// pointer move (see `follow_the_band_while_dragging`).
+/// pointer move (see `follow_the_band_while_dragging`). **The visible placement's only**: the invisible
+/// road asks the source nothing at all between the two ends of a drag.
 const DRAG_ASK_EVERY: Duration = Duration::from_millis(120);
 
 /// A growing box is chased once it is more than this many tenths larger than the source, in integers
@@ -295,6 +310,12 @@ const GROWTH_OUT_OF_TENTHS: i32 = 11;
 /// step can land in, and never under [`SHRINK_LEAD_MIN`] (see `the_shrink_lead`).
 const SHRINK_LEAD_PER: i32 = 85;
 const SHRINK_LEAD_MIN: i32 = 8;
+
+/// The most the source may stand larger than the pin's box on the invisible road, as a multiple of it:
+/// a pin that will be dragged from a small box to a large one is the one that needs the room, but a pin
+/// that stays small must not allocate a 4K surface for a film nobody will ever see at that size (see
+/// `the_generous_source_size`).
+const GENEROUS_CAP: i32 = 3;
 
 /// The placement a `RHP_THUMBNAIL_SOURCE` value names, or nothing for a value that names none.
 ///
@@ -438,6 +459,14 @@ type SourceBox = (i32, i32, i32, i32);
 /// The last box a drag asked the source for, and when: the throttle, and the test that the ask
 /// before it has landed (see `follow_the_band_while_dragging`).
 static DRAG_ASK: Mutex<Option<(Instant, SourceBox)>> = Mutex::new(None);
+
+/// How many asks a drag has made at the source since the last `source settled` line was written.
+///
+/// **It exists so that `0 asks while dragging` is provable from a run rather than asserted here.** The
+/// invisible road makes no ask at all between the two ends of a drag (see `the_band_was_placed`), and
+/// the line the drag's end settles on carries this count so the log says so; the visible road's same
+/// line carries the handful of catch-ups it spent, which is the other half of the A/B.
+static ASKS_WHILE_DRAGGING: AtomicU32 = AtomicU32::new(0);
 
 /// What a settle knows about the player's output filling its own window (see `the_picture_fills`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -698,8 +727,8 @@ pub(super) unsafe fn keep_the_source_invisible() {
 ///
 /// **The source is not resized on every step here**, which is the whole of what makes a step cheap:
 /// the destination is the host's box and the Shell stretches whatever the source's box is into it.
-/// The source is resized exactly at each end of a drag (see `place_the_source`) and, between them,
-/// only by the coarse catch-up a hand that is resizing it is owed (see
+/// The source is resized exactly at each end of a drag (see `place_the_source`) and, between them on a
+/// *visible* placement, only by the coarse catch-up a hand that is resizing it is owed (see
 /// `follow_the_band_while_dragging`).
 ///
 /// **Nor is it moved here, on the two off-screen placements** — the point of those is that a step of a
@@ -708,8 +737,9 @@ pub(super) unsafe fn keep_the_source_invisible() {
 /// `the_band_moves_the_source`).
 ///
 /// **What a drag step costs is what follows**: one comparison, a `DwmUpdateThumbnailProperties` only
-/// where the host's client box changed, and — a handful of times over a long drag — one posted ask for
-/// a new source size (see `follow_the_band_while_dragging`).
+/// where the host's client box changed, and — on a visible placement, a handful of times over a long
+/// drag — one posted ask for a new source size (see `follow_the_band_while_dragging`). On the invisible
+/// road a step is the destination rectangle and nothing else at all.
 pub(super) fn the_band_was_placed(host: HWND) {
     let number = SOURCE.load(Ordering::SeqCst);
     if number == 0 {
@@ -720,15 +750,31 @@ pub(super) fn the_band_was_placed(host: HWND) {
     };
 
     if the_band_moves_the_source(the_source_placement()) {
-        if let Some(origin) = unsafe { client_origin(host) } {
-            move_the_source(HWND(number as *mut _), origin);
+        if the_source_is_invisible() {
+            // **A drag step asks an invisible source for nothing — not a corner and not a size.** One
+            // ask while the Shell is thumbnailing a window is a window *mid-reconfigure*: part of its
+            // surface holds the previous scale and part the next, and the pin shows both at once. That
+            // is the flicker measured on the glass, and it is the catch-up asks that cause it, so this
+            // road makes none: the source is stood where the drag began (nobody can see it, so it cannot
+            // spill) at the generous size that same first ask gave it, and the only thing that follows
+            // the hand is the destination rectangle (see `the_box_a_placement_asks_for`).
+            //
+            // shortcut: a source the drag outgrows is the Shell's to stretch, so a long drag to a box
+            // bigger than the generous one is soft by however far it outgrew it, and a source wider
+            // than the box's shape is the picture letterboxed by the Shell itself. Upgrade it by
+            // asking once more at a step where the drag is *idle* (a hand held still past
+            // `SETTLE_RETRY`), not by catching up on every step.
+        } else {
+            if let Some(origin) = unsafe { client_origin(host) } {
+                move_the_source(HWND(number as *mut _), origin);
+            }
+            // **And how big the source is, where a hand is pulling the box.** A step is this app's two
+            // windows and a destination rectangle, but a source left at the size a drag began at is a
+            // picture the Shell stretches by however far the hand has come — so a resize is followed,
+            // coarsely and ahead of itself on the way down (see `follow_the_band_while_dragging`).
+            follow_the_band_while_dragging(host);
         }
     }
-    // **And how big the source is, where a hand is pulling the box.** A step is this app's two windows
-    // and a destination rectangle, but a source left at the size a drag began at is a picture the
-    // Shell stretches by however far the hand has come — so a resize is followed, coarsely and ahead
-    // of itself on the way down (see `follow_the_band_while_dragging`).
-    follow_the_band_while_dragging(host);
 
     let Ok(mut held) = THUMBNAIL.lock() else {
         return;
@@ -745,8 +791,10 @@ pub(super) fn the_band_was_placed(host: HWND) {
 /// Put the source where its placement wants it, at the box the host is at: the ask a drag makes at its
 /// two ends and at every box that settles without one.
 ///
-/// **Its size is the box the pin is at.** A drag between two placements leaves a `behind` source at the
-/// size the follow last asked for rather than at the box the drag began at (see
+/// **Its size is the box the pin is at**, except at the beginning of a resize on the invisible road,
+/// where it is a generous box the whole drag can be drawn down from and nothing between the two ends
+/// asks again (see `the_box_a_placement_asks_for`). A visible drag between two placements leaves a
+/// `behind` source at the size the follow last asked for rather than at the box the drag began at (see
 /// `follow_the_band_while_dragging`), so what the settle here corrects is the lead it was asked for
 /// ahead of the box and the softness of a catch-up still behind it.
 ///
@@ -761,6 +809,7 @@ pub(super) fn place_the_source(host: HWND) {
     let Some(box_) = the_box_the_placement_names(host) else {
         return;
     };
+    let box_ = the_box_a_placement_asks_for(source, box_);
     // **A placement is a fresh settle even where it names the box the last settle did**: a drag
     // between the two may have left the player's output at another size, so the picture is looked at
     // again rather than taken on trust from the settle before it (see `settle_the_fill`).
@@ -789,6 +838,68 @@ pub(super) fn place_the_source(host: HWND) {
 /// in, and the one state a repeated nudge must not be made from (see `place_the_source`).
 fn the_settle_is_fresh(held: &Thumbnail, box_: SourceBox) -> bool {
     held.fill != Fill::NeverFilled || held.asked != box_
+}
+
+/// The box a placement asks the source for: the pin's own box, or — on the invisible road, at the
+/// beginning of a resize — one big enough for the whole drag to be drawn down from.
+///
+/// **That one ask is the whole of what a drag does to the source on this road.** Nothing between the
+/// two ends asks again (see `the_band_was_placed`), so this is the last chance to give the player's
+/// output a size the gesture can be drawn from: the Shell scales the source into the destination, so a
+/// source at least as large as the drag will get is a picture only ever scaled *down*, and a source
+/// nobody can see may be as large as that needs (see `the_generous_source_size`). Everything else — a
+/// move, a maximize, a zoom, a walk, either end of any drag — is the placement's own box.
+fn the_box_a_placement_asks_for(source: HWND, box_: SourceBox) -> SourceBox {
+    if !(the_source_is_invisible() && pin_drag::pin_is_resizing()) {
+        return box_;
+    }
+    let own = the_films_own_size();
+    let (width, height) = the_generous_source_size((box_.2, box_.3), own);
+    note_pin_trace!(
+        "source generous {:?} {}x{}+{}+{} reason generous box {}x{} own {:?} cap {}x",
+        source,
+        width,
+        height,
+        box_.0,
+        box_.1,
+        box_.2,
+        box_.3,
+        own,
+        GENEROUS_CAP,
+    );
+    (box_.0, box_.1, width, height)
+}
+
+/// How big the source may be asked to be where nothing of it can be seen: the larger of the pin's box
+/// and a half again, and the film's own display size, per axis — never less than the box and never more
+/// than `GENEROUS_CAP` times it.
+///
+/// **The film's own size is the point of it.** A box smaller than the film is a picture the Shell is
+/// scaling down anyway; asking the player for the film's own size instead means a drag from a small pin
+/// to a large one is drawn from a source at least as big as the film, and never upscaled at the source
+/// before being scaled again by the Shell. The cap is the other half: a 160 px pin must not allocate a
+/// 4K source for a film nobody is going to see at that size, so a small box simply gets three times
+/// itself and is soft for the length of a drag it grows past that.
+fn the_generous_source_size(box_: (i32, i32), own: Option<(i32, i32)>) -> (i32, i32) {
+    let generous = |extent: i32, own: Option<i32>| {
+        let half_again = (extent * 3 / 2).max(1);
+        own.unwrap_or(0)
+            .max(half_again)
+            .clamp(1, extent.saturating_mul(GENEROUS_CAP).max(1))
+    };
+    (
+        generous(box_.0, own.map(|own| own.0)),
+        generous(box_.1, own.map(|own| own.1)),
+    )
+}
+
+/// The film's own display size, as the probe answered it when the film was measured: read out of the
+/// geometry cache and never asked of the player, because this runs on the first pointer message of a
+/// drag and a pipe read there is a stall in the hand (see `dimensions::video_box`).
+fn the_films_own_size() -> Option<(i32, i32)> {
+    let (path, _) = pinned_media_owner()?;
+    let (width, height) = dimensions::video_box(&path)?;
+    Some((width as i32, height as i32))
 }
 
 /// Whether the player whose window is the pin's picture has said its video output is configured for a
@@ -943,9 +1054,15 @@ fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), coun
             // **`source settled` means both halves**: the box matched and the picture fills it. A box
             // taken again on a settle whose fill was already proved is a settle too, which is what the
             // `asks > 0` half says (the box look resets its count as soon as the box matches).
+            //
+            // **And it says what the drag spent.** `0 while dragging` is the invisible road's proof that
+            // nothing asked the source for anything between the two ends of the gesture (see
+            // `ASKS_WHILE_DRAGGING`); a handful is the visible road's catch-ups. The count is given up
+            // with the line, so every settle reports its own drag and no more.
             if proved && (asks > 0 || !was_filled) {
+                let while_dragging = ASKS_WHILE_DRAGGING.swap(0, Ordering::SeqCst);
                 note_pin_trace!(
-                    "source settled {:?} {:?} {}x{}+{}+{} host {:?} after {} asks",
+                    "source settled {:?} {:?} {}x{}+{}+{} host {:?} after {} asks, {} while dragging",
                     source,
                     placement,
                     width,
@@ -954,6 +1071,7 @@ fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), coun
                     y,
                     host,
                     held.matched_after,
+                    while_dragging,
                 );
             }
         }
@@ -1282,7 +1400,8 @@ fn nudge_the_source(source: HWND, box_: (i32, i32, i32, i32), client: (i32, i32)
 /// the box by `the_shrink_lead` and a grow's is the box itself.
 ///
 /// Nothing is asked on any other placement, where the source is not a window that follows the host at
-/// all, and nothing while no hand is on an edge (see `pin_drag::pin_is_dragging`).
+/// all, nothing while no hand is on an edge (see `pin_drag::pin_is_dragging`), and **nothing at all on
+/// the invisible road**, whose source is generous and unseen instead (see `the_band_was_placed`).
 fn follow_the_band_while_dragging(host: HWND) {
     if !pin_drag::pin_is_dragging() || !the_band_moves_the_source(the_source_placement()) {
         return;
@@ -1324,6 +1443,7 @@ fn follow_the_band_while_dragging(host: HWND) {
         )
     };
     *last = Some((now, asked_box));
+    ASKS_WHILE_DRAGGING.fetch_add(1, Ordering::Relaxed);
     note_pin_trace!(
         "source followed {:?} {}x{}+{}+{} host {:?} from {}x{} {} ok {}",
         source,
@@ -1912,6 +2032,39 @@ mod tests {
         assert_eq!(the_shrink_lead(680), SHRINK_LEAD_MIN);
         assert!(the_shrink_lead(2263) > SHRINK_LEAD_MIN, "a big box gets a bigger lead");
         assert_eq!(the_shrink_lead(10), SHRINK_LEAD_MIN, "and a small one is not less than it");
+    }
+
+    /// **The generous box an invisible source is asked for at the beginning of a resize**: the larger
+    /// of the box and a half again and the film's own display size, never under the box and never more
+    /// than `GENEROUS_CAP` times it — so a small pin cannot allocate a 4K source and a big one never
+    /// asks for less than the film it is showing (see `the_generous_source_size`).
+    #[test]
+    fn a_generous_source_is_the_box_scaled_up_or_the_films_own_size_within_a_cap() {
+        // A pin smaller than the film gets the film's own size, not three times a tiny box.
+        assert_eq!(the_generous_source_size((867, 487), Some((1920, 1080))), (1920, 1080));
+        // A pin much larger than the film gets half again, which is more than the film.
+        assert_eq!(the_generous_source_size((2263, 1274), Some((1920, 1080))), (3394, 1911));
+        // A pin the film's own size gets half again as well: a growth is always worth the room.
+        assert_eq!(the_generous_source_size((1920, 1080), Some((1920, 1080))), (2880, 1620));
+        // A tiny pin is capped at three times itself rather than at the film's 1920.
+        assert_eq!(the_generous_source_size((160, 90), Some((1920, 1080))), (480, 270));
+        // And a film nothing is known about is still a half again, once only, capped.
+        assert_eq!(the_generous_source_size((200, 100), None), (300, 150));
+        assert_eq!(the_generous_source_size((3000, 1600), None), (4500, 2400));
+        // Never under the box, and never zero for a box that is nothing.
+        assert!(
+            the_generous_source_size((1, 1), Some((0, 0))) == (1, 1),
+            "a pin of one pixel asks for what it can be drawn at and no more"
+        );
+        assert_eq!(the_generous_source_size((0, 0), None), (1, 1));
+        for box_ in [(640, 360), (160, 90), (2263, 1274)] {
+            let (width, height) = the_generous_source_size(box_, Some((1920, 1080)));
+            assert!(width >= box_.0 && height >= box_.1, "never smaller than the box: {box_:?}");
+            assert!(
+                width <= box_.0 * GENEROUS_CAP && height <= box_.1 * GENEROUS_CAP,
+                "and never more than the cap allows: {box_:?}"
+            );
+        }
     }
 
     /// A box a settle already gave up on is not judged again — which is what makes the nudge fire
