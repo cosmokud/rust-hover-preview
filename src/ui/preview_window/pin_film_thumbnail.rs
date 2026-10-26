@@ -20,12 +20,22 @@
 //! **What a thumbnail shows is the source's picture, not its whole client** (`RHP_THUMBNAIL_PICTURE`,
 //! `picture` by default): the rectangle mpv draws the film in — the client less the letterbox margins a
 //! film of another shape leaves — is cropped out of the source and fitted into the box at its own
-//! shape, and the strips of the box left around it are painted black so they read as film letterboxing
-//! (see `the_thumbnail_box` and `the_bars_around_the_picture`). `client` is the road this began on and
-//! it is dead: it stretched the whole client, margins included, into the box, which is the pillar of
-//! black that read as a pin zoomed out (measured: `client 916x515 … picture 2595x1460 margins
-//! l311t0r311b0` — 311 px a side stretched into the picture) and the upscale that read as one zoomed
-//! in. The shape is read at a settle and kept, so a step of a drag still reads nothing of the player's.
+//! shape, and what the box leaves around it is the host's own black (see `the_thumbnail_box`). `client`
+//! is the road this began on and it is dead: it stretched the whole client, margins included, into the
+//! box, which is the pillar of black that read as a pin zoomed out (measured: `client 916x515 … picture
+//! 2595x1460 margins l311t0r311b0` — 311 px a side stretched into the picture) and the upscale that read
+//! as one zoomed in. The shape is read at a settle and kept, so a step of a drag still reads nothing of
+//! the player's.
+//!
+//! **The composition invariant is one line, and it is the whole of what the picture road was getting
+//! wrong**: the host's own erase paints its whole client, and the destination rectangle the Shell is
+//! given is inside that client, so every pixel of the host is drawn by one of the two — never a hole,
+//! never a seam. Both rectangles are built at the moment of the `DwmUpdateThumbnailProperties` call from
+//! the host's live client, the source's live client and the shape the last settle read; **a change of
+//! any of the three is a re-point**, and a settle re-points even where the box did not change, because
+//! the settle's own ask is what changes the source's client. A pair built against a box the host is no
+//! longer in — or a source rectangle reaching past the surface the Shell is sampling, which the Shell
+//! answers with nothing — is the picture cropped and a band of desktop showing through the pin.
 //!
 //! **Where the source stands is a knob, and the answer is measured: it has to be on the screen.**
 //! `RHP_THUMBNAIL_SOURCE` names three placements, and two of them are known dead:
@@ -571,8 +581,10 @@ struct Thumbnail {
     /// The host the Shell is drawing into, and the registration it answered with.
     host: isize,
     registration: isize,
-    /// The size of the host's client area the registration was last given, as a width and a height.
-    destination: (i32, i32),
+    /// The rectangle pair the registration was last handed — the host's client it is drawn in, the
+    /// picture's rectangle in the source and the source's own client — or nothing where none stands.
+    /// **A change of any of the three is a re-point** (see `settle_the_registration`).
+    shown: Option<ThumbnailBox>,
     /// The box the source was last asked for at a settle, how many asks of it have been made, when the
     /// last of them was, and whether that settle has already reported the box as never taken: what
     /// the tick reads to tell a placement that landed from one that did not (see `ask_the_source_for`).
@@ -589,17 +601,13 @@ struct Thumbnail {
     /// settle's read, kept because a step of a drag crops the source by it and a step may not read the
     /// player (see `the_thumbnail_box`).
     picture: Option<f64>,
-    /// The client area the source was last asked for, as a width and a height: the box the source's
-    /// picture rectangle is fitted into. This app's own record of an ask, not a read of the player's
-    /// window (see `the_source_client`).
-    source_client: (i32, i32),
 }
 
 impl Thumbnail {
     const NOTHING: Self = Self {
         host: 0,
         registration: 0,
-        destination: (0, 0),
+        shown: None,
         asked: (0, 0, 0, 0),
         asks: 0,
         asked_at: None,
@@ -607,7 +615,6 @@ impl Thumbnail {
         matched_after: 0,
         fill: Fill::Unlooked,
         picture: None,
-        source_client: (0, 0),
     };
 }
 
@@ -762,12 +769,6 @@ pub(super) fn the_source_is_up(pid: u32) -> bool {
     }
 }
 
-/// Whether `host` is the window the Shell is drawing the picture in, which is the one fact the host's
-/// own erase is answered from: a host wearing a thumbnail has nothing of this app's to fill.
-pub(super) fn the_host_shows_a_thumbnail(host: HWND) -> bool {
-    REGISTERED_HOST.load(Ordering::SeqCst) == host.0 as isize
-}
-
 /// Put the invisibility back where something took it off the source: the style monitor's pass over a
 /// player's window asks this, and it is the only caller.
 ///
@@ -803,8 +804,8 @@ pub(super) unsafe fn keep_the_source_invisible() {
 }
 
 /// Follow the host: register the picture where there is none, and point it at the host's client area —
-/// the picture fitted into it at the film's own shape, with the bars around it left to this app's paint
-/// (see `the_thumbnail_box`).
+/// the picture fitted into it at the film's own shape, with what is left around it left black (see
+/// `the_thumbnail_box`).
 ///
 /// **The source is not resized on every step here**, which is the whole of what makes a step cheap:
 /// the destination is the host's box and the Shell stretches whatever the source's box is into it.
@@ -817,8 +818,8 @@ pub(super) unsafe fn keep_the_source_invisible() {
 /// is the only thing keeping it under the host rather than standing where the pin used to be (see
 /// `the_band_moves_the_source`).
 ///
-/// **What a drag step costs is what follows**: one comparison, a `DwmUpdateThumbnailProperties` only
-/// where the host's client box changed, and — on a visible placement, a handful of times over a long
+/// **What a drag step costs is what follows**: a comparison, a `DwmUpdateThumbnailProperties` only
+/// where the rectangle pair changed, and — on a visible placement, a handful of times over a long
 /// drag — one posted ask for a new source size (see `follow_the_band_while_dragging`). On the invisible
 /// road a step is the destination rectangle and nothing else at all.
 pub(super) fn the_band_was_placed(host: HWND) {
@@ -826,9 +827,6 @@ pub(super) fn the_band_was_placed(host: HWND) {
     if number == 0 {
         return;
     }
-    let Some(destination) = (unsafe { client_size(host) }) else {
-        return;
-    };
 
     if the_band_moves_the_source(the_source_placement()) {
         if the_source_is_invisible() {
@@ -860,13 +858,7 @@ pub(super) fn the_band_was_placed(host: HWND) {
     let Ok(mut held) = THUMBNAIL.lock() else {
         return;
     };
-    if held.host == host.0 as isize
-        && held.registration != 0
-        && held.destination == destination
-    {
-        return;
-    }
-    settle_the_registration(&mut held, host, destination);
+    settle_the_registration(&mut held, host);
 }
 
 /// Put the source where its placement wants it, at the box the host is at: the ask a drag makes at its
@@ -1132,6 +1124,11 @@ fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), coun
             }
             let was_filled = held.fill == Fill::Filled;
             let proved = settle_the_fill(&mut held, source, host, box_, now, count_the_ask);
+            // **A settle is where the pair is re-pointed**: the source's client has just been read
+            // again (the shrink a drag ended on is the picture's whole crop) and the shape with it, so
+            // the registration is handed the rectangles those two make now rather than the ones it was
+            // left wearing when the drag began (see `settle_the_registration`).
+            settle_the_registration(&mut held, host);
             // **`source settled` means both halves**: the box matched and the picture fills it. A box
             // taken again on a settle whose fill was already proved is a settle too, which is what the
             // `asks > 0` half says (the box look resets its count as soon as the box matches).
@@ -1181,10 +1178,9 @@ fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), coun
             } else {
                 0
             };
-            // The box the source is asked for is the client its picture is cropped out of until the
-            // next ask, and this app's own record of it rather than a read of the player's window (see
-            // `the_source_client`).
-            held.source_client = (width, height);
+            // The ask no longer decides what the picture is cropped from: the registration reads the
+            // source's own client at the moment it is pointed, so a settle in flight is a crop of the
+            // surface that is there rather than of the one being asked for (see `the_source_client`).
             let placed = unsafe {
                 SetWindowPos(
                     source,
@@ -1214,6 +1210,10 @@ fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), coun
                 now_at.1,
                 placed.is_ok() as u8,
             );
+            // **The settle's own line, whether or not the pair moved**: an ask is the moment a box, a
+            // source and a shape are all in question, and the trace says here what the Shell has been
+            // handed for them (see `note_the_thumbnail_pair`).
+            settle_the_registration(&mut held, host);
         }
     }
 }
@@ -1540,11 +1540,6 @@ fn follow_the_band_while_dragging(host: HWND) {
         )
     };
     *last = Some((now, asked_box));
-    // The box the source is asked for is the client its picture is cropped out of: an ask made here is
-    // as much a source rectangle as a settle's is (see `the_source_client`).
-    if let Ok(mut held) = THUMBNAIL.lock() {
-        held.source_client = (width, height);
-    }
     ASKS_WHILE_DRAGGING.fetch_add(1, Ordering::Relaxed);
     note_pin_trace!(
         "source followed {:?} {}x{}+{}+{} host {:?} from {}x{} {} ok {}",
@@ -1689,9 +1684,9 @@ struct ThumbnailBox {
 /// the source that rectangle is taken from.
 ///
 /// `aspect` is the picture's own width over its height, as a settle's `osd-dimensions` read gave it, and
-/// `client` is the box the source is at. The two together are the source's picture rectangle, which is
-/// why a step of a drag asks the player nothing: neither the shape nor the source's box changes while a
-/// hand is on an edge (see `settle_the_registration`).
+/// `client` is the box the source is at **as its window answers it at this call**. The two together are
+/// the source's picture rectangle, which is why a step of a drag asks the player nothing: the shape is
+/// the one the settle read and the client is Windows' answer about the window.
 ///
 /// **The `client` road, and a picture nothing has read yet, is the whole client into the whole box** —
 /// today's stretch, and the fallback for a shape this app cannot crop by.
@@ -1711,24 +1706,26 @@ fn the_thumbnail_box(
     }
 }
 
-/// The box the source is at, as this app last asked it for one: the source is launched `--no-border`,
-/// so its window box and its client area are one rectangle. The host's own box stands in until the
-/// first placement has asked for one.
+/// The client box the source is at, read off the window at the moment the registration is pointed: the
+/// source is launched `--no-border`, so its window box and its client area are one rectangle. The
+/// host's own box stands in for a source that has gone.
 ///
-/// shortcut: this app's own ask is taken for the source's client, so a step that lands while an ask is
-/// still in flight is cropped against the box the source is about to have; upgrade it by reading the
-/// client once on a settle that says the box was not taken (`source never took its box`).
-fn the_source_client(held: &Thumbnail, destination: (i32, i32)) -> (i32, i32) {
-    if held.source_client == (0, 0) {
-        destination
-    } else {
-        held.source_client
+/// **This is a question Windows answers about a window, not a read of the player** — the same one the
+/// tick asks with `window_box` — so it spends a step nothing it is not already spending. What it
+/// replaces is this app's own record of the last ask, which a settle still in flight leaves a size
+/// behind: a source rectangle built against that is sampled from a surface that is no longer there, or
+/// past the end of the one that is, and the Shell answers a sample outside the surface with nothing —
+/// the hole the picture road showed as a band of desktop inside the pin.
+fn the_source_client(source: HWND, host: (i32, i32)) -> (i32, i32) {
+    match unsafe { client_size(source) } {
+        Some(client) if client.0 > 0 && client.1 > 0 => client,
+        _ => host,
     }
 }
 
 /// The strips of a `client` box a `destination` rectangle leaves around it, as top, bottom, left and
-/// right in the client's coordinates: the bars a film's own shape puts beside itself, which this app
-/// paints black so they read as letterboxing (see `paint_the_host_behind_the_film`).
+/// right in the client's coordinates: the bars a film's own shape puts beside itself, which the host's
+/// own erase leaves black so they read as letterboxing (see `paint_the_host_behind_the_film`).
 fn the_bars_around(
     client: (i32, i32),
     destination: (i32, i32, i32, i32),
@@ -1743,40 +1740,51 @@ fn the_bars_around(
     ]
 }
 
-/// The strips of `host`'s client box its thumbnail's picture does not cover, in the host's own client
-/// coordinates: what the host's erase paints black, so a film shown in a box of another shape reads as
-/// letterboxed rather than as a stretched held frame (see `pin_film_host`).
-///
-/// **No rectangle is read across to the player here**: the shape is the one the last settle read, and
-/// the source's box is the one this app last asked for (see `the_thumbnail_box`).
-pub(super) fn the_bars_around_the_picture(host: HWND) -> [(i32, i32, i32, i32); 4] {
-    let Some(client) = (unsafe { client_size(host) }) else {
-        return [(0, 0, 0, 0); 4];
-    };
-    let Ok(held) = THUMBNAIL.lock() else {
-        return [(0, 0, 0, 0); 4];
-    };
-    let shown = the_thumbnail_box(
-        client,
-        the_source_client(&held, client),
-        held.picture,
-        the_picture_road(),
-    );
-    the_bars_around(client, shown.destination)
+/// Whether a registration wearing `held.shown` has to be pointed at `wanted`: **nothing else is a
+/// reason not to re-point.** Another host client, another source client or another picture shape all
+/// change what the pair is, and a registration left wearing the old pair is a picture cropped off the
+/// surface the Shell is sampling — the three bands of the picture road, and the one cache that
+/// compared the box alone (see `settle_the_registration`).
+fn the_registration_wants(held: &Thumbnail, wanted: ThumbnailBox) -> bool {
+    held.registration == 0 || held.shown != Some(wanted)
 }
 
 /// Register the picture in the host's client area, or point the registration the host already wears at
-/// the box it is in now.
-fn settle_the_registration(held: &mut Thumbnail, host: HWND, destination: (i32, i32)) {
+/// the rectangles it is drawn with **now**: the host's live client area, the source's live client area
+/// and the film's shape as the last settle read it — all read at this call, none of them a box a step
+/// cached.
+///
+/// **The invariant is one line long**: the host's own erase paints its whole client (see
+/// `pin_film_host::paint_the_host_behind_the_film`) and the destination rectangle is inside that
+/// client, so every pixel of the host is drawn by one of the two — no seam, no hole. What breaks it is
+/// a pair built against a box the host is no longer in, or a source rectangle reaching past the surface
+/// the Shell is sampling, so both are read here and the pair is traced whether it moved or not (see
+/// `note_the_thumbnail_pair`).
+fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     if held.registration != 0 && held.host != host.0 as isize {
         let _ = unsafe { DwmUnregisterThumbnail(held.registration) };
         held.registration = 0;
+        held.shown = None;
     }
     held.host = host.0 as isize;
     REGISTERED_HOST.store(held.host, Ordering::SeqCst);
 
+    let source = HWND(SOURCE.load(Ordering::SeqCst) as *mut _);
+    let Some(client) = (unsafe { client_size(host) }) else {
+        return;
+    };
+    let shown = the_thumbnail_box(
+        client,
+        the_source_client(source, client),
+        held.picture,
+        the_picture_road(),
+    );
+    if !the_registration_wants(held, shown) {
+        note_the_thumbnail_pair("held", host, client, shown);
+        return;
+    }
+
     if held.registration == 0 {
-        let source = HWND(SOURCE.load(Ordering::SeqCst) as *mut _);
         let Ok(registration) = (unsafe { DwmRegisterThumbnail(host, source) }) else {
             // Nothing to draw in until a later placement asks again: a source that has made its
             // window and not yet presented is a registration the Shell can refuse. **A refusal is the
@@ -1794,12 +1802,6 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND, destination: (i32, 
         held.registration = registration;
     }
 
-    let shown = the_thumbnail_box(
-        destination,
-        the_source_client(held, destination),
-        held.picture,
-        the_picture_road(),
-    );
     let (x, y, width, height) = shown.destination;
     let mut properties = DWM_THUMBNAIL_PROPERTIES {
         dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_SOURCECLIENTAREAONLY | DWM_TNP_VISIBLE,
@@ -1831,9 +1833,9 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND, destination: (i32, 
     }
     if unsafe { DwmUpdateThumbnailProperties(held.registration, &properties) }.is_err() {
         note_pin_trace!(
-            "thumbnail properties failed host {:?} destination {:?} placement {:?}",
+            "thumbnail properties failed host {:?} box {:?} placement {:?}",
             host,
-            destination,
+            client,
             the_source_placement(),
         );
         let _ = unsafe { DwmUnregisterThumbnail(held.registration) };
@@ -1841,30 +1843,44 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND, destination: (i32, 
         REGISTERED_HOST.store(0, Ordering::SeqCst);
         return;
     }
-    held.destination = destination;
-    // **The strips the picture leaves are this app's to paint**: the Shell composes the thumbnail under
-    // the host's own content, so the erase fills them black and nothing inside the picture (see
-    // `the_bars_around_the_picture`).
+    held.shown = Some(shown);
+    // **The host is asked to erase its whole client behind the picture**, which is the other half of
+    // the invariant above: the Shell composes the thumbnail over this app's content, so a client the
+    // host never erased is a pixel nobody drew — and one of those is the desktop seen through the pin.
     let _ = unsafe { InvalidateRect(host, None, true) };
-    let (source_left, source_top, source_right, source_bottom) = match shown.source {
+    note_the_thumbnail_pair("update", host, client, shown);
+}
+
+/// The one line that makes a hole visible at a glance: the host the Shell is drawing into (its own box
+/// and where it stands), the host client the pair was built from, and the exact rectangles handed over.
+/// **`host` and `box` disagree only where something stands on the host's client** — a border, a frame
+/// style — which is a picture that cannot line up with its pin's box.
+fn note_the_thumbnail_pair(what: &str, host: HWND, client: (i32, i32), shown: ThumbnailBox) {
+    let (host_x, host_y, host_width, host_height) =
+        unsafe { window_box(host) }.unwrap_or((0, 0, client.0, client.1));
+    let (x, y, width, height) = shown.destination;
+    let (left, top, right, bottom) = match shown.source {
         Some((left, top, right, bottom)) => (left, top, right, bottom),
         None => (0, 0, shown.client.0, shown.client.1),
     };
-    let bars = the_bars_around(destination, shown.destination);
+    let bars = the_bars_around(client, shown.destination);
     note_pin_trace!(
-        "thumbnail dest box {}x{} picture {}x{}+{}+{} src {}x{} pic {}x{}+{}+{} bars l{}r{}t{}b{} ({}={})",
-        destination.0,
-        destination.1,
+        "thumbnail {} host {}x{}+{}+{} box {}x{} dest {}x{}+{}+{} src {}x{}+{}+{} bars l{}r{}t{}b{} ({}={})",
+        what,
+        host_width,
+        host_height,
+        host_x,
+        host_y,
+        client.0,
+        client.1,
         width,
         height,
         x,
         y,
-        shown.client.0,
-        shown.client.1,
-        source_right - source_left,
-        source_bottom - source_top,
-        source_left,
-        source_top,
+        right - left,
+        bottom - top,
+        left,
+        top,
         bars[2].2,
         bars[3].2,
         bars[0].3,
@@ -1929,35 +1945,129 @@ unsafe fn window_box(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
 mod tests {
     use super::*;
 
-    /// A registration is pointed at the host's box again only when the box or the host has changed,
-    /// which is the whole cost a resize step is meant to be: a step that moved nothing asks nothing.
+    /// **A registration is pointed again at everything the rectangles are built from**: the host's
+    /// client, the source's client and the film's shape — not just the host's box. A source re-asked at
+    /// a settle is a different source client, and a registration left wearing the old pair is a picture
+    /// cropped against a surface that has gone (see `settle_the_registration`).
     #[test]
-    fn a_thumbnail_is_settled_again_only_when_its_host_or_the_box_it_is_drawn_in_changes() {
-        let holding = Thumbnail {
+    fn a_settle_re_points_a_registration_whatever_part_of_the_pair_changed() {
+        let client = (1000, 560);
+        let aspect = Some(2595.0 / 1460.0);
+        let shown_at = |box_: (i32, i32), source: (i32, i32), aspect: Option<f64>| {
+            the_thumbnail_box(box_, source, aspect, PictureRoad::Picture)
+        };
+        let generous = shown_at(client, (2731, 1536), aspect);
+        let mut holding = Thumbnail {
             host: 0x2000,
             registration: 9,
-            destination: (320, 240),
+            shown: Some(generous),
+            picture: aspect,
             ..Thumbnail::NOTHING
         };
 
-        assert!(holding.host == 0x2000 && holding.destination == (320, 240));
         assert!(
-            !(holding.host == 0x2001 && holding.destination == (320, 240)),
-            "another host is another registration"
+            !the_registration_wants(&holding, generous),
+            "a settle that moved nothing asks nothing"
+        );
+
+        let shrunk = shown_at(client, (1000, 560), aspect);
+        assert_ne!(generous.source, shrunk.source, "the source's own client changed");
+        assert!(
+            the_registration_wants(&holding, shrunk),
+            "a source re-asked at a settle is a re-point even where the box did not move"
+        );
+
+        let read_late = shown_at(client, (1000, 560), Some(16.0 / 9.0));
+        assert!(
+            the_registration_wants(&holding, read_late),
+            "and a shape the settle read after an unread one is another pair"
         );
         assert!(
-            !(holding.host == 0x2000 && holding.destination == (321, 240)),
-            "and the same host in another box is another destination"
+            the_registration_wants(&holding, shown_at((1200, 560), (1000, 560), aspect)),
+            "as is the host's own client"
+        );
+
+        holding.shown = Some(shrunk);
+        assert!(
+            !the_registration_wants(&holding, shrunk),
+            "and the pair it was just handed is not handed again"
+        );
+        holding.registration = 0;
+        assert!(
+            the_registration_wants(&holding, shrunk),
+            "where no registration stands, the pair is what has to be drawn"
         );
     }
 
-    /// The registration is nobody's where none was taken, and a host wearing one is the only host the
-    /// Shell is drawing into — which is the answer the host's own erase is given.
+    /// **The host's erase and the destination together cover its whole client, for every box and every
+    /// shape**: the erase is the client and the destination is inside it, so the picture plus the bars
+    /// around it tile the box exactly — no hole for the desktop to show through and no seam to leave
+    /// one unpainted (see `paint_the_host_behind_the_film` and `settle_the_registration`).
     #[test]
-    fn a_host_shows_a_thumbnail_only_while_a_registration_stands_in_it() {
-        assert!(!the_host_shows_a_thumbnail(HWND(0x2000 as *mut _)));
+    fn the_hosts_erase_and_the_destination_never_leave_a_hole_or_a_seam() {
+        let shapes = [
+            None,
+            Some(16.0 / 9.0),
+            Some(9.0 / 16.0),
+            Some(1.0),
+            Some(2.39),
+            Some(2595.0 / 1460.0),
+            Some(1.0 + 1e-9),
+            Some(0.0),
+            Some(f64::NAN),
+        ];
+        for (box_width, box_height) in [
+            (1, 1),
+            (2, 3),
+            (641, 361),
+            (999, 1001),
+            (1000, 560),
+            (1920, 1080),
+            (2100, 900),
+            (2560, 1080),
+            (3840, 2160),
+        ] {
+            for shape in shapes {
+                let (x, y, width, height) = a_picture_fitted_to(shape, (box_width, box_height));
+                assert!(
+                    x >= 0
+                        && y >= 0
+                        && width >= 1
+                        && height >= 1
+                        && x + width <= box_width
+                        && y + height <= box_height,
+                    "{width}x{height}+{x}+{y} is inside {box_width}x{box_height} at {shape:?}"
+                );
+                let bars = the_bars_around((box_width, box_height), (x, y, width, height));
+                let mut drawn = (width as i64) * (height as i64);
+                for (bar_x, bar_y, bar_width, bar_height) in bars {
+                    assert!(
+                        bar_x >= 0
+                            && bar_y >= 0
+                            && bar_width >= 0
+                            && bar_height >= 0
+                            && bar_x + bar_width <= box_width
+                            && bar_y + bar_height <= box_height,
+                        "a bar never reaches outside the box at {shape:?}"
+                    );
+                    drawn += (bar_width as i64) * (bar_height as i64);
+                }
+                assert_eq!(
+                    drawn,
+                    (box_width as i64) * (box_height as i64),
+                    "the picture and its bars cover {box_width}x{box_height} exactly once at {shape:?}"
+                );
+            }
+        }
+    }
+
+    /// The registration is nobody's where none was taken: a thumbnail record with no pair stands in no
+    /// host, which is what a host that has not been pointed at yet reads as.
+    #[test]
+    fn nothing_stands_in_a_host_until_a_pair_is_handed_over() {
         assert_eq!(Thumbnail::NOTHING.registration, 0);
         assert_eq!(Thumbnail::NOTHING.host, 0);
+        assert_eq!(Thumbnail::NOTHING.shown, None);
     }
 
     /// The knob names three roads, and the one that draws is the one a machine that says nothing
@@ -2544,20 +2654,15 @@ mod tests {
             ),
         );
         let read = the_drawn_picture(pid).expect("the player answers about its output");
-        let held = Thumbnail {
-            source_client: (3217, 1460),
-            picture: the_picture_shape(read),
-            ..Thumbnail::NOTHING
-        };
+        let picture = the_picture_shape(read);
+        // The client the source's window answers for the step, never asked of the player: the same box
+        // for the whole drag, because a hand on an edge does not resize the source (see
+        // `the_source_client` and `the_band_was_placed`).
+        let source = (3217, 1460);
 
         let mut shown = Vec::new();
         for box_ in [(680, 383), (1000, 560), (2263, 1274)] {
-            shown.push(the_thumbnail_box(
-                box_,
-                the_source_client(&held, box_),
-                held.picture,
-                PictureRoad::Picture,
-            ));
+            shown.push(the_thumbnail_box(box_, source, picture, PictureRoad::Picture));
         }
 
         assert_eq!(
