@@ -43,11 +43,13 @@
 //! draws every pixel of the pin, and the host's own erase paints that same client under it — which is
 //! what a client the Shell has not composed yet, or one whose source is not drawing, shows instead of the
 //! desktop. Both rectangles are built at the moment of the `DwmUpdateThumbnailProperties` call from the
-//! host's live client, the source's live client and the shape the last settle read; **a change of any of
-//! the three is a re-point**, and a settle re-points even where the box did not change, because the
-//! settle's own ask is what changes the source's client. A pair built against a box the host is no longer
-//! in — or a source rectangle reaching past the surface the Shell is sampling, which the Shell answers
-//! with nothing — is the picture cropped and a band of desktop showing through the pin.
+//! host's live client and the window the picture is *in*: the source's live client, except where the
+//! settle that is pointing the pair knows the content is somewhere else still — the box it has just asked
+//! away from, or the window the player's own answer named (see `the_window_the_picture_is_at`). **A
+//! change of any of them is a re-point**, and a settle re-points even where the box did not change,
+//! because the settle's own ask is what changes the source's client. A pair built against a box the host
+//! is no longer in — or a source rectangle reaching past the surface the Shell is sampling, which the
+//! Shell answers with nothing — is the picture cropped and a band of desktop showing through the pin.
 //!
 //! **Where the source stands is a knob, and the answer is measured: it has to be on the screen.**
 //! `RHP_THUMBNAIL_SOURCE` names three placements, and two of them are known dead:
@@ -614,6 +616,10 @@ struct Thumbnail {
     /// settle's read, kept because a step of a drag crops the source by it and a step may not read the
     /// player (see `the_thumbnail_box`).
     picture: Option<f64>,
+    /// The window the player last said its picture is in, as that same answer gave it: the surface the
+    /// Shell is sampling, which is a box behind the source's own window after an ask the output has not
+    /// taken yet (see `the_window_the_picture_is_at`).
+    presented: Option<(i32, i32)>,
 }
 
 impl Thumbnail {
@@ -628,6 +634,7 @@ impl Thumbnail {
         matched_after: 0,
         fill: Fill::Unlooked,
         picture: None,
+        presented: None,
     };
 }
 
@@ -870,7 +877,9 @@ pub(super) fn the_band_was_placed(host: HWND) {
     let Ok(mut held) = THUMBNAIL.lock() else {
         return;
     };
-    settle_the_registration(&mut held, host);
+    // **A step crops by the client the source is at now**, never by where a settle last saw the
+    // picture: the film follows the box it is drawn in (see `the_window_the_picture_is_at`).
+    settle_the_registration(&mut held, host, None);
 }
 
 /// Put the source where its placement wants it, at the box the host is at: the ask a drag makes at its
@@ -1146,8 +1155,10 @@ fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), coun
             // **A settle is where the pair is re-pointed**: the source's client has just been read
             // again (the shrink a drag ended on is the picture's whole crop) and the shape with it, so
             // the registration is handed the rectangles those two make now rather than the ones it was
-            // left wearing when the drag began (see `settle_the_registration`).
-            settle_the_registration(&mut held, host);
+            // left wearing when the drag began (see `settle_the_registration`). Where that read says
+            // the picture is still at another window, that window is what the crop is fitted into.
+            let at = the_window_the_picture_is_at(&held, None);
+            settle_the_registration(&mut held, host, at);
             // **`source settled` means both halves**: the box matched and the picture fills it. A box
             // taken again on a settle whose fill was already proved is a settle too, which is what the
             // `asks > 0` half says (the box look resets its count as soon as the box matches).
@@ -1232,7 +1243,12 @@ fn ask_the_source_for(source: HWND, host: HWND, box_: (i32, i32, i32, i32), coun
             // **The settle's own line, whether or not the pair moved**: an ask is the moment a box, a
             // source and a shape are all in question, and the trace says here what the Shell has been
             // handed for them (see `note_the_thumbnail_pair`).
-            settle_the_registration(&mut held, host);
+            //
+            // **And it is cropped where the picture still is**, which is the box the source was at
+            // before this ask: the content is one adoption behind the window, so a crop of the window
+            // this call has just asked for is a crop of a surface the Shell is not sampling (see
+            // `the_window_the_picture_is_at`).
+            settle_the_registration(&mut held, host, Some((now_at.2, now_at.3)));
         }
     }
 }
@@ -1288,6 +1304,7 @@ fn settle_the_fill(
     // a crop a pixel or a frame out, never a bar, because the box is filled from it whatever it says.
     if let Some(drawn) = drawn {
         held.picture = the_picture_shape(drawn);
+        held.presented = Some(drawn.window);
     }
     let (ml, mt, mr, mb) = drawn.map_or((0, 0, 0, 0), |drawn| drawn.margins);
     match drawn {
@@ -1756,6 +1773,37 @@ fn the_thumbnail_box(
         client,
         clamped,
     }
+    .checked(box_)
+}
+
+/// **A pair is a promise the Shell keeps or cannot keep**: it draws the destination with the crop, so
+/// this is where the two are held to their invariants rather than hoped into them — the destination is
+/// the box, and the crop is a non-empty rectangle inside the window it was fitted into. Nothing is
+/// clamped here: a crop that failed this test is a rect the Shell is asked to sample from outside the
+/// surface it is sampling, which is the band of desktop the module note describes, so it is a program
+/// error and not a frame to paint.
+impl ThumbnailBox {
+    fn checked(self, box_: (i32, i32)) -> Self {
+        debug_assert_eq!(
+            self.destination,
+            (0, 0, box_.0.max(1), box_.1.max(1)),
+            "the destination is the whole box the pair was built for"
+        );
+        debug_assert!(
+            self.source.is_none_or(|(left, top, right, bottom)| {
+                left >= 0
+                    && top >= 0
+                    && right > left
+                    && bottom > top
+                    && right <= self.client.0.max(1)
+                    && bottom <= self.client.1.max(1)
+            }),
+            "the crop {:?} is a non-empty rect inside the client {:?}",
+            self.source,
+            self.client
+        );
+        self
+    }
 }
 
 /// The rectangle of `picture` — `left, top, width, height` inside the source's client — that has the
@@ -1810,6 +1858,28 @@ fn the_source_client(source: HWND, host: (i32, i32)) -> (i32, i32) {
     }
 }
 
+/// **The window the picture is actually in, where a call knows it better than the source's own
+/// client.** The window's client is what this app has *asked for*; the picture is one adoption behind
+/// it, so:
+///
+/// - a settle that has just asked the source for another box (`before_the_ask`, the box the window
+///   stood at when the ask was made) crops where the content still is, not where the ask is sending it;
+/// - a settle whose own read said the picture does not fill the client crops by the window the player
+///   named, which is the surface the Shell is sampling.
+///
+/// Nothing is passed for a step of a drag, which crops by the source's live client: that is the moment
+/// the window and the film move together (see `the_band_was_placed`).
+fn the_window_the_picture_is_at(
+    held: &Thumbnail,
+    before_the_ask: Option<(i32, i32)>,
+) -> Option<(i32, i32)> {
+    let at = before_the_ask.or(match held.fill {
+        Fill::Nudged(_) | Fill::NeverFilled => held.presented,
+        _ => None,
+    })?;
+    (at.0 > 0 && at.1 > 0).then_some(at)
+}
+
 /// Whether a registration wearing `held.shown` has to be pointed at `wanted`: **nothing else is a
 /// reason not to re-point.** Another host client, another source client or another picture shape all
 /// change what the pair is, and a registration left wearing the old pair is a picture cropped off the
@@ -1820,7 +1890,7 @@ fn the_registration_wants(held: &Thumbnail, wanted: ThumbnailBox) -> bool {
 }
 
 /// Register the picture in the host's client area, or point the registration the host already wears at
-/// the rectangles it is drawn with **now**: the host's live client area, the source's live client area
+/// the rectangles it is drawn with **now**: the host's live client area, the window the picture is in
 /// and the film's shape as the last settle read it — all read at this call, none of them a box a step
 /// cached.
 ///
@@ -1831,7 +1901,11 @@ fn the_registration_wants(held: &Thumbnail, wanted: ThumbnailBox) -> bool {
 /// pair built against a box the host is no longer in, or a source rectangle reaching past the surface
 /// the Shell is sampling, so both are read here and the pair is traced whether it moved or not (see
 /// `note_the_thumbnail_pair` and `note_the_cover`).
-fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
+///
+/// `at` is the window the picture is in where the caller knows it better than the source's own client —
+/// the box a settle has just asked away from, or the one the player named in its own answer — and the
+/// source's live client, read here and once, everywhere else (see `the_window_the_picture_is_at`).
+fn settle_the_registration(held: &mut Thumbnail, host: HWND, at: Option<(i32, i32)>) {
     if held.registration != 0 && held.host != host.0 as isize {
         let _ = unsafe { DwmUnregisterThumbnail(held.registration) };
         held.registration = 0;
@@ -1844,14 +1918,13 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     let Some(client) = (unsafe { client_size(host) }) else {
         return;
     };
-    let shown = the_thumbnail_box(
-        client,
-        the_source_client(source, client),
-        held.picture,
-        the_picture_road(),
-    );
+    // **The one read of the source at this call.** `cli` in the trace is this number and `pic` the one
+    // the pair was cropped against, so a frame where the two disagree says which window a flash would
+    // have to come from (see `note_the_thumbnail_pair`).
+    let live = the_source_client(source, client);
+    let shown = the_thumbnail_box(client, at.unwrap_or(live), held.picture, the_picture_road());
     if !the_registration_wants(held, shown) {
-        note_the_thumbnail_pair("held", host, client, shown);
+        note_the_thumbnail_pair("held", host, client, live, shown);
         return;
     }
 
@@ -1919,14 +1992,23 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     // the invariant above: the Shell composes the thumbnail over this app's content, so a client the
     // host never erased is a pixel nobody drew — and one of those is the desktop seen through the pin.
     let _ = unsafe { InvalidateRect(host, None, true) };
-    note_the_thumbnail_pair("update", host, client, shown);
+    note_the_thumbnail_pair("update", host, client, live, shown);
 }
 
 /// The one line that makes a hole visible at a glance: the host the Shell is drawing into (its own box
-/// and where it stands), the host client the pair was built from, and the exact rectangles handed over.
-/// **`host` and `box` disagree only where something stands on the host's client** — a border, a frame
-/// style — which is a picture that cannot line up with its pin's box.
-fn note_the_thumbnail_pair(what: &str, host: HWND, client: (i32, i32), shown: ThumbnailBox) {
+/// and where it stands), the host client the pair was built from, the source's live client (`cli`), the
+/// window the picture is in (`pic`) and the exact rectangles handed over. **`host` and `box` disagree
+/// only where something stands on the host's client** — a border, a frame style — which is a picture
+/// that cannot line up with its pin's box, and **`cli` and `pic` disagree only where the source's window
+/// and its content are a moment apart**, which is the one way a crop can be of a surface the Shell is
+/// not sampling.
+fn note_the_thumbnail_pair(
+    what: &str,
+    host: HWND,
+    client: (i32, i32),
+    live: (i32, i32),
+    shown: ThumbnailBox,
+) {
     let (host_x, host_y, host_width, host_height) =
         unsafe { window_box(host) }.unwrap_or((0, 0, client.0, client.1));
     let (x, y, width, height) = shown.destination;
@@ -1935,7 +2017,7 @@ fn note_the_thumbnail_pair(what: &str, host: HWND, client: (i32, i32), shown: Th
         None => (0, 0, shown.client.0, shown.client.1),
     };
     note_pin_trace!(
-        "thumbnail {} host {}x{}+{}+{} box {}x{} dest {}x{}+{}+{} src {}x{}+{}+{} ({}={})",
+        "thumbnail {} host {}x{}+{}+{} box {}x{} dest {}x{}+{}+{} cli {}x{} pic {}x{} src {}x{}+{}+{} ({}={})",
         what,
         host_width,
         host_height,
@@ -1947,6 +2029,10 @@ fn note_the_thumbnail_pair(what: &str, host: HWND, client: (i32, i32), shown: Th
         height,
         x,
         y,
+        live.0,
+        live.1,
+        shown.client.0,
+        shown.client.1,
         right - left,
         bottom - top,
         left,
@@ -1972,22 +2058,29 @@ fn note_the_cover(what: &str, host: HWND) {
     };
     let source = HWND(SOURCE.load(Ordering::SeqCst) as *mut _);
     let client = the_source_client(source, box_);
-    let aspect = THUMBNAIL.lock().ok().and_then(|held| held.picture);
-    let shown = the_thumbnail_box(box_, client, aspect, the_picture_road());
+    let held = THUMBNAIL.lock().ok();
+    let aspect = held.as_ref().and_then(|held| held.picture);
+    let at = held
+        .as_ref()
+        .and_then(|held| the_window_the_picture_is_at(held, None))
+        .unwrap_or(client);
+    let shown = the_thumbnail_box(box_, at, aspect, the_picture_road());
     let (_, _, width, height) = if shown.source.is_some() {
-        a_picture_fitted_to(aspect, client)
+        a_picture_fitted_to(aspect, at)
     } else {
-        (0, 0, client.0, client.1)
+        (0, 0, at.0, at.1)
     };
     let (src_left, src_top, src_right, src_bottom) =
-        shown.source.unwrap_or((0, 0, client.0, client.1));
+        shown.source.unwrap_or((0, 0, at.0, at.1));
     let an_aspect = |extent: (i32, i32)| extent.0 as f64 / extent.1.max(1) as f64;
     note_pin_trace!(
-        "thumbnail cover {} box {}x{} a{:.4} pic {}x{} a{:.4} src {}x{}+{}+{} clamp {} ({}={})",
+        "thumbnail cover {} box {}x{} a{:.4} cli {}x{} pic {}x{} a{:.4} src {}x{}+{}+{} clamp {} ({}={})",
         what,
         box_.0,
         box_.1,
         an_aspect(box_),
+        client.0,
+        client.1,
         width,
         height,
         an_aspect((width, height)),
@@ -2162,6 +2255,155 @@ mod tests {
                     (0, 0, box_width, box_height),
                     "the destination is the box and never a picture fitted into one, at {shape:?}"
                 );
+            }
+        }
+    }
+
+    /// **A release is cropped where the picture still is, not where the source's window has already
+    /// gone.** The measured release: `source fills … client 1332x749 drawn 2880x1460 picture 2595x1460
+    /// margins l142t0r143b0`, and the pair that followed it was cropped `1331x748+0+0` — the top-left
+    /// corner of a surface still holding the generous picture, whose 142 px margin is the pillar that
+    /// reads as the film squished (see `the_window_the_picture_is_at`).
+    #[test]
+    fn a_release_crops_the_picture_where_the_player_says_it_still_is() {
+        let box_ = (1332, 749);
+        let live = box_;
+        let surface = (2880, 1460);
+        let aspect = Some(2595.0 / 1460.0);
+        let mut held = Thumbnail {
+            fill: Fill::Nudged(Instant::now()),
+            presented: Some(surface),
+            ..Thumbnail::NOTHING
+        };
+
+        let at = the_window_the_picture_is_at(&held, None).expect("the player named its window");
+        assert_eq!(
+            at, surface,
+            "a picture that does not fill the client is where it was read"
+        );
+        assert_ne!(at, live, "which is not the client the window has already taken");
+        let shown = the_thumbnail_box(box_, at, aspect, PictureRoad::Picture);
+        assert_eq!(
+            shown.source,
+            Some((142, 0, 2737, 1459)),
+            "the picture's shape at the surface's scale, centred: 2595x1459 at +142, never the \
+             whole of the box-sized client"
+        );
+        assert_eq!(
+            shown.destination,
+            (0, 0, box_.0, box_.1),
+            "and the box is still what is filled"
+        );
+        assert_eq!(
+            the_thumbnail_box(box_, live, aspect, PictureRoad::Picture).source,
+            Some((0, 0, 1331, 748)),
+            "which is the pair the release was cropped with: the corner of the generous surface"
+        );
+
+        held.fill = Fill::Filled;
+        assert_eq!(
+            the_window_the_picture_is_at(&held, None),
+            None,
+            "a picture proved to fill its client is the client, and nothing has to stand in for it"
+        );
+    }
+
+    /// **A drag's beginning is cropped against the window the source has, not the generous box it has
+    /// been asked for.** The measured line: `thumbnail cover begin box 1920x1080 a1.7778 pic
+    /// 2596x1460 a1.7781 src 2596x1460+142+0` — a crop reaching 818 px past the surface the Shell is
+    /// sampling, which is the film zoomed, or black past where it really has a picture.
+    #[test]
+    fn a_drag_start_crops_the_window_the_source_has_not_the_plan() {
+        let box_ = (1920, 1080);
+        let plan = (2880, 1460);
+        let content = (1920, 1080);
+
+        let at = the_window_the_picture_is_at(&Thumbnail::NOTHING, Some(content))
+            .expect("the box the source stood at before this ask is where its picture is");
+        assert_eq!(
+            at, content,
+            "the ask has moved the window; the picture has not moved yet"
+        );
+        let shown = the_thumbnail_box(box_, at, Some(16.0 / 9.0), PictureRoad::Picture);
+        assert_eq!(
+            shown.source,
+            Some((0, 0, 1920, 1080)),
+            "the film's own window, whole, and never a rect past 1920"
+        );
+        assert_eq!(
+            the_thumbnail_box(box_, plan, Some(16.0 / 9.0), PictureRoad::Picture).source,
+            Some((142, 0, 2738, 1460)),
+            "which is what the generous box would have cropped the window it has not taken"
+        );
+        assert_eq!(
+            the_window_the_picture_is_at(&Thumbnail::NOTHING, None),
+            None,
+            "a step of a drag crops by the source's live client, which the caller reads"
+        );
+    }
+
+    /// **The invariant the Shell is owed, over every shape pair a broadcast or a probe can produce**:
+    /// the destination is the box and the crop is a non-empty rectangle inside the window it was fitted
+    /// into, for every client, cached aspect and box aspect — including a shape that is nothing, a
+    /// nonsense one, and a client of one pixel (see `ThumbnailBox::checked`).
+    #[test]
+    fn every_pair_is_a_non_empty_crop_inside_the_window_it_was_fitted_into() {
+        let shapes = [
+            None,
+            Some(16.0 / 9.0),
+            Some(9.0 / 16.0),
+            Some(1.0),
+            Some(2.39),
+            Some(2595.0 / 1460.0),
+            Some(1.0 + 1e-9),
+            Some(0.0),
+            Some(-1.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+        ];
+        let clients = [
+            (1, 1),
+            (2, 3),
+            (1332, 749),
+            (1920, 1080),
+            (2880, 1460),
+            (3217, 1460),
+            (999, 1001),
+            (3840, 2160),
+        ];
+        let boxes = [
+            (1, 1),
+            (2, 3),
+            (641, 361),
+            (1000, 560),
+            (1332, 749),
+            (1920, 1080),
+            (2100, 900),
+            (3840, 2160),
+        ];
+        for client in clients {
+            for shape in shapes {
+                for box_ in boxes {
+                    let shown = the_thumbnail_box(box_, client, shape, PictureRoad::Picture);
+                    assert_eq!(
+                        shown.destination,
+                        (0, 0, box_.0, box_.1),
+                        "the destination is the box, at {client:?} {shape:?} {box_:?}"
+                    );
+                    let Some((left, top, right, bottom)) = shown.source else {
+                        assert!(shape.is_none(), "a shape nothing has read is the whole client");
+                        continue;
+                    };
+                    assert!(
+                        right > left && bottom > top,
+                        "{right}x{bottom}+{left}+{top} is not empty"
+                    );
+                    assert!(
+                        left >= 0 && top >= 0 && right <= client.0 && bottom <= client.1,
+                        "{right}x{bottom}+{left}+{top} is inside the client {client:?}, at \
+                         {shape:?} {box_:?}"
+                    );
+                }
             }
         }
     }
