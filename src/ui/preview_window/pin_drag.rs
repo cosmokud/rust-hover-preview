@@ -762,10 +762,12 @@ pub(super) fn begin_pin_drag(
         // length of a resize and puts it back when the drag ends (see `pin_resize_probe`).
         if matches!(action, PinDragAction::Resize(_)) {
             // **The frame a growing host paints its new strip with is taken before the box moves.**
-            // The band is the film's and the film is mpv's child, and the child reaches a new box a
-            // moment after the band does — so the strip the band has gained is this app's to fill in
-            // the meantime, and what fills it is the picture that was on screen when the hand took
-            // the edge (see `hold_the_frame_a_growing_host_paints`).
+            // On the child road the band is the film's and the film is mpv's child, and the child
+            // reaches a new box a moment after the band does — so the strip the band has gained is
+            // this app's to fill in the meantime, and what fills it is the picture that was on screen
+            // when the hand took the edge (see `hold_the_frame_a_growing_host_paints`, which takes
+            // nothing on the thumbnail road: there the Shell stretches its own picture into the
+            // host's new box).
             pin_film_host::hold_the_frame_a_growing_host_paints();
             pin_resize_probe::hide_the_film_for_a_resize_drag();
         }

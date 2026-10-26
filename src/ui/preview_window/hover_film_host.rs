@@ -140,9 +140,11 @@ pub(super) fn forget_the_hover_film_host_that_was_handed_over(host: HWND) {
 }
 
 /// Whether this file is a hovered film that a host should hold: mpv's, and FFmpeg's player's while
-/// Pin Mode is on. A film pinned from a hover is drawn in a host by then, so a pin's take-up can
-/// move the running picture into its own window without beginning a second player; every other
-/// route — the engine's own frame, a pin standing in the preview's window — keeps the window it has.
+/// Pin Mode is on. A film pinned from a hover is drawn in a host by then, so a pin's take-up on the
+/// child road can move the running picture into its own window without beginning a second player;
+/// every other route — the engine's own frame, a pin standing in the preview's window, and any pin
+/// at all on the thumbnail road, whose host holds the wrong shape of film for it — keeps the window
+/// it has.
 ///
 /// It is asked on a video launch only, which is what keeps a sound out: the audio road begins its
 /// player through `start_audio_player` and never asks here (see `the_hover_film_to_adopt` for the
