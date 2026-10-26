@@ -121,10 +121,24 @@ fn a_resize_drag_is_live() -> bool {
 /// and the hover's a pin took up (see `hover_film_host`) — and a host that is not the pin's is
 /// erased black, which is what the class brush did before it.
 pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
-    // **A host the Shell is drawing the film into has nothing of this app's to fill.** A DWM
-    // thumbnail is composed under the destination window's own content, so an erase here is this app
-    // painting over the picture it asked for (see `pin_film_thumbnail`).
+    // **A host the Shell is drawing the film into has nothing of this app's to fill where the picture
+    // is.** A DWM thumbnail is composed under the destination window's own content, so an erase here
+    // is this app painting over the picture it asked for — but the bars the film's own shape leaves
+    // around that picture are the host's, and they are painted black here so that a film in a box of
+    // another shape reads as letterboxed (see `pin_film_thumbnail`).
     if pin_film_thumbnail::the_host_shows_a_thumbnail(host) {
+        let brush = HBRUSH(unsafe { GetStockObject(BLACK_BRUSH) }.0);
+        for (x, y, width, height) in pin_film_thumbnail::the_bars_around_the_picture(host) {
+            if width > 0 && height > 0 {
+                let bar = RECT {
+                    left: x,
+                    top: y,
+                    right: x + width,
+                    bottom: y + height,
+                };
+                unsafe { FillRect(dc, &bar, brush) };
+            }
+        }
         return;
     }
 
@@ -1475,6 +1489,15 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
     };
 
     let (x, y, width, height) = the_film_host_box(content);
+    // **The thumbnail road has nothing of this app's to carry across a step**, so its host's bits are
+    // not copied: the picture is the Shell's, and the only pixels painted in the host are the film's
+    // bars — a fresh surface every step is what keeps a bar of an earlier box from standing black over
+    // the picture the box now draws (see `pin_film_thumbnail::the_bars_around_the_picture`).
+    let flags = if the_pin_shows_its_film_by_thumbnail() {
+        SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS
+    } else {
+        SWP_NOZORDER | SWP_NOACTIVATE
+    };
     // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock for this placement, taken only where a
     // resize step is being measured (see `pin_resize_probe`).
     let mut started = None;
@@ -1482,15 +1505,7 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
         || lead_the_hosted_mpv_to_the_box(host, width, height),
         || {
             started = pin_resize_probe::a_step_started();
-            let _ = SetWindowPos(
-                host,
-                HWND::default(),
-                x,
-                y,
-                width,
-                height,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
+            let _ = SetWindowPos(host, HWND::default(), x, y, width, height, flags);
         },
     );
     // **What a resize step costs on the thumbnail road is this one call**: the destination is the
