@@ -14,7 +14,10 @@
 //! went in, and the three costs a step pays: the chrome's paint, the film host's placement, and the
 //! fit of mpv's child into it. The box the child was asked for is written down with it and looked at
 //! on a later tick, because the question there is when the film's window *arrived* rather than how
-//! long asking for it took (see `observe_the_film`).
+//! long asking for it took (see `observe_the_film`). **And the line carries the box the child was
+//! standing at as the step's own commits ended, with the strip of its host that box did not cover** —
+//! the lag itself, which is the thing the three `RHP_FILM_*` knobs of `pin_film_host` are measured by
+//! (see `measure_the_film` and `the_uncovered_strip`).
 //!
 //! **Neither is a setting.** Both are presence-style `RHP_*` variables read once, a run with neither
 //! set builds no line, hides nothing and pays one thread-local read per paint, and a pin's road is
@@ -27,7 +30,7 @@
 use std::cell::Cell;
 use std::fmt::Write as _;
 
-use windows::Win32::UI::WindowsAndMessaging::SWP_ASYNCWINDOWPOS;
+use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, SWP_ASYNCWINDOWPOS};
 
 use super::*;
 
@@ -93,6 +96,12 @@ pub(super) struct Step {
     /// The film window the fit asked for a box, that box in screen coordinates, and the instant it was
     /// asked for: what a later tick looks at (see `observe_the_film`).
     pub(super) asked_for: Option<(HWND, ScreenBox, Instant)>,
+    /// The host and the child the step fitted, so that the child's own box and the strip of its host it
+    /// leaves uncovered are read when the step's commits have all run (see `measure_the_film`).
+    pub(super) filmed: Option<(HWND, HWND)>,
+    /// The child's box as the step left it, and the strip of the host that box does not cover: the lag
+    /// itself, measured at the end of the step rather than argued about (see `the_uncovered_strip`).
+    pub(super) uncovered: Option<(ScreenBox, (i32, i32))>,
 }
 
 thread_local! {
@@ -114,6 +123,8 @@ pub(super) fn a_step_at(box_: ScreenRegion, grew: bool) -> Step {
         fit: None,
         fit_is_async: false,
         asked_for: None,
+        filmed: None,
+        uncovered: None,
     }
 }
 
@@ -128,10 +139,15 @@ pub(super) fn begin_step(box_: ScreenRegion, grew: bool) {
 
 /// Close the step: one line to the pin trace's own file, and the box it asked the film's window for
 /// left to a later tick to look at.
+///
+/// **The child's own box is read here, at the step's end and not when it was asked for**, because the
+/// ask is the thing that lands late: a step whose numbers were taken at the ask would say the film is
+/// where it was told to be before mpv's thread had a chance to move it.
 pub(super) fn end_step() {
-    let Some(step) = STEP.with(|step| step.borrow_mut().take()) else {
+    let Some(mut step) = STEP.with(|step| step.borrow_mut().take()) else {
         return;
     };
+    step.uncovered = step.filmed.and_then(|(host, child)| measure_the_film(host, child));
     pin_trace::write(&a_step_line(&step));
     if let Some((child, want, since)) = step.asked_for {
         OBSERVATION.with(|held| {
@@ -178,6 +194,7 @@ pub(super) fn note_the_child_fit(
         step.fit = Some(started.elapsed());
         step.fit_is_async = flags.contains(SWP_ASYNCWINDOWPOS);
         step.asked_for = Some((child, the_screen_box(host, rect), started));
+        step.filmed = Some((host, child));
     });
 }
 
@@ -220,7 +237,50 @@ pub(super) fn a_step_line(step: &Step) -> String {
         }
         None => line.push_str(" child none"),
     }
+    // **What the film's window was standing at as the step ended, and the strip of its host it did not
+    // cover** — the number the lag is: what the host has to paint in the strip, whether that is the
+    // frame a drag holds, the brush, or the live picture of a child held over the band.
+    if let Some((child, (strip_w, strip_h))) = step.uncovered {
+        let _ = write!(
+            line,
+            " now {},{} {}x{} strip {strip_w}x{strip_h}",
+            child.0, child.1, child.2, child.3
+        );
+    }
     line
+}
+
+/// The child's own box and the strip of its host it does not cover, read at the end of a step: three
+/// reads of rectangles, on windows of this app's own, so this is no message to anybody and no wait on
+/// the player's thread (see `observe_the_film`, which reads the same fact a tick later).
+fn measure_the_film(host: HWND, child: HWND) -> Option<(ScreenBox, (i32, i32))> {
+    let mut client = RECT::default();
+    let mut got = RECT::default();
+    let mut origin = POINT::default();
+    unsafe {
+        GetClientRect(host, &mut client).ok()?;
+        GetWindowRect(child, &mut got).ok()?;
+        let _ = ClientToScreen(host, &mut origin);
+    }
+    let band = (origin.x, origin.y, client.right, client.bottom);
+    let child_box = (got.left, got.top, got.right - got.left, got.bottom - got.top);
+    Some((child_box, the_uncovered_strip(band, child_box)))
+}
+
+/// How much of a `band` box a `child` box does not cover: the width of the strip left over on the
+/// right and the height of the strip left over at the bottom, each zero where the child covers the
+/// band and each the whole extent where the child is not in it at all.
+///
+/// **Two strips and not a difference of areas**, because that is the shape of what the host paints: it
+/// fills its whole client box, and a child that is a step behind on two edges leaves a band on each.
+pub(super) fn the_uncovered_strip(band: ScreenBox, child: ScreenBox) -> (i32, i32) {
+    let covered = |start: i32, extent: i32, from: i32, size: i32| {
+        ((start + extent).min(from + size) - start.max(from)).max(0)
+    };
+    (
+        (band.2 - covered(band.0, band.2, child.0, child.2)).max(0),
+        (band.3 - covered(band.1, band.3, child.1, child.3)).max(0),
+    )
 }
 
 /// One cost as the line carries it, in milliseconds, or a dash where the step did not pay it.
