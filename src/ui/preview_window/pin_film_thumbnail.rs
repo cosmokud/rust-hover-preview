@@ -1,7 +1,9 @@
 //! The pin's film drawn by the Desktop Window Manager rather than nested in a window of this app's.
 //!
-//! **A prototype, behind `RHP_MPV_THUMBNAIL_PIN`, and it should be deleted once the answer is in.**
-//! mpv is launched with no `--wid` and makes a window of the desktop's of its own; the pin's film
+//! **This is the road a pin's mpv film is drawn on**: `RHP_MPV_THUMBNAIL_PIN=0` is the escape hatch
+//! back to the child road, and it is byte for byte the road this app stood in before (see
+//! `pin_film_host::MPV_THUMBNAIL_PIN_VARIABLE`). mpv is launched with no `--wid` and makes a window
+//! of the desktop's of its own; the pin's film
 //! host asks the Shell to draw that window into itself (`DwmRegisterThumbnail`), and what follows a
 //! resize is one rectangle rather than two windows agreeing about a box.
 //!
@@ -1634,7 +1636,7 @@ pub(super) fn forget_the_thumbnail() {
 }
 
 /// Take the registration down where it is drawn in `host`: a host of the hover's that goes while it
-/// is showing a film of its own, which is every road this prototype does not take.
+/// is showing a film of its own, which is every road that is not this one.
 pub(super) fn forget_the_thumbnail_of(host: HWND) {
     let drawn_in = REGISTERED_HOST.load(Ordering::SeqCst) == host.0 as isize;
     if drawn_in {
