@@ -1198,6 +1198,7 @@ fn a_resize_step_writes_its_box_its_direction_and_the_costs_it_paid() {
         (100, 200, 300, 400),
         Instant::now(),
     ));
+    step.uncovered = Some(((100, 200, 280, 400), (20, 0)));
 
     let line = pin_resize_probe::a_step_line(&step);
     for field in [
@@ -1207,6 +1208,7 @@ fn a_resize_step_writes_its_box_its_direction_and_the_costs_it_paid() {
         "host 1.000ms",
         "fit 2.000ms async",
         "want 100,200 300x400",
+        "now 100,200 280x400 strip 20x0",
     ] {
         assert!(line.contains(field), "{field} is in the line: {line}");
     }
@@ -1219,6 +1221,40 @@ fn a_resize_step_writes_its_box_its_direction_and_the_costs_it_paid() {
     assert!(line.contains("shrank"), "{line}");
     assert!(line.contains("paint 3.000ms host - fit -"), "{line}");
     assert!(line.contains("child none"), "{line}");
+    assert!(
+        !line.contains("strip"),
+        "and a step that asked no window for anything measures no strip: {line}"
+    );
+}
+
+/// **The strip a step's child leaves uncovered is what the host has to paint**, and it is measured
+/// rather than assumed: the band the step committed, minus the part of it the child stands over — so a
+/// child a step behind on the right is a strip on the right, and a child held over the band is none.
+#[test]
+fn the_strip_a_child_leaves_is_the_part_of_the_band_it_does_not_cover() {
+    let band = (0, 0, 1000, 500);
+
+    assert_eq!(pin_resize_probe::the_uncovered_strip(band, band), (0, 0));
+    assert_eq!(
+        pin_resize_probe::the_uncovered_strip(band, (0, 0, 900, 500)),
+        (100, 0),
+        "a child a step behind on the right leaves exactly that strip"
+    );
+    assert_eq!(
+        pin_resize_probe::the_uncovered_strip(band, (0, 0, 900, 420)),
+        (100, 80),
+        "and one behind on two edges leaves a band on each"
+    );
+    assert_eq!(
+        pin_resize_probe::the_uncovered_strip(band, (-40, -20, 1080, 540)),
+        (0, 0),
+        "a child held over the band covers it and is clipped by it, not counted as two strips"
+    );
+    assert_eq!(
+        pin_resize_probe::the_uncovered_strip(band, (0, 0, 0, 0)),
+        (1000, 500),
+        "and a child that is not there at all leaves the whole band"
+    );
 }
 
 /// **The box a step asked the film's window for is read as the distance it was found at**, on each of
