@@ -2069,6 +2069,11 @@ mod tests {
         assert!(!named(Some("0")), "`0` is the child road, byte for byte");
         assert!(named(Some("")), "a value that names nothing is not read as `0`");
         assert!(named(Some("off")), "only the one value asks for the child road");
+
+        // And what a test run rests on is the road the app ships, which is what a fixture that
+        // stands nothing in (or puts back `None`) is answered with.
+        stand_the_thumbnail_road_in(None);
+        assert!(the_pin_shows_its_film_by_thumbnail());
     }
 
     /// **The per-tick line is written on change and at most once a second otherwise**, which is what
