@@ -1242,11 +1242,6 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
     // here on (see `pin_film_thumbnail`). Nothing is asked on the `--wid` road, where the host's own
     // fit has already given mpv's child its size.
     pin_film_host::place_the_film_source_at_the_band();
-    // **And the child a live resize drag had standing over its band is put back at the band here**, on
-    // the drag's own end rather than only on the tick that follows it: the tick would otherwise show
-    // one frame of the oversized box on the pin the hand has just let go of (see
-    // `pin_film_host::settle_the_hosted_child_back_at_the_band`).
-    pin_film_host::settle_the_hosted_child_back_at_the_band(false);
     true
 }
 
