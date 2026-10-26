@@ -1222,6 +1222,10 @@ pub fn run_preview_window() {
             // step: the film comes back once the drag is over, and the box the last step asked the
             // film's window for is looked at (see `pin_resize_probe`).
             pin_resize_probe::settle_on_the_tick(dragging);
+            // And the child a live resize drag had standing over its band is put back at the band
+            // itself, which is the one thing the `RHP_FILM_CHILD_SLACK` knob leaves owed (see
+            // `pin_film_host::settle_the_hosted_child_back_at_the_band`).
+            pin_film_host::settle_the_hosted_child_back_at_the_band(dragging);
 
             // Advance animation frames if needed
             let mut needs_repaint = false;
