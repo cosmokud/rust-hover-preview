@@ -105,8 +105,8 @@ fn a_resize_drag_is_live() -> bool {
         .is_some_and(|drag| matches!(drag.action, PinDragAction::Resize(_)))
 }
 
-/// Paint the part of the host the film's child does not cover: the frame a drag is holding,
-/// stretched into the box, or black where there is none in hand.
+/// Paint the host's whole client: the frame a drag is holding, stretched into the box, or black where
+/// there is none in hand.
 ///
 /// **A band that has just grown is this app's to fill until the child is its size.** mpv gives its
 /// child the host's new box from the message that gave the host its own, and does it on its own
@@ -117,31 +117,17 @@ fn a_resize_drag_is_live() -> bool {
 /// the band and is scaled *into* the band; the host's `WS_CLIPCHILDREN` clips the part of it the
 /// live child stands over, which is what keeps the film untouched (see `create`).
 ///
+/// **A host the Shell is drawing a thumbnail into is erased here exactly the same way**, and that is
+/// the whole of what closes the hole a film of the picture road showed as three bands: the Shell
+/// composes the thumbnail *over* this app's content and only inside the destination rectangle, so a
+/// client painted in the bars alone is a pixel nobody drew — and one of those reads as the desktop seen
+/// through the pin. The picture covers its destination and this erase covers everything else (see
+/// `pin_film_thumbnail::settle_the_registration`).
+///
 /// Both hosts a pin can be showing its film through are erased through here — the pin's own class,
 /// and the hover's a pin took up (see `hover_film_host`) — and a host that is not the pin's is
 /// erased black, which is what the class brush did before it.
 pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
-    // **A host the Shell is drawing the film into has nothing of this app's to fill where the picture
-    // is.** A DWM thumbnail is composed under the destination window's own content, so an erase here
-    // is this app painting over the picture it asked for — but the bars the film's own shape leaves
-    // around that picture are the host's, and they are painted black here so that a film in a box of
-    // another shape reads as letterboxed (see `pin_film_thumbnail`).
-    if pin_film_thumbnail::the_host_shows_a_thumbnail(host) {
-        let brush = HBRUSH(unsafe { GetStockObject(BLACK_BRUSH) }.0);
-        for (x, y, width, height) in pin_film_thumbnail::the_bars_around_the_picture(host) {
-            if width > 0 && height > 0 {
-                let bar = RECT {
-                    left: x,
-                    top: y,
-                    right: x + width,
-                    bottom: y + height,
-                };
-                unsafe { FillRect(dc, &bar, brush) };
-            }
-        }
-        return;
-    }
-
     let mut client = RECT::default();
     if unsafe { GetClientRect(host, &mut client) }.is_err() {
         return;
@@ -1490,9 +1476,10 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
 
     let (x, y, width, height) = the_film_host_box(content);
     // **The thumbnail road has nothing of this app's to carry across a step**, so its host's bits are
-    // not copied: the picture is the Shell's, and the only pixels painted in the host are the film's
-    // bars — a fresh surface every step is what keeps a bar of an earlier box from standing black over
-    // the picture the box now draws (see `pin_film_thumbnail::the_bars_around_the_picture`).
+    // not copied: the picture is the Shell's, and the only pixels this app paints in the host are its
+    // whole client erased black behind that picture — a fresh surface every step is what keeps a bar of
+    // an earlier box from standing black over the picture the box now draws (see
+    // `pin_film_thumbnail::settle_the_registration`).
     let flags = if the_pin_shows_its_film_by_thumbnail() {
         SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS
     } else {
