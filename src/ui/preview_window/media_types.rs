@@ -387,10 +387,11 @@ impl MediaType {
     /// window behind the band, so a band this app fills itself has nothing to put away, and the
     /// flat fill a park paints would be laid over a picture this window is drawing — a frame of
     /// this app's own, blanked for the length of a drag and answered with a stray decode. FFmpeg's
-    /// player and the browser that draws an engine document are the two of them; a film mpv plays
-    /// into the pin's own host is a child of the pin's window rather than a window of the
-    /// desktop's, and the media engine's video is drawn into this window's own surface like any
-    /// other frame (see `park_pinned_player` and `pin_film_host`).
+    /// player and the browser that draws an engine document are the two of them; a film mpv plays is
+    /// the pin's own host's on every road, so a park leaves it where it draws (see
+    /// `pin_film_host::the_pinned_film_is_drawn_in_a_host`), and the media engine's video is drawn
+    /// into this window's own surface like any other frame (see `park_pinned_player` and
+    /// `pin_film_host`).
     ///
     /// **A film's answer is the route of the film it is showing now**, rather than the window the
     /// pin was taken up in: an engine row can change under a pin that is already up, and the pin is

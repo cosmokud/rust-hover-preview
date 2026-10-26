@@ -2401,9 +2401,9 @@ fn prepare_resume_frame() {
 /// as the park stands, and the tick's own raise is answered out of the hand for the same reason,
 /// so the tick that takes the park back is the one that has to place the window.
 pub(super) fn settle_pinned_park() -> bool {
-    // **A hosted film's window is a child of the pin's**, so there is no window of the desktop's to
-    // find by pid: the one question the park and the settlement roads ask is answered of the host
-    // as well (see `pin_film_host::the_players_window_is_up`).
+    // **A hosted film's window is the host and not a window of the desktop's of its own**, so there
+    // is no window of the desktop's to find by pid: the one question the park and the settlement
+    // roads ask is answered of the host as well (see `pin_film_host::the_players_window_is_up`).
     let window_up = pin_film_host::the_players_window_is_up(VIDEO_PID.load(Ordering::SeqCst));
     settle_pinned_park_where(&Win32PinWindow, window_up)
 }

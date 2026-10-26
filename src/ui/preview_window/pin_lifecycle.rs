@@ -793,10 +793,11 @@ pub(super) fn end_pin_beside_the_state() {
     // `compose_parked_band`).
     forget_video_frame();
 
-    // And the window a pinned mpv film was drawn in — a host this app made a child of the pin's —
-    // with the player it held: it is a window of this app's own, and one left standing for a pin
-    // that has gone is a black band in the next pin's picture (see `pin_film_host`). The player is
-    // the loop's own kill road's, which is asked for by the take-down the message below is.
+    // And the window a pinned mpv film was drawn in — the host, a child of the pin's on the child
+    // road and a window of the desktop's that owns the pin's chrome on the default one — with the
+    // player it held: it is a window of this app's own, and one left standing for a pin that has gone
+    // is a black band in the next pin's picture (see `pin_film_host`). The player is the loop's own
+    // kill road's, which is asked for by the take-down the message below is.
     unsafe {
         pin_film_host::take_down_the_pin_film_host();
     }
@@ -2460,11 +2461,13 @@ pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
 /// absence can be ended (see `pin_player_is_parked`).
 pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
     // **A film drawn into the pin's own host travels with the band rather than being placed at it.**
-    // The host is a child of the pin's window, so a move is the compositor's and never this app's;
-    // what a resize changes is the band *inside* that window, which is the host's own box — and the
-    // player's geometry is never touched, because mpv's child fills whatever box the host is given
-    // (see `place_the_pin_film_host`). Placed while a park stands as much as after one: the band a
-    // hidden host comes back at is the band it was given (see `settle_pinned_park`).
+    // On the child road the host is a child of the pin's window, so a move is the compositor's and
+    // never this app's; what a resize changes is the band *inside* that window, which is the host's
+    // own box — and the player's geometry is never touched, because mpv's child fills whatever box
+    // the host is given. On the thumbnail road the host is a window of the desktop's and is placed at
+    // the band itself, which is what `place_the_pin_film_host` does for either (see
+    // `the_film_host_box`). Placed while a park stands as much as after one: the band a hidden host
+    // comes back at is the band it was given (see `settle_pinned_park`).
     if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         unsafe { pin_film_host::place_the_pin_film_host(content) };
         return;

@@ -1560,8 +1560,8 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         note_pin_trace!("topmost skipped: pin collapsed");
         return false;
     }
-    // **A film drawn into a child of the pin's has no window of the desktop's to order, style or
-    // raise.** The host is the picture and the pin is the order it stands in, so showing it is the
+    // **A film drawn into the pin's host has no window of the desktop's to order, style or raise.**
+    // The host is the picture and the pin is the order it stands in, so showing it is the
     // whole of what the band is owed — and the box this road was handed is a top-level player's,
     // not the host's. It is asked of the pairing rather than of the host alone: a pin that took up
     // a hover's top-level player has a host standing empty until a relaunch fills it, and that
@@ -1584,7 +1584,8 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         }
         if pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
             note_pin_trace!("topmost shown: pin host drawing");
-            // SAFETY: the host is this app's own window, made a child of the pin's, and `ShowWindow`
+            // SAFETY: the host is this app's own window — a child of the pin's on the child road,
+            // a window of the desktop's on the thumbnail one — and `ShowWindow`
             // takes any window and reports rather than faults.
             unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
         } else {
