@@ -21,23 +21,33 @@
 //!
 //! **What a thumbnail shows is the source's picture, not its whole client** (`RHP_THUMBNAIL_PICTURE`,
 //! `picture` by default): the rectangle mpv draws the film in — the client less the letterbox margins a
-//! film of another shape leaves — is cropped out of the source and fitted into the box at its own
-//! shape, and what the box leaves around it is the host's own black (see `the_thumbnail_box`). `client`
+//! film of another shape leaves — is cropped out of the source to **the box's own shape**, and the whole
+//! box is handed over as the destination, so the film fills its pin (see `the_thumbnail_box`). `client`
 //! is the road this began on and it is dead: it stretched the whole client, margins included, into the
 //! box, which is the pillar of black that read as a pin zoomed out (measured: `client 916x515 … picture
 //! 2595x1460 margins l311t0r311b0` — 311 px a side stretched into the picture) and the upscale that read
 //! as one zoomed in. The shape is read at a settle and kept, so a step of a drag still reads nothing of
 //! the player's.
 //!
-//! **The composition invariant is one line, and it is the whole of what the picture road was getting
-//! wrong**: the host's own erase paints its whole client, and the destination rectangle the Shell is
-//! given is inside that client, so every pixel of the host is drawn by one of the two — never a hole,
-//! never a seam. Both rectangles are built at the moment of the `DwmUpdateThumbnailProperties` call from
-//! the host's live client, the source's live client and the shape the last settle read; **a change of
-//! any of the three is a re-point**, and a settle re-points even where the box did not change, because
-//! the settle's own ask is what changes the source's client. A pair built against a box the host is no
-//! longer in — or a source rectangle reaching past the surface the Shell is sampling, which the Shell
-//! answers with nothing — is the picture cropped and a band of desktop showing through the pin.
+//! **Filling the box is not a detail of the crop, it is what makes a flash impossible.** The road this
+//! replaces fitted the picture into the box at the picture's own shape and left the rest to the host's
+//! black: a destination *smaller* than the client whenever the box's aspect and the film's were not the
+//! same. The drift between them is what the hand sees as the film squashed into the middle of the pin
+//! with a pillar either side, twice per drag — at the press and at the release — because those two
+//! moments are where the picture's shape is read again (see `place_the_source`), while every step between
+//! them is re-pointed from the shape that read gave and a box whose aspect a resize holds still (see
+//! `pin_geometry::resize_pinned_content`). No pair of shapes can produce a bar now, whatever order the
+//! box, the source and the shape are re-pointed in.
+//!
+//! **The composition invariant is one line**: the destination is the host's whole client, so the Shell
+//! draws every pixel of the pin, and the host's own erase paints that same client under it — which is
+//! what a client the Shell has not composed yet, or one whose source is not drawing, shows instead of the
+//! desktop. Both rectangles are built at the moment of the `DwmUpdateThumbnailProperties` call from the
+//! host's live client, the source's live client and the shape the last settle read; **a change of any of
+//! the three is a re-point**, and a settle re-points even where the box did not change, because the
+//! settle's own ask is what changes the source's client. A pair built against a box the host is no longer
+//! in — or a source rectangle reaching past the surface the Shell is sampling, which the Shell answers
+//! with nothing — is the picture cropped and a band of desktop showing through the pin.
 //!
 //! **Where the source stands is a knob, and the answer is measured: it has to be on the screen.**
 //! `RHP_THUMBNAIL_SOURCE` names three placements, and two of them are known dead:
@@ -238,8 +248,8 @@ const INVISIBLE_ALPHA: u8 = 1;
 
 /// **`RHP_THUMBNAIL_PICTURE`: what a thumbnail of the source shows.** `picture` (the default) crops the
 /// source to the rectangle mpv draws the film in — the letterbox margins a film of another shape leaves
-/// in its client are not part of the film — and draws it into the box fitted to its own shape, so a box
-/// of another shape gets black bars around the film rather than a stretched one.
+/// in its client are not part of the film — and crops that rectangle again to the box's own shape, so a
+/// pin's film always fills its box and has no bar to be found in (see `the_thumbnail_box`).
 ///
 /// **`client` is the road this began on, and it is dead.** It stretched the source's whole client,
 /// margins included, into the box: measured on the glass as `client 916x515 drawn 3217x1460 picture
@@ -252,7 +262,8 @@ const PICTURE_VARIABLE: &str = "RHP_THUMBNAIL_PICTURE";
 /// What `RHP_THUMBNAIL_PICTURE` names.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum PictureRoad {
-    /// The source's picture rectangle, fitted into the box at its own shape: the default road.
+    /// The source's picture rectangle, cropped to the box's own shape: the default road, and the one a
+    /// pin's film fills its box on.
     Picture,
     /// The source's whole client, stretched into the box: today's road, and the A/B's other arm.
     Client,
@@ -806,8 +817,7 @@ pub(super) unsafe fn keep_the_source_invisible() {
 }
 
 /// Follow the host: register the picture where there is none, and point it at the host's client area —
-/// the picture fitted into it at the film's own shape, with what is left around it left black (see
-/// `the_thumbnail_box`).
+/// **the whole of it, filled by the picture** (see `the_thumbnail_box`).
 ///
 /// **The source is not resized on every step here**, which is the whole of what makes a step cheap:
 /// the destination is the host's box and the Shell stretches whatever the source's box is into it.
@@ -841,10 +851,10 @@ pub(super) fn the_band_was_placed(host: HWND) {
             // the hand is the destination rectangle (see `the_box_a_placement_asks_for`).
             //
             // shortcut: a source the drag outgrows is the Shell's to stretch, so a long drag to a box
-            // bigger than the generous one is soft by however far it outgrew it, and a source wider
-            // than the box's shape is the picture letterboxed by the Shell itself. Upgrade it by
-            // asking once more at a step where the drag is *idle* (a hand held still past
-            // `SETTLE_RETRY`), not by catching up on every step.
+            // bigger than the generous one is soft by however far it outgrew it, and a source of a
+            // shape the box does not share is the picture cropped by the box and upscaled to fill it.
+            // Upgrade it by asking once more at a step where the drag is *idle* (a hand held still
+            // past `SETTLE_RETRY`), not by catching up on every step.
         } else {
             if let Some(origin) = unsafe { client_origin(host) } {
                 move_the_source(HWND(number as *mut _), origin);
@@ -877,7 +887,10 @@ pub(super) fn the_band_was_placed(host: HWND) {
 /// at a drag's beginning cheap where the source has not left its placement since the last one; the
 /// one thing it does spend is the fill read, because a placement is a fresh settle even where it names
 /// the same box (see `settle_the_fill`).
-pub(super) fn place_the_source(host: HWND) {
+///
+/// `what` names the moment this is, for the one line a flash is read from: a drag's beginning, its
+/// release, or a settle that is no drag's (see `note_the_cover`).
+pub(super) fn place_the_source(host: HWND, what: &'static str) {
     let Some(source) = the_source_window() else {
         return;
     };
@@ -900,6 +913,10 @@ pub(super) fn place_the_source(host: HWND) {
         }
     }
     ask_the_source_for(source, host, box_, true);
+    // The box this moment's pair is drawn in, the shape it is drawn with and the crop that fills it —
+    // the three numbers a flash is answerable by, at the three moments a flash can be in (see
+    // `note_the_cover`).
+    note_the_cover(what, host);
     // **The settle is the drag follow's previous ask**: nothing follows a box that has not landed, and
     // this is the ask whose landing the next drag's first step waits on (see
     // `follow_the_band_while_dragging`).
@@ -1262,7 +1279,13 @@ fn settle_the_fill(
     let (x, y, width, height) = box_;
     let drawn = the_drawn_picture(SOURCE_PROCESS.load(Ordering::SeqCst));
     // **The picture's shape is kept for the drag that may follow**: it is what every step crops the
-    // source by and fits into the box, and a step asks the player nothing (see `the_thumbnail_box`).
+    // source by and fills the box with, and a step asks the player nothing (see `the_thumbnail_box`).
+    //
+    // shortcut: this read is kept even where the settle goes on to judge it stale (`the_picture_fills`
+    // below), which it is when the source's window has just been re-asked — the drag's two ends are
+    // exactly that, and a shape a frame out is how the containing road came out as a bar. Upgrade it by
+    // keeping only a read whose own window is the source's client; until then what a wrong shape costs is
+    // a crop a pixel or a frame out, never a bar, because the box is filled from it whatever it says.
     if let Some(drawn) = drawn {
         held.picture = the_picture_shape(drawn);
     }
@@ -1672,23 +1695,41 @@ fn a_picture_fitted_to(aspect: Option<f64>, box_: (i32, i32)) -> (i32, i32, i32,
 /// of the source's client it is taken from, and the client that rectangle was fitted into.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ThumbnailBox {
-    /// The rectangle of the host's client area the picture is drawn in.
+    /// The rectangle of the host's client area the picture is drawn in: **the whole of it, always** (see
+    /// `the_thumbnail_box`).
     destination: (i32, i32, i32, i32),
     /// The picture's rectangle in the source's own client area, as left, top, right and bottom — or
     /// nothing where the whole client is what is shown (see `the_thumbnail_box`).
     source: Option<(i32, i32, i32, i32)>,
     /// The client the source is at, as a width and a height.
     client: (i32, i32),
+    /// Whether the crop had to be clamped inside the picture rather than being the extent the box's
+    /// shape asks for, which a trace reads and nothing else does (see `note_the_cover`).
+    clamped: bool,
 }
 
-/// **What a thumbnail of the source shows**: the picture rectangle mpv draws into the source's client,
-/// fitted into the host's `box_` at its own shape, and — where the road is `picture` — the rectangle of
-/// the source that rectangle is taken from.
+/// **What a thumbnail of the source shows: the box, filled.** The destination is the host's whole client
+/// area and the source is the rectangle of the picture that *is* the box's shape — so the film covers its
+/// box and there is nothing left for the host's black to show through (see `the_crop_filling`).
 ///
 /// `aspect` is the picture's own width over its height, as a settle's `osd-dimensions` read gave it, and
 /// `client` is the box the source is at **as its window answers it at this call**. The two together are
 /// the source's picture rectangle, which is why a step of a drag asks the player nothing: the shape is
 /// the one the settle read and the client is Windows' answer about the window.
+///
+/// **A destination fitted into the box was a bar of black waiting for the two numbers to disagree**, and
+/// they do disagree at exactly the two moments nothing else on this road re-reads them: a drag's
+/// beginning and its release are where the picture's shape is read again (see `place_the_source`). A
+/// box whose aspect was a frame out — a source mid-placement, a shape read from an output that is still
+/// configuring — came out as the film squeezed into the middle of the pin with a pillar either side, and
+/// that is the flash the hand sees on the press and again on the release. **Filling the box is bars made
+/// impossible by construction**: whatever the two shapes are, the destination is the client and the crop
+/// is the part of the picture that has the client's shape, so there is no rectangle left over to read as
+/// the wrong thing.
+///
+/// At rest the two shapes agree — a pin is built at its film's shape and a drag keeps the shape it began
+/// with (`pin_geometry::resize_pinned_content`) — so the crop is the picture whole and the pair handed to
+/// the Shell is the one the containing road handed it.
 ///
 /// **The `client` road, and a picture nothing has read yet, is the whole client into the whole box** —
 /// today's stretch, and the fallback for a shape this app cannot crop by.
@@ -1700,12 +1741,56 @@ fn the_thumbnail_box(
 ) -> ThumbnailBox {
     let aspect = (road == PictureRoad::Picture).then_some(aspect).flatten();
     let client = (client.0.max(1), client.1.max(1));
-    let (left, top, width, height) = a_picture_fitted_to(aspect, client);
+    let box_ = (box_.0.max(1), box_.1.max(1));
+    let (source, clamped) = match aspect {
+        Some(_) => {
+            let ((left, top, width, height), clamped) =
+                the_crop_filling(a_picture_fitted_to(aspect, client), box_);
+            (Some((left, top, left + width, top + height)), clamped)
+        }
+        None => (None, false),
+    };
     ThumbnailBox {
-        destination: a_picture_fitted_to(aspect, box_),
-        source: aspect.map(|_| (left, top, left + width, top + height)),
+        destination: (0, 0, box_.0, box_.1),
+        source,
         client,
+        clamped,
     }
+}
+
+/// The rectangle of `picture` — `left, top, width, height` inside the source's client — that has the
+/// shape of `box_`: the film cropped to fill the box and centred in it, and whether the crop had to be
+/// clamped inside the picture rather than being the extent the shape asks for.
+///
+/// **A picture wider than the box keeps its height and gives up its sides; one no wider keeps its width
+/// and gives up its top and bottom.** Integer and clamped, so the rectangle is always inside the picture
+/// and never empty, whatever the two shapes are and however the rounding falls.
+fn the_crop_filling(
+    picture: (i32, i32, i32, i32),
+    box_: (i32, i32),
+) -> ((i32, i32, i32, i32), bool) {
+    let (left, top, width, height) = picture;
+    let (width, height) = (width.max(1), height.max(1));
+    let (box_width, box_height) = (box_.0.max(1), box_.1.max(1));
+    let (crop_width, crop_height, clamped) =
+        if width as f64 / height as f64 > box_width as f64 / box_height as f64 {
+            let asked = (height as f64 * box_width as f64 / box_height as f64).round() as i32;
+            let crop = asked.clamp(1, width);
+            (crop, height, crop != asked)
+        } else {
+            let asked = (width as f64 * box_height as f64 / box_width as f64).round() as i32;
+            let crop = asked.clamp(1, height);
+            (width, crop, crop != asked)
+        };
+    (
+        (
+            left + (width - crop_width) / 2,
+            top + (height - crop_height) / 2,
+            crop_width,
+            crop_height,
+        ),
+        clamped,
+    )
 }
 
 /// The client box the source is at, read off the window at the moment the registration is pointed: the
@@ -1725,23 +1810,6 @@ fn the_source_client(source: HWND, host: (i32, i32)) -> (i32, i32) {
     }
 }
 
-/// The strips of a `client` box a `destination` rectangle leaves around it, as top, bottom, left and
-/// right in the client's coordinates: the bars a film's own shape puts beside itself, which the host's
-/// own erase leaves black so they read as letterboxing (see `paint_the_host_behind_the_film`).
-fn the_bars_around(
-    client: (i32, i32),
-    destination: (i32, i32, i32, i32),
-) -> [(i32, i32, i32, i32); 4] {
-    let (box_width, box_height) = (client.0.max(0), client.1.max(0));
-    let (x, y, width, height) = destination;
-    [
-        (0, 0, box_width, y),
-        (0, y + height, box_width, box_height - y - height),
-        (0, y, x, height),
-        (x + width, y, box_width - x - width, height),
-    ]
-}
-
 /// Whether a registration wearing `held.shown` has to be pointed at `wanted`: **nothing else is a
 /// reason not to re-point.** Another host client, another source client or another picture shape all
 /// change what the pair is, and a registration left wearing the old pair is a picture cropped off the
@@ -1756,12 +1824,13 @@ fn the_registration_wants(held: &Thumbnail, wanted: ThumbnailBox) -> bool {
 /// and the film's shape as the last settle read it — all read at this call, none of them a box a step
 /// cached.
 ///
-/// **The invariant is one line long**: the host's own erase paints its whole client (see
-/// `pin_film_host::paint_the_host_behind_the_film`) and the destination rectangle is inside that
-/// client, so every pixel of the host is drawn by one of the two — no seam, no hole. What breaks it is
-/// a pair built against a box the host is no longer in, or a source rectangle reaching past the surface
+/// **The invariant is one line long**: the destination rectangle is the host's whole client, so every
+/// pixel of the host is drawn by the Shell and a bar is a rectangle nothing could have left over, and
+/// the host's own erase paints that client under it — which is what a client the Shell has not yet
+/// composed, or one whose source is not drawing, shows rather than the desktop. What breaks it is a
+/// pair built against a box the host is no longer in, or a source rectangle reaching past the surface
 /// the Shell is sampling, so both are read here and the pair is traced whether it moved or not (see
-/// `note_the_thumbnail_pair`).
+/// `note_the_thumbnail_pair` and `note_the_cover`).
 fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     if held.registration != 0 && held.host != host.0 as isize {
         let _ = unsafe { DwmUnregisterThumbnail(held.registration) };
@@ -1807,8 +1876,8 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     let (x, y, width, height) = shown.destination;
     let mut properties = DWM_THUMBNAIL_PROPERTIES {
         dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_SOURCECLIENTAREAONLY | DWM_TNP_VISIBLE,
-        // The picture's rectangle in the host's client area, which is the box itself unless the film's
-        // own shape leaves bars around it (see `the_thumbnail_box`).
+        // The host's whole client area, unconditionally: the film fills the box it is drawn in (see
+        // `the_thumbnail_box`).
         rcDestination: RECT {
             left: x,
             top: y,
@@ -1865,9 +1934,8 @@ fn note_the_thumbnail_pair(what: &str, host: HWND, client: (i32, i32), shown: Th
         Some((left, top, right, bottom)) => (left, top, right, bottom),
         None => (0, 0, shown.client.0, shown.client.1),
     };
-    let bars = the_bars_around(client, shown.destination);
     note_pin_trace!(
-        "thumbnail {} host {}x{}+{}+{} box {}x{} dest {}x{}+{}+{} src {}x{}+{}+{} bars l{}r{}t{}b{} ({}={})",
+        "thumbnail {} host {}x{}+{}+{} box {}x{} dest {}x{}+{}+{} src {}x{}+{}+{} ({}={})",
         what,
         host_width,
         host_height,
@@ -1883,10 +1951,51 @@ fn note_the_thumbnail_pair(what: &str, host: HWND, client: (i32, i32), shown: Th
         bottom - top,
         left,
         top,
-        bars[2].2,
-        bars[3].2,
-        bars[0].3,
-        bars[1].3,
+        PICTURE_VARIABLE,
+        the_picture_road().named(),
+    );
+}
+
+/// **The one line a flash is read from, and only at the three moments a flash can be in**: the box, the
+/// picture the last settle read, and the rectangle of that picture the box is filled with — the aspect
+/// of each, so a line that does not explain a bar says why it does not.
+///
+/// Written at a drag's beginning, at its release and at every settle, and **never on a step of a drag**:
+/// those three are the moments the pair is re-pointed from a shape that was read again (see
+/// `place_the_source`), and they are the whole of what this road may spend on the question.
+fn note_the_cover(what: &str, host: HWND) {
+    if !super::pin_trace::asked() {
+        return;
+    }
+    let Some(box_) = (unsafe { client_size(host) }) else {
+        return;
+    };
+    let source = HWND(SOURCE.load(Ordering::SeqCst) as *mut _);
+    let client = the_source_client(source, box_);
+    let aspect = THUMBNAIL.lock().ok().and_then(|held| held.picture);
+    let shown = the_thumbnail_box(box_, client, aspect, the_picture_road());
+    let (_, _, width, height) = if shown.source.is_some() {
+        a_picture_fitted_to(aspect, client)
+    } else {
+        (0, 0, client.0, client.1)
+    };
+    let (src_left, src_top, src_right, src_bottom) =
+        shown.source.unwrap_or((0, 0, client.0, client.1));
+    let an_aspect = |extent: (i32, i32)| extent.0 as f64 / extent.1.max(1) as f64;
+    note_pin_trace!(
+        "thumbnail cover {} box {}x{} a{:.4} pic {}x{} a{:.4} src {}x{}+{}+{} clamp {} ({}={})",
+        what,
+        box_.0,
+        box_.1,
+        an_aspect(box_),
+        width,
+        height,
+        an_aspect((width, height)),
+        src_right - src_left,
+        src_bottom - src_top,
+        src_left,
+        src_top,
+        shown.clamped as u8,
         PICTURE_VARIABLE,
         the_picture_road().named(),
     );
@@ -2001,12 +2110,12 @@ mod tests {
         );
     }
 
-    /// **The host's erase and the destination together cover its whole client, for every box and every
-    /// shape**: the erase is the client and the destination is inside it, so the picture plus the bars
-    /// around it tile the box exactly — no hole for the desktop to show through and no seam to leave
-    /// one unpainted (see `paint_the_host_behind_the_film` and `settle_the_registration`).
+    /// **No pair of shapes can leave a bar**: the destination is the host's whole client and the source is
+    /// the part of the picture that has that client's shape, so the Shell fills the box from edge to edge
+    /// whatever the two shapes are — which is what the containing road could not say, and what the flash
+    /// at each end of a drag was (see `the_thumbnail_box`).
     #[test]
-    fn the_hosts_erase_and_the_destination_never_leave_a_hole_or_a_seam() {
+    fn the_box_is_filled_and_no_pair_of_shapes_can_leave_a_bar() {
         let shapes = [
             None,
             Some(16.0 / 9.0),
@@ -2030,34 +2139,28 @@ mod tests {
             (3840, 2160),
         ] {
             for shape in shapes {
-                let (x, y, width, height) = a_picture_fitted_to(shape, (box_width, box_height));
+                let picture = a_picture_fitted_to(shape, (box_width, box_height));
+                let ((x, y, width, height), _) =
+                    the_crop_filling(picture, (box_width, box_height));
                 assert!(
-                    x >= 0
-                        && y >= 0
+                    x >= picture.0
+                        && y >= picture.1
                         && width >= 1
                         && height >= 1
-                        && x + width <= box_width
-                        && y + height <= box_height,
-                    "{width}x{height}+{x}+{y} is inside {box_width}x{box_height} at {shape:?}"
+                        && x + width <= picture.0 + picture.2
+                        && y + height <= picture.1 + picture.3,
+                    "{width}x{height}+{x}+{y} is inside the picture {picture:?} at {shape:?}"
                 );
-                let bars = the_bars_around((box_width, box_height), (x, y, width, height));
-                let mut drawn = (width as i64) * (height as i64);
-                for (bar_x, bar_y, bar_width, bar_height) in bars {
-                    assert!(
-                        bar_x >= 0
-                            && bar_y >= 0
-                            && bar_width >= 0
-                            && bar_height >= 0
-                            && bar_x + bar_width <= box_width
-                            && bar_y + bar_height <= box_height,
-                        "a bar never reaches outside the box at {shape:?}"
-                    );
-                    drawn += (bar_width as i64) * (bar_height as i64);
-                }
+                let shown = the_thumbnail_box(
+                    (box_width, box_height),
+                    (box_width, box_height),
+                    shape,
+                    PictureRoad::Picture,
+                );
                 assert_eq!(
-                    drawn,
-                    (box_width as i64) * (box_height as i64),
-                    "the picture and its bars cover {box_width}x{box_height} exactly once at {shape:?}"
+                    shown.destination,
+                    (0, 0, box_width, box_height),
+                    "the destination is the box and never a picture fitted into one, at {shape:?}"
                 );
             }
         }
@@ -2549,61 +2652,89 @@ mod tests {
         assert_eq!(PictureRoad::Client.named(), "client");
     }
 
-    /// **A picture is fitted into a box of another shape and centred in it, with the strips left over
-    /// as bars on the sides the shapes disagree about**: 16:9 in a 4:3 box is bars above and below,
-    /// 16:9 in a wider box is pillars either side, and a box of the picture's own shape is no bars at
-    /// all (see `a_picture_fitted_to`).
+    /// **A picture is fitted into a client of another shape and centred in it, and the box a pin draws it
+    /// in is filled by cropping that picture instead**: 16:9 in a 4:3 client is 60 px of letterbox above
+    /// and below, 16:9 in a wider one is pillars either side, and a client of the picture's own shape is
+    /// the picture whole (see `a_picture_fitted_to`, which is the picture's rectangle and not the box's).
     #[test]
-    fn a_picture_is_fitted_into_its_box_and_centred_with_the_bars_left_over() {
+    fn a_picture_is_fitted_into_its_client_and_centred() {
         let wide = Some(16.0 / 9.0);
 
         assert_eq!(a_picture_fitted_to(wide, (640, 480)), (0, 60, 640, 360));
-        let bars = the_bars_around((640, 480), a_picture_fitted_to(wide, (640, 480)));
-        assert_eq!((bars[0].3, bars[1].3), (60, 60), "60 px of bar above and below the film");
-        assert_eq!((bars[2].2, bars[3].2), (0, 0), "and none either side of it");
-
         assert_eq!(a_picture_fitted_to(wide, (2100, 900)), (250, 0, 1600, 900));
-        let bars = the_bars_around((2100, 900), a_picture_fitted_to(wide, (2100, 900)));
-        assert_eq!((bars[2].2, bars[3].2), (250, 250), "pillars either side of the film");
-        assert_eq!((bars[0].3, bars[1].3), (0, 0), "and none above or below it");
-
         assert_eq!(
             a_picture_fitted_to(wide, (1920, 1080)),
             (0, 0, 1920, 1080),
-            "a box the film's own shape is the film and no bars at all"
-        );
-        assert_eq!(
-            the_bars_around((1920, 1080), (0, 0, 1920, 1080)),
-            [(0, 0, 1920, 0), (0, 1080, 1920, 0), (0, 0, 0, 1080), (1920, 0, 0, 1080)],
-            "four strips of nothing: a box of the film's own shape is left whole"
+            "a client the film's own shape is the film and nothing beside it"
         );
     }
 
-    /// **A shape that rounds is a picture a pixel out and never a pixel over its box**: the measured
-    /// 2595x1460 picture in a 1000x560 box is 995 px wide in it, the bars take up the rest, and a box of
-    /// one pixel is the box itself (see `a_picture_fitted_to`).
+    /// **A crop fills the box, so the picture gives up the side the box's shape does not want**: a picture
+    /// wider than the box loses its sides, one no wider loses its top and bottom, a box of the picture's
+    /// own shape loses nothing, and the strip the rounding could not split in two is one pixel of crop
+    /// rather than a bar (see `the_crop_filling`).
     #[test]
-    fn a_fitted_picture_rounds_inside_its_box_and_never_out_of_it() {
+    fn a_crop_fills_the_box_whatever_shape_the_box_is() {
+        // Picture wider than the box: 3200x1000 kept whole down, cropped across to 1600x1000 in a
+        // 1600x1000 box, and to 800x1000 in a 800x1000 one.
+        assert_eq!(
+            the_crop_filling((0, 0, 3200, 1000), (1600, 1000)).0,
+            (800, 0, 1600, 1000)
+        );
+        assert_eq!(
+            the_crop_filling((0, 0, 3200, 1000), (800, 1000)).0,
+            (1200, 0, 800, 1000)
+        );
+        // No wider than the box: the width is kept and the top and bottom go.
+        assert_eq!(
+            the_crop_filling((0, 0, 1000, 4000), (1000, 1000)).0,
+            (0, 1500, 1000, 1000)
+        );
+        // A box the picture's own shape is the picture whole, and says so.
+        assert_eq!(
+            the_crop_filling((311, 0, 2595, 1460), (2595, 1460)),
+            ((311, 0, 2595, 1460), false),
+            "nothing is cropped where the two shapes agree"
+        );
+        // A crop is centred in the picture, wherever the picture stands in the client.
+        assert_eq!(
+            the_crop_filling((311, 0, 2595, 1460), (1000, 560)).0,
+            (311, 3, 2595, 1453),
+            "the odd pixel of the rounding is the picture's own and never a bar"
+        );
+        // A box of one pixel is the picture's largest square, and never nothing.
+        assert_eq!(the_crop_filling((0, 0, 1440, 1080), (1, 1)).0, (180, 0, 1080, 1080));
+        assert_eq!(the_crop_filling((0, 0, 1, 4000), (1, 1)).0, (0, 1999, 1, 1));
+        // A crop that would be wider than the picture it is cut from is clamped into it, and a trace
+        // says so.
+        let ((_, _, width, height), clamped) = the_crop_filling((0, 0, 4, 100), (4000, 1));
+        assert_eq!((width, height), (4, 1), "never outside the picture");
+        assert!(clamped, "and the clamp is what the trace reads");
+    }
+
+    /// **A shape that rounds is a picture a pixel out and never a pixel over its client**: the measured
+    /// 2595x1460 picture in a 1000x560 client is 995 px wide in it, and a client of one pixel is the
+    /// client itself (see `a_picture_fitted_to`).
+    #[test]
+    fn a_fitted_picture_rounds_inside_its_client_and_never_out_of_it() {
         let measured = Some(2595.0 / 1460.0);
         let (x, y, width, height) = a_picture_fitted_to(measured, (1000, 560));
         assert_eq!((x, y, width, height), (2, 0, 995, 560));
-        assert!(x + width <= 1000 && y + height <= 560, "never a pixel over the box");
+        assert!(x + width <= 1000 && y + height <= 560, "never a pixel over the client");
         assert!(x >= 0 && y >= 0, "and never one outside it");
-        let bars = the_bars_around((1000, 560), (x, y, width, height));
-        assert_eq!(bars[2].2 + bars[3].2, 5, "the pixel the rounding could not split in two is a bar");
 
         assert_eq!(a_picture_fitted_to(Some(1.7773973), (1, 1)), (0, 0, 1, 1));
         assert_eq!(a_picture_fitted_to(Some(16.0 / 9.0), (1, 1)), (0, 0, 1, 1));
         assert_eq!(
             a_picture_fitted_to(Some(16.0 / 9.0), (0, 0)),
             (0, 0, 1, 1),
-            "a box of nothing is asked for what a window can be"
+            "a client of nothing is asked for what a window can be"
         );
         assert_eq!(a_picture_fitted_to(None, (800, 600)), (0, 0, 800, 600));
         assert_eq!(a_picture_fitted_to(Some(f64::NAN), (800, 600)), (0, 0, 800, 600));
     }
 
-    /// **The picture road crops the source to its picture and fits that into the box; the client road
+    /// **The picture road crops the source to the part of its picture that fills the box; the client road
     /// and a picture nothing has read are the whole client into the whole box** — the two arms of the
     /// A/B, and the fallback that is byte for byte today's road (see `the_thumbnail_box`).
     #[test]
@@ -2619,13 +2750,14 @@ mod tests {
         assert_eq!(shown.client, (3217, 1460));
         assert_eq!(
             shown.source,
-            Some((311, 0, 2906, 1460)),
-            "the picture is taken out of the source's margins, not stretched with them"
+            Some((311, 3, 2906, 1456)),
+            "the picture is taken out of the source's margins and cropped to the box's shape, not \
+             stretched with them"
         );
         assert_eq!(
             shown.destination,
-            (2, 0, 995, 560),
-            "and fitted into the box at its own shape: 2 px and 3 px of pillar, not 311 a side"
+            (0, 0, 1000, 560),
+            "and the box is filled by it: no pillar, and no letterbox above or below"
         );
 
         let whole = the_thumbnail_box((1000, 560), (3217, 1460), aspect, PictureRoad::Client);
@@ -2637,9 +2769,10 @@ mod tests {
         assert_eq!(nothing_read.destination, (0, 0, 1000, 560));
     }
 
-    /// **The picture a settle reads is what a whole drag of steps is drawn with, and a step reads
-    /// nothing of the player's**: one `osd-dimensions` read, and the same source rectangle from it at
-    /// every box the hand pulls the pin through (see `the_thumbnail_box`).
+    /// **The picture a settle reads is what a whole drag of steps is drawn with, and a step reads nothing
+    /// of the player's**: one `osd-dimensions` read, and the same picture at every box the hand pulls the
+    /// pin through — cropped to each box's shape, which is the box filled and never a bar (see
+    /// `the_thumbnail_box`).
     #[test]
     fn a_drag_reuses_the_picture_its_settle_read() {
         let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -2662,22 +2795,33 @@ mod tests {
         // `the_source_client` and `the_band_was_placed`).
         let source = (3217, 1460);
 
-        let mut shown = Vec::new();
-        for box_ in [(680, 383), (1000, 560), (2263, 1274)] {
-            shown.push(the_thumbnail_box(box_, source, picture, PictureRoad::Picture));
-        }
+        let boxes = [(680, 383), (1000, 560), (2263, 1274)];
+        let shown: Vec<_> = boxes
+            .iter()
+            .map(|box_| the_thumbnail_box(*box_, source, picture, PictureRoad::Picture))
+            .collect();
 
         assert_eq!(
             mpv_ipc::noted_reads(),
             vec![format!("{pid}:osd-dimensions")],
             "one read for the settle and nothing asked for by the steps"
         );
-        for step in &shown {
-            assert_eq!(step.source, shown[0].source, "the source's picture is the same every step");
-            assert_eq!(step.client, (3217, 1460), "and so is the client it is fitted into");
+        let painted = a_picture_fitted_to(picture, source);
+        for (step, box_) in shown.iter().zip(boxes) {
+            assert_eq!(
+                step.destination,
+                (0, 0, box_.0, box_.1),
+                "the box follows the hand and is filled at every step of it"
+            );
+            let (left, top, right, bottom) = step.source.expect("the picture is what is cropped by");
+            assert!(
+                left >= painted.0
+                    && top >= painted.1
+                    && right <= painted.0 + painted.2
+                    && bottom <= painted.1 + painted.3,
+                "and what is cropped is always inside the picture the settle read"
+            );
         }
-        assert_ne!(shown[0].destination, shown[1].destination, "while the box follows the hand");
-        assert_ne!(shown[1].destination, shown[2].destination);
 
         mpv_ipc::forget_pipe(pid);
         mpv_ipc::clear_reads();

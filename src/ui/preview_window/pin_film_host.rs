@@ -129,9 +129,10 @@ fn a_resize_drag_is_live() -> bool {
 ///
 /// **A host the Shell is drawing a thumbnail into is erased here exactly the same way**, and that is
 /// the whole of what closes the hole a film of the picture road showed as three bands: the Shell
-/// composes the thumbnail *over* this app's content and only inside the destination rectangle, so a
-/// client painted in the bars alone is a pixel nobody drew — and one of those reads as the desktop seen
-/// through the pin. The picture covers its destination and this erase covers everything else (see
+/// composes the thumbnail *over* this app's content, so a client painted in the bars alone is a pixel
+/// nobody drew — and one of those reads as the desktop seen through the pin. The picture now fills its
+/// destination, which is the whole client, so there is no bar for this erase to show through; what it
+/// covers is the client the Shell has not composed yet, or one whose source is not drawing (see
 /// `pin_film_thumbnail::settle_the_registration`).
 ///
 /// Both hosts a pin can be showing its film through are erased through here — the pin's own class,
@@ -1626,12 +1627,16 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
 ///
 /// Nothing is asked on any other road: there the film is a child of the host, and it is the host's
 /// own `WM_SIZE` that fits it.
-pub(super) fn place_the_film_source_at_the_band() {
+///
+/// `what` is which of the three moments this placement is — a drag's beginning, its release, or a box
+/// that settled without one — and it is the name the trace of a flash is read by (see
+/// `pin_film_thumbnail::note_the_cover`).
+pub(super) fn place_the_film_source_at_the_band(what: &'static str) {
     if !the_pin_shows_its_film_by_thumbnail() {
         return;
     }
     if let Some(host) = film_host() {
-        pin_film_thumbnail::place_the_source(host);
+        pin_film_thumbnail::place_the_source(host, what);
     }
 }
 
@@ -1981,7 +1986,7 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
         // tick cannot be relied on to run inside the wait: the host took its band before the player's
         // window existed, so a source adopted for a box the pin no longer has is a picture the Shell
         // stretches out of its shape (see `pin_film_thumbnail`).
-        place_the_film_source_at_the_band();
+        place_the_film_source_at_the_band("settle");
 
         // **The hover is ended before the pin's player is let go of.** The two are the same sound at
         // the same second, and the unpause is a post to one process while the kill is a termination of

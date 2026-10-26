@@ -783,7 +783,7 @@ pub(super) fn begin_pin_drag(
         // source into whatever destination the pin's host reports, so a resize is followed without
         // asking mpv's process for a geometry on every step — and what the source must not do is keep a
         // box the hand has taken the pin away from, which is what the placement at this end is for.
-        pin_film_host::place_the_film_source_at_the_band();
+        pin_film_host::place_the_film_source_at_the_band("begin");
         // A newer gesture supersedes whatever relaunch is still in flight behind the cover: the
         // bump kills it before it can publish. After the park rather than before it — the fresh
         // park's capture reads the live window, and there is nothing to read once it has gone.
@@ -1243,7 +1243,7 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
     // the film's window takes the box the hand left behind, and the Shell draws it into the host from
     // here on (see `pin_film_thumbnail`). Nothing is asked on the `--wid` road, where the host's own
     // fit has already given mpv's child its size.
-    pin_film_host::place_the_film_source_at_the_band();
+    pin_film_host::place_the_film_source_at_the_band("release");
     true
 }
 
@@ -1350,5 +1350,5 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
     // the thumbnail road's film's window is asked for that box here: the drag's own release is the
     // other road that ends it, and the two are one call because the box is read off the host (see
     // `pin_film_thumbnail`).
-    pin_film_host::place_the_film_source_at_the_band();
+    pin_film_host::place_the_film_source_at_the_band("release");
 }
