@@ -1491,8 +1491,10 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
 
 /// Put mpv's window where the pin's film is drawn from, where the pin's film is drawn through the
 /// Shell's own thumbnail of it: the box the pin is at, at each end of a drag and at every box that
-/// settles without one (see `pin_film_thumbnail`). Between the two ends the source follows the box
-/// coarsely by itself (see `pin_film_thumbnail::follow_the_band_while_dragging`).
+/// settles without one (see `pin_film_thumbnail`). Between the two ends a *visible* source follows the
+/// box coarsely by itself (see `pin_film_thumbnail::follow_the_band_while_dragging`); an invisible one
+/// is asked for a generous box at the drag's beginning and nothing again until its end (see
+/// `pin_film_thumbnail::the_box_a_placement_asks_for`).
 ///
 /// Nothing is asked on any other road: there the film is a child of the host, and it is the host's
 /// own `WM_SIZE` that fits it.

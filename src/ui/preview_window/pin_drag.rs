@@ -31,6 +31,19 @@ pub(super) fn pin_is_dragging() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the drag on a pinned window is one that changes its box rather than only its place.
+///
+/// It is asked by the thumbnail road, which has a reason to treat the two differently: a resize is the
+/// only drag a source's *size* is owed anything at the beginning of (see
+/// `pin_film_thumbnail::the_box_a_placement_asks_for`), and a move is a drag that owes the source
+/// nothing at all once the source is invisible.
+pub(super) fn pin_is_resizing() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.dragging))
+        .flatten()
+        .is_some_and(|drag| matches!(drag.action, PinDragAction::Resize(_)))
+}
+
 /// Whether the player standing behind a pinned window's media band has been put away for the length
 /// of a drag.
 ///
@@ -761,11 +774,13 @@ pub(super) fn begin_pin_drag(
         unsafe {
             pin_film_host::place_the_pin_in_the_band(HWND(hwnd as *mut _), band_place());
         }
-        // **The source takes the box the drag begins at, once.** The Shell stretches the source into
-        // whatever destination the pin's host reports, so a resize can be followed without asking
-        // mpv's process for a geometry on every step — and what the source must not do is keep a box
-        // the hand has taken the pin away from, which is what the placement at this end is for (see
-        // `pin_film_thumbnail`).
+        // **The source takes the box the drag begins at, once** — and, on the invisible road, a
+        // *generous* one instead of the pin's: nothing of it can be seen, so it may be larger than the
+        // band, and the one ask a drag is allowed to make is its last chance to give the player an
+        // output big enough for the whole gesture (see `pin_film_thumbnail`). The Shell stretches the
+        // source into whatever destination the pin's host reports, so a resize is followed without
+        // asking mpv's process for a geometry on every step — and what the source must not do is keep a
+        // box the hand has taken the pin away from, which is what the placement at this end is for.
         pin_film_host::place_the_film_source_at_the_band();
         // A newer gesture supersedes whatever relaunch is still in flight behind the cover: the
         // bump kills it before it can publish. After the park rather than before it — the fresh
