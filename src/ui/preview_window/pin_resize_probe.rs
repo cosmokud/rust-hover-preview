@@ -170,14 +170,14 @@ pub(super) fn note_the_host_placement(started: Option<Instant>) {
 pub(super) fn note_the_child_fit(
     host: HWND,
     child: HWND,
-    size: (i32, i32),
+    rect: (i32, i32, i32, i32),
     flags: SET_WINDOW_POS_FLAGS,
     started: Instant,
 ) {
     note_in_the_step(|step| {
         step.fit = Some(started.elapsed());
         step.fit_is_async = flags.contains(SWP_ASYNCWINDOWPOS);
-        step.asked_for = Some((child, the_screen_box(host, size), started));
+        step.asked_for = Some((child, the_screen_box(host, rect), started));
     });
 }
 
@@ -233,13 +233,19 @@ fn write_a_cost(line: &mut String, took: Option<Duration>) {
     }
 }
 
-/// The box a child window of `host` is asked for when it is given `size` in the host's own client
-/// coordinates: what a later tick compares `GetWindowRect` against, which answers in screen
+/// The box a child window of `host` is asked for when it is given `rect` in the host's own client
+/// coordinates — the origin as well as the size, because a child held over its band is asked for a
+/// negative one: what a later tick compares `GetWindowRect` against, which answers in screen
 /// coordinates for a child as well as for a window of the desktop's.
-fn the_screen_box(host: HWND, size: (i32, i32)) -> ScreenBox {
+fn the_screen_box(host: HWND, rect: (i32, i32, i32, i32)) -> ScreenBox {
     let mut origin = POINT::default();
     let _ = unsafe { ClientToScreen(host, &mut origin) };
-    (origin.x, origin.y, size.0, size.1)
+    (
+        origin.x + rect.0,
+        origin.y + rect.1,
+        rect.2,
+        rect.3,
+    )
 }
 
 /// What a step asked the film's window for, and what a later tick has to say about it.
