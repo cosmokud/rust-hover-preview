@@ -64,12 +64,14 @@ const REAL_PIN_TITLE: PCWSTR = w!("Rust Preview");
 /// `WS_EX_APPWINDOW`: a taskbar button asked for by the window itself rather than inferred from what
 /// owns it, which is the button this window owes and the one the stand-in used to fake.
 ///
-/// `WS_CLIPCHILDREN`: the band's film is a **child** window standing in this one (see
-/// `pin_film_host`), and a pin that holds an FFmpeg film paints its own surface with `GDI` rather than
-/// by `UpdateLayeredWindow` (see `paint::paints_through_the_window_dc`). Without this bit that paint
-/// covers the client area whole, child included, so the film would be wiped over at the pin's own
-/// repaint cadence — measured: the band showed the pin's flat colour with nothing of the film in it.
-/// With it, the pin's own DC stops at the film's box and the film is left standing.
+/// `WS_CLIPCHILDREN`: on the child road the band's film is a **child** window standing in this one,
+/// and the chrome's strips are this one's children on every road (see `pin_film_host` and
+/// `pin_chrome_strips`), and a pin that holds an FFmpeg film paints its own surface with `GDI`
+/// rather than by `UpdateLayeredWindow` (see `paint::paints_through_the_window_dc`). Without this
+/// bit that paint covers the client area whole, child included, so the film would be wiped over at
+/// the pin's own repaint cadence — measured: the band showed the pin's flat colour with nothing of
+/// the film in it. With it, the pin's own DC stops at the film's box and the film is left
+/// standing.
 ///
 /// **What is missing is the answer.** `WS_EX_TOOLWINDOW` is what keeps a window out of Alt+Tab and
 /// out of the taskbar; `WS_EX_NOACTIVATE` is what refuses it the focus; `WS_EX_TOPMOST` is a band,
