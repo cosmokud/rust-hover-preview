@@ -92,6 +92,87 @@ unsafe extern "system" fn the_default_answer(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
+/// **`RHP_FILM_UNCOVERED`: what is painted in the strip of a film host its child does not cover.**
+/// Unset or `stretch` is the frame a resize drag took at its beginning, stretched over the box,
+/// which is what the host has always painted; `black` is the class's own brush, so a picture taken
+/// before the drag began is never seen stretched over a box the film has left.
+const FILM_UNCOVERED_VARIABLE: &str = "RHP_FILM_UNCOVERED";
+
+/// What is painted in the strip a film host's child does not cover, while a resize drag is live.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Uncovered {
+    /// The frame the drag's beginning took, stretched over the box: today's road.
+    Stretch,
+    /// The brush and nothing else.
+    Black,
+}
+
+/// The knobs as this run was started with: read once, because they are facts about the run and not
+/// about a pin — a variable set after the app has started changes nothing, which is what makes two
+/// runs comparable and not two halves of one. Every road asks them through `the_film_knobs`, so what
+/// an erase or a step pays for them is a copy of three small fields.
+///
+/// **Read by the shipped binary and not by a test run**, the way the thumbnail road's own knob is
+/// (see `the_pin_shows_its_film_by_thumbnail`): a suite that read the machine's variables would move
+/// the geometry these knobs move under a knob and not without one, and both of those runs are what
+/// is measured. What a test asks instead is the function, with the variable's own text as a
+/// parameter (see `the_uncovered_fill`).
+static THE_FILM_KNOBS: Lazy<FilmKnobs> = Lazy::new(read_the_film_knobs);
+
+/// What the `RHP_FILM_*` knobs came to.
+#[derive(Clone, Copy)]
+struct FilmKnobs {
+    uncovered: Uncovered,
+}
+
+fn the_film_knobs() -> FilmKnobs {
+    *THE_FILM_KNOBS
+}
+
+#[cfg(not(test))]
+fn read_the_film_knobs() -> FilmKnobs {
+    FilmKnobs {
+        uncovered: the_uncovered_fill(std::env::var(FILM_UNCOVERED_VARIABLE).ok().as_deref()),
+    }
+}
+
+#[cfg(test)]
+fn read_the_film_knobs() -> FilmKnobs {
+    // A suite reads the default road whatever the machine was started with (see `THE_FILM_KNOBS`).
+    FilmKnobs {
+        uncovered: Uncovered::Stretch,
+    }
+}
+
+/// What `RHP_FILM_UNCOVERED` asked for: `black` is the brush, and today's stretched frame is every
+/// other answer — nothing set, `stretch`, and a word this app does not know.
+fn the_uncovered_fill(asked: Option<&str>) -> Uncovered {
+    match asked.map(str::trim) {
+        Some(value) if value.eq_ignore_ascii_case("black") => Uncovered::Black,
+        _ => Uncovered::Stretch,
+    }
+}
+
+/// Whether a resize drag is in flight: the one gesture the `RHP_FILM_*` knobs may change, so that a
+/// pin standing still is the pin it was before any of them was named.
+///
+/// **Asked without waiting for the pin's own lock**, because both askers run inside calls that may
+/// hold it — the host's erase, and the fit its `WM_SIZE` runs — and a lock that cannot be taken here
+/// is answered with the road as it was rather than waited on (see `pin_state_try`).
+fn a_resize_drag_is_live() -> bool {
+    pin_window::pin_state_try()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.dragging))
+        .flatten()
+        .is_some_and(|drag| matches!(drag.action, PinDragAction::Resize(_)))
+}
+
+/// Whether the strip the film's child does not cover is to be left to the brush rather than filled
+/// with the frame the drag is holding: `RHP_FILM_UNCOVERED=black`, and only while a resize drag is
+/// live — a pin at rest is erased exactly as it was before this knob existed.
+fn the_strip_is_left_to_the_brush() -> bool {
+    the_film_knobs().uncovered == Uncovered::Black && a_resize_drag_is_live()
+}
+
 /// Paint the part of the host the film's child does not cover: the frame a drag is holding,
 /// stretched into the box, or black where there is none in hand.
 ///
@@ -120,8 +201,12 @@ pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
         return;
     }
 
+    // **A live drag may be told to leave this strip black**, so that the pre-drag picture the frame
+    // holds is never seen stretched over a box the film has since left (see `the_uncovered_fill` and
+    // `the_strip_is_left_to_the_brush`).
     if film_host() == Some(host)
         && !the_pins_film_is_ffplay()
+        && !the_strip_is_left_to_the_brush()
         && unsafe { stretch_the_held_frame(dc, client.right, client.bottom) }
     {
         return;
@@ -1902,6 +1987,30 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The strip knob names the brush and defaults to the road the host was already on**, which is
+    /// what makes `cargo test` and a run with no variable the same run: only `black` moves anything,
+    /// and a word this app does not know is not a second way to ask for it.
+    #[test]
+    fn the_uncovered_strip_is_black_only_where_the_knob_says_so() {
+        assert_eq!(
+            FILM_UNCOVERED_VARIABLE, "RHP_FILM_UNCOVERED",
+            "the knob is the name the report and the run's own trace give it"
+        );
+        assert_eq!(the_uncovered_fill(None), Uncovered::Stretch);
+        assert_eq!(the_uncovered_fill(Some("stretch")), Uncovered::Stretch);
+        assert_eq!(the_uncovered_fill(Some("black")), Uncovered::Black);
+        assert_eq!(
+            the_uncovered_fill(Some(" Black ")),
+            Uncovered::Black,
+            "a value pasted with its whitespace is still the word"
+        );
+        assert_eq!(
+            the_uncovered_fill(Some("purple")),
+            Uncovered::Stretch,
+            "and a word this app does not know is the road it always had"
+        );
+    }
 
     /// The thumbnail road is mpv's alone: a film FFmpeg's player draws has no switch that tells it not
     /// to take a window of this app's, so a thumbnail of one is a picture this app could never launch.
