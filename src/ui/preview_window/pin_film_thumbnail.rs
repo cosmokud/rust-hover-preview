@@ -1482,9 +1482,19 @@ fn note_the_source_not_ready(pending: PendingSource, live: Option<(i32, i32)>) {
 ///
 /// **The three numbers are the whole of the smaller-than-the-box frame.** A `cli` that is not `asked`
 /// is a surface the crop was not built for: the Shell scales the film out of a window of another size,
-/// which is a next frame drawn smaller than the pin's film box. A `pic` that is not `asked` is a film
-/// the player is fitting inside its own window. Either is a difference the line names, so a seek that
-/// flashed and a seek that did not are told apart by what they wrote and not by what was remembered.
+/// which is a next frame drawn smaller than the pin's film box. A `pic` that *was read* and is not
+/// `asked` is a film the player is fitting inside its own window. Either is a difference the line
+/// names, so a seek that flashed and a seek that did not are told apart by what they wrote and not by
+/// what was remembered.
+///
+/// **`pic none` is nothing read, and never a mismatch.** FFmpeg's player answers no property at all,
+/// so the picture of the frame it has drawn cannot be read from it; a seek onto one was written as a
+/// `pic!=asked` failure on every run until this asked whether anything had been read. What can be read
+/// is read from **the source whose registration stands** — the frame on screen, which for the whole of a
+/// relaunch's wait is the player before the replacement, and after the swap is the one that just drew
+/// (see `the_standing_source_process`) — so a line written during a wait cannot describe a window that
+/// has drawn nothing.
+///
 /// The line is written once per seek — in place for mpv, and at the swap for FFmpeg's player, whose
 /// seek is a new window — and never per frame.
 pub(super) fn note_the_seek_picture(pid: u32, seconds: f64) {
@@ -1493,12 +1503,16 @@ pub(super) fn note_the_seek_picture(pid: u32, seconds: f64) {
         .ok()
         .and_then(|held| held.source)
         .map(|shape| shape.client);
-    let source = the_source_window();
+    let standing = the_standing_source();
+    let source = standing.map(|(window, _)| window).or_else(the_source_window);
     let cli = source.and_then(|source| unsafe { client_size(source) });
+    // The picture belongs to the player whose window is on screen; the caller's pid is the answer only
+    // where nothing is registered yet.
+    let pid = standing.map(|(_, process)| process).unwrap_or(pid);
     let pic = the_players_picture_size(pid);
     let differs = match asked {
         Some(asked) if cli != Some(asked) => " cli!=asked",
-        Some(asked) if pic != Some(asked) => " pic!=asked",
+        Some(asked) if pic.is_some_and(|pic| pic != asked) => " pic!=asked",
         _ => "",
     };
     note_pin_trace!(
@@ -1508,6 +1522,22 @@ pub(super) fn note_the_seek_picture(pid: u32, seconds: f64) {
         a_box_as_text(asked),
         source,
     );
+}
+
+/// The window the registration standing draws, and the player it belongs to: **the picture on screen**,
+/// where one stands (see `the_standing_source_process`).
+///
+/// It takes no host, because the line that reads it is about the film rather than about a box: a seek is
+/// the same seek in a hover's host and in a pin's.
+fn the_standing_source() -> Option<(HWND, u32)> {
+    let held = THUMBNAIL.lock().ok()?;
+    if held.registration == 0 || held.registered == 0 || held.registered_process == 0 {
+        return None;
+    }
+    Some((
+        HWND(held.registered as *mut _),
+        held.registered_process,
+    ))
 }
 
 /// A box as a trace line spells it, and `none` where there is no answer at all.
