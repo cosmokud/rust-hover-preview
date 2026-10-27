@@ -167,7 +167,7 @@ fn holds_a_reveal_to_the_item_the_hover_was_resolved_from() {
 
 /// One hover of one file, asked exactly the six questions the `Show` arm asks and in the
 /// order it asks them — which is the shape whose entry reads the test below is about.
-fn ask_as_the_show_arm_does(path: &PathBuf, bounds: ScreenBounds, dpi: u32) {
+fn ask_as_the_show_arm_does(path: &Path, bounds: ScreenBounds, dpi: u32) {
     let hover = HoverFacts::read(path);
 
     let _ = effective_preview_scale_of(&hover, hover.scales);
