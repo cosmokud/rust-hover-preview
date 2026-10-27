@@ -130,12 +130,6 @@ pub(super) fn work_area_at(x: i32, y: i32) -> ScreenBounds {
     display_at(&DESKTOPS, x, y).work_area
 }
 
-/// Every display in one rectangle, for the one placement that has to put a window *outside* all of
-/// them rather than somewhere on one (see `pin_film_thumbnail`).
-pub(super) fn the_virtual_screen() -> ScreenBounds {
-    DESKTOPS.virtual_screen()
-}
-
 /// The primary display's work area, which is the corner a player's `--geometry` is measured from
 /// rather than the monitor's own (see `pin_film_thumbnail::the_source_launch_origin`).
 pub(super) fn the_primary_work_area() -> ScreenBounds {

@@ -867,12 +867,6 @@ pub fn run_preview_window() {
                 // until a frame has been drawn into the moved window, then gives the band back to
                 // the film's alpha-1 claim before any later park can see a stale frame.
                 pin_film_host::settle_the_move_cover();
-                // And whether the box a thumbnail's source was asked for is the box it is in: a
-                // placement can be dropped while a player's output is still configuring, and a
-                // source left at another box is one the Shell stretches out of its shape — the
-                // pin that is zoomed in, or small in a field of black, until the next box settles
-                // (see `pin_film_host::keep_the_film_source_in_the_band`).
-                pin_film_host::keep_the_film_source_in_the_band();
                 settle_pending_hold();
 
                 // And what the taskbar button's own hover is offering, which is settled by the same

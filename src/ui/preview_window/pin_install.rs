@@ -1363,11 +1363,9 @@ pub(super) fn relayout_pinned_media(
                     // is begun again and the film plays on through the settle. mpv and FFmpeg's
                     // player are both hosted here (see `pin_film_host`).
                     //
-                    // **And a box that settled is where a film drawn through a thumbnail is asked
-                    // for its box**, which is the one cross-process geometry on that road: a maximize,
-                    // a restore, a zoom and the end of a drag all arrive here, and none of them is a
-                    // hand still on an edge (see `pin_film_thumbnail`).
-                    pin_film_host::place_the_film_source_at_the_band("settle");
+                    // **And the film's window is not asked for the new box**: a source drawn through
+                    // the Shell's thumbnail was placed once, at the film's own size, and a box that
+                    // settled is a destination rectangle (see `pin_film_thumbnail`).
                 }
                 Some((path, _)) => {
                     // And with no press behind it the hold is the pin's own: what the transport says

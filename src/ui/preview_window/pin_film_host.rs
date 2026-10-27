@@ -1329,6 +1329,8 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
     );
     // A picture the Shell is already drawing into this host goes with the box it was placed at, even
     // where the host was made and the film's window found in the same pass (see `pin_film_thumbnail`).
+    // **The source itself is never asked for a box again**, so this is a destination rectangle and
+    // nothing else (see `pin_film_thumbnail::the_band_was_placed`).
     pin_film_thumbnail::the_band_was_placed(host);
     unsafe { fit_the_hosted_ffplay_to_the_host(host) };
     pin_chrome_strips::place_the_chrome_strips();
@@ -1541,8 +1543,7 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
         },
     );
     // **What a resize step costs on the thumbnail road is this one call**: the destination is the
-    // host's new client area, and the film's window is moved with the host's corner and not resized
-    // (see `pin_film_thumbnail`).
+    // host's new client area, and the film's window is not touched at all (see `pin_film_thumbnail`).
     pin_film_thumbnail::the_band_was_placed(host);
     pin_resize_probe::note_the_host_placement(started);
     unsafe { fit_the_hosted_ffplay_to_the_host(host) };
@@ -1615,43 +1616,6 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     // park's own frame is its to give up, so it is left standing for the park.
     if !pin_player_is_parked() {
         forget_video_frame();
-    }
-}
-
-/// Put mpv's window where the pin's film is drawn from, where the pin's film is drawn through the
-/// Shell's own thumbnail of it: the box the pin is at, at each end of a drag and at every box that
-/// settles without one (see `pin_film_thumbnail`). Between the two ends a *visible* source follows the
-/// box coarsely by itself (see `pin_film_thumbnail::follow_the_band_while_dragging`); an invisible one
-/// is asked for a generous box at the drag's beginning and nothing again until its end (see
-/// `pin_film_thumbnail::the_box_a_placement_asks_for`).
-///
-/// Nothing is asked on any other road: there the film is a child of the host, and it is the host's
-/// own `WM_SIZE` that fits it.
-///
-/// `what` is which of the three moments this placement is — a drag's beginning, its release, or a box
-/// that settled without one — and it is the name the trace of a flash is read by (see
-/// `pin_film_thumbnail::note_the_cover`).
-pub(super) fn place_the_film_source_at_the_band(what: &'static str) {
-    if !the_pin_shows_its_film_by_thumbnail() {
-        return;
-    }
-    if let Some(host) = film_host() {
-        pin_film_thumbnail::place_the_source(host, what);
-    }
-}
-
-/// Ask the film's window again for the box it did not take, on a box that has settled.
-///
-/// The settled boxes a drag cannot reach already ask (see `place_the_film_source_at_the_band`); this is
-/// the tick's proof that the ask landed, and the only road that catches a placement the player dropped
-/// or overwrote while its output was configuring (see `pin_film_thumbnail`). It asks nothing while a
-/// hand is on an edge, nothing on any other road, and nothing of the player's own pipe.
-pub(super) fn keep_the_film_source_in_the_band() {
-    if !the_pin_shows_its_film_by_thumbnail() {
-        return;
-    }
-    if let Some(host) = film_host() {
-        pin_film_thumbnail::keep_the_source_at_the_band(host);
     }
 }
 
@@ -1982,11 +1946,9 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
         with_pin(|pin| pin.chrome = PinChrome::hidden());
         unsafe { show_pinned_window(pinned_window()) };
 
-        // **And the film's own window is asked for the box the pin has now**, which is the one settle a
-        // tick cannot be relied on to run inside the wait: the host took its band before the player's
-        // window existed, so a source adopted for a box the pin no longer has is a picture the Shell
-        // stretches out of its shape (see `pin_film_thumbnail`).
-        place_the_film_source_at_the_band("settle");
+        // **And the film's own window is not asked for anything here**: it was placed once, at the
+        // film's own size, when it was adopted, and a box the pin has now is a destination rectangle
+        // (see `pin_film_thumbnail`).
 
         // **The hover is ended before the pin's player is let go of.** The two are the same sound at
         // the same second, and the unpause is a post to one process while the kill is a termination of

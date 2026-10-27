@@ -423,9 +423,9 @@ fn read_reply(name: &str, request: String) -> Option<String> {
 /// `None` a caller reads as "not known yet" (see `get_property`).
 ///
 /// **A `data` that opens an object is handed back whole**, up to the brace that closes it: a node
-/// property (`osd-dimensions`, see `pin_film_thumbnail::the_drawn_picture`) is the one answer on this
-/// pipe with more than one field in it, and cutting it at its first `,` would be handing the caller the
-/// first field of a film's geometry and calling it the geometry.
+/// property (`video-params`, see `pin_film_thumbnail::the_players_picture_size`) is the one answer on
+/// this pipe with more than one field in it, and cutting it at its first `,` would be handing the
+/// caller the first field of a film's geometry and calling it the geometry.
 ///
 /// shortcut: a string value with a `,` in it would be cut at it, and a brace inside a string would
 /// close an object early, which no property read here is; upgrade to a parser when one that is is.
