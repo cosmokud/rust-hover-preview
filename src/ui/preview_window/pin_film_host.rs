@@ -931,11 +931,11 @@ pub(super) fn the_hosted_frame_is_up(pid: u32) -> bool {
 
 /// Whether the hosted player has the frame the hover froze on screen, rather than only a window.
 ///
-/// **A window is not a picture.** mpv makes its child under the host before it has decoded anything,
-/// and a shown child with a box is the most `the_hosted_player_is_drawing` can see — which leaves the
-/// band black until the first frame is drawn into it, and is the empty stage the whole wait exists to
-/// keep behind the hover. The two facts that separate a window from a picture are the player's own,
-/// read over its pipe: `time-pos` has no value until a file is loaded and positioned, and
+/// **A window is not a picture.** A player makes its window before it has decoded anything, and a
+/// source adopted for it is the most `the_hosted_player_is_drawing` can see — which leaves the band
+/// black until the first frame is drawn into it, and is the empty stage the whole wait exists to keep
+/// behind the hover. The two facts that separate a window from a picture are the player's own, read
+/// over its pipe: `time-pos` has no value until a file is loaded and positioned, and
 /// `vo-configured` is true once the video output is configured for a frame. **Both**, because either
 /// alone is a weaker question — a position is where the file is and not what has been drawn, and a
 /// configured video output is a size and a format and not a frame.

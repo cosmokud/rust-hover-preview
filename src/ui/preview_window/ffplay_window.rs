@@ -149,9 +149,10 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
 /// swaps its own surface. A video that stopped rendering would be a far worse
 /// answer than a click that falls through to the desktop.
 pub(super) fn player_ex_style_for(current: isize) -> isize {
-    // **A film in the pin's own host wears none of this.** The list is a window of the desktop's own
-    // wearing bits this app puts on another program's window: a hosted player is mpv's child under a
-    // host the pin owns and disables, so it neither takes a press nor holds a band of its own (see
+    // **A film drawn through the pin's own host wears none of this.** The list is a window of the
+    // desktop's own wearing bits this app puts on another program's window: a source is adopted by
+    // `pin_film_thumbnail::adopt_the_source`, which gives it the invisibility and the press-through
+    // both engines' windows need, so nothing of it is styled as a player's own window here (see
     // `pin_film_host`).
     if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         return current;
@@ -190,9 +191,9 @@ pub(super) fn host_for_a_hosted_player(pid: u32) -> Option<HWND> {
 
 /// Style and raise a player's known window.
 pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
-    // **A hosted player's window is not this app's to style or to publish.** It is mpv's child under
-    // a host the pin owns, and every road that would place, style or raise it is answered by the
-    // host instead (see `player_ex_style_for`, `place_player_window`).
+    // **A hosted player's window is not this app's to style or to publish.** It is the source the
+    // host draws through the Shell's thumbnail, and every road that would place, style or raise it is
+    // answered by the host instead (see `player_ex_style_for`, `place_player_window`).
     if pin_film_host::the_pinned_player_was_begun_in_the_host()
         || hover_film_host::the_hover_player_was_begun_in_the_host(VIDEO_PID.load(Ordering::SeqCst))
     {

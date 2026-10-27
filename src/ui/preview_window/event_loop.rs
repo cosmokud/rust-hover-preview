@@ -1000,9 +1000,9 @@ pub fn run_preview_window() {
             // never came up — one that died, one that took longer than a start ever does
             // — is ended here rather than left playing behind nothing (see `player_wait`).
             if let Some(start) = video_start.take() {
-                // **A hosted hover's player has no window of the desktop's**: mpv's child under
-                // the hover's own host is the window the wait is for, and the same question
-                // answers a top-level player's window (see `the_players_window_is_up`).
+                // **A hosted hover's player is drawn through the hover's own host**, and the
+                // source adopted there is the window the wait is for — the same question a
+                // top-level player's window answers (see `the_players_window_is_up`).
                 let window_up = pin_film_host::the_players_window_is_up(start.pid);
                 let alive = is_player_pid_alive(start.pid);
 
@@ -1050,11 +1050,11 @@ pub fn run_preview_window() {
                         // gone: ending it here is what keeps a process this app started
                         // from playing behind a preview that has gone.
                         //
-                        // **A hosted hover that never drew is given one ordinary launch.** mpv's
-                        // child under the host is the only sign a hosted player gives, and a
+                        // **A hosted hover that never drew is given one ordinary launch.** The
+                        // source adopted into the host is the only sign a hosted player gives, and a
                         // player that is alive but has put nothing there inside the start bound is
                         // a host this app cannot show a picture through; the hover is begun again
-                        // once without `wid`, and a second failure is abandoned below (see
+                        // once without a host, and a second failure is abandoned below (see
                         // `restart_hover_video_without_a_host`).
                         let mut media = Some(start.media);
                         let mut relaunched = false;

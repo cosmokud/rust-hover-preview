@@ -1799,17 +1799,17 @@ fn a_hosted_replacement_ends_the_retirement_it_took_over_from() {
     note_player_process(previous_pid, previous_image);
 }
 
-/// A swap onto a hosted film is answered by the child its player has put under the host, not by a
-/// top-level handle a hosted player never publishes: the file is installed on the child's arrival
-/// rather than let go of at the cover's bound (see `PinSwapHold::settle`).
+/// A swap onto a hosted film is answered by the source adopted into the host, not by a top-level
+/// handle a hosted player never publishes: the file is installed on the source's arrival rather than
+/// let go of at the cover's bound (see `PinSwapHold::settle`).
 #[test]
-fn a_hosted_swaps_wait_is_answered_by_the_hosts_child() {
+fn a_hosted_swaps_wait_is_answered_by_the_sources_arrival() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     let film = StandingFilm::new();
-    // The child this test makes is the test's own process's, so the player the host holds has to be
-    // this process as well (see `the_hosted_player_is_drawing`).
+    // The source this test stands is the test's own process's, so the player the host holds has to
+    // be this process as well (see `the_hosted_player_is_drawing`).
     let drawn = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(drawn);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -2805,12 +2805,12 @@ fn a_pin_taken_up_on_a_hover_waits_for_the_first_frame() {
     drop(film);
 }
 
-/// A hidden child is not a film drawing: the host carries the last player's child for as long
-/// as that process lives, and a player that has not put a visible child of its own under the
-/// host has nothing on screen yet — so the host stays off the screen even though a process of
-/// its own exists (see `the_hosted_player_is_drawing`).
+/// A window that is not the source is not a film drawing: the record is the player's own window
+/// adopted for the host, and a window of the same process that nothing adopted is nothing the host
+/// has to show — so the host stays off the screen even though a process of its own exists (see
+/// `the_hosted_player_is_drawing`).
 #[test]
-fn a_hidden_child_is_not_a_film_drawing() {
+fn a_window_that_is_not_the_source_is_not_a_film_drawing() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -2820,30 +2820,30 @@ fn a_hidden_child_is_not_a_film_drawing() {
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
 
-    // A child mpv made but has not shown yet: created hidden, the way a player whose first
-    // frame has not arrived leaves it (see `host_has_a_child_of`).
-    let hidden = unsafe {
+    // A window the player has made and nothing has adopted: the pass that watches a player has not
+    // run over it yet, which is a film whose source is not the host's picture (see
+    // `pin_film_thumbnail::adopt_the_source`).
+    let unmade = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!(""),
-            WS_CHILD,
-            0,
-            0,
-            16,
-            16,
-            host,
+            WS_POPUP | WS_VISIBLE,
+            NOWHERE,
+            NOWHERE,
+            320,
+            180,
+            None,
             None,
             None,
             None,
         )
     }
-    .expect("a hidden child of the host's, in this process");
+    .expect("a window of the player's own, in this process");
 
     assert!(
         !pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
-        "a hidden child is not a first frame: the engine's own report is a window it shows, \
-         not one it made"
+        "a window nothing adopted is not a source: the film is the one the record names"
     );
 
     let _ = ensure_video_window_topmost(
@@ -2854,11 +2854,11 @@ fn a_hidden_child_is_not_a_film_drawing() {
     );
     assert!(
         !unsafe { IsWindowVisible(host) }.as_bool(),
-        "and the tick's road leaves the host off the screen until that frame arrives"
+        "and the tick's road leaves the host off the screen until a source is adopted"
     );
 
     unsafe {
-        let _ = DestroyWindow(hidden);
+        let _ = DestroyWindow(unmade);
     };
 }
 
@@ -3802,12 +3802,12 @@ fn the_top_level_roads_leave_a_hosted_ffplay_player_alone() {
     unsafe { DestroyWindow(source) }.expect("the source's window goes");
 }
 
-/// FFmpeg's player has no pipe to say its video output is configured, so its adopted child is the
-/// frame's proof: that window is the player's whole picture and only arrives after the player made
-/// and showed it (see `the_hosted_frame_is_up`). This is the fresh-pin, step and seek relaunch
+/// FFmpeg's player has no pipe to say its video output is configured, so its adopted source is the
+/// frame's proof: that window is the player's whole picture and is adopted only after the player
+/// made and showed it (see `the_hosted_frame_is_up`). This is the fresh-pin, step and seek relaunch
 /// road — without it the chrome would stay hidden for the life of the pin.
 #[test]
-fn a_hosted_ffplay_films_frame_is_its_child_and_the_chrome_comes_back() {
+fn a_hosted_ffplay_films_frame_is_its_source_and_the_chrome_comes_back() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -3826,7 +3826,7 @@ fn a_hosted_ffplay_films_frame_is_its_child_and_the_chrome_comes_back() {
 
     assert!(
         pin_film_host::the_hosted_player_is_drawing(pid),
-        "the FFmpeg player's own window is under the host"
+        "the FFmpeg player's own window is the source the host draws"
     );
     assert!(
         pin_film_host::the_hosted_frame_is_up(pid),

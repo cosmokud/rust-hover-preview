@@ -179,7 +179,7 @@ fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() 
         );
         assert!(
             !hover_film_host::the_hover_player_is_drawing(pid),
-            "a player just begun has no child under the host yet"
+            "a player just begun has no source adopted for the host yet"
         );
         assert_eq!(
             video_window_for(pid),
