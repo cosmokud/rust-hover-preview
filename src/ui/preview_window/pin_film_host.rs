@@ -7,7 +7,8 @@
 //! the desktop's that owns the pin's chrome**: Windows keeps the chrome above the film, hides it with
 //! the host, keeps it out of Alt+Tab, and moves neither for this app (see
 //! `the_pin_film_host_is_a_window_of_the_desktop` and `own_the_pin_window`). A resize step moves this
-//! app's own window and re-points one rectangle; nothing of mpv's is asked for a box.
+//! app's own window and re-points one rectangle; nothing of mpv's is asked for a box. **Why that is
+//! the only road, and what a resize may move, is `Pin mode → The film road` in `ARCHITECTURE.md`.**
 //!
 //! **FFmpeg's player is drawn into this host as a child**, because SDL has no `--wid` and its
 //! renderer needs a window of this app's to present into: the hover's host is re-parented into the

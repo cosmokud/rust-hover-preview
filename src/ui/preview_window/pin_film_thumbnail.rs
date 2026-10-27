@@ -3,7 +3,8 @@
 //! **This is the road a pin's mpv film is drawn on, and the only one.** mpv is launched with no
 //! `--wid` and makes a window of the desktop's of its own; the pin's film host asks the Shell to draw
 //! that window into itself (`DwmRegisterThumbnail`), and what follows a resize is one rectangle
-//! rather than two windows agreeing about a box.
+//! rather than two windows agreeing about a box. **The rules this file implements, the roads that
+//! lost and the measured evidence are `Pin mode → The film road` in `ARCHITECTURE.md`.**
 //!
 //! **Why the film has to be a window of the desktop's.** A thumbnail is taken of a window's
 //! composition surface, and a `WS_CHILD` has none of its own — it is drawn into its parent's — so a
