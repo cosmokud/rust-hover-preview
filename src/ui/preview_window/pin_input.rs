@@ -326,11 +326,6 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             // stopped for the whole of the drag, which is a pause rather than a seek. So the cover,
             // the end and the relaunch are the release's own (see `pinned_transport_release`), and a
             // film mpv draws is ended at neither end of the gesture (see `mpv_ipc`).
-            if current_media_type() == Some(MediaType::Video) {
-                // A newer gesture supersedes whatever relaunch is still in flight: the bump kills
-                // it before it can publish a player this gesture is not waiting for.
-                bump_pinned_generation();
-            }
         }
         // The volume button is held rather than acted on where it is pressed, like every button a
         // window has: what a click does is open the popup or put it away, and that is a release
