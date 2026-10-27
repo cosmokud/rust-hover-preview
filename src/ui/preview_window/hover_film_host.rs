@@ -90,6 +90,18 @@ pub(super) fn hover_film_host_player() -> Option<u32> {
     (player != 0).then_some(player)
 }
 
+/// The file the player this host holds was begun for: the path beside the hover's player, or nothing
+/// where the host holds another player (see `the_film_the_player_plays`).
+pub(super) fn the_hover_players_file(pid: u32) -> Option<PathBuf> {
+    if hover_film_host_player() != Some(pid) {
+        return None;
+    }
+    HOVER_FILM_HOST_PATH
+        .lock()
+        .ok()
+        .and_then(|held| held.clone())
+}
+
 /// Record the player begun into the hover's host, before it has a window of its own in there.
 pub(super) fn note_hover_film_host_player(pid: u32, path: &Path) {
     HOVER_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);

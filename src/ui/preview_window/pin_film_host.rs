@@ -107,8 +107,11 @@ unsafe extern "system" fn the_default_answer(
 ///
 /// **Asked without waiting for the pin's own lock**, because both askers run inside calls that may
 /// hold it — the host's erase, and the fit its `WM_SIZE` runs — and a lock that cannot be taken here
-/// is answered with the road as it was rather than waited on (see `pin_state_try`).
-fn a_resize_drag_is_live() -> bool {
+/// is answered with the road as it was rather than waited on (see `pin_state_try`). It is also the
+/// one question the thumbnail road asks before it places a source it did not have a size for at
+/// adoption: **nothing may size the source while a resize gesture is live** (see
+/// `pin_film_thumbnail::place_the_source_when_the_player_answers`).
+pub(super) fn a_resize_drag_is_live() -> bool {
     pin_window::pin_state_try()
         .and_then(|pinned| pinned.pin().map(|pin| pin.dragging))
         .flatten()
