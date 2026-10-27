@@ -2504,11 +2504,11 @@ pub fn run_preview_window() {
                         }
                     }
                     PreviewMessage::VideoSubtitlesReady(path) => {
-                        // A pinned window showing this film is begun again so the copy that just
-                        // landed is drawn by the frame after it — the one reload a hover
-                        // deliberately does not have (see `reload_pinned_subtitles`). Nothing
-                        // here is hover bookkeeping: the message is not an answer to a hover, and
-                        // a hover is never begun again for it.
+                        // A pinned window showing this film takes the copy that just landed as a
+                        // preload for its next relaunch — the one road a hover deliberately does
+                        // not have (see `reload_pinned_subtitles`). Nothing here is hover
+                        // bookkeeping: the message is not an answer to a hover, and a hover is
+                        // never begun again for it.
                         reload_pinned_subtitles(&path);
                     }
                     PreviewMessage::PinAnswered(answer) => {
@@ -3826,13 +3826,14 @@ pub fn run_preview_window() {
                             pin_set_focusable(hwnd, true);
                         }
 
-                        // **A player adopted without its film's copied subtitles is begun
-                        // again here**, where the copy is ready now and the adopted player is
-                        // one the hover began before it existed — the corner the ready-message
-                        // cannot reach, because it has already been and gone (see
-                        // `reload_adopted_subtitles`). A pin taken up on a film that is still
-                        // being copied is not this: the message will find the pin when it
-                        // lands, and there is nothing to draw yet in any case.
+                        // **A player adopted without its film's copied subtitles takes the
+                        // copy as a preload for its next relaunch here**, where the copy is
+                        // ready now and the adopted player is one the hover began before it
+                        // existed — the corner the ready-message cannot reach, because it has
+                        // already been and gone (see `reload_adopted_subtitles`). A pin taken
+                        // up on a film that is still being copied is not this: the message will
+                        // find the pin when it lands, and there is nothing to draw yet in any
+                        // case.
                         reload_adopted_subtitles(&path);
 
                         // A text preview is the one kind a pin *changes* rather than frames: it

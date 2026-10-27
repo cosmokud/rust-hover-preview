@@ -36,16 +36,6 @@ pub(super) fn transport_clock(transport: &PinTransport) -> Option<f64> {
     })
 }
 
-/// The second a relaunch of the pin's film is begun at: the transport's own playhead, or the
-/// second it started from where the media slot is empty. A pin-hosted player that is already
-/// playing is never begun again at zero by a fallback (see `reload_adopted_subtitles` and
-/// `begin_the_adopted_film_in_the_host`).
-fn pinned_relaunch_second(transport: &PinTransport) -> f64 {
-    pin_playhead(transport)
-        .or_else(|| transport.started.map(|(_, from)| from))
-        .unwrap_or(0.0)
-}
-
 /// Where a pinned preview's playhead is, read out of the pin that is up: the same answer as
 /// above, for a caller that has no transport in hand — a resize deciding where the player it is
 /// about to begin again should start (see `relayout_pinned_media`).
@@ -363,6 +353,16 @@ fn relaunch_pinned_player(
         "player restarted for {} from {replaced} to {pid}",
         reason.as_str()
     );
+
+    // **A copy the film was waiting on rides this relaunch.** The launch names the film's copy in its
+    // filter chain out of the film's own geometry, so this one line is the whole of what the preload
+    // costs the relaunch it waited for (see `preload_the_subtitles_for_the_next_relaunch`).
+    if take_the_pending_subtitles(path) {
+        note_pin_trace!(
+            "subtitle carried into a relaunch pid {pid} file {}",
+            path_name(path)
+        );
+    }
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(media) = current.as_mut() {
@@ -810,6 +810,62 @@ fn add_the_subtitles_to_the_player(path: &Path, pid: u32, track: Option<usize>) 
     true
 }
 
+/// The film whose ready copy of its subtitles has not been drawn yet: **a preload for the next
+/// relaunch**, because the engine that cannot be told can only be given a copy by being begun again,
+/// and a player begun again for a copy alone is a second decode and a picture that changes hands for a
+/// subtitle (see `preload_the_subtitles_for_the_next_relaunch`).
+static PRELOADED_SUBTITLES: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+
+/// Write a film's ready copy down as **pending for its next relaunch**, and say so.
+///
+/// It is the whole of what a late copy costs a film FFmpeg's player draws. That player can be told
+/// nothing, so a copy can only reach the picture by the player being begun again — and a player begun
+/// again for the copy alone changes the picture's hands and decodes the file a second time for a
+/// subtitle nobody asked for at that moment. What the copy does instead is wait: a launch builds its
+/// filter chain out of the film's own geometry, which already names the copy once the extraction has
+/// written it (see `video_launch::subtitle_filter`), so the *next* relaunch for a reason of the user's
+/// — a seek, a level, a track, an engine — draws it on the way past (see `take_the_pending_subtitles`).
+///
+/// This is the "preload in the background, activate at the next seek" a copy was asked for, and it is
+/// why a film with a pending copy is never begun again on the copy's own account (see
+/// `reload_pinned_subtitles`).
+fn preload_the_subtitles_for_the_next_relaunch(path: &Path) {
+    let already = PRELOADED_SUBTITLES
+        .lock()
+        .ok()
+        .and_then(|pending| pending.clone());
+    if already.as_deref() == Some(path) {
+        return;
+    }
+    if let Ok(mut pending) = PRELOADED_SUBTITLES.lock() {
+        *pending = Some(path.to_path_buf());
+    }
+    note_pin_trace!(
+        "subtitle preloaded for the next relaunch file {}",
+        path_name(path),
+    );
+}
+
+/// Take a film's pending copy where it is this film's: the relaunch that carries it into the picture.
+fn take_the_pending_subtitles(path: &Path) -> bool {
+    let Ok(mut pending) = PRELOADED_SUBTITLES.lock() else {
+        return false;
+    };
+    if pending.as_deref() != Some(path) {
+        return false;
+    }
+    *pending = None;
+    true
+}
+
+/// Forget the film whose copy is waiting for a relaunch, so each test carries its own.
+#[cfg(test)]
+pub(super) fn clear_pending_subtitles() {
+    if let Ok(mut pending) = PRELOADED_SUBTITLES.lock() {
+        *pending = None;
+    }
+}
+
 /// Begin a pinned window's player again so a film's own subtitles, copied out of it a moment
 /// ago, are drawn — where the pin is showing that film right now.
 ///
@@ -818,9 +874,9 @@ fn add_the_subtitles_to_the_player(path: &Path, pid: u32, track: Option<usize>) 
 /// user's own choice, and the small files are what the hover *after* it draws (see
 /// `video_launch::subtitle_filter`). A pinned window is a different answer: the user has said
 /// with the pin that this film is the one being watched, so what its player was handed is worth
-/// correcting the moment it can be, and a player replaced at the second the bar is showing is
-/// the same relaunch a track change already is (see `restart_pinned_player`). What the swap
-/// costs is the blink every other relaunch costs, and the window is the pin's throughout.
+/// correcting the moment it can be — and the way it is corrected is that the copy **rides the next
+/// relaunch**: the picture is not changed hands and the film is not decoded a second time for a
+/// subtitle (see `preload_the_subtitles_for_the_next_relaunch`).
 ///
 /// Everything else is refused rather than attempted: no pin, a pin on another file, a pin whose
 /// media is not a film this app plays with FFmpeg (the engine's own videos are not this app's to
@@ -829,16 +885,17 @@ fn add_the_subtitles_to_the_player(path: &Path, pid: u32, track: Option<usize>) 
 ///
 /// **mpv is never begun again for this**, which is the difference the pipe makes: the copy is handed to
 /// the player that is drawing the film (see `add_the_subtitles_to_the_player`), so the line above is
-/// the relaunch road and not this one.
+/// the relaunch road and not this one. FFmpeg's player is begun again for nothing at all: the copy is
+/// preloaded and rides the next relaunch the user asks for (see
+/// `preload_the_subtitles_for_the_next_relaunch`).
 ///
-/// Answers whether a player was begun again, or a running one was given the copy, which is what the
-/// tests read.
+/// Answers whether the copy was answered at all, which is what the tests read.
 pub(super) fn reload_pinned_subtitles(path: &Path) -> bool {
     if current_media_type() != Some(MediaType::Video) {
         return false;
     }
 
-    let Some((pinned, content, transport, _)) = pinned_playback_state() else {
+    let Some((pinned, _, transport, _)) = pinned_playback_state() else {
         return false;
     };
 
@@ -860,13 +917,7 @@ pub(super) fn reload_pinned_subtitles(path: &Path) -> bool {
         return false;
     }
 
-    restart_pinned_player(
-        &pinned,
-        content,
-        pinned_relaunch_second(&transport),
-        transport.paused_at.is_some(),
-        RestartReason::Subtitle,
-    );
+    preload_the_subtitles_for_the_next_relaunch(&pinned);
 
     true
 }
@@ -885,13 +936,14 @@ pub(super) fn reload_pinned_subtitles(path: &Path) -> bool {
 /// `player_draws_subtitles`).
 ///
 /// A film whose copy is still coming is deliberately not this: there is nothing to draw yet,
-/// and the message will find the pin when there is.
+/// and the message will find the pin when there is. And the correction is a preload rather than a
+/// relaunch (see `preload_the_subtitles_for_the_next_relaunch`).
 pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
     if current_media_type() != Some(MediaType::Video) {
         return false;
     }
 
-    let Some((pinned, content, transport, _)) = pinned_playback_state() else {
+    let Some((pinned, _, transport, _)) = pinned_playback_state() else {
         return false;
     };
 
@@ -921,20 +973,11 @@ pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
         return false;
     }
 
-    // A hosted hover's player has no copied subtitle to add, and relaunching it would be the
-    // second decode this road exists to avoid. The pin keeps the film without the late copy until
-    // its next relaunch (a seek, a step, or a track change).
-    if hover_film_host::the_hover_player_was_begun_in_the_host(VIDEO_PID.load(Ordering::SeqCst)) {
-        return false;
-    }
-
-    restart_pinned_player(
-        &pinned,
-        content,
-        pinned_relaunch_second(&transport),
-        transport.paused_at.is_some(),
-        RestartReason::Subtitle,
-    );
+    // **A player that cannot be told preloads the copy rather than being begun again**, whether it is
+    // the player its own launch began or one a hover's host was taken up with: the film keeps the
+    // picture it has, and the copy rides the next relaunch of the user's (see
+    // `preload_the_subtitles_for_the_next_relaunch`).
+    preload_the_subtitles_for_the_next_relaunch(&pinned);
 
     true
 }

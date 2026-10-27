@@ -308,10 +308,10 @@ pub(super) fn cycle_subtitles(pid: u32) -> bool {
 /// Give a running mpv a subtitle file and draw it, which is the one thing that makes a film's late
 /// copy cost no relaunch.
 ///
-/// **A copy that becomes ready while the pin is up used to begin the player again** so that the file
-/// it names was drawn, and a player begun again is the black frame and the second decode this road
-/// removes (see `pin_playback::reload_pinned_subtitles`). mpv can simply be handed the file: the copy
-/// is a whole subtitle with no streams of its own, so `select` is what says to draw it.
+/// **A copy that becomes ready while the pin is up needs no player begun again** so that the file it
+/// names is drawn — a player begun again is the black frame and the second decode this road removes (see
+/// `pin_playback::reload_pinned_subtitles`). mpv can simply be handed the file: the copy is a whole
+/// subtitle with no streams of its own, so `select` is what says to draw it.
 pub(super) fn add_subtitles(pid: u32, file: &std::path::Path) -> bool {
     write(
         pid,

@@ -34,15 +34,16 @@ fn a_pin_playing(film: &Path, content: ScreenRegion) -> PinnedPreview {
     pin
 }
 
-/// A pin showing the film whose subtitles have just been copied: **FFmpeg's player is begun again** so
-/// the copy is drawn by the frame after it, and **mpv is simply handed the file** and draws it without
-/// the player, its window or its picture moving — no black frame, no second decode, no handover (see
-/// `reload_pinned_subtitles` and `mpv_ipc::add_subtitles`).
+/// A pin showing the film whose subtitles have just been copied: **mpv is simply handed the file** and
+/// draws it without the player, its window or its picture moving, and **FFmpeg's player is begun for
+/// nothing at all** — the copy is preloaded for the next relaunch, which draws it out of the film's own
+/// geometry (see `reload_pinned_subtitles` and `preload_the_subtitles_for_the_next_relaunch`).
 ///
-/// This is the pin-only reload the user asked for: a pinned window has its film on screen already, so a
-/// copy landing in the background is worth drawing; a hover is deliberately never begun again for one.
+/// This is the pin-only answer the user asked for: a pinned window has its film on screen already, and
+/// a copy landing in the background must not swap the picture for it; a hover is deliberately never
+/// begun again for one.
 #[test]
-fn a_pin_hands_its_late_copied_subtitles_to_mpv_without_a_relaunch_and_begins_ffplay_again() {
+fn a_pin_hands_its_late_copied_subtitles_to_mpv_and_preloads_them_for_ffplays_next_relaunch() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -99,27 +100,63 @@ fn a_pin_hands_its_late_copied_subtitles_to_mpv_without_a_relaunch_and_begins_ff
         "and the run says the copy cost no restart"
     );
 
-    // **FFmpeg's player can be told nothing, so the same copy begins it again** at the second the bar
-    // is showing — and the line says why (see `RestartReason`).
+    // **FFmpeg's player can be told nothing, so the copy waits for the next relaunch** — and the
+    // picture on screen is not changed hands, nor the film decoded a second time, for it.
     clear_restart_count();
     mpv_ipc::forget_pipe(101);
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     VIDEO_PID.store(101, Ordering::SeqCst);
+    pin_trace::clear_noted();
     assert!(
         reload_pinned_subtitles(&film),
-        "a film FFmpeg's player draws is begun again for the copy"
+        "the copy is answered on the engine that cannot be told as well"
     );
-    assert_eq!(restart_count(), 1, "one relaunch, and only one");
     assert_eq!(
-        last_restart_reason(),
-        Some(RestartReason::Subtitle),
-        "and it says it was the subtitles that asked for it"
+        restart_count(),
+        0,
+        "and no player is begun for it: the copy is preloaded, not a reason for a swap"
+    );
+    assert_eq!(last_restart_reason(), None, "so nothing says a relaunch happened");
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("subtitle preloaded for the next relaunch")),
+        "and the run says the copy is waiting for one: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    // The relaunch the user asks for next is where it is activated: the launch's own `-vf` chain names
+    // the copy the film's geometry holds, and one line says it is carrying it (see
+    // `preload_the_subtitles_for_the_next_relaunch`).
+    pin_trace::clear_noted();
+    restart_pinned_player(
+        &film,
+        (100, 80, 420, 320),
+        30.0,
+        false,
+        RestartReason::Seek,
+    );
+    let launched = take_last_spawned_command().expect("a player begun for the seek");
+    assert!(
+        launched
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-vf" && pair[1].contains("subtitles=") && pair[1].contains("sub0.ass")),
+        "the relaunch draws the copy: {:?}",
+        launched.args
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("subtitle carried into a relaunch")),
+        "and the one line that says so is written: {:?}",
+        pin_trace::noted_lines()
     );
 
     // The same answer about another film is not this pin's to act on: a copy landing for a file
-    // the pin is not showing is a file the pin has nothing to reload for.
+    // the pin is not showing is a file the pin has nothing to preload for.
     assert!(
         !reload_pinned_subtitles(&PathBuf::from("pin-subtitle-reload-other.mkv")),
         "an answer about another film is dropped"
@@ -310,10 +347,12 @@ fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on
 /// the copy is ready by the time the pin is made — the corner the ready-message cannot reach
 /// because it has already been and gone (see `reload_adopted_subtitles`).
 ///
-/// **mpv is handed the copy and FFmpeg's player is begun again**, and the difference is the whole of
-/// what a player that can be spoken to is worth here: the same corner costs a film mpv plays nothing.
+/// **mpv is handed the copy and FFmpeg's player is given the copy to carry**, and the difference is the
+/// whole of what a player that can be spoken to is worth here: the same corner costs a film mpv plays
+/// nothing, and the one it draws is not begun again for a subtitle either (see
+/// `preload_the_subtitles_for_the_next_relaunch`).
 #[test]
-fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
+fn an_adopted_pin_is_handed_the_copy_it_predates_without_a_relaunch() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -354,7 +393,8 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
         "the copy is the one command the adopted player is sent"
     );
 
-    // **FFmpeg's player is begun again**, at the second the bar is showing, the way a seek begins one.
+    // **FFmpeg's player is begun for nothing at all**: the copy is preloaded, and the relaunch the user
+    // asks for next is what draws it (see `preload_the_subtitles_for_the_next_relaunch`).
     clear_restart_count();
     mpv_ipc::forget_pipe(101);
     stand_mpv_in(Some(false));
@@ -362,12 +402,19 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     assert!(
         reload_adopted_subtitles(&film),
-        "a player that can be told nothing is begun again now that the copy is here"
+        "a player that can be told nothing has the copy to carry"
     );
     assert_eq!(
         restart_count(),
-        1,
-        "one relaunch, at the second the bar is showing, the way a seek begins one"
+        0,
+        "and no player is begun for it: the copy waits for a relaunch of the user's"
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("subtitle preloaded for the next relaunch")),
+        "and the run says so: {:?}",
+        pin_trace::noted_lines()
     );
 
     // A player begun with its subtitles — the copies themselves, a sidecar, or the film's own
@@ -375,9 +422,9 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
     note_player_subtitles(&film, true);
     assert!(
         !reload_adopted_subtitles(&film),
-        "a player already drawing subtitles is not begun again"
+        "a player already drawing subtitles has nothing to preload"
     );
-    assert_eq!(restart_count(), 1, "and nothing is begun for one");
+    assert_eq!(restart_count(), 0, "and nothing is begun for one");
 
     // And a film with no copy ready is not this either, whatever its player drew: what is
     // missing is the thing there would be something to reload for.
@@ -388,20 +435,20 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
         !reload_adopted_subtitles(&other),
         "no copy ready is nothing to reload for"
     );
-    assert_eq!(restart_count(), 1, "and nothing is begun");
+    assert_eq!(restart_count(), 0, "and nothing is begun");
 
-    // **A hosted hover is not begun again for the same copy**: its player was moved into the pin
-    // rather than launched there, and a relaunch would be the second decode the move exists to
-    // avoid. The pin keeps the film without the late copy until its next relaunch.
+    // **A hosted hover's moved player is not begun again either**: it was moved into the pin rather
+    // than launched there, and the copy rides the next relaunch the user asks for.
+    stand_pin(Some(a_pin_playing(&film, (100, 80, 420, 320))));
     let host = unsafe { hover_film_host::take_up_the_hover_film_host((100, 80, 420, 320)) }
         .expect("a host standing in for the moved hover");
     hover_film_host::note_hover_film_host_player(101, &film);
     note_player_subtitles(&film, false);
     assert!(
-        !reload_adopted_subtitles(&film),
-        "a hosted hover's moved player is not relaunched for the late copy"
+        reload_adopted_subtitles(&film),
+        "the copy is preloaded for a player that cannot be told"
     );
-    assert_eq!(restart_count(), 1, "and nothing is begun");
+    assert_eq!(restart_count(), 0, "and nothing is begun");
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     assert!(!unsafe { IsWindow(host) }.as_bool(), "the stand goes");
 
@@ -409,6 +456,7 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     restore_media(previous_media);
     clear_restart_count();
+    clear_pending_subtitles();
     mpv_ipc::clear_noted();
     mpv_ipc::forget_pipe(101);
     stand_mpv_in(None);

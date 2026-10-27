@@ -732,8 +732,8 @@ fn copy_out(args: &[String], workdir: &Path, extraction: &Extraction) -> bool {
 ///
 /// Both outcomes are remembered in the geometry cache entry for this file and version, which is
 /// the whole of how a later launch hears about either without this thread being waited on — and
-/// a success is also the one thing a pinned window is told, because a pin has its film on screen
-/// already and begins its player again to draw what just landed (see
+/// a success is also the one thing a pinned window is told, because a pin has its film on
+/// screen already and preloads what just landed for its next relaunch (see
 /// `reload_pinned_subtitles`). What a success leaves is the derived files themselves, so the
 /// next launch draws them. What a failure leaves is the flag that says this film is not asked
 /// again: the launch that reads it draws the film *without* subtitles and stays fast (see
@@ -770,8 +770,8 @@ fn finish(path: &Path, codecs: &[String], ok: bool) {
     // **A pinned window is told, because it is the one thing that can use the answer now.** A
     // pin showing this film has a player that was begun before the copy existed, and the frame
     // it draws next is drawn without the subtitles the user is watching for; the message is
-    // what begins that player again, at the second the bar is showing (see
-    // `reload_pinned_subtitles`). A hover is told nothing — it was answered without subtitles
+    // what preloads the copy for that pin's next relaunch (see `reload_pinned_subtitles`). A
+    // hover is told nothing — it was answered without subtitles
     // by the user's own choice, and the hover after it reads what this wrote (see
     // `video_launch::subtitle_filter`) — and a pass that *failed* tells nothing either: the
     // film's own track is not a route this app takes at all (see `subtitle_filter`).
