@@ -163,19 +163,19 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
-use windows::Win32::Graphics::Gdi::{ClientToScreen, InvalidateRect};
 use windows::Win32::Graphics::Dwm::{
     DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE,
     DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
+use windows::Win32::Graphics::Gdi::{ClientToScreen, InvalidateRect};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
     IsWindow, IsWindowVisible, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW,
     SetWindowPos, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK,
-    SM_CYMAXTRACK, SW_HIDE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 // Only the binary asks a window who owns it: a test has one process (see `the_source_is_up`).
 #[cfg(not(test))]
@@ -324,6 +324,12 @@ static SOURCE_PLACEMENTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static SOURCE_REPLACEMENTS: AtomicU32 = AtomicU32::new(0);
 
+/// How many registrations the Shell has been asked for since a test last cleared it: one per source
+/// window, so a source that replaced itself is a second registration rather than a second thumbnail
+/// over the first (see `settle_the_registration`).
+#[cfg(test)]
+static REGISTRATIONS: AtomicU32 = AtomicU32::new(0);
+
 /// The one host this road has drawn a picture into, or nothing while no registration is recorded: a
 /// pin's host and a hover's are the same one at the take-up that promotes it (see
 /// `settle_the_registration`).
@@ -345,6 +351,18 @@ pub(super) fn the_source_placements() -> u32 {
 #[cfg(test)]
 pub(super) fn the_source_replacements() -> u32 {
     SOURCE_REPLACEMENTS.load(Ordering::SeqCst)
+}
+
+/// How many registrations the Shell has been asked for (see `settle_the_registration`).
+#[cfg(test)]
+pub(super) fn the_registrations() -> u32 {
+    REGISTRATIONS.load(Ordering::SeqCst)
+}
+
+/// Forget the registrations counted before a test (see `settle_the_registration`).
+#[cfg(test)]
+pub(super) fn clear_the_registrations() {
+    REGISTRATIONS.store(0, Ordering::SeqCst);
 }
 
 /// Forget the placements counted before a test (see `place_the_source`).
@@ -1366,6 +1384,8 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     }
 
     if held.registration == 0 {
+        #[cfg(test)]
+        REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
         let Ok(registration) = (unsafe { DwmRegisterThumbnail(host, source) }) else {
             // Nothing to draw in until the registration is asked for again: a source that has made
             // its window and not yet presented is a registration the Shell can refuse. A refusal is
