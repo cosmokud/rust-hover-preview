@@ -393,7 +393,9 @@ fn thumbnail_bitmap(picture: &PinPicture, width: u32, height: u32) -> Option<Dib
 /// has minimized answers with no area at all, which is the answer that keeps the picture already
 /// taken — a minimized window is not drawn where it stands, so nothing read off the desk there would
 /// be the pin.
-unsafe fn client_area_on_the_screen(hwnd: HWND) -> Option<RECT> {
+/// The same area for a caller outside this module's mirror, which is the relaunch measurement that
+/// reads the pin off the desktop (see `hide_probe`).
+pub(super) unsafe fn client_area_on_the_screen(hwnd: HWND) -> Option<RECT> {
     let mut area = RECT::default();
     GetClientRect(hwnd, &mut area).ok()?;
     let (width, height) = (area.right - area.left, area.bottom - area.top);

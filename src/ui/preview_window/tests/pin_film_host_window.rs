@@ -5410,6 +5410,7 @@ fn the_freeze_road_is_the_runs_own_setting() {
     assert_eq!(freeze_road_from(Some("suspend")), FreezeRoad::Suspend);
     assert_eq!(freeze_road_from(Some(" key ")), FreezeRoad::Key);
     assert_eq!(freeze_road_from(Some("off")), FreezeRoad::Off);
+    assert_eq!(freeze_road_from(Some(" hide ")), FreezeRoad::Hide);
     assert_eq!(freeze_road_from(Some("anything else")), FreezeRoad::Capture);
 }
 
@@ -5846,9 +5847,176 @@ fn a_black_or_failed_capture_paints_nothing_and_leaves_the_old_picture_playing()
     pin_trace::clear_noted();
 }
 
-/// **A hover frozen for a handover that never draws is ended, not left suspended.** The wait fails —
-/// no player behind it — and the one road out ends the hover's player through the same terminate the
-/// loop uses, which is where a suspension's record goes with it (see `retire_the_frozen_hover`).
+/// **The `hide` road takes the picture off the screen by hiding the player's own window, and gives the
+/// player up only once its replacement has the frame.**
+///
+/// The outgoing player is neither ended nor told anything: its window — the source the pin's host goes
+/// on wearing a registration for — is hidden, once, and the process stands until the swap (see
+/// `pin_playback::FreezeRoad::Hide`). What that leaves the pin showing is not a question this test can
+/// answer, because it is a question about what the Shell draws: the run's own probe reads it off the
+/// desk (see `hide_probe`), and this holds the road to the two facts a test can see — one hide, of the
+/// outgoing source's window, and a retirement that comes after the swap and not before it.
+#[test]
+fn the_hide_road_hides_the_outgoing_source_once_and_reaps_it_after_the_swap() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_retirement = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let path = PathBuf::from("a-film.mkv");
+    let outgoing = unsafe { GetCurrentProcessId() };
+    probed_at(&path, 1920, 1080);
+    pin_film_thumbnail::forget_the_thumbnail();
+    film.drawn_in_the_host(outgoing);
+    let source = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(source, outgoing, host) };
+    VIDEO_PID.store(outgoing, Ordering::SeqCst);
+
+    stand_the_freeze_road_in(Some(FreezeRoad::Hide));
+    ffplay_window::clear_suspended_players();
+    ffplay_window::clear_pause_posts();
+    pin_film_thumbnail::clear_source_hides();
+    pin_film_thumbnail::clear_the_unregistrations();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+    clear_restart_count();
+    let erases = pin_film_host::host_erases();
+
+    restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Seek);
+    stand_the_freeze_road_in(None);
+
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    assert_ne!(replacement, 0, "a replacement player was begun");
+    let lines = pin_trace::noted_lines();
+    let hidden = format!(
+        "outgoing picture hidden pid {outgoing}: the pin keeps its last composed frame"
+    );
+    let restarted = format!("player restarted for seek from {outgoing} to {replacement}");
+    assert_eq!(
+        lines.iter().filter(|line| **line == hidden).count(),
+        1,
+        "one hide a relaunch, and the run says so: {lines:?}"
+    );
+    assert!(
+        lines.iter().position(|line| *line == hidden) < lines.iter().position(|line| *line == restarted),
+        "the picture is off the screen before its replacement is begun: {lines:?}"
+    );
+    assert_eq!(
+        pin_film_thumbnail::source_hides(),
+        1,
+        "and it is one hide posted, not one a tick"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_hidden_for_a_relaunch(),
+        source.0 as isize,
+        "of the outgoing player's own window, which is what the registration draws"
+    );
+
+    // (a) Nothing ended the player on screen, and nothing will until its replacement stands.
+    assert!(
+        !lines.iter().any(|line| line.starts_with("player retired after the swap")
+            || line.starts_with("outgoing player ended at once")
+            || line.starts_with("player ended while standing")),
+        "a hide ends nothing: {lines:?}"
+    );
+    assert_eq!(
+        VIDEO_RETIREMENT
+            .lock()
+            .ok()
+            .and_then(|held| *held)
+            .map(|parked| (parked.retiring, parked.replacement)),
+        Some((outgoing, replacement)),
+        "the player is parked for the loop, not ended, and its replacement is the one waited for"
+    );
+    assert!(
+        pin_film_thumbnail::the_source_is_up(outgoing),
+        "and its window is still the source the host stands on"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "the registration is never taken down for a hide"
+    );
+    assert_eq!(
+        pin_film_host::host_erases(),
+        erases,
+        "nothing erases the host while the hidden source is what it draws"
+    );
+    assert!(
+        ffplay_window::suspended_players().is_empty(),
+        "the hide suspends nothing"
+    );
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        0,
+        "and posts no key: a key would clear the window the pin is still drawing"
+    );
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "nor is there a hold down a pipe"
+    );
+
+    // (c) The replacement draws, the picture changes hands, and only then is the hidden player reaped.
+    let second = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(second, replacement, host) };
+    pin_film_thumbnail::hand_the_picture_over(host);
+    assert!(
+        pin_film_thumbnail::the_source_is_up(replacement),
+        "the replacement is the picture once it can draw"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_hidden_for_a_relaunch(),
+        0,
+        "and the window hidden for the relaunch is given up with the swap, so the next show is the \
+         new source's"
+    );
+    assert!(
+        !pin_trace::noted_lines()
+            .iter()
+            .any(|line| line == &format!("player retired after the swap pid {outgoing}")),
+        "the swap itself ends nothing"
+    );
+
+    settle_video_retirement();
+    let lines = pin_trace::noted_lines();
+    let at_swap = lines
+        .iter()
+        .position(|line| line.starts_with("thumbnail swapped old"))
+        .expect("a swap line");
+    let at_retire = lines
+        .iter()
+        .position(|line| line == &format!("player retired after the swap pid {outgoing}"))
+        .unwrap_or_else(|| panic!("the hidden player is reaped after the swap: {lines:?}"));
+    assert!(
+        at_swap < at_retire,
+        "the picture changed hands before the player went: {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("player ended while standing")),
+        "and no path ended the source while the host was drawing it: {lines:?}"
+    );
+
+    let _ = unsafe { DestroyWindow(second) };
+    let _ = unsafe { DestroyWindow(source) };
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        *held = previous_retirement;
+    }
+    pin_film_thumbnail::forget_the_hidden_source();
+    pin_film_thumbnail::forget_the_thumbnail();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+    pin_trace::clear_noted();
+}
 #[test]
 fn a_failed_handover_ends_the_player_it_suspended() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME

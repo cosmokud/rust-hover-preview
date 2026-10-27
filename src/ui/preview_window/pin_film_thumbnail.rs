@@ -131,8 +131,11 @@
 //! than dropped on the floor (see `video_launch::the_thumbnail_swapchain_flip`).
 //!
 //! **The source is never hidden and never resized.** Hidden the Shell stops drawing it — the
-//! thumbnail of a `SW_HIDE` window is frozen at its last frame — so it is taken off the screen only
-//! where the host it is seen in is going away for good (see `set_the_source_visible`). Resized is the
+//! thumbnail of a `SW_HIDE` window is frozen at its last frame, which is the one sentence this road
+//! has never measured and which `RHP_FREEZE=hide` exists to settle (see `hide_probe`) — so it is taken
+//! off the screen only where the host it is seen in is going away for good, and on that road only once
+//! the player drawing it has a replacement (see `set_the_source_visible`, `hide_the_outgoing_source`).
+//! Resized is the
 //! flash this road was measured with. Moved it is, but only to keep the crop on the screen and never
 //! with a new size: one placement, and then a slide at an edge and nothing else until teardown (see
 //! `keep_the_crop_on_the_screen`).
@@ -367,6 +370,15 @@ pub(super) fn the_source_launch_origin(at: (i32, i32)) -> (i32, i32) {
 /// The source window as the number of its handle, read without the lock by the questions the tick
 /// asks on every pass (see `the_source_is_up`); zero while there is none.
 static SOURCE: AtomicIsize = AtomicIsize::new(0);
+/// The source this app took off the screen for a relaunch of the player behind it (see
+/// `hide_the_outgoing_source`), or zero where none was: the one window the host's own show must not
+/// put back, because that show runs on every tick of a pin that is drawing.
+static HIDDEN_FOR_A_RELAUNCH: AtomicIsize = AtomicIsize::new(0);
+/// How many player windows a pin has hidden for a relaunch since a test last cleared it: a hide
+/// posts to another process's window and a test run has no such window to see it land on, so what is
+/// counted is the asking (see `set_the_source_visible`).
+#[cfg(test)]
+static SOURCE_HIDES: AtomicU32 = AtomicU32::new(0);
 /// The process the source window belongs to, which is what tells a window given the number of one it
 /// replaced from the one this registration was taken with.
 static SOURCE_PROCESS: AtomicU32 = AtomicU32::new(0);
@@ -1303,6 +1315,9 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     // pixels**, which is the whole of what "it has drawn" can mean for a player that answers nothing
     // (see `the_source_drew`).
     let ready = sized && the_source_drew(pending, source, shape.client);
+    if ready {
+        super::hide_probe::note_drawn(pending.process);
+    }
     let waited = pending.since.elapsed();
     if !ready {
         note_the_source_not_ready(pending, live);
@@ -1353,6 +1368,10 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     // still this app painted (see `stand_the_outgoing_picture_as_a_still`).
     STILL_HOST.store(0, Ordering::SeqCst);
     STILL_PID.store(0, Ordering::SeqCst);
+    // **The window a relaunch hid for itself is given up here**, on the same step that makes another
+    // window the picture: from this line the host's show is a show of the new source's (see
+    // `hide_the_outgoing_source`), and the measurement that hide was made for has its swap.
+    forget_the_hidden_source();
     forget_the_pending_source_of(pending.source, pending.process);
     // **The line names both players, not just the two windows**: a handover made onto a dead window is
     // invisible in a pair of handles, and a run should never have to read a pid off anything else to
@@ -1365,6 +1384,9 @@ pub(super) fn hand_the_picture_over(host: HWND) {
         pending.process,
         waited.as_millis(),
     );
+    // **And the hide road's measurement closes on the same step**: one thing happened, so the swap and
+    // the answer to what the pin showed waiting for it are adjacent lines (see `hide_probe`).
+    super::hide_probe::note_swapped(pending.process);
     // **The replacement is the picture, so the relaunch that began it is over.** Until this line the
     // record is a player a newer gesture may kill before it publishes; from here it is the source the
     // host draws, and killing it is the black band (see `pin_playback::settle_the_published_relaunch`).
@@ -1790,14 +1812,74 @@ pub(super) fn set_the_source_visible(visible: bool) {
     let Some(source) = the_source_window() else {
         return;
     };
+    // **A source this app hid for a relaunch is not put back by a show.** The host's own show runs on
+    // every tick of a pin that is drawing, and the window it would show here is the player a relaunch
+    // took off the screen on purpose (see `pin_playback::FreezeRoad::Hide`); the picture changes hands
+    // at the swap, which is where the record below goes.
+    if visible && HIDDEN_FOR_A_RELAUNCH.load(Ordering::SeqCst) == source.0 as isize {
+        return;
+    }
     // Safety: the handle is a window this module adopted, and the question is about it rather than a
     // change to it. A window already where it is wanted is left alone: a host's show runs on every
     // tick of a pin that is drawing, and a `ShowWindow` a tick is a message mpv's thread owes nothing.
     if unsafe { IsWindowVisible(source) }.as_bool() != visible {
+        #[cfg(test)]
+        if !visible {
+            SOURCE_HIDES.fetch_add(1, Ordering::AcqRel);
+        }
         let _ = unsafe {
             ShowWindowAsync(source, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE })
         };
     }
+}
+
+/// **Take the picture off the screen while its replacement is begun, and keep it off** (the road
+/// `RHP_FREEZE=hide` is, see `pin_playback::FreezeRoad`).
+///
+/// It is the ordinary hide — `set_the_source_visible(false)`, the one path a source window is hidden
+/// by — recorded beside it, because the source the registration draws is a window of the player's and
+/// the host's own show would otherwise put it back on the next tick: the record is what refuses that
+/// show, and the swap is what gives it up (see `hand_the_picture_over`, `forget_the_thumbnail`).
+///
+/// It answers whether the pin's picture was this player's own window: a player whose window is not
+/// the source has nothing of the pin's on screen to take off, and hiding it would be hiding a window
+/// nothing of this app's draws.
+pub(super) fn hide_the_outgoing_source(pid: u32) -> bool {
+    if !the_source_is_up(pid) {
+        return false;
+    }
+    let Some(source) = the_source_window() else {
+        return false;
+    };
+    HIDDEN_FOR_A_RELAUNCH.store(source.0 as isize, Ordering::SeqCst);
+    set_the_source_visible(false);
+    true
+}
+
+/// Give the record of a source hidden for a relaunch up: the picture has changed hands, so the next
+/// show is a show of another window's (see `hide_the_outgoing_source`).
+pub(super) fn forget_the_hidden_source() {
+    HIDDEN_FOR_A_RELAUNCH.store(0, Ordering::SeqCst);
+}
+
+/// The window hidden for a relaunch, as a handle number, or zero where none was (see
+/// `hide_the_outgoing_source`).
+#[cfg(test)]
+pub(super) fn the_hidden_for_a_relaunch() -> isize {
+    HIDDEN_FOR_A_RELAUNCH.load(Ordering::SeqCst)
+}
+
+/// How many hides a pin has posted to a player's own window since a test last cleared it (see
+/// `SOURCE_HIDES`).
+#[cfg(test)]
+pub(super) fn source_hides() -> u32 {
+    SOURCE_HIDES.load(Ordering::Acquire)
+}
+
+/// Forget the hides counted so far, so each test counts its own (see `SOURCE_HIDES`).
+#[cfg(test)]
+pub(super) fn clear_source_hides() {
+    SOURCE_HIDES.store(0, Ordering::SeqCst);
 }
 
 /// Take the registration down: the host it was drawn in is going, and a registration left behind a
@@ -1815,6 +1897,7 @@ pub(super) fn forget_the_thumbnail() {
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(0, Ordering::SeqCst);
     SOURCE_PROCESS.store(0, Ordering::SeqCst);
+    forget_the_hidden_source();
     STILL_HOST.store(0, Ordering::SeqCst);
     STILL_PID.store(0, Ordering::SeqCst);
     if let Ok(mut held) = HELD_FRAMES.lock() {
