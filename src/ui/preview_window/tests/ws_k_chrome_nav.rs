@@ -5,13 +5,9 @@ use super::*;
 use super::pin_input::{take_relayout_request, CapturingWindow};
 
 // WS-K Phase 1: the capture discipline (a press that arms nothing must claim
-// nothing), the swap's reconcile (a take-up carries no gesture), the two
-// covers (a file step and a box change), and the player's own mouse.
-//
-// RED (pre-fix): the seams below — `begin_covered_box_change`,
-// `cover_step_swap_for_video`, `reconcile_swap_take_up` — do not exist yet, so
-// this file does not compile; the capture tests are behavioural red through
-// the arms that already exist.
+// nothing), the swap's reconcile (a take-up gives up the step's leftovers), the
+// one cover a file step raises, and the player's own mouse. A gesture raises no
+// cover of its own and asks nothing of a player (see `begin_pin_drag`).
 
 /// A playing pin, as a covered road's press finds it.
 fn playing_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
@@ -99,10 +95,8 @@ fn restore(
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_video_engine_in(None);
-    take_gesture_snapshot();
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
     clear_park_swap_arm();
     clear_restart_count();
@@ -232,7 +226,6 @@ fn a_release_no_arm_owns_gives_the_pointer_back() {
     // text selection and no scroll drag is in flight (see `reconcile_swap_take_up` for the
     // take-down that discards the state a press was written into).
     stand_pin(None);
-    take_gesture_snapshot();
     forget_pin_park_swap();
     set_text_scroll_dragging(false);
     let _ = end_text_selection();
@@ -362,8 +355,7 @@ fn every_caption_button_asks_its_command_on_a_press_and_a_release() {
         stand_pin(Some(wide_banded_video_pin((100, 80, 420, 320), 30.0)));
         forget_pin_park_swap();
         forget_video_frame();
-        take_gesture_snapshot();
-        take_pin_command();
+            take_pin_command();
 
         let (x, y) = a_caption_button_point(kind);
         assert!(
@@ -403,7 +395,6 @@ fn the_always_on_top_caption_button_toggles_pin_always_on_top() {
     stand_pin(Some(wide_banded_video_pin((100, 80, 420, 320), 30.0)));
     forget_pin_park_swap();
     forget_video_frame();
-    take_gesture_snapshot();
     take_pin_command();
 
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::AlwaysOnTop);
@@ -452,7 +443,6 @@ fn a_restore_down_button_asks_its_command_too() {
     pin.restore = Some((100, 80, 420, 320));
     stand_pin(Some(pin));
     forget_pin_park_swap();
-    take_gesture_snapshot();
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Maximize);
     take_pin_command();
 
@@ -496,7 +486,6 @@ fn the_volume_button_opens_and_closes_its_popup() {
     stand_pin(Some(banded_video_pin((100, 80, 420, 320), 30.0)));
     forget_pin_park_swap();
     forget_video_frame();
-    take_gesture_snapshot();
 
     let (x, y) = a_transport_part_point(pin_chrome::TransportPart::Volume);
     let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
@@ -547,7 +536,6 @@ fn the_two_hand_offs_reach_their_arm_on_a_press_and_a_release() {
     stand_pin(Some(wide_banded_video_pin((100, 80, 420, 320), 30.0)));
     forget_pin_park_swap();
     forget_video_frame();
-    take_gesture_snapshot();
 
     for kind in [
         pin_chrome::CaptionButton::OpenWith,
@@ -591,20 +579,14 @@ fn caption_height_of_the_pin() -> i32 {
 }
 
 /// K2 DRAG after a step: the cover a file step raises is still standing when the hand
-/// goes on to carry the window or pull its edge, and the gesture must neither strand it
-/// nor leave it standing for want of the relayout that ends it.
+/// goes on to carry the window or pull its edge, and a gesture neither strands it nor
+/// raises a second one — a drag is this app's own window work and touches no player
+/// (see `begin_pin_drag`).
 ///
-/// A placeholder left in the video area is that cover: a band painted with the outgoing
-/// frame, held until there is a player's own window in it to see through. Both ways it can
-/// be stranded are read here — `park_stranded_without_a_player` and `seek_cover_is_waiting`
-/// — and so is the relayout, because a drag whose own end never runs leaves a standing
-/// cover with nothing behind it to be handed, which is the cover the user was left looking
-/// at. And a button afterwards, because a window whose caption has stopped answering is the
-/// other half of the same report.
-///
-/// The resize's park is armed rather than begun, and that is not a shortcut: a begun
-/// resize asks for the frame it hands the band back and spawns a player to render it,
-/// which a test must not do. Its end is the same arm either way (see `finish_pin_drag`).
+/// What a drag after a step owes is the relayout a resize asks for and nothing else, and
+/// the cover is settled by the tick that finds the replacement's window. And a button
+/// afterwards, because a window whose caption has stopped answering is the other half of
+/// the same report.
 #[test]
 fn a_drag_after_a_file_step_strands_no_cover_and_no_park() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -625,8 +607,6 @@ fn a_drag_after_a_file_step_strands_no_cover_and_no_park() {
     stand_pin(Some(wide_banded_video_pin(content, 30.0)));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
-    take_gesture_snapshot();
     take_relayout_request();
 
     assert!(
@@ -657,9 +637,9 @@ fn a_drag_after_a_file_step_strands_no_cover_and_no_park() {
     );
     assert!(!pin_is_dragging(), "so the drag is over");
     assert!(
-        !park_stranded_without_a_player() && !seek_cover_is_waiting(),
-        "and the cover is not left standing over a band nothing is going to hand back — which is \
-         what a placeholder in the video area is"
+        pin_player_is_parked() && park_record_owner() == Some(ParkArm::Step),
+        "and the step's cover is exactly as the drag found it: a gesture raises no cover of its \
+         own and ends none"
     );
     assert!(
         take_relayout_request().is_none(),
@@ -698,8 +678,18 @@ fn a_drag_after_a_file_step_strands_no_cover_and_no_park() {
         "and the resize asked for its media at the box the hand settled on"
     );
     assert!(
-        !park_stranded_without_a_player() && !seek_cover_is_waiting(),
-        "with a relaunch of its own behind it, so nothing is stranded either"
+        pin_player_is_parked() && park_record_owner() == Some(ParkArm::Step),
+        "and the resize leaves that cover alone too: the only thing it asked for is the box"
+    );
+    spend_the_swap_bound();
+    let settled = RecordedPinWindow::new(0x1000);
+    assert!(
+        settle_pinned_park_where(&settled, true),
+        "and the tick that finds the replacement's window hands the band back"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "so no placeholder is left over the video area"
     );
 
     // And the window is still a window a hand can use: the whole of the report was that
@@ -759,10 +749,6 @@ fn a_seek_press_with_no_second_to_seek_to_claims_nothing() {
         !pin_player_is_parked(),
         "and no cover stands over a film nothing is going to end"
     );
-    assert!(
-        !gesture_snapshot_active(),
-        "and no dead interval is armed behind a press that armed nothing"
-    );
 
     restore(previous_pin, previous_pid, previous_media);
 }
@@ -813,7 +799,6 @@ fn a_transport_release_with_nothing_armed_leaves_the_pointer_alone() {
 
     stand_pin(Some(banded_video_pin((100, 80, 420, 320), 30.0)));
     forget_pin_park_swap();
-    take_gesture_snapshot();
 
     let (x, y) = seek_track_point();
     let window = RecordedPinWindow::new(0x1000);
@@ -880,7 +865,6 @@ fn a_release_with_nothing_armed_anywhere_gives_the_pointer_back() {
 
     stand_pin(Some(banded_video_pin((100, 80, 420, 320), 30.0)));
     forget_pin_park_swap();
-    take_gesture_snapshot();
 
     let (x, y) = seek_track_point();
     let window = RecordedPinWindow::new(0x1000);
@@ -943,7 +927,6 @@ fn a_drag_end_with_no_drag_gives_the_pointer_back() {
     let previous_media = stand_video_media();
 
     stand_pin(Some(banded_video_pin((100, 80, 420, 320), 30.0)));
-    take_gesture_snapshot();
 
     let window = RecordedPinWindow::new(0x1000);
     assert!(
@@ -958,12 +941,9 @@ fn a_drag_end_with_no_drag_gives_the_pointer_back() {
 
     restore(previous_pin, previous_pid, previous_media);
 }
-/// K3 RECONCILE: a swap under a hand reconciles what a file step inherits. A
-/// snapshot nothing will ever take answers `video_drag_hold_apply` false for the
-/// rest of the run, and the take-up's own `release_pin_capture` re-enters
-/// `pin_capture_lost`, whose snapshot arm then relaunches the film the pin just
-/// left - at its second, at its box - over the player begun for the file that
-/// replaced it.
+/// K3 RECONCILE: a swap under a hand gives up what a file step inherits. The in-flight relaunch
+/// is reaped rather than left behind a cover nothing will hand the band to, and the box request a
+/// gesture wrote belongs to the file that made it rather than to the one arriving.
 #[test]
 fn a_swap_reconciles_the_gesture_it_is_taking_up_with() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -975,29 +955,25 @@ fn a_swap_reconciles_the_gesture_it_is_taking_up_with() {
 
     stand_pin(Some(playing_pin((100, 80, 420, 320), 30.0)));
     forget_pin_park_swap();
-    assert!(
-        gesture_press_freeze(),
-        "a gesture killed a player of its own"
-    );
     let generation = current_pinned_generation();
     fake_end_relaunch(102, 30.0, false);
-    with_pin(|pin| pin.transport.drag_held = true);
-    video_drag_hold_set(true);
+    if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+        *request = Some((100, 80, 420, 320));
+    }
 
     reconcile_swap_take_up(true);
 
     assert!(
-        !gesture_snapshot_active(),
-        "the snapshot goes with the step: no end will relaunch a file that is no longer on screen"
-    );
-    assert!(
         pending_pinned_relaunch().is_none(),
-        "and the relaunch behind it is reaped rather than left for the next run's sweep"
+        "the relaunch behind it is reaped rather than left for the next run's sweep"
     );
     assert!(
-        !video_drag_holding(),
-        "the claim on the film a gesture was holding goes with it: the next film to be dragged is \
-         not answered with a claim about this one"
+        PIN_BOX_REQUEST
+            .lock()
+            .ok()
+            .and_then(|request| *request)
+            .is_none(),
+        "and the box request goes with the file that made it"
     );
     assert!(
         current_pinned_generation() == generation,
@@ -1006,15 +982,13 @@ fn a_swap_reconciles_the_gesture_it_is_taking_up_with() {
     assert_eq!(
         VIDEO_PID.load(Ordering::SeqCst),
         0,
-        "and that relaunch is the outgoing film's own, so its kill is confirmed: nothing of the \
-         film the pin left is left standing"
+        "and that relaunch is the outgoing film's own, so its kill is confirmed: nothing of the          film the pin left is left standing"
     );
     assert!(
         orphaned_video_kills().is_empty(),
         "reaped rather than parked for the next run's sweep"
     );
 
-    video_drag_hold_set(false);
     restore(previous_pin, previous_pid, previous_media);
 }
 
@@ -1095,7 +1069,6 @@ fn a_step_onto_a_video_parks_the_outgoing_frame() {
     stand_pin(Some(playing_pin(content, 30.0)));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
 
     assert!(cover_step_swap_for_video(true), "a step onto a video parks");
     assert!(pin_player_is_parked(), "the cover stands across the swap");
@@ -1153,7 +1126,6 @@ fn a_step_from_the_caption_hides_the_chrome_over_the_held_frame_and_the_hover_as
     stand_pin(Some(pin));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     pin_film_host::note_hosted_player(0);
     take_pin_command();
 
@@ -1275,7 +1247,6 @@ fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_land
     stand_pin(Some(pin));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     pin_film_host::note_hosted_player(0);
     take_pin_command();
     if let Ok(mut pending) = PIN_JOBS.0.lock() {
@@ -1394,7 +1365,6 @@ fn a_step_ask_leaves_the_chrome_up_while_the_outgoing_film_is_live() {
     stand_pin(Some(pin));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     pin_film_host::note_hosted_player(0);
     take_pin_command();
     if let Ok(mut pending) = PIN_JOBS.0.lock() {
@@ -1452,7 +1422,6 @@ fn a_step_park_takes_the_chrome_down_in_the_same_park_call() {
     });
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
 
     assert!(cover_step_swap_for_video(true), "a step onto a video parks");
     assert!(
@@ -1487,7 +1456,6 @@ fn the_settle_that_ends_a_step_park_brings_the_caption_back_in_the_same_call() {
     stand_pin(Some(playing_pin(content, 30.0)));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
 
     assert!(cover_step_swap_for_video(true), "the step covers");
     clear_pin_step_chrome();
@@ -1529,7 +1497,6 @@ fn a_move_over_the_caption_does_not_bring_a_strip_back_while_a_step_is_in_flight
     stand_pin(Some(pin));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
 
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
     unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
@@ -1679,13 +1646,11 @@ fn a_step_onto_a_film_no_player_can_play_raises_no_cover() {
     restore(previous_pin, previous_pid, previous_media);
 }
 
-/// K5 ROAD: which of the two roads a relayout was asked on decides a video's
-/// answer, and the answer is not the same for both. A box change is a player being
-/// ended and begun again, so it presses; a take-up has pressed nothing, so it
-/// relaunches the film that is there and reads the hold out of the pin's own
-/// transport.
+/// K5 ROAD: a video's relayout is the host fitted to the box, on every road. Nothing begins a
+/// player for a box change and nothing begins one for a take-up: the film is a thumbnail of a
+/// source window placed once, and a box is a destination rectangle (see `pin_film_thumbnail`).
 #[test]
-fn a_take_up_relaunches_a_film_without_pressing_it() {
+fn a_box_change_begins_no_player() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -1698,99 +1663,42 @@ fn a_take_up_relaunches_a_film_without_pressing_it() {
     stand_pin(Some(playing_pin(content, 30.0)));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     assert_eq!(
         VIDEO_PID.load(Ordering::SeqCst),
         101,
         "a player is behind the band"
     );
-    assert!(
-        !pinned_is_held(),
-        "and the film is playing rather than held"
-    );
 
-    relayout_pinned_media(
-        &PathBuf::from("ws-k-chrome-nav.mkv"),
-        content,
-        96,
-        None,
-        PinRelayoutRoad::TakeUp,
-    );
+    for road in [PinRelayoutRoad::TakeUp, PinRelayoutRoad::BoxChange] {
+        clear_restart_count();
+        relayout_pinned_media(
+            &PathBuf::from("ws-k-chrome-nav.mkv"),
+            content,
+            96,
+            None,
+            road,
+        );
 
-    assert_eq!(
-        restart_count(),
-        1,
-        "one relaunch: the film is begun again in the box it is being shown in"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "and no cover stands over it. A take-up has pressed nothing, so there is no dead interval \
-         to cover - and a cover raised here would be carried onto the pin this take-up is building \
-         (see `pin_park_carried_forward`), which is a frame held for the length of a wait nothing \
-         is ever going to end"
-    );
-    assert!(
-        !gesture_snapshot_active(),
-        "and no snapshot armed behind a road with no press in it: a snapshot nothing takes answers \
-         `video_drag_hold_apply` false for the rest of the run"
-    );
-    assert!(
-        !pinned_is_held(),
-        "the hold is the pin's own transport, read as it was before this WS: a film that was \
-         playing is playing on, not frozen under a cover no hand asked for"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K5 ROAD, the other half: the box change is the one road that does press, and its
-/// relaunch carries was-held rather than the frozen transport — which is what
-/// keeps a maximized playing film playing instead of coming back paused.
-#[test]
-fn a_box_change_presses_the_film_and_relaunches_it_behind_the_cover() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-    clear_restart_count();
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-    forget_resume_frame();
-
-    relayout_pinned_media(
-        &PathBuf::from("ws-k-chrome-nav.mkv"),
-        content,
-        96,
-        None,
-        PinRelayoutRoad::BoxChange,
-    );
-
-    assert!(
-        pin_player_is_parked(),
-        "the cover stands over the outgoing frame: a replacement's window is on screen within \
-         milliseconds and empty until the file is open"
-    );
-    assert_eq!(
-        restart_count(),
-        1,
-        "exactly one relaunch, and it is the press's own end that makes it"
-    );
-    assert!(
-        !pinned_is_held(),
-        "and it is begun playing. The film was playing when the change began it, so was-held is \
-         false and the relaunch carries playing — never a pause. The frozen transport says held \
-         for every film a press has touched, playing or not, which is why the relaunch reads the \
-         snapshot's was-held instead"
-    );
-    assert!(
-        !gesture_snapshot_active(),
-        "and the snapshot is spent: the press's end has taken the one relaunch it owed"
-    );
+        assert_eq!(
+            restart_count(),
+            0,
+            "{road:?} begins no player: the film follows its host"
+        );
+        assert_eq!(
+            last_restart_reason(),
+            None,
+            "so no reason line is written for a box"
+        );
+        assert_eq!(
+            VIDEO_PID.load(Ordering::SeqCst),
+            101,
+            "and the player is the one that was there"
+        );
+        assert!(
+            !pin_player_is_parked(),
+            "{road:?} raises no cover: nothing has been ended for one to hide"
+        );
+    }
 
     restore(previous_pin, previous_pid, previous_media);
 }
@@ -1840,7 +1748,6 @@ fn a_step_hands_the_cover_to_the_window_that_replaces_it() {
     stand_pin(Some(playing_pin(content, 30.0)));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     assert!(cover_step_swap_for_video(true), "the step covers");
 
     let window = RecordedPinWindow::new(0x1000);
@@ -1862,211 +1769,6 @@ fn a_step_hands_the_cover_to_the_window_that_replaces_it() {
             PinWindowCall::Repaint,
         ],
         "placed before shown, repainted in the same tick"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K5 PRESS: a box change snapshots, parks the cover and kills - the WS-J press
-/// half, at the box the window stands at rather than at a gesture's.
-#[test]
-fn a_box_change_freezes_parks_and_kills() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-    let generation = current_pinned_generation();
-
-    assert!(
-        unsafe { begin_covered_box_change() },
-        "a maximize over a live player takes the covered road"
-    );
-    assert!(
-        gesture_snapshot_active(),
-        "the press snapshots: the end relaunch owns the resume"
-    );
-    assert!(pin_player_is_parked(), "and the cover stands");
-    assert!(
-        PIN_PARK_SWAP
-            .lock()
-            .ok()
-            .and_then(|held| held.as_ref().map(|swap| swap.replacing))
-            .unwrap_or(false),
-        "for a relaunch behind it"
-    );
-    assert_eq!(
-        VIDEO_PID.load(Ordering::SeqCst),
-        0,
-        "the press kills: VIDEO_PID == 0 mid-road asserts silence"
-    );
-    assert!(
-        current_pinned_generation() > generation,
-        "a newer road supersedes whatever relaunch is still in flight"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K5 PRESS with nothing to kill is the legacy road: no snapshot, no cover.
-#[test]
-fn a_box_change_with_no_player_stays_on_the_legacy_road() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    stand_pin(Some(playing_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
-
-    assert!(
-        !unsafe { begin_covered_box_change() },
-        "with VIDEO_PID == 0 there is nothing to kill: no snapshot, no cover"
-    );
-    assert!(!gesture_snapshot_active(), "and no dead interval is armed");
-    assert!(!pin_player_is_parked(), "and no cover stands");
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K5 PRESS is not run twice for one relayout: a resize's drag already ran it
-/// and left its cover standing, and running it again would kill the replacement
-/// the first one is waiting for.
-#[test]
-fn a_box_change_over_a_standing_cover_does_not_press_again() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-    assert!(
-        park_pinned_player(HWND(0x1000 as *mut _), (content.0, content.1), true),
-        "a resize's drag parks its own cover"
-    );
-    assert_eq!(
-        VIDEO_PID.load(Ordering::SeqCst),
-        101,
-        "and its press has not killed yet - the release owns that"
-    );
-
-    assert!(
-        !unsafe { begin_covered_box_change() },
-        "so a box change over it is the same relayout and presses nothing again"
-    );
-    assert_eq!(
-        VIDEO_PID.load(Ordering::SeqCst),
-        101,
-        "leaving the player the resize's own press stood behind alone"
-    );
-    assert!(
-        pin_player_is_parked(),
-        "and the standing cover still standing"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K5 END takes the snapshot once: a second end relaunches nothing, so a
-/// maximize is exactly one relaunch at the final box.
-#[test]
-fn a_box_change_takes_the_snapshot_exactly_once() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    assert!(
-        unsafe { begin_covered_box_change() },
-        "the press arms one relaunch"
-    );
-
-    let first = take_gesture_snapshot();
-    assert!(first.is_some(), "the end owns the one relaunch");
-    assert!(
-        !gesture_snapshot_active(),
-        "the take disarms the dead interval"
-    );
-    assert_eq!(
-        take_gesture_snapshot(),
-        None,
-        "a second end relaunches nothing: one press, one player"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K5 WHOLE ROAD: press, kill, one covered swap at the final box - a playing film
-/// is playing after, placed before shown, repainted in the same tick, and never
-/// at the box the press found.
-#[test]
-fn a_box_change_swaps_once_at_the_final_box() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    clear_park_swap_arm();
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    let final_box = (0, 0, 800, 600);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-    forget_resume_frame();
-
-    assert!(
-        unsafe { begin_covered_box_change() },
-        "the press snapshots, parks and kills"
-    );
-    let snapshot = take_gesture_snapshot().expect("the end owns the relaunch");
-    fake_end_relaunch(
-        102,
-        snapshot.seconds,
-        gesture_end_holding(snapshot.was_playing, snapshot.was_held),
-    );
-    spend_the_swap_bound();
-
-    let window = RecordedPinWindow::new(0x1000);
-    // The maximize has already written the new box into the pin, so the cover was
-    // painted at that box rather than the one the press found.
-    with_pin(|pin| pin.content = final_box);
-    assert!(
-        settle_pinned_park_where(&window, true),
-        "the current replacement swaps"
-    );
-    assert!(!pin_player_is_parked(), "and the cover comes down with it");
-    assert_eq!(
-        window.calls(),
-        vec![
-            PinWindowCall::UnparkPlayerWindow(Some(final_box)),
-            PinWindowCall::Repaint,
-        ],
-        "one swap at the final box: placed before shown, repainted in the same tick"
-    );
-    assert_eq!(VIDEO_PID.load(Ordering::SeqCst), 102, "exactly one player");
-    assert!(
-        !settle_pinned_park_where(&window, true),
-        "a spent swap never swaps twice"
     );
 
     restore(previous_pin, previous_pid, previous_media);
@@ -2249,7 +1951,6 @@ fn a_box_change_moves_mpv_and_begins_nothing_again() {
     pin_stands_in_its_own_window(true);
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     clear_restart_count();
 
     relayout_pinned_media(
@@ -2284,130 +1985,6 @@ fn a_box_change_moves_mpv_and_begins_nothing_again() {
     );
 
     pin_stands_in_its_own_window(previous_own);
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// A drag on the mpv route leaves the film playing: mpv is told everything while it runs, so its
-/// press neither freezes the transport nor puts the window away — where FFmpeg's player's press
-/// still takes the kill road. The ffplay half is what the gate is visible against (see
-/// `gesture_press_freeze` and `video_drag_hold_apply`).
-#[test]
-fn a_drag_holds_ffplays_film_and_leaves_the_mpv_one_playing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    let window = CapturingWindow::around(a_window_at(content));
-
-    // FFmpeg's player: the press takes the kill road — the transport is frozen at the second the
-    // hand found and a cover stands over the window the player is about to lose.
-    stand_ffplay_in(Some(true));
-    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
-    stand_mpv_in(Some(false));
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-    take_gesture_snapshot();
-    begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
-    assert!(pin_is_dragging(), "the hand is carrying the window");
-    assert!(
-        gesture_snapshot_active(),
-        "FFmpeg's press freezes the film it is about to end"
-    );
-    assert!(
-        pin_player_is_parked(),
-        "and stands a cover over the window it is about to take down"
-    );
-    finish_pin_drag(HWND(0x1000 as *mut _), &window);
-
-    // mpv: the same press is a move. Nothing is frozen and nothing is put away, because the film
-    // is never stopped and keeps drawing in the window the drag is moving.
-    stand_ffplay_in(Some(false));
-    stand_mpv_in(Some(true));
-    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
-    take_gesture_snapshot();
-    forget_pin_park_swap();
-    forget_video_frame();
-    stand_pin(Some(playing_pin(content, 30.0)));
-    // **A film pin stands in a window of its own**, so the film is drawn through its host and the
-    // drag is a move of that host rather than a window to put away (see `pin_film_host`).
-    pin_stands_in_its_own_window(true);
-    begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
-    assert!(pin_is_dragging(), "the hand is carrying the window");
-    assert!(
-        !gesture_snapshot_active(),
-        "mpv's press freezes nothing: the film is not being ended"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "and nothing covers its window: mpv keeps drawing in the one it has"
-    );
-    finish_pin_drag(HWND(0x1000 as *mut _), &window);
-
-    stand_mpv_in(None);
-    stand_ffplay_in(None);
-    stand_video_engine_in(None);
-    pin_stands_in_its_own_window(false);
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// A drag tells FFmpeg's player to hold and tells an mpv player nothing at all — the gate that keeps
-/// a dragged mpv film drawing, seen in the one act the transport cannot show.
-///
-/// The drag test above reads this out of the transport, and the transport cannot tell the two routes
-/// apart: the freeze and the cover it observes are refused *before* any hold is taken, and the key
-/// itself lands on another process's message queue, which a test run has none of (see
-/// `video_window_for`) — so a key that was posted and a key that was never posted leave the same
-/// trace. What is asserted here is the telling itself, counted where the key is posted (see
-/// `ffplay_window::pause_posts`). Deleting the mpv gate in `video_drag_hold_apply` makes the second
-/// half post a key, which is a dragged mpv film stopped by the window it is being moved in.
-#[test]
-fn a_drag_posts_ffplays_pause_key_and_sends_an_mpv_player_nothing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-
-    // FFmpeg's player: the hold a gesture asks for is the pause key posted to its own window, and
-    // it is the only thing this app can tell a running player of its (see `video_key_pause`).
-    stand_pin(Some(playing_pin(content, 30.0)));
-    ffplay_window::clear_pause_posts();
-    video_drag_hold_apply(true);
-    assert_eq!(
-        ffplay_window::pause_posts(),
-        1,
-        "a drag over a film FFmpeg plays is one pause key, which is both the hold the transport \
-         records and the whole of what the film is told"
-    );
-
-    // mpv: the same gesture tells its player nothing, because mpv is told while it runs over its own
-    // pipe and a drag only moves the window it is already drawing in.
-    stand_ffplay_in(Some(false));
-    stand_mpv_in(Some(true));
-    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
-    stand_pin(Some(playing_pin(content, 30.0)));
-    // **A film pin stands in a window of its own**, so the film is drawn through its host and a
-    // drag only moves that host (see `pin_film_host`).
-    pin_stands_in_its_own_window(true);
-    ffplay_window::clear_pause_posts();
-    video_drag_hold_apply(true);
-    assert_eq!(
-        ffplay_window::pause_posts(),
-        0,
-        "mpv's player is left playing through a drag: a pause key posted here stops the film the \
-         hand is moving the window of, and the release that ends the gesture posts no second key \
-         to start it again"
-    );
-
-    pin_stands_in_its_own_window(false);
     restore(previous_pin, previous_pid, previous_media);
 }
 

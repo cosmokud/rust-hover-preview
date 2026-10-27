@@ -2987,7 +2987,6 @@ fn a_step_holds_its_cover_until_the_new_films_first_frame() {
     );
 
     forget_video_frame();
-    forget_resume_frame();
     forget_pin_park_swap();
 }
 

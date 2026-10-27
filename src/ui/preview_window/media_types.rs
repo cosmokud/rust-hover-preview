@@ -388,9 +388,9 @@ impl MediaType {
     /// flat fill a park paints would be laid over a picture this window is drawing — a frame of
     /// this app's own, blanked for the length of a drag and answered with a stray decode. The
     /// browser that draws an engine document is one of them; a film at a pin that stands in a window
-    /// of its own is drawn through the pin's host, so a park leaves it where it draws (see
-    /// `pin_film_host::the_pinned_film_is_drawn_in_a_host`), and the media engine's video is drawn
-    /// into this window's own surface like any other frame (see `park_pinned_player` and
+    /// of its own is drawn through the pin's host, so a cover leaves it where it draws (see
+    /// `pin_film_host::the_film_is_shown_in_a_host`), and the media engine's video is drawn
+    /// into this window's own surface like any other frame (see `park_pinned_player_for_seek` and
     /// `pin_film_host`).
     ///
     /// **A film's answer is the route of the film it is showing now**, rather than the window the

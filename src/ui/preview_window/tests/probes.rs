@@ -848,7 +848,6 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     pin_stands_in_its_own_window(true);
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
 
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
@@ -966,7 +965,6 @@ fn a_resize_drag_bands_the_pin_at_its_two_ends_and_not_on_a_step_between_them() 
     stand_pin(Some(overlay_pin(content, PinChrome::always())));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
 
     let hwnd = pin_window;
     let window = a_window_at(content);
@@ -1433,7 +1431,7 @@ fn a_player_begun_behind_a_bubble_is_begun_off_the_desktop() {
 /// by `pinned_content_is_the_pins`, and the caption, the buttons, the edges and the corners are
 /// asked about first and win where they are drawn — so the film is a handle rather than a gesture
 /// of its own. Nothing is parked and nothing is held, because mpv's window *is* the film and is
-/// carried rather than put away (see `gesture_press_freeze`).
+/// carried rather than put away: a gesture asks nothing of the player.
 #[test]
 fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1463,7 +1461,6 @@ fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
     pin_stands_in_its_own_window(true);
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
 
     // This app writes the player down as it begins one, and nothing here begins one (see
     // `note_player_process`).
@@ -1568,7 +1565,6 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
     stand_pin(Some(pin));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
 
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
@@ -1868,7 +1864,6 @@ fn a_pinned_mpv_film_is_placed_by_a_tick_a_drag_and_a_monitor_pass() {
     stand_pin(Some(pin));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
 
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;

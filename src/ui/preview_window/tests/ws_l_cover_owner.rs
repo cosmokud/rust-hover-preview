@@ -71,7 +71,7 @@ fn wide_banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
 /// A video behind the pin, as a covered press finds it.
 /// A video behind the pin, on FFmpeg's player's route rather than the machine's: with mpv
 /// installed the default engine would pick mpv, and every test here is about the cover FFmpeg's
-/// player's kill road raises — the mpv route moves the window it has and begins nothing again (see
+/// player's cover raises — the mpv route moves the window it has and begins nothing again (see
 /// `mpv_ipc`). `restore` puts the stands back.
 fn stand_video_media() -> Option<MediaData> {
     stand_ffplay_in(Some(true));
@@ -98,10 +98,8 @@ fn restore(
 ) {
     stand_mpv_in(None);
     stand_ffplay_in(None);
-    take_gesture_snapshot();
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
     clear_park_swap_arm();
     clear_restart_count();
@@ -170,22 +168,6 @@ fn the_pressed_button() -> Option<pin_chrome::CaptionButton> {
     pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.pressed))
 }
 
-/// A fresh pin over a playing video and nothing else: no step, so the first cover a press raises
-/// here is that press's own and the record names its road.
-fn stand_a_fresh_video_pin(content: ScreenRegion) {
-    stand_pin(Some(wide_banded_video_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-    forget_resume_frame();
-    take_gesture_snapshot();
-    take_relayout_request();
-    take_pin_command();
-    clear_pending_pinned_relaunch();
-    clear_park_swap_arm();
-    clear_restart_count();
-    VIDEO_PID.store(101, Ordering::SeqCst);
-}
-
 /// The user's exact sequence up to the interaction: a fresh pin over a video, then a step onto
 /// the next file. The step raises the cover it hands to the incoming player, and the record it
 /// writes is a `Step` — a replacement already on its way, begun by the swap itself, so nothing
@@ -194,8 +176,6 @@ fn stand_a_swapped_pin(content: ScreenRegion) {
     stand_pin(Some(wide_banded_video_pin(content, 30.0)));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
-    take_gesture_snapshot();
     take_relayout_request();
     take_pin_command();
     clear_pending_pinned_relaunch();
@@ -213,38 +193,21 @@ fn stand_a_swapped_pin(content: ScreenRegion) {
     VIDEO_PID.store(u32::MAX, Ordering::SeqCst);
 
     assert!(pin_player_is_parked(), "so the cover stands over the step");
-    assert!(
-        !seek_cover_is_waiting(),
-        "and a step's record is not waiting for a release that has nothing to relaunch"
-    );
 }
 
-/// What one interaction after that step must leave behind, at the state seam and one tick later.
-///
-/// Two facts. The first is where the cover is decided: a standing record left waiting on a road
-/// that is not going to come can only be ended by `finish_pin_drag` or `pin_capture_lost`, and
-/// both of them reach for `seek_cover_is_waiting` and then refuse. The second is the tick a real
-/// loop reaches a moment after the hand let go — the window behind the cover up, the bound spent,
-/// the gesture's own record gone — and it must hand the band back rather than hold a placeholder
-/// over a player that is already standing there.
+/// What the tick a real loop reaches a moment after a press leaves: the window behind the cover
+/// up, the bound spent — and the band handed back rather than a placeholder held over a player
+/// that is already standing there.
 fn assert_the_pin_is_still_usable(content: ScreenRegion, what: &str) {
-    assert!(
-        !seek_cover_is_waiting(),
-        "{what}: the standing record was left waiting on a release that was never going to make \
-         one, so the only two roads that could end the cover both refuse it"
-    );
-
     spend_the_swap_bound();
     let window = RecordedPinWindow::new(0x1000);
     assert!(
         settle_pinned_park_where(&window, true),
-        "{what}: with the window that was already behind the cover up and the bound spent, the \
-         cover settles"
+        "{what}: with the window that was already behind the cover up and the bound spent, the          cover settles"
     );
     assert!(
         !pin_player_is_parked(),
-        "{what}: and the band is the hole the player's window is seen through again, rather than \
-         an opaque rectangle whose pixels this app's own window claims every click in"
+        "{what}: and the band is the hole the player's window is seen through again, rather than          an opaque rectangle whose pixels this app's own window claims every click in"
     );
     assert_eq!(
         window.calls(),
@@ -401,12 +364,6 @@ fn a_standing_step_record_is_not_flipped_by_a_press_that_did_not_write_it() {
         pin_player_is_parked(),
         "a press over a standing cover extends it rather than raising a second one"
     );
-    assert!(
-        !seek_cover_is_waiting(),
-        "and it leaves the record it found exactly as it found it: a step's record is not made \
-         into a cover waiting on a release by a press that began no relaunch"
-    );
-
     restore(previous_pin, previous_pid, previous_media);
 }
 
@@ -560,151 +517,6 @@ fn a_cover_with_no_window_ever_arriving_comes_down_by_its_own_deadline() {
         matches!(park_swap_last_arm(), Some((ParkSwap::Abandoned, _))),
         "and the arm is written down with the wait, which is where the next person tuning the \
          cover's bound reads it from"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// A scrub's release, and a relaunch that got no player: exactly the state that road leaves behind,
-/// stood rather than driven.
-///
-/// The snapshot is taken by whichever of the two ends runs first and it is the only thing that
-/// disarms the dead interval (`relaunch_gesture_end_at`); the aim is dropped by the capture the
-/// release gives back (`pin_capture_lost`); and a relaunch with no pid writes **no** record at all,
-/// because `note_pinned_relaunch` treats a zero pid as nothing to wait behind. There is no pending
-/// record with a pid of zero to find — the absent record is the answer.
-fn stand_the_release_that_got_no_player() {
-    take_gesture_snapshot();
-    update_pin_transport(|transport| transport.seeking = None);
-    clear_pending_pinned_relaunch();
-    VIDEO_PID.store(0, Ordering::SeqCst);
-}
-
-/// A cover parked before the player behind it has been begun, which is what the kill road writes and
-/// the only press that parks before its relaunch is made (see `park_pinned_player_for_gesture`),
-/// with the pin left standing up over it.
-fn stand_a_cover_awaiting_its_relaunch(content: ScreenRegion) {
-    assert!(
-        park_pinned_player_for_seek(HWND(0x1000 as *mut _), (content.0, content.1)),
-        "a cover over the live player"
-    );
-    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
-        if let Some(swap) = held.as_mut() {
-            swap.awaiting_relaunch = true;
-        }
-    }
-    assert!(
-        seek_cover_is_waiting(),
-        "waiting for a relaunch that nothing has begun yet"
-    );
-    assert!(
-        pin_media_is_alive(false),
-        "and the pin is held up over it: the cover's record is what tells the pin it is not a \
-         window onto nothing, so nothing takes the window down from under this test"
-    );
-}
-
-/// L7 THE RESIDUAL: `awaiting_relaunch` is an expectation, and an expectation nothing can satisfy is
-/// not a wait. This is the residue of a cover whose relaunch came and got no player — the snapshot
-/// taken by whichever end ran first, no pending record at all, because a relaunch with no pid writes
-/// none, and no aim left standing.
-///
-/// Held on that, the cover is opaque for the life of the pin: the band is this app's own shape at
-/// the compositor's hit test, so every click in the video area is answered here rather than by the
-/// player, and the release roads have nothing left to ask.
-///
-/// The cover is stood as the kill road writes it, and the end that came without a player is stood
-/// rather than driven — it would begin a real player — with each half of what it leaves behind
-/// written the way that road writes it (see `relaunch_gesture_end_at` and `note_pinned_relaunch`).
-#[test]
-fn a_cover_waiting_on_a_relaunch_that_can_no_longer_arrive_is_given_up() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    clear_park_swap_arm();
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 820, 620);
-    stand_a_fresh_video_pin(content);
-    stand_a_cover_awaiting_its_relaunch(content);
-
-    // The relaunch it was parked for: it came, and no player with it.
-    stand_the_release_that_got_no_player();
-
-    stand_the_park_wait_at(PIN_PARK_COVER_TIMEOUT + PIN_PARK_SWAP_TIMEOUT);
-    let window = RecordedPinWindow::new(0x1000);
-    assert!(
-        settle_pinned_park_where(&window, false),
-        "so the cover is given up rather than held for a relaunch that can never be begun"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "and the band is the hole it is between films, which this app's own window does not claim"
-    );
-    assert!(
-        !seek_cover_is_waiting(),
-        "nothing is in flight any more, so the expectation is dead: no gesture, no snapshot, no \
-         relaunch of its own"
-    );
-
-    // The same expectation, with the player's window already standing behind the cover: that is
-    // the user's case — a film is playing behind the placeholder — and it must be handed the band,
-    // not held away from it.
-    stand_a_fresh_video_pin(content);
-    stand_a_cover_awaiting_its_relaunch(content);
-    stand_the_release_that_got_no_player();
-
-    stand_the_park_wait_at(PIN_PARK_SWAP_TIMEOUT * 4);
-    let window = RecordedPinWindow::new(0x1000);
-    assert!(
-        settle_pinned_park_where(&window, true),
-        "a window standing in the band is the thing the cover was hiding, and a dead expectation is \
-         no reason to keep hiding it"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "so the player is seen through the band again"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// L6 AGGRAVATOR: a box change over somebody else's cover is not a bare relaunch. Refusing the
-/// press leaves `relayout_pinned_media` with a `restart_pinned_player` and nothing else — a
-/// player ended and another begun with the cover that was hiding the hole still standing and no
-/// frame asked for, which is a hole in the shape of a video rather than a placeholder.
-#[test]
-fn a_box_change_over_a_step_cover_is_a_press_and_not_a_bare_relaunch() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    clear_park_swap_arm();
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 820, 620);
-    stand_a_swapped_pin(content);
-    let generation = current_pinned_generation();
-
-    assert!(
-        unsafe { begin_covered_box_change() },
-        "a box change over a standing cover is a press under the cover that is already there, \
-         not a refusal that leaves the relayout with nothing"
-    );
-    assert!(
-        gesture_snapshot_active(),
-        "so the press snapshots and the end relaunch owns the resume"
-    );
-    assert!(
-        pin_player_is_parked(),
-        "and the cover the relayout is about to leave a hole behind is still standing"
-    );
-    assert!(
-        current_pinned_generation() > generation,
-        "a newer road supersedes whatever relaunch is still in flight behind it"
     );
 
     restore(previous_pin, previous_pid, previous_media);

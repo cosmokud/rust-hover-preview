@@ -137,10 +137,6 @@ fn pin_state_dump() -> BTreeMap<String, String> {
             pin.transport.pending_hold.to_string(),
         );
         out.insert(
-            "pin.transport.drag_held".into(),
-            pin.transport.drag_held.to_string(),
-        );
-        out.insert(
             "pin.transport.seeking".into(),
             rounded(pin.transport.seeking),
         );
@@ -172,14 +168,6 @@ fn pin_state_dump() -> BTreeMap<String, String> {
     out.insert(
         "static.PIN_PLAYER_GENERATION".into(),
         current_pinned_generation().to_string(),
-    );
-    out.insert(
-        "static.GESTURE_SNAPSHOT".into(),
-        gesture_snapshot_active().to_string(),
-    );
-    out.insert(
-        "static.VIDEO_DRAG_HOLDING".into(),
-        video_drag_holding().to_string(),
     );
     out.insert(
         "static.VIDEO_PID".into(),
@@ -245,16 +233,13 @@ fn stand_a_kind(width: u32, height: u32, kind: MediaType) -> Option<MediaData> {
 /// Every piece of a road's bookkeeping put back to nothing, so one test's
 /// reads are not the next test's.
 fn clean_slate() {
-    take_gesture_snapshot();
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
     clear_park_swap_arm();
     clear_restart_count();
     clear_park_trace();
     stand_pin(None);
-    video_drag_hold_set(false);
     pin_arc_set(None);
     VIDEO_PID.store(0, Ordering::SeqCst);
     let _ = take_pin_command();
@@ -673,10 +658,8 @@ fn a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_b
     // rather than begun, because a begun resize asks for the frame it hands the
     // band back and spawns a player to render it, which a test must not do. Its
     // end is the same arm either way (see `finish_pin_drag`) — as long as no
-    // press's dead interval is standing, or the end is a relaunch rather than
+    // cover is standing, or the end is a relaunch rather than
     // the relayout this is about.
-    take_gesture_snapshot();
-    forget_resume_frame();
     take_relayout_request();
     let window = CapturingWindow::around(a_window_at(the_window_box()));
     let (width, height) = pin_state()

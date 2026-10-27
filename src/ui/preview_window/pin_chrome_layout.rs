@@ -1091,7 +1091,7 @@ pub(super) fn settle_pin_volume() {
         ) {
             PinLevelSettling::Relaunch => {
                 let playhead = pin_playhead(&transport).unwrap_or(0.0);
-                restart_pinned_player(&path, content, playhead, false);
+                restart_pinned_player(&path, content, playhead, false, RestartReason::Volume);
             }
             PinLevelSettling::OwedToTheNextPlayer => {
                 // Nothing is done, and nothing is written: the claim of what the running player
