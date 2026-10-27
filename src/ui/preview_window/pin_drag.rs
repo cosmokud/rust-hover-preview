@@ -1207,6 +1207,9 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
     // told it is owed — and a hold already owed is a second key for one gesture, which is a film
     // playing over a bar with a pause glyph on it (see `settle_video_drag_hold`).
     settle_video_drag_hold(false);
+    // The held frames the drag's steps were counted in are summed here, at the settle that ends it
+    // (see `pin_film_thumbnail::settle_the_held_frames`).
+    pin_film_thumbnail::settle_the_held_frames();
 
     // **The band is not handed back here, by either kind of drag.** It is handed back by the settle,
     // on the tick that finds a player to see through the band — which is the only place that can
@@ -1276,6 +1279,9 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
     // refuses the hold it exists for and its own release posts the toggle onto a film nobody
     // stopped (see `settle_video_drag_hold`).
     settle_video_drag_hold(false);
+    // A capture taken from under a drag is the drag's other settle, and the held frames it counted are
+    // summed here as they are at a release (see `pin_film_thumbnail::settle_the_held_frames`).
+    pin_film_thumbnail::settle_the_held_frames();
 
     // The seek's aim, read before the record goes: a kill-road seek ended or
     // abandoned here relaunches at the aimed second rather than the press's,

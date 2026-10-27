@@ -1586,6 +1586,9 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     // Shell's resource leaking, and the source is taken off the screen with the host it was seen in
     // (see `pin_film_thumbnail`).
     pin_film_thumbnail::set_the_source_visible(false);
+    // A pin's own end is the last settle of the held frames it counted, written before the record
+    // that counted them goes (see `pin_film_thumbnail::settle_the_held_frames`).
+    pin_film_thumbnail::settle_the_held_frames();
     pin_film_thumbnail::forget_the_thumbnail();
     // **The pin's chrome is given back to the Shell before the host that owns it goes.** Destroying
     // a window destroys the windows it owns, and the pin's window is kept between pins — so a
