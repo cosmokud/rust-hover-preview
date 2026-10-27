@@ -1404,6 +1404,29 @@ fn the_source_sample(source: HWND, client: (i32, i32)) -> bool {
     unsafe { the_source_has_lit_pixels(source, client) }
 }
 
+/// Whether the picture the source of this player holds is lit, read through the player's own window
+/// now rather than at the monitor's pace.
+///
+/// It is the drawn probe (`the_source_has_lit_pixels`) asked at one moment, and its one caller is a
+/// relaunch's freeze: after a player is suspended, **this is what says whether the frame it was
+/// showing is still there for the Shell to draw** — `ok` for a window that kept its picture, `black`
+/// for one with nothing in it, which no registration of that window can bring back (see
+/// `pin_playback::freeze_the_outgoing_picture`). `None` where this player has no source window to
+/// read, which is a film that has drawn nothing yet.
+///
+/// It reads a few pixels of the window's own DC, which is not a wait on the player's threads: a
+/// suspended player is asked nothing, and the answer is the surface it left behind.
+pub(super) fn the_sources_picture_is_lit(pid: u32) -> Option<bool> {
+    if !the_source_is_up(pid) {
+        return None;
+    }
+    let source = the_source_window()?;
+    // Safety: the handle is the source this module adopted from a player's own window, and the calls
+    // read a few of its pixels or report that they cannot.
+    let client = unsafe { client_size(source) }.unwrap_or((0, 0));
+    Some(the_source_sample(source, (client.0.max(1), client.1.max(1))))
+}
+
 /// Whether a few pixels of the source's own window are lit: **the only "it has drawn" there is for a
 /// player that answers nothing**, and what `the_source_drew` paces.
 ///

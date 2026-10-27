@@ -35,9 +35,10 @@ use crate::formats::routing::NavCategory;
 /// confirm and a mute is a toggle rather than a setting, so a film begun at zero stays at zero for
 /// good.
 ///
-/// **So the player on screen is frozen rather than left playing.** A hold is the one thing both
-/// engines take instantly, and it is taken before its replacement is begun (see
-/// `pin_playback::freeze_the_outgoing_picture`), so what overlaps the replacement is a still frame
+/// **So the player on screen is frozen rather than left playing.** A hold is taken before its
+/// replacement is begun (see `pin_playback::freeze_the_outgoing_picture`) — mpv by its pipe, and an
+/// engine with no command channel by suspending every thread of it, since the pause key it can be told
+/// clears the window the picture is drawn through — so what overlaps the replacement is a still frame
 /// and nothing else: the walk-and-jump the waiting picture used to do, and the second audio stream
 /// that went with it, are both gone. What the hold costs is a picture that does not move for as long
 /// as the swap takes — bounded by the same `VIDEO_START_WAIT_SECS` the picture's hold is bounded by,
