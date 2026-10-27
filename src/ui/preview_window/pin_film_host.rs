@@ -105,6 +105,8 @@ pub(super) fn a_resize_drag_is_live() -> bool {
 /// a pin can show its film through are erased through here — the pin's own class, and the hover's a
 /// pin took up (see `hover_film_host`).
 pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
+    #[cfg(test)]
+    HOST_ERASES.fetch_add(1, Ordering::SeqCst);
     let mut client = RECT::default();
     if unsafe { GetClientRect(host, &mut client) }.is_err() {
         return;
@@ -118,6 +120,18 @@ pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
 
 /// Registered once per run: the class a film's host is made from (see `create`).
 static FILM_HOST_CLASS_REGISTERED: Once = Once::new();
+
+/// How many erases this run has painted into a film host: the seam that says **nothing paints over a
+/// still a relaunch left standing** (see `paint_the_host_behind_the_film` and
+/// `pin_film_thumbnail::stand_the_outgoing_picture_as_a_still`).
+#[cfg(test)]
+static HOST_ERASES: AtomicU32 = AtomicU32::new(0);
+
+/// The erases this run has painted into a film host (see `HOST_ERASES`).
+#[cfg(test)]
+pub(super) fn host_erases() -> u32 {
+    HOST_ERASES.load(Ordering::SeqCst)
+}
 
 /// The host of the pin that is up, and the player this app has attached to it.
 static PIN_FILM_HOST: AtomicIsize = AtomicIsize::new(0);
@@ -384,12 +398,15 @@ fn the_drawing_trace_is_due(
 ///
 /// It is the question every road that would show, raise or order the host asks, and it is asked of the
 /// registration rather than of the newest player because of the whole of a relaunch's wait: the
-/// replacement is recorded before it has made a window, while the player before it is **frozen** and is
-/// what the host is drawing (see `pin_playback::freeze_the_outgoing_picture`). Asked of the newest pid
+/// replacement is recorded before it has made a window, while the player before it is **covered** and is
+/// what the host is drawing (see `pin_playback::relaunch_pinned_player`). Asked of the newest pid
 /// instead, a seek's instant is a pin declared empty — the z-order re-assert skipped, the band treated
-/// as a hole — with a still frame standing in it. A host with no registration in it yet is the player's
+/// as a hole — with a still standing in it. A host with no registration in it yet is the player's
 /// own window, which is all there is while the source is being adopted and the Shell has not been handed
-/// it (see `pin_film_thumbnail::adopt_the_source`).
+/// it (see `pin_film_thumbnail::adopt_the_source`). **A still this app painted is the one picture a host
+/// can have with no registration in it**, and it is not this question's: the host stands where it is and
+/// the tick's show has nothing to add to it (see
+/// `pin_film_thumbnail::stand_the_outgoing_picture_as_a_still`).
 pub(super) fn the_host_is_drawing() -> bool {
     let Some(host) = film_host() else {
         trace_the_hosted_drawing(0, None, false);

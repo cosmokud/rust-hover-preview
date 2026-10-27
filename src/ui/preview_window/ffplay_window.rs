@@ -422,10 +422,10 @@ pub(super) fn ensure_noactivate_monitor() {
 
                 let elapsed = pid_started.elapsed();
                 // **A replacement that is being waited for is looked for at the start's cadence, not
-                // the idle one.** The placeholder is already on screen (see
-                // `pin_playback::freeze_the_outgoing_picture`), so the only thing left of a relaunch's
+                // the idle one.** The cover is already on screen (see
+                // `pin_playback::relaunch_pinned_player`), so the only thing left of a relaunch's
                 // wait is its window being found and handed the picture — and the pass that finds it is
-                // the pass the freeze ends. It is bounded by the same wait the handover is bounded by,
+                // the pass the cover ends. It is bounded by the same wait the handover is bounded by,
                 // and it costs nothing at all while no relaunch is pending.
                 let launching = elapsed < Duration::from_secs(VIDEO_START_WAIT_SECS)
                     && pinned()

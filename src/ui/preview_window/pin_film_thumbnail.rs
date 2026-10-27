@@ -165,22 +165,23 @@ use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
+use windows::Win32::Foundation::{BOOL, COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE,
     DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, GetDC, GetPixel, InvalidateRect, ReleaseDC, CLR_INVALID,
+    ClientToScreen, GetDC, GetPixel, InvalidateRect, ReleaseDC, SetBrushOrgEx, SetStretchBltMode,
+    StretchBlt, UpdateWindow, CLR_INVALID, HALFTONE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
     IsWindow, IsWindowVisible, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW,
-    SetWindowPos, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK,
-    SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    SetWindowPos, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, LWA_ALPHA, PW_RENDERFULLCONTENT,
+    SM_CXMAXTRACK, SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 // Only the binary asks a window who owns it: a test has one process (see `the_source_is_up`).
 #[cfg(not(test))]
@@ -188,6 +189,21 @@ use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
 use super::pin_trace::note_pin_trace;
 use super::*;
+
+// `PrintWindow`, which is the one call that asks a window for the frame it last presented.
+//
+// **It is declared here because this build's `windows` features file the call under an unrelated
+// module** (`Win32::Storage::Xps`) rather than beside the window calls it belongs to, and a feature
+// added for one name is a module of the SDK's carried for it. user32 is in every process already, so
+// this is a link and not a dependency (see `mpv_ipc`'s `PeekNamedPipe` for the same bargain).
+#[link(name = "user32")]
+extern "system" {
+    // `PrintWindow(window, dc, flags)`, which draws the window's own picture into the context and
+    // reports whether it did. `PW_RENDERFULLCONTENT` is what asks for the last *presented* frame of a
+    // window that draws through a swapchain, rather than an empty remake of it (see
+    // `the_machine_prints_the_source`).
+    fn PrintWindow(window: HWND, dc: HDC, flags: u32) -> BOOL;
+}
 
 // **`RHP_THUMBNAIL_SOURCE` lost and is gone.** It named `native` (one placement at the film's own
 // picture size) or `box` (one placement at the pin's box the source was adopted at), and nothing
@@ -688,13 +704,18 @@ fn note_the_placement_of_a_pending_source(source: isize, process: u32, placed: S
     }
 }
 
-/// Whether the registration standing in a host draws a source at all — the question `note_the_source`
-/// asks before it lets the picture before this source go (see `hand_the_picture_over`).
-fn the_registration_is_standing() -> bool {
-    THUMBNAIL
-        .lock()
-        .ok()
-        .is_some_and(|held| held.registration != 0 && held.registered != 0)
+/// Whether a host has a picture in it at all — the question `note_the_source` asks before it lets the
+/// picture before this source go (see `hand_the_picture_over`).
+///
+/// **A still this app painted is a picture too**, and it is the one a relaunch that took a capture
+/// leaves standing (see `stand_the_outgoing_picture_as_a_still`): a source adopted over it waits its
+/// turn exactly as it would behind a registration, rather than being registered before it can draw.
+fn the_picture_is_standing() -> bool {
+    a_still_stands()
+        || THUMBNAIL
+            .lock()
+            .ok()
+            .is_some_and(|held| held.registration != 0 && held.registered != 0)
 }
 
 /// Whether a source adopted to take the picture over is still waiting to be ready, for the player it
@@ -768,6 +789,12 @@ pub(super) fn the_standing_source_process(host: HWND) -> Option<u32> {
 ///
 /// Safety: `source` is a window the caller found by `pid` and this app did not make.
 pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
+    // **A window the still was taken of is not adopted again**: its player is ended the moment the
+    // still is painted, and this pass can arrive in between with the window still a window (see
+    // `STILL_PID`).
+    if STILL_PID.load(Ordering::SeqCst) == pid {
+        return;
+    }
     let ex = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
     let invisible = the_source_is_invisible();
     let _ = unsafe { SetWindowLongPtrW(source, GWL_EXSTYLE, source_ex_style(ex, invisible)) };
@@ -867,7 +894,12 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
         } else {
             arm_the_late_placement(source, pid);
         }
-        settle_the_registration(&mut held, host);
+        // **A still this app painted is the picture until a source can draw over it**: registering
+        // this one here would compose a window that has drawn nothing over that still, which is the
+        // blank the paint exists to keep out (see `stand_the_outgoing_picture_as_a_still`).
+        if !(pending && a_still_stands()) {
+            settle_the_registration(&mut held, host);
+        }
     }
 }
 
@@ -887,18 +919,26 @@ pub(super) fn note_the_source(source: HWND, pid: u32) {
         return;
     }
 
-    if the_registration_is_standing() {
+    if the_picture_is_standing() {
         let drawn = THUMBNAIL.lock().ok().map(|held| held.registered).unwrap_or(0);
         arm_the_pending_source(source, pid);
         SOURCE.store(number, Ordering::SeqCst);
         SOURCE_PROCESS.store(pid, Ordering::SeqCst);
-        note_pin_trace!(
-            "thumbnail source waiting {:?} pid {}: the picture standing is {:?} and draws until it \
-             is ready",
-            source,
-            pid,
-            HWND(drawn as *mut _),
-        );
+        if drawn != 0 {
+            note_pin_trace!(
+                "thumbnail source waiting {:?} pid {}: the picture standing is {:?} and draws until it \
+                 is ready",
+                source,
+                pid,
+                HWND(drawn as *mut _),
+            );
+        } else {
+            note_pin_trace!(
+                "thumbnail source waiting {:?} pid {pid}: the still painted for a relaunch draws until \
+                 it is ready",
+                source,
+            );
+        }
         return;
     }
 
@@ -998,7 +1038,7 @@ pub(super) unsafe fn keep_the_source_invisible() {
 /// **A frame is only a re-point where the pair changed**: a step of a drag moves the host's client
 /// every time, and a tick that finds the same box hands the Shell nothing (see `the_registration_wants`).
 pub(super) fn the_band_was_placed(host: HWND) {
-    if SOURCE.load(Ordering::SeqCst) == 0 {
+    if SOURCE.load(Ordering::SeqCst) == 0 || a_still_stands() {
         return;
     }
     let Ok(mut held) = THUMBNAIL.lock() else {
@@ -1308,6 +1348,11 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     let_the_registration_go(old.registration);
     let swapped = held.registered;
     drop(held);
+    // **The still is covered from the line above**, and it goes with the registration that took the
+    // picture over: the swap needs no clear, because the Shell composes this registration over the
+    // still this app painted (see `stand_the_outgoing_picture_as_a_still`).
+    STILL_HOST.store(0, Ordering::SeqCst);
+    STILL_PID.store(0, Ordering::SeqCst);
     forget_the_pending_source_of(pending.source, pending.process);
     // **The line names both players, not just the two windows**: a handover made onto a dead window is
     // invisible in a pair of handles, and a run should never have to read a pid off anything else to
@@ -1770,6 +1815,8 @@ pub(super) fn forget_the_thumbnail() {
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(0, Ordering::SeqCst);
     SOURCE_PROCESS.store(0, Ordering::SeqCst);
+    STILL_HOST.store(0, Ordering::SeqCst);
+    STILL_PID.store(0, Ordering::SeqCst);
     if let Ok(mut held) = HELD_FRAMES.lock() {
         // The pin that counted these is gone, so the next one opens its own first second.
         *held = HeldFrames::default();
@@ -1783,6 +1830,240 @@ pub(super) fn forget_the_thumbnail_of(host: HWND) {
     if drawn_in {
         forget_the_thumbnail();
     }
+}
+
+/// The host a relaunch has painted a still into, or nothing while none stands: **a picture of this
+/// app's own where the registration was drawing**, and the state that keeps a new source from taking
+/// the box before it can draw (see `the_picture_is_standing`). It goes with the registration, the
+/// host, and the pin (see `forget_the_thumbnail`).
+static STILL_HOST: AtomicIsize = AtomicIsize::new(0);
+
+/// The player the still standing was taken of, or nothing while none stands: **its window is not
+/// adopted again**. The player is ended a moment after the still is painted, and the pass that watches
+/// a player the pin is drawing would otherwise find the window it has just been let go of and register
+/// a dying source over the still (see `adopt_the_source`).
+static STILL_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Whether a still this app painted for a relaunch is the picture on screen (see `STILL_HOST`).
+pub(super) fn a_still_stands() -> bool {
+    STILL_HOST.load(Ordering::SeqCst) != 0
+}
+
+/// A frame captured out of the picture a relaunch is about to end, and where it goes: the host whose
+/// whole client it covers, and the rectangle of the capture that has that client's shape.
+struct CapturedStill {
+    pixels: DibSurface,
+    crop: SourceBox,
+    host: HWND,
+}
+
+/// **A still of the picture on screen, taken before anything is begun over it**, or nothing where
+/// there is no lit frame to take.
+///
+/// It is `PrintWindow` with `PW_RENDERFULLCONTENT` — the last frame the source presented, rather
+/// than a remake of it by the player — into a surface the size of the source's own client, and a
+/// handful of its pixels are read before it is offered as a picture: a window FFmpeg's player draws
+/// through a swapchain can answer with black, and a black still is the placeholder this road must
+/// never paint (see `the_machine_prints_the_source`).
+///
+/// **The crop is the one the registration already wears**, from the source's client and the film's
+/// own shape to the host's client (see `the_pictures_crop`), so the still covers exactly the pixels
+/// the Shell was composing a moment ago.
+///
+/// shortcut: `PrintWindow` is a cross-process send, and it is made once per relaunch and never on a
+/// gesture; it is also why the player it reads is still running when it is asked — a suspended
+/// process answers nothing. If a run shows the call waiting, read the frame off the source's own DC
+/// instead and take the accuracy it loses for it.
+fn capture_the_outgoing_picture(pid: u32) -> Option<CapturedStill> {
+    if !the_source_is_up(pid) {
+        return None;
+    }
+    let source = the_source_window()?;
+    // Safety: the handle is the source this module adopted from a player's own window, and the
+    // questions are about its client area.
+    let (width, height) = unsafe { client_size(source) }.filter(|(w, h)| *w > 0 && *h > 0)?;
+    let (host, aspect) = {
+        let held = THUMBNAIL.lock().ok()?;
+        let host = (held.host != 0).then_some(HWND(held.host as *mut _))?;
+        let aspect = held
+            .source
+            .filter(|shape| shape.belongs_to(source, pid))
+            .and_then(|shape| shape.aspect);
+        (host, aspect)
+    };
+    // Safety: the handle is the host the registration was drawing into, a window of this app's.
+    let (box_width, box_height) = unsafe { client_size(host) }.filter(|(w, h)| *w > 0 && *h > 0)?;
+    let still = DibSurface::create(width as u32, height as u32)?;
+    let lit = the_machine_prints_the_source(source, &still);
+    note_pin_trace!(
+        "outgoing picture captured pid {pid} {width}x{height} sample {}",
+        if lit { "ok" } else { "black" },
+    );
+    lit.then_some(CapturedStill {
+        pixels: still,
+        crop: the_pictures_crop((width, height), (box_width, box_height), aspect).0,
+        host,
+    })
+}
+
+/// Whether the source's last presented frame is in `still`, from the machine or from the answer a
+/// test stood in (see `CAPTURE_STAND_IN`).
+fn the_machine_prints_the_source(source: HWND, still: &DibSurface) -> bool {
+    #[cfg(test)]
+    if let Some(lit) = CAPTURE_STAND_IN.lock().ok().and_then(|held| *held) {
+        // A window of the test process prints itself as nothing, so what a test stands in is the
+        // result rather than the call: a lit still is filled where the sample reads it.
+        if lit {
+            let length = still.width as usize * still.height as usize * 4;
+            // Safety: the surface is this test's own, of the size this line reads.
+            unsafe { std::ptr::write_bytes(still.bits(), 0x80, length) };
+        }
+        return lit;
+    }
+    // Safety: the handle is the source this module adopted from a player's own window, and the
+    // surface is this call's own; both are given back before this answers.
+    unsafe {
+        if !PrintWindow(source, still.dc, PW_RENDERFULLCONTENT).as_bool() {
+            return false;
+        }
+        // GDI batches its calls and what is read next is not a GDI call.
+        let _ = GdiFlush();
+        the_still_is_lit(still)
+    }
+}
+
+/// Whether a handful of points well inside the captured frame are lit: **the same probe the source's
+/// own window is read with**, applied to the still instead (see `the_source_has_lit_pixels`).
+///
+/// Safety: `still` is a surface this app made and holds.
+unsafe fn the_still_is_lit(still: &DibSurface) -> bool {
+    let (width, height) = (still.width as i32, still.height as i32);
+    let points = [
+        (width / 4, height / 4),
+        (width / 2, height / 4),
+        (width / 2, height / 2),
+        (width / 4, height * 3 / 4),
+        (width * 3 / 4, height * 3 / 4),
+    ];
+    // Safety: the surface's bits are as many pixels as its own width and height say.
+    let pixels = unsafe {
+        std::slice::from_raw_parts(still.bits() as *const u32, (width * height) as usize)
+    };
+    points
+        .iter()
+        .any(|&(x, y)| pixels[(y * width + x) as usize] & 0x00FF_FFFF != 0)
+}
+
+/// Paint the still into the host's whole client, with the same `HALFTONE` stretch a picture is
+/// scaled with everywhere else (see `pin_taskbar_mirror::thumbnail_bitmap`).
+unsafe fn paint_the_still(still: &CapturedStill) -> bool {
+    // Safety: the handle is the host the registration was drawing into, a window of this app's.
+    let Some((width, height)) = (unsafe { client_size(still.host) }) else {
+        return false;
+    };
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+    let (left, top, crop_width, crop_height) = still.crop;
+    // Safety: the surface is this call's, the host is a window of this app's, and what is asked of
+    // the two device contexts is one scaling copy between them.
+    unsafe {
+        let dc = GetDC(still.host);
+        if dc.is_invalid() {
+            return false;
+        }
+        let _ = SetStretchBltMode(dc, HALFTONE);
+        // The brush origin travels with the mode: halftone measures the destination from it.
+        let _ = SetBrushOrgEx(dc, 0, 0, None);
+        let painted = StretchBlt(
+            dc,
+            0,
+            0,
+            width,
+            height,
+            still.pixels.dc,
+            left,
+            top,
+            crop_width,
+            crop_height,
+            SRCCOPY,
+        )
+        .as_bool();
+        ReleaseDC(still.host, dc);
+        painted
+    }
+}
+
+/// **The placeholder a relaunch paints for itself: a still of the picture it ends, and the outgoing
+/// player let go of a moment later.**
+///
+/// It answers whether a still stands, and `false` is the road as it was before there was a cover at
+/// all: nothing is captured, painted, frozen, suspended or unregistered, so the player the relaunch
+/// replaces goes on playing until the replacement draws — `placeholder unavailable pid N: the old
+/// picture plays on` says so. A black capture is that case too: a black still is never painted (see
+/// `capture_the_outgoing_picture`).
+///
+/// **The one case where the registration goes first is this one** — its window is the player being
+/// ended, so nothing may be left drawing it. The still is painted underneath before that, which is
+/// what makes the unregister safe: the host has a picture of this app's own from the moment the
+/// Shell stops composing the window.
+///
+/// It is once per relaunch and never on a frame: the capture, the crop and the one stretch happen
+/// behind the user's own gesture, and everything after it is the swap that was already there (see
+/// `hand_the_picture_over`).
+pub(super) fn stand_the_outgoing_picture_as_a_still(pid: u32) -> bool {
+    let Some(still) = capture_the_outgoing_picture(pid) else {
+        note_pin_trace!("placeholder unavailable pid {pid}: the old picture plays on");
+        return false;
+    };
+    if !unsafe { paint_the_still(&still) } {
+        note_pin_trace!("placeholder unavailable pid {pid}: the old picture plays on");
+        return false;
+    }
+    // Safety: the handle is the host the registration was drawing into, a window of this app's.
+    let host = still.host;
+    // **Let go of before the registration is**, so the pass that watches the outgoing player cannot
+    // adopt it back in between (see `STILL_PID`).
+    STILL_PID.store(pid, Ordering::SeqCst);
+    forget_the_thumbnail();
+    STILL_HOST.store(host.0 as isize, Ordering::SeqCst);
+    #[cfg(test)]
+    if let Ok(mut held) = THE_STILLS_CROP.lock() {
+        *held = Some(still.crop);
+    }
+    // **One repaint and no erase**: the host's own erase is the black a still must never show, so the
+    // client is invalidated without it and the still this app painted is what it paints.
+    unsafe {
+        let _ = InvalidateRect(host, None, false);
+        let _ = UpdateWindow(host);
+    }
+    note_pin_trace!("placeholder painted from a capture pid {pid}");
+    true
+}
+
+/// The answer a test stands in for the machine's capture: `true` is a lit frame, `false` a black
+/// one, and `None` asks the machine (see `the_machine_prints_the_source`).
+#[cfg(test)]
+static CAPTURE_STAND_IN: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Stand a capture answer in place of the machine's own, or give the machine's own back with `None`.
+#[cfg(test)]
+pub(super) fn stand_the_capture_in(answer: Option<bool>) {
+    if let Ok(mut held) = CAPTURE_STAND_IN.lock() {
+        *held = answer;
+    }
+}
+
+/// The crop the last still was painted with, as a test reads the road it took rather than the pixels
+/// it put there: the rectangle of the capture that filled the host's client (see
+/// `stand_the_outgoing_picture_as_a_still`).
+#[cfg(test)]
+static THE_STILLS_CROP: Mutex<Option<SourceBox>> = Mutex::new(None);
+
+/// The crop the last still was painted with (see `THE_STILLS_CROP`).
+#[cfg(test)]
+pub(super) fn the_stills_crop() -> Option<SourceBox> {
+    THE_STILLS_CROP.lock().ok().and_then(|held| *held)
 }
 
 /// The rectangle a picture of `aspect` is drawn in inside a `box_`: fitted to the box's own shape and
@@ -1859,8 +2140,7 @@ fn the_thumbnail_box(box_: (i32, i32), client: (i32, i32), aspect: Option<f64>) 
     let box_ = (box_.0.max(1), box_.1.max(1));
     let (source, clamped) = match aspect {
         Some(_) => {
-            let ((left, top, width, height), clamped) =
-                the_crop_filling(a_picture_fitted_to(aspect, client), box_);
+            let ((left, top, width, height), clamped) = the_pictures_crop(client, box_, aspect);
             (Some((left, top, left + width, top + height)), clamped)
         }
         None => (None, false),
@@ -1902,6 +2182,18 @@ impl ThumbnailBox {
         );
         self
     }
+}
+
+/// **The crop a host's client is filled by a picture in a source's own client**: the picture fitted
+/// inside that client and then cut to the client's shape — the one rectangle the registration samples
+/// and the one a captured still is painted with, so a relaunch's cover is the frame it replaced rather
+/// than a second guess at its shape (see `the_thumbnail_box` and `stand_the_outgoing_picture_as_a_still`).
+fn the_pictures_crop(
+    client: (i32, i32),
+    box_: (i32, i32),
+    aspect: Option<f64>,
+) -> ((i32, i32, i32, i32), bool) {
+    the_crop_filling(a_picture_fitted_to(aspect, client), box_)
 }
 
 /// The rectangle of `picture` — `left, top, width, height` inside the source's client — that has the
@@ -3376,6 +3668,36 @@ mod tests {
             );
             assert!(upscaled, "and the trace says the crop was cut to the picture");
         }
+    }
+
+    /// **A still a relaunch paints is cut by the box's own shape, exactly as the registration's crop is**:
+    /// the film fitted into the source's client and then the rectangle of it that has the host's shape, so
+    /// the cover the user sees is the frame that was just on screen and not a second guess at its shape
+    /// (see `the_pictures_crop` and `stand_the_outgoing_picture_as_a_still`).
+    #[test]
+    fn a_captured_still_is_cropped_by_the_boxs_shape() {
+        let wide = Some(16.0 / 9.0);
+        // A 1920x1080 frame on a square band: the height is kept and the sides go, centred.
+        assert_eq!(
+            the_pictures_crop((1920, 1080), (400, 400), wide).0,
+            (420, 0, 1080, 1080)
+        );
+        // The same frame on the 320x240 band a pin is built at: the largest 4:3 rectangle of it.
+        assert_eq!(
+            the_pictures_crop((1920, 1080), (320, 240), wide).0,
+            (240, 0, 1440, 1080)
+        );
+        // The film's own shape inside its client: a 4:3 film in a 16:9 client is pillars either side,
+        // and the crop is of the picture rather than of the client it stands in.
+        assert_eq!(
+            the_pictures_crop((1920, 1080), (400, 400), Some(0.75)).0,
+            (555, 135, 810, 810)
+        );
+        // A box the film's own shape is the picture whole.
+        assert_eq!(
+            the_pictures_crop((1920, 1080), (1920, 1080), wide).0,
+            (0, 0, 1920, 1080)
+        );
     }
 
     /// **A shape that rounds is a picture a pixel out and never a pixel over its client**: the measured
