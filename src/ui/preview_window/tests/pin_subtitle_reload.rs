@@ -34,35 +34,88 @@ fn a_pin_playing(film: &Path, content: ScreenRegion) -> PinnedPreview {
     pin
 }
 
-/// A pin showing the film whose subtitles have just been copied is begun again, once, so the
-/// frame it draws next is drawn with them — while a hover keeps the answer it was given.
+/// A pin showing the film whose subtitles have just been copied: **FFmpeg's player is begun again** so
+/// the copy is drawn by the frame after it, and **mpv is simply handed the file** and draws it without
+/// the player, its window or its picture moving — no black frame, no second decode, no handover (see
+/// `reload_pinned_subtitles` and `mpv_ipc::add_subtitles`).
 ///
-/// This is the pin-only reload the user asked for: a pinned window has its film on screen
-/// already, so a copy landing in the background is worth a stop and a start (see
-/// `reload_pinned_subtitles`), which is exactly what a hover must not do under the pointer.
+/// This is the pin-only reload the user asked for: a pinned window has its film on screen already, so a
+/// copy landing in the background is worth drawing; a hover is deliberately never begun again for one.
 #[test]
-fn a_pin_showing_the_film_restarts_its_player_when_the_copied_subtitles_are_ready() {
+fn a_pin_hands_its_late_copied_subtitles_to_mpv_without_a_relaunch_and_begins_ffplay_again() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    let _setting = VideoSubtitlesSetting::stood_at(true);
 
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
 
     let film = PathBuf::from("pin-subtitle-reload-film.mkv");
+    let folder = a_copied_track(&film, &PathBuf::from("sub0.ass"));
     stand_pin(Some(a_pin_playing(&film, (100, 80, 420, 320))));
     clear_restart_count();
 
+    // **mpv draws it from the file it is handed**: the player this app holds is the one it was, and
+    // nothing is begun again for the copy.
+    stand_mpv_in(Some(true));
+    stand_ffplay_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+    mpv_ipc::remember_pipe(101, "a-subtitle-pipe", false);
+
     assert!(
         reload_pinned_subtitles(&film),
-        "a pin showing the film is begun again for the copy that just landed"
+        "a pin showing the film is handed the copy that just landed"
     );
     assert_eq!(
         restart_count(),
+        0,
+        "and no player is begun again: the picture on screen is the one the film plays on"
+    );
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        101,
+        "the player is the one it was, so there is no handover and no audio to hand over"
+    );
+    let commands = mpv_ipc::noted_lines();
+    assert_eq!(
+        commands.len(),
         1,
-        "one relaunch, at the second the bar is showing — the same player a track change \
-         begins, with the copy now drawn (see `restart_pinned_player`)"
+        "one command, and it is the file: {commands:?}"
+    );
+    assert!(
+        commands[0].contains("\"sub-add\"")
+            && commands[0].contains("sub0.ass")
+            && commands[0].contains("\"select\""),
+        "mpv is told to add the copy and draw it: {commands:?}"
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("subtitle added without a restart")),
+        "and the run says the copy cost no restart"
+    );
+
+    // **FFmpeg's player can be told nothing, so the same copy begins it again** at the second the bar
+    // is showing — and the line says why (see `RestartReason`).
+    clear_restart_count();
+    mpv_ipc::forget_pipe(101);
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    VIDEO_PID.store(101, Ordering::SeqCst);
+    assert!(
+        reload_pinned_subtitles(&film),
+        "a film FFmpeg's player draws is begun again for the copy"
+    );
+    assert_eq!(restart_count(), 1, "one relaunch, and only one");
+    assert_eq!(
+        last_restart_reason(),
+        Some(RestartReason::Subtitle),
+        "and it says it was the subtitles that asked for it"
     );
 
     // The same answer about another film is not this pin's to act on: a copy landing for a file
@@ -98,13 +151,28 @@ fn a_pin_showing_the_film_restarts_its_player_when_the_copied_subtitles_are_read
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     restore_media(previous_media);
     clear_restart_count();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+    mpv_ipc::forget_pipe(101);
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    let _ = std::fs::remove_dir_all(&folder);
 }
 
 /// A geometry answer for `film` carrying a ready copy, as the probe would have left it once the
-/// extraction finished — what the take-up's question is read from (see `video_copy_ready`). No
-/// files are written: the question is whether the answer holds a copy, not whether one is there
-/// to open.
-fn stand_a_ready_copy(film: &Path) {
+/// extraction finished — and a real file for it, because a copy is only handed to a player that has one
+/// to open. Answers the folder the test removes (see `video_copy_ready` and `video_subtitle_copy`).
+fn a_copied_track(film: &Path, name: &Path) -> PathBuf {
+    let folder = std::env::temp_dir().join(format!(
+        "preview-subtitle-copy-{}",
+        film.file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "film".to_string()),
+    ));
+    std::fs::create_dir_all(&folder).expect("a folder for the copied track is creatable");
+    let copy = folder.join(name);
+    std::fs::write(&copy, b"[Script Info]\n").expect("a stand-in copy is writable");
     video_geometry_cache().insert(
         VideoGeometryKey {
             path: film.to_path_buf(),
@@ -120,7 +188,7 @@ fn stand_a_ready_copy(film: &Path) {
             subtitles: SubtitleStreams { count: 1, first: 0 },
             sidecar: None,
             derived: Some(DerivedSubtitles {
-                tracks: vec![Some(PathBuf::from("pin-subtitle-reload-sub0.ass"))],
+                tracks: vec![Some(copy)],
                 fonts: None,
             }),
             subtitle_codecs: vec!["ass".to_string()],
@@ -128,6 +196,7 @@ fn stand_a_ready_copy(film: &Path) {
             subtitle_extraction_failed: false,
         }),
     );
+    folder
 }
 
 /// A geometry answer for `film` carrying `count` subtitle streams and nothing else, as the probe
@@ -237,9 +306,12 @@ fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on
     clear_restart_count();
 }
 
-/// A pin taken up on a player that was begun before the copy existed is begun again here, where
+/// A pin taken up on a player that was begun before the copy existed is corrected here, where
 /// the copy is ready by the time the pin is made — the corner the ready-message cannot reach
 /// because it has already been and gone (see `reload_adopted_subtitles`).
+///
+/// **mpv is handed the copy and FFmpeg's player is begun again**, and the difference is the whole of
+/// what a player that can be spoken to is worth here: the same corner costs a film mpv plays nothing.
 #[test]
 fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -255,18 +327,42 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
     let previous_media = stand_video_media();
 
     let film = PathBuf::from("pin-subtitle-reload-adopted.mkv");
-    stand_a_ready_copy(&film);
+    let folder = a_copied_track(&film, &PathBuf::from("sub0.ass"));
     stand_pin(Some(a_pin_playing(&film, (100, 80, 420, 320))));
 
     // The hover this pin was taken up on was begun while the copy was still coming — the state
     // every launch writes down (see `note_player_subtitles`) — so the adopted player is drawing
-    // no subtitles and there is a ready copy to begin it again for.
+    // no subtitles and there is a ready copy to hand it.
     note_player_subtitles(&film, false);
     clear_restart_count();
 
+    // **mpv is handed the file**: the player adopted by the take-up is left running, which is the
+    // second decode the take-up exists to avoid.
+    stand_mpv_in(Some(true));
+    stand_ffplay_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    mpv_ipc::clear_noted();
+    mpv_ipc::remember_pipe(101, "an-adopted-subtitle-pipe", false);
     assert!(
         reload_adopted_subtitles(&film),
-        "a player begun before the copy existed is begun again now that it does"
+        "a player begun before the copy existed is handed it now that it does"
+    );
+    assert_eq!(restart_count(), 0, "and no player is begun again for it");
+    assert_eq!(
+        mpv_ipc::noted_lines().len(),
+        1,
+        "the copy is the one command the adopted player is sent"
+    );
+
+    // **FFmpeg's player is begun again**, at the second the bar is showing, the way a seek begins one.
+    clear_restart_count();
+    mpv_ipc::forget_pipe(101);
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    assert!(
+        reload_adopted_subtitles(&film),
+        "a player that can be told nothing is begun again now that the copy is here"
     );
     assert_eq!(
         restart_count(),
@@ -313,4 +409,10 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     restore_media(previous_media);
     clear_restart_count();
+    mpv_ipc::clear_noted();
+    mpv_ipc::forget_pipe(101);
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    let _ = std::fs::remove_dir_all(&folder);
 }

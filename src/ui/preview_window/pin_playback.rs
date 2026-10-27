@@ -2,7 +2,7 @@
 //! covering the band for the one relaunch a user action needs — a seek or a file step. A gesture
 //! asks nothing of a player (see `RestartReason`).
 
-use super::pin_trace::note_pin_trace;
+use super::pin_trace::{note_pin_trace, path_name};
 use super::*;
 
 /// Where a pinned preview's playhead is, in seconds: the engine's own answer where the media
@@ -146,15 +146,23 @@ pub(super) fn clear_restart_count() {
 
 /// The reason the last player was begun again, as the code of the line the trace wrote.
 ///
-/// A test seam, and the same one question the trace answers: a pid that changed with no reason
-/// said out loud is the fault this field is read for (see `relaunch_pinned_player`).
-#[cfg(test)]
+/// The same one question the trace answers — a pid that changed with no reason said out loud is the
+/// fault this field is read for (see `relaunch_pinned_player`) — and the question a handover's own
+/// line is read against, so a seek's picture is written where a seek is what began the player (see
+/// `pin_film_thumbnail::note_the_seek_picture`).
 pub(super) static LAST_RESTART_REASON: AtomicU64 = AtomicU64::new(0);
 
 /// The reason the last player was begun again, if one was (see `LAST_RESTART_REASON`).
 #[cfg(test)]
 pub(super) fn last_restart_reason() -> Option<RestartReason> {
     RestartReason::of_code(LAST_RESTART_REASON.load(Ordering::Acquire))
+}
+
+/// The reason the last player was begun again, **taken**: what a handover reads once to say whether a
+/// seek began the source it is about to draw, so one reason is never read as a second seek's (see
+/// `pin_film_thumbnail::hand_the_picture_over`).
+pub(super) fn take_the_last_restart_reason() -> Option<RestartReason> {
+    RestartReason::of_code(LAST_RESTART_REASON.swap(0, Ordering::AcqRel))
 }
 
 /// Why a player is begun again, which is the one thing every relaunch says out loud.
@@ -186,7 +194,6 @@ impl RestartReason {
     }
 
     /// The code this reason is written down as (see `LAST_RESTART_REASON`).
-    #[cfg(test)]
     fn code(self) -> u64 {
         match self {
             RestartReason::Seek => 1,
@@ -197,7 +204,6 @@ impl RestartReason {
         }
     }
 
-    #[cfg(test)]
     fn of_code(code: u64) -> Option<RestartReason> {
         match code {
             1 => Some(RestartReason::Seek),
@@ -280,8 +286,8 @@ fn relaunch_pinned_player(
     #[cfg(test)]
     {
         RESTART_COUNT.fetch_add(1, Ordering::AcqRel);
-        LAST_RESTART_REASON.store(reason.code(), Ordering::SeqCst);
     }
+    LAST_RESTART_REASON.store(reason.code(), Ordering::SeqCst);
     // **Every relaunch says why it happened, in one line**, so a pid that changed can be read
     // against the user action that asked for it. A player that changes with no line here is a
     // bug, and the words are exactly the actions that need one (see `RestartReason`).
@@ -504,8 +510,7 @@ pub(super) fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, second
         Some(MediaType::Video) => {
             if video_route(path) == VideoRoute::Mpv
                 && mpv_ipc::seek_absolute(VIDEO_PID.load(Ordering::SeqCst), seconds)
-            {
-                // mpv is taken to the second while it runs: the player stays and the bar's own
+            {                // mpv is taken to the second while it runs: the player stays and the bar's own
                 // clock is rebased onto where it was taken rather than a player begun at that
                 // second. A held file stays held, because mpv's own seek keeps its pause, and the
                 // rebase happens only where the command reached the player: a seek that did not
@@ -522,6 +527,14 @@ pub(super) fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, second
                 // into the last moments of a film would be undone by the next tick, which wraps
                 // the film back to zero (see `rebase_video_loop_clock_to`).
                 video_hw::rebase_video_loop_clock_to(VIDEO_PID.load(Ordering::SeqCst), seconds);
+                // **And the one bounded read that says what the seek's frame is drawn from**: a seek
+                // in place moves the picture inside a source whose client is the one placement's, and
+                // a frame drawn smaller than the pin's box there would be a number in this line (see
+                // `pin_film_thumbnail::note_the_seek_picture`).
+                pin_film_thumbnail::note_the_seek_picture(
+                    VIDEO_PID.load(Ordering::SeqCst),
+                    seconds,
+                );
             } else {
                 // **A pipe this app could not write to is the relaunch road after all**, and a player
                 // ended with no cover over the band is a hole in the desktop shaped like a film. The
@@ -735,6 +748,30 @@ pub(super) fn step_pinned_subtitle() {
     );
 }
 
+/// Hand a film's copied subtitles to the player that is drawing it, where that player can be told.
+///
+/// **This is the whole of what a late copy costs a film mpv plays: nothing.** The copy is a whole
+/// subtitle with no streams of its own, mpv takes it down its pipe and draws it, and the player, its
+/// window and its picture never move — so there is no black frame, and no second decode of the film
+/// (see `mpv_ipc::add_subtitles`). FFmpeg's player has no pipe to be told on and answers `false` here,
+/// which is what leaves the relaunch as its answer.
+fn add_the_subtitles_to_the_player(path: &Path, pid: u32, track: Option<usize>) -> bool {
+    if video_route(path) != VideoRoute::Mpv {
+        return false;
+    }
+    let Some(copy) = video_subtitle_copy(path, track) else {
+        return false;
+    };
+    if !mpv_ipc::add_subtitles(pid, &copy) {
+        return false;
+    }
+    note_pin_trace!(
+        "subtitle added without a restart pid {pid} file {}",
+        path_name(&copy),
+    );
+    true
+}
+
 /// Begin a pinned window's player again so a film's own subtitles, copied out of it a moment
 /// ago, are drawn — where the pin is showing that film right now.
 ///
@@ -752,7 +789,12 @@ pub(super) fn step_pinned_subtitle() {
 /// reload, and no extraction runs for one), and a pin whose file has no player up are all
 /// nothing to begin again.
 ///
-/// Answers whether a player was begun again, which is what the tests read.
+/// **mpv is never begun again for this**, which is the difference the pipe makes: the copy is handed to
+/// the player that is drawing the film (see `add_the_subtitles_to_the_player`), so the line above is
+/// the relaunch road and not this one.
+///
+/// Answers whether a player was begun again, or a running one was given the copy, which is what the
+/// tests read.
 pub(super) fn reload_pinned_subtitles(path: &Path) -> bool {
     if current_media_type() != Some(MediaType::Video) {
         return false;
@@ -763,6 +805,17 @@ pub(super) fn reload_pinned_subtitles(path: &Path) -> bool {
     };
 
     if pinned.as_path() != path {
+        return false;
+    }
+
+    if add_the_subtitles_to_the_player(&pinned, VIDEO_PID.load(Ordering::SeqCst), transport.subtitle)
+    {
+        return true;
+    }
+    if video_route(&pinned) == VideoRoute::Mpv {
+        // A film mpv plays is never begun again for its subtitles: the pipe is the whole of what the
+        // copy needs, and a relaunch is the black frame this road removed (see
+        // `add_the_subtitles_to_the_player`).
         return false;
     }
 
@@ -805,7 +858,22 @@ pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
         return false;
     }
 
-    if !video_copy_ready(path) || player_draws_subtitles(path) {
+    if !video_copy_ready(path) {
+        return false;
+    }
+
+    // **A player that can be told is told**, and this is the road where a copy lands on a player that
+    // predates it: mpv takes the file down its pipe with no relaunch at all (see
+    // `add_the_subtitles_to_the_player`).
+    if add_the_subtitles_to_the_player(&pinned, VIDEO_PID.load(Ordering::SeqCst), transport.subtitle)
+    {
+        return true;
+    }
+    if video_route(&pinned) == VideoRoute::Mpv {
+        return false;
+    }
+
+    if player_draws_subtitles(path) {
         return false;
     }
 

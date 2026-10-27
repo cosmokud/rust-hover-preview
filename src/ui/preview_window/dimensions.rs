@@ -238,6 +238,28 @@ pub(super) fn video_copy_ready(path: &Path) -> bool {
     }
 }
 
+/// The small file this film's copied subtitles are drawn from, where one is ready: the track this app
+/// copied out of the film, or the first copy where the track named is not one it carries (see
+/// `video_launch::subtitle_filter`, which names the same file for a launch).
+///
+/// It is what a player that is **already running** is handed at runtime — mpv takes it as a subtitle
+/// file of its own (see `pin_playback::reload_pinned_subtitles`) — rather than the filtergraph a
+/// launch is given. A copy that is not there is answered with nothing: naming a file that does not
+/// exist is a player asked to open something that is not there.
+pub(super) fn video_subtitle_copy(path: &Path, track: Option<usize>) -> Option<PathBuf> {
+    let Some(ProbedGeometry::Measured(geometry)) = cached_video_geometry(path) else {
+        return None;
+    };
+    let derived = geometry.derived?;
+    let track = track
+        .filter(|track| *track < derived.tracks.len())
+        .unwrap_or(0);
+    derived
+        .track(track)
+        .filter(|track_file| track_file.is_file())
+        .map(Path::to_path_buf)
+}
+
 /// Whether this file is a video the probe has not answered for yet.
 ///
 /// A hover for one cannot be laid out as a video — the layout has no shape to place — so

@@ -333,6 +333,12 @@ static SOURCE_REPLACEMENTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static REGISTRATIONS: AtomicU32 = AtomicU32::new(0);
 
+/// How many registrations have been let go of since a test last cleared it: a handover is one swap and
+/// **one** old registration, and never a picture dropped before the next one is there (see
+/// `hand_the_picture_over`).
+#[cfg(test)]
+static UNREGISTRATIONS: AtomicU32 = AtomicU32::new(0);
+
 /// The one host this road has drawn a picture into, or nothing while no registration is recorded: a
 /// pin's host and a hover's are the same one at the take-up that promotes it (see
 /// `settle_the_registration`).
@@ -373,6 +379,48 @@ pub(super) fn clear_the_registrations() {
 pub(super) fn clear_the_source_placements() {
     SOURCE_PLACEMENTS.store(0, Ordering::SeqCst);
     SOURCE_REPLACEMENTS.store(0, Ordering::SeqCst);
+}
+
+/// How many registrations this run has let go of (see `let_the_registration_go`).
+#[cfg(test)]
+pub(super) fn the_unregistrations() -> u32 {
+    UNREGISTRATIONS.load(Ordering::SeqCst)
+}
+
+/// Forget the unregistrations counted before a test (see `let_the_registration_go`).
+#[cfg(test)]
+pub(super) fn clear_the_unregistrations() {
+    UNREGISTRATIONS.store(0, Ordering::SeqCst);
+}
+
+/// Whether the picture standing in a host is the source this road has adopted — the question a test
+/// asks between a source's adoption and the swap that makes it the picture (see
+/// `hand_the_picture_over`).
+#[cfg(test)]
+pub(super) fn the_standing_source_is_the_current_one() -> bool {
+    let number = SOURCE.load(Ordering::SeqCst);
+    THUMBNAIL.lock().ok().is_some_and(|held| {
+        held.registration != 0 && held.registered == number && number != 0
+    })
+}
+
+/// Whether a source adopted to take the picture over is still waiting to be ready (see
+/// `PendingSource`).
+#[cfg(test)]
+pub(super) fn a_source_is_waiting_to_take_the_picture() -> bool {
+    PENDING_SOURCE.lock().ok().is_some_and(|pending| pending.is_some())
+}
+
+/// The client the picture standing is cropped by: the one placement's, never a live read of the source
+/// (see `settle_the_registration`). It is what a seek's own line is read against (see
+/// `note_the_seek_picture`).
+#[cfg(test)]
+pub(super) fn the_cropped_client() -> Option<(i32, i32)> {
+    THUMBNAIL
+        .lock()
+        .ok()
+        .and_then(|held| held.source)
+        .map(|shape| shape.client)
 }
 
 /// A box as a trace and a placement carry it: origin, width and height.
@@ -448,12 +496,16 @@ struct Thumbnail {
     /// The host the Shell is drawing into, and the registration it answered with.
     host: isize,
     registration: isize,
+    /// The window that registration draws. **It is not always the current source**: a source adopted
+    /// to take the picture over draws nothing until it is ready, and the picture before it keeps the
+    /// host until then (see `hand_the_picture_over`).
+    registered: isize,
     /// The rectangle pair the registration was last handed — the host's client it is drawn in, the
     /// picture's rectangle in the source and the source's own client — or nothing where none stands.
     /// **A change of either is a re-point** (see `settle_the_registration`).
     shown: Option<ThumbnailBox>,
-    /// The picture the source shows: `None` until the one placement is made, and the same value for
-    /// every frame after it (see `place_the_source`).
+    /// The picture the registered source shows: `None` until its one placement is made, and the same
+    /// value for every frame after it (see `place_the_source`).
     source: Option<SourceShape>,
 }
 
@@ -461,6 +513,7 @@ impl Thumbnail {
     const NOTHING: Self = Self {
         host: 0,
         registration: 0,
+        registered: 0,
         shown: None,
         source: None,
     };
@@ -500,6 +553,125 @@ fn forget_the_late_placement() {
     if let Ok(mut armed) = LATE_PLACEMENT.lock() {
         *armed = None;
     }
+}
+
+/// A source this road has adopted that is **not the picture in the host yet**.
+///
+/// **A new source may not take over before it is ready.** A relaunch — FFmpeg's player on every seek,
+/// the copy of a film's subtitles landing late, mpv's own window made again — is another window, and a
+/// registration moved onto it the moment it exists is a picture cropped by a client the one placement
+/// did not ask for, drawn over the host's black while the player opens the file. So the registration
+/// that is standing goes on drawing the source before it, and the swap is one step made when this one
+/// can draw: its live client is the client the placement asked for, and its player's own video output
+/// is configured for a frame (see `hand_the_picture_over`). The wait is bounded by the player-start
+/// wait, and the trace says which of the two ended it.
+#[derive(Clone, Copy)]
+struct PendingSource {
+    source: isize,
+    process: u32,
+    /// The one placement this source was given, once the film's own size is known.
+    placed: Option<SourceShape>,
+    /// When the source was adopted: the wait the swap is bounded by.
+    since: Instant,
+    /// The `not ready` answer last written and when, so a pass every hundred milliseconds is a line a
+    /// run can be read from rather than a flood (see `note_the_source_not_ready`).
+    not_ready: Option<((i32, i32), Instant)>,
+}
+
+/// The source adopted and not yet the picture, if one is (see `PendingSource`).
+static PENDING_SOURCE: Mutex<Option<PendingSource>> = Mutex::new(None);
+
+/// Wait for a source to be ready to take the picture over (see `PendingSource`).
+fn arm_the_pending_source(source: HWND, process: u32) {
+    if let Ok(mut pending) = PENDING_SOURCE.lock() {
+        *pending = Some(PendingSource {
+            source: source.0 as isize,
+            process,
+            placed: None,
+            since: Instant::now(),
+            not_ready: None,
+        });
+    }
+}
+
+/// The source this road is waiting on, where it is the one named.
+fn the_pending_source_for(source: isize, process: u32) -> Option<PendingSource> {
+    PENDING_SOURCE
+        .lock()
+        .ok()
+        .and_then(|pending| *pending)
+        .filter(|pending| pending.source == source && pending.process == process)
+}
+
+/// Give up waiting for a source: the picture changed hands, or there is nothing left to hand it to.
+fn forget_the_pending_source() {
+    if let Ok(mut pending) = PENDING_SOURCE.lock() {
+        *pending = None;
+    }
+}
+
+/// Forget the wait only where it is still `source`'s and `process`'s: a source adopted while this one
+/// was being handed over is the next wait, and it is not this call's to give up (see
+/// `hand_the_picture_over`).
+fn forget_the_pending_source_of(source: isize, process: u32) {
+    if let Ok(mut pending) = PENDING_SOURCE.lock() {
+        if pending.is_some_and(|pending| pending.source == source && pending.process == process) {
+            *pending = None;
+        }
+    }
+}
+
+/// Keep the one placement a source that is waiting to take the picture over was given.
+fn note_the_placement_of_a_pending_source(source: isize, process: u32, placed: SourceShape) {
+    if let Ok(mut pending) = PENDING_SOURCE.lock() {
+        if let Some(waiting) = pending
+            .as_mut()
+            .filter(|waiting| waiting.source == source && waiting.process == process)
+        {
+            waiting.placed = Some(placed);
+        }
+    }
+}
+
+/// Whether the registration standing in a host draws a source at all — the question `note_the_source`
+/// asks before it lets the picture before this source go (see `hand_the_picture_over`).
+fn the_registration_is_standing() -> bool {
+    THUMBNAIL
+        .lock()
+        .ok()
+        .is_some_and(|held| held.registration != 0 && held.registered != 0)
+}
+
+/// Whether a source adopted to take the picture over is still waiting to be ready, for the player it
+/// belongs to: the question the loop's retirement asks before it ends the player that is still the
+/// picture on screen (see `video_retire::settle_video_retirement`).
+///
+/// **It is the same question the swap asks**, so a record nothing is waiting on any more — a source
+/// this road has moved off, or one a registration already draws — is not a wait and answers no.
+pub(super) fn a_handover_is_pending_for(process: u32) -> bool {
+    let Some(pending) = PENDING_SOURCE.lock().ok().and_then(|pending| *pending) else {
+        return false;
+    };
+    process != 0
+        && pending.process == process
+        && pending.source != 0
+        && SOURCE.load(Ordering::SeqCst) == pending.source
+        && THUMBNAIL
+            .lock()
+            .ok()
+            .is_some_and(|held| held.registration != 0 && held.registered != pending.source)
+}
+
+/// Whether this player's source is the window the host is drawing: **the one step of a handover**, and
+/// the answer that says the player it replaced has nothing of the pin's on screen any more.
+pub(super) fn the_source_is_standing(pid: u32) -> bool {
+    if !the_source_is_up(pid) {
+        return false;
+    }
+    let number = SOURCE.load(Ordering::SeqCst);
+    THUMBNAIL.lock().ok().is_some_and(|held| {
+        held.registration != 0 && held.registered == number && number != 0
+    })
 }
 
 
@@ -598,36 +770,74 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
         .filter(|shape| shape.belongs_to(source, pid));
     let native = the_films_native_size(pid).map_or(NativeSize::NotYet, NativeSize::Known);
     let placed = place_the_source(source, host, pid, placed, native);
+    let pending = the_pending_source_for(source.0 as isize, pid).is_some();
+    if let Some(placed) = placed.filter(|_| pending) {
+        // **The picture standing keeps drawing**: this source's placement is kept for the swap and not
+        // for this pass (see `hand_the_picture_over`).
+        note_the_placement_of_a_pending_source(source.0 as isize, pid, placed);
+    }
     if let Ok(mut held) = THUMBNAIL.lock() {
-        if let Some(placed) = placed {
-            held.source = Some(placed);
+        if !pending {
+            if let Some(placed) = placed {
+                held.source = Some(placed);
+            }
         }
         // **A film adopted without a size is one the road is still waiting for**, and what waits is
         // the pass that watches the player rather than a second placement made here.
-        if held.source.is_none() {
-            arm_the_late_placement(source, pid);
+        let sized = if pending {
+            the_pending_source_for(source.0 as isize, pid)
+                .is_some_and(|pending| pending.placed.is_some())
         } else {
+            held.source.is_some_and(|shape| shape.belongs_to(source, pid))
+        };
+        if sized {
             forget_the_late_placement();
+        } else {
+            arm_the_late_placement(source, pid);
         }
         settle_the_registration(&mut held, host);
     }
 }
 
 /// Record the window the Shell is to draw: another player, or the same player's window made again,
-/// is another picture and goes down with the registration the last one had.
+/// is another picture — which **takes over only when it can draw it**.
+///
+/// **The registration that is standing is not taken down here.** A relaunch produces a new window
+/// while the one it replaces is still the picture on screen (that is what the player being parked
+/// rather than ended is for), and unregistering before the new source can draw is the host's own black
+/// erase seen through the pin for as long as the player takes to open the file — the flash a subtitle
+/// copy and a seek both reported. So the new source is recorded, the old registration keeps drawing,
+/// and `hand_the_picture_over` makes the swap in one step when the new one is ready. With nothing
+/// standing there is nothing to keep, and the record is reset as it always was.
 pub(super) fn note_the_source(source: HWND, pid: u32) {
     let number = source.0 as isize;
     if SOURCE.load(Ordering::SeqCst) == number && SOURCE_PROCESS.load(Ordering::SeqCst) == pid {
         return;
     }
 
+    if the_registration_is_standing() {
+        let drawn = THUMBNAIL.lock().ok().map(|held| held.registered).unwrap_or(0);
+        arm_the_pending_source(source, pid);
+        SOURCE.store(number, Ordering::SeqCst);
+        SOURCE_PROCESS.store(pid, Ordering::SeqCst);
+        note_pin_trace!(
+            "thumbnail source waiting {:?} pid {}: the picture standing is {:?} and draws until it \
+             is ready",
+            source,
+            pid,
+            HWND(drawn as *mut _),
+        );
+        return;
+    }
+
+    let registration = THUMBNAIL.lock().ok().map(|held| held.registration);
     if let Ok(mut held) = THUMBNAIL.lock() {
-        if held.registration != 0 {
-            let _ = unsafe { DwmUnregisterThumbnail(held.registration) };
-        }
         *held = Thumbnail::NOTHING;
     }
-    forget_the_late_placement();
+    if let Some(registration) = registration {
+        let_the_registration_go(registration);
+    }
+    forget_the_pending_source();
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(number, Ordering::SeqCst);
     SOURCE_PROCESS.store(pid, Ordering::SeqCst);
@@ -872,7 +1082,17 @@ pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
     let Ok(mut held) = THUMBNAIL.lock() else {
         return;
     };
-    if held.source.is_some() {
+    // **The source this pass is about is the one the road is on**: the source waiting to take the
+    // picture over where a swap is waiting, and the standing one otherwise. A source that has its one
+    // placement already is left alone.
+    let pending = the_pending_source_for(number, process);
+    let sized = match pending {
+        Some(pending) => pending.placed.is_some(),
+        None => held
+            .source
+            .is_some_and(|shape| shape.belongs_to(HWND(number as *mut _), process)),
+    };
+    if sized {
         forget_the_late_placement();
         return;
     }
@@ -903,11 +1123,204 @@ pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
         None => return,
     };
     let placed = place_the_source(source, host, process, None, native);
-    if placed.is_some() {
-        held.source = placed;
+    if let Some(placed) = placed {
+        if pending.is_some() {
+            // The picture standing keeps drawing; this placement is the swap's (see
+            // `hand_the_picture_over`).
+            note_the_placement_of_a_pending_source(number, process, placed);
+        } else {
+            held.source = Some(placed);
+        }
         forget_the_late_placement();
     }
     settle_the_registration(&mut held, host);
+}
+
+/// Hand the picture from the source that is drawing it to the one that replaced it, **once the new one
+/// can draw the frame it was placed for**.
+///
+/// **The one visible swap of a relaunch, and it is one step.** Until now the registration standing in
+/// the host draws the window before this one, so the pin has a picture for the whole of the wait and
+/// none of it is the host's black erase — and no frame is cropped by a client the source was not placed
+/// at. Ready is `the_source_can_draw`: the client the one placement asked for is the window's live
+/// client, and the player's video output is configured for a frame where the player answers over a pipe.
+///
+/// **It is paced by the pass that already watches the player** (`ffplay_window`), so it costs a client
+/// read and at most one bounded property read per pass while a swap is waiting, and nothing at all once
+/// one is not. A resize gesture holds it off, the way it holds off the placement, so no gesture ever
+/// has the picture change hands under it.
+///
+/// **The new registration is handed its pair before the old one is let go of**, so the Shell is never
+/// asked to draw the host with nothing in it. The player being replaced has nothing of the pin's on
+/// screen from the line after, and the loop's own retirement ends it (see
+/// `video_retire::settle_video_retirement`, which waits for this swap rather than for a window).
+///
+/// **A source that never reaches its own client is not allowed to blank the pin**: the old picture goes
+/// on drawing, `thumbnail source not ready` is written, and at the player-start bound the picture is
+/// handed over anyway with the line that says so — the one answer that never exposes the host's black
+/// for a handover.
+pub(super) fn hand_the_picture_over(host: HWND) {
+    if pin_film_host::a_resize_drag_is_live() {
+        return;
+    }
+    let Some(pending) = PENDING_SOURCE.lock().ok().and_then(|pending| *pending) else {
+        return;
+    };
+    let current = SOURCE.load(Ordering::SeqCst);
+    if pending.source == 0 || current != pending.source {
+        // The record names a window this road has left: there is nothing to hand over.
+        forget_the_pending_source_of(pending.source, pending.process);
+        return;
+    }
+    let source = HWND(pending.source as *mut _);
+    // Safety: the handle is one a player made and this module adopted, and the question is about it.
+    if !unsafe { IsWindow(source) }.as_bool() {
+        forget_the_pending_source_of(pending.source, pending.process);
+        return;
+    }
+    // A source still waiting for its own size has nothing to be ready for yet (see
+    // `place_the_source_when_the_player_answers`).
+    let Some(shape) = pending.placed else {
+        return;
+    };
+    let live = unsafe { client_size(source) };
+    let ready = the_source_can_draw(live, shape, pending.process);
+    let waited = pending.since.elapsed();
+    if !ready {
+        note_the_source_not_ready(pending, live);
+        if waited < Duration::from_secs(VIDEO_START_WAIT_SECS) {
+            return;
+        }
+        note_pin_trace!(
+            "thumbnail source still not ready after {}ms: the picture changes hands anyway rather \
+             than leaving the one before it to a player that is ending",
+            waited.as_millis(),
+        );
+    }
+
+    let Ok(mut held) = THUMBNAIL.lock() else {
+        return;
+    };
+    let old = *held;
+    // The new source's pair first: nothing of the old registration is touched until the Shell has
+    // taken the new one.
+    held.registration = 0;
+    held.registered = 0;
+    held.shown = None;
+    held.source = Some(shape);
+    settle_the_registration(&mut held, host);
+    if held.registration == 0 {
+        // **A registration the Shell refused is not a swap**: the picture standing stays, and the pass
+        // asks again (see `settle_the_registration`).
+        *held = old;
+        REGISTERED_HOST.store(old.host, Ordering::SeqCst);
+        return;
+    }
+    let_the_registration_go(old.registration);
+    let swapped = held.registered;
+    drop(held);
+    forget_the_pending_source_of(pending.source, pending.process);
+    note_pin_trace!(
+        "thumbnail swapped old {:?} new {:?} after {}ms",
+        HWND(old.registered as *mut _),
+        HWND(swapped as *mut _),
+        waited.as_millis(),
+    );
+    // **And the seek's own numbers where a seek is what asked for this source**, so the frame a seek
+    // lands on is one line rather than an argument (see `note_the_seek_picture`). The reason is taken
+    // rather than read, so a swap for a file step is not written as a seek that never happened.
+    if pin_playback::take_the_last_restart_reason() == Some(pin_playback::RestartReason::Seek) {
+        note_the_seek_picture(pending.process, pin_playback::pinned_playhead().unwrap_or(0.0));
+    }
+}
+
+/// Whether a source adopted to take the picture over can draw the frame it was placed for: the client
+/// the one placement asked for is the client the window has, and — where the player answers over a
+/// pipe — its video output is configured for a frame.
+///
+/// **This is the presented predicate without the second**, and the difference is what makes it usable
+/// here: a replacement is begun at the second a seek or a cue asked for, and this pass has no second to
+/// hold it to (see `pin_film_host::the_hosted_frame_is_presented`). A player with no pipe answers
+/// nothing and its window is the whole of its picture, exactly as `the_hosted_frame_is_up` reads it.
+fn the_source_can_draw(live: Option<(i32, i32)>, shape: SourceShape, process: u32) -> bool {
+    live == Some(shape.client) && pin_film_host::the_players_output_is_configured(process)
+}
+
+/// Write a handover's `not ready` answer: the source's live client, the client the one placement asked
+/// for, and the same line once a second while it stands. Written on change and never per frame.
+fn note_the_source_not_ready(pending: PendingSource, live: Option<(i32, i32)>) {
+    let live = live.unwrap_or((0, 0));
+    let asked = pending.placed.map_or((0, 0), |shape| shape.client);
+    let now = Instant::now();
+    let due = {
+        let Ok(mut record) = PENDING_SOURCE.lock() else {
+            return;
+        };
+        let Some(waiting) = record
+            .as_mut()
+            .filter(|waiting| waiting.source == pending.source && waiting.process == pending.process)
+        else {
+            return;
+        };
+        let due = waiting.not_ready.is_none_or(|(seen, at)| {
+            seen != live || now.duration_since(at) >= Duration::from_secs(1)
+        });
+        if due {
+            waiting.not_ready = Some((live, now));
+        }
+        due
+    };
+    if due {
+        note_pin_trace!(
+            "thumbnail source not ready cli {}x{} asked {}x{}",
+            live.0,
+            live.1,
+            asked.0,
+            asked.1,
+        );
+    }
+}
+
+/// **One bounded read of what the engine reports drawing, after a seek** — and the line a run is
+/// convicted or cleared by: the source window, the client the Shell is sampling (`cli`), the picture
+/// the player says it is drawing (`pic`), and the client the one placement asked for (`asked`).
+///
+/// **The three numbers are the whole of the smaller-than-the-box frame.** A `cli` that is not `asked`
+/// is a surface the crop was not built for: the Shell scales the film out of a window of another size,
+/// which is a next frame drawn smaller than the pin's film box. A `pic` that is not `asked` is a film
+/// the player is fitting inside its own window. Either is a difference the line names, so a seek that
+/// flashed and a seek that did not are told apart by what they wrote and not by what was remembered.
+/// The line is written once per seek — in place for mpv, and at the swap for FFmpeg's player, whose
+/// seek is a new window — and never per frame.
+pub(super) fn note_the_seek_picture(pid: u32, seconds: f64) {
+    let asked = THUMBNAIL
+        .lock()
+        .ok()
+        .and_then(|held| held.source)
+        .map(|shape| shape.client);
+    let source = the_source_window();
+    let cli = source.and_then(|source| unsafe { client_size(source) });
+    let pic = the_players_picture_size(pid);
+    let differs = match asked {
+        Some(asked) if cli != Some(asked) => " cli!=asked",
+        Some(asked) if pic != Some(asked) => " pic!=asked",
+        _ => "",
+    };
+    note_pin_trace!(
+        "seek picture to {seconds:.3} cli {} pic {} asked {} source {:?}{differs}",
+        a_box_as_text(cli),
+        a_box_as_text(pic),
+        a_box_as_text(asked),
+        source,
+    );
+}
+
+/// A box as a trace line spells it, and `none` where there is no answer at all.
+fn a_box_as_text(size: Option<(i32, i32)>) -> String {
+    size.map_or_else(
+        || "none".to_string(),
+        |(width, height)| format!("{width}x{height}"),
+    )
 }
 
 /// Whether the road owes the player an ask: the first one as soon as the film is waiting, then one
@@ -1098,13 +1511,14 @@ pub(super) fn set_the_source_visible(visible: bool) {
 /// window that is gone is a leak of the Shell's own resources.
 pub(super) fn forget_the_thumbnail() {
     if let Ok(mut held) = THUMBNAIL.lock() {
-        if held.registration != 0 {
-            let _ = unsafe { DwmUnregisterThumbnail(held.registration) };
-        }
+        let registration = held.registration;
         *held = Thumbnail::NOTHING;
+        let_the_registration_go(registration);
     }
-    // The film this road was waiting to size went with the window it was going to place.
+    // The film this road was waiting to size went with the window it was going to place, and so did
+    // the source it was waiting to hand the picture to (see `arm_the_pending_source`).
     forget_the_late_placement();
+    forget_the_pending_source();
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(0, Ordering::SeqCst);
     SOURCE_PROCESS.store(0, Ordering::SeqCst);
@@ -1309,12 +1723,15 @@ fn the_source_client(source: HWND, host: (i32, i32)) -> (i32, i32) {
 /// The line is written once, where the record goes, so a run says the shape was given up rather than
 /// leaving the missing crop to be guessed at.
 fn forget_the_shape_of_another_film(held: &mut Thumbnail) {
-    let current = HWND(SOURCE.load(Ordering::SeqCst) as *mut _);
-    let process = SOURCE_PROCESS.load(Ordering::SeqCst);
-    let Some(shape) = held
-        .source
-        .filter(|shape| !shape.belongs_to(current, process))
-    else {
+    // **The window the shape has to belong to is the one the registration draws**, which is the
+    // current source until a handover replaces it: a shape whose source is waiting to take the picture
+    // over is the swap's and is not this record's to give up (see `hand_the_picture_over`).
+    let drawn = if held.registration != 0 {
+        held.registered
+    } else {
+        SOURCE.load(Ordering::SeqCst)
+    };
+    let Some(shape) = held.source.filter(|shape| shape.source != drawn) else {
         return;
     };
     held.source = None;
@@ -1322,6 +1739,17 @@ fn forget_the_shape_of_another_film(held: &mut Thumbnail) {
         "thumbnail source shape forgotten {:?}: it was placed for another film",
         HWND(shape.source as *mut _),
     );
+}
+
+/// Let one registration go, and count it: the Shell's own resource, and the number the road's tests
+/// hold a handover to (see `the_unregistrations`).
+fn let_the_registration_go(registration: isize) {
+    if registration == 0 {
+        return;
+    }
+    let _ = unsafe { DwmUnregisterThumbnail(registration) };
+    #[cfg(test)]
+    UNREGISTRATIONS.fetch_add(1, Ordering::SeqCst);
 }
 
 /// Whether a registration wearing `held.shown` has to be pointed at `wanted`: **nothing else is a
@@ -1351,14 +1779,28 @@ fn the_registration_wants(held: &Thumbnail, wanted: ThumbnailBox) -> bool {
 /// than this app resized the source.
 fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     if held.registration != 0 && held.host != host.0 as isize {
-        let _ = unsafe { DwmUnregisterThumbnail(held.registration) };
+        let registration = held.registration;
         held.registration = 0;
+        held.registered = 0;
         held.shown = None;
+        let_the_registration_go(registration);
     }
     held.host = host.0 as isize;
     REGISTERED_HOST.store(held.host, Ordering::SeqCst);
 
-    let source = HWND(SOURCE.load(Ordering::SeqCst) as *mut _);
+    // **The window this registration draws, and not necessarily the current source.** A source adopted
+    // to take the picture over is not the picture until it is ready, so what a standing registration
+    // draws is read out of the record rather than out of the source this road has just adopted (see
+    // `hand_the_picture_over`).
+    let number = if held.registration != 0 {
+        held.registered
+    } else {
+        SOURCE.load(Ordering::SeqCst)
+    };
+    if number == 0 {
+        return;
+    }
+    let source = HWND(number as *mut _);
     let Some(client) = (unsafe { client_size(host) }) else {
         return;
     };
@@ -1405,6 +1847,7 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
             return;
         };
         held.registration = registration;
+        held.registered = number;
     }
 
     let (x, y, width, height) = shown.destination;
@@ -1442,12 +1885,13 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
             host,
             client,
         );
-        let _ = unsafe { DwmUnregisterThumbnail(held.registration) };
+        let registration = held.registration;
         // The picture adoption placed is kept: the next registration is cropped by the same one, and a
         // failure of the Shell's is not a reason to fall back to the whole client.
         let source = held.source;
         *held = Thumbnail::NOTHING;
         held.source = source;
+        let_the_registration_go(registration);
         REGISTERED_HOST.store(0, Ordering::SeqCst);
         return;
     }
@@ -1839,6 +2283,7 @@ mod tests {
         let mut holding = Thumbnail {
             host: 0x2000,
             registration: 9,
+            registered: source.source,
             shown: Some(shown),
             source: Some(source),
         };
@@ -2242,6 +2687,7 @@ mod tests {
         let mut held = Thumbnail {
             host: 0x2000,
             registration: 0,
+            registered: 0,
             shown: None,
             source: Some(a),
         };

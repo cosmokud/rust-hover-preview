@@ -338,6 +338,12 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
             // answers rather than at the box the player chose for itself (see
             // `pin_film_thumbnail::place_the_source_when_the_player_answers`).
             pin_film_thumbnail::place_the_source_when_the_player_answers(host);
+            // **And the pass that says whether a source adopted to replace this one can take the
+            // picture yet**: the registration that is standing goes on drawing the window before it
+            // until the new one can draw what it was placed for, and the swap is one step made here
+            // rather than a picture taken down before its replacement exists (see
+            // `pin_film_thumbnail::hand_the_picture_over`).
+            pin_film_thumbnail::hand_the_picture_over(host);
         }
         return false;
     }

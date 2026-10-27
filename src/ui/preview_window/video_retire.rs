@@ -84,7 +84,11 @@ pub(super) fn retire_replaced_player(retiring: u32, replacement: u32) {
         *held,
         retiring,
         replacement,
-        video_window_for(retiring).is_some(),
+        // **A player covers the one before it when it is the picture**, which a film drawn through a
+        // host answers with the source the registration draws rather than with a window of its own (see
+        // `pin_film_thumbnail::the_source_is_standing`). A replacement whose window is up but which has
+        // not been handed the picture yet covers nothing: the player it displaced is still on screen.
+        video_window_for(retiring).is_some() || pin_film_thumbnail::the_source_is_standing(retiring),
         Instant::now(),
     );
     if let Some(ending) = ending {
@@ -400,19 +404,30 @@ pub(super) fn settle_video_retirement() {
     // as well (see `video_window_for` and `pin_film_host::the_players_window_is_up`).
     let arrival = pin_film_host::the_players_window_is_up(pending.replacement);
 
+    // **A replacement that has not taken the picture over yet is waiting, not late.** The player it
+    // replaced is still what the pin's host is drawing (see
+    // `pin_film_thumbnail::a_handover_is_pending_for`), and ending it on the start timeout is the
+    // black frame the handover exists to keep out — the bound of that wait is the handover's own, which
+    // hands the picture over at the same timeout and lets the pass after this one end this player.
+    let handing_over = pin_film_thumbnail::a_handover_is_pending_for(pending.replacement);
+    let ended = if handing_over {
+        // A replacement that died has no swap left to wait for and nothing holding the picture up.
+        !is_player_pid_alive(pending.replacement)
+    } else {
+        retire_ready(
+            arrival,
+            is_player_pid_alive(pending.replacement),
+            pending.started.elapsed(),
+        )
+    };
+
     // A pin that is no longer up is the other end of the wait, and it ends it at once. What this
     // player is being kept on screen *for* is a window that has gone — a pin closed, a walk that
     // stepped off, a hover that took the file over — and a replacement the pin is not waiting for
     // any more is one whose arrival will never be answered by a window of this pin's, so waiting
     // the full `VIDEO_START_WAIT_SECS` for it would leave a stray window on the desktop for ten
     // seconds after the pin it belonged to had closed.
-    if !pinned()
-        || retire_ready(
-            arrival,
-            is_player_pid_alive(pending.replacement),
-            pending.started.elapsed(),
-        )
-    {
+    if !pinned() || ended {
         // A player whose end was not confirmed keeps its place in the record and is asked again on
         // the next tick, because nothing else here would ask it: the wait is over either way, and
         // what is left of it is only the pid (see `end_retired_player`).

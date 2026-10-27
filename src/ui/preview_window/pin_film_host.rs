@@ -914,13 +914,22 @@ pub(super) fn the_hosted_frame_is_up(pid: u32) -> bool {
     if !the_hosted_player_is_drawing(pid) {
         return false;
     }
-    if mpv_ipc::answers_properties(pid)
-        && mpv_ipc::get_property(pid, "vo-configured").as_deref() != Some("true")
-    {
+    if !the_players_output_is_configured(pid) {
         return false;
     }
     PRESENTED_PID.store(pid, Ordering::SeqCst);
     true
+}
+
+/// Whether this player's own video output is configured for a frame, where the player answers over a
+/// pipe: **the half of the presented predicate that does not need to know which second it is on**.
+///
+/// It is asked where a player has just been begun and the second it stands on is the caller's own
+/// (see `pin_film_thumbnail::hand_the_picture_over`), and it is the same fact `the_hosted_frame_is_up`
+/// proves a frame with, so the two cannot answer differently about the same player.
+pub(super) fn the_players_output_is_configured(pid: u32) -> bool {
+    !mpv_ipc::answers_properties(pid)
+        || mpv_ipc::get_property(pid, "vo-configured").as_deref() == Some("true")
 }
 
 /// Whether the hosted player has the frame the hover froze on screen, rather than only a window.

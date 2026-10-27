@@ -4768,14 +4768,17 @@ fn a_whole_gesture_places_a_source_once(film: StandingFilm, route: VideoRoute) {
     mpv_ipc::clear_reads();
 }
 
-/// **A window that replaced itself is a new source, and a new source is adopted once.** FFmpeg's
-/// player can make its window again — and every relaunch of it is another process with another
-/// window — so the monitor's pass finds a pid whose picture it is not drawing, adopts the new
-/// window, places it once, registers it and drops the registration the old one had (see
-/// `pin_film_thumbnail::note_the_source`). A pass that finds the source already up adopts nothing,
-/// which is what keeps one window from being placed twice.
+/// **A window that replaced itself is a new source, and a new source is adopted once and takes the
+/// picture only when it can draw it.** FFmpeg's player can make its window again — and every relaunch
+/// of it is another process with another window — so the monitor's pass finds a pid whose picture it is
+/// not drawing, adopts the new window and places it once. What it must not do is take the picture down
+/// before that window can draw: the registration the host wears goes on drawing the window before it
+/// until the new source's client is the one the placement asked for and its output is configured for a
+/// frame, and then one swap is made — the new registration handed over before the old one is let go of
+/// (see `pin_film_thumbnail::hand_the_picture_over`). A pass that finds the source standing asks for
+/// nothing at all, which is what keeps one window from being placed twice.
 #[test]
-fn a_source_that_replaced_itself_is_adopted_once_and_registered_once() {
+fn a_source_that_replaced_itself_is_adopted_once_and_takes_the_picture_when_it_is_ready() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -4795,21 +4798,25 @@ fn a_source_that_replaced_itself_is_adopted_once_and_registered_once() {
     let second = unsafe { a_window_of_the_players_own() };
     pin_film_thumbnail::clear_the_source_placements();
     pin_film_thumbnail::clear_the_registrations();
+    pin_film_thumbnail::clear_the_unregistrations();
     let the_monitors_pass = || {
         if !pin_film_thumbnail::the_source_is_up(pid) {
             unsafe { pin_film_thumbnail::adopt_the_source(second, pid, host) };
+        } else {
+            pin_film_thumbnail::place_the_source_when_the_player_answers(host);
+            pin_film_thumbnail::hand_the_picture_over(host);
         }
     };
+    pin_trace::clear_noted();
+    // The pass that adopts the window the player made, and the pass after it — which is the one
+    // that asks whether the new source can draw yet (see `hand_the_picture_over`).
+    the_monitors_pass();
     the_monitors_pass();
 
     assert_eq!(
         pin_film_thumbnail::the_source_window(),
         Some(second),
         "the record follows the window the player made last"
-    );
-    assert!(
-        pin_film_thumbnail::the_source_is_up(pid),
-        "and the pin is drawing that one"
     );
     assert_eq!(
         pin_film_thumbnail::the_source_placements(),
@@ -4821,17 +4828,82 @@ fn a_source_that_replaced_itself_is_adopted_once_and_registered_once() {
         0,
         "and is never asked for a second one"
     );
+    // **The picture standing is still the window before it**, which is the whole point: the player
+    // this window replaced has not had its frame taken off the screen to show one that is not there.
+    assert_eq!(
+        pin_film_thumbnail::the_registrations(),
+        0,
+        "nothing is registered for a source that cannot draw yet"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "and the registration standing is not taken down for it either"
+    );
+    assert!(
+        !pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the picture is the window before this one"
+    );
+    assert!(
+        pin_film_thumbnail::a_source_is_waiting_to_take_the_picture(),
+        "and the swap is what is waiting"
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("thumbnail source not ready")),
+        "and the run says so: a source that is not ready is a traced wait, not a blank pin"
+    );
+    assert!(
+        !pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("thumbnail swapped")),
+        "and nothing has changed hands"
+    );
+
+    // The player answers that its output is configured for a frame: the same pass the monitor makes
+    // hands the picture over, once.
+    mpv_ipc::answer_a_read(pid, "vo-configured", Some("true"));
+    pin_trace::clear_noted();
+    the_monitors_pass();
+
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the new source is the picture once it can draw"
+    );
+    assert!(
+        !pin_film_thumbnail::a_source_is_waiting_to_take_the_picture(),
+        "and nothing is waiting to take it any more"
+    );
     assert_eq!(
         pin_film_thumbnail::the_registrations(),
         1,
-        "exactly one registration: the one the old window had is dropped with it"
+        "exactly one registration: the swap"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        1,
+        "and exactly one old registration let go of, after the new one was handed over"
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("thumbnail swapped old")),
+        "and the swap is one line: old window, new window, how long the wait was"
     );
 
-    // The next pass finds the source up and asks for nothing at all.
+    // The next pass finds the source standing and asks for nothing at all.
+    pin_film_thumbnail::clear_the_source_placements();
+    pin_film_thumbnail::clear_the_registrations();
+    pin_film_thumbnail::clear_the_unregistrations();
     the_monitors_pass();
     assert_eq!(
-        (pin_film_thumbnail::the_source_placements(), pin_film_thumbnail::the_registrations()),
-        (1, 1),
+        (
+            pin_film_thumbnail::the_source_placements(),
+            pin_film_thumbnail::the_registrations(),
+            pin_film_thumbnail::the_unregistrations(),
+        ),
+        (0, 0, 0),
         "a source that is already the picture is not adopted, placed or registered again"
     );
 
@@ -4842,6 +4914,275 @@ fn a_source_that_replaced_itself_is_adopted_once_and_registered_once() {
     );
 
     let _ = unsafe { DestroyWindow(second) };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
+
+/// **A relaunch for a late subtitle keeps the picture until its new source can draw**, on the engine
+/// that cannot be told: FFmpeg's player is begun again (one player, as a subtitle copy always was), the
+/// registration the host wears goes on drawing the window before it, and the swap is one registration
+/// and one old registration let go of once the new window's client is the box the placement asked for
+/// (see `pin_playback::reload_pinned_subtitles` and `pin_film_thumbnail::hand_the_picture_over`).
+#[test]
+fn a_relaunch_for_a_late_subtitle_keeps_the_picture_until_its_new_source_is_ready() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (host, _first, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    clear_restart_count();
+    pin_film_thumbnail::clear_the_registrations();
+    pin_film_thumbnail::clear_the_unregistrations();
+    pin_trace::clear_noted();
+
+    assert!(
+        reload_pinned_subtitles(&path),
+        "a copy that lands while the pin is up begins FFmpeg's player again"
+    );
+    assert_eq!(restart_count(), 1, "one relaunch, and only one");
+    assert_eq!(
+        last_restart_reason(),
+        Some(RestartReason::Subtitle),
+        "and the line says the subtitles are what asked for it"
+    );
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the picture on screen is still the window before the relaunch"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "and it is not taken down for a player that is still opening its file"
+    );
+
+    // The replacement's own window arrives — the way the monitor adopts it — and its client is the
+    // box the placement asks for, so the picture changes hands in one step.
+    let second = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(second, pid, host) };
+    pin_film_thumbnail::hand_the_picture_over(host);
+
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the new source is the picture once it can draw"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_registrations(),
+        1,
+        "exactly one swap: one registration for the new source"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        1,
+        "and exactly one old registration let go of, after the new one was handed over"
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("thumbnail swapped old")),
+        "and the run says the old picture stood until the swap"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    let _ = unsafe { DestroyWindow(second) };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    clear_restart_count();
+    pin_trace::clear_noted();
+}
+
+/// **A seek is one read of the numbers the frame it lands on is drawn from, and nothing of the picture
+/// changes for it.** mpv is taken to the second while it runs, so there is no relaunch, no unregister
+/// and no handover: the source the host is drawing is the one it was, and the crop is still the client
+/// the one placement asked for — which is what says a frame drawn smaller than the pin's box on a seek
+/// would be a number in this line rather than a thing to guess at (see
+/// `pin_film_thumbnail::note_the_seek_picture`). FFmpeg's player is begun again, and what that costs is
+/// one player and no registration: the picture standing is kept for the window that replaces it.
+#[test]
+fn a_seek_moves_the_second_and_not_the_picture_on_either_engine() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (host, source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Mpv) };
+    let content = film.box_;
+    let _ = source;
+    let _ = host;
+
+    // mpv: a line down the pipe, the bar rebased onto the second, and one read of what the engine
+    // reports drawing at the frame it landed on.
+    stand_mpv_in(Some(true));
+    stand_ffplay_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    clear_restart_count();
+    pin_film_thumbnail::clear_the_unregistrations();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+
+    seek_pinned_playback(&path, content, 90.0);
+
+    assert_eq!(restart_count(), 0, "mpv is taken to the second while it runs");
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![format!(
+            "{}
+",
+            r#"{"command":["seek",90.000,"absolute"],"async":true}"#
+        )],
+        "and the only command is the seek"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "no registration is taken down for a seek: the source does not change"
+    );
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the picture is the source it was"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_cropped_client(),
+        Some((1920, 1080)),
+        "and the crop after the seek is still the client the one placement asked for"
+    );
+    let seek_lines: Vec<String> = pin_trace::noted_lines()
+        .into_iter()
+        .filter(|line| line.starts_with("seek picture"))
+        .collect();
+    assert_eq!(
+        seek_lines.len(),
+        1,
+        "one read per seek, and never one per frame: {seek_lines:?}"
+    );
+    assert!(
+        seek_lines[0].contains("cli 1920x1080")
+            && seek_lines[0].contains("pic 1920x1080")
+            && seek_lines[0].contains("asked 1920x1080")
+            && !seek_lines[0].contains("!=asked"),
+        "and the picture the engine reports is the box the source was placed at: {}",
+        seek_lines[0]
+    );
+
+    // FFmpeg's player: one relaunch, and the registration the host wears is still the old source's
+    // until the window that replaces it can draw (see `pin_film_thumbnail::hand_the_picture_over`).
+    clear_restart_count();
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    VIDEO_PID.store(pid, Ordering::SeqCst);
+    pin_film_thumbnail::clear_the_unregistrations();
+    pin_trace::clear_noted();
+
+    seek_pinned_playback(&path, content, 90.0);
+
+    assert_eq!(restart_count(), 1, "a seek is one player begun again on this engine");
+    assert_eq!(
+        last_restart_reason(),
+        Some(RestartReason::Seek),
+        "and it says the seek is what asked for it"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "and the picture standing is not taken down for the player that is still starting"
+    );
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the old source goes on drawing until the new one can"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    clear_restart_count();
+    pin_trace::clear_noted();
+}
+
+/// **A source that never reaches the client it was placed at is waited for and never blanks the pin.**
+/// A short or stuck window — a player that has not taken the box it was asked for, or one that came up at
+/// a size of its own — is a swap that never happens: the picture before it goes on drawing, the run says
+/// `thumbnail source not ready` with both numbers, and nothing is registered, unregistered or begun for
+/// it. The wait is bounded by the player-start wait, which hands the picture over anyway rather than
+/// leaving the one before it to a player that is ending (see `hand_the_picture_over`).
+#[test]
+fn a_source_that_never_reaches_its_asked_client_does_not_blank_the_pin() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let (host, source, pid) = unsafe {
+        a_hover_drawn_through_a_thumbnail(&film, &PathBuf::from("a-film.mkv"), VideoRoute::Mpv)
+    };
+
+    // The player's window comes back and is adopted in the place of the one that was drawing — and
+    // then puts itself back at a box of its own, which is the client the placement did not ask for
+    // and the way a player that will not take the box it was given behaves.
+    unsafe { DestroyWindow(source) }.expect("the source goes");
+    let short = unsafe { a_window_of_the_players_own() };
+    mpv_ipc::answer_a_read(pid, "vo-configured", Some("true"));
+    pin_film_thumbnail::clear_the_registrations();
+    pin_film_thumbnail::clear_the_unregistrations();
+    pin_trace::clear_noted();
+    unsafe { pin_film_thumbnail::adopt_the_source(short, pid, host) };
+    unsafe { MoveWindow(short, NOWHERE, NOWHERE, 960, 540, false) }.expect("a short window");
+    pin_film_thumbnail::hand_the_picture_over(host);
+
+    assert!(
+        !pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "a source at another client is not the picture"
+    );
+    assert_eq!(
+        (
+            pin_film_thumbnail::the_registrations(),
+            pin_film_thumbnail::the_unregistrations(),
+        ),
+        (0, 0),
+        "and nothing is registered or unregistered for it: the pin draws what it drew"
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line == "thumbnail source not ready cli 960x540 asked 1920x1080"),
+        "the wait is traced with both numbers, so a stuck window is a line and not a guess: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    // **And the short window does not become the picture by being asked again**: the placement is
+    // the film's one, and the wait goes on rather than sizing the source a second time.
+    pin_film_thumbnail::place_the_source_when_the_player_answers(host);
+    pin_film_thumbnail::hand_the_picture_over(host);
+    assert_eq!(
+        pin_film_thumbnail::the_source_replacements(),
+        0,
+        "nothing is re-placed to make it fit"
+    );
+    assert!(
+        !pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "and it is still not the picture"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    let _ = unsafe { DestroyWindow(short) };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
 }
