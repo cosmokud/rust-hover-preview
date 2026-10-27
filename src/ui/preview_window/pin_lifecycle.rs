@@ -710,13 +710,13 @@ impl PinWindow for Win32PinWindow {
             // and the swap places the window BEFORE taking the flag down, so the cover is still up
             // when the window goes back (see `unpark_pinned_player`).
             Some(band) => {
-                // **A hosted film is placed and shown rather than raised.** Its picture is a child of
-                // the pin's window, so the band inside that window is its box and the place is the
+                // **A hosted film is placed and shown rather than raised.** Its picture is the
+                // host's own window of the desktop's, so the band is its box and the place is the
                 // whole of what putting it back is — and the topmost road refuses outright while a
                 // park stands, which is still the case here (see `ensure_video_window_topmost`).
                 if pin_film_host::the_pinned_player_was_begun_in_the_host() {
-                    // SAFETY: the host is this app's own child window and both calls report rather
-                    // than fault for a window on its way out.
+                    // SAFETY: the host is this app's own window and both calls report rather than
+                    // fault for a window on its way out.
                     unsafe {
                         pin_film_host::place_the_pin_film_host(band);
                         pin_film_host::set_the_pin_film_host_visible(true);

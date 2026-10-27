@@ -1904,11 +1904,11 @@ fn the_strips_geometry() -> (i32, i32, i32, i32) {
         .expect("the pin the strips are carried for")
 }
 
-/// The film's chrome is drawn over its picture (see `band_in_the_window`), and a child composites
-/// over the layered surface its parent paints — so mpv's film stood over the strips the moment it
-/// began to draw, painted and interactive and invisible. The chrome therefore has windows of its
-/// own, layered children of the pin's window, which composite over the host carrying the very
-/// pixels the pin paints for them (see `pin_chrome_strips`).
+/// The film's chrome is drawn over its picture, and the host the film is drawn in composites over
+/// the layered surface the pin paints — so the film stood over the strips the moment it began to
+/// draw, painted and interactive and invisible. The chrome therefore has windows of its own, layered
+/// children of the pin's window, which composite over the host carrying the very pixels the pin
+/// paints for them (see `pin_chrome_strips`).
 #[test]
 fn the_chrome_of_a_hosted_film_stands_over_it() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -3530,9 +3530,9 @@ unsafe fn a_players_own_window() -> HWND {
     .expect("a player's own window")
 }
 
-/// A pinned FFmpeg film is begun into the pin's host and publishes no top-level window: the
-/// monitor adopts the player's own window into the host once it exists (see
-/// `start_video_playback_where` and `ffplay_window::adopt_the_players_window`).
+/// A pinned FFmpeg film is kept for the pin's host and publishes no top-level window of its own: the
+/// monitor adopts the player's own window as the source the host draws (see
+/// `start_video_playback_where` and `ffplay_window::try_apply_noactivate_style`).
 #[test]
 fn a_pinned_ffplay_film_is_begun_into_the_pins_film_host() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME

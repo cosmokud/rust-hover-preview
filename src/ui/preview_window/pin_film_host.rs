@@ -274,9 +274,9 @@ fn the_film_host_box(content: ScreenRegion) -> (i32, i32, i32, i32) {
 ///
 /// **Who Windows lists and activates is asked of a window once, when it is made, and ownership is the
 /// answer that can still be written later.** An owned window stands above its owner, hides with it,
-/// and is out of Alt+Tab and the taskbar — which is the whole of what the new road needs from the OS,
+/// and is out of Alt+Tab and the taskbar — which is the whole of what the film road needs from the OS,
 /// and the whole of what the pin owes the host for holding its film (see
-/// `the_pin_film_host_is_a_window_of_the_desktop`). `WS_EX_APPWINDOW` is what asks for a taskbar
+/// `the_pins_chrome_is_owned`). `WS_EX_APPWINDOW` is what asks for a taskbar
 /// button regardless of ownership, so it goes with the road that owns the pin and comes back with the
 /// one that does not (see `pin_real_window::real_pin_style`).
 ///

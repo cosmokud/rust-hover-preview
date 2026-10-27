@@ -937,7 +937,7 @@ pub(super) unsafe fn settle_pinned_engine_drag(hwnd: HWND) {
         return;
     }
 
-    // No final apply on the way out: a hosted film's drag is delivered to the pin's own window,
+    // No final apply on the way out: a dragged pin's release is delivered to the pin's own window,
     // where `pinned_release` applies the pointer's last place (see `finish_pin_drag`).
     finish_pin_drag(hwnd, &Win32PinWindow);
 }
