@@ -131,7 +131,6 @@ pub(super) fn mpv_args(
     subtitles: bool,
     input_conf: Option<&Path>,
     ipc: &str,
-    wid: Option<u32>,
     flip: bool,
     ontop: bool,
 ) -> Vec<String> {
@@ -169,37 +168,28 @@ pub(super) fn mpv_args(
     // the two halves two rather than one is that this side holds the window up before this app has
     // ever found its handle, which is what the first frames of a pinned film are drawn under.
     //
-    // **A player given a window of this app's own is told that window and neither of the two.** A
-    // host is a child of the pin's, so where the picture goes is the host's box and the band it
-    // stands in is the pin's own order to keep: `--wid` names the window and mpv draws into it,
-    // while a `--geometry` would be a top-level box nobody asked for and an `--ontop` a place in
-    // the desktop's order the pin is the owner of (see `pin_film_host`).
-    if let Some(wid) = wid {
-        args.push(format!("--wid={wid}"));
-    } else {
-        // **The order the player is held up in, where it is to hold one.** A top-level film is a
-        // window of the desktop's that has to stay over whatever the pin stands in front of; a film
-        // the pin shows through a DWM thumbnail is one that has to stay *behind* the window it is
-        // seen in, so its launch asks for no band at all (see `pin_film_thumbnail`).
-        if ontop {
-            args.push("--ontop".to_string());
-        }
-        // The size and the position, always both, and always written `+x+y` whether x and y are
-        // negative or not: a box on a monitor left of or above the primary one has a negative
-        // coordinate, and `+-2160` is how that coordinate is spelled for a geometry whose offsets
-        // are introduced by a sign — a bare `-2160` is a distance from the far edge instead, so the
-        // film would be put somewhere other than the box. Measured on mpv 0.41.0, on a primary
-        // display 3440x1440 with a second one at (3440,-2160), preview box (3540,-2060):
-        // `+3540+-2060` puts the window on the second display, and the size alone centres it on the
-        // primary at (1520,570).
-        args.push(format!("--geometry={width}x{height}+{x}+{y}"));
+    // **The order the player is held up in, where it is to hold one.** A top-level film is a
+    // window of the desktop's that has to stay over whatever the pin stands in front of; a film
+    // the pin shows through a DWM thumbnail is one that has to stay *behind* the window it is
+    // seen in, so its launch asks for no band at all (see `pin_film_thumbnail`).
+    if ontop {
+        args.push("--ontop".to_string());
     }
+    // The size and the position, always both, and always written `+x+y` whether x and y are
+    // negative or not: a box on a monitor left of or above the primary one has a negative
+    // coordinate, and `+-2160` is how that coordinate is spelled for a geometry whose offsets
+    // are introduced by a sign — a bare `-2160` is a distance from the far edge instead, so the
+    // film would be put somewhere other than the box. Measured on mpv 0.41.0, on a primary
+    // display 3440x1440 with a second one at (3440,-2160), preview box (3540,-2060):
+    // `+3540+-2060` puts the window on the second display, and the size alone centres it on the
+    // primary at (1520,570).
+    args.push(format!("--geometry={width}x{height}+{x}+{y}"));
     // **`--vo=gpu-next` is being measured here, not chosen.** It is libplacebo's renderer rather than
     // `vo=gpu`'s, with its own swapchain and its own present path, and what it is being tried for is
     // the two things the bitblt swapchain below has not settled: a band that goes black while a grown
     // host waits for the player to redraw its child at the new size, and a picture that judders inside
     // a box that is otherwise standing still. `--gpu-api=d3d11` and `--d3d11-flip=no` apply to it as
-    // they did to `vo=gpu`, and `--wid` names the same window. One flag, reverted by deleting it; what
+    // they did to `vo=gpu`. One flag, reverted by deleting it; what
     // a run of it wants looked at is the resize, the colours and the scale against `vo=gpu`, HDR files,
     // and `--hwdec=auto`.
     args.push("--vo=gpu-next".to_string());
@@ -220,9 +210,8 @@ pub(super) fn mpv_args(
     // construction* rather than because mpv caught a `WM_SIZE` and resized its buffer. With the
     // bitblt model a buffer that is a size behind the window is presented 1:1 — cropped where it is
     // larger, a small picture in black where it is smaller (see `pin_film_thumbnail`). It is asked
-    // for by the knob and never by default, and **never on the `--wid` road**: `flip` there would
-    // be a swapchain model a child window cannot have, which is the hitch the paragraph above is
-    // about. No other flag conflicts: `--gpu-api=d3d11` is the context the flag names,
+    // for by the knob and never by default. No other flag conflicts: `--gpu-api=d3d11` is the
+    // context the flag names,
     // `--vo=gpu-next` presents through the same DXGI swapchain, and `--hwdec=auto`'s d3d11va
     // interop is what a flip model is designed for.
     //
@@ -230,7 +219,7 @@ pub(super) fn mpv_args(
     // swapchain, so `flip` is `false` there by the caller's own decision and the launch says the knob
     // was overruled rather than dropping it (see `the_thumbnail_swapchain_flip`).
     args.push(
-        if flip && wid.is_none() {
+        if flip {
             "--d3d11-flip=yes"
         } else {
             "--d3d11-flip=no"
@@ -1397,7 +1386,6 @@ mod tests {
                 true,
                 Some(Path::new("scratch/mpv-input.conf")),
                 IPC,
-            None,
             false,
             true
             ),
@@ -1428,44 +1416,6 @@ mod tests {
         );
     }
 
-    /// A player begun into a pin's host is told the host and nothing about a window of its own:
-    /// there is no top-level window to place and no place in the desktop's order to ask for, so
-    /// `--geometry` and `--ontop` are the two flags that would be a lie (see `pin_film_host`).
-    #[test]
-    fn an_mpv_player_in_a_host_is_told_the_host_and_no_place_of_its_own() {
-        let args = mpv_args(
-            Path::new("a.mkv"),
-            10,
-            20,
-            640,
-            360,
-            0.0,
-            false,
-            80,
-            None,
-            true,
-            true,
-            None,
-            IPC,
-            Some(0x1234_5678),
-            false,
-            true
-        );
-
-        assert!(
-            args.iter().any(|arg| arg == "--wid=305419896"),
-            "the host is named as an unsigned 32-bit decimal, which is what mpv reads: {args:?}"
-        );
-        assert!(
-            !args.iter().any(|arg| arg.starts_with("--geometry")),
-            "a child has no box of its own on the desktop to be given: {args:?}"
-        );
-        assert!(
-            !args.iter().any(|arg| arg == "--ontop"),
-            "and a child has no place in the desktop's order to hold: {args:?}"
-        );
-    }
-
     /// **The flip-model swapchain is the thumbnail road's, and the knob is the only thing that asks
     /// for it.** A pinned mpv whose window is a window of the desktop's is the one place a flip-model
     /// swapchain fixes what the bitblt model gets wrong: the compositor scales the buffer to the
@@ -1487,43 +1437,14 @@ mod tests {
             true,
             None,
             IPC,
-            None,
             true,
-            false,
-        );
+            false);
         assert!(
             with_flip.iter().any(|arg| arg == "--d3d11-flip=yes"),
             "a player that makes a window of its own on the thumbnail road is asked for the flip \
              model when the knob is on: {with_flip:?}"
         );
 
-        let in_a_host = mpv_args(
-            Path::new("a.mkv"),
-            0,
-            0,
-            640,
-            360,
-            0.0,
-            false,
-            80,
-            None,
-            true,
-            true,
-            None,
-            IPC,
-            Some(0x1234_5678),
-            true,
-            true,
-        );
-        assert!(
-            in_a_host.iter().any(|arg| arg == "--d3d11-flip=no"),
-            "and the `--wid` road keeps the bitblt model even with the knob on, because a \
-             flip-model swapchain cannot be a child of another window's: {in_a_host:?}"
-        );
-        assert!(
-            !in_a_host.iter().any(|arg| arg == "--d3d11-flip=yes"),
-            "the knob never reaches a child: {in_a_host:?}"
-        );
     }
 
     /// The flip knob is exactly `1`: the A/B is two runs, and a value that is not the one named must
@@ -1586,7 +1507,6 @@ mod tests {
             true,
             None,
             IPC,
-        None,
         false,
         true
         );
@@ -1619,7 +1539,6 @@ mod tests {
                 false,
                 None,
                 IPC,
-            None,
             false,
             true
             ),
@@ -1667,7 +1586,6 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
             false,
             true
             ),
@@ -1714,7 +1632,6 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
             false,
             true
             ),
@@ -1770,7 +1687,6 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
             false,
             true
             ),
@@ -1816,7 +1732,6 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
             false,
             true
             ),
@@ -1865,7 +1780,6 @@ mod tests {
             true,
             None,
             IPC,
-            None,
             false,
             true
         );
@@ -1898,7 +1812,6 @@ mod tests {
             true,
             None,
             IPC,
-            None,
             false,
             true
         );
@@ -1940,7 +1853,6 @@ mod tests {
                     true,
                     None,
                     IPC,
-                None,
                 false,
                 true
                 ),
@@ -1983,7 +1895,6 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
             false,
             true
             )
@@ -2034,7 +1945,6 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
             false,
             true
             ),
@@ -2103,7 +2013,6 @@ mod tests {
                 true,
                 None,
                 IPC,
-            None,
             false,
             true
             ),

@@ -1154,51 +1154,37 @@ fn a_box_the_frames_pixels_already_cover_owes_the_pin_no_decode() {
 }
 
 /// **The temporary `RHP_RESIZE_TRACE` diagnostic measures a step only where the machine named it**,
-/// which is the whole of what makes it safe to leave in the tree: a run with neither variable set
-/// opens no step, writes no line, and a step that is opened is one a test can read back (see
-/// `pin_resize_probe`).
+/// which is the whole of what makes it safe to leave in the tree: a run with it unset opens no step,
+/// writes no line, and a step that is opened is one a test can read back (see `pin_resize_probe`).
 #[test]
 fn a_resize_step_is_measured_only_where_the_diagnostic_asked_for_it() {
-    pin_resize_probe::stand_the_knobs_in(Some((false, false)));
+    pin_resize_probe::stand_the_trace_in(Some(false));
     pin_resize_probe::begin_step((100, 200, 400, 600), true);
     assert!(
         pin_resize_probe::a_step_started().is_none(),
-        "nothing is measured with neither variable set"
+        "nothing is measured where the trace was not asked for"
     );
     pin_resize_probe::end_step();
-    assert!(
-        !pin_resize_probe::the_film_is_hidden(),
-        "and no film is off the screen for a diagnostic nobody asked for"
-    );
 
-    pin_resize_probe::stand_the_knobs_in(Some((false, true)));
+    pin_resize_probe::stand_the_trace_in(Some(true));
     pin_resize_probe::begin_step((100, 200, 400, 600), true);
     assert!(
         pin_resize_probe::a_step_started().is_some(),
         "and a step is opened where the trace did ask for one"
     );
     pin_resize_probe::forget_the_step();
-    pin_resize_probe::stand_the_knobs_in(None);
+    pin_resize_probe::stand_the_trace_in(None);
 }
 
 /// **A step's line carries the box the pointer asked for, the direction the step went in, and each
 /// cost the step paid** — the numbers a future agent reads to see where a step's time went. A cost
-/// written as a dash is one nothing measured, and a fit that was asked for asynchronously says so,
-/// because that is the difference between a step that waited on mpv's thread and one that did not.
+/// written as a dash is one nothing measured.
 #[test]
 fn a_resize_step_writes_its_box_its_direction_and_the_costs_it_paid() {
     let took = |ms: u64| Some(Duration::from_micros(ms * 1000));
     let mut step = pin_resize_probe::a_step_at((100, 200, 400, 600), true);
     step.paint = took(3);
     step.host = took(1);
-    step.fit = took(2);
-    step.fit_is_async = true;
-    step.asked_for = Some((
-        HWND(std::ptr::null_mut()),
-        (100, 200, 300, 400),
-        Instant::now(),
-    ));
-    step.uncovered = Some(((100, 200, 280, 400), (20, 0)));
 
     let line = pin_resize_probe::a_step_line(&step);
     for field in [
@@ -1206,9 +1192,6 @@ fn a_resize_step_writes_its_box_its_direction_and_the_costs_it_paid() {
         "grew",
         "paint 3.000ms",
         "host 1.000ms",
-        "fit 2.000ms async",
-        "want 100,200 300x400",
-        "now 100,200 280x400 strip 20x0",
     ] {
         assert!(line.contains(field), "{field} is in the line: {line}");
     }
@@ -1216,67 +1199,8 @@ fn a_resize_step_writes_its_box_its_direction_and_the_costs_it_paid() {
     // A step that paid none of them says so rather than printing a zero, and one that shrank says
     // that: the two are what a line is read against.
     let mut bare = pin_resize_probe::a_step_at((100, 200, 400, 600), false);
-    bare.paint = took(3);
+    bare.host = took(1);
     let line = pin_resize_probe::a_step_line(&bare);
     assert!(line.contains("shrank"), "{line}");
-    assert!(line.contains("paint 3.000ms host - fit -"), "{line}");
-    assert!(line.contains("child none"), "{line}");
-    assert!(
-        !line.contains("strip"),
-        "and a step that asked no window for anything measures no strip: {line}"
-    );
-}
-
-/// **The strip a step's child leaves uncovered is what the host has to paint**, and it is measured
-/// rather than assumed: the band the step committed, minus the part of it the child stands over — so a
-/// child a step behind on the right is a strip on the right, and a child held over the band is none.
-#[test]
-fn the_strip_a_child_leaves_is_the_part_of_the_band_it_does_not_cover() {
-    let band = (0, 0, 1000, 500);
-
-    assert_eq!(pin_resize_probe::the_uncovered_strip(band, band), (0, 0));
-    assert_eq!(
-        pin_resize_probe::the_uncovered_strip(band, (0, 0, 900, 500)),
-        (100, 0),
-        "a child a step behind on the right leaves exactly that strip"
-    );
-    assert_eq!(
-        pin_resize_probe::the_uncovered_strip(band, (0, 0, 900, 420)),
-        (100, 80),
-        "and one behind on two edges leaves a band on each"
-    );
-    assert_eq!(
-        pin_resize_probe::the_uncovered_strip(band, (-40, -20, 1080, 540)),
-        (0, 0),
-        "a child held over the band covers it and is clipped by it, not counted as two strips"
-    );
-    assert_eq!(
-        pin_resize_probe::the_uncovered_strip(band, (0, 0, 0, 0)),
-        (1000, 500),
-        "and a child that is not there at all leaves the whole band"
-    );
-}
-
-/// **The box a step asked the film's window for is read as the distance it was found at**, on each of
-/// the four edges a box is written in: what a later tick's `GetWindowRect` is compared against, and
-/// the only number that says whether the film's window arrived at all (see `pin_resize_probe`).
-#[test]
-fn an_observed_film_box_is_read_as_the_distance_it_was_off_by() {
-    let want = (100, 200, 300, 400);
-
-    assert_eq!(
-        pin_resize_probe::the_delta(want, want),
-        (0, 0, 0, 0),
-        "a window standing where it was asked for is no distance at all"
-    );
-    assert_eq!(
-        pin_resize_probe::the_delta(want, (100, 200, 200, 400)),
-        (0, 0, -100, 0),
-        "and one still a step behind is short by the width it has not taken yet"
-    );
-    assert_eq!(
-        pin_resize_probe::the_delta(want, (90, 210, 310, 390)),
-        (-10, 10, 10, -10),
-        "a box asked for somewhere else is off on every edge it moved"
-    );
+    assert!(line.contains("paint - host 1.000ms"), "{line}");
 }

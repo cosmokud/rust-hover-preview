@@ -356,7 +356,7 @@ pub(super) fn bubble_players_box(x: i32, y: i32, width: i32) -> (i32, i32) {
 /// showing, which is what a pin taken up from a hover begins (see
 /// `pin_playback::begin_the_pinned_film_at_the_hovers_frame`). It is mpv's to answer and no other
 /// route's — FFmpeg's player has neither a pause to begin in nor an exact seek, and no take-up of a
-/// hover's film reaches that route (see `pin_film_host::host_for_the_pins_film`).
+/// hover's film reaches that route (see `pin_film_host::the_film_is_shown_in_a_host`).
 ///
 /// `kind` is the kind being launched where the caller knows it before the media slot is written —
 /// a swap names the incoming file's own kind, whose host question must not read the emptied slot
@@ -461,10 +461,9 @@ fn start_video_playback_where(
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = engine_processes::hidden_command("ffplay");
 
-    // **Where this film's picture will be drawn, before the command is built.** mpv is told the host
-    // with `--wid`; FFmpeg's player has no such switch, so it is begun with the frame it will lose
-    // and adopted into the same host once its own window exists (see
-    // `ffplay_window::adopt_the_players_window`). A hosted launch is born off every display with
+    // **Where this film's picture will be drawn, before the command is built.** FFmpeg's player has
+    // no switch that names a window, so it is begun with the frame it will lose and adopted into the
+    // host once its own window exists (see `ffplay_window::adopt_the_players_window`). A hosted launch is born off every display with
     // `-left/-top` and **without `-noborder`**: `-noborder` makes SDL create a non-resizable window
     // whose cached flags then clamp every external resize, so the band could never follow the pin.
     let hosted = if route == VideoRoute::Ffplay {
@@ -712,25 +711,6 @@ fn start_video_playback_where(
     child
 }
 
-/// The window an mpv player begun for this film is told to draw into, as `--wid` is given it: the
-/// pin's own child for a pinned mpv film, and nothing for every other launch — a hover's film, a
-/// pin standing in the preview's window, and FFmpeg's player and the media engine's own frame,
-/// which are not this route at all (see `pin_film_host::host_for_the_pins_film`).
-///
-/// **The one answer both of the launch's questions are read from.** A player given a window of
-/// this app's own is told it and no place of its own, and it is owed no topmost ask either: the
-/// pin is the host's order, so the ask that is the desktop's to answer is the top-level road's
-/// alone (see `mpv_ipc::set_ontop`).
-pub(super) fn mpv_launch_host(path: &Path, kind: Option<MediaType>) -> Option<u32> {
-    let host = pin_film_host::host_for_the_pins_film(path, kind)?;
-    // **The thumbnail road names no window of this app's**: the player makes its own and the host
-    // shows it (see `pin_film_thumbnail`).
-    if pin_film_host::the_pin_shows_its_film_by_thumbnail() {
-        return None;
-    }
-    Some(host.0 as usize as u32)
-}
-
 /// Begin an mpv video, in a window of its own over the preview box.
 ///
 /// It is the ffplay launch's own shape — a player spawned and booked in, its window found by pid
@@ -780,28 +760,20 @@ fn start_mpv_video_playback(
     let (asked_width, asked_height) =
         video_launch::mpv_box_size(width, height, dpi_at(x, y), dpi_at(0, 0));
 
-    // The window this player draws into, where it is this app's to give: a pinned mpv film is a
-    // child of the pin's own window, and a hover whose Pin Mode is on gets a top-level host of the
-    // app's own so that the film can move into the pin without a second launch (see
-    // `mpv_launch_host` and `hover_film_host`).
-    //
-    // **On the thumbnail road the pin's host is the destination of a picture that is mpv's own
-    // window**, so no window of this app's is named and no place in the desktop's order is asked for:
-    // the host shows the player rather than holding it (see `pin_film_thumbnail`).
-    let pin_host = pin_film_host::host_for_the_pins_film(path, kind);
-    // **A hover's film on this road is a thumbnail of its own**, so that pinning it is the same
-    // picture re-cropped into the pin's host rather than a second player begun on a frozen frame
+    // **A pin's mpv film is drawn in a window of the player's own**, and the pin's host shows it
+    // through the Shell's thumbnail (see `pin_film_thumbnail`); a hover's is either the same picture
+    // in its own hover host or, where no host is kept, a window of the desktop's over the preview
+    // box. No window of this app's is handed to mpv on any of those roads: the only one this app
+    // ever named was the child road's `--wid`, and it is gone.
+    let the_pins_film = pin_film_host::the_film_is_shown_in_a_host(path, kind);
+    // **A hover's film on the thumbnail road is a thumbnail of its own**, so that pinning it is the
+    // same picture re-cropped into the pin's host rather than a second player begun on a frozen frame
     // (see `hover_film_host` and `pin_playback::adopt_the_hovered_film_in_the_host`). The host is
-    // the destination here, exactly as the pin's host is: what shows the picture is the Shell, and
-    // no window of this app's is handed to mpv.
+    // the destination here: what shows the picture is the Shell.
     let hover_destination = allow_the_hover_host
         && hover_film_host::the_hover_film_is_kept_in_a_host(path)
-        && pin_film_host::a_film_is_drawn_by_a_thumbnail(
-            video_route(path),
-            pin_film_host::the_pin_shows_its_film_by_thumbnail(),
-        );
-    let behind_the_host = hover_destination
-        || (pin_host.is_some() && pin_film_host::the_pin_shows_its_film_by_thumbnail());
+        && video_route(path) == VideoRoute::Mpv;
+    let behind_the_host = hover_destination || the_pins_film;
     // **The source is launched where it will stand rather than wherever mpv would put itself.** mpv
     // shows its own window as soon as it has opened the file — before this app has found the window
     // and adopted it — so a launch at the corner of the box that will show it is a window of mpv's
@@ -834,36 +806,17 @@ fn start_mpv_video_playback(
     }
     if asked_flip && !thumbnail_flip {
         note_pin_trace!(
-            "RHP_THUMBNAIL_FLIP was ignored: a layered window has no flip-model swapchain, so this \
-             player is the bitblt one"
+            "RHP_THUMBNAIL_FLIP was ignored: a layered window has no flip-model swapchain, so this              player is the bitblt one"
         );
     }
-    // The pin's film is mpv's from here, for the questions asked while the pin's lock is held: a
-    // step from an FFmpeg film must not leave the host answering as FFmpeg's (see
-    // `the_pins_film_is_ffplay`).
-    if pin_host.is_some() {
-        pin_film_host::note_the_pins_film_route(path);
-    }
     // **A hover's host is made here where the picture is a thumbnail of mpv's own window**: the
-    // player is given no `--wid` on that road, so the host is the destination the Shell draws into
-    // and not a parent the player draws in (see `pin_film_thumbnail`).
+    // host is the destination the Shell draws into and not a parent the player draws in (see
+    // `pin_film_thumbnail`).
     let hover_host = hover_destination
         .then(|| unsafe {
             hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
         })
         .flatten();
-    let host = if hover_destination {
-        None
-    } else {
-        mpv_launch_host(path, kind).or_else(|| {
-            (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
-                .then(|| unsafe {
-                    hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
-                        .map(|host| host.0 as usize as u32)
-                })
-                .flatten()
-        })
-    };
 
     let mut command = engine_processes::hidden_command(program);
     command
@@ -881,7 +834,6 @@ fn start_mpv_video_playback(
             subtitles_wanted(),
             video_launch::mpv_input_conf(),
             &ipc,
-            host,
             thumbnail_flip,
             !behind_the_host,
         ))
@@ -893,9 +845,7 @@ fn start_mpv_video_playback(
     // its own in there: the wait for the film's first frame is a wait for this player's child and
     // not the last film's, which is what the pid beside the host is for (see `pin_film_host` and
     // `hover_film_host`).
-    if pin_host.is_some() {
-        pin_film_host::note_hosted_player(child.id());
-    } else if host.is_some() || hover_host.is_some() {
+    if hover_host.is_some() {
         hover_film_host::note_hover_film_host_player(child.id(), path);
     }
     // The pipe the player is told on, and the one thing a later command has to know about the
@@ -912,10 +862,7 @@ fn start_mpv_video_playback(
     // not hold the front wants the opposite of it: asking here rather than at the launch's
     // arguments is what keeps one command line for both, and the pipe is already remembered so the
     // ask is on the player this app holds (see `mpv_ipc::set_ontop`).
-    //
-    // **And a player in the pin's own host is not asked at all**: it has no place in the desktop's
-    // order for the answer to be about, and the pin is the host's order (see `mpv_launch_host`).
-    if host.is_none() && pinned() && !pin_holds_the_front() {
+    if pinned() && !pin_holds_the_front() {
         let _ = mpv_ipc::set_ontop(child.id(), false);
     }
 

@@ -178,9 +178,10 @@ pub(super) fn player_ex_style_for(current: isize) -> isize {
 
 /// The host this app has recorded as holding the player `pid`, where it has recorded one.
 ///
-/// It is where a player begun for a host is to be adopted from its own top-level window: mpv is
-/// given the host as `--wid` and already draws there, while FFmpeg's player only gets a window of
-/// the desktop's of its own, which is moved in once it exists.
+/// It is where a player begun for a host is to be adopted from its own top-level window: FFmpeg's
+/// player only gets a window of the desktop's of its own, which is moved in once it exists. mpv's
+/// film is never adopted into a host: it is a window of its own shown through a thumbnail (see
+/// `pin_film_thumbnail`).
 pub(super) fn host_for_a_hosted_player(pid: u32) -> Option<HWND> {
     if pid == 0 {
         return None;
@@ -198,9 +199,9 @@ pub(super) fn host_for_a_hosted_player(pid: u32) -> Option<HWND> {
 /// FFmpeg film is already on screen at `child`, and the pin's (or hover's) band is `host`.
 ///
 /// SDL2 has no embed switch on Windows, so the window cannot be asked to draw into the host — it is
-/// restyled to a disabled `WS_CHILD` and re-parented after it exists, which is the `--wid` shape mpv
-/// is given at its launch. The frame the window was born with is stripped here, and it was born off
-/// every display (see `start_video_playback_where`), so no border is ever seen.
+/// restyled to a disabled `WS_CHILD` and re-parented after it exists. The frame the window was born
+/// with is stripped here, and it was born off every display (see `start_video_playback_where`), so
+/// no border is ever seen.
 ///
 /// Idempotent: a window already parented to the host is only fitted to it, so the monitor that runs
 /// every few milliseconds while a film plays can ask again without restyling a child the compositor
@@ -390,11 +391,9 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
         // never moved into the host the way FFmpeg's player is (see `pin_film_thumbnail`).
         //
         // **The host is whichever one is showing the film** — a pin's, or the hover's the pin will
-        // take up: a hover's film is drawn by a thumbnail of its own so that pinning it is a
-        // re-pointing of the same picture rather than a second player (see `hover_film_host`).
-        if pin_film_host::the_pin_shows_its_film_by_thumbnail()
-            && video_process_image() == MPV_IMAGE_NAME
-        {
+        // take up: mpv's film is drawn by a thumbnail of its own so that pinning it is a re-pointing
+        // of the same picture rather than a second player (see `hover_film_host`).
+        if video_process_image() == MPV_IMAGE_NAME {
             if !pin_film_thumbnail::the_source_is_up(pid) {
                 let mut data = EnumWindowsData {
                     target_pid: pid,

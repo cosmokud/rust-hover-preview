@@ -57,15 +57,13 @@ const REAL_PIN_TITLE: PCWSTR = w!("Rust Preview");
 /// `WS_EX_LAYERED`: the pin's corners and the shadow around its chrome are alpha, and a layered
 /// window is a window in every other respect, including activation. **A pin that holds a hosted
 /// FFmpeg film drops it**, because that film is presented through the composed renderer into this
-/// window's own DC rather than through a flip-model swapchain — and, under the temporary
-/// `RHP_MPV_COMPOSED_PIN` diagnostic, a pin that holds a hosted mpv film drops it too (see
-/// `pin_film_host::the_mpv_pin_is_composed` and `real_pin_style`).
+/// window's own DC rather than through a flip-model swapchain (see `real_pin_style`).
 ///
 /// `WS_EX_APPWINDOW`: a taskbar button asked for by the window itself rather than inferred from what
 /// owns it, which is the button this window owes and the one the stand-in used to fake.
 ///
-/// `WS_CLIPCHILDREN`: on the child road the band's film is a **child** window standing in this one,
-/// and the chrome's strips are this one's children on every road (see `pin_film_host` and
+/// `WS_CLIPCHILDREN`: a hosted FFmpeg film is a **child** window standing in this one, and the
+/// chrome's strips are this one's children on every road (see `pin_film_host` and
 /// `pin_chrome_strips`), and a pin that holds an FFmpeg film paints its own surface with `GDI`
 /// rather than by `UpdateLayeredWindow` (see `paint::paints_through_the_window_dc`). Without this
 /// bit that paint covers the client area whole, child included, so the film would be wiped over at
@@ -89,9 +87,8 @@ fn real_pin_style(layered: bool) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
 
 /// Put the pin's own window in the layered or the non-layered form its presentation asks for, now.
 /// The window is reused across pins, so the form is written on every take-up: a hosted FFmpeg film
-/// — and, under the temporary `RHP_MPV_COMPOSED_PIN` diagnostic, a hosted mpv film — is composed
-/// through this window's own DC and must not wear `WS_EX_LAYERED`, and every other pin keeps the
-/// layered surface it has always had (see `pin_film_host`).
+/// is composed through this window's own DC and must not wear `WS_EX_LAYERED`, and every other pin
+/// keeps the layered surface it has always had (see `pin_film_host`).
 pub(super) unsafe fn set_the_pin_window_layered(hwnd: HWND, layered: bool) {
     if unsafe { set_an_ex_style(hwnd, WS_EX_LAYERED, layered) } {
         unsafe { ask_the_window_to_re_read_its_style(hwnd) };
