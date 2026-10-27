@@ -5582,6 +5582,90 @@ fn the_standing_source_is_what_the_tracker_and_the_topmost_road_follow() {
     clear_pending_subtitles();
     clear_pending_pinned_relaunch();
     mpv_ipc::forget_pipe(pid);
+    mpv_ipc::forget_pipe(replacement);
+    mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
+
+/// **`pic none` is nothing read, not a mismatch, and a picture that really disagrees stays loud.** A
+/// seek whose frame drawn by FFmpeg's player is written as one line, and the line a run is convicted by
+/// — `pic!=asked` — is only written where a picture was actually read (see `note_the_seek_picture`).
+#[test]
+fn a_seeks_picture_line_calls_nothing_a_mismatch_that_was_never_read() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (host, _first, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    clear_restart_count();
+    pin_film_thumbnail::clear_the_registrations();
+    pin_film_thumbnail::clear_the_unregistrations();
+    pin_trace::clear_noted();
+
+    // A seek's relaunch, and the swap onto the window that drew: FFmpeg's player answers nothing, so
+    // the picture of the frame cannot be read — and that is not the loud line.
+    restart_pinned_player(&path, film.box_, 90.0, false, RestartReason::Seek);
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    let second = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(second, replacement, host) };
+    pin_film_thumbnail::hand_the_picture_over(host);
+
+    let seek_lines: Vec<String> = pin_trace::noted_lines()
+        .into_iter()
+        .filter(|line| line.starts_with("seek picture"))
+        .collect();
+    assert_eq!(
+        seek_lines.len(),
+        1,
+        "one read per seek, and never one per frame: {seek_lines:?}"
+    );
+    assert!(
+        seek_lines[0].contains("cli 1920x1080")
+            && seek_lines[0].contains("pic none")
+            && seek_lines[0].contains("asked 1920x1080"),
+        "the box is the placement's and the picture is nothing read: {}",
+        seek_lines[0]
+    );
+    assert!(
+        !seek_lines[0].contains("!=asked"),
+        "a player that reports no picture is not a film fitted inside its own window: {}",
+        seek_lines[0]
+    );
+
+    // A player that does answer, and answers with another size, is the loud line — asked of the player
+    // whose window is the one standing, which after the swap is the replacement.
+    pin_trace::clear_noted();
+    mpv_ipc::remember_pipe(replacement, "the-standing-pipe", false);
+    mpv_ipc::answer_a_read(
+        replacement,
+        "video-params",
+        Some(r#"{"w":1280,"h":720,"dw":1280,"dh":720}"#),
+    );
+    pin_film_thumbnail::note_the_seek_picture(replacement, 90.0);
+    let loud = pin_trace::noted_lines()
+        .into_iter()
+        .find(|line| line.starts_with("seek picture"))
+        .unwrap_or_else(|| panic!("a line for the read"));
+    assert!(
+        loud.contains("pic 1280x720") && loud.contains("pic!=asked"),
+        "a picture that really disagrees with the box stays loud: {loud}"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    let _ = unsafe { DestroyWindow(second) };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    clear_restart_count();
+    clear_pending_subtitles();
+    clear_pending_pinned_relaunch();
+    mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
     pin_trace::clear_noted();
 }
