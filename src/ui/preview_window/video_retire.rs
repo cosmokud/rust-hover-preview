@@ -35,16 +35,15 @@ use crate::formats::routing::NavCategory;
 /// confirm and a mute is a toggle rather than a setting, so a film begun at zero stays at zero for
 /// good.
 ///
-/// **So the player on screen is frozen rather than left playing.** A hold is taken before its
-/// replacement is begun (see `pin_playback::freeze_the_outgoing_picture`) — mpv by its pipe, and an
-/// engine with no command channel by suspending every thread of it, since the pause key it can be told
-/// clears the window the picture is drawn through — so what overlaps the replacement is a still frame
-/// and nothing else: the walk-and-jump the waiting picture used to do, and the second audio stream
-/// that went with it, are both gone. What the hold costs is a picture that does not move for as long
-/// as the swap takes — bounded by the same `VIDEO_START_WAIT_SECS` the picture's hold is bounded by,
-/// and in practice a few hundred milliseconds, a player having to open the file, seek and put its
-/// window up — and the overlap ends the moment the wait does, whether that is the replacement
-/// arriving or the pin being gone.
+/// **So the player on screen is covered before its replacement is begun.** The road that ships takes
+/// a still of the frame it is drawing, paints it where the registration was drawing, and ends that
+/// player at once (see `pin_playback::relaunch_pinned_player` and
+/// `pin_film_thumbnail::stand_the_outgoing_picture_as_a_still`) — so what overlaps the replacement is
+/// a picture of this app's own and **no player at all**: the file lock, the sound device and the GPU
+/// device are free for the replacement to start on. The dead freeze roads cover it with the player's
+/// own frame and keep it running instead (see `pin_playback::freeze_the_outgoing_picture`), which is
+/// the wait this record's own road bounds: either way what the user sees is one still frame and not
+/// the walk-and-jump, and the second audio stream that went with it is gone.
 #[derive(Clone, Copy)]
 pub(super) struct VideoRetirement {
     /// The player being replaced, verified still to be `ffplay.exe` before it is ended however
@@ -319,6 +318,10 @@ pub(super) static ORPHANED_VIDEO_KILLS: Lazy<Mutex<Vec<u32>>> =
 /// record forgotten and `VIDEO_PID` cleared where it still names it, the same
 /// bookkeeping `kill_superseded_player` does. Only a player still dying after
 /// being asked is owned by the list — never dropped, never waited on.
+///
+/// **It is also how a relaunch ends the player a capture replaced**: a still is on screen instead of
+/// that player, so nothing has to wait for it, and the road that ends a player nothing is waiting on
+/// is this one (see `pin_playback::relaunch_pinned_player`).
 pub(super) fn retire_orphaned_player(pid: u32) {
     if pid == 0 {
         return;

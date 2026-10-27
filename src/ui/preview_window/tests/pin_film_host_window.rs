@@ -4832,6 +4832,11 @@ fn every_relaunch_ends_its_old_player_only_after_the_new_picture_stands() {
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    // **The suspension is the dead arm this test is about**: it holds the picture on the registration
+    // it was already drawn through, which is the ordering of the retirement read here. The road that
+    // ships captures a still and ends the player at once, and has no retirement to order (see
+    // `FreezeRoad`).
+    stand_the_freeze_road_in(Some(FreezeRoad::Suspend));
 
     let reasons = [
         RestartReason::Seek,
@@ -4974,6 +4979,7 @@ fn every_relaunch_ends_its_old_player_only_after_the_new_picture_stands() {
     for source in sources {
         let _ = unsafe { DestroyWindow(source) };
     }
+    stand_the_freeze_road_in(None);
     unsafe { pin_film_host::take_down_the_pin_film_host() };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     stand_mpv_in(None);
@@ -5337,7 +5343,9 @@ fn a_relaunch_freezes_the_picture_on_screen_down_the_pipe_the_player_answers_on(
     let (_host, _source, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Mpv) };
     // The replacement is begun as the route a test can stand in for; what is being read here is how
-    // the player *on screen* is told, which the pipe it answers on decides.
+    // the player *on screen* is told, which the pipe it answers on decides. The road is the dead
+    // suspension's, because the road that ships captures a still instead (see `FreezeRoad`).
+    stand_the_freeze_road_in(Some(FreezeRoad::Suspend));
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
@@ -5348,6 +5356,7 @@ fn a_relaunch_freezes_the_picture_on_screen_down_the_pipe_the_player_answers_on(
     pin_trace::clear_noted();
 
     restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Seek);
+    stand_the_freeze_road_in(None);
 
     let lines = pin_trace::noted_lines();
     assert!(
@@ -5391,16 +5400,17 @@ fn a_relaunch_freezes_the_picture_on_screen_down_the_pipe_the_player_answers_on(
     pin_trace::clear_noted();
 }
 
-/// **The freeze road is the run's own setting, read once, and the arm that lost is still nameable**
-/// (see `FreezeRoad`). Everything that is not one of the two named arms is the road that ships, because
-/// a value this build does not know must not silently turn the freeze off.
+/// **The cover road is the run's own setting, read once, and the road that ships is the capture.**
+/// Everything that is not one of the two dead arms or `off` is the capture, because a value this
+/// build does not know must not silently turn the cover off (see `FreezeRoad`).
 #[test]
 fn the_freeze_road_is_the_runs_own_setting() {
-    assert_eq!(freeze_road_from(None), FreezeRoad::Suspend);
+    assert_eq!(freeze_road_from(None), FreezeRoad::Capture);
+    assert_eq!(freeze_road_from(Some("capture")), FreezeRoad::Capture);
     assert_eq!(freeze_road_from(Some("suspend")), FreezeRoad::Suspend);
     assert_eq!(freeze_road_from(Some(" key ")), FreezeRoad::Key);
     assert_eq!(freeze_road_from(Some("off")), FreezeRoad::Off);
-    assert_eq!(freeze_road_from(Some("anything else")), FreezeRoad::Suspend);
+    assert_eq!(freeze_road_from(Some("anything else")), FreezeRoad::Capture);
 }
 
 /// **A player with no command channel is suspended where it stands, and the line says whether the
@@ -5498,6 +5508,9 @@ fn only_the_outgoing_player_of_a_relaunch_is_suspended() {
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    // **The suspension is the dead arm this test is about**, and the road that ships captures a still
+    // and ends the player instead (see `FreezeRoad` and `the_capture_road_paints_a_still_and_ends_the_player_before_the_replacement`).
+    stand_the_freeze_road_in(Some(FreezeRoad::Suspend));
     ffplay_window::clear_suspended_players();
     ffplay_window::clear_pause_posts();
     mpv_ipc::clear_noted();
@@ -5505,6 +5518,7 @@ fn only_the_outgoing_player_of_a_relaunch_is_suspended() {
     clear_restart_count();
 
     restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Seek);
+    stand_the_freeze_road_in(None);
 
     let replacement = VIDEO_PID.load(Ordering::SeqCst);
     assert_ne!(replacement, outgoing, "a relaunch begins another player");
@@ -5563,6 +5577,271 @@ fn only_the_outgoing_player_of_a_relaunch_is_suspended() {
     stand_video_engine_in(None);
     mpv_ipc::forget_pipe(outgoing);
     mpv_ipc::clear_reads();
+    clear_restart_count();
+    pin_trace::clear_noted();
+}
+
+/// **The road that ships paints a still of the picture it ends, and ends the player at once.**
+///
+/// One capture and one paint per relaunch; the outgoing player is ended before its replacement is
+/// spawned, so the file, the sound device and the GPU device are all free for it (see
+/// `stand_the_outgoing_picture_as_a_still`); the registration is let go of only once the still is
+/// painted under it; and the still is cropped by the box's own shape, read as the rectangle the road
+/// wrote down rather than as pixels no test can see. The swap is untouched: the replacement's
+/// registration composes over the still and the still disappears with it.
+#[test]
+fn the_capture_road_paints_a_still_and_ends_the_player_before_the_replacement() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_retirement = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let path = PathBuf::from("a-film.mkv");
+    let outgoing = unsafe { GetCurrentProcessId() };
+    probed_at(&path, 1920, 1080);
+    pin_film_thumbnail::forget_the_thumbnail();
+    film.drawn_in_the_host(outgoing);
+    let source = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(source, outgoing, host) };
+    VIDEO_PID.store(outgoing, Ordering::SeqCst);
+
+    pin_film_thumbnail::stand_the_capture_in(Some(true));
+    ffplay_window::clear_suspended_players();
+    ffplay_window::clear_pause_posts();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+    clear_restart_count();
+    pin_film_thumbnail::clear_the_unregistrations();
+    let erases = pin_film_host::host_erases();
+
+    restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Seek);
+
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    let lines = pin_trace::noted_lines();
+    let at = |line: &str| lines.iter().position(|noted| noted == line);
+    let captured = format!("outgoing picture captured pid {outgoing} 1920x1080 sample ok");
+    let painted = format!("placeholder painted from a capture pid {outgoing}");
+    let ended = format!("outgoing player ended at once pid {outgoing}");
+    let restarted = format!("player restarted for seek from {outgoing} to {replacement}");
+    assert_eq!(
+        lines.iter().filter(|line| **line == captured).count(),
+        1,
+        "one capture a relaunch, and the run says what it took: {lines:?}"
+    );
+    assert_eq!(
+        lines.iter().filter(|line| **line == painted).count(),
+        1,
+        "and one still painted from it: {lines:?}"
+    );
+    let (at_capture, at_paint, at_end, at_restart) =
+        (at(&captured), at(&painted), at(&ended), at(&restarted));
+    assert!(
+        at_capture < at_paint && at_paint < at_end && at_end < at_restart,
+        "the capture, the still under the registration, and only then the player ended and its \
+         replacement begun: {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("placeholder unavailable")),
+        "a lit capture is not the fallback: {lines:?}"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        1,
+        "the outgoing registration is let go of, once, and only after the still is painted"
+    );
+    assert!(
+        pin_film_thumbnail::a_still_stands(),
+        "the still is what the host is showing for the whole of the wait"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_stills_crop(),
+        Some((240, 0, 1440, 1080)),
+        "the still is cut by the box's own shape: 1920x1080 cropped to the 320x240 band"
+    );
+    assert!(
+        ffplay_window::suspended_players().is_empty(),
+        "the capture road suspends nothing"
+    );
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        0,
+        "and the pause key is not part of it either"
+    );
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "nor is a hold down a pipe: the player is ended, not frozen"
+    );
+    assert_eq!(
+        pin_film_host::host_erases(),
+        erases,
+        "nothing erases the host while the still stands"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("film host hidden while a pin lives")),
+        "and nothing takes the host off the screen for it: {lines:?}"
+    );
+
+    // The replacement's own source is drawn, and the registration that takes the box over composes
+    // over the still: the still goes with the swap and nothing had to clear it.
+    let second = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(second, replacement, host) };
+    assert!(
+        pin_film_thumbnail::a_still_stands(),
+        "a source that has not drawn does not take the still's box"
+    );
+    pin_film_thumbnail::hand_the_picture_over(host);
+    assert!(
+        pin_film_thumbnail::the_source_is_up(replacement),
+        "the replacement is the picture once it can draw"
+    );
+    assert!(
+        !pin_film_thumbnail::a_still_stands(),
+        "and the still goes with the registration that covers it"
+    );
+    assert_eq!(
+        pin_film_host::host_erases(),
+        erases,
+        "nothing erases the host for the swap either"
+    );
+
+    let _ = unsafe { DestroyWindow(second) };
+    let _ = unsafe { DestroyWindow(source) };
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        *held = previous_retirement;
+    }
+    pin_film_thumbnail::stand_the_capture_in(None);
+    pin_film_thumbnail::forget_the_thumbnail();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+    pin_trace::clear_noted();
+}
+
+/// **A black capture, and one that fails outright, paint nothing and leave the old picture playing.**
+///
+/// The capture is what decides it, so a window FFmpeg's player draws through a swapchain — which can
+/// answer `PrintWindow` with black — is a relaunch on the road as it was before there was any cover:
+/// nothing captured as a still, nothing frozen, nothing suspended, the registration left drawing the
+/// frame that is on screen, and the player retired by the loop once its replacement draws (see
+/// `stand_the_outgoing_picture_as_a_still`).
+#[test]
+fn a_black_or_failed_capture_paints_nothing_and_leaves_the_old_picture_playing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_retirement = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let path = PathBuf::from("a-film.mkv");
+    let outgoing = unsafe { GetCurrentProcessId() };
+    probed_at(&path, 1920, 1080);
+    pin_film_thumbnail::forget_the_thumbnail();
+    film.drawn_in_the_host(outgoing);
+    let source = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(source, outgoing, host) };
+    VIDEO_PID.store(outgoing, Ordering::SeqCst);
+
+    pin_film_thumbnail::stand_the_capture_in(Some(false));
+    ffplay_window::clear_suspended_players();
+    ffplay_window::clear_pause_posts();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+    clear_restart_count();
+    pin_film_thumbnail::clear_the_unregistrations();
+
+    restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Seek);
+
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    let lines = pin_trace::noted_lines();
+    let at = |line: &str| lines.iter().position(|noted| noted == line);
+    let captured = format!("outgoing picture captured pid {outgoing} 1920x1080 sample black");
+    let fallback = format!("placeholder unavailable pid {outgoing}: the old picture plays on");
+    let restarted = format!("player restarted for seek from {outgoing} to {replacement}");
+    assert!(
+        at(&captured) < at(&fallback) && at(&fallback) < at(&restarted),
+        "a black capture is written as one, the fallback is named before the replacement is begun, \
+         and the run says what it took: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| {
+            line.starts_with("placeholder painted")
+                || line.starts_with("outgoing player ended at once")
+                || line.starts_with("outgoing picture frozen")
+        }),
+        "and nothing is painted over, ended or frozen on the fallback: {lines:?}"
+    );
+    assert!(
+        !pin_film_thumbnail::a_still_stands(),
+        "and nothing stands where a cover would be"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "the registration goes on drawing the picture that is on screen"
+    );
+    assert!(
+        pin_film_thumbnail::the_source_is_up(outgoing),
+        "which is the outgoing player's own frame"
+    );
+    assert_eq!(
+        VIDEO_RETIREMENT
+            .lock()
+            .ok()
+            .and_then(|held| *held)
+            .map(|parked| parked.retiring),
+        Some(outgoing),
+        "and the player is kept for the loop to end once the replacement draws"
+    );
+    assert!(
+        ffplay_window::suspended_players().is_empty(),
+        "nothing is suspended on the fallback either"
+    );
+    assert_eq!(ffplay_window::pause_posts(), 0, "and no key is posted");
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "nor is there a hold down a pipe"
+    );
+
+    // The other half of the fallback: a capture that cannot be taken at all is the same one line and
+    // the same nothing painted.
+    let _ = unsafe { DestroyWindow(source) };
+    pin_trace::clear_noted();
+    assert!(
+        !pin_film_thumbnail::stand_the_outgoing_picture_as_a_still(outgoing),
+        "there is no window left to take a still of"
+    );
+    assert_eq!(
+        pin_trace::noted_lines(),
+        vec![format!(
+            "placeholder unavailable pid {outgoing}: the old picture plays on"
+        )],
+        "so the same fallback is said, and nothing claims a capture was taken"
+    );
+
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        *held = previous_retirement;
+    }
+    pin_film_thumbnail::stand_the_capture_in(None);
+    pin_film_thumbnail::forget_the_thumbnail();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::clear_noted();
     clear_restart_count();
     pin_trace::clear_noted();
 }
