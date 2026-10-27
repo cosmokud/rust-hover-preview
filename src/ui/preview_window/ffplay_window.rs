@@ -1,13 +1,6 @@
 //! The window FFmpeg draws a film into, and the process standing behind it: finding the
 //! window, keeping it out of the foreground, sending it a key, and killing what is left over.
 
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetParent, SetParent, GWL_STYLE, SWP_FRAMECHANGED, SWP_SHOWWINDOW, WS_CAPTION,
-    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_ACCEPTFILES,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
-};
-
 use super::*;
 
 // Expected executable names of the players a video or a sound is spawned as, used to verify a
@@ -178,9 +171,9 @@ pub(super) fn player_ex_style_for(current: isize) -> isize {
 
 /// The host this app has recorded as holding the player `pid`, where it has recorded one.
 ///
-/// It is where a player begun for a host is to be adopted from its own top-level window: FFmpeg's
-/// player only gets a window of the desktop's of its own, which is moved in once it exists. mpv's
-/// film is never adopted into a host: it is a window of its own shown through a thumbnail (see
+/// It is where a player of a film is adopted as the picture, from the window the player made for
+/// itself: neither engine is drawn into a window of this app's, so what is found under the pid is a
+/// window of the desktop's and the host shows it through the Shell's thumbnail (see
 /// `pin_film_thumbnail`).
 pub(super) fn host_for_a_hosted_player(pid: u32) -> Option<HWND> {
     if pid == 0 {
@@ -193,78 +186,6 @@ pub(super) fn host_for_a_hosted_player(pid: u32) -> Option<HWND> {
         return hover_film_host::hover_film_host();
     }
     None
-}
-
-/// Adopt a player's own top-level window into a host this app owns: the button press that begins an
-/// FFmpeg film is already on screen at `child`, and the pin's (or hover's) band is `host`.
-///
-/// SDL2 has no embed switch on Windows, so the window cannot be asked to draw into the host — it is
-/// restyled to a disabled `WS_CHILD` and re-parented after it exists. The frame the window was born
-/// with is stripped here, and it was born off every display (see `start_video_playback_where`), so
-/// no border is ever seen.
-///
-/// Idempotent: a window already parented to the host is only fitted to it, so the monitor that runs
-/// every few milliseconds while a film plays can ask again without restyling a child the compositor
-/// is drawing.
-pub(super) unsafe fn adopt_the_players_window(child: HWND, host: HWND) -> bool {
-    if child.is_invalid() || host.is_invalid() {
-        return false;
-    }
-
-    if unsafe { GetParent(child) }.is_ok_and(|parent| parent == host) {
-        unsafe { fit_the_hosted_player_to_the_host(child, host) };
-        return true;
-    }
-
-    let style = unsafe { GetWindowLongPtrW(child, GWL_STYLE) };
-    let style = style
-        & !(WS_POPUP.0 as isize
-            | WS_CAPTION.0 as isize
-            | WS_THICKFRAME.0 as isize
-            | WS_SYSMENU.0 as isize
-            | WS_MINIMIZEBOX.0 as isize
-            | WS_MAXIMIZEBOX.0 as isize)
-        | (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN).0 as isize;
-    unsafe { SetWindowLongPtrW(child, GWL_STYLE, style) };
-
-    // The bits that make a window of the desktop's one of the Shell's go; ACCEPTFILES is ffplay's
-    // own and is left exactly as it was found.
-    let ex = unsafe { GetWindowLongPtrW(child, GWL_EXSTYLE) };
-    let ex = ex
-        & !(WS_EX_TOPMOST.0 as isize
-            | WS_EX_APPWINDOW.0 as isize
-            | WS_EX_TOOLWINDOW.0 as isize
-            | WS_EX_NOACTIVATE.0 as isize)
-        | WS_EX_ACCEPTFILES.0 as isize;
-    unsafe { SetWindowLongPtrW(child, GWL_EXSTYLE, ex) };
-
-    let _ = unsafe { SetParent(child, host) };
-    // `SetParent` puts the topmost bit back for a window that had one; the host wears none.
-    unsafe { SetWindowLongPtrW(child, GWL_EXSTYLE, ex) };
-    // Disabled, so a press on the picture is a press on the pin (see `pin_film_host`).
-    let _ = unsafe { EnableWindow(child, false) };
-    unsafe { fit_the_hosted_player_to_the_host(child, host) };
-    true
-}
-
-/// Fit a hosted player's window to the host's client box: the band's box changes and SDL will not
-/// follow its parent on its own.
-pub(super) unsafe fn fit_the_hosted_player_to_the_host(child: HWND, host: HWND) {
-    let mut client = RECT::default();
-    if unsafe { GetClientRect(host, &mut client) }.is_err() {
-        return;
-    }
-    let _ = unsafe {
-        SetWindowPos(
-            child,
-            HWND::default(),
-            0,
-            0,
-            (client.right - client.left).max(1),
-            (client.bottom - client.top).max(1),
-            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
-        )
-    };
 }
 
 /// Style and raise a player's known window.
@@ -379,61 +300,43 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
 /// Apply WS_EX_NOACTIVATE style to a window
 /// Returns true if the window was found and modified
 pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
-    // **A player in a host of this app's has no window of the desktop's to style.** mpv's child
-    // under the host is already disabled, and there is nothing to enumerate or to publish: the
-    // host stands in every top-level road instead (see `pin_film_host` and `hover_film_host`).
-    // FFmpeg's player is the one that is not there yet: it makes its own top-level window, which
-    // is adopted into the host here — once, and then never found again by the enumeration below.
+    // **A film the Shell draws into a host of this app's is a window of the desktop's that is kept
+    // one.** Neither player is begun into a window of this app's — mpv is launched with no `--wid`
+    // and FFmpeg's player has no embed switch — so the window under this pid is the film's own,
+    // and the host shows it by the Shell's thumbnail rather than holding it (see
+    // `pin_film_thumbnail`).
     if let Some(host) = host_for_a_hosted_player(pid) {
-        // **The thumbnail road's player is a window of the desktop's and is kept one.** mpv is begun
-        // with no `--wid`, so what is found under this pid is the film's own window rather than a
-        // child of the host's: it is adopted as the picture the host shows by a DWM thumbnail, and
-        // never moved into the host the way FFmpeg's player is (see `pin_film_thumbnail`).
-        //
-        // **The host is whichever one is showing the film** — a pin's, or the hover's the pin will
-        // take up: mpv's film is drawn by a thumbnail of its own so that pinning it is a re-pointing
-        // of the same picture rather than a second player (see `hover_film_host`).
-        if video_process_image() == MPV_IMAGE_NAME {
-            if !pin_film_thumbnail::the_source_is_up(pid) {
-                let mut data = EnumWindowsData {
-                    target_pid: pid,
-                    found_hwnd: HWND::default(),
-                    best_area: 0,
-                };
-                let _ = EnumWindows(
-                    Some(enum_windows_callback),
-                    LPARAM(&mut data as *mut EnumWindowsData as isize),
-                );
-                if !data.found_hwnd.is_invalid() {
-                    unsafe { pin_film_thumbnail::adopt_the_source(data.found_hwnd, pid, host) };
-                }
-            } else {
-                // **And this is the pass that keeps the source invisible**: the style is put on at
-                // adoption and mpv can come back from a video output reinit without it, so a source
-                // whose layered bit is gone is a film standing over the pin until the next adopt — and
-                // a window that is *the same handle* styled again is never adopted again (see
-                // `pin_film_thumbnail::keep_the_source_invisible`).
-                unsafe { pin_film_thumbnail::keep_the_source_invisible() };
-                // **And the pass that sizes a film adoption had no answer for**: the player opens the
-                // file after its window exists, and the one placement is made here as soon as it
-                // answers rather than at the box the player chose for itself (see
-                // `pin_film_thumbnail::place_the_source_when_the_player_answers`).
-                pin_film_thumbnail::place_the_source_when_the_player_answers(host);
+        // **The source is adopted once, and the host is whichever one is showing the film** — a
+        // pin's, or the hover's the pin will take up, so that pinning it is a re-pointing of the same
+        // picture rather than a second player (see `hover_film_host`). A window that replaced itself
+        // is another source: `the_source_is_up` says this pid's picture is not the one recorded, and
+        // the adoption takes the new registration and drops the old (see
+        // `pin_film_thumbnail::note_the_source`).
+        if !pin_film_thumbnail::the_source_is_up(pid) {
+            let mut data = EnumWindowsData {
+                target_pid: pid,
+                found_hwnd: HWND::default(),
+                best_area: 0,
+            };
+            let _ = EnumWindows(
+                Some(enum_windows_callback),
+                LPARAM(&mut data as *mut EnumWindowsData as isize),
+            );
+            if !data.found_hwnd.is_invalid() {
+                unsafe { pin_film_thumbnail::adopt_the_source(data.found_hwnd, pid, host) };
             }
-            return false;
-        }
-
-        let mut data = EnumWindowsData {
-            target_pid: pid,
-            found_hwnd: HWND::default(),
-            best_area: 0,
-        };
-        let _ = EnumWindows(
-            Some(enum_windows_callback),
-            LPARAM(&mut data as *mut EnumWindowsData as isize),
-        );
-        if !data.found_hwnd.is_invalid() {
-            unsafe { adopt_the_players_window(data.found_hwnd, host) };
+        } else {
+            // **And this is the pass that keeps the source invisible**: the style is put on at
+            // adoption and a player can come back from a video output reinit without it, so a source
+            // whose layered bit is gone is a film standing over the pin until the next adopt — and
+            // a window that is *the same handle* styled again is never adopted again (see
+            // `pin_film_thumbnail::keep_the_source_invisible`).
+            unsafe { pin_film_thumbnail::keep_the_source_invisible() };
+            // **And the pass that sizes a film adoption had no answer for**: the player opens the
+            // file after its window exists, and the one placement is made here as soon as it
+            // answers rather than at the box the player chose for itself (see
+            // `pin_film_thumbnail::place_the_source_when_the_player_answers`).
+            pin_film_thumbnail::place_the_source_when_the_player_answers(host);
         }
         return false;
     }
@@ -658,20 +561,11 @@ pub(super) fn video_window_for(pid: u32) -> Option<HWND> {
         return None;
     }
 
-    // **A hover's hosted player has no window of the desktop's**, only mpv's child under this
-    // app's host: that child is the player's own window, already disabled and non-activating, and
-    // it is what the roads asking "is the player's window up" are answered with (see
-    // `the_players_window_is_up`).
-    if let Some(child) = hover_film_host::the_hover_players_window(pid) {
-        return Some(child);
-    }
-
-    // The pin's host holds the film the same way: a hosted FFmpeg player is its child, and a key
-    // has to reach that window rather than a top-level one that no longer exists (see
-    // `pin_film_host::a_child_of_the_host`).
-    if pin_film_host::hosted_player_pid() == Some(pid) {
-        return pin_film_host::film_host()
-            .and_then(|host| pin_film_host::a_child_of_the_host(host, pid));
+    // **A film the Shell draws into a host of this app's is asked about as its source**, which is
+    // the window the player made and the host thumbnails: a key has to reach that window, and it is
+    // the one handle the road publishing nothing else leaves (see `pin_film_thumbnail`).
+    if pin_film_thumbnail::the_source_is_up(pid) {
+        return pin_film_thumbnail::the_source_window();
     }
 
     let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);

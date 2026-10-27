@@ -2242,7 +2242,11 @@ fn a_box_change_moves_mpv_and_begins_nothing_again() {
     }
 
     let content = (100, 80, 420, 320);
+    let previous_own = pin_is_its_own_window();
     stand_pin(Some(playing_pin(content, 30.0)));
+    // **A film pin stands in a window of its own**, which is where its host is made: a resize or a
+    // take-up is a box for that host and not a player begun again (see `pin_film_host`).
+    pin_stands_in_its_own_window(true);
     forget_pin_park_swap();
     forget_video_frame();
     forget_resume_frame();
@@ -2279,6 +2283,7 @@ fn a_box_change_moves_mpv_and_begins_nothing_again() {
         "a take-up moves the window that is already showing the film and begins nothing"
     );
 
+    pin_stands_in_its_own_window(previous_own);
     restore(previous_pin, previous_pid, previous_media);
 }
 
@@ -2328,6 +2333,9 @@ fn a_drag_holds_ffplays_film_and_leaves_the_mpv_one_playing() {
     forget_pin_park_swap();
     forget_video_frame();
     stand_pin(Some(playing_pin(content, 30.0)));
+    // **A film pin stands in a window of its own**, so the film is drawn through its host and the
+    // drag is a move of that host rather than a window to put away (see `pin_film_host`).
+    pin_stands_in_its_own_window(true);
     begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
     assert!(pin_is_dragging(), "the hand is carrying the window");
     assert!(
@@ -2343,6 +2351,7 @@ fn a_drag_holds_ffplays_film_and_leaves_the_mpv_one_playing() {
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_video_engine_in(None);
+    pin_stands_in_its_own_window(false);
     restore(previous_pin, previous_pid, previous_media);
 }
 
@@ -2385,6 +2394,9 @@ fn a_drag_posts_ffplays_pause_key_and_sends_an_mpv_player_nothing() {
     stand_mpv_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     stand_pin(Some(playing_pin(content, 30.0)));
+    // **A film pin stands in a window of its own**, so the film is drawn through its host and a
+    // drag only moves that host (see `pin_film_host`).
+    pin_stands_in_its_own_window(true);
     ffplay_window::clear_pause_posts();
     video_drag_hold_apply(true);
     assert_eq!(
@@ -2395,6 +2407,7 @@ fn a_drag_posts_ffplays_pause_key_and_sends_an_mpv_player_nothing() {
          to start it again"
     );
 
+    pin_stands_in_its_own_window(false);
     restore(previous_pin, previous_pid, previous_media);
 }
 

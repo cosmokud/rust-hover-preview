@@ -645,11 +645,6 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
         *current = Some(media);
     }
 
-    // A file stepped into or out of an FFmpeg film changes the pin's presentation with it: the
-    // window's own style is written here, before any paint of the file just installed (see
-    // `pin_real_window::apply_the_pin_window_presentation`).
-    unsafe { pin_real_window::apply_the_pin_window_presentation() };
-
     // What the loop's own bookkeeping is about is the file on screen, and the pin is showing
     // another one now: the card a sound is drawn from, the render tier's own record, and the
     // hover a take-down ends are all read of this.

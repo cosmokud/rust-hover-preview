@@ -1399,6 +1399,7 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     let previous_pin = take_pin_for_a_test();
     let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
     let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
+    let previous_own = pin_is_its_own_window();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
     register_the_stand_in_class();
@@ -1462,6 +1463,9 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     let mut pin = overlay_pin((100, 80, 164, 128), PinChrome::always());
     pin.collapsed = true;
     stand_pin(Some(pin));
+    // **The pin stands in a window of its own**, which is where a film's host is made: the picture
+    // the button holds is the pin's window rather than the player's (see `mirror_source`).
+    pin_stands_in_its_own_window(true);
     the_stand_in();
 
     // The picture the button of this pin holds, taken the way a collapse takes it.
@@ -1503,6 +1507,7 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
     }
+    pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
 }
 

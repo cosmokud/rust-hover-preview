@@ -349,7 +349,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // to exactly as a picture's own frame is (see `compose_parked_band`), and black under it rather
     // than the configured `Background -> Video` — that setting is allowed to be `Transparent`, and
     // a deliberately transparent band is exactly the hole this is here not to leave.
-    if paint.parked || pin_film_host::the_move_cover_is_up() {
+    if paint.parked {
         if mem_dc.is_some() {
             let held = held_video_frame();
             compose_parked_band(
@@ -414,7 +414,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     );
                 } else if film_band_is_hit_testable(
                     media.media_type,
-                    paint.parked || pin_film_host::the_move_cover_is_up(),
+                    paint.parked,
                 ) {
                     // Nothing is composed into this band — the film is in a window under it — so
                     // what is written here is only ever the pin's own claim on the pixel (see
@@ -647,39 +647,17 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     };
 
     if let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) {
-        if paints_through_the_window_dc(hwnd) {
-            // **The composed road.** A pin that holds a hosted FFmpeg film has no `WS_EX_LAYERED`:
-            // the same 32bpp DIB is blitted into the window's own DC, alpha ignored, which is what
-            // keeps the film off a flip-model swapchain and off a path a driver can drive VRR from.
-            // The window is placed here as `UpdateLayeredWindow` places it, so the picture lands on
-            // the same box (see `the_slack_a_resize_paints_with`).
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                place.0,
-                place.1,
-                width,
-                rows,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-            let dc = GetDC(hwnd);
-            if !dc.is_invalid() {
-                let _ = BitBlt(dc, 0, 0, width, rows, mem_dc, 0, 0, SRCCOPY);
-                ReleaseDC(hwnd, dc);
-            }
-        } else {
-            let _ = UpdateLayeredWindow(
-                hwnd,
-                None,
-                Some(&dst_point),
-                Some(&size),
-                mem_dc,
-                Some(&src_point),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            );
-        }
+        let _ = UpdateLayeredWindow(
+            hwnd,
+            None,
+            Some(&dst_point),
+            Some(&size),
+            mem_dc,
+            Some(&src_point),
+            COLORREF(0),
+            Some(&blend),
+            ULW_ALPHA,
+        );
     }
 
     // And the strips the chrome stands in, which carry what this paint just painted into their own
@@ -692,20 +670,13 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // per painted frame is what made the 500 ms throttle suppress nothing.
 }
 
-/// Whether a pin window is painted through its own DC — the composed road — rather than by
-/// `UpdateLayeredWindow`. It is asked of the window rather than of the state so that the paint can
-/// never disagree with the style the take-up wrote (see `pin_real_window` and `pin_film_host`).
-pub(super) fn paints_through_the_window_dc(hwnd: HWND) -> bool {
-    unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED.0 as isize == 0 }
-}
-
 /// Whether a resize's paint asks the surface for the row of slack it paints with.
 ///
-/// **A pin whose film is drawn in a host asks for none.** The picture there is a child window, so the
-/// row the slack moves the pin's window by is a row that child rides — the film moving on every
-/// paint is exactly the jitter the hand sees. A native strip's picture is this app's own pixels and
-/// lands on the box the paint gives it, so it keeps the slack that clears the ghost of a shrink (see
-/// `the_slack_a_resize_paints_with`).
+/// **A pin whose film is drawn in a host asks for none.** The picture there is another window the
+/// Shell composes, so the row the slack moves the pin's window by would be the band moving while the
+/// film stayed — moving on every paint is exactly the jitter the hand sees. A native strip's picture
+/// is this app's own pixels and lands on the box the paint gives it, so it keeps the slack that
+/// clears the ghost of a shrink (see `the_slack_a_resize_paints_with`).
 pub(super) fn a_resize_asks_the_surface_for_a_row_of_slack(
     resizing: bool,
     a_film_host_stands: bool,

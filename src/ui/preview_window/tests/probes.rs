@@ -837,10 +837,15 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    let previous_own = pin_is_its_own_window();
     let mut pin = overlay_pin(content, PinChrome::always());
     pin.path = PathBuf::from("a-pin-whose-player-is-mpv.mkv");
     pin.transport.begun(30.0, true, false);
     stand_pin(Some(pin));
+    // **A film pin stands in a window of its own**, which is where its host is made: the film is
+    // drawn through that host rather than being the player's window over the band (see
+    // `pin_film_host`).
+    pin_stands_in_its_own_window(true);
     forget_pin_park_swap();
     forget_video_frame();
     forget_resume_frame();
@@ -894,6 +899,7 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_video_engine_in(None);
+    pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
@@ -1447,10 +1453,14 @@ fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    let previous_own = pin_is_its_own_window();
     let mut pin = overlay_pin(content, PinChrome::always());
     pin.path = PathBuf::from("a-film-mpv-draws.mkv");
     let caption = pin.caption;
     stand_pin(Some(pin));
+    // **A film pin stands in a window of its own**, which is where its host is made (see
+    // `pin_film_host`).
+    pin_stands_in_its_own_window(true);
     forget_pin_park_swap();
     forget_video_frame();
     forget_resume_frame();
@@ -1515,6 +1525,7 @@ fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
     stand_video_engine_in(None);
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
+    pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;

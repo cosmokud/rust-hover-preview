@@ -3505,27 +3505,21 @@ fn a_resize_paints_a_row_of_slack_so_the_window_moves_and_the_picture_does_not()
 /// never repaints cannot leave a row standing over a window that has stopped moving (see
 /// `the_row_a_resize_paints_the_picture_down`).
 #[test]
-fn the_hosted_children_are_put_back_down_by_the_row_a_resize_paints_the_picture_down() {
+fn the_children_are_put_back_down_by_the_row_a_resize_paints_the_picture_down() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     let previous_pin = take_pin_for_a_test();
 
     let content = (100, 100, 500, 400);
-    let caption = 30;
     let mut pin = overlay_pin(content, PinChrome::always());
-    pin.caption = caption;
+    pin.caption = 30;
     pin.overlay = false;
     stand_pin(Some(pin));
 
     // A paint that is not a resize has no row, even one made just after a resize's own paint chose
     // one: the drag in flight is the whole of what the answer stands for.
     assert_eq!(paint::the_row_a_resize_paints_the_picture_down(), 0);
-    assert_eq!(
-        pin_film_host::band_in_the_window(content).1,
-        caption,
-        "a band that is not being dragged sits under the caption and nowhere else"
-    );
 
     with_pin(|pin| {
         pin.dragging = Some(PinDrag {
@@ -3537,8 +3531,8 @@ fn the_hosted_children_are_put_back_down_by_the_row_a_resize_paints_the_picture_
         });
     });
 
-    // Every paint of the drag asks for its row, and the band and the chrome are placed by that same
-    // row — the pin's picture lands on the box the pointer asked for either way (see
+    // Every paint of the drag asks for its row, and the chrome's strips are placed by that same row:
+    // the pin's picture lands on the box the pointer asked for either way (see
     // `the_slack_a_resize_paints_with`).
     for _ in 0..4 {
         let (padding, slack) = paint::the_slack_a_resize_paints_with(true);
@@ -3548,23 +3542,12 @@ fn the_hosted_children_are_put_back_down_by_the_row_a_resize_paints_the_picture_
             padding,
             "the children are owed the row this paint just chose"
         );
-        assert_eq!(
-            pin_film_host::band_in_the_window(content).1,
-            caption + padding,
-            "the band stands on the picture's box rather than riding the window's move"
-        );
-
-        // The whole-window arm asks the same question of the same row, with no caption above it.
-        with_pin(|pin| pin.overlay = true);
-        assert_eq!(pin_film_host::band_in_the_window(content).1, padding);
-        with_pin(|pin| pin.overlay = false);
     }
 
     // A release that never repaints answers nothing: the row is not left applied to children whose
     // window has stopped moving.
     with_pin(|pin| pin.dragging = None);
     assert_eq!(paint::the_row_a_resize_paints_the_picture_down(), 0);
-    assert_eq!(pin_film_host::band_in_the_window(content).1, caption);
 
     stand_pin(previous_pin);
 }

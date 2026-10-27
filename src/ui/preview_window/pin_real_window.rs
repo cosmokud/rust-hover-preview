@@ -55,44 +55,25 @@ const REAL_PIN_TITLE: PCWSTR = w!("Rust Preview");
 /// to treat like any other, and a window without them wears a button that refuses both.
 ///
 /// `WS_EX_LAYERED`: the pin's corners and the shadow around its chrome are alpha, and a layered
-/// window is a window in every other respect, including activation. **A pin that holds a hosted
-/// FFmpeg film drops it**, because that film is presented through the composed renderer into this
-/// window's own DC rather than through a flip-model swapchain (see `real_pin_style`).
+/// window is a window in every other respect, including activation (see `real_pin_style`).
 ///
 /// `WS_EX_APPWINDOW`: a taskbar button asked for by the window itself rather than inferred from what
 /// owns it, which is the button this window owes and the one the stand-in used to fake.
 ///
-/// `WS_CLIPCHILDREN`: a hosted FFmpeg film is a **child** window standing in this one, and the
-/// chrome's strips are this one's children on every road (see `pin_film_host` and
-/// `pin_chrome_strips`), and a pin that holds an FFmpeg film paints its own surface with `GDI`
-/// rather than by `UpdateLayeredWindow` (see `paint::paints_through_the_window_dc`). Without this
-/// bit that paint covers the client area whole, child included, so the film would be wiped over at
-/// the pin's own repaint cadence — measured: the band showed the pin's flat colour with nothing of
-/// the film in it. With it, the pin's own DC stops at the film's box and the film is left
-/// standing.
+/// `WS_CLIPCHILDREN`: the chrome's strips are this window's children on every road (see
+/// `pin_chrome_strips`). Without this bit this window's paint covers the client area whole, children
+/// included, so the chrome would be wiped over at the pin's own repaint cadence — measured: the band
+/// showed the pin's flat colour with nothing of the chrome in it. With it, the paint stops at the
+/// strips and they are left standing.
 ///
 /// **What is missing is the answer.** `WS_EX_TOOLWINDOW` is what keeps a window out of Alt+Tab and
 /// out of the taskbar; `WS_EX_NOACTIVATE` is what refuses it the focus; `WS_EX_TOPMOST` is a band,
 /// and the band is the setting's (see `band_place`).
-fn real_pin_style(layered: bool) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
+fn real_pin_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
     (
         WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
-        if layered {
-            WS_EX_LAYERED | WS_EX_APPWINDOW
-        } else {
-            WS_EX_APPWINDOW
-        },
+        WS_EX_LAYERED | WS_EX_APPWINDOW,
     )
-}
-
-/// Put the pin's own window in the layered or the non-layered form its presentation asks for, now.
-/// The window is reused across pins, so the form is written on every take-up: a hosted FFmpeg film
-/// is composed through this window's own DC and must not wear `WS_EX_LAYERED`, and every other pin
-/// keeps the layered surface it has always had (see `pin_film_host`).
-pub(super) unsafe fn set_the_pin_window_layered(hwnd: HWND, layered: bool) {
-    if unsafe { set_an_ex_style(hwnd, WS_EX_LAYERED, layered) } {
-        unsafe { ask_the_window_to_re_read_its_style(hwnd) };
-    }
 }
 
 /// Ask for or give back the pin's own taskbar button and Alt+Tab entry: what a pin whose chrome is
@@ -140,16 +121,6 @@ unsafe fn ask_the_window_to_re_read_its_style(hwnd: HWND) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
     };
-}
-
-/// Write the form the pin now asks for, wherever its own window exists: asked on a take-up and on
-/// a file swapped into a standing pin, so a film stepped to or away from changes presentation with
-/// the file rather than waiting for the next show.
-pub(super) unsafe fn apply_the_pin_window_presentation() {
-    if let Some(hwnd) = real_pin_window() {
-        let layered = !super::pin_film_host::the_pin_presents_a_hosted_film_composed();
-        unsafe { set_the_pin_window_layered(hwnd, layered) };
-    }
 }
 
 /// The pin's own window, where one has been made.
@@ -207,8 +178,7 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
     }
 
     register_real_pin_class();
-    let (style, ex_style) =
-        real_pin_style(!super::pin_film_host::the_pin_presents_a_hosted_film_composed());
+    let (style, ex_style) = real_pin_style();
     let hinstance = GetModuleHandleW(None).ok()?;
     let hwnd = CreateWindowExW(
         ex_style,
@@ -256,8 +226,7 @@ mod tests {
     /// window after the fact.
     #[test]
     fn the_pins_own_window_is_listed_and_may_be_activated() {
-        let (style, ex) = real_pin_style(true);
-        let (bare_style, bare) = real_pin_style(false);
+        let (style, ex) = real_pin_style();
 
         assert_eq!(
             style & WS_POPUP,
@@ -267,33 +236,12 @@ mod tests {
         assert_eq!(
             style & WS_CLIPCHILDREN,
             WS_CLIPCHILDREN,
-            "the film is a child of this window, and a composed paint that is not clipped over it \
-             wipes the picture out at the pin's own repaint cadence"
-        );
-        assert_eq!(
-            bare_style & WS_CLIPCHILDREN,
-            WS_CLIPCHILDREN,
-            "and the pin that composes a film through its own DC clips it the same way"
+            "the chrome's strips are this window's children, and an unclipped paint wipes them out"
         );
         assert_eq!(
             ex & WS_EX_LAYERED,
             WS_EX_LAYERED,
             "the pin's edges are alpha"
-        );
-        assert_eq!(
-            bare & WS_EX_LAYERED,
-            WINDOW_EX_STYLE::default(),
-            "but a pin that composes a hosted film through its own DC is not layered"
-        );
-        assert_eq!(
-            bare & WS_EX_APPWINDOW,
-            WS_EX_APPWINDOW,
-            "and it is still the window the taskbar button belongs to"
-        );
-        assert_eq!(
-            bare & WS_EX_TOOLWINDOW,
-            WINDOW_EX_STYLE::default(),
-            "still listed, still activatable, either way"
         );
         assert_eq!(
             ex & WS_EX_APPWINDOW,

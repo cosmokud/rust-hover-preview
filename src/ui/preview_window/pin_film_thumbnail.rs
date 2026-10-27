@@ -171,12 +171,15 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetForegroundWindow,
-    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindowAsync, GWL_EXSTYLE,
-    HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK, SM_CYMAXTRACK, SW_HIDE, SWP_ASYNCWINDOWPOS,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    IsWindow, IsWindowVisible, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW,
+    SetWindowPos, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK,
+    SM_CYMAXTRACK, SW_HIDE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
+// Only the binary asks a window who owns it: a test has one process (see `the_source_is_up`).
+#[cfg(not(test))]
+use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
 use super::pin_trace::note_pin_trace;
 use super::*;
@@ -616,21 +619,30 @@ pub(super) fn the_source_window() -> Option<HWND> {
 
 /// Whether this player's window is up as the pin's picture: still a window, and still one of the
 /// player this app records rather than one given the number of a window it replaced.
+///
+/// The record is the player, so the live window's own owner is asked only of the binary: a test has
+/// one process and the player it stands for is a number, so its source is a real window of its own
+/// (see `the_source_window`).
 pub(super) fn the_source_is_up(pid: u32) -> bool {
     let number = SOURCE.load(Ordering::SeqCst);
     if number == 0 || pid == 0 || SOURCE_PROCESS.load(Ordering::SeqCst) != pid {
         return false;
     }
     let source = HWND(number as *mut _);
-    // Safety: the handle is one this module adopted from a window of mpv's, and the two questions are
+    // Safety: the handle is one this module adopted from a player's own window, and the questions are
     // about the window rather than changes to it.
     unsafe {
         if !IsWindow(source).as_bool() {
             return false;
         }
-        let mut owner = 0u32;
-        GetWindowThreadProcessId(source, Some(&mut owner));
-        owner == pid
+        #[cfg(test)]
+        return true;
+        #[cfg(not(test))]
+        {
+            let mut owner = 0u32;
+            GetWindowThreadProcessId(source, Some(&mut owner));
+            owner == pid
+        }
     }
 }
 
@@ -941,7 +953,10 @@ fn the_films_native_size(pid: u32) -> Option<(i32, i32)> {
         if let Some(size) = the_players_picture_size(pid) {
             return Some(size);
         }
-        if ask + 1 < NATIVE_SIZE_ASKS {
+        // **A player with no pipe to answer through never answers, however long it is waited for**,
+        // and the probe's measurement of the same film is the answer instead (see
+        // `mpv_ipc::answers_properties`).
+        if ask + 1 < NATIVE_SIZE_ASKS && mpv_ipc::answers_properties(pid) {
             std::thread::sleep(NATIVE_SIZE_WAIT);
         }
     }

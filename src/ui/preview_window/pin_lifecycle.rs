@@ -1174,9 +1174,11 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
 /// [`a_pin_of_this_file_stands_in_its_own_window`]).
 pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: &Path) -> bool {
     match kind {
-        // A pinned FFmpeg film is hosted in the pin's own window from the moment it is taken up,
-        // before `pin_is_its_own_window` has been written (see `pin_film_host`).
-        Some(MediaType::Video) if video_route(path) == VideoRoute::Ffplay => true,
+        // **A film is drawn through a host of the pin's own, whichever engine plays it** — and the
+        // host is only made for a pin that stands in a window of its own, which is this question
+        // (see `pin_film_host`). It is asked here because `pin_is_its_own_window` is written after
+        // this answer, and a film's host road would otherwise be refused by its own consequence.
+        Some(MediaType::Video) => matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay),
         Some(kind) if !matches!(kind, MediaType::Loading | MediaType::Unplayable) => {
             !kind.draws_in_a_window_of_its_own(path)
         }
@@ -1288,11 +1290,6 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         hwnd
     };
 
-    // The pin window is reused across pins, so its presentation form is written on every take-up:
-    // a pin holding a hosted FFmpeg film is composed through its own DC and must not be layered,
-    // and every other pin is the layered surface it has always been (see `pin_film_host`).
-    unsafe { pin_real_window::apply_the_pin_window_presentation() };
-
     // Whether the pin's window is on the screen as this is asked, which is what tells a pin standing
     // where the user put it from one being brought back from away — and it is read before the showing
     // below, since that is the call which puts it on the screen. A window the Shell minimized is a
@@ -1321,34 +1318,26 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // standing over a park, the film is adopted the synchronous way instead: the cover that park
     // raised is the placeholder, and the show below hands the band over through it.
     // **And a film the pin took up from a hover whose player is already in the app's host is
-    // moved rather than begun again.** The host the hover was drawing in becomes the pin's host with
-    // the same player, the same child and the same playhead — no freeze, no read back of `time-pos`,
-    // no second decode. A host of the desktop's is promoted: it already owns the pin's chrome, and
-    // the same window keeps the picture and takes the chrome (see
-    // `pin_film_host::take_up_the_pin_film_host`). A child host is re-parented into this window.
+    // promoted rather than begun again.** The host the hover was drawing in becomes the pin's host
+    // with the same player, the same source and registration and the same playhead — no freeze, no
+    // read back of `time-pos`, no second decode: the host already owns the pin's chrome from here,
+    // and the same window keeps the picture (see `pin_film_host::take_up_the_pin_film_host`).
     // Every other take-up from a hover keeps the freeze/relaunch handover below as the fallback.
     let the_hover_host = pin_is_its_own_window()
         .then(pinned_path)
         .flatten()
-        .and_then(|path| {
-            let a_window_of_the_desktop =
-                pin_film_host::the_pin_film_host_is_a_window_of_the_desktop(&path);
-            hover_film_host::the_hover_film_to_adopt(&path)
-                .map(|host| (host, a_window_of_the_desktop))
-        });
+        .and_then(|path| hover_film_host::the_hover_film_to_adopt(&path));
     let adopts_the_hover_host = the_hover_host.is_some();
-    let promotes_the_hover_host = the_hover_host.is_some_and(|(_, owned)| owned);
     {
         let path = pinned_path();
         let route = path.as_deref().map(video_route);
         note_pin_trace!(
-            "take-up path {} own {} adopt_host {} promoted {} route {:?} host {} pid {}",
+            "take-up path {} own {} adopt_host {} route {:?} host {} pid {}",
             path.as_deref()
                 .map(pin_trace::path_name)
                 .unwrap_or_else(|| "-".to_string()),
             pin_is_its_own_window() as u8,
             adopts_the_hover_host as u8,
-            promotes_the_hover_host as u8,
             route,
             pin_film_host::film_host().is_some() as u8,
             VIDEO_PID.load(Ordering::SeqCst),
@@ -1370,17 +1359,6 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
 
-    // The pin's first paint on the adopt road stands on the held frame rather than on an alpha-1
-    // band: the host is about to leave the desktop's composition as a top-level window and arrive
-    // as a child of the pin, and until it presents there the only guaranteed pixels are the pin's
-    // own bitmap (see `raise_the_move_cover`). The park flag is deliberately not set: this cover is
-    // not the park machine's. **A host that is promoted rather than moved needs none of it**: it stays
-    // on the screen with the film drawing in it from the first call to the last, so there is no
-    // interval in which the band has to stand on anything else.
-    if adopts_the_hover_host && !promotes_the_hover_host {
-        surfaces::hold_video_window_frame();
-        pin_film_host::raise_the_move_cover();
-    }
     render_pinned_preview_at(hwnd, window.0, window.1);
     // Where the pin is owed: the topmost band for a pin that is Always On Top or one that owes the
     // front while it follows the listing (see `pin_holds_the_front`), and the ordinary one for one
@@ -1447,9 +1425,9 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     );
 
     // The pin is painted and on the screen over the hover's still-top-level host, and only now is
-    // that host moved into this window: the move is the visible handover, and the picture never
-    // sits in a hidden parent or behind a pin that has not appeared yet.
-    if let Some((host, _)) = the_hover_host {
+    // that host made the pin's: the promotion is the visible handover, and the picture never sits
+    // behind a pin that has not appeared yet.
+    if let Some(host) = the_hover_host {
         adopt_the_hovered_film_in_the_host(host);
     }
 

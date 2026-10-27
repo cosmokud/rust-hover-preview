@@ -1,6 +1,6 @@
-//! The top-level host a hovered mpv film is drawn in, before a pin ever takes it: made for the
-//! hover only where Pin Mode is on and the file is mpv's, placed at the hover's own box, revealed
-//! only when the player has a child drawing, and destroyed on every road the hover ends.
+//! The top-level host a hovered film is drawn in, before a pin ever takes it: made for the hover
+//! only where Pin Mode is on and the file is a film, placed at the hover's own box, revealed only
+//! when the player's source is adopted, and destroyed on every road the hover ends.
 //!
 //! No real player is begun here — the suite's `spawn_player` notes one instead — and every window
 //! is stood off the user's desktop.
@@ -85,26 +85,30 @@ fn window_rect(hwnd: HWND) -> (i32, i32, i32, i32) {
     (rect.left, rect.top, rect.right, rect.bottom)
 }
 
-/// A child of the host of the player's own process, shown and with a box: the film drawing (see
-/// `the_hover_player_is_drawing`).
-unsafe fn a_child_of_the_host(host: HWND) -> HWND {
-    unsafe {
+/// The film drawing in the hover's host, on the road both engines are on: a window of the player's
+/// own, recorded as the source the Shell draws into it (see `pin_film_thumbnail`). It is this
+/// process's window, which is the player every stand in this file records, and the caller destroys
+/// it.
+unsafe fn a_source_of_the_host(pid: u32) -> HWND {
+    let source = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!(""),
-            WS_CHILD | WS_VISIBLE,
-            0,
-            0,
-            16,
-            16,
-            host,
+            WS_POPUP | WS_VISIBLE,
+            NOWHERE,
+            NOWHERE,
+            320,
+            180,
+            None,
             None,
             None,
             None,
         )
     }
-    .expect("a child of the hover's host, in this process")
+    .expect("a window of the player's own, in this process");
+    pin_film_thumbnail::note_the_source(source, pid);
+    source
 }
 
 /// An mpv hover is begun with `--wid` into a top-level host of the app's own only with Pin Mode
@@ -261,15 +265,15 @@ fn the_hover_host_follows_the_box_and_answers_for_the_players_window() {
         "so the start wait goes on"
     );
 
-    let child = unsafe { a_child_of_the_host(host) };
+    let source = unsafe { a_source_of_the_host(pid) };
     assert!(
         hover_film_host::the_hover_player_is_drawing(pid),
-        "a shown child with a box is the player drawing"
+        "the source the Shell draws into the host is the player drawing"
     );
     assert_eq!(
         video_window_for(pid),
-        Some(child),
-        "and the child is the player's window for the roads that ask by pid"
+        Some(source),
+        "and it is the player's window for the roads that ask by pid"
     );
     assert!(pin_film_host::the_players_window_is_up(pid));
 
@@ -284,10 +288,10 @@ fn the_hover_host_follows_the_box_and_answers_for_the_players_window() {
         "the first frame reveals the host"
     );
 
-    unsafe { DestroyWindow(child) }.expect("the child goes");
+    unsafe { DestroyWindow(source) }.expect("the source goes");
     assert!(
         !pin_film_host::the_players_window_is_up(pid),
-        "and a player with no child is a window that is not up"
+        "and a player whose window is gone is a window that is not up"
     );
 }
 
@@ -307,7 +311,7 @@ fn the_loops_hover_box_reveals_the_host_at_the_hovers_own_size() {
     let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 1, 1)) }
         .expect("the hover's host");
     hover_film_host::note_hover_film_host_player(pid, &path);
-    let _child = unsafe { a_child_of_the_host(host) };
+    let _source = unsafe { a_source_of_the_host(pid) };
 
     unsafe {
         hover_film_host::reveal_the_hover_film_host(
@@ -350,7 +354,7 @@ fn a_visible_hover_host_is_the_rect_a_pin_takes_up() {
     }
     .expect("the hover's host");
     hover_film_host::note_hover_film_host_player(pid, &path);
-    let _child = unsafe { a_child_of_the_host(host) };
+    let _source = unsafe { a_source_of_the_host(pid) };
     VIDEO_PID.store(pid, Ordering::SeqCst);
     VIDEO_HWND.store(0, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -438,9 +442,9 @@ fn the_hover_host_goes_down_only_with_the_player_it_holds() {
 }
 
 /// An FFmpeg video hover is kept in the app's top-level host while Pin Mode is on, exactly as
-/// mpv's is: the player is begun off-screen without `-noborder` and adopted into the host once its
-/// window exists, so a pin can move the running picture into its own window without a second
-/// launch. A sound, the media engine and a picture keep the route they have.
+/// mpv's is: the player makes its own window and the host shows it through the Shell's thumbnail,
+/// so a pin can take the running picture up without a second launch. A sound, the media engine and
+/// a picture keep the route they have.
 #[test]
 fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -493,10 +497,10 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
     stand_ffplay_in(Some(true));
     stand_mpv_in(Some(false));
     let pid = unsafe { GetCurrentProcessId() };
-    let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 320, 180)) }
+    unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 320, 180)) }
         .expect("a host standing for an FFmpeg player");
     hover_film_host::note_hover_film_host_player(pid, &path);
-    let _child = unsafe { a_child_of_the_host(host) };
+    let _source = unsafe { a_source_of_the_host(pid) };
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         let mut sound = video_media();
         sound.media_type = MediaType::Audio;
@@ -510,9 +514,8 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
 
 /// A hosted hover's FFmpeg launch is the same one a hosted pin gets: the composed renderer, whose
 /// blt-model present the desktop compositor copies and whose swapchain no display's adaptive sync can
-/// follow, without `-noborder` so a later band resize is not clamped, and with vsync off. A plain
-/// top-level hover keeps its borderless window and is begun with the same composed renderer, because
-/// its own window is a top-level one as well.
+/// follow, with vsync off, and borderless so that the window's box is the client the crop is cut
+/// from. A plain top-level hover is begun the same way.
 #[test]
 fn every_hover_ffplay_launch_asks_for_the_composed_renderer_and_vsync_off() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -528,8 +531,8 @@ fn every_hover_ffplay_launch_asks_for_the_composed_renderer_and_vsync_off() {
             .expect("a noted ffplay");
         let launched = take_last_spawned_command().expect("the hosted hover launch");
         assert!(
-            !launched.args.iter().any(|arg| arg == "-noborder"),
-            "a hosted hover keeps SDL's resizable window, or a pin could never resize it"
+            launched.args.iter().any(|arg| arg == "-noborder"),
+            "a hosted hover is borderless: the source is never sized under the Shell"
         );
         let composed = video_playback::the_renderer_asked_for(None);
         assert!(
