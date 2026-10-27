@@ -462,9 +462,12 @@ pub(super) unsafe fn pinned_transport_release(
         }
 
         if let Some((path, content, _, _)) = pinned_playback_state() {
-            // The cover, the end and the relaunch, in the order a park owns: the frame is read and
-            // painted flat before the window is hidden and before the player is killed, and the
-            // player taking its place is begun last (see `park_pinned_player_for_seek`). Only the
+            // The cover, and the relaunch, in the order a park owns: the frame is read and painted
+            // flat before the window is hidden, and the player taking its place is begun last (see
+            // `park_pinned_player_for_seek`). **Nothing kills the player that is on screen here**, and
+            // that is the whole of what the cover is for: it is retired by the relaunch once the
+            // picture that replaces it is standing, so the host is never handed the box while the
+            // window the registration draws is a dead one (see `retire_replaced_player`). Only the
             // roads that end a player raise the cover: a film the media engine draws is told where
             // to go and gets there itself, and mpv's is a command written down its pipe and answered
             // while the film runs (see `seek_pinned_playback` and `mpv_ipc`).
@@ -476,7 +479,6 @@ pub(super) unsafe fn pinned_transport_release(
                     .or_else(|| pinned_content().map(|content| (content.0, content.1)))
                     .unwrap_or((0, 0));
                 park_pinned_player_for_seek(hwnd, at);
-                kill_pinned_player_async();
             }
             seek_pinned_playback(&path, content, seconds);
         }

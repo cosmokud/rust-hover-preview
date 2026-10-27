@@ -1484,14 +1484,41 @@ pub(super) fn clear_pending_pinned_relaunch() {
 /// and a kill not yet taken stays pending for the next path to retry. Callers
 /// that own no retry — the pin's own teardown — hand what is left to the
 /// orphan reaper instead of dropping it (see `retire_orphaned_player`).
+///
+/// **A player that is the picture is never killed as superseded**, whatever the record still says:
+/// its window is the source the host is drawing, and ending it is the black band a relaunch exists to
+/// keep out. A record left naming one is what killed the picture at the next relaunch — the player went
+/// with its replacement no better off, and the band was the host's black until a decode later — so this
+/// asks the picture before it kills and leaves a standing player to the retirement that replaces it (see
+/// `retire_replaced_player`).
 pub(super) fn reap_superseded_relaunch() -> Option<u32> {
-    let killed = pending_pinned_relaunch()
-        .filter(|stale| kill_superseded_player(stale.pid))
-        .map(|stale| stale.pid);
+    let stale = pending_pinned_relaunch()?;
+    if pin_film_thumbnail::the_source_is_standing(stale.pid) {
+        // The record names the picture, so nothing is in flight and nothing is killed: it is forgotten
+        // rather than carried, and the player it names is the one its own replacement retires (see
+        // `retire_replaced_player`).
+        clear_pending_pinned_relaunch();
+        return None;
+    }
+    let killed = kill_superseded_player(stale.pid).then_some(stale.pid);
     if killed.is_some() {
         clear_pending_pinned_relaunch();
     }
     killed
+}
+
+/// The replacement is the picture: the relaunch that began it is no longer in flight.
+///
+/// **A record that outlives its swap is the ordering bug this exists to remove.** The in-flight record
+/// is what a newer gesture kills before it can publish (see `reap_superseded_relaunch`), so a record
+/// still naming a player the host has been handed draws a later kill onto the standing source — the
+/// old player dies with its replacement no better off, and the pin shows the host's black for the
+/// length of a decode. Written where the swap is made (see `pin_film_thumbnail::hand_the_picture_over`)
+/// and where a window of the desktop's is shown (see `show_current_replacement`).
+pub(super) fn settle_the_published_relaunch(pid: u32) {
+    if pending_pinned_relaunch().is_some_and(|pending| pending.pid == pid) {
+        clear_pending_pinned_relaunch();
+    }
 }
 
 /// Whether there is no in-flight relaunch, or it is of the current generation: the settle's
@@ -1545,6 +1572,12 @@ pub(super) fn show_current_replacement(pid: u32, content: ScreenRegion) {
         (content.2 - content.0).max(1),
         (content.3 - content.1).max(1),
     );
+    // A window of the desktop's that is up is the picture: the relaunch is over. A film drawn through
+    // the pin's host is not shown by that call at all — its swap is the thumbnail's, and the record is
+    // cleared there (see `pin_film_thumbnail::hand_the_picture_over`).
+    if !pin_film_host::the_pinned_player_was_begun_in_the_host() {
+        settle_the_published_relaunch(pid);
+    }
     revalidate_shown_replacement(pid);
 }
 
@@ -1745,13 +1778,15 @@ pub(super) fn clear_park_trace() {
 /// Put a pinned video's player away for a seek taken from the transport bar.
 ///
 /// The same cover a file step is given, raised at the same moment in a seek's life: the player that
-/// has been playing under the hand is ended here — where the second the hand chose is known and
+/// has been playing under the hand is covered here — where the second the hand chose is known and
 /// there is nothing left to aim — and the player taking its place has no window and no decoded
-/// frame for the length of a file open and a seek. No resume frame, because the playhead is moving
-/// and a frame rendered at the second the hand started from is a frame of the wrong second. The
-/// relaunch begins on the next line, which is why the record waits for no release to make one, and
-/// the settle hands the band to the player replacing this one (see `settle_pinned_park` and
-/// `park_swap_arm`).
+/// frame for the length of a file open and a seek. **It is not ended here**: the relaunch that begins
+/// on the next line parks it and the loop's retirement ends it once the picture that replaces it is
+/// standing, so the band is never handed to a registration drawing a dead window (see
+/// `retire_replaced_player`). No resume frame, because the playhead is moving and a frame rendered at
+/// the second the hand started from is a frame of the wrong second. The record waits for no release to
+/// make a relaunch, and the settle hands the band to the player replacing this one (see
+/// `settle_pinned_park` and `park_swap_arm`).
 pub(super) fn park_pinned_player_for_seek(hwnd: HWND, at: (i32, i32)) -> bool {
     park_pinned_player_inner(hwnd, at, true, ParkArm::Seek)
 }

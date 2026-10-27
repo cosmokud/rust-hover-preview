@@ -777,7 +777,13 @@ pub(super) fn is_player_pid_alive(pid: u32) -> bool {
 
 /// Terminate `pid` when it is still the player we spawned. Non-blocking: it only
 /// requests the termination, it never waits for the process to exit.
+///
+/// **Every end of a player in the preview comes through here**, which is why the one line that says a
+/// player went while its window was the picture is written here: an end made before its replacement
+/// stands is the black band the relaunch's order exists to keep out (see
+/// `video_retire::note_an_end_while_standing`).
 pub(super) fn terminate_player_pid(pid: u32) {
+    note_an_end_while_standing(pid);
     unsafe {
         let Ok(handle) = OpenProcess(
             PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,

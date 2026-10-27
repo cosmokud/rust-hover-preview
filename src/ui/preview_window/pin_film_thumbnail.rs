@@ -171,7 +171,9 @@ use windows::Win32::Graphics::Dwm::{
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE,
     DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
-use windows::Win32::Graphics::Gdi::{ClientToScreen, InvalidateRect};
+use windows::Win32::Graphics::Gdi::{
+    ClientToScreen, GetDC, GetPixel, InvalidateRect, ReleaseDC, CLR_INVALID,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
     IsWindow, IsWindowVisible, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW,
@@ -279,6 +281,47 @@ const LATE_NATIVE_WAIT: Duration = Duration::from_secs(1);
 /// every pass of the monitor that asks it (see `a_late_placement_is_due`).
 const LATE_NATIVE_EVERY: Duration = Duration::from_millis(64);
 
+/// How often a source whose player has no pipe is sampled for a picture: **one DC and a handful of
+/// pixel reads, paced to the monitor that asks it and never on a frame** (see `the_source_drew`).
+/// It is the same pace a player that has not answered its own size is asked at, because it is the
+/// same kind of wait.
+const SOURCE_DREW_EVERY: Duration = Duration::from_millis(64);
+
+/// Whether a source with no pipe has drawn, as a test stands it in: `Some(true)` and `Some(false)` are
+/// a source that drew and one that never does, and `None` reads the source's own pixels (see
+/// `the_source_has_lit_pixels`).
+///
+/// It is `Some(true)` until a test says otherwise: the tests that are about a swap are about the swap,
+/// and the sampled road has tests of its own that stand both answers in.
+#[cfg(test)]
+static DREW_STAND_IN: Mutex<Option<bool>> = Mutex::new(Some(true));
+
+/// Stand an answer for the drawn sample in place of the machine's own (see `the_source_drew`).
+#[cfg(test)]
+pub(super) fn stand_the_drawn_probe_in(answer: Option<bool>) {
+    if let Ok(mut held) = DREW_STAND_IN.lock() {
+        *held = answer;
+    }
+    // The pace is a cost on the machine's own sample, and a test that changes the answer is not made to
+    // wait it out: the answer it stood in is the next sample the pass would have taken.
+    if let Ok(mut pending) = PENDING_SOURCE.lock() {
+        if let Some(waiting) = pending.as_mut() {
+            waiting.sampled = None;
+        }
+    }
+}
+
+/// Stand the moment the source waiting to be handed the picture over was adopted, or give its own
+/// answer back with `None` — a test of the bound that sample is waited for, which cannot wait out the
+/// start bound itself (see `hand_the_picture_over`).
+#[cfg(test)]
+pub(super) fn stand_the_pending_source_since(since: Option<Instant>) {
+    if let Ok(mut pending) = PENDING_SOURCE.lock() {
+        if let Some(waiting) = pending.as_mut() {
+            waiting.since = since.unwrap_or_else(Instant::now);
+        }
+    }
+}
 
 /// Where a source is launched: the pin's own corner.
 ///
@@ -576,6 +619,10 @@ struct PendingSource {
     /// The `not ready` answer last written and when, so a pass every hundred milliseconds is a line a
     /// run can be read from rather than a flood (see `note_the_source_not_ready`).
     not_ready: Option<((i32, i32), Instant)>,
+    /// When the source was last sampled for a picture, and whether one has ever been seen: the sample
+    /// is paced and a source that has drawn is not asked again (see `the_source_drew`).
+    sampled: Option<Instant>,
+    drew: bool,
 }
 
 /// The source adopted and not yet the picture, if one is (see `PendingSource`).
@@ -590,6 +637,8 @@ fn arm_the_pending_source(source: HWND, process: u32) {
             placed: None,
             since: Instant::now(),
             not_ready: None,
+            sampled: None,
+            drew: false,
         });
     }
 }
@@ -1142,8 +1191,10 @@ pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
 /// **The one visible swap of a relaunch, and it is one step.** Until now the registration standing in
 /// the host draws the window before this one, so the pin has a picture for the whole of the wait and
 /// none of it is the host's black erase — and no frame is cropped by a client the source was not placed
-/// at. Ready is `the_source_can_draw`: the client the one placement asked for is the window's live
-/// client, and the player's video output is configured for a frame where the player answers over a pipe.
+/// at. Ready is `the_source_can_draw` and `the_source_drew`: the client the one placement asked for is
+/// the window's live client, and it has a frame to show — its player's video output is configured for
+/// one where the player answers over a pipe, and a few points of its own window have been read where it
+/// answers nothing at all.
 ///
 /// **It is paced by the pass that already watches the player** (`ffplay_window`), so it costs a client
 /// read and at most one bounded property read per pass while a swap is waiting, and nothing at all once
@@ -1184,18 +1235,33 @@ pub(super) fn hand_the_picture_over(host: HWND) {
         return;
     };
     let live = unsafe { client_size(source) };
-    let ready = the_source_can_draw(live, shape, pending.process);
+    let sized = the_source_can_draw(live, shape, pending.process);
+    // **A source with a pipe is asked its own video output and a source without one is asked its own
+    // pixels**, which is the whole of what "it has drawn" can mean for a player that answers nothing
+    // (see `the_source_drew`).
+    let ready = sized && the_source_drew(pending, source, shape.client);
     let waited = pending.since.elapsed();
     if !ready {
         note_the_source_not_ready(pending, live);
         if waited < Duration::from_secs(VIDEO_START_WAIT_SECS) {
             return;
         }
-        note_pin_trace!(
-            "thumbnail source still not ready after {}ms: the picture changes hands anyway rather \
-             than leaving the one before it to a player that is ending",
-            waited.as_millis(),
-        );
+        if sized {
+            // **The box is the one thing that is right**: this is a source the Shell would draw if
+            // there were a picture in it, and the picture has not come (a film whose opening frame is
+            // black, or a window whose surface a sample cannot reach). Changing hands anyway is the
+            // one answer that never leaves the old picture to a player that is ending.
+            note_pin_trace!(
+                "thumbnail source never drew after {}ms, swapping anyway",
+                waited.as_millis(),
+            );
+        } else {
+            note_pin_trace!(
+                "thumbnail source still not ready after {}ms: the picture changes hands anyway rather \
+                 than leaving the one before it to a player that is ending",
+                waited.as_millis(),
+            );
+        }
     }
 
     let Ok(mut held) = THUMBNAIL.lock() else {
@@ -1220,12 +1286,21 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     let swapped = held.registered;
     drop(held);
     forget_the_pending_source_of(pending.source, pending.process);
+    // **The line names both players, not just the two windows**: a handover made onto a dead window is
+    // invisible in a pair of handles, and a run should never have to read a pid off anything else to
+    // see it.
     note_pin_trace!(
-        "thumbnail swapped old {:?} new {:?} after {}ms",
+        "thumbnail swapped old {:?} pid {} new {:?} pid {} after {}ms",
         HWND(old.registered as *mut _),
+        old.source.map_or(0, |shape| shape.process),
         HWND(swapped as *mut _),
+        pending.process,
         waited.as_millis(),
     );
+    // **The replacement is the picture, so the relaunch that began it is over.** Until this line the
+    // record is a player a newer gesture may kill before it publishes; from here it is the source the
+    // host draws, and killing it is the black band (see `pin_playback::settle_the_published_relaunch`).
+    pin_playback::settle_the_published_relaunch(pending.process);
     // **And the seek's own numbers where a seek is what asked for this source**, so the frame a seek
     // lands on is one line rather than an argument (see `note_the_seek_picture`). The reason is taken
     // rather than read, so a swap for a file step is not written as a seek that never happened.
@@ -1244,6 +1319,103 @@ pub(super) fn hand_the_picture_over(host: HWND) {
 /// nothing and its window is the whole of its picture, exactly as `the_hosted_frame_is_up` reads it.
 fn the_source_can_draw(live: Option<(i32, i32)>, shape: SourceShape, process: u32) -> bool {
     live == Some(shape.client) && pin_film_host::the_players_output_is_configured(process)
+}
+
+/// Whether a source with no pipe has drawn anything into the client it was placed at: **the second
+/// half of readiness for the one engine that cannot report a frame**, sampled and latched.
+///
+/// FFmpeg's player answers no property at all (see `mpv_ipc::answers_properties`), so `the_source_can_draw`
+/// is only "the window is the size we asked for" for it — and that window is the right size and empty for
+/// the whole of a decode, which is the swap onto a blank band a seek and a subtitle copy were measured
+/// with. What separates a sized window from a drawn one is what is in it, so a few points inside the
+/// client are read through the window's own DC until one of them is not black.
+///
+/// **It is paced and it is latched**: the monitor asks every few milliseconds and a read of another
+/// process's window per pass is the per-frame cross-process work this road refuses, so the sample is one
+/// per `SOURCE_DREW_EVERY` and a source that has drawn is never sampled again for its life. A drag holds
+/// the whole handover off, so nothing here runs under one (see `hand_the_picture_over`).
+///
+/// The answer is written down once, when a source draws and nowhere else: a run reads how long the
+/// picture before it stood from one line rather than from a gap between two.
+fn the_source_drew(pending: PendingSource, source: HWND, client: (i32, i32)) -> bool {
+    // A player that answers over a pipe is asked its own video output instead of its pixels (see
+    // `the_source_can_draw`), and a source that has drawn once has drawn.
+    if pending.drew || mpv_ipc::answers_properties(pending.process) {
+        return true;
+    }
+    let now = Instant::now();
+    if pending
+        .sampled
+        .is_some_and(|sampled| now.duration_since(sampled) < SOURCE_DREW_EVERY)
+    {
+        return false;
+    }
+    let drew = the_source_sample(source, client);
+    if let Ok(mut record) = PENDING_SOURCE.lock() {
+        if let Some(waiting) = record.as_mut().filter(|waiting| {
+            waiting.source == pending.source && waiting.process == pending.process
+        }) {
+            waiting.sampled = Some(now);
+            waiting.drew |= drew;
+        }
+    }
+    if drew {
+        note_pin_trace!(
+            "thumbnail source drew after {}ms",
+            pending.since.elapsed().as_millis(),
+        );
+    }
+    drew
+}
+
+/// The sample itself: the machine's own read of the source's pixels, or the answer a test stood in for
+/// it (see `DREW_STAND_IN`).
+fn the_source_sample(source: HWND, client: (i32, i32)) -> bool {
+    #[cfg(test)]
+    if let Ok(held) = DREW_STAND_IN.lock() {
+        if let Some(answer) = *held {
+            return answer;
+        }
+    }
+    // Safety: the handle is one this module adopted from a player's own window.
+    unsafe { the_source_has_lit_pixels(source, client) }
+}
+
+/// Whether a few pixels of the source's own window are lit: **the only "it has drawn" there is for a
+/// player that answers nothing**, and what `the_source_drew` paces.
+///
+/// The points are a handful well inside the client — corners are where a player's own letterbox or
+/// border stands — and one lit sample is enough, so a film's first frame answers on the first pass it
+/// is drawn. A frame that really is black everywhere (a fade, black leader) is the bound's case rather
+/// than this one's, and the bound swaps anyway (see `hand_the_picture_over`).
+///
+/// shortcut: a window whose picture is presented through a swapchain whose redirection surface is not
+/// updated answers black here, so such a player waits the start bound and is swapped at it rather than
+/// on its first frame. Confirm the sample reaches a live FFmpeg window before trusting a run's
+/// `thumbnail source drew` timing; upgrade it to a read of the composed picture only if it does not.
+pub(super) unsafe fn the_source_has_lit_pixels(source: HWND, client: (i32, i32)) -> bool {
+    let (width, height) = (client.0.max(1), client.1.max(1));
+    let points = [
+        (width / 4, height / 4),
+        (width / 2, height / 4),
+        (width / 2, height / 2),
+        (width / 4, height * 3 / 4),
+        (width * 3 / 4, height * 3 / 4),
+    ];
+    // Safety: the handle is a window this module adopted from a player's own, and the calls read a few
+    // of its pixels or report that they cannot; the context is given back before this answers.
+    unsafe {
+        let dc = GetDC(source);
+        if dc.is_invalid() {
+            return false;
+        }
+        let lit = points.iter().any(|&(x, y)| {
+            let pixel = GetPixel(dc, x, y);
+            pixel.0 != CLR_INVALID && pixel.0 & 0x00FF_FFFF != 0
+        });
+        ReleaseDC(source, dc);
+        lit
+    }
 }
 
 /// Write a handover's `not ready` answer: the source's live client, the client the one placement asked

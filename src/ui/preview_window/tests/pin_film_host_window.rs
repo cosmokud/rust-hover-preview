@@ -5186,3 +5186,471 @@ fn a_source_that_never_reaches_its_asked_client_does_not_blank_the_pin() {
     mpv_ipc::clear_reads();
     pin_trace::clear_noted();
 }
+
+/// **The player on screen outlives its replacement, for every reason a relaunch has.** A relaunch begins
+/// another player behind the one that is drawing, adopts and places its source once, and only when the
+/// swap has made that source the picture does the loop's retirement end the one before it — so the pin's
+/// host is never handed the band while the registration it wears draws a window whose process is gone
+/// (see `retire_replaced_player`, `pin_film_thumbnail::hand_the_picture_over`).
+///
+/// The order is read out of the run's own lines rather than out of a clock: the relaunch's line names the
+/// player it replaced (`… from N to M`), the swap's line names both, and the retirement's line is written
+/// after it and only once the picture stands — so nothing had to be stopped for the test to see the
+/// order, and the one line that says a picture was ended while it stood is written by no reason at all.
+#[test]
+fn every_relaunch_ends_its_old_player_only_after_the_new_picture_stands() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (host, _first, old_pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+    // The route a pinned film of this kind is relaunched on: FFmpeg's player, which answers nothing. The
+    // relaunches below begin noted players, so nothing of the desktop's is spawned for them.
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+
+    let reasons = [
+        RestartReason::Seek,
+        RestartReason::Volume,
+        RestartReason::Subtitle,
+        RestartReason::End,
+        RestartReason::Engine,
+    ];
+    let mut standing = old_pid;
+    let mut sources = Vec::new();
+    for reason in reasons {
+        pin_trace::clear_noted();
+        clear_restart_count();
+        restart_pinned_player(&path, film.box_, 10.0, false, reason);
+
+        let replacement = VIDEO_PID.load(Ordering::SeqCst);
+        assert_ne!(replacement, 0, "a replacement player was begun");
+        assert_ne!(replacement, standing, "and it is another player");
+        assert_eq!(last_restart_reason(), Some(reason));
+        assert!(
+            pin_trace::noted_lines().iter().any(|line| line
+                == &format!(
+                    "player restarted for {} from {standing} to {replacement}",
+                    reason.as_str()
+                )),
+            "the player on screen is still the one the relaunch replaces, so nothing ended it: {:?}",
+            pin_trace::noted_lines()
+        );
+        assert!(
+            pin_film_thumbnail::the_source_is_up(standing),
+            "and its source is still the picture after the relaunch for {reason:?}"
+        );
+        assert!(
+            !pin_trace::noted_lines()
+                .iter()
+                .any(|line| line.starts_with("player ended while standing")),
+            "a relaunch for {reason:?} ends nothing before its replacement exists: {:?}",
+            pin_trace::noted_lines()
+        );
+
+        // The replacement's own window arrives and draws: the swap is one step, and it does not end the
+        // player whose picture it is replacing.
+        let second = unsafe { a_window_of_the_players_own() };
+        unsafe { pin_film_thumbnail::adopt_the_source(second, replacement, host) };
+        pin_film_thumbnail::hand_the_picture_over(host);
+        assert!(
+            pin_film_thumbnail::the_standing_source_is_the_current_one(),
+            "the new source is the picture once it can draw, for {reason:?}"
+        );
+        let swap_line = pin_trace::noted_lines()
+            .into_iter()
+            .find(|line| line.starts_with("thumbnail swapped old"))
+            .unwrap_or_else(|| panic!("a swap is one line: {:?}", pin_trace::noted_lines()));
+        assert!(
+            swap_line.contains(&format!("pid {standing}"))
+                && swap_line.contains(&format!("pid {replacement}")),
+            "the swap names both players, so a handover onto a dead window cannot pass: {swap_line}"
+        );
+
+        assert!(
+            !pin_trace::noted_lines()
+                .iter()
+                .any(|line| line == &format!("player retired after the swap pid {standing}")),
+            "the swap itself ends nothing: the old player is still the picture's for {reason:?}"
+        );
+
+        // The loop's retirement is what ends the player whose picture has been replaced.
+        settle_video_retirement();
+        let lines = pin_trace::noted_lines();
+        let at_swap = lines
+            .iter()
+            .position(|line| line.starts_with("thumbnail swapped old"))
+            .expect("a swap line");
+        let at_retire = lines
+            .iter()
+            .position(|line| line == &format!("player retired after the swap pid {standing}"))
+            .unwrap_or_else(|| panic!("the retirement is one line: {lines:?}"));
+        assert!(
+            at_swap < at_retire,
+            "the picture changed hands before the player went, for {reason:?}: {lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.starts_with("player ended while standing")),
+            "no path ends the source the host is drawing, for {reason:?}: {lines:?}"
+        );
+
+        sources.push(second);
+        standing = replacement;
+    }
+
+    for source in sources {
+        let _ = unsafe { DestroyWindow(source) };
+    }
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    pin_trace::clear_noted();
+}
+
+/// **A record that names the picture is not a relaunch in flight, and reaping it must not kill what it
+/// names.** The in-flight record is what a newer gesture ends before it can publish; a record left naming
+/// the source the host is drawing is the opposite of that, and it is forgotten rather than killed (see
+/// `reap_superseded_relaunch`).
+#[test]
+fn a_relaunch_record_that_names_the_picture_is_forgotten_rather_than_killed() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (_host, source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+    pin_trace::clear_noted();
+
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the source is the picture before anything is reaped"
+    );
+    note_pinned_relaunch(pid);
+    assert_eq!(
+        reap_superseded_relaunch(),
+        None,
+        "a record naming the picture reaps nothing"
+    );
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "and the picture it named is still on screen"
+    );
+    assert_eq!(
+        pending_pinned_relaunch(),
+        None,
+        "the stale record is forgotten rather than carried into the next relaunch"
+    );
+    assert!(
+        !pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("player ended while standing")),
+        "nothing was ended: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    let _ = unsafe { DestroyWindow(source) };
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    clear_pending_pinned_relaunch();
+    pin_trace::clear_noted();
+}
+
+/// **A window the right size is not a picture, on the engine that cannot say so.** A source placed at the
+/// client the one placement asked for is not handed the picture while its own pixels are dark — the window
+/// is the box, and nothing has been drawn into it — and it takes the picture on the pass it draws, with the
+/// wait written down once (see `pin_film_thumbnail::the_source_drew`).
+#[test]
+fn a_source_at_the_asked_client_takes_the_picture_only_once_it_has_drawn() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (host, first, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+
+    // The player's window goes and another takes its place, placed once at the same film's size — and not
+    // one pixel of a picture in it yet.
+    unsafe { DestroyWindow(first) }.expect("the first source goes");
+    let second = unsafe { a_window_of_the_players_own() };
+    pin_film_thumbnail::clear_the_registrations();
+    pin_film_thumbnail::clear_the_unregistrations();
+    pin_trace::clear_noted();
+    pin_film_thumbnail::stand_the_drawn_probe_in(Some(false));
+    unsafe { pin_film_thumbnail::adopt_the_source(second, pid, host) };
+    pin_film_thumbnail::hand_the_picture_over(host);
+
+    assert!(
+        !pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "a window at the asked client with nothing drawn in it is not the picture"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "and the registration standing is not taken down for it"
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line == "thumbnail source not ready cli 1920x1080 asked 1920x1080"),
+        "the wait is traced with both numbers, so a dark window is a line: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    // The pass on which it draws is the pass the picture changes hands on, and the wait is one line.
+    pin_film_thumbnail::stand_the_drawn_probe_in(Some(true));
+    pin_trace::clear_noted();
+    pin_film_thumbnail::hand_the_picture_over(host);
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the new source is the picture once it has drawn"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        1,
+        "and exactly one old registration is let go of, after the new one was handed over"
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("thumbnail source drew after")),
+        "and the run says how long the picture before it stood: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    let _ = unsafe { DestroyWindow(second) };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    pin_film_thumbnail::stand_the_drawn_probe_in(Some(true));
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
+
+/// **A source that never draws is waited for and then handed the picture anyway, out loud**: the start
+/// bound is the one answer that never leaves the old picture to a player that is ending, and the line that
+/// says so is the one a black opening frame is read from (see `pin_film_thumbnail::hand_the_picture_over`).
+#[test]
+fn a_source_that_never_draws_is_swapped_at_the_bound_and_says_so() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (host, first, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+
+    unsafe { DestroyWindow(first) }.expect("the first source goes");
+    let second = unsafe { a_window_of_the_players_own() };
+    pin_film_thumbnail::clear_the_registrations();
+    pin_film_thumbnail::clear_the_unregistrations();
+    pin_trace::clear_noted();
+    pin_film_thumbnail::stand_the_drawn_probe_in(Some(false));
+    unsafe { pin_film_thumbnail::adopt_the_source(second, pid, host) };
+    pin_film_thumbnail::stand_the_pending_source_since(Some(
+        Instant::now() - Duration::from_secs(VIDEO_START_WAIT_SECS + 1),
+    ));
+    pin_trace::clear_noted();
+    pin_film_thumbnail::hand_the_picture_over(host);
+
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "at the bound the picture changes hands rather than being left on a player that is ending"
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("thumbnail source never drew after")
+                && line.ends_with(", swapping anyway")),
+        "and the line says the source never drew: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    let _ = unsafe { DestroyWindow(second) };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    pin_film_thumbnail::stand_the_drawn_probe_in(Some(true));
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
+
+/// **The sample itself reads a lit client and a dark one**, which is the whole premise of the drawn
+/// readiness for a player with no pipe: a few points through the source's own DC, and one lit point is
+/// enough (see `pin_film_thumbnail::the_source_has_lit_pixels`).
+#[test]
+fn the_drawn_sample_reads_a_lit_client_and_a_dark_one() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let window = unsafe { a_window_of_the_players_own() };
+    // **A window off the desktop has no visible region to be written through**, so this one stands where
+    // it can be drawn in and is shown the way a player shows its own — small, and for the length of one
+    // test (see `an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be`).
+    unsafe {
+        let _ = MoveWindow(window, 100, 100, 320, 240, true);
+        let _ = ShowWindow(window, SW_SHOWNOACTIVATE);
+    }
+
+    // A client painted black is a window the right size with nothing drawn in it.
+    unsafe { fill_the_client(window, COLORREF(0)) };
+    assert!(
+        !unsafe { pin_film_thumbnail::the_source_has_lit_pixels(window, (320, 240)) },
+        "a black client is not a picture"
+    );
+
+    unsafe { fill_the_client(window, COLORREF(0x00FF_FFFF)) };
+    assert!(
+        unsafe { pin_film_thumbnail::the_source_has_lit_pixels(window, (320, 240)) },
+        "a lit client is one sample away from being drawn"
+    );
+
+    let _ = unsafe { DestroyWindow(window) };
+}
+
+/// Paint a window's whole client one colour, through the window's own DC: what a player would have had
+/// drawn into it, made a constant the drawn sample is asked about (see `the_source_has_lit_pixels`).
+unsafe fn fill_the_client(window: HWND, colour: COLORREF) {
+    use windows::Win32::Graphics::Gdi::{
+        CreateSolidBrush, DeleteObject, FillRect, GdiFlush, GetDC, ReleaseDC,
+    };
+
+    unsafe {
+        let dc = GetDC(window);
+        let brush = CreateSolidBrush(colour);
+        let mut rect = RECT::default();
+        let _ = GetClientRect(window, &mut rect);
+        FillRect(dc, &rect, brush);
+        let _ = DeleteObject(brush);
+        // The surface is handed over before it is read back through another context: GDI batches, and
+        // what reads it next is a different DC.
+        let _ = GdiFlush();
+        ReleaseDC(window, dc);
+    }
+}
+
+/// **A seek on FFmpeg's player leaves the picture where it is until the new one can draw it**: the ten
+/// lines a seek's band used to show came from a registration drawing the window of the player the seek had
+/// just killed, so the crop after the seek is asserted against the client the one placement asked for and
+/// the registration the host wears is asserted to be the same source it was (see
+/// `pin_film_thumbnail::note_the_seek_picture`).
+#[test]
+fn a_seek_on_ffplay_ends_no_standing_source_and_crops_by_the_placed_client() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (_host, source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+    let content = film.box_;
+
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    VIDEO_PID.store(pid, Ordering::SeqCst);
+    clear_restart_count();
+    pin_film_thumbnail::clear_the_unregistrations();
+    pin_trace::clear_noted();
+
+    seek_pinned_playback(&path, content, 90.0);
+
+    assert_eq!(restart_count(), 1, "a seek on this engine is one relaunch");
+    assert_eq!(last_restart_reason(), Some(RestartReason::Seek));
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "the registration the host wears is not taken down for the player that is still starting"
+    );
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the source the seek left behind is still the picture"
+    );
+    assert!(
+        pin_film_thumbnail::the_source_is_up(pid),
+        "its window is still there to be drawn from: no picture gap can come from a dead registration"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_cropped_client(),
+        Some((1920, 1080)),
+        "and the crop after the seek is the client the one placement asked for"
+    );
+    assert!(
+        !pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("player ended while standing")),
+        "nothing was ended under the picture: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    let _ = unsafe { DestroyWindow(source) };
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    clear_restart_count();
+    clear_pending_pinned_relaunch();
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
+/// **The swap is the end of the relaunch it completes**: the in-flight record is forgotten by the step
+/// that hands the picture over, so a later relaunch cannot kill the player that is now the picture as a
+/// superseded one (see `pin_playback::settle_the_published_relaunch`).
+#[test]
+fn the_swap_forgets_the_relaunch_that_put_the_picture_up() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (host, first, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+
+    unsafe { DestroyWindow(first) }.expect("the first source goes");
+    let second = unsafe { a_window_of_the_players_own() };
+    pin_film_thumbnail::clear_the_registrations();
+    pin_film_thumbnail::clear_the_unregistrations();
+    pin_trace::clear_noted();
+    unsafe { pin_film_thumbnail::adopt_the_source(second, pid, host) };
+    assert!(
+        pin_film_thumbnail::a_source_is_waiting_to_take_the_picture(),
+        "the replacement is adopted and waiting"
+    );
+    note_pinned_relaunch(pid);
+    assert_eq!(
+        pending_pinned_relaunch().map(|pending| pending.pid),
+        Some(pid),
+        "and the relaunch that began it is in flight"
+    );
+
+    pin_film_thumbnail::hand_the_picture_over(host);
+
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the picture changed hands"
+    );
+    assert_eq!(
+        pending_pinned_relaunch(),
+        None,
+        "and the relaunch is over with the swap: nothing is left for a later reap to kill"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    let _ = unsafe { DestroyWindow(second) };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
