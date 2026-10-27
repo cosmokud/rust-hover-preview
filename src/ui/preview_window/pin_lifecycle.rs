@@ -699,43 +699,6 @@ impl PinWindow for Win32PinWindow {
         }
     }
 
-    fn unpark_player_window(&self, band: Option<ScreenRegion>) {
-        // Nothing here is unsafe: the player's window is found by the process this app started it
-        // for rather than held as a handle, so there is no dereference to justify and a window
-        // that has since gone is found not to be there.
-        match band {
-            // The place is the show — the window goes up in the same `SetWindowPos` that moves
-            // it, so a band answered here is answered on screen at once. Placed directly rather
-            // than through `ensure_pinned_sibling_box`: that call is refused while a park stands,
-            // and the swap places the window BEFORE taking the flag down, so the cover is still up
-            // when the window goes back (see `unpark_pinned_player`).
-            Some(band) => {
-                // **A hosted film is placed and shown rather than raised.** Its picture is the
-                // host's own window of the desktop's, so the band is its box and the place is the
-                // whole of what putting it back is — and the topmost road refuses outright while a
-                // park stands, which is still the case here (see `ensure_video_window_topmost`).
-                if pin_film_host::the_pinned_player_was_begun_in_the_host() {
-                    // SAFETY: the host is this app's own window and both calls report rather than
-                    // fault for a window on its way out.
-                    unsafe {
-                        pin_film_host::place_the_pin_film_host(band);
-                        pin_film_host::set_the_pin_film_host_visible(true);
-                    }
-                } else {
-                    let _ = ensure_video_window_topmost(
-                        band.0,
-                        band.1,
-                        (band.2 - band.0).max(1),
-                        (band.3 - band.1).max(1),
-                    );
-                }
-            }
-            // A pin with no band to go back into has no rect to be told, so only its hiddenness is
-            // taken back (see `unpark_pinned_player`).
-            None => show_pinned_player_window(),
-        }
-    }
-
     fn post(&self, hwnd: isize, message: u32) {
         // Safety: the handle is read from the slot the window was created into, and the message
         // asks only for something this window does to itself. A window that has since gone is
@@ -787,12 +750,6 @@ pub(super) fn end_pin_beside_the_state() {
         *request = None;
     }
 
-    // And the frame a drag of this pin held for its media band. A pin taken down with a drag still
-    // in flight — a pick from the bubble under the hand, the watchdog — never reaches the other end
-    // of its park, and what it was holding is a picture the size of a display (see
-    // `compose_parked_band`).
-    forget_video_frame();
-
     // And the window a pinned mpv film was drawn in — the host, a child of the pin's on the child
     // road and a window of the desktop's that owns the pin's chrome on the default one — with the
     // player it held: it is a window of this app's own, and one left standing for a pin that has gone
@@ -823,14 +780,6 @@ pub(super) fn end_pin_beside_the_state() {
             clear_pending_pinned_relaunch();
         }
     }
-
-    // And the cover a seek of this pin was aiming under. A pin taken down
-    // mid-aim — a walk stepping off, the watchdog — never reaches its swap,
-    // and the record left behind is a cover over a pin that has gone: no park
-    // flag to end it, and the next park overwrites it rather than extends it,
-    // but a settle asked before that would answer a dead player. Given up
-    // with the frame it was holding.
-    forget_pin_park_swap();
 }
 
 /// Whether the thing a pin is a window onto is still there.
@@ -915,11 +864,11 @@ pub(super) fn pin_media_is_alive(navigating: bool) -> bool {
 
     match kind {
         MediaType::Video => {
-            // A supersede-kill leaves the player gone with its replacement on its way — the
-            // cover standing over a relaunch still to come, or one still in flight. That is not
-            // a pin that came apart: the release relaunches, the in-flight one lands, and the
-            // cover holds until one of them does.
-            if pin_park_covers_a_relaunch() {
+            // A relaunch in flight is a pin that is up: the player the loop began for it has not
+            // taken the picture over, and the one before it is still drawing (see
+            // `relaunch_pinned_player`). A player that is gone with its replacement on its way is
+            // not a pin that came apart either.
+            if a_relaunch_is_in_flight() {
                 return true;
             }
             is_video_process_running()
@@ -997,13 +946,11 @@ pub(super) fn pin_media_failed_before_a_frame(player_started: Option<Instant>) -
         MediaType::NativeVideo => video_player::failing_before_a_frame()
             .filter(|path| pinned_path().as_deref() == Some(path.as_path())),
         MediaType::Video => {
-            // A player ended for a cover is not a file that failed: it was killed on purpose and
-            // its replacement is on its way, which is exactly how `pin_media_is_alive` reads the
-            // same fact. Without this the tick after a step's own player is read as a dead file —
-            // inside the give-up window — and the pin falls to the failure mark before the
-            // replacement can arrive (the "window breaks permanently" after a Next: a film's
-            // player is killed and the pin is stuck on the cross).
-            if pin_park_covers_a_relaunch() {
+            // A player ended for a relaunch is not a file that failed: its replacement is on its
+            // way, which is exactly how `pin_media_is_alive` reads the same fact. Without this a
+            // tick inside the give-up window reads the relaunch as a dead file and the pin falls
+            // to the failure mark before the replacement can arrive.
+            if a_relaunch_is_in_flight() {
                 return None;
             }
 
@@ -1065,11 +1012,10 @@ pub(super) fn pinned_window_box() -> Option<(ScreenRegion, i32, i32)> {
 ///
 /// The handle the window was created into, which is the same one
 /// [`PinWindow::hwnd`] reads and the same one `raise_pinned_window` is asked
-/// with from the loop's own tick. It is here for the two covers that run with no
+/// with from the loop's own tick. It is here for the roads that run with no
 /// pointer message of their own — a box change and a file step are both the
-/// loop's work, and both owe a paint before a player is hidden — so the handle
-/// they paint through is read rather than carried down from a window procedure
-/// that is not on either road.
+/// loop's work, and both owe a paint — so the handle they paint through is read
+/// rather than carried down from a window procedure that is not on either road.
 pub(super) fn pinned_window() -> HWND {
     if pin_is_its_own_window() {
         if let Some(hwnd) = pin_real_window::real_pin_window() {
@@ -1300,9 +1246,7 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // hosted player in the background while the hover stays visible and playing as the placeholder,
     // the pin's window and its strips stay down with the chrome hidden, and the tick's handover is
     // the only visible swap — the pin appearing with the film already drawing, and only then the
-    // hover coming down (see `pin_film_host::settle_pin_handover`). Where the pin is already
-    // standing over a park, the film is adopted the synchronous way instead: the cover that park
-    // raised is the placeholder, and the show below hands the band over through it.
+    // hover coming down (see `pin_film_host::settle_pin_handover`).
     // **And a film the pin took up from a hover whose player is already in the app's host is
     // promoted rather than begun again.** The host the hover was drawing in becomes the pin's host
     // with the same player, the same source and registration and the same playhead — no freeze, no
@@ -1333,7 +1277,7 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         if pin_is_its_own_window() {
             if !adopts_the_hover_host {
                 pin_film_host::take_up_the_pin_film_host(None);
-                if begin_the_adopted_film_in_the_host() && !pin_player_is_parked() {
+                if begin_the_adopted_film_in_the_host() {
                     with_pin(|pin| pin.chrome = PinChrome::hidden());
                     pin_film_host::arm_pin_handover();
                     render_pinned_preview_at(hwnd, window.0, window.1);
@@ -1416,11 +1360,6 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     if let Some(host) = the_hover_host {
         adopt_the_hovered_film_in_the_host(host);
     }
-
-    // Traced for the take-up that shows the pin: a step's cover was painted before this line, so
-    // the bars appear over the held frame, and a take-up from a hover reaches it through the
-    // handover with the film already drawing (see `settle_pin_handover`).
-    trace_park_step("show");
 
     // **And now the hover goes**, painted, shown and settled: from here the pin is what stands in the
     // box, and the window that stood in for it while it was only a hover comes down with nothing left
@@ -2414,25 +2353,20 @@ pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
 /// re-raised here at all (see `player_order`, whose hold-offs stand for mpv's film as they do
 /// for FFmpeg's).
 ///
-/// **A band whose player is parked is left alone, which is what this is for rather than an
-/// afterthought of it.** The park is a hide on the drag's first pointer message, and a raise here
-/// is a show as well as a place (see `ensure_video_window_topmost`): a resize drag puts the player
-/// here on every pointer move, and a maximized or restored window, a relayout and a take-up each put
-/// it here once more, so the film would be back on screen for as long as the drag lasted. What the
-/// park holds is the window's *absence*, and there is nothing about being out of date to say the
-/// absence can be ended (see `pin_player_is_parked`).
+/// **A band whose player is not on screen is left alone**: a collapsed pin has no band for
+/// anybody else's window to stand in.
 pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
     // **A film host is placed at the band rather than moved with the pin's window.** A host of the
     // desktop's is a window of its own at the band; a child host is moved by the compositor with the
     // pin's window and is only re-measured inside it, which is what `place_the_pin_film_host` does
-    // for either (see `the_film_host_box`). Placed while a park stands as much as after one: the
-    // band a hidden host comes back at is the band it was given (see `settle_pinned_park`).
+    // for either (see `the_film_host_box`): the band it is placed at is the band the pin stands
+    // at, and the picture in it is the one placement's from there.
     if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         unsafe { pin_film_host::place_the_pin_film_host(content) };
         return;
     }
 
-    if pin_player_is_parked() || pin_is_collapsed() {
+    if pin_is_collapsed() {
         return;
     }
 

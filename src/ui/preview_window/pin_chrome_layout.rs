@@ -70,14 +70,6 @@ pub(super) fn with_pin(change: impl FnOnce(&mut PinnedPreview)) {
     }
 }
 
-/// End the chrome suppression a file step raised, where the step ends without a file landing: a
-/// walk that was given up on, one whose answer was for a file the pin has left, or one that ran
-/// out of files to step to. The pointer asks the strips back from the next tick on (see
-/// `park_pinned_player_for_step` and `refresh_pin_chrome`).
-pub(super) fn clear_pin_step_chrome() {
-    with_pin(|pin| pin.chrome.step_in_flight = false);
-}
-
 /// The level the pin that is up plays a film at, and the setting where there is no pin: what a
 /// player this app starts for a pinned file is given (see `restart_pinned_player`).
 pub(super) fn pinned_volume_level() -> u32 {
@@ -325,11 +317,6 @@ pub(super) struct PinChrome {
     pub(super) bar: bool,
     /// When the arrival window closes, while one is open. While it is open both strips are shown.
     pub(super) until: Option<Instant>,
-    /// Whether a file step is still on its way to the band. Raised with the step's park, so the
-    /// strips go down with the film they were standing over rather than while it is still live;
-    /// the step clears this when the new file lands (see `park_pinned_player_for_step` and
-    /// `refresh_pin_chrome`).
-    pub(super) step_in_flight: bool,
 }
 
 impl PinChrome {
@@ -342,7 +329,6 @@ impl PinChrome {
             caption: true,
             bar: true,
             until: Some(now + Duration::from_secs_f32(PIN_CHROME_ARRIVAL_SECONDS)),
-            step_in_flight: false,
         }
     }
 
@@ -353,7 +339,6 @@ impl PinChrome {
             caption: true,
             bar: true,
             until: None,
-            step_in_flight: false,
         }
     }
 
@@ -365,19 +350,15 @@ impl PinChrome {
             caption: false,
             bar: false,
             until: None,
-            step_in_flight: false,
         }
     }
 }
 
-/// Whether the chrome is held down by something other than the pointer: a file step on its way,
-/// a hosted film's handover, or a step's own park over the held frame. The cheap terms only, so a
-/// hand that moves over the pin can ask it; the player read is `refresh_pin_chrome`'s alone (see
-/// `film_window_without_a_picture` there).
-pub(super) fn pin_chrome_is_held_down(pin: &PinnedPreview) -> bool {
-    pin.chrome.step_in_flight
-        || pin_film_host::pin_handover_armed()
-        || (pin.parked && park_record_owner() == Some(ParkArm::Step))
+/// Whether the chrome is held down by something other than the pointer: a hosted film's handover.
+/// The cheap term only, so a hand that moves over the pin can ask it; the player read is
+/// `refresh_pin_chrome`'s alone (see `film_window_without_a_picture` there).
+pub(super) fn pin_chrome_is_held_down() -> bool {
+    pin_film_host::pin_handover_armed()
 }
 
 /// Ask the chrome question now, outside the loop's tick, answering whether it changed. The caller
@@ -433,19 +414,16 @@ pub(super) fn refresh_pin_chrome(
         // no chrome either — it is the pin's first frame, not an arrival, and only the pointer
         // asks a strip back (see `pin_film_host::settle_pin_handover`).
         //
-        // A file step holds the strips down while it is on its way, and its held frame is alone on
-        // the band once its park takes the outgoing film down: the strips go down with that park,
-        // not with the ask, and the file that replaces it asks them back (see
-        // `pin_chrome_is_held_down`, `park_pinned_player_for_step`).
+        // A file step holds the strips down while it is on its way: the strips go down with the
+        // step, not with the ask, and the file that replaces it asks them back (see
+        // `pin_chrome_is_held_down`).
         //
         // A hosted film whose player has a window but no frame yet is a band that would be black
-        // behind the chrome: the strips wait for the picture the player itself says it drew. Asked
-        // only of a standing pin, because a park keeps its chrome over the held frame.
+        // behind the chrome: the strips wait for the picture the player itself says it drew.
         let pid = VIDEO_PID.load(Ordering::SeqCst);
-        let film_window_without_a_picture = !pin.parked
-            && pin_film_host::the_hosted_player_is_drawing(pid)
+        let film_window_without_a_picture = pin_film_host::the_hosted_player_is_drawing(pid)
             && !pin_film_host::the_hosted_frame_is_up(pid);
-        let (caption, bar) = if pin_chrome_is_held_down(pin) || film_window_without_a_picture {
+        let (caption, bar) = if pin_chrome_is_held_down() || film_window_without_a_picture {
             (false, false)
         } else {
             // The arrival window is spent the moment it closes, and there is no bringing it back:

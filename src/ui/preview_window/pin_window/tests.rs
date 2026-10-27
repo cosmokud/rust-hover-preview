@@ -287,10 +287,6 @@ impl PinWindow for LookingWindow {
         self.inner.repaint();
     }
 
-    fn unpark_player_window(&self, band: Option<ScreenRegion>) {
-        self.inner.unpark_player_window(band);
-    }
-
     fn post(&self, hwnd: isize, message: u32) {
         self.inner.post(hwnd, message);
     }

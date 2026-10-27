@@ -846,8 +846,6 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     // drawn through that host rather than being the player's window over the band (see
     // `pin_film_host`).
     pin_stands_in_its_own_window(true);
-    forget_pin_park_swap();
-    forget_video_frame();
 
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
@@ -862,10 +860,6 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     assert!(
         pin_chrome_up(),
         "the caption the hand is on is up over the band"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "and mpv's window is the one the drag has to carry"
     );
 
     for step in 1..=3 {
@@ -963,8 +957,6 @@ fn a_resize_drag_bands_the_pin_at_its_two_ends_and_not_on_a_step_between_them() 
         config.pin_always_on_top = false;
     }
     stand_pin(Some(overlay_pin(content, PinChrome::always())));
-    forget_pin_park_swap();
-    forget_video_frame();
 
     let hwnd = pin_window;
     let window = a_window_at(content);
@@ -1459,8 +1451,6 @@ fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
     // **A film pin stands in a window of its own**, which is where its host is made (see
     // `pin_film_host`).
     pin_stands_in_its_own_window(true);
-    forget_pin_park_swap();
-    forget_video_frame();
 
     // This app writes the player down as it begins one, and nothing here begins one (see
     // `note_player_process`).
@@ -1509,10 +1499,6 @@ fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
         pinned_content(),
         Some(content),
         "and the band the press landed in is that same box"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "mpv is left drawing: a gesture writes commands down its pipe rather than ending its player"
     );
 
     finish_pin_drag(hwnd, &window);
@@ -1563,8 +1549,6 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
     let mut pin = overlay_pin(content, PinChrome::always());
     pin.path = PathBuf::from("a-film-whose-window-is-clicked-through.mkv");
     stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
 
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
@@ -1671,7 +1655,7 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
 #[test]
 fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
     assert_eq!(
-        player_order(MPV_IMAGE_NAME, true, false, false, false, false),
+        player_order(MPV_IMAGE_NAME, true, false, false, false),
         PlayerOrder::Raise,
         "an mpv pin's film is raised with nothing of the pin's own drawn over the band: the pin \
          is put back over it right after"
@@ -1687,14 +1671,7 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
         (false, false, true, "with the card's menu up over it"),
     ] {
         assert_eq!(
-            player_order(
-                MPV_IMAGE_NAME,
-                true,
-                chrome_up,
-                volume_open,
-                menu_open,
-                false
-            ),
+            player_order(MPV_IMAGE_NAME, true, chrome_up, volume_open, menu_open),
             PlayerOrder::Leave,
             "an mpv pin's film is left exactly where it is {what}: a raise would put the film \
              over what the user is looking at and blink it, while mpv's own window holds the band \
@@ -1703,14 +1680,14 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
     }
 
     assert_eq!(
-        player_order(MPV_IMAGE_NAME, false, false, false, false, false),
+        player_order(MPV_IMAGE_NAME, false, false, false, false),
         PlayerOrder::Raise,
         "the same film on a hover is raised as it always was: a hover must keep falling through to \
          what is behind it"
     );
 
     assert_eq!(
-        player_order(FFPLAY_IMAGE_NAME, true, false, false, false, false),
+        player_order(FFPLAY_IMAGE_NAME, true, false, false, false),
         PlayerOrder::Raise,
         "an ffplay pin raises its player over the band as it always has"
     );
@@ -1725,34 +1702,13 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
         (false, false, true, "while the card's menu floats over it"),
     ] {
         assert_eq!(
-            player_order(
-                FFPLAY_IMAGE_NAME,
-                true,
-                chrome_up,
-                volume_open,
-                menu_open,
-                false
-            ),
+            player_order(FFPLAY_IMAGE_NAME, true, chrome_up, volume_open, menu_open),
             PlayerOrder::Leave,
             "an ffplay pin's player is left exactly where it is {what}: on that route the band is \
              that very window, and a raise would bury what this app is drawing there"
         );
     }
-
-    assert_eq!(
-        player_order(FFPLAY_IMAGE_NAME, true, false, false, false, true),
-        PlayerOrder::Leave,
-        "and a film parked for a gesture is left alone: a raise here would show it back over the \
-         cover the park painted"
-    );
-    assert_eq!(
-        player_order(MPV_IMAGE_NAME, true, false, false, false, true),
-        PlayerOrder::Leave,
-        "mpv's own film included — nothing on screen is raised, and a parked band would be the \
-         desktop under the pin's own pixel"
-    );
 }
-
 /// A player's window is asserted the styles **with** the topmost bit, and the click-through style
 /// besides. The film is topmost for as long as the pin is Always On Top, because a pin's band is the
 /// band its film stands in (see `pin_holds_the_front`).
@@ -1856,14 +1812,11 @@ fn a_pinned_mpv_film_is_placed_by_a_tick_a_drag_and_a_monitor_pass() {
             caption: false,
             bar: false,
             until: None,
-            step_in_flight: false,
         },
     );
     pin.path = PathBuf::from("a-film-the-pin-stands-above.mkv");
     pin.transport.begun(30.0, true, false);
     stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
 
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
@@ -1967,7 +1920,6 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
             caption: false,
             bar: false,
             until: None,
-            step_in_flight: false,
         },
     )));
     assert!(
@@ -2052,7 +2004,6 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
             caption: false,
             bar: false,
             until: None,
-            step_in_flight: false,
         },
     );
     with_menu.menu.open = true;
@@ -2167,8 +2118,8 @@ fn the_player_stands_over_the_pin_only_while_it_is_raised_over_it() {
          raise left standing"
     );
 
-    // A parked film is not on screen, and a window that is not on screen covers nothing — the
-    // answer a drag's own moves owe while the window is hidden (see `pin_player_is_parked`).
+    // A film's window that is not on screen covers nothing — the answer a drag's own moves owe
+    // while the window is hidden (see `player_stands_over_the_pin`).
     unsafe {
         raise(player, content);
         let _ = ShowWindow(player, SW_HIDE);

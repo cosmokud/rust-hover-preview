@@ -385,13 +385,12 @@ impl MediaType {
     ///
     /// It is the question a park is asked, and the whole of it: what a drag puts away is the
     /// window behind the band, so a band this app fills itself has nothing to put away, and the
-    /// flat fill a park paints would be laid over a picture this window is drawing — a frame of
-    /// this app's own, blanked for the length of a drag and answered with a stray decode. The
-    /// browser that draws an engine document is one of them; a film at a pin that stands in a window
-    /// of its own is drawn through the pin's host, so a cover leaves it where it draws (see
-    /// `pin_film_host::the_film_is_shown_in_a_host`), and the media engine's video is drawn
-    /// into this window's own surface like any other frame (see `park_pinned_player_for_seek` and
-    /// `pin_film_host`).
+    /// flat fill would be laid over a picture the engine is drawing — a frame of this app's own,
+    /// blanked for the length of a drag and answered with a stray decode. The browser that draws an
+    /// engine document is one of them; a film at a pin that stands in a window of its own is drawn
+    /// through the pin's host, so it never reaches the paint at all (see
+    /// `pin_film_host::the_film_is_shown_in_a_host`), and the media engine's video is drawn into
+    /// this window's own surface like any other frame.
     ///
     /// **A film's answer is the route of the film it is showing now**, rather than the window the
     /// pin was taken up in: an engine row can change under a pin that is already up, and the pin is

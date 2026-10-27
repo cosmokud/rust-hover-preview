@@ -127,7 +127,8 @@ static PIN_FILM_HOST_PLAYER: AtomicU32 = AtomicU32::new(0);
 static PRESENTED_PID: AtomicU32 = AtomicU32::new(0);
 
 /// The host the pin is showing its film through, or nothing while there is none.
-pub(super) fn film_host() -> Option<HWND> {    let host = PIN_FILM_HOST.load(Ordering::SeqCst);
+pub(super) fn film_host() -> Option<HWND> {
+    let host = PIN_FILM_HOST.load(Ordering::SeqCst);
     (host != 0).then_some(HWND(host as *mut _))
 }
 
@@ -311,13 +312,12 @@ unsafe fn own_the_pin_window(owned: bool) {
 /// because a hover's `Hide` can empty that bookkeeping while the pin still owns the window (see
 /// `a_pin_owns_the_window_a_hide_would_take_down`).
 pub(super) fn the_video_window_is_owed_the_front(current_video_path: Option<&Path>) -> bool {
-    current_video_path.is_some()
-        || (pinned() && pin_is_its_own_window() && film_host().is_some())
+    current_video_path.is_some() || (pinned() && pin_is_its_own_window() && film_host().is_some())
 }
 
 /// Whether the player this app is holding is the one it began into the host — the question every
 /// road that used to find a top-level mpv window by pid asks instead (see
-/// `ensure_video_window_topmost`, `hold_video_window_frame`, `settle_pinned_mpv_ontop`).
+/// `ensure_video_window_topmost`).
 ///
 /// It says the pairing and not that the film is drawing: a player begun into the host has not put
 /// a child of its own there for a moment or more, and that wait is `the_hosted_player_is_drawing`.
@@ -336,7 +336,8 @@ const HOSTED_DRAWING_TRACE_EVERY: Duration = Duration::from_secs(1);
 type HostedDrawingTrace = (u32, isize, bool, Instant);
 
 /// The last answer `the_hosted_player_is_drawing` wrote down (see `trace_the_hosted_drawing`).
-static LAST_HOSTED_DRAWING: Lazy<Mutex<Option<HostedDrawingTrace>>> = Lazy::new(|| Mutex::new(None));
+static LAST_HOSTED_DRAWING: Lazy<Mutex<Option<HostedDrawingTrace>>> =
+    Lazy::new(|| Mutex::new(None));
 
 /// Write the answer of one look at the hosted film's window, on change and at most once a second.
 ///
@@ -389,9 +390,8 @@ pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
         trace_the_hosted_drawing(pid, None, false);
         return false;
     };
-    let drawing = pid != 0
-        && hosted_player_pid() == Some(pid)
-        && pin_film_thumbnail::the_source_is_up(pid);
+    let drawing =
+        pid != 0 && hosted_player_pid() == Some(pid) && pin_film_thumbnail::the_source_is_up(pid);
     trace_the_hosted_drawing(pid, Some(host), drawing);
     drawing
 }
@@ -405,7 +405,6 @@ pub(super) fn the_players_window_is_up(pid: u32) -> bool {
     video_window_for(pid).is_some() || the_hosted_player_is_drawing(pid)
 }
 
-
 /// Make the host where the pin has none, or put the one it has at the band it stands at now.
 ///
 /// Asked of the pin rather than of the caller's box, because the two roads that reach it — a show
@@ -416,8 +415,7 @@ pub(super) fn the_players_window_is_up(pid: u32) -> bool {
 /// window until the player this app begins has put a child of its own in it, and a black rectangle
 /// over the band is the film the hover was showing, blanked. A host a restore takes up is drawing
 /// already and is shown here; one a fresh launch made is shown by the tick's own road once that
-/// source is there (see `ensure_video_window_topmost`), and the park's settle that shows it again
-/// after a park.
+/// source is there (see `ensure_video_window_topmost`).
 ///
 /// `adopted` is the hover's host on the road that takes an already-running film up: its player is
 /// the one drawing the hover, so the window is the pin's rather than replaced (see
@@ -580,7 +578,7 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
 }
 
 /// Put the host at the pin's band, without showing it: the band-change road, where the window is
-/// either already up or is the park's to hand back (see `ensure_pinned_sibling_box`).
+/// either already up (see `ensure_pinned_sibling_box`).
 pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
     let Some(host) = film_host() else {
         return;
@@ -604,10 +602,14 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
     pin_chrome_strips::place_the_chrome_strips();
 }
 
-/// Hide or show the host for a park, at the box it already has: a park hides the window behind the
-/// band, and the pin paints its held frame in its place (see `park_pinned_player_inner`). The
-/// chrome stays where the chrome state puts it: the strips are the pin's window's rather than the
-/// host's, and a park hides the picture rather than the chrome (see `pin_chrome_strips`).
+/// Hide or show the host the film is drawn in.
+///
+/// **Nothing but the film leaving the pin hides it** (see `take_the_film_off_the_band`), and a hide
+/// with a pin standing over a source the host is drawing is written out as the defect it would be:
+/// the picture is the Shell's thumbnail of the player's window, and there is no frame of this app's
+/// to stand in for it (see `pin_film_thumbnail`). The chrome stays where the chrome state puts it:
+/// the strips are the pin's window's rather than the host's, so they are not hidden with it.
+///
 /// The last show this host was asked for, and the host it was asked for: the tick asks on every
 /// pass, so the trace's `host visible` line is written where the answer changes rather than on every
 /// ask (938 of a 114 s run's lines were this family and `topmost shown`).
@@ -631,15 +633,43 @@ fn trace_the_host_show(host: HWND, visible: bool) {
     note_pin_trace!("host visible {} {:?}", visible as u8, host);
 }
 
+/// How many times this run has asked the host to hide, for the tests that hold a relaunch to never
+/// taking the picture off the screen (see `set_the_pin_film_host_visible`).
+#[cfg(test)]
+pub(super) static HOST_HIDES_ASKED: AtomicU32 = AtomicU32::new(0);
+
+/// The hides this run has asked for.
+#[cfg(test)]
+pub(super) fn host_hides_asked() -> u32 {
+    HOST_HIDES_ASKED.load(Ordering::SeqCst)
+}
+
 pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
+    #[cfg(test)]
+    if !visible {
+        HOST_HIDES_ASKED.fetch_add(1, Ordering::SeqCst);
+    }
     if let Some(host) = film_host() {
         // **A host the Shell has minimized is the Shell's to bring back.** Showing a minimized
         // window restores it, so a tick that showed the host it is watching would undo the user's own
         // minimize of it every tick — and the button that minimized it is the host's own on this road
-        // (see `own_the_pin_window`). A host the app hid for a park is not iconic, and is shown here as
-        // it always was.
+        // (see `own_the_pin_window`).
         if visible && unsafe { IsIconic(host) }.as_bool() {
             return;
+        }
+        // **A picture hidden under a pin is the blank this road exists not to make.** The one road
+        // that may hide the host is the film being taken off the pin, which lets the registration go
+        // before it asks for the hide; anything else is a relaunch's step taken over a standing
+        // source, and a run says so here rather than in what the user sees.
+        if !visible
+            && pinned()
+            && !pin_is_collapsed()
+            && pin_film_thumbnail::the_source_is_standing(hosted_player_pid().unwrap_or(0))
+        {
+            note_pin_trace!(
+                "film host hidden while a pin lives {:?}: the picture was the standing source",
+                host,
+            );
         }
         trace_the_host_show(host, visible);
         let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
@@ -651,6 +681,18 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
     // The strips carry the chrome on every road, whatever the host is doing: the sync answers
     // what the chrome state asks for over the picture or over the cover (see `pin_chrome_strips`).
     pin_chrome_strips::sync_the_chrome_strips();
+}
+
+/// Take the film off the band, because the pin is about to show the host no film: the registration
+/// goes first, so the hide that follows is a window going down rather than a picture going black.
+///
+/// It is one call rather than two at each road that ends a film, because the order is the whole of
+/// it — a host hidden with the source the Shell draws still registered in it is the blank frame this
+/// road is a film road to avoid (see `set_the_pin_film_host_visible` and
+/// `pin_film_thumbnail::forget_the_thumbnail`).
+pub(super) unsafe fn take_the_film_off_the_band() {
+    pin_film_thumbnail::forget_the_thumbnail();
+    unsafe { set_the_pin_film_host_visible(false) };
 }
 
 /// Destroy the host and forget the player it held: the pin it was showing a film for is ending, and
@@ -683,11 +725,6 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     PIN_FILM_HOST.store(0, Ordering::SeqCst);
     PIN_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
     PRESENTED_PID.store(0, Ordering::SeqCst);
-    // A held frame of this film must not open the next pin or park. A park's own frame is its to
-    // give up, so it is left standing for the park.
-    if !pin_player_is_parked() {
-        forget_video_frame();
-    }
 }
 
 /// The window the pin's film is drawn from, where the Shell is drawing it: the player's own window
@@ -729,7 +766,7 @@ unsafe fn create() -> Option<HWND> {
     // **Made without `WS_VISIBLE`, and that is what keeps the band the film's until the Shell has
     // composed the picture.** A host put on the screen empty is a black rectangle where the hover's
     // picture was, for as long as the player takes to open the file. What shows it is the take-up of a
-    // host the player is already drawing in, the tick's own road, and the settle of a park (see
+    // host the player is already drawing in, and the tick's own road (see
     // `take_up_the_pin_film_host`, `ensure_video_window_topmost`).
     //
     // **`WS_CLIPCHILDREN`** so that the host's own erase is clipped to the area outside the chrome
@@ -996,7 +1033,10 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     if the_hosted_player_is_drawing(pid)
         && frozen.is_some_and(|frozen| the_hosted_frame_is_presented(pid, frozen.seconds))
     {
-        note_pin_trace!("handover handed over after {}ms", since.elapsed().as_millis());
+        note_pin_trace!(
+            "handover handed over after {}ms",
+            since.elapsed().as_millis()
+        );
         disarm_pin_handover();
         // The handover is the pin's first frame, not an arrival: the chrome stays hidden over it
         // until the pointer asks for a strip (see `refresh_pin_chrome`).

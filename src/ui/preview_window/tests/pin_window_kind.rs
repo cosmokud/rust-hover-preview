@@ -145,7 +145,10 @@ fn a_pins_film_is_drawn_in_its_host_whichever_route_it_is_drawn_by_now() {
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     assert_eq!(video_route(path), VideoRoute::Mpv);
     assert!(!MediaType::Video.draws_in_a_window_of_its_own(path));
-    assert!(pin_should_stand_in_its_own_window(Some(MediaType::Video), path));
+    assert!(pin_should_stand_in_its_own_window(
+        Some(MediaType::Video),
+        path
+    ));
 
     // The engine row changes to FFmpeg's player under the same pin: the film is adopted into the
     // same host, not left as a window of the desktop's.

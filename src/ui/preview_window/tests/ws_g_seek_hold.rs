@@ -4,9 +4,10 @@ use super::*;
 //
 // The press tells the player nothing on either route, and the film plays on under the hand. mpv is
 // taken to the second over its pipe at the release and keeps the player it has; FFmpeg's player —
-// which cannot be told anything — is ended and begun again there, behind a cover raised for the
-// hole that leaves. A gesture does not stop the film: the seek is the only thing a hand on the bar
-// asks of it (see `pin_input`).
+// which cannot be told anything — is begun again there, and **nothing is taken off the screen for
+// it**: the registration the outgoing player's window is drawn through is the picture until the
+// replacement's source has taken it over, and only then is the outgoing player ended (see
+// `pin_playback::relaunch_pinned_player` and `pin_film_thumbnail::hand_the_picture_over`).
 
 /// A video behind the pin, as the press road reads the kind off the slot.
 fn stand_video_media() -> Option<MediaData> {
@@ -39,11 +40,7 @@ fn a_banded_video_pin(film: &Path, content: ScreenRegion) -> PinnedPreview {
 
 /// The second a scrub is aiming at, read out of the pin.
 fn the_seek_aim() -> Option<f64> {
-    pin_state().and_then(|pinned| {
-        pinned
-            .pin()
-            .and_then(|pin| pin.transport.seeking)
-    })
+    pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.seeking))
 }
 
 /// The line mpv is taken to a second with, as this app writes it (see `mpv_ipc::seek_absolute`).
@@ -52,8 +49,8 @@ fn the_seek_line(seconds: f64) -> String {
 }
 
 /// **The press on the bar tells the player nothing on either route**, and the film plays on under
-/// the hand: no key, no restart, no cover, and the aim moves with the pointer. The second is only
-/// known at the release, and nothing about the film may change before then.
+/// the hand: no key, no restart, and the aim moves with the pointer. The second is only known at
+/// the release, and nothing about the film may change before then.
 #[test]
 fn a_seek_press_and_scrub_tell_the_player_nothing_on_either_route() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -74,10 +71,10 @@ fn a_seek_press_and_scrub_tell_the_player_nothing_on_either_route() {
         stand_ffplay_in(Some(ffplay));
         stand_video_engine_in(Some((engine, true)));
         stand_pin(Some(a_banded_video_pin(&film, content)));
-        forget_pin_park_swap();
         ffplay_window::clear_pause_posts();
         mpv_ipc::clear_noted();
         clear_restart_count();
+        let hides = pin_film_host::host_hides_asked();
 
         let bar = pinned_transport_geometry().expect("a banded video pin carries a bar");
         let (x, y) = (bar.width / 2, bar.top + bar.height / 2);
@@ -108,14 +105,14 @@ fn a_seek_press_and_scrub_tell_the_player_nothing_on_either_route() {
             0,
             "and no player is ended while the second is still being chosen ({what})"
         );
-        assert!(
-            !pin_player_is_parked() && park_record_owner().is_none(),
-            "with no cover over a film nothing has ended ({what})"
+        assert_eq!(
+            pin_film_host::host_hides_asked(),
+            hides,
+            "and the picture is never taken off the screen for a press ({what})"
         );
 
         // The release is the release's own; this test is about the press and the scrub.
         let _ = unsafe { pinned_transport_release(HWND(0x1000 as *mut _), x, y, &window) };
-        forget_pin_park_swap();
         mpv_ipc::forget_pipe(101);
         mpv_ipc::clear_noted();
         clear_restart_count();
@@ -131,11 +128,12 @@ fn a_seek_press_and_scrub_tell_the_player_nothing_on_either_route() {
     }
 }
 
-/// **A release on FFmpeg's route is one player ended and begun again at the aimed second**, behind a
-/// seek's cover, and it says why: `player restarted for seek`. mpv is asked down its pipe and
-/// begins nothing.
+/// **A release on FFmpeg's route is one player begun again at the aimed second, and it says why**:
+/// `player restarted for seek`. mpv is asked down its pipe and begins nothing. On both routes the
+/// film is on screen throughout: no host is hidden, nothing is painted flat over the band, and the
+/// player that was drawing it is still the one the bar reads from until its replacement stands.
 #[test]
-fn a_seek_release_on_ffmpeg_restarts_once_behind_a_cover_and_says_why() {
+fn a_seek_release_restarts_once_and_the_film_stays_on_screen() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -151,8 +149,9 @@ fn a_seek_release_on_ffmpeg_restarts_once_behind_a_cover_and_says_why() {
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     stand_pin(Some(a_banded_video_pin(&film, content)));
-    forget_pin_park_swap();
     clear_restart_count();
+    pin_trace::clear_noted();
+    let hides = pin_film_host::host_hides_asked();
 
     let bar = pinned_transport_geometry().expect("a banded video pin carries a bar");
     let (x, y) = (bar.width / 2, bar.top + bar.height / 2);
@@ -167,20 +166,34 @@ fn a_seek_release_on_ffmpeg_restarts_once_behind_a_cover_and_says_why() {
         Some(RestartReason::Seek),
         "and the line says what it was for"
     );
-    assert!(
-        pin_player_is_parked() && park_record_owner() == Some(ParkArm::Seek),
-        "behind a seek's cover, over the frame the hand let go on"
-    );
     assert_eq!(
         the_seek_aim(),
         None,
         "and the aim is spent by the release rather than left standing"
     );
+    assert_eq!(
+        pin_film_host::host_hides_asked(),
+        hides,
+        "the host the picture is drawn in is never hidden for a relaunch"
+    );
+    assert!(
+        !window
+            .calls()
+            .iter()
+            .any(|call| matches!(call, PinWindowCall::Repaint)),
+        "and the pin's window is not repainted for a relaunch: there is no cover to take down and          nothing of the picture to put back"
+    );
+    let lines = pin_trace::noted_lines();
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("film host hidden while a pin lives")),
+        "and a run says nothing was taken off the screen: {lines:?}"
+    );
 
     // mpv: the same hand, and the player is taken to the second over its pipe. Nothing is begun.
     mpv_ipc::forget_pipe(101);
     mpv_ipc::clear_noted();
-    forget_pin_park_swap();
     clear_restart_count();
     stand_mpv_in(Some(true));
     stand_ffplay_in(Some(false));
@@ -188,6 +201,7 @@ fn a_seek_release_on_ffmpeg_restarts_once_behind_a_cover_and_says_why() {
     mpv_ipc::remember_pipe(101, "test-pipe", false);
     VIDEO_PID.store(101, Ordering::SeqCst);
     stand_pin(Some(a_banded_video_pin(&film, content)));
+    let hides = pin_film_host::host_hides_asked();
 
     let bar = pinned_transport_geometry().expect("a banded video pin carries a bar");
     let (x, y) = (bar.width / 2, bar.top + bar.height / 2);
@@ -201,6 +215,11 @@ fn a_seek_release_on_ffmpeg_restarts_once_behind_a_cover_and_says_why() {
         "mpv is taken to the aimed second while it runs"
     );
     assert_eq!(restart_count(), 0, "and no player is begun again for it");
+    assert_eq!(
+        pin_film_host::host_hides_asked(),
+        hides,
+        "and nothing of the picture is hidden on that route either"
+    );
 
     mpv_ipc::forget_pipe(101);
     mpv_ipc::clear_noted();
@@ -208,7 +227,6 @@ fn a_seek_release_on_ffmpeg_restarts_once_behind_a_cover_and_says_why() {
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_video_engine_in(None);
-    forget_pin_park_swap();
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -216,76 +234,14 @@ fn a_seek_release_on_ffmpeg_restarts_once_behind_a_cover_and_says_why() {
     }
 }
 
-/// A seek cover with no window behind it, and nothing in flight that can put one there, holds while
-/// it is still inside the cover's own bound and is given up once it is not: an opaque band is
-/// claimed by this app's own window at the compositor's hit test, so a cover nothing will ever fill
-/// cannot own a pin (see `PIN_PARK_COVER_TIMEOUT`).
-#[test]
-fn a_seek_cover_with_nothing_in_flight_is_given_up_by_the_cover_bound() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    clear_park_swap_arm();
-    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-
-    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
-    pin.path = PathBuf::from("seek-cover-holds-without-a-window.mkv");
-    stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
-
-    assert!(
-        park_pinned_player_for_seek(HWND(0x1000 as *mut _), (100, 80)),
-        "the release parks"
-    );
-    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
-        if let Some(swap) = held.as_mut() {
-            swap.since = Some(Instant::now());
-        }
-    }
-
-    let window = RecordedPinWindow::new(0x1000);
-    assert!(
-        !settle_pinned_park_where(&window, false),
-        "a bound is a bound on a wait, not a delay: nothing has been waited for yet"
-    );
-    assert!(
-        pin_player_is_parked(),
-        "so the cover stands, holding the frame the press took"
-    );
-    assert_eq!(park_swap_last_arm(), None, "no arm for a park still standing");
-
-    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
-        if let Some(swap) = held.as_mut() {
-            swap.since = Some(Instant::now() - PIN_PARK_COVER_TIMEOUT * 2);
-        }
-    }
-    assert!(
-        settle_pinned_park_where(&window, false),
-        "past the cover's own bound with nothing behind the band gives the cover up"
-    );
-    assert!(!pin_player_is_parked(), "so no cover stands for ever");
-    assert!(
-        matches!(park_swap_last_arm(), Some((ParkSwap::Abandoned, _))),
-        "and the arm is the one the cover's own bound ends on"
-    );
-
-    forget_pin_park_swap();
-    forget_video_frame();
-    stand_pin(previous_pin);
-    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
-}
-
-/// **A seek's release ends nothing on the spot.** FFmpeg's player is the one picture the pin has until
-/// the player that replaces it has drawn its own, so the player under the hand is retired by the loop
-/// once that picture stands rather than killed at the release — the kill is the band the host's black
-/// shows through for the length of a decode (see `retire_replaced_player` and
-/// `pin_playback::park_pinned_player_for_seek`).
+/// **A seek's release ends nothing on the spot.** FFmpeg's player is the one picture the pin has
+/// until the player that replaces it has drawn its own, so the player under the hand is retired by
+/// the loop once that picture stands rather than killed at the release — the kill is the band the
+/// host's black shows through for the length of a decode (see `retire_replaced_player`).
 ///
-/// The line read here is the relaunch's own `from`, which is the pid of the player the cover was raised
-/// over: a release that ended it first leaves `VIDEO_PID` cleared before the relaunch reads it, and the
-/// line says `from 0` with no player for the retirement to hold.
+/// The line read here is the relaunch's own `from`, which is the pid of the player that was on
+/// screen: a release that ended it first leaves `VIDEO_PID` cleared before the relaunch reads it,
+/// and the line says `from 0` with no player for the retirement to hold.
 #[test]
 fn a_seek_release_ends_no_player_before_its_replacement_can_draw() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -297,11 +253,11 @@ fn a_seek_release_ends_no_player_before_its_replacement_can_draw() {
 
     let content = (100, 80, 420, 320);
     let film = PathBuf::from("seek-release-ends-nothing.mkv");
+
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     stand_pin(Some(a_banded_video_pin(&film, content)));
-    forget_pin_park_swap();
     clear_restart_count();
     pin_trace::clear_noted();
 
@@ -312,7 +268,11 @@ fn a_seek_release_ends_no_player_before_its_replacement_can_draw() {
     assert!(unsafe { pinned_transport_drag(HWND(0x1000 as *mut _), bar.width / 4) });
     assert!(unsafe { pinned_transport_release(HWND(0x1000 as *mut _), x, y, &window) });
 
-    assert_eq!(restart_count(), 1, "the seek is one relaunch on this engine");
+    assert_eq!(
+        restart_count(),
+        1,
+        "the seek is one relaunch on this engine"
+    );
     let lines = pin_trace::noted_lines();
     assert!(
         lines
@@ -327,7 +287,6 @@ fn a_seek_release_ends_no_player_before_its_replacement_can_draw() {
         "no end is written against a picture that is still on screen: {lines:?}"
     );
 
-    forget_pin_park_swap();
     clear_restart_count();
     stand_mpv_in(None);
     stand_ffplay_in(None);

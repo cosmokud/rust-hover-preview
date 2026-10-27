@@ -211,7 +211,6 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
         pin_chrome_up(),
         pin_volume_open(),
         pin_menu_open(),
-        pin_player_is_parked(),
     );
 
     // Add WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST and WS_EX_TRANSPARENT to its extended
@@ -239,19 +238,10 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // menu is raised over the film by the tick's own `render_pin_menu` (see `toggle_pin_volume`,
     // `pin_chrome_up`); the next raise through here settles the order either way.
     //
-    // **And it waits while a drag is parking the window, which is the same arrangement for the same
-    // reason: this is a thread of its own, asking every hundred milliseconds whether the player's
-    // window is still the window it styled.** Neither the drag's own raises nor the tick's can cover
-    // it — they are two callers, and this one answers for a film nobody asked about. A park this
-    // function undid would last from one monitor pass to the next, which at the pace it runs is a
-    // hundred milliseconds of a drag with the film back on screen and the compositor re-blitting it
-    // at the pointer's rate: the stutter the park was written for, and a band painted flat under a
-    // window that is standing in it (see `pin_player_is_parked`).
-    //
-    // **What is held off here is the `Leave` answer and nothing else.** Those are the park, a strip
-    // of the pin's chrome, an open volume popup and an open card's menu (see `pin_player_is_parked`,
-    // `pin_chrome_up`, `pin_volume_open`, `pin_menu_open`): a raise over any of the last three puts
-    // the film over what the user is looking at — the caption and the transport bar the pin draws
+    // **What is held off here is the `Leave` answer and nothing else.** Those are a strip of the
+    // pin's chrome, an open volume popup and an open card's menu (see `pin_chrome_up`,
+    // `pin_volume_open`, `pin_menu_open`): a raise over any of them puts the film over what the
+    // user is looking at — the caption and the transport bar the pin draws
     // into the band over the media, and the panel the card's menu floats in (see the note above and
     // `pin_overlay_chrome`, `pin_menu_window`). mpv's film holds its own band while they are up
     // (`--ontop`, see `mpv_args`), the pin's own raise carries the press, and a band that has moved
@@ -797,38 +787,6 @@ pub(super) fn terminate_player_pid(pid: u32) {
         }
         let _ = CloseHandle(handle);
     }
-}
-
-/// Kill the pinned player the way a gesture's press does: terminate, and reap
-/// where the death confirms — never a wait, never the UI thread.
-///
-/// A kill confirmed on the spot clears the pid with it, so `VIDEO_PID == 0`
-/// asserts silence for the whole interval the cover stands. A kill not yet taken is
-/// handed to the orphan reaper that outlives every gesture, which asks again
-/// on every tick until the death confirms: never dropped, never waited on
-/// (see `retire_orphaned_player`).
-///
-/// Answers whether nothing is left: pid zero is already nothing, and a kill
-/// confirmed gone leaves nothing either.
-pub(super) fn kill_pinned_player_async() -> bool {
-    let pid = VIDEO_PID.load(Ordering::SeqCst);
-    if pid == 0 {
-        return true;
-    }
-
-    // The media's handle and background work belong to the player being
-    // killed: the only thing that can end it now is the pid, so nothing else
-    // may keep asking the handle. What the tick asks instead is the pid,
-    // which the reaper below retries to confirmation.
-    if let Ok(mut current) = CURRENT_MEDIA.lock() {
-        if let Some(media) = current.as_mut() {
-            media.cancel_background_work();
-            media.video_process = None;
-        }
-    }
-    retire_orphaned_player(pid);
-
-    VIDEO_PID.load(Ordering::SeqCst) != pid
 }
 
 /// Clear the recorded video process state once `pid` is confirmed gone.

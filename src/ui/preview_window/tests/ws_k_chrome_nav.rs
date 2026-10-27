@@ -1,15 +1,14 @@
 use super::*;
 
-// The stand-in for the machine's own `ReleaseCapture` re-entrancy and the one reader of the
-// relayout slot, shared with the tests about the roads a release ends (see `pin_input`).
-use super::pin_input::{take_relayout_request, CapturingWindow};
+// The stand-in for the machine's own `ReleaseCapture` re-entrancy, shared with the tests about
+// the roads a release ends (see `pin_input`).
+use super::pin_input::CapturingWindow;
 
-// WS-K Phase 1: the capture discipline (a press that arms nothing must claim
-// nothing), the swap's reconcile (a take-up gives up the step's leftovers), the
-// one cover a file step raises, and the player's own mouse. A gesture raises no
-// cover of its own and asks nothing of a player (see `begin_pin_drag`).
+// WS-K Phase 1: the capture discipline (a press that arms nothing must claim nothing), the
+// swap's reconcile (a take-up gives up the step's leftovers), the chrome a file step raises,
+// and the player's own mouse. A gesture never asks anything of a player (see `begin_pin_drag`).
 
-/// A playing pin, as a covered road's press finds it.
+/// A playing pin, as a gesture's press finds it.
 fn playing_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
     let mut pin = overlay_pin(content, PinChrome::always());
     pin.path = PathBuf::from("ws-k-chrome-nav.mkv");
@@ -48,7 +47,6 @@ fn banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
         last_press: None,
         tooltip: PinTooltip::default(),
         dragging: None,
-        parked: false,
         transport: {
             let mut transport = PinTransport::default();
             transport.begun(from, true, false);
@@ -95,10 +93,7 @@ fn restore(
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_video_engine_in(None);
-    forget_pin_park_swap();
-    forget_video_frame();
     clear_pending_pinned_relaunch();
-    clear_park_swap_arm();
     clear_restart_count();
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
@@ -111,14 +106,6 @@ fn fake_end_relaunch(pid: u32, from: f64, holding: bool) {
     VIDEO_PID.store(pid, Ordering::SeqCst);
     note_pinned_relaunch(pid);
     update_pin_transport(|transport| transport.begun(from, true, holding));
-}
-
-fn spend_the_swap_bound() {
-    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
-        if let Some(swap) = held.as_mut() {
-            swap.since = Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT * 4);
-        }
-    }
 }
 
 /// A point on the seek track of a banded pin's bar, and the proof that it is
@@ -226,7 +213,6 @@ fn a_release_no_arm_owns_gives_the_pointer_back() {
     // text selection and no scroll drag is in flight (see `reconcile_swap_take_up` for the
     // take-down that discards the state a press was written into).
     stand_pin(None);
-    forget_pin_park_swap();
     set_text_scroll_dragging(false);
     let _ = end_text_selection();
 
@@ -353,9 +339,7 @@ fn every_caption_button_asks_its_command_on_a_press_and_a_release() {
         (pin_chrome::CaptionButton::Close, PinCommand::Close),
     ] {
         stand_pin(Some(wide_banded_video_pin((100, 80, 420, 320), 30.0)));
-        forget_pin_park_swap();
-        forget_video_frame();
-            take_pin_command();
+        take_pin_command();
 
         let (x, y) = a_caption_button_point(kind);
         assert!(
@@ -393,8 +377,6 @@ fn the_always_on_top_caption_button_toggles_pin_always_on_top() {
     let previous_media = stand_video_media();
 
     stand_pin(Some(wide_banded_video_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
     take_pin_command();
 
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::AlwaysOnTop);
@@ -442,7 +424,6 @@ fn a_restore_down_button_asks_its_command_too() {
     let mut pin = wide_banded_video_pin((100, 80, 420, 320), 30.0);
     pin.restore = Some((100, 80, 420, 320));
     stand_pin(Some(pin));
-    forget_pin_park_swap();
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Maximize);
     take_pin_command();
 
@@ -484,8 +465,6 @@ fn the_volume_button_opens_and_closes_its_popup() {
     let previous_media = stand_video_media();
 
     stand_pin(Some(banded_video_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
 
     let (x, y) = a_transport_part_point(pin_chrome::TransportPart::Volume);
     let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
@@ -534,8 +513,6 @@ fn the_two_hand_offs_reach_their_arm_on_a_press_and_a_release() {
     let previous_media = stand_video_media();
 
     stand_pin(Some(wide_banded_video_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
 
     for kind in [
         pin_chrome::CaptionButton::OpenWith,
@@ -578,148 +555,6 @@ fn caption_height_of_the_pin() -> i32 {
         .unwrap_or(0)
 }
 
-/// K2 DRAG after a step: the cover a file step raises is still standing when the hand
-/// goes on to carry the window or pull its edge, and a gesture neither strands it nor
-/// raises a second one — a drag is this app's own window work and touches no player
-/// (see `begin_pin_drag`).
-///
-/// What a drag after a step owes is the relayout a resize asks for and nothing else, and
-/// the cover is settled by the tick that finds the replacement's window. And a button
-/// afterwards, because a window whose caption has stopped answering is the other half of
-/// the same report.
-#[test]
-fn a_drag_after_a_file_step_strands_no_cover_and_no_park() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    // FFmpeg's route rather than the machine's: with mpv installed the default engine would pick
-    // it, and this cover and the relaunch behind it are the two readings FFmpeg's player answers
-    // (see `stand_mpv_in`). Put back before the restore below.
-    stand_ffplay_in(Some(true));
-    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
-    stand_mpv_in(Some(false));
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(wide_banded_video_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-    take_relayout_request();
-
-    assert!(
-        cover_step_swap_for_video(true),
-        "a step onto a video raises the cover it hands to the incoming player"
-    );
-    // A player standing behind the cover, published without arming a relaunch of its own:
-    // the cover is waiting for a window to see through it, not for a process to begin. A
-    // process id no machine hands out, so nothing here is ever a process to end.
-    VIDEO_PID.store(u32::MAX, Ordering::SeqCst);
-
-    let window = CapturingWindow::around(a_window_at(content));
-    begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
-    assert!(pin_is_dragging(), "the hand is carrying the window");
-
-    let bar = pinned_transport_geometry().expect("a banded pin has a bar");
-    assert!(
-        unsafe {
-            pinned_release(
-                HWND(0x1000 as *mut _),
-                content.0 + 10,
-                bar.top - 10,
-                &window,
-            )
-        },
-        "and the release is the drag's own to answer: the three arms before it each had nothing \
-         armed and each declined in silence, so the drag's record was still on the pin to read"
-    );
-    assert!(!pin_is_dragging(), "so the drag is over");
-    assert!(
-        pin_player_is_parked() && park_record_owner() == Some(ParkArm::Step),
-        "and the step's cover is exactly as the drag found it: a gesture raises no cover of its \
-         own and ends none"
-    );
-    assert!(
-        take_relayout_request().is_none(),
-        "and a move asked for no relayout of its own"
-    );
-
-    // The edge, which is the one drag that ends in a relaunch.
-    with_pin(|pin| {
-        pin.dragging = Some(PinDrag {
-            from: (0, 0),
-            window: content,
-            action: PinDragAction::Resize(PinResize {
-                left: false,
-                top: false,
-                right: true,
-                bottom: true,
-            }),
-            delivered: true,
-            carried: (i32::MIN, i32::MIN),
-        });
-    });
-    assert!(pin_is_dragging(), "and the hand is on the corner");
-    assert!(
-        unsafe {
-            pinned_release(
-                HWND(0x1000 as *mut _),
-                content.0 + 10,
-                bar.top - 10,
-                &window,
-            )
-        },
-        "so the resize's release is its own too"
-    );
-    assert!(
-        take_relayout_request().is_some(),
-        "and the resize asked for its media at the box the hand settled on"
-    );
-    assert!(
-        pin_player_is_parked() && park_record_owner() == Some(ParkArm::Step),
-        "and the resize leaves that cover alone too: the only thing it asked for is the box"
-    );
-    spend_the_swap_bound();
-    let settled = RecordedPinWindow::new(0x1000);
-    assert!(
-        settle_pinned_park_where(&settled, true),
-        "and the tick that finds the replacement's window hands the band back"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "so no placeholder is left over the video area"
-    );
-
-    // And the window is still a window a hand can use: the whole of the report was that
-    // the caption had stopped answering.
-    let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
-    assert!(
-        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
-        "a button is still a button after a step and a drag"
-    );
-    assert!(
-        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
-        "and its release is still the caption's own"
-    );
-    assert_eq!(
-        take_pin_command(),
-        Some(PinCommand::Next),
-        "so the walk still moves a file along"
-    );
-
-    stand_mpv_in(None);
-    stand_ffplay_in(None);
-    stand_video_engine_in(None);
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K1 PRESS: a seek press with no second to seek to arms nothing — no aim, no
-/// button, no cover, and no capture, because every release arm answers out of
-/// what the press armed and a press that armed nothing left the window holding the
-/// pointer for the rest of the process (the state a pin is in between a
-/// file step and the probe that answers for the file in it).
 #[test]
 fn a_seek_press_with_no_second_to_seek_to_claims_nothing() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -732,8 +567,6 @@ fn a_seek_press_with_no_second_to_seek_to_claims_nothing() {
     let mut pin = banded_video_pin((100, 80, 420, 320), 30.0);
     pin.transport.duration = None;
     stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
 
     let (x, y) = seek_track_point();
     assert!(
@@ -744,10 +577,6 @@ fn a_seek_press_with_no_second_to_seek_to_claims_nothing() {
         armed(),
         (false, None, false, false),
         "nothing is claimed: no button, no aim, no drag, no knob"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "and no cover stands over a film nothing is going to end"
     );
 
     restore(previous_pin, previous_pid, previous_media);
@@ -765,8 +594,6 @@ fn a_seek_press_with_a_second_still_arms_the_scrub() {
     let previous_media = stand_video_media();
 
     stand_pin(Some(banded_video_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
 
     let (x, y) = seek_track_point();
     assert!(
@@ -798,7 +625,6 @@ fn a_transport_release_with_nothing_armed_leaves_the_pointer_alone() {
     let previous_media = stand_video_media();
 
     stand_pin(Some(banded_video_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
 
     let (x, y) = seek_track_point();
     let window = RecordedPinWindow::new(0x1000);
@@ -864,7 +690,6 @@ fn a_release_with_nothing_armed_anywhere_gives_the_pointer_back() {
     let previous_media = stand_video_media();
 
     stand_pin(Some(banded_video_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
 
     let (x, y) = seek_track_point();
     let window = RecordedPinWindow::new(0x1000);
@@ -954,14 +779,13 @@ fn a_swap_reconciles_the_gesture_it_is_taking_up_with() {
     let previous_media = stand_video_media();
 
     stand_pin(Some(playing_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
     let generation = current_pinned_generation();
     fake_end_relaunch(102, 30.0, false);
     if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
         *request = Some((100, 80, 420, 320));
     }
 
-    reconcile_swap_take_up(true);
+    reconcile_swap_take_up();
 
     assert!(
         pending_pinned_relaunch().is_none(),
@@ -992,246 +816,6 @@ fn a_swap_reconciles_the_gesture_it_is_taking_up_with() {
     restore(previous_pin, previous_pid, previous_media);
 }
 
-/// K3 RECONCILE: a cover standing for the file coming in is carried onto the pin
-/// that file is taken up in, because the settle is what takes it down.
-#[test]
-fn a_swap_carries_a_cover_forward_to_the_incoming_file() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-    assert!(cover_step_swap_for_video(true), "the step covers");
-
-    reconcile_swap_take_up(true);
-
-    assert!(
-        pin_park_carried_forward(),
-        "the cover survives the reconcile, so the take-up's own pin is written parked"
-    );
-    assert!(
-        pin_player_is_parked(),
-        "and the standing cover is still standing"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K3 RECONCILE: a cover with nothing behind it is given up rather than carried,
-/// so a pin taken up over a picture is never left holding a frozen film.
-#[test]
-fn a_swap_gives_up_a_cover_nothing_is_coming_to_be_handed() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-    assert!(cover_step_swap_for_video(true), "a cover stands");
-
-    reconcile_swap_take_up(false);
-
-    assert!(
-        !pin_player_is_parked(),
-        "the flag is down: nothing is coming to be handed this band"
-    );
-    assert!(
-        !pin_park_carried_forward(),
-        "and no record is left for a settle to answer"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K4 COVER: a step onto a video parks the outgoing frame - the band holds a
-/// picture, never the desktop, until the new player has a window of its own.
-#[test]
-fn a_step_onto_a_video_parks_the_outgoing_frame() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-
-    assert!(cover_step_swap_for_video(true), "a step onto a video parks");
-    assert!(pin_player_is_parked(), "the cover stands across the swap");
-    assert!(
-        PIN_PARK_SWAP
-            .lock()
-            .ok()
-            .and_then(|held| held.as_ref().map(|swap| swap.replacing))
-            .unwrap_or(false),
-        "for the incoming player behind it"
-    );
-    assert_eq!(
-        VIDEO_PID.load(Ordering::SeqCst),
-        0,
-        "and the outgoing player is killed: the cover stands over nothing"
-    );
-    assert!(
-        orphaned_video_kills().is_empty(),
-        "a confirmed kill is reaped, never parked"
-    );
-
-    // Rapid steps coalesce: a second step extends the standing cover rather than
-    // stacking a second park on the first, and the newest file wins.
-    fake_end_relaunch(103, 0.0, false);
-    assert!(
-        cover_step_swap_for_video(true),
-        "a rapid second step covers again"
-    );
-    assert!(pin_player_is_parked(), "still one cover");
-    assert_eq!(
-        VIDEO_PID.load(Ordering::SeqCst),
-        0,
-        "and the film the first step began is killed by the second"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K2 STEP: a step asked for from the caption leaves the pointer on the caption, so the chrome
-/// must stand while the outgoing film is live and go down with the park that takes it away. The
-/// held frame is alone on the band while the new film loads, and the caption comes back in the
-/// settle call that ends that park, with the file that replaces it.
-#[test]
-fn a_step_from_the_caption_hides_the_chrome_over_the_held_frame_and_the_hover_asks_it_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 800, 320);
-    let mut pin = wide_banded_video_pin(content, 30.0);
-    pin.hides_chrome = true;
-    stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
-    pin_film_host::note_hosted_player(0);
-    take_pin_command();
-
-    // The step is the caption's own: a press arms the button and a release on it asks the walk
-    // to move, with the pointer left exactly where the hand clicked.
-    let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
-    assert!(
-        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
-        "a hand on Next is the caption's to act on"
-    );
-    let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
-    assert!(
-        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
-        "and its release asks the step"
-    );
-    assert_eq!(take_pin_command(), Some(PinCommand::Next));
-
-    // The command is the walk's question, and the chrome stands: the outgoing film is still live
-    // and the strips have no business leaving before it does.
-    let mut wait = None;
-    assert!(step_pinned_file(1, &mut wait, None).is_none());
-    assert!(wait.is_some(), "the step is a walk the planner owes an answer");
-    if let Ok(mut pending) = PIN_JOBS.0.lock() {
-        *pending = None;
-    }
-
-    // The pointer is still on the caption, and the chrome would otherwise be shown by hover.
-    let box_ = pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
-        .expect("a pin up");
-    let cursor = Some((box_.0 + x, box_.1 + y));
-    with_pin(|pin| {
-        pin.chrome.caption = true;
-        pin.chrome.bar = false;
-        pin.chrome.until = None;
-    });
-    pin_state().and_then(|mut pinned| {
-        let pin = pinned.pin_mut()?;
-        Some(refresh_pin_chrome(pin, Instant::now(), cursor))
-    });
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
-        Some((true, false)),
-        "and the chrome stands while the outgoing film is still live, with the pointer still on the caption it clicked"
-    );
-    assert!(
-        pin_state().is_some_and(|pinned| pinned.pin().is_some_and(|pin| !pin.chrome.step_in_flight)),
-        "and the ask alone does not raise the step's suppression"
-    );
-
-    assert!(
-        cover_step_swap_for_video(true),
-        "the step raises the cover it hands to the incoming player"
-    );
-    assert!(
-        pin_player_is_parked() && park_record_owner() == Some(ParkArm::Step),
-        "with the step's own park holding the outgoing frame"
-    );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
-        Some((false, false)),
-        "and the chrome goes down in the same call as the park that hides the film"
-    );
-
-    // The new film draws and the park hands the band over; the take-up of that file clears the
-    // step's suppression, and the chrome is asked back inside that same settle call.
-    fake_end_relaunch(103, 0.0, false);
-    clear_pin_step_chrome();
-    with_pin(|pin| pin.chrome.until = Some(Instant::now() + std::time::Duration::from_secs(5)));
-    assert!(
-        unpark_pinned_player(&window),
-        "the incoming player's window settles the step's park"
-    );
-    assert!(!pin_player_is_parked(), "and the held frame is gone");
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.chrome.caption)),
-        Some(true),
-        "and the caption is back in the settle call that ended the park"
-    );
-    with_pin(|pin| pin.chrome.until = None);
-
-    // The bar's end of the pin asks its own strip back the same way, now that the step's gate is
-    // gone for both strips rather than only for the one the hand clicked.
-    let bar_cursor = Some((box_.0 + x, box_.3 - 1));
-    let bar_shown = pin_state().and_then(|mut pinned| {
-        let pin = pinned.pin_mut()?;
-        Some(refresh_pin_chrome(pin, Instant::now(), bar_cursor))
-    });
-    assert_eq!(
-        bar_shown,
-        Some(true),
-        "the bar comes back under the hand too"
-    );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
-        Some((false, true)),
-        "and the caption goes away again at the other end of the pin"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K2 STEP GAP: the chrome stands over the outgoing film for the whole walk and load and goes
-/// down only with the park at the end of them, while the flag stays the one that names a step on
-/// its way and is cleared where the new file lands. A walk given up on without a file clears it
-/// too rather than leaving the strips suppressed for good.
 #[test]
 fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_lands() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1245,8 +829,6 @@ fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_land
     let mut pin = wide_banded_video_pin(content, 30.0);
     pin.hides_chrome = true;
     stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
     pin_film_host::note_hosted_player(0);
     take_pin_command();
     if let Ok(mut pending) = PIN_JOBS.0.lock() {
@@ -1293,18 +875,9 @@ fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_land
         Some((true, false)),
         "and the step leaves the chrome up while the outgoing film is live, with the pointer still on the chevron it clicked"
     );
-    assert!(
-        pin_state().is_some_and(|pinned| pinned.pin().is_some_and(|pin| !pin.chrome.step_in_flight)),
-        "and asking for the step raises no suppression of its own"
-    );
 
-    // The file lands: the take-up hides the chrome it draws for this file, and that hidden
-    // chrome carries the step's flag's false with it.
+    // The file lands: the take-up hides the chrome it draws for this file.
     let arrived = take_up_pinned_window(Path::new("ws-k-chrome-nav-next.mkv"), content);
-    assert!(
-        !arrived.chrome.step_in_flight,
-        "a file taken up into the pin ends the step that asked for it"
-    );
     stand_pin(Some(arrived));
 
     let shown = pin_state().and_then(|mut pinned| {
@@ -1320,26 +893,6 @@ fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_land
         pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
         Some((true, false)),
         "the caption is back, with the bar left to its own end of the pin"
-    );
-
-    // A walk given up on before its file lands is the same suppression ending without an
-    // install: the strips must not stay down for a file nobody is fetching.
-    with_pin(|pin| pin.chrome = PinChrome::always());
-    with_pin(|pin| pin.chrome.step_in_flight = true);
-    clear_pin_step_chrome();
-    let shown = pin_state().and_then(|mut pinned| {
-        let pin = pinned.pin_mut()?;
-        Some(refresh_pin_chrome(pin, Instant::now(), cursor))
-    });
-    assert_eq!(
-        shown,
-        Some(true),
-        "a step that ended without a file hands the chrome back too"
-    );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
-        Some((true, false)),
-        "with no stale suppression left behind"
     );
 
     if let Ok(mut pending) = PIN_JOBS.0.lock() {
@@ -1363,8 +916,6 @@ fn a_step_ask_leaves_the_chrome_up_while_the_outgoing_film_is_live() {
     let mut pin = wide_banded_video_pin(content, 30.0);
     pin.hides_chrome = true;
     stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
     pin_film_host::note_hosted_player(0);
     take_pin_command();
     if let Ok(mut pending) = PIN_JOBS.0.lock() {
@@ -1396,259 +947,10 @@ fn a_step_ask_leaves_the_chrome_up_while_the_outgoing_film_is_live() {
         Some((true, false)),
         "and the chrome stands over the live film, with the pointer still on the chevron it clicked"
     );
-    assert!(
-        pin_state().is_some_and(|pinned| pinned.pin().is_some_and(|pin| !pin.chrome.step_in_flight)),
-        "and the ask raises no step suppression of its own"
-    );
 
     restore(previous_pin, previous_pid, previous_media);
 }
 
-/// The step's park takes the chrome down in its own call, not one tick or one message later.
-#[test]
-fn a_step_park_takes_the_chrome_down_in_the_same_park_call() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    with_pin(|pin| {
-        pin.chrome.caption = true;
-        pin.chrome.bar = false;
-    });
-    forget_pin_park_swap();
-    forget_video_frame();
-
-    assert!(cover_step_swap_for_video(true), "a step onto a video parks");
-    assert!(
-        pin_player_is_parked() && park_record_owner() == Some(ParkArm::Step),
-        "with the step's own park holding the outgoing frame"
-    );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
-        Some((false, false)),
-        "the strips go down in the park call that hid the film"
-    );
-    assert!(
-        pin_state().is_some_and(|pinned| pinned.pin().is_some_and(|pin| pin.chrome.step_in_flight)),
-        "and the park is what raised the step's suppression"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// The settle that ends a step's park asks the chrome back in its own call, once the take-up has
-/// cleared the step, so the caption is painted over the file that replaced the film.
-#[test]
-fn the_settle_that_ends_a_step_park_brings_the_caption_back_in_the_same_call() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-
-    assert!(cover_step_swap_for_video(true), "the step covers");
-    clear_pin_step_chrome();
-    // An armed arrival keeps the answer off the desktop's own pointer, so the same-call question
-    // is answerable on a headless run (see `PinChrome::until`).
-    with_pin(|pin| pin.chrome.until = Some(Instant::now() + std::time::Duration::from_secs(5)));
-    fake_end_relaunch(103, 0.0, false);
-    let window = RecordedPinWindow::new(0x1000);
-
-    assert!(
-        unpark_pinned_player(&window),
-        "the incoming player's window settles the step's park"
-    );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.chrome.caption)),
-        Some(true),
-        "and the caption is back in the settle call itself"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// A hand moving over the caption while a step is in flight must not bring a strip back over the
-/// film the step is holding.
-#[test]
-fn a_move_over_the_caption_does_not_bring_a_strip_back_while_a_step_is_in_flight() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 800, 320);
-    let mut pin = wide_banded_video_pin(content, 30.0);
-    pin.hides_chrome = true;
-    pin.chrome = PinChrome::hidden();
-    pin.chrome.step_in_flight = true;
-    stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
-
-    let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
-    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
-        Some((false, false)),
-        "a move is not an ask while the step holds the strips down"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K4 COVER: a file that paints itself is not covered, and a cover standing over
-/// one is given up: there is no player coming to be handed this band, so a
-/// frozen film left standing over a picture is worse than the hole it hides.
-#[test]
-fn a_step_onto_a_picture_raises_no_cover() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    stand_pin(Some(playing_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-
-    assert!(
-        !cover_step_swap_for_video(false),
-        "a picture paints itself: nothing to cover and nothing to hand the cover to"
-    );
-    assert!(!pin_player_is_parked(), "so no cover stands");
-    assert_eq!(
-        VIDEO_PID.load(Ordering::SeqCst),
-        101,
-        "and the outgoing player is left to the take-down that always killed it"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K4 ARM: the cover is armed for a player that is going to be put up, and a film
-/// nothing on this machine will play is not one. The two roads that depend on the
-/// answer - the cover and the start - are given the same one fact, because a cover
-/// armed for a player that is never begun is a frozen frame of the film being left
-/// behind standing in the band for the life of the pin: nothing is behind the band
-/// to hand it back to, so it never comes down, and `pin_media_is_alive` reads its
-/// own record as a player still on its way.
-#[test]
-fn a_step_onto_a_film_no_player_can_play_raises_no_cover() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    stand_pin(Some(playing_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-
-    let film = Path::new("ws-k-chrome-nav-film.mkv");
-
-    // The machine's own answer cannot be asked for here: the arm is the one a machine with
-    // FFmpeg never takes, so both answers are stood in rather than one of them read off
-    // whatever machine this is running on. mpv is stood out for the same reason: with mpv
-    // installed the default engine would pick it and answer a different way (see `stand_mpv_in`).
-    stand_mpv_in(Some(false));
-    stand_ffplay_in(Some(true));
-    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
-    assert!(
-        pinned_player_is_coming(MediaType::Video, film),
-        "a film on a machine with FFmpeg is a player coming"
-    );
-    stand_ffplay_in(Some(false));
-    assert!(
-        !pinned_player_is_coming(MediaType::Video, film),
-        "and a film on a machine without one is not: there is no window to put it in"
-    );
-
-    // And the same for mpv, which is the third player a film can be given: a machine whose only
-    // player is mpv is a machine with a window coming, whatever FFmpeg's absence on its own
-    // would have said (see `pinned_player_is_coming`).
-    stand_mpv_in(Some(true));
-    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
-    assert!(
-        pinned_player_is_coming(MediaType::Video, film),
-        "a film on a machine with mpv is a player coming too, and mpv is the player Best prefers"
-    );
-    stand_mpv_in(Some(false));
-
-    assert!(
-        !pinned_player_is_coming(MediaType::StaticImage, film),
-        "nor is a file this app paints itself, which is the other half of the same answer"
-    );
-
-    assert!(
-        !cover_step_swap_for_video(pinned_player_is_coming(MediaType::Video, film)),
-        "so the step covers nothing"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "and no cover stands over the film it is leaving"
-    );
-    assert_eq!(
-        VIDEO_PID.load(Ordering::SeqCst),
-        101,
-        "and the outgoing player is left to the take-down that always killed it"
-    );
-
-    // A cover already standing — a drag's, a seek's — is given up rather than carried onto a
-    // pin whose player is never going to be begun, which is the arm the take-up reads this
-    // through and the one the sibling refusal already takes for a start that failed. Raised on a
-    // machine that has FFmpeg, because that is the machine a standing cover can only be left by.
-    stand_ffplay_in(Some(true));
-    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
-    assert!(
-        cover_step_swap_for_video(pinned_player_is_coming(MediaType::Video, film)),
-        "a cover stands over the outgoing film"
-    );
-    assert!(
-        pin_player_is_parked(),
-        "and the band is holding a picture, not the desktop"
-    );
-
-    stand_ffplay_in(Some(false));
-    reconcile_swap_take_up(pinned_player_is_coming(MediaType::Video, film));
-    assert!(
-        !pin_player_is_parked(),
-        "and it is given up where no player is coming: nothing is going to be handed this band"
-    );
-    assert!(
-        !pin_park_carried_forward(),
-        "no record is left for a settle to answer"
-    );
-    assert!(
-        !pin_media_is_alive(false),
-        "so the pin is a pin onto nothing rather than one waiting for a player that is never \
-         coming: the cover's record is not the player's, and reading it as one kept the outgoing \
-         frame on screen for the life of the pin"
-    );
-
-    stand_ffplay_in(None);
-    stand_mpv_in(None);
-    stand_video_engine_in(None);
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K5 ROAD: a video's relayout is the host fitted to the box, on every road. Nothing begins a
-/// player for a box change and nothing begins one for a take-up: the film is a thumbnail of a
-/// source window placed once, and a box is a destination rectangle (see `pin_film_thumbnail`).
 #[test]
 fn a_box_change_begins_no_player() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1661,8 +963,6 @@ fn a_box_change_begins_no_player() {
 
     let content = (100, 80, 420, 320);
     stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
     assert_eq!(
         VIDEO_PID.load(Ordering::SeqCst),
         101,
@@ -1694,89 +994,11 @@ fn a_box_change_begins_no_player() {
             101,
             "and the player is the one that was there"
         );
-        assert!(
-            !pin_player_is_parked(),
-            "{road:?} raises no cover: nothing has been ended for one to hide"
-        );
     }
 
     restore(previous_pin, previous_pid, previous_media);
 }
 
-/// K4 COVER with nothing behind it is nothing: no pin up, or no player, and there
-/// is no band to cover and no frame to read.
-#[test]
-fn a_step_with_nothing_playing_raises_no_cover() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    stand_pin(Some(playing_pin((100, 80, 420, 320), 30.0)));
-    forget_pin_park_swap();
-    assert!(
-        !cover_step_swap_for_video(true),
-        "with no player there is no window to put away and no frame to read"
-    );
-
-    VIDEO_PID.store(101, Ordering::SeqCst);
-    stand_pin(None);
-    forget_pin_park_swap();
-    assert!(
-        !cover_step_swap_for_video(true),
-        "and with no pin up there is no band to cover"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K4 COVER hands the band over: the settle puts the window the step's swap was waiting
-/// for up and takes the cover down in the same tick, and it does not wait the bound out on
-/// top of that.
-#[test]
-fn a_step_hands_the_cover_to_the_window_that_replaces_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 420, 320);
-    stand_pin(Some(playing_pin(content, 30.0)));
-    forget_pin_park_swap();
-    forget_video_frame();
-    assert!(cover_step_swap_for_video(true), "the step covers");
-
-    let window = RecordedPinWindow::new(0x1000);
-    fake_end_relaunch(103, 0.0, false);
-
-    // The swap a step raises its cover for is itself held until this window is up, so the window
-    // is the band to hand back and there is nothing left to wait for: waiting the bound out on
-    // top of the swap's own wait would hold the outgoing frame over a band that has already been
-    // given the incoming file's box, which is the last film stretched into the new one's shape
-    // (see `PinSwapHold` and `park_swap_arm`).
-    assert!(
-        settle_pinned_park_where(&window, true),
-        "a step's window is the band to hand back: the wait for it has already been paid once"
-    );
-    assert_eq!(
-        window.calls(),
-        vec![
-            PinWindowCall::UnparkPlayerWindow(Some(content)),
-            PinWindowCall::Repaint,
-        ],
-        "placed before shown, repainted in the same tick"
-    );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// K5 BOX MATH: a maximize fits the shape to the room and remembers the box;
-/// restore gives the remembered box back and forgets it. The cover is scaled to
-/// whichever box the pin stands at, so this is the box it is scaled to.
 #[test]
 fn a_maximize_remembers_its_box_and_a_restore_gives_it_back() {
     let room = ScreenBounds {
@@ -1949,8 +1171,6 @@ fn a_box_change_moves_mpv_and_begins_nothing_again() {
     // **A film pin stands in a window of its own**, which is where its host is made: a resize or a
     // take-up is a box for that host and not a player begun again (see `pin_film_host`).
     pin_stands_in_its_own_window(true);
-    forget_pin_park_swap();
-    forget_video_frame();
     clear_restart_count();
 
     relayout_pinned_media(
@@ -1964,10 +1184,6 @@ fn a_box_change_moves_mpv_and_begins_nothing_again() {
         restart_count(),
         0,
         "mpv rescales itself, so a resize is a move and begins nothing again"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "and no cover stands over it: nothing was killed for one to stand over"
     );
 
     // The take-up road answers the same way, for the same player.

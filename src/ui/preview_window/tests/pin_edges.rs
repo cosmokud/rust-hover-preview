@@ -623,7 +623,6 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         last_press: None,
         tooltip: PinTooltip::default(),
         dragging: None,
-        parked: false,
         transport: PinTransport::default(),
         volume: PinVolume::default(),
         audio_hovered: None,

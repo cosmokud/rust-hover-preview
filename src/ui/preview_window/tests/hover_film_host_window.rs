@@ -10,8 +10,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WINDOW_EX_STYLE,
     WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
-    WS_VISIBLE,
+    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
 
 const NOWHERE: i32 = -32000;
@@ -350,7 +349,9 @@ fn a_visible_hover_host_is_the_rect_a_pin_takes_up() {
 
     let box_ = (NOWHERE, NOWHERE + 80, 320, 180);
     let host = unsafe {
-        hover_film_host::take_up_the_hover_film_host(hover_film_host::the_hover_box_as_a_region(box_))
+        hover_film_host::take_up_the_hover_film_host(hover_film_host::the_hover_box_as_a_region(
+            box_,
+        ))
     }
     .expect("the hover's host");
     hover_film_host::note_hover_film_host_player(pid, &path);
@@ -377,10 +378,7 @@ fn a_visible_hover_host_is_the_rect_a_pin_takes_up() {
 
     let show = PreviewMessage::Show(path.clone(), 0, 0, None);
     match pin_what_is_on_screen(&Some(show), None) {
-        Some(PreviewMessage::Pin {
-            path: pinned,
-            rect,
-        }) => {
+        Some(PreviewMessage::Pin { path: pinned, rect }) => {
             assert_eq!(pinned, path, "the pin takes up the file that is on screen");
             assert_eq!(rect, host_rect, "and the box the hover's host is in");
         }
@@ -399,8 +397,8 @@ fn the_hover_host_goes_down_only_with_the_player_it_holds() {
     let _stand = HoverHostStand::new(true);
     let path = a_film();
 
-    let first =
-        start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None).expect("a noted player");
+    let first = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+        .expect("a noted player");
     let first_pid = first.id();
     let host = hover_film_host::hover_film_host().expect("the hover's host");
 
@@ -415,8 +413,8 @@ fn the_hover_host_goes_down_only_with_the_player_it_holds() {
     );
 
     // The next hover player is begun into the same host, which now belongs to it.
-    let second =
-        start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None).expect("a noted player");
+    let second = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+        .expect("a noted player");
     assert_eq!(
         hover_film_host::hover_film_host(),
         Some(host),

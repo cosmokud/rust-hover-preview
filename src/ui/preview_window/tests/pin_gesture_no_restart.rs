@@ -2,7 +2,8 @@ use super::*;
 
 // **A gesture does not touch the film.** The pinned film is a thumbnail of a source window nothing
 // a hand does moves, so a press, a move, a drag, a resize and their ends are this app's own window
-// work: no key is posted, no player is killed, parked or begun again, and no reason line is written.
+// work: no key is posted, no player is killed or begun again, nothing is hidden, and no reason line
+// is written.
 // The only relaunches left are the ones a user action needs on a player that cannot be told
 // anything — a seek, a level, a subtitle, the end of a file, and the engine's own take-up (see
 // `RestartReason`).
@@ -31,8 +32,8 @@ fn a_playing_film_pin(film: &str, content: ScreenRegion) -> PinnedPreview {
     pin
 }
 
-/// Nothing of the film was touched by the gesture: the player is the one that was there, nothing was
-/// begun, and no cover stands over the band.
+/// Nothing of the film was touched by the gesture: the player is the one that was there, nothing
+/// was begun, and nothing of the picture was hidden.
 fn nothing_of_the_film_was_touched(pid: u32, what: &str) {
     assert_eq!(
         VIDEO_PID.load(Ordering::SeqCst),
@@ -48,10 +49,6 @@ fn nothing_of_the_film_was_touched(pid: u32, what: &str) {
         last_restart_reason(),
         None,
         "so no reason line was written, and there is no reason a gesture could write ({what})"
-    );
-    assert!(
-        !pin_player_is_parked() && park_record_owner().is_none(),
-        "with no cover standing over a band nothing has ended ({what})"
     );
 }
 
@@ -72,7 +69,6 @@ fn a_press_with_no_movement_does_nothing_to_the_film_on_either_route() {
         let previous_pin = take_pin_for_a_test();
         let previous_media = stand_video_media(ffplay, mpv);
         clear_restart_count();
-        forget_pin_park_swap();
 
         let content = (100, 80, 420, 320);
         let film = format!("a-click-does-nothing-{ffplay}.mkv");
@@ -86,12 +82,7 @@ fn a_press_with_no_movement_does_nothing_to_the_film_on_either_route() {
         stand_pin(Some(pin));
 
         let window = a_window_at(content);
-        begin_pin_drag(
-            HWND(0x1000 as *mut _),
-            &window,
-            PinDragAction::Move,
-            true,
-        );
+        begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
         assert!(
             pin_is_dragging(),
             "the press is the pin's own and the window it stands in is selected ({what})"
@@ -110,7 +101,6 @@ fn a_press_with_no_movement_does_nothing_to_the_film_on_either_route() {
             "and the pin is still up and no longer carried, exactly as a click left it ({what})"
         );
 
-        forget_pin_park_swap();
         clear_restart_count();
         stand_mpv_in(None);
         stand_ffplay_in(None);
@@ -135,11 +125,13 @@ fn a_drag_and_a_resize_keep_the_same_player_throughout() {
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media(true, false);
     clear_restart_count();
-    forget_pin_park_swap();
     pin_film_thumbnail::clear_the_source_placements();
 
     let content = (100, 80, 420, 320);
-    stand_pin(Some(a_playing_film_pin("a-drag-touches-nothing.mkv", content)));
+    stand_pin(Some(a_playing_film_pin(
+        "a-drag-touches-nothing.mkv",
+        content,
+    )));
     assert_eq!(
         video_route(&PathBuf::from("a-drag-touches-nothing.mkv")),
         VideoRoute::Ffplay,
@@ -180,7 +172,11 @@ fn a_drag_and_a_resize_keep_the_same_player_throughout() {
         nothing_of_the_film_was_touched(101, &format!("{what}, let go"));
         if matches!(action, PinDragAction::Resize(_)) {
             assert!(
-                PIN_BOX_REQUEST.lock().ok().and_then(|request| *request).is_some(),
+                PIN_BOX_REQUEST
+                    .lock()
+                    .ok()
+                    .and_then(|request| *request)
+                    .is_some(),
                 "a resize asks for its media to be laid out again at the box it settled on"
             );
             drain_pin_box_request();
@@ -194,7 +190,6 @@ fn a_drag_and_a_resize_keep_the_same_player_throughout() {
          film's own size, and a gesture moves only the box (see `pin_film_thumbnail`)"
     );
 
-    forget_pin_park_swap();
     clear_restart_count();
     stand_mpv_in(None);
     stand_ffplay_in(None);
@@ -217,7 +212,6 @@ fn a_volume_change_restarts_once_and_says_why() {
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media(true, false);
     clear_restart_count();
-    forget_pin_park_swap();
 
     let mut pin = a_playing_film_pin("a-volume-change-restarts.mkv", (100, 80, 420, 320));
     pin.volume.level = 70;
@@ -236,7 +230,6 @@ fn a_volume_change_restarts_once_and_says_why() {
         Some(RestartReason::Volume),
         "and the line says what it was for"
     );
-    forget_pin_park_swap();
     clear_restart_count();
     stand_mpv_in(None);
     stand_ffplay_in(None);

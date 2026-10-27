@@ -260,11 +260,7 @@ pub(super) fn spawn_player(command: &mut std::process::Command) -> Option<Player
         })
         .collect();
     if let Ok(mut last) = LAST_SPAWNED_COMMAND.lock() {
-        *last = Some(LaunchedCommand {
-            program,
-            args,
-            env,
-        });
+        *last = Some(LaunchedCommand { program, args, env });
     }
     if SPAWN_REAL_PLAYER.load(Ordering::Acquire) {
         return command.spawn().ok().map(PlayerProcess::Started);
@@ -1069,14 +1065,13 @@ pub(super) fn player_wait(
 /// hover holds back a window with a spinner behind it and nothing under the spinner that could
 /// arrive sooner, so ten seconds is a start nobody has to watch; a swap is waiting with the
 /// file the pin is leaving still up, at the box the pin is still at, and every tick of the wait
-/// is a tick of that old picture. So the bound is the one the cover a step raises is settled on
-/// — a player begun for a replacement has to open the file, seek, decode hardware and present,
-/// and a wait past that is a player this app stops watching (see `PIN_PARK_SWAP_TIMEOUT` and
-/// `settle_pinned_park`).
+/// is a tick of that old picture. So the bound is the one a player start is held to anywhere else
+/// — a player begun for a replacement has to open the file, seek, decode hardware and present, and
+/// a wait past that is a player this app stops watching (see `VIDEO_START_WAIT_SECS`).
 ///
-/// What the wait is *for* is the same fact the cover above it is settled on: the player's own
-/// window is the only sign a player of this kind gives that its film is on screen, so a window
-/// that is up has arrived, cap or no cap (see `player_wait`).
+/// What the wait is *for* is the same fact: the player's own window is the only sign a player of
+/// this kind gives that its film is on screen, so a window that is up has arrived, cap or no cap
+/// (see `player_wait`).
 pub(super) fn player_swap_wait(
     window_up: bool,
     player_alive: bool,
@@ -1086,7 +1081,7 @@ pub(super) fn player_swap_wait(
         return Some(PlayerWait::Arrived);
     }
 
-    if !player_alive || waited >= PIN_PARK_SWAP_TIMEOUT {
+    if !player_alive || waited >= Duration::from_secs(VIDEO_START_WAIT_SECS) {
         return Some(PlayerWait::Abandoned);
     }
 
@@ -1169,7 +1164,7 @@ pub(super) enum PlayerOrder {
     /// `place_player_window`).
     Raise,
     /// Leave the window exactly as it stands: a strip of the pin's chrome or its volume popup is
-    /// drawn where the film is, or the film is parked for the length of a gesture.
+    /// drawn where the film is.
     Leave,
 }
 
@@ -1238,10 +1233,7 @@ fn note_pin_re_raise() {
 /// whose window stands in its band.
 ///
 /// The raise is held off for the same reasons it always was: a strip of the pin's chrome, the
-/// volume popup or the card's menu is drawn where the film is, and a film parked for a gesture is
-/// deliberately not on screen. `parked` is asked here for the monitor, which nobody can hold off
-/// from outside; the placement road is the one road that must put a parked window back, so it asks
-/// this with no park (see `unpark_player_window`).
+/// volume popup or the card's menu is drawn where the film is.
 ///
 /// **The hold-offs stand for mpv's film as they do for FFmpeg's.** A raise put over the pin
 /// covers the caption and the transport bar the pin draws into the band over the media (see
@@ -1269,15 +1261,14 @@ pub(super) fn player_order(
     chrome_up: bool,
     volume_open: bool,
     menu_open: bool,
-    parked: bool,
 ) -> PlayerOrder {
-    // A park, a strip of the pin's chrome, the volume popup and the card's menu are all refused for
-    // every window there is: a parked film is not on screen to be raised, and on any of the other
-    // routes a raise puts the film over what this app is drawing — the caption and the bar in the
-    // pin's strips over it, and the panel of a card's menu in a window of its own over them. mpv's film
-    // holds its own band (`--ontop`) while the pin's own raise carries the press, and a band that
-    // has moved is placed without a raise (see the note above and `ensure_pinned_sibling_box`).
-    let order = if parked || chrome_up || volume_open || menu_open {
+    // A strip of the pin's chrome, the volume popup and the card's menu are all refused for every
+    // window there is: a raise puts the film over what this app is drawing — the caption and the
+    // bar in the pin's strips over it, and the panel of a card's menu in a window of its own over
+    // them. mpv's film holds its own band (`--ontop`) while the pin's own raise carries the press,
+    // and a band that has moved is placed without a raise (see the note above and
+    // `ensure_pinned_sibling_box`).
+    let order = if chrome_up || volume_open || menu_open {
         PlayerOrder::Leave
     } else {
         PlayerOrder::Raise
@@ -1312,8 +1303,8 @@ pub(super) fn player_order(
 /// what answers for the pin standing over it.
 ///
 /// **A `Leave` never reaches here** — both raisers refuse it before asking (see `player_order`) —
-/// so the pin is not re-raised for a park, and the three hold-offs a `Leave` stands for are
-/// answered where they are caused: a strip of the pin's chrome and an open volume popup each come
+/// so the pin is not re-raised, and the three hold-offs a `Leave` stands for are answered where
+/// they are caused: a strip of the pin's chrome and an open volume popup each come
 /// with a raise of the pin's own window (see `event_loop`'s chrome block, `toggle_pin_volume`), and
 /// an open card's menu is a window of its own that the tick raises over the film every tick (see
 /// `render_pin_menu`). Nor is a
@@ -1495,22 +1486,11 @@ pub(super) fn settle_pinned_mpv_ontop() {
 /// pinned window does while it is being looked at. Guarding here rather than in four places is what
 /// makes it true rather than nearly true.
 ///
-/// **The drag's park is guarded by its callers rather than here, and the reason is that this
-/// function is one of the ways a park ends.** A relaunch is a new player with a window of its own,
-/// and it is the relaunch that puts that window up and clears the flag (see `restart_pinned_player`);
-/// a guard here would answer the unpark itself with "parked" and leave the replacement hidden behind
-/// a band painted flat for it. The callers are the two that spend a drag's life raising a window that
-/// should not be on screen — a drag's own pointer moves and the tick's re-assertion — and they read
-/// the same flag (see `pin_player_is_parked`); the monitor thread's own raise, which nobody can hold
-/// off from outside, is guarded where it is raised (see `apply_noactivate_to_hwnd`).
-///
 /// **What a hold-off refuses is the raise, and never the band.** A player's window that is not on
 /// screen is owed the band whatever is up over it — the band's rows are this app's own transparent
 /// pixels, painted for that window to show through (see `film_band_is_hit_testable`), so one left
-/// hidden is a hole with the desktop standing in it, which is what a park leaves behind and what the
-/// swap out of a park fills *before* the cover comes down (see `unpark_pinned_player`). A window
-/// that is not being drawn is not carried over a strip the pin is showing by being put back
-/// (see `put_a_player_that_is_not_on_screen_back`).
+/// hidden is a hole with the desktop standing in it. A window that is not being drawn is not carried
+/// over a strip the pin is showing by being put back (see `put_a_player_that_is_not_on_screen_back`).
 /// What the last pass wrote about the film's window, and the answer it wrote: the raise road is asked
 /// on every tick, and an answer that has not moved is the heartbeat a normal session's trace does not
 /// need (938 of a 114 s run's lines were this family and `host visible`). A line is written where the
@@ -1569,14 +1549,6 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         // **Where the host stands is not this road's to say**, and the box it was handed is a
         // top-level player's rather than the band's: the band's box is the pin's, and it is given
         // by the roads that read it (see `ensure_pinned_sibling_box`).
-        // **A park is the band's to hand back, and this road would take it back on every tick.**
-        // The host is hidden for the length of a drag and shown by the swap that ends it, which
-        // places it at the band the hand settled on before the flag comes down (see
-        // `unpark_player_window`). A show here is the tick undoing the cover at its own pace.
-        if pin_player_is_parked() {
-            trace_the_raised_film(0, "topmost skipped: pin host parked");
-            return true;
-        }
         let host = pin_film_host::film_host().map_or(0, |host| host.0 as isize);
         if pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
             trace_the_raised_film(host, "topmost shown: pin host drawing");
@@ -1610,16 +1582,12 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // nothing this road places, and a raise puts the pin back over the film it raised (see
     // `place_player_window`).
     //
-    // The park is deliberately not asked of it here: this is the road that must put a parked
-    // window back (see `unpark_player_window`), so the park is the callers' refusal and the
-    // monitor's rather than this one's (see the note over the function).
     let order = player_order(
         video_process_image(),
         pinned(),
         pin_chrome_up(),
         pin_volume_open(),
         pin_menu_open(),
-        false,
     );
     if order == PlayerOrder::Leave {
         trace_the_raised_film(0, "topmost skipped: raise held off");
@@ -1683,13 +1651,8 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
 pub(super) fn bring_the_video_window_to_the_front(video_pos: ScreenRegion) {
     if pin_volume_open() {
         unsafe { raise_pinned_window(HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _)) };
-    } else if !pin_player_is_parked() {
-        let _ = ensure_video_window_topmost(
-            video_pos.0,
-            video_pos.1,
-            video_pos.2,
-            video_pos.3,
-        );
+    } else {
+        let _ = ensure_video_window_topmost(video_pos.0, video_pos.1, video_pos.2, video_pos.3);
     }
 }
 
@@ -1703,12 +1666,9 @@ pub(super) fn bring_the_video_window_to_the_front(video_pos: ScreenRegion) {
 /// this app's own transparent rows, which are the desktop when nothing of the player's is drawing in
 /// them (see `film_band_is_hit_testable`).
 ///
-/// **Which is the state a park leaves, and the reason the park is not asked about here.** The window
-/// goes back up before the flag that hides it comes down, so that no frame falls between a band that
-/// is a hole and the window that fills it (see `unpark_pinned_player`, `settle_pinned_park_onto`); a
-/// road that asked the flag would refuse the very place the swap is made of. Every other caller asks
-/// the park itself and never reaches this with a parked window (see `event_loop`'s tick,
-/// `show_current_replacement`, `ensure_pinned_sibling_box`).
+/// **It is the road that puts a window that is not on screen back in the band**, without a raise:
+/// a strip of the pin's chrome or an open popup holds the raise off and owes the band its window
+/// all the same (see `player_order` and `ensure_pinned_sibling_box`).
 ///
 /// The place is `SWP_NOZORDER`, which is what keeps the film under the pin that is standing over it:
 /// the order is left exactly where it is, there is no raise here, and so there is nothing to put back
@@ -1751,9 +1711,9 @@ fn put_a_player_that_is_not_on_screen_back(x: i32, y: i32, width: i32, height: i
 ///
 /// The walk goes up from the pin and stops at the first window that is not topmost, which is where
 /// the band both of them are in ends, so what it costs is the length of that band and not of the
-/// desktop. A player's window that is not on screen covers nothing, which is the answer a parked
-/// film owes (see `unpark_player_window`), and a band with no player's window in it at all — a
-/// hover, or the media engine painting this app's own rows — is nobody standing over anything.
+/// desktop. A player's window that is not on screen covers nothing, and a band with no player's
+/// window in it at all — a hover, or the media engine painting this app's own rows — is nobody
+/// standing over anything.
 pub(super) unsafe fn player_stands_over_the_pin(pin: HWND) -> bool {
     let player = HWND(VIDEO_HWND.load(Ordering::SeqCst) as *mut std::ffi::c_void);
     if player.is_invalid() || !IsWindowVisible(player).as_bool() {
@@ -1798,8 +1758,8 @@ mod tests {
             "and the same answer for the same window is not written on every tick"
         );
         assert!(
-            the_raise_is_new(shown, 0x1000, "topmost skipped: pin host parked"),
-            "a park is a change"
+            the_raise_is_new(shown, 0x1000, "topmost skipped: pin host not drawing yet"),
+            "a source that is not drawing yet is a change"
         );
         assert!(
             the_raise_is_new(shown, 0x2000, "topmost shown: pin host drawing"),

@@ -98,7 +98,6 @@ fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() 
             last_press: None,
             tooltip: PinTooltip::default(),
             dragging: None,
-            parked: false,
             transport: PinTransport {
                 duration: Some(120.0),
                 paused_at,

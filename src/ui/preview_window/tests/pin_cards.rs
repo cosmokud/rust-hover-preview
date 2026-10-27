@@ -1438,7 +1438,6 @@ fn a_pins_chrome_is_shown_and_hidden_by_where_the_pointer_is() {
         caption: false,
         bar: false,
         until: None,
-        step_in_flight: false,
     };
     pressed.pressed = Some(pin_chrome::CaptionButton::Minimize);
     pressed.dragging = Some(PinDrag {
@@ -1704,8 +1703,6 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let previous_pin = take_pin_for_a_test();
-    forget_pin_park_swap();
-    forget_video_frame();
 
     for (control, command) in [
         (CardControl::Minimize, PinCommand::Minimize),
@@ -1764,8 +1761,6 @@ fn a_sounds_always_on_top_button_toggles_pin_always_on_top() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let previous_pin = take_pin_for_a_test();
-    forget_pin_park_swap();
-    forget_video_frame();
 
     let mut shown = sound_pin();
     shown.audio_window_buttons = true;
@@ -1951,8 +1946,6 @@ fn a_press_that_slides_off_a_sounds_window_button_asks_for_nothing() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let previous_pin = take_pin_for_a_test();
-    forget_pin_park_swap();
-    forget_video_frame();
 
     // The window buttons are controls only while they are
     // showing, which is the state a hand near the window's
