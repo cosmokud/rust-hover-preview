@@ -235,15 +235,16 @@ pub(super) fn forget_video_frame() {
 /// that is still there would be worse than the frame, and the park below knows the difference
 /// between a picture and no picture (see `compose_parked_band`).
 pub(super) fn hold_video_window_frame() -> bool {
-    // **A film the pin draws into its own host has no window of the desktop's to find by pid**: the
-    // picture is the child mpv made under the host, so what is on screen in the band is the host
-    // itself, and that is the rect the frame is read off. Everything else is a player's own window,
-    // found the way it always was (see `pin_film_host`).
+    // **A film the pin draws through its host has no window of the desktop's of its own to find by
+    // pid**: the picture is the Shell's thumbnail of the player's window, composed into the host,
+    // so what is on screen in the band is the host itself and that is the rect the frame is read
+    // off. Everything else is a player's own window over the preview, found the way it always was
+    // (see `pin_film_host`).
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     let window = if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         pin_film_host::film_host()
     } else if hover_film_host::the_hover_player_was_begun_in_the_host(pid) {
-        // The hover's host is the visible surface; mpv's child inside it is the picture (see
+        // The hover's host is the visible surface, with the film composed into it (see
         // `hover_film_host`).
         hover_film_host::hover_film_host()
     } else {

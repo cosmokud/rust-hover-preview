@@ -1,13 +1,12 @@
 //! The windows the pin's chrome and overlays are carried in.
 //!
-//! **Why they exist.** The film's host is a child of the pin's window standing in the whole of the
-//! client rectangle (see `band_in_the_window`), and a child composites over the layered surface its
-//! parent paints. So the moment mpv began to draw, the film stood over the caption and the
-//! transport. The pin's bitmap therefore paints no chrome at all — only its alpha-1 claim on the
-//! chrome's rows, which keeps every press on them the pin's (see `render_pinned_preview_at`) — and
-//! the chrome has windows of its own: layered children of the pin's window, placed at the strips
-//! the chrome is painted in, which composite over whatever stands in the band — a hosted film, the
-//! cover, FFmpeg's player, or this app's own picture.
+//! **Why they exist.** The pin's film is drawn by its host — a window of the desktop's standing at
+//! the whole of the band (`pin_film_host`) — and that window composites over the layered surface the
+//! pin paints. So the moment the film began to draw, it stood over the caption and the transport. The
+//! pin's bitmap therefore paints no chrome at all — only its alpha-1 claim on the chrome's rows, which
+//! keeps every press on them the pin's (see `render_pinned_preview_at`) — and the chrome has windows
+//! of its own: layered children of the pin's window, placed at the strips the chrome is painted in,
+//! which composite over whatever stands in the band — the film, the cover, or this app's own picture.
 //!
 //! **The volume popup needs one for the same reason.** It is painted into the pin's own surface too,
 //! but over a hosted film that surface is under the child, so the panel was invisible while its

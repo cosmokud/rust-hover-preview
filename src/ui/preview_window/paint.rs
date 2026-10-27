@@ -731,12 +731,12 @@ pub(super) fn the_slack_a_resize_paints_with(resizing: bool) -> (i32, i32) {
 /// The row the last paint chose to push the pin's own picture down into the slack, which is the row
 /// the window itself was moved up by (see `the_slack_a_resize_paints_with`).
 ///
-/// **It exists for the children of the pin's window.** A hosted film and the chrome strips are placed
-/// in the pin's client coordinates, so they ride every move of the window — and the slack moves the
-/// window a pixel on every paint of a resize, which leaves the film and the chrome bobbing at paint
-/// rate while the hand's own resize should be smooth. Asked here so both can put themselves back
-/// down by the same row and stay on the band (see `pin_film_host::band_in_the_window` and
-/// `pin_chrome_strips::place_the_chrome_strips`).
+/// **It exists for the children of the pin's window.** The chrome strips are placed in the pin's
+/// client coordinates, so they ride every move of the window — and the slack moves the window a pixel
+/// on every paint of a resize, which leaves the chrome bobbing at paint rate while the hand's own
+/// resize should be smooth. Asked here so they can put themselves back down by the same row and stay
+/// on the band (see `pin_chrome_strips::place_the_chrome_strips`). The film is not one of these: it
+/// is a window of the desktop's the Shell composes, so moving the pin does not move it.
 ///
 /// **It answers nothing unless a resize is the drag in flight**, so a release or a lost capture that
 /// never repaints cannot leave a row standing over children whose window has stopped moving. The

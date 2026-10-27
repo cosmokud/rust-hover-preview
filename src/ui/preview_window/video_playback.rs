@@ -937,11 +937,11 @@ pub(super) struct VideoStart {
     pub(super) path: PathBuf,
     pub(super) pid: u32,
     pub(super) started: Instant,
-    /// Whether this player was begun into the hover's own host, and so has no window of the
-    /// desktop's to wait for (see `hover_film_host`).
+    /// Whether this player was begun for the hover's own host, and so is drawn there rather than
+    /// over the preview box (see `hover_film_host`).
     pub(super) hosted: bool,
-    /// Whether the one top-level fallback has already been spent for this hover: a hosted player
-    /// that never draws is begun again once without `--wid`, and a second failure is abandoned.
+    /// Whether the one top-level fallback has already been spent for this hover: a player kept for
+    /// a host that never draws is begun again once without one, and a second failure is abandoned.
     pub(super) fell_back: bool,
 }
 

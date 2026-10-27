@@ -1,15 +1,17 @@
 //! The pin's film drawn by the Desktop Window Manager rather than nested in a window of this app's.
 //!
-//! **This is the road a pin's mpv film is drawn on, and the only one.** mpv is launched with no
-//! `--wid` and makes a window of the desktop's of its own; the pin's film host asks the Shell to draw
-//! that window into itself (`DwmRegisterThumbnail`), and what follows a resize is one rectangle
-//! rather than two windows agreeing about a box. **The rules this file implements, the roads that
-//! lost and the measured evidence are `Pin mode → The film road` in `ARCHITECTURE.md`.**
+//! **This is the road a pin's film is drawn on, whichever engine plays it, and the only one.** mpv is
+//! launched with no `--wid` and makes a window of the desktop's of its own; FFmpeg's player has no
+//! embed switch to pass and makes one too. The pin's film host asks the Shell to draw that window into
+//! itself (`DwmRegisterThumbnail`), and what follows a resize is one rectangle rather than two windows
+//! agreeing about a box. **The rules this file implements, the roads that lost and the measured
+//! evidence are `Pin mode → The film road` in `ARCHITECTURE.md`.**
 //!
 //! **Why the film has to be a window of the desktop's.** A thumbnail is taken of a window's
 //! composition surface, and a `WS_CHILD` has none of its own — it is drawn into its parent's — so a
-//! film that is to be thumbnailed cannot be mpv's child under the host. That is the whole of why
-//! this road launches mpv without `--wid` (see `video_launch::mpv_args`).
+//! film that is to be thumbnailed cannot be a child of the host. That is the whole of why this road
+//! launches mpv without `--wid` (see `video_launch::mpv_args`), and the whole of why FFmpeg's player
+//! is no longer `SetParent`ed into one.
 //!
 //! **The source is placed once, at the film's own size, and never again.** That is the whole of this
 //! road now, and it is where two flashes were: a 19.4 s trace of the road that resized the source at
@@ -27,8 +29,9 @@
 //!
 //! **The size is the film's own picture size, never the pin's box.** The source is placed at the size
 //! the film would be drawn at were it not fitted to a window, from the player's own `video-params` —
-//! or from the probe's measurement of the same film where the player has not opened the file yet,
-//! which is waited for rather than guessed at. A pin at or under that size is a *downscale* the
+//! or from the probe's measurement of the same film where the player answers nothing at all, which
+//! is waited for rather than guessed at. **FFmpeg's player answers nothing**, so the probe's
+//! measurement is the whole of what its source is placed at (see `the_films_native_size`). A pin at or under that size is a *downscale* the
 //! Shell makes, which is sharp at every box the hand pulls it to; a pin over it is the upscale the
 //! player itself would have to make, from the film's own pixels and not from a box three times a
 //! small pin. **`RHP_THUMBNAIL_SOURCE` used to offer the pin's box as the other arm, and it is gone**:
@@ -558,16 +561,19 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
 
     note_the_source(source, pid);
 
-    // **Where mpv put the window it made for itself, before this app asks it for anything.** The
-    // source is launched at the corner of the box that shows it (see `the_source_launch_origin`) and
-    // this is the line that says whether mpv honoured it; the one placement's own line follows it
-    // with what this app asked for instead.
+    // **Where the player put the window it made for itself, before this app asks it for anything.**
+    // The source is launched on the desktop (see `the_source_launch_origin`) and this is the line
+    // that says where it was born and which player made it; the one placement's own line follows it
+    // with what this app asked for instead. **`player` is the engine a run is read by** — the image
+    // this app recorded when it began the player — so an FFmpeg film and an mpv one are told apart
+    // here and nowhere else in the trace's per-frame lines.
     let mut created = RECT::default();
     if unsafe { GetWindowRect(source, &mut created) }.is_ok() {
         note_pin_trace!(
-            "source adopted {:?} pid {} placed by mpv {}x{}+{}+{}",
+            "source adopted {:?} pid {} player {} born {}x{}+{}+{}",
             source,
             pid,
+            video_process_image(),
             created.right - created.left,
             created.bottom - created.top,
             created.left,
