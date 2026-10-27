@@ -651,8 +651,6 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
             // **The composed road.** A pin that holds a hosted FFmpeg film has no `WS_EX_LAYERED`:
             // the same 32bpp DIB is blitted into the window's own DC, alpha ignored, which is what
             // keeps the film off a flip-model swapchain and off a path a driver can drive VRR from.
-            // (And under the temporary `RHP_MPV_COMPOSED_PIN`, a pin that hosts an mpv film takes it
-            // too — see `pin_film_host::the_mpv_pin_is_composed`.)
             // The window is placed here as `UpdateLayeredWindow` places it, so the picture lands on
             // the same box (see `the_slack_a_resize_paints_with`).
             let _ = SetWindowPos(

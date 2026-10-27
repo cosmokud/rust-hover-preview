@@ -1212,10 +1212,6 @@ pub fn run_preview_window() {
             // `settle_pinned_engine_drag`).
             let dragging = pin_is_dragging();
             settle_video_drag_hold(dragging);
-            // And the two temporary resize diagnostics settle here, on a tick that is not a resize
-            // step: the film comes back once the drag is over, and the box the last step asked the
-            // film's window for is looked at (see `pin_resize_probe`).
-            pin_resize_probe::settle_on_the_tick(dragging);
 
             // Advance animation frames if needed
             let mut needs_repaint = false;

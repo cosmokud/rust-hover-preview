@@ -1512,8 +1512,7 @@ pub(super) unsafe fn hide_pinned_siblings() {
     // mpv's thread from this one — and it has already gone with the host, which was taken off the
     // screen above and takes the picture with it (see `pin_film_thumbnail`).
     let pid = VIDEO_PID.load(Ordering::SeqCst);
-    let drawn_by_the_shell = pin_film_host::the_pinned_player_was_begun_in_the_host()
-        && pin_film_host::the_pin_shows_its_film_by_thumbnail();
+    let drawn_by_the_shell = pin_film_host::the_pinned_player_was_begun_in_the_host();
     if pid != 0 && !drawn_by_the_shell {
         let _ = EnumWindows(Some(hide_player_windows_callback), LPARAM(pid as isize));
     }

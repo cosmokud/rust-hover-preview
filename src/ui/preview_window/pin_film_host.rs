@@ -1,34 +1,32 @@
-//! The window a pinned mpv film is drawn in: a window of the pin's own or of the desktop's, standing
-//! in the band its picture is shown through.
+//! The window a pinned film is drawn in: a window of the desktop's for mpv's, and a child of the
+//! pin's for FFmpeg's player.
 //!
-//! **Two roads share it.** By default the film mpv plays is a window of the desktop's of its own and
-//! this host shows it through a DWM thumbnail of that window (see `pin_film_thumbnail`); with
-//! `RHP_MPV_THUMBNAIL_PIN=0` the film is mpv's `WS_CHILD` of this host, and the host's own `WM_SIZE`
-//! fits it (see `fit_the_hosted_mpv_to_the_host`). Which one the host is, child or window of the
-//! desktop's, is a fact written down at the window when it is made (see
-//! `the_pin_film_host_is_a_window_of_the_desktop`).
+//! **mpv's film has one road: a window of the desktop's of its own, shown through a DWM thumbnail.**
+//! mpv is launched with no `--wid` and makes a window of its own, and the pin's host shows it by the
+//! Shell's own thumbnail of that window (see `pin_film_thumbnail`). The host is then a **window of
+//! the desktop's that owns the pin's chrome**: Windows keeps the chrome above the film, hides it with
+//! the host, keeps it out of Alt+Tab, and moves neither for this app (see
+//! `the_pin_film_host_is_a_window_of_the_desktop` and `own_the_pin_window`). A resize step moves this
+//! app's own window and re-points one rectangle; nothing of mpv's is asked for a box.
 //!
-//! **Why it is not the pin's window itself.** mpv's `--wid` fills the window it is given, and the
-//! pin's window is the chrome and the transport as well as the band; pointed at the pin, the film
-//! would be drawn over the caption. So the picture gets a window of its own at the band's client
-//! rectangle, and the pin keeps every other pixel (see `band_in_the_window`, which is the box the
-//! host is given).
+//! **FFmpeg's player is drawn into this host as a child**, because SDL has no `--wid` and its
+//! renderer needs a window of this app's to present into: the hover's host is re-parented into the
+//! pin's, and the player's child is fitted to the host's client box (see
+//! `adopt_the_hover_film_host` and `fit_the_hosted_ffplay_to_the_host`). That is the only child road
+//! left, and it belongs to the player rather than to a way of drawing mpv.
 //!
-//! **Why it is a child on the child road.** The film has to travel with the pin — on a move, on a
-//! resize, and with the window when it is hidden or put away — and a child does that in the
-//! compositor rather than by this app moving two windows and then repairing their order. That repair
-//! is what the topmost band was for, and it is removed for the host (see
-//! `ensure_video_window_topmost`). That road is not the default any more, and nothing is lost with
-//! it: on the default road the film's own window is not carried across a step at all — only the host
-//! is moved and the Shell re-points the thumbnail (see `pin_film_thumbnail`).
+//! **Why it is not the pin's window itself.** The pin's window is the chrome and the transport as
+//! well as the band, and the film would be drawn over the caption. So the picture gets a window of
+//! its own at the band's client rectangle, and the pin keeps every other pixel (see
+//! `band_in_the_window`, which is the box a child host is given, and `the_film_host_box`).
 //!
 //! **Why it is disabled.** A press on the picture is a press on the pin: the pin is dragged by its
 //! film, and the band's alpha-1 claim is already hit-testable (see `fill_band_hit_testable`). A
 //! disabled child is skipped by `WindowFromPoint`, so the press arrives at the pin rather than at
-//! mpv's window — the same answer the prototype measured, and no style of mpv's to rely on.
+//! FFmpeg's window.
 //!
-//! The host outlives the players begun into it: a seek is mpv's own IPC, a resize is the host's
-//! box, and a file step begins another player into the same host. It goes down with the pin (see
+//! The host outlives the player once begun into it: a seek is mpv's own IPC, and a file step begins
+//! another player into the same host. It goes down with the pin (see
 //! `take_down_the_pin_film_host`, called from the state a road out of a pin clears).
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
@@ -36,21 +34,18 @@ use std::sync::Once;
 
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    FillRect, GetStockObject, SetBrushOrgEx, SetStretchBltMode, StretchDIBits, BLACK_BRUSH,
-    HALFTONE, HBRUSH, NULL_BRUSH, STRETCH_BLT_MODE,
-};
+use windows::Win32::Graphics::Gdi::{FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, NULL_BRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, RegisterClassExW, SetParent,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, GW_CHILD,
-    GW_HWNDNEXT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SC_CLOSE, SWP_ASYNCWINDOWPOS,
-    SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
-    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_CLOSE, WM_ERASEBKGND, WM_SIZE, WM_SYSCOMMAND,
-    WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-    WS_POPUP, WS_VISIBLE,
+    GW_HWNDNEXT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SC_CLOSE, SWP_NOACTIVATE, SWP_NOCOPYBITS,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    WINDOW_EX_STYLE, WM_CLOSE, WM_ERASEBKGND, WM_SYSCOMMAND, WNDCLASSEXW,
+    WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WS_VISIBLE,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -62,9 +57,8 @@ use super::*;
 const FILM_HOST_CLASS: windows::core::PCWSTR = w!("RustHoverPreviewPinFilmHost");
 
 /// The default answer is most of what the host does: it draws nothing of the film's own and no
-/// press lands on it, because the picture is mpv's child (see the module doc) — and on `WM_SIZE` it
-/// puts that child at its own client box, and on `WM_ERASEBKGND` it fills the band the child leaves
-/// (see `paint_the_host_behind_the_film`). This bindings version exposes `DefWindowProcW` as a
+/// press lands on it. On `WM_ERASEBKGND` it fills the band the picture leaves (see
+/// `paint_the_host_behind_the_film`). This bindings version exposes `DefWindowProcW` as a
 /// Rust-callable function, so the class still needs a system-ABI shim around it.
 unsafe extern "system" fn the_default_answer(
     hwnd: HWND,
@@ -72,8 +66,8 @@ unsafe extern "system" fn the_default_answer(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // **The strip a grown band has gained is painted here rather than erased to black**, and the
-    // class wears `NULL_BRUSH` so that this is the only hand that draws it (see
+    // **The band behind the picture is painted here rather than erased by the class**, and the class
+    // wears `NULL_BRUSH` so that this is the only hand that draws it (see
     // `paint_the_host_behind_the_film` and `create`). `1` is "handled": it is what keeps
     // `DefWindowProcW` from erasing the same pixels a second time.
     if msg == WM_ERASEBKGND {
@@ -81,20 +75,11 @@ unsafe extern "system" fn the_default_answer(
         return LRESULT(1);
     }
 
-    // **The child's box is given in the message that gave the host its own**, so the film is the
-    // band's size before this app composites the pin over it rather than a size or more behind (see
-    // `fit_the_hosted_mpv_to_the_host`).
-    if msg == WM_SIZE {
-        fit_the_hosted_mpv_to_the_host(hwnd);
-    }
-
     // **A host that is the Shell's window is the Shell's close too.** Its taskbar button's Close
     // arrives here as a `WM_CLOSE` or an `SC_CLOSE`, and taken it would destroy the window the pin's
     // chrome is owned by — the pin with it, under a state that still believes a pin is up. What a
     // close means for the pin is the pin's own road's answer (see `window_proc`).
-    if PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst)
-        && (msg == WM_CLOSE || (msg == WM_SYSCOMMAND && (wparam.0 & 0xFFF0) as u32 == SC_CLOSE))
-    {
+    if msg == WM_CLOSE || (msg == WM_SYSCOMMAND && (wparam.0 & 0xFFF0) as u32 == SC_CLOSE) {
         request_pin_end();
         return LRESULT(0);
     }
@@ -102,15 +87,13 @@ unsafe extern "system" fn the_default_answer(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-/// Whether a resize drag is in flight: the one gesture a step leads its host in, so that a pin standing
-/// still is the pin it always was (see `lead_the_hosted_mpv_to_the_box`).
-///
-/// **Asked without waiting for the pin's own lock**, because both askers run inside calls that may
-/// hold it — the host's erase, and the fit its `WM_SIZE` runs — and a lock that cannot be taken here
-/// is answered with the road as it was rather than waited on (see `pin_state_try`). It is also the
-/// one question the thumbnail road asks before it places a source it did not have a size for at
-/// adoption: **nothing may size the source while a resize gesture is live** (see
+/// Whether a resize drag is in flight: the one gesture the thumbnail road must never place a source
+/// under, so that a film whose size arrives late is not sized while the hand is on an edge (see
 /// `pin_film_thumbnail::place_the_source_when_the_player_answers`).
+///
+/// **Asked without waiting for the pin's own lock**, because the asker may run inside a call that
+/// holds it — the tick's own pass — and a lock that cannot be taken here is answered with the road
+/// as it was rather than waited on (see `pin_state_try`).
 pub(super) fn a_resize_drag_is_live() -> bool {
     pin_window::pin_state_try()
         .and_then(|pinned| pinned.pin().map(|pin| pin.dragging))
@@ -118,39 +101,20 @@ pub(super) fn a_resize_drag_is_live() -> bool {
         .is_some_and(|drag| matches!(drag.action, PinDragAction::Resize(_)))
 }
 
-/// Paint the host's whole client: the frame a drag is holding, stretched into the box, or black where
-/// there is none in hand.
+/// Paint the host's whole client black: the film is the Shell's thumbnail (see `pin_film_thumbnail`)
+/// or FFmpeg's child, which fills the client box itself.
 ///
-/// **A band that has just grown is this app's to fill until the child is its size.** mpv gives its
-/// child the host's new box from the message that gave the host its own, and does it on its own
-/// thread (see `fit_the_hosted_mpv_to_the_host`), so the strip the band has gained is drawn by
-/// nobody until then — and it used to be erased black, which is the flash this fills over.
-///
-/// **The destination is the whole client box and not the strip**, because the frame is a picture of
-/// the band and is scaled *into* the band; the host's `WS_CLIPCHILDREN` clips the part of it the
-/// live child stands over, which is what keeps the film untouched (see `create`).
-///
-/// **A host the Shell is drawing a thumbnail into is erased here exactly the same way**, and that is
-/// the whole of what closes the hole a film fitted into its box once showed as three bands: the Shell
-/// composes the thumbnail *over* this app's content, so a client painted in the bars alone is a pixel
-/// nobody drew — and one of those reads as the desktop seen through the pin. The picture now fills its
-/// destination, which is the whole client, so there is no bar for this erase to show through; what it
-/// covers is the client the Shell has not composed yet, or one whose source is not drawing (see
-/// `pin_film_thumbnail::settle_the_registration`).
-///
-/// Both hosts a pin can be showing its film through are erased through here — the pin's own class,
-/// and the hover's a pin took up (see `hover_film_host`) — and a host that is not the pin's is
-/// erased black, which is what the class brush did before it.
+/// **The host's own erase is what closes the hole a film fitted into its box once showed as three
+/// bands**: the Shell composes the thumbnail *over* this app's content, so a client painted in the
+/// bars alone is a pixel nobody drew — and one of those reads as the desktop seen through the pin.
+/// The picture fills its destination, which is the whole client, so nothing of this fill shows
+/// through once the Shell has composed; what it covers is the client the Shell has not composed yet,
+/// or one whose source is not drawing (see `pin_film_thumbnail::settle_the_registration`). Both hosts
+/// a pin can show its film through are erased through here — the pin's own class, and the hover's a
+/// pin took up (see `hover_film_host`).
 pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
     let mut client = RECT::default();
     if unsafe { GetClientRect(host, &mut client) }.is_err() {
-        return;
-    }
-
-    if film_host() == Some(host)
-        && !the_pins_film_is_ffplay()
-        && unsafe { stretch_the_held_frame(dc, client.right, client.bottom) }
-    {
         return;
     }
 
@@ -160,131 +124,12 @@ pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
     unsafe { FillRect(dc, &client, brush) };
 }
 
-/// Stretch the frame a drag is holding over a `width` by `height` client box, answering whether GDI
-/// drew it.
-///
-/// The frame is stretched out of its own bits rather than through a surface made for it: it is
-/// already a block of BGRA pixels, and a device context and bitmap made for the width of one erase
-/// and thrown away after it is two handles and a display's worth of memory per pointer move.
-unsafe fn stretch_the_held_frame(dc: HDC, width: i32, height: i32) -> bool {
-    let held = held_video_frame();
-    let Some(frame) = held.as_ref() else {
-        return false;
-    };
-    if frame.width == 0
-        || frame.height == 0
-        || frame.pixels.len() != frame.width as usize * frame.height as usize * 4
-    {
-        return false;
-    }
-
-    let info = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: frame.width as i32,
-            biHeight: -(frame.height as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    // SAFETY: the bits are the held frame's own, of the size checked above, and `dc` is the one the
-    // host was asked to erase with; GDI reports rather than faults for a DC that has gone.
-    unsafe {
-        // GDI's own filtering rather than a nearest-neighbour stretch, the way the taskbar's peek
-        // is scaled: the strip is a few pixels of growth at a time, and a soft edge is the picture
-        // where a hard one is a stair (see `pin_taskbar_mirror`). The brush origin travels with the
-        // mode, because halftone measures the destination from it.
-        let mode = SetStretchBltMode(dc, HALFTONE);
-        let _ = SetBrushOrgEx(dc, 0, 0, None);
-        let drawn = StretchDIBits(
-            dc,
-            0,
-            0,
-            width,
-            height,
-            0,
-            0,
-            frame.width as i32,
-            frame.height as i32,
-            Some(frame.pixels.as_ptr().cast()),
-            &info,
-            DIB_RGB_COLORS,
-            SRCCOPY,
-        );
-        if mode != 0 {
-            let _ = SetStretchBltMode(dc, STRETCH_BLT_MODE(mode));
-        }
-        drawn > 0
-    }
-}
-
-/// Whether the resize drag in flight took the frame the host paints with, so that its own end gives
-/// it up and no road's frame is dropped with it (see `hold_the_frame_a_growing_host_paints`).
-static HOST_FILL_HELD: AtomicBool = AtomicBool::new(false);
-
-/// Capture the frame a growing host paints the strip it gains with.
-///
-/// **Taken on the pointer message that begins a resize drag**, before the band has moved: what is
-/// wanted is the picture that was on screen when the hand took the edge. It is the held-frame road
-/// a park paints its band from rather than a capture of this app's own, because a frame read any
-/// other way — `PrintWindow`, a decode — is a black rectangle or a whole decode on the message a
-/// drag begins on (see `hold_video_window_frame`).
-///
-/// Only mpv's film, and only where the host is on screen: FFmpeg's child is given the host's new box
-/// by the call that gives the host its own (see `fit_the_hosted_ffplay_to_the_host`), and a host
-/// that is not on screen has no picture of the film's to read — the desktop where it stands is the
-/// pin's chrome or somebody else's window.
-pub(super) fn hold_the_frame_a_growing_host_paints() {
-    HOST_FILL_HELD.store(false, Ordering::SeqCst);
-    // **The thumbnail road has no strip to paint**: the film is a window of the desktop's shown
-    // through the Shell's own thumbnail, so a frame taken for the band's new rows would never be
-    // drawn, and taking one is a read of the film's window that road does not need (see
-    // `pin_film_thumbnail`).
-    if the_pin_shows_its_film_by_thumbnail() {
-        return;
-    }
-    if the_pins_film_is_ffplay() || !the_pinned_player_was_begun_in_the_host() {
-        return;
-    }
-    if !film_host().is_some_and(|host| unsafe { IsWindowVisible(host) }.as_bool()) {
-        return;
-    }
-
-    let taken = hold_video_window_frame();
-    HOST_FILL_HELD.store(taken, Ordering::SeqCst);
-}
-
-/// Give up the frame a growing host painted with, where this drag took one: the band is the film's
-/// again by the time a drag ends, and a frame kept past it is a picture a later erase would paint
-/// the strip with.
-///
-/// A frame a park or the move cover is painting from is theirs and is left standing — their roads
-/// give it up when the band has a player in it again (see `settle_the_move_cover`,
-/// `take_the_park_down`).
-pub(super) fn give_up_the_frame_a_growing_host_paints() {
-    if !HOST_FILL_HELD.swap(false, Ordering::SeqCst) {
-        return;
-    }
-    if !the_move_cover_is_up() && !pin_player_is_parked() {
-        forget_video_frame();
-    }
-}
-
 /// The host of the pin that is up, and the player this app has attached to it.
 static PIN_FILM_HOST: AtomicIsize = AtomicIsize::new(0);
 static PIN_FILM_HOST_PLAYER: AtomicU32 = AtomicU32::new(0);
 /// The hosted player whose frame this app has proved on screen, so the pipe read that proves it is
 /// asked once and not on every tick (see `the_hosted_frame_is_up`).
 static PRESENTED_PID: AtomicU32 = AtomicU32::new(0);
-/// mpv's own child under the host, and the host and player it was found under and for: a resize step
-/// asks it on every pointer move, and the handle is only ever a hint (see `the_hosted_mpv_child`).
-static HOSTED_MPV_CHILD: AtomicIsize = AtomicIsize::new(0);
-static HOSTED_MPV_CHILD_HOST: AtomicIsize = AtomicIsize::new(0);
-static HOSTED_MPV_CHILD_PID: AtomicU32 = AtomicU32::new(0);
 /// The move cover: the held frame the pin paints in its own bitmap while a hover's host is hidden,
 /// restyled and re-parented into the pin (see `raise_the_move_cover` and `show_pinned_window`).
 static PIN_MOVE_COVER: AtomicBool = AtomicBool::new(false);
@@ -383,20 +228,8 @@ pub(super) fn hosted_player_pid() -> Option<u32> {
 pub(super) fn note_hosted_player(pid: u32) {
     PIN_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
     PRESENTED_PID.store(0, Ordering::SeqCst);
-    // Another player draws another window, whatever handle the last one left behind.
-    forget_the_hosted_mpv_child();
     // A hosted player has no window of the desktop's to publish, and this one is the film now.
     VIDEO_HWND.store(0, Ordering::SeqCst);
-}
-
-/// The host to give a player begun for `path`, where that player is a pinned mpv and the pin
-/// stands in a window of its own. `None` is every other launch: a hover's film, FFmpeg's player,
-/// and the media engine's own frame. FFmpeg's player is not given a window — it is adopted into
-/// the host once it makes its own (see `host_for_the_pins_ffplay`).
-pub(super) fn host_for_the_pins_film(path: &Path, kind: Option<MediaType>) -> Option<HWND> {
-    (the_film_is_shown_in_a_host(path, kind) && video_route(path) == VideoRoute::Mpv)
-        .then(film_host)
-        .flatten()
 }
 
 /// The host an FFmpeg film begun for `path` is to be adopted into, where this is the pin's own
@@ -408,165 +241,17 @@ pub(super) fn host_for_the_pins_ffplay(path: &Path, kind: Option<MediaType>) -> 
         .flatten()
 }
 
-/// **Which road a pin's mpv film is drawn on: the default is the film's host owning the pin's
-/// chrome, and `RHP_MPV_CHILD_HOST_PIN`, present, asks for the hosted child host instead.**
-///
-/// A `WS_CHILD` is always drawn above its parent's client area, and a `WS_EX_LAYERED` parent — the
-/// pin's chrome, painted through `UpdateLayeredWindow` — cannot clip or synchronise a hardware
-/// swapchain child. So with nothing set the film is given not a child of the pin but a **window of
-/// the desktop's of its own, which owns the pin's chrome**: Windows then keeps the chrome above the
-/// film, hides it with the host, keeps it out of Alt+Tab, and moves neither for this app (see
-/// `the_pin_film_host_is_a_window_of_the_desktop`). **Not a setting**: the variable brings the child
-/// host this app stood in before it back for an A/B that needs no rebuild. **It is answered on the
-/// child road alone**, because a film drawn through a thumbnail has no child of this app's under the
-/// host at all: `RHP_MPV_THUMBNAIL_PIN=0` is what brings that road back (see
-/// `the_film_host_owns_the_pin` and [`MPV_THUMBNAIL_PIN_VARIABLE`]).
-const MPV_CHILD_HOST_PIN_VARIABLE: &str = "RHP_MPV_CHILD_HOST_PIN";
-
-/// Whether the film host owns the pin's chrome, which is the road unless a machine asked for the
-/// child host (see [`MPV_CHILD_HOST_PIN_VARIABLE`]). The environment is read here and nowhere else,
-/// and the answer is a fact of the process: flipping the variable needs the app restarted, not the
-/// film re-pinned.
-pub(super) fn the_film_host_owns_the_pin() -> bool {
-    // **A thumbnail is drawn into a window of the desktop's**, never into a child's composition, so
-    // the thumbnail road — which is the default road — takes the host that owns the pin's chrome
-    // whatever a machine asked the child host for (see `pin_film_thumbnail`).
-    if the_pin_shows_its_film_by_thumbnail() {
-        return true;
-    }
-
-    #[cfg(test)]
-    if let Some(answer) = the_owned_road_stand_in() {
-        return answer;
-    }
-
-    std::env::var_os(MPV_CHILD_HOST_PIN_VARIABLE).is_none()
-}
-
-/// **The road a pin's mpv film is drawn on: the thumbnail, unless `RHP_MPV_THUMBNAIL_PIN` says
-/// exactly `0`.**
-///
-/// The film mpv plays for a pin is drawn in a window of the desktop's of its own — launched with no
-/// `--wid` — and the pin's host shows it by a DWM thumbnail of that window rather than by holding
-/// mpv's child (see `pin_film_thumbnail`, and `video_launch::mpv_args`, which drops `--ontop` for
-/// it). A resize step then moves this app's own windows and nothing of mpv's, which is the road
-/// measured as the one with nothing to see in a drag (see the note on `pin_film_thumbnail`).
-///
-/// **`0` is the escape hatch back to the child road, byte for byte the road the app stood in
-/// before**: mpv is given the host's window with `--wid`, and every step of a resize asks mpv's
-/// thread for the child's new box (see `fit_the_hosted_mpv_to_the_host`). `1` is the default
-/// written out and changes nothing, and any other value leaves the thumbnail road standing, because
-/// only `0` names the other road.
-const MPV_THUMBNAIL_PIN_VARIABLE: &str = "RHP_MPV_THUMBNAIL_PIN";
-
-/// Whether the pin's film is drawn through the Shell's own thumbnail of mpv's window, which is the
-/// road unless the machine asked for the child road (see [`MPV_THUMBNAIL_PIN_VARIABLE`]).
-///
-/// **Read once for the process**, because the answer is a fact about the run and not about a film:
-/// flipping the variable needs the app restarted, not the film re-pinned. The reading writes the
-/// road's own line to the pin trace, so a run's trace always says which of the two roads ran.
-///
-/// **The environment is read by the shipped binary and not by a test run.** A suite that read it
-/// would answer every test written against the `--wid` road with this one whenever the variable was
-/// set — and both of those runs are what the two roads are measured by — so a test stands the road in
-/// where it wants it (see [`stand_the_thumbnail_road_in`]).
-pub(super) fn the_pin_shows_its_film_by_thumbnail() -> bool {
-    #[cfg(test)]
-    {
-        THUMBNAIL_ROAD_STAND_IN.with(|held| held.get()).unwrap_or(true)
-    }
-    #[cfg(not(test))]
-    {
-        *THE_THUMBNAIL_ROAD
-    }
-}
-
-/// The road this run is on, read once (see [`the_pin_shows_its_film_by_thumbnail`]).
-#[cfg(not(test))]
-static THE_THUMBNAIL_ROAD: Lazy<bool> = Lazy::new(|| {
-    let asked = std::env::var_os(MPV_THUMBNAIL_PIN_VARIABLE);
-    let thumbnail = the_thumbnail_road_from(asked.as_deref());
-    note_pin_trace!(
-        "pin film road {}",
-        if thumbnail {
-            "thumbnail"
-        } else {
-            "child (RHP_MPV_THUMBNAIL_PIN=0)"
-        }
-    );
-    thumbnail
-});
-
-/// The knob's own reading: the child road only where the value is exactly `0` (see
-/// [`MPV_THUMBNAIL_PIN_VARIABLE`]).
-fn the_thumbnail_road_from(value: Option<&std::ffi::OsStr>) -> bool {
-    value.and_then(|value| value.to_str()) != Some("0")
-}
-
-/// Whether a film of `route` is drawn by the Shell rather than by a child of the pin's host: mpv's
-/// only, because the road is mpv's launch told not to take a window of this app's, and FFmpeg's
-/// player has no such switch.
-///
-/// With the machine's own answer as a parameter, so a test is a call rather than an environment write
-/// every other test in the process would see.
-pub(super) fn a_film_is_drawn_by_a_thumbnail(route: VideoRoute, asked: bool) -> bool {
-    asked && route == VideoRoute::Mpv
-}
-
-/// Stand an answer for [`the_pin_shows_its_film_by_thumbnail`] on this thread, or give the road the
-/// app ships back with `None` (see `stand_the_owned_road_in`, which is the same arrangement).
-#[cfg(test)]
-pub(super) fn stand_the_thumbnail_road_in(answer: Option<bool>) {
-    THUMBNAIL_ROAD_STAND_IN.with(|held| held.set(answer));
-}
-
-#[cfg(test)]
-thread_local! {
-    static THUMBNAIL_ROAD_STAND_IN: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
-/// Stand an answer for [`the_film_host_owns_the_pin`] on this thread in place of the machine's own, or
-/// give the machine's own answer back with `None`.
-///
-/// **Per thread because the tests run at once**, and because every road that asks the question in a
-/// test asks it from the thread the test is on: one test standing the road off is not another — and a
-/// run whose environment set the opt-out would otherwise hand every test written against the owned
-/// road the child host (see `pin_film_host::stand_the_mpv_pin_hosted_in` for the process-wide
-/// form, which is the right one only where the answer is read from no thread in particular).
-#[cfg(test)]
-pub(super) fn stand_the_owned_road_in(answer: Option<bool>) {
-    OWNED_ROAD_STAND_IN.with(|held| held.set(answer));
-}
-
-/// The answer [`the_film_host_owns_the_pin`] is given while a test stands one in.
-#[cfg(test)]
-fn the_owned_road_stand_in() -> Option<bool> {
-    OWNED_ROAD_STAND_IN.with(|held| held.get())
-}
-
-#[cfg(test)]
-thread_local! {
-    static OWNED_ROAD_STAND_IN: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
-/// Whether a film of `route` at a pin's band is drawn in a window of the desktop's that owns the
-/// pin's chrome, with the machine's own answer given as a parameter: so a test is a call rather
-/// than an environment write every other test in the process would see.
-///
-/// mpv's only. FFmpeg's player is drawn into a host of the pin's for its renderer's sake and keeps
-/// the road it has (see `a_hosted_film_is_presented_composed`).
-pub(super) fn a_film_route_is_drawn_in_a_host_of_its_own(route: VideoRoute, owned: bool) -> bool {
-    owned && route == VideoRoute::Mpv
-}
-
 /// Whether the film at this pin's band is drawn in a window of the desktop's that owns the pin's
 /// chrome: the pin stands in a window of its own, its media is a film, and the film is mpv's.
+///
+/// **A pin's mpv film is drawn on one road only**: the player makes a window of its own and the host
+/// shows it through the Shell's thumbnail (see `pin_film_thumbnail`). A `WS_CHILD` has no
+/// composition surface of its own to be thumbnailed, and a `WS_EX_LAYERED` pin cannot clip or
+/// synchronise a hardware swapchain — so the film is given not a child of the pin but a window of the
+/// desktop's, which owns the pin's chrome. FFmpeg's player is the other answer, and only because its
+/// renderer needs a window of this app's (see `ffplay_is_presented_composed`).
 pub(super) fn the_pin_film_host_is_a_window_of_the_desktop(path: &Path) -> bool {
-    pin_is_its_own_window()
-        && a_film_route_is_drawn_in_a_host_of_its_own(
-            video_route(path),
-            the_film_host_owns_the_pin(),
-        )
+    pin_is_its_own_window() && video_route(path) == VideoRoute::Mpv
 }
 
 /// Whether the host that is up is a window of the desktop's — written where it is made, because a
@@ -690,27 +375,6 @@ pub(super) fn ffplay_is_presented_composed() -> bool {
     video_playback::the_film_is_presented_composed()
 }
 
-/// **A temporary diagnostic, and not a setting: `RHP_MPV_COMPOSED_PIN`, present means on.**
-///
-/// A pinned mpv film is drawn into a child of a **layered** pin window, so every paint of the pin
-/// re-sends the whole surface through `UpdateLayeredWindow` while the player's swapchain presents
-/// its own frames on top of it. A pinned FFmpeg film takes the composed road instead — a pin window
-/// with no `WS_EX_LAYERED`, painted with `BitBlt` — and is smooth under a drag-resize, while the mpv
-/// pin is shaky. This asks, by hand, whether the road is the whole of that difference: with the
-/// variable set, a hosted mpv film takes the composed road exactly as ffplay's does.
-///
-/// **It should be deleted once the answer is in** — either the composed road is what fixes the
-/// shake and mpv is moved onto it for good, or it is not and this goes. The environment is read
-/// here and nowhere else, and the answer is a fact of the process: flipping the variable needs the
-/// app restarted, not the film re-pinned.
-const MPV_COMPOSED_PIN_VARIABLE: &str = "RHP_MPV_COMPOSED_PIN";
-
-/// Whether the machine asked a pinned mpv film to take the composed road (see
-/// [`MPV_COMPOSED_PIN_VARIABLE`]).
-pub(super) fn the_mpv_pin_is_composed() -> bool {
-    std::env::var_os(MPV_COMPOSED_PIN_VARIABLE).is_some()
-}
-
 /// Whether the pin on screen holds a hosted film presented through the composed road. It is
 /// the one predicate behind three things that must never disagree: the player's renderer (the composed
 /// one, unless a machine named another by hand), the pin window's style (no `WS_EX_LAYERED`), and the
@@ -725,16 +389,6 @@ pub(super) fn the_pin_presents_a_hosted_film_composed() -> bool {
         return false;
     };
 
-    // **A pin whose film is drawn in a window of the desktop's is the layered surface over it,
-    // whatever else a machine asked for.** The picture stands below this one, so the band has to be
-    // an alpha the host shows through and a press falls on — a composed pin is blitted through its
-    // own DC and is opaque over the whole of itself, which is the film gone. Asked of the road rather
-    // than of the host that is up, because the form is written at a take-up, before there is one (see
-    // `the_pin_film_host_is_a_window_of_the_desktop`).
-    if the_pin_film_host_is_a_window_of_the_desktop(&path) {
-        return false;
-    }
-
     // A sound's player is FFmpeg's too: only a film at this pin's band is presented this way, and
     // a placeholder counts because the pin is taken up before its film is installed.
     current_media_type().is_none_or(|kind| {
@@ -742,29 +396,18 @@ pub(super) fn the_pin_presents_a_hosted_film_composed() -> bool {
             kind,
             MediaType::Video | MediaType::Loading | MediaType::Unplayable
         )
-    }) && a_hosted_film_is_presented_composed(
-        video_route(&path),
-        ffplay_is_presented_composed(),
-        the_mpv_pin_is_composed(),
-    )
+    }) && a_hosted_film_is_presented_composed(video_route(&path), ffplay_is_presented_composed())
 }
 
-/// The decision itself, with each road's own answer as a parameter: the environment is read in one
-/// place ([`the_mpv_pin_is_composed`]), so a test is a call rather than an environment write every
-/// other launch in the process would see.
-///
-/// FFmpeg's player is composed unless a machine named a flip-model renderer by hand; mpv is composed
-/// only where the temporary diagnostic asks for it.
+/// The decision itself, with the player's own answer as a parameter, so a test is a call rather than
+/// an environment write every other launch in the process would see. FFmpeg's player is composed
+/// unless a machine named a flip-model renderer by hand; no other route is presented through this
+/// host at all.
 pub(super) fn a_hosted_film_is_presented_composed(
     route: VideoRoute,
     ffplay_presented_composed: bool,
-    mpv_asked_by_hand: bool,
 ) -> bool {
-    match route {
-        VideoRoute::Ffplay => ffplay_presented_composed,
-        VideoRoute::Mpv => mpv_asked_by_hand,
-        _ => false,
-    }
+    route == VideoRoute::Ffplay && ffplay_presented_composed
 }
 
 /// Whether this file is shown in a host this app owns: a film mpv plays or FFmpeg's player draws,
@@ -792,8 +435,8 @@ pub(super) fn the_pinned_film_is_drawn_in_a_host(path: &Path) -> bool {
 }
 
 /// Whether the pin's film is FFmpeg's, whose child is fitted to the host's box by the road that
-/// placed the host: mpv's child is fitted by the host's own `WM_SIZE`, because mpv sizes it on its
-/// own thread and at its own pace (see `fit_the_hosted_mpv_to_the_host`).
+/// placed the host. mpv's film is a window of its own and is never fitted by anything here (see
+/// `pin_film_thumbnail`).
 pub(super) fn the_pins_film_is_ffplay() -> bool {
     PIN_FILM_IS_FFPLAY.load(Ordering::SeqCst)
 }
@@ -802,8 +445,6 @@ pub(super) fn the_pins_film_is_ffplay() -> bool {
 /// pin's own lock is held (see `the_pins_film_is_ffplay`).
 pub(super) fn note_the_pins_film_route(path: &Path) {
     PIN_FILM_IS_FFPLAY.store(video_route(path) == VideoRoute::Ffplay, Ordering::SeqCst);
-    // The film a step is on is another film: its player may have made itself another child.
-    forget_the_hosted_mpv_child();
 }
 
 /// Fit the player's child to the host's client box, where the pin's film is FFmpeg's and the
@@ -818,83 +459,6 @@ pub(super) unsafe fn fit_the_hosted_ffplay_to_the_host(host: HWND) {
     if let Some(child) = a_child_of_the_host(host, pid) {
         unsafe { ffplay_window::fit_the_hosted_player_to_the_host(child, host) };
     }
-}
-
-/// Forget the child mpv was drawing in: called where this app writes down which player draws the
-/// pin's film, because a film a step is on — or another player begun into the same host — is another
-/// window of mpv's (see `the_hosted_mpv_child`).
-fn forget_the_hosted_mpv_child() {
-    HOSTED_MPV_CHILD.store(0, Ordering::SeqCst);
-    HOSTED_MPV_CHILD_HOST.store(0, Ordering::SeqCst);
-    HOSTED_MPV_CHILD_PID.store(0, Ordering::SeqCst);
-}
-
-/// The window mpv draws the pin's film in under `host`, where this host holds a player of mpv's.
-///
-/// **It is found the way FFmpeg's child is found** — a shown child of the host owned by the player
-/// this app began into it (`a_child_of_the_host`) — and the shown-with-a-box rule is what picks the
-/// picture rather than a window mpv has made and not yet drawn in. The handle is then kept, because
-/// a resize step asks for it on every pointer move and looking it up is a walk of the host's
-/// children.
-///
-/// **The kept handle is only ever a hint.** mpv makes itself a new child when its video output is
-/// reinitialised, so a handle that is no longer a window is re-found, and the host and player it was
-/// found for are kept beside it: an adopted host, a host made again, and a player begun over the
-/// last one are all other answers, and none of them inherits the box of the film before it.
-fn the_hosted_mpv_child(host: HWND) -> Option<HWND> {
-    // Only a film mpv was begun into this host for has a child of mpv's under it: FFmpeg's is fitted
-    // by the road that places the host (see `fit_the_hosted_ffplay_to_the_host`), and a picture, a
-    // preview and a park hold no player at all.
-    if the_pins_film_is_ffplay() || !the_pinned_player_was_begun_in_the_host() {
-        return None;
-    }
-
-    let pid = hosted_player_pid()?;
-    let kept = HOSTED_MPV_CHILD.load(Ordering::SeqCst);
-    if kept != 0
-        && HOSTED_MPV_CHILD_HOST.load(Ordering::SeqCst) == host.0 as isize
-        && HOSTED_MPV_CHILD_PID.load(Ordering::SeqCst) == pid
-    {
-        let child = HWND(kept as *mut _);
-        if unsafe { IsWindow(child) }.as_bool() {
-            return Some(child);
-        }
-    }
-
-    let child = a_child_of_the_host(host, pid)?;
-    HOSTED_MPV_CHILD_PID.store(pid, Ordering::SeqCst);
-    HOSTED_MPV_CHILD_HOST.store(host.0 as isize, Ordering::SeqCst);
-    HOSTED_MPV_CHILD.store(child.0 as isize, Ordering::SeqCst);
-    Some(child)
-}
-
-/// Whether a resize of this host would place mpv's child at its box, as a test reads the gate the
-/// host's `WM_SIZE` asks before it places anything (see `the_hosted_mpv_child`).
-#[cfg(test)]
-pub(super) fn a_host_resize_would_place_the_child_for_a_test(host: HWND) -> bool {
-    the_hosted_mpv_child(host).is_some()
-}
-
-/// The flags a host's `WM_SIZE` fits mpv's child with.
-///
-/// **A host that is a window of the desktop's asks for the box rather than waiting for it.** Its
-/// child is still mpv's, but the message doing the asking is the host's own `WM_SIZE`, which is the
-/// window being moved — a synchronous fit there is this app's thread waiting on mpv's, on the step
-/// path, which is the hang this road exists to not have. What it costs is the box landing a message
-/// later, and the film is clipped by the band rather than the band a hole.
-pub(super) fn fit_flags() -> SET_WINDOW_POS_FLAGS {
-    let mut flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
-    // **A film taken off the screen for a resize drag is not put back by the fit that follows its
-    // host's own box**, which is the one thing the temporary `RHP_HIDE_FILM_ON_RESIZE` diagnostic
-    // asked for: a fit that showed the child is a diagnostic that lasts one step (see
-    // `pin_resize_probe`).
-    if !pin_resize_probe::the_film_is_hidden() {
-        flags |= SWP_SHOWWINDOW;
-    }
-    if PIN_FILM_HOST_IS_TOP_LEVEL.load(Ordering::SeqCst) {
-        flags |= SWP_ASYNCWINDOWPOS;
-    }
-    flags
 }
 
 /// The box the host is placed at, from the band the pin says its picture stands in.
@@ -957,109 +521,6 @@ unsafe fn own_the_pin_window(owned: bool) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         )
     };
-}
-
-/// Put the film mpv draws at the host's client box, from the message that gave the host its own.
-///
-/// **This is what makes a hosted mpv film follow a resize instead of trailing it.** FFmpeg's child is
-/// fitted in the same call that places the host (see `fit_the_hosted_ffplay_to_the_host`); mpv's is
-/// sized by mpv's own thread, and at the pace of a fast hand it arrives several sizes behind the
-/// band it stands in.
-///
-/// **And on the road a pin's film host is on, the box is asked for rather than waited for**
-/// (`SWP_ASYNCWINDOWPOS`, see `fit_flags`): that host is a window of the desktop's, and a fit that
-/// blocked from inside its own `WM_SIZE` would be this app's thread waiting on mpv's. Nothing of this
-/// app's is locked across it — the pin's state is read and given up in `band_in_the_window` before the
-/// host is placed — so what it costs is not a stall but a lag: the child takes its new box a message
-/// behind the band it stands in, which is the strip the host paints and is the number the step's own
-/// trace writes down (see `pin_resize_probe`). How long the ask took goes to the pin trace with it.
-fn fit_the_hosted_mpv_to_the_host(host: HWND) -> bool {
-    let mut client = RECT::default();
-    if unsafe { GetClientRect(host, &mut client) }.is_err() {
-        return false;
-    }
-    place_the_hosted_mpv_in(host, client.right.max(1), client.bottom.max(1))
-}
-
-/// **Ask mpv's child for the box the host is about to take before the host takes it**, while a resize
-/// drag is live: a step's band is then the child's before it is the host's, so on a shrink the child is
-/// never the smaller of the two and is clipped by the window it is a child of instead of seen cropped,
-/// and on a grow its ask is made a step earlier than the one the host's own `WM_SIZE` would make it.
-///
-/// **The ask is asynchronous on the road a pin's host is on** (see `fit_flags`), so leading puts the
-/// ask before the host's move and does not make it land before it: what a step still pays for is the
-/// residual bounce of mpv redrawing into its grown or lowered window, which the step's own line
-/// measures (see `pin_resize_probe`). The road does not block for that — no wait, no spin, no
-/// synchronous fit — because a wait there is this app's thread waiting on mpv's.
-fn lead_the_hosted_mpv_to_the_box(host: HWND, width: i32, height: i32) {
-    if a_resize_drag_is_live() {
-        place_the_hosted_mpv_in(host, width, height);
-    }
-}
-
-/// One resize step's two commits, in the order it commits them.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum StepCommit {
-    /// The hosted child's box, asked for the band the host is about to take.
-    TheChild,
-    /// The host's own move, which the child is already on its way to.
-    TheHost,
-}
-
-/// **The child's box before the host's, on both a grow and a shrink**: a child standing over its
-/// parent is clipped by it rather than the band seen cropped, and a grow is a step ahead of where the
-/// host's own `WM_SIZE` would have it (see `lead_the_hosted_mpv_to_the_box`).
-const A_STEP_COMMITS: [StepCommit; 2] = [StepCommit::TheChild, StepCommit::TheHost];
-
-/// Run a step's two commits in the order `A_STEP_COMMITS` names, so the order the trace and this
-/// module's own notes describe is the order that runs.
-fn commit_a_step(ask_the_child: impl FnOnce(), move_the_host: impl FnOnce()) {
-    // Each commit is taken out as the loop reaches it: the order is the constant's and not the
-    // compiler's to guess at.
-    let (mut ask_the_child, mut move_the_host) = (Some(ask_the_child), Some(move_the_host));
-    for commit in A_STEP_COMMITS {
-        match commit {
-            StepCommit::TheChild => {
-                if let Some(ask) = ask_the_child.take() {
-                    ask();
-                }
-            }
-            StepCommit::TheHost => {
-                if let Some(move_) = move_the_host.take() {
-                    move_();
-                }
-            }
-        }
-    }
-}
-
-/// Give mpv's child the `width` x `height` box in its host's own client coordinates — exactly the box,
-/// never a pixel over it — and write down what it cost.
-fn place_the_hosted_mpv_in(host: HWND, width: i32, height: i32) -> bool {
-    let Some(child) = the_hosted_mpv_child(host) else {
-        return false;
-    };
-
-    let rect = (0, 0, width, height);
-    let flags = fit_flags();
-    let started = Instant::now();
-    let placed =
-        unsafe { SetWindowPos(child, HWND::default(), rect.0, rect.1, rect.2, rect.3, flags) }
-            .is_ok();
-
-    note_pin_trace!(
-        "hosted mpv fit host {host:?} child {child:?} {},{} {}x{} {:.3}ms placed {}",
-        rect.0,
-        rect.1,
-        rect.2,
-        rect.3,
-        started.elapsed().as_secs_f64() * 1000.0,
-        placed as u8,
-    );
-    // What the temporary `RHP_RESIZE_TRACE` diagnostic writes down, and the box a later tick looks for
-    // (see `pin_resize_probe`).
-    pin_resize_probe::note_the_child_fit(host, child, rect, flags, started);
-    placed
 }
 
 /// Whether the tick owes the player's window the front: a film a hover is following, or a pin's
@@ -1139,8 +600,8 @@ fn the_drawing_trace_is_due(
 /// **It is asked of the process, not of the window alone**, because the host carries the last
 /// player's child for as long as that process is alive: a file step begins a new player into the
 /// same host, and the older child would answer "a film is drawing" for a film about to be killed.
-/// A child's owning process is the player that made it — mpv's window is created by mpv's own
-/// process under `--wid` — so the two facts are one question (see `GetWindowThreadProcessId`).
+/// A child's owning process is the player that made it — the window is created by the player's own
+/// process — so the two facts are one question (see `GetWindowThreadProcessId`).
 ///
 /// **And only a shown child with a size counts, never a hidden or empty one.** A player that has
 /// just been begun makes its window before it has decoded anything, so existence alone is true
@@ -1450,11 +911,11 @@ unsafe fn adopt_the_hover_film_host(host: HWND, content: ScreenRegion) {
 /// its style — the topmost band nothing may cover, transparent to the press, out of the Shell's
 /// lists — and the pin's is none of that (see `create`).
 ///
-/// **Why it is not the re-parent the child road does.** A `WS_EX_LAYERED` chrome cannot clip or
-/// synchronise a hardware swapchain child, which is the whole reason the pin's host is a window of
-/// the desktop's on this road (see `the_pin_film_host_is_a_window_of_the_desktop`). Moving the
-/// hover's host into the pin's window would undo exactly that; the host takes the pin's chrome as
-/// its own window instead (see `own_the_pin_window`).
+/// **Why it is not a re-parent.** A `WS_EX_LAYERED` chrome cannot clip or synchronise a hardware
+/// swapchain child, which is the whole reason the pin's host is a window of the desktop's on this
+/// road (see `the_pin_film_host_is_a_window_of_the_desktop`). Moving the hover's host into the
+/// pin's window would undo exactly that; the host takes the pin's chrome as its own window instead
+/// (see `own_the_pin_window`).
 ///
 /// **Nothing is begun, frozen or read back**, so there is no pause between the hover and the pin and
 /// no second decode of the file: what changes is a style, an owner, a band and a box, and what does
@@ -1530,26 +991,16 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
     };
 
     let (x, y, width, height) = the_film_host_box(content);
-    // **The thumbnail road has nothing of this app's to carry across a step**, so its host's bits are
-    // not copied: the picture is the Shell's, and the only pixels this app paints in the host are its
-    // whole client erased black behind that picture — a fresh surface every step is what keeps a bar of
-    // an earlier box from standing black over the picture the box now draws (see
+    // **A host has nothing of this app's to carry across a step**, so its bits are not copied: the
+    // picture is the Shell's thumbnail or FFmpeg's child, and the only pixels this app paints in the
+    // host are its whole client erased black behind that picture — a fresh surface every step is what
+    // keeps a bar of an earlier box from standing black over the picture the box now draws (see
     // `pin_film_thumbnail::settle_the_registration`).
-    let flags = if the_pin_shows_its_film_by_thumbnail() {
-        SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS
-    } else {
-        SWP_NOZORDER | SWP_NOACTIVATE
-    };
+    let flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
     // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock for this placement, taken only where a
     // resize step is being measured (see `pin_resize_probe`).
-    let mut started = None;
-    commit_a_step(
-        || lead_the_hosted_mpv_to_the_box(host, width, height),
-        || {
-            started = pin_resize_probe::a_step_started();
-            let _ = SetWindowPos(host, HWND::default(), x, y, width, height, flags);
-        },
-    );
+    let started = pin_resize_probe::a_step_started();
+    let _ = SetWindowPos(host, HWND::default(), x, y, width, height, flags);
     // **What a resize step costs on the thumbnail road is this one call**: the destination is the
     // host's new client area, and the film's window is not touched at all (see `pin_film_thumbnail`).
     pin_film_thumbnail::the_band_was_placed(host);
@@ -1618,10 +1069,6 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     PIN_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
     PIN_FILM_HOST_IS_TOP_LEVEL.store(false, Ordering::SeqCst);
     PRESENTED_PID.store(0, Ordering::SeqCst);
-    forget_the_hosted_mpv_child();
-    // The temporary `RHP_HIDE_FILM_ON_RESIZE` diagnostic's film goes with the host that held it, and a
-    // flag left standing is the next film fitted without a show (see `pin_resize_probe`).
-    pin_resize_probe::forget_the_hidden_film();
     clear_the_move_cover();
     // A cover left over from a move must not open the next pin or park on this film's frame. A
     // park's own frame is its to give up, so it is left standing for the park.
@@ -1637,7 +1084,8 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
 /// `None` on every other road, where the film is a child of the host (or a window of FFmpeg's player's
 /// that the hook is already told) and there is nothing of mpv's of the desktop's to publish.
 pub(super) fn the_films_own_window() -> Option<HWND> {
-    (the_pin_shows_its_film_by_thumbnail() && film_host().is_some())
+    film_host()
+        .is_some()
         .then(pin_film_thumbnail::the_source_window)
         .flatten()
 }
@@ -2008,51 +1456,6 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// **A drag step asks the child before it moves the host**, in both directions: the host is moved
-    /// only after the child's box has been committed, so a shrink is a child clipped by its parent and
-    /// not a band cropped by a child that has not caught up yet.
-    #[test]
-    fn a_drag_step_asks_the_child_before_it_moves_the_host() {
-        let ran = RefCell::new(Vec::new());
-        commit_a_step(
-            || ran.borrow_mut().push("child"),
-            || ran.borrow_mut().push("host"),
-        );
-        assert_eq!(*ran.borrow(), ["child", "host"]);
-        assert_eq!(A_STEP_COMMITS, [StepCommit::TheChild, StepCommit::TheHost]);
-    }
-
-    /// The thumbnail road is mpv's alone: a film FFmpeg's player draws has no switch that tells it not
-    /// to take a window of this app's, so a thumbnail of one is a picture this app could never launch.
-    #[test]
-    fn a_film_is_drawn_by_a_thumbnail_only_where_mpv_is_told_to_make_its_own_window() {
-        assert!(a_film_is_drawn_by_a_thumbnail(VideoRoute::Mpv, true));
-        assert!(!a_film_is_drawn_by_a_thumbnail(VideoRoute::Mpv, false));
-        assert!(!a_film_is_drawn_by_a_thumbnail(VideoRoute::Ffplay, true));
-        assert_eq!(
-            MPV_THUMBNAIL_PIN_VARIABLE, "RHP_MPV_THUMBNAIL_PIN",
-            "the knob is the name the branch's notes and the report give it"
-        );
-    }
-
-    /// **The knob's two roads: unset is the thumbnail road the pin ships on, and only `0` names the
-    /// child road it stood in before.** `1` is the default written out, and a value that names
-    /// neither road is not read as the one it does not name (see `the_thumbnail_road_from`).
-    #[test]
-    fn the_thumbnail_road_is_the_default_and_zero_is_the_child_road() {
-        let named = |value: Option<&str>| the_thumbnail_road_from(value.map(std::ffi::OsStr::new));
-        assert!(named(None), "unset is the road a pin's film is drawn on");
-        assert!(named(Some("1")), "and `1` is that same road written out");
-        assert!(!named(Some("0")), "`0` is the child road, byte for byte");
-        assert!(named(Some("")), "a value that names nothing is not read as `0`");
-        assert!(named(Some("off")), "only the one value asks for the child road");
-
-        // And what a test run rests on is the road the app ships, which is what a fixture that
-        // stands nothing in (or puts back `None`) is answered with.
-        stand_the_thumbnail_road_in(None);
-        assert!(the_pin_shows_its_film_by_thumbnail());
-    }
 
     /// **The per-tick line is written on change and at most once a second otherwise**, which is what
     /// keeps a run's trace readable: the tick asks `the_hosted_player_is_drawing` hundreds of times a

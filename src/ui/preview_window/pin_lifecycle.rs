@@ -1323,10 +1323,10 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // **And a film the pin took up from a hover whose player is already in the app's host is
     // moved rather than begun again.** The host the hover was drawing in becomes the pin's host with
     // the same player, the same child and the same playhead — no freeze, no read back of `time-pos`,
-    // no second decode. It is re-parented into this window on the child road, and on the road where
-    // the pin's chrome is owned by its film's host it is that host already: the same window keeps the
-    // picture and takes the chrome (see `pin_film_host::take_up_the_pin_film_host`). Every other
-    // take-up from a hover keeps the freeze/relaunch handover below as the fallback.
+    // no second decode. A host of the desktop's is promoted: it already owns the pin's chrome, and
+    // the same window keeps the picture and takes the chrome (see
+    // `pin_film_host::take_up_the_pin_film_host`). A child host is re-parented into this window.
+    // Every other take-up from a hover keeps the freeze/relaunch handover below as the fallback.
     let the_hover_host = pin_is_its_own_window()
         .then(pinned_path)
         .flatten()
@@ -2460,14 +2460,11 @@ pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
 /// park holds is the window's *absence*, and there is nothing about being out of date to say the
 /// absence can be ended (see `pin_player_is_parked`).
 pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
-    // **A film drawn into the pin's own host travels with the band rather than being placed at it.**
-    // On the child road the host is a child of the pin's window, so a move is the compositor's and
-    // never this app's; what a resize changes is the band *inside* that window, which is the host's
-    // own box — and the player's geometry is never touched, because mpv's child fills whatever box
-    // the host is given. On the thumbnail road the host is a window of the desktop's and is placed at
-    // the band itself, which is what `place_the_pin_film_host` does for either (see
-    // `the_film_host_box`). Placed while a park stands as much as after one: the band a hidden host
-    // comes back at is the band it was given (see `settle_pinned_park`).
+    // **A film host is placed at the band rather than moved with the pin's window.** A host of the
+    // desktop's is a window of its own at the band; a child host is moved by the compositor with the
+    // pin's window and is only re-measured inside it, which is what `place_the_pin_film_host` does
+    // for either (see `the_film_host_box`). Placed while a park stands as much as after one: the
+    // band a hidden host comes back at is the band it was given (see `settle_pinned_park`).
     if pin_film_host::the_pinned_player_was_begun_in_the_host() {
         unsafe { pin_film_host::place_the_pin_film_host(content) };
         return;

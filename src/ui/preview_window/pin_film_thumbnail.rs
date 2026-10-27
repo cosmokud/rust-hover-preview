@@ -1,11 +1,9 @@
 //! The pin's film drawn by the Desktop Window Manager rather than nested in a window of this app's.
 //!
-//! **This is the road a pin's mpv film is drawn on**: `RHP_MPV_THUMBNAIL_PIN=0` is the escape hatch
-//! back to the child road, and it is byte for byte the road this app stood in before (see
-//! `pin_film_host::MPV_THUMBNAIL_PIN_VARIABLE`). mpv is launched with no `--wid` and makes a window
-//! of the desktop's of its own; the pin's film host asks the Shell to draw that window into itself
-//! (`DwmRegisterThumbnail`), and what follows a resize is one rectangle rather than two windows
-//! agreeing about a box.
+//! **This is the road a pin's mpv film is drawn on, and the only one.** mpv is launched with no
+//! `--wid` and makes a window of the desktop's of its own; the pin's film host asks the Shell to draw
+//! that window into itself (`DwmRegisterThumbnail`), and what follows a resize is one rectangle
+//! rather than two windows agreeing about a box.
 //!
 //! **Why the film has to be a window of the desktop's.** A thumbnail is taken of a window's
 //! composition surface, and a `WS_CHILD` has none of its own — it is drawn into its parent's — so a
@@ -116,10 +114,9 @@
 //! **The structural answer to a source mid-reconfigure is a flip-model swapchain**, which the
 //! compositor scales to the window's client area by construction instead of relying on mpv catching
 //! a `WM_SIZE`: `RHP_THUMBNAIL_FLIP=1` passes `--d3d11-flip=yes` to a pinned mpv on this road and
-//! this road only, so the user can A/B the two runs. It is never asked for on the `--wid` road,
-//! where a flip-model swapchain cannot be a child of another window's (see
-//! `video_launch::mpv_args`), **and never on a source made invisible**: a layered window has no
-//! flip-model swapchain, so `RHP_THUMBNAIL_FLIP` is read, overruled and traced as overruled rather
+//! this road only, so the user can A/B the two runs. It is **never asked for on a source made
+//! invisible**: a layered window has no flip-model swapchain, so `RHP_THUMBNAIL_FLIP` is read,
+//! overruled and traced as overruled rather
 //! than dropped on the floor (see `video_launch::the_thumbnail_swapchain_flip`).
 //!
 //! **The source is never hidden and never resized.** Hidden the Shell stops drawing it — the
@@ -474,7 +471,7 @@ fn forget_the_late_placement() {
 ///
 /// **The z-order insert is one post rather than a wait**, `SWP_ASYNCWINDOWPOS` to the bottom: the
 /// window belongs to mpv's process, and a synchronous reorder is this thread waiting on mpv's — the
-/// road that deadlocked this app once already (see `fit_the_hosted_mpv_to_the_host`). What a post
+/// road that deadlocked this app once already on the child road. What a post
 /// costs is the window standing on its own for the moment it takes mpv to pump it, which is behind
 /// the hover the pin is being taken up from.
 ///

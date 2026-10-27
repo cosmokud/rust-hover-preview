@@ -1060,7 +1060,6 @@ mod tests {
             false,
             None,
             &name,
-            None,
             false,
             true,
         );
