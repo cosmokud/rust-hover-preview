@@ -206,9 +206,8 @@ pub(super) enum VideoLoopAction {
 /// pin in front of it is measured the same way — and it is read against the *pid on screen*, so a
 /// clock left behind by a player that has been replaced cannot rewind the player that replaced it.
 ///
-/// The hold is the other refusal, and it is what a gesture over the picture does: a drag holds the
-/// player with a pause key (see `video_drag_hold_apply`), so a film a second from its end would
-/// otherwise be rewound *underneath the hand holding it*, and the second the film was held at would
+/// The hold is the other refusal, and it is what a pause does: a held film a second from its end
+/// would otherwise be rewound *underneath the hold*, and the second the film was held at would
 /// keep counting up in the clock underneath this record — so that a film held for a minute near its
 /// end was past its end the moment it was let go of, and was rewound on the very next tick. Rebasing
 /// is what a release does to the transport's own clock, and it is the same arithmetic for the same
@@ -337,7 +336,7 @@ pub(super) fn video_loop_tick(playing: bool, loops: bool) -> bool {
             // step on a film longer than the step walks the film backwards instead of returning it
             // to the start (see `video_launch::rewind_launch_seconds`). `holding` is false because
             // the tick only rewinds a film that is playing.
-            restart_pinned_player(&path, content, seconds, false);
+            restart_pinned_player(&path, content, seconds, false, RestartReason::End);
             true
         }
     }

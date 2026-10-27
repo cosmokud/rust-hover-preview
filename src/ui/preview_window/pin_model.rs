@@ -482,7 +482,7 @@ pub(super) struct PinnedPreview {
     /// arguing with the press that answered it (see `toggle_pinned_by_key` and
     /// `settle_bubble_playback`). A press with no park standing — a film the bar had paused before
     /// the pin went down — leaves this alone, because the park a press would stand down from is
-    /// the one still written (see `PinTransport::drag_held` on claims that outlive their film).
+    /// the one still written (see `pin_bubble_pause`).
     pub(super) bubble_run: bool,
     /// The caption button the pointer is over and the one it has pressed: what the caption is
     /// painted from, and what a release acts on.
@@ -504,25 +504,20 @@ pub(super) struct PinnedPreview {
     pub(super) tooltip: PinTooltip,
     /// A drag or a resize in progress.
     pub(super) dragging: Option<PinDrag>,
-    /// Whether the player behind this pin has been put away for the length of a drag.
+    /// Whether the player behind this pin has been put away under a cover.
     ///
-    /// A video pin's picture is not drawn by this app: the band in the middle of the window is
-    /// transparent, and FFmpeg's own window shows through it. That is what makes the picture sharp
-    /// and free, and it is also what makes the window expensive to move — every pointer move puts
-    /// the player's window to a new size and the compositor has to re-blit a 2560x1440 surface,
-    /// which on a 144 Hz screen is a stutter the hand feels rather than sees (see `park_pinned_player`).
+    /// **No gesture raises one.** A press, a move, a drag and a resize are this app's own window
+    /// work, and the film follows them as a thumbnail of a source window nothing moves. A cover is
+    /// what a *relaunch* the user asked for raises — a seek and a step — because that player is
+    /// ended and the band would be the desktop until its replacement decodes (see
+    /// `park_pinned_player_for_seek`).
     ///
-    /// While this is set the player's window is hidden and the band is painted a flat
-    /// colour instead of being left for it to show through, so a drag is a rectangle of the pin's own
-    /// background following the pointer. Blank is the point: there is nothing for the picture to be
-    /// rescaled into, so there is nothing to rescale.
+    /// While this is set the player's window is hidden and the band is painted a flat colour
+    /// instead of being left for it to show through.
     ///
-    /// **It carries nothing about the film**, and that is the whole of how the pair avoids pausing
-    /// twice. Whether the film is held, and whether it should come back, are the transport's own
-    /// facts (`PinTransport::drag_held`), written by the tick that holds it and reconciled by every
-    /// path that ends the player it was made against — so a flag here that remembered whether the
-    /// film was playing would be a second record of a thing that is recorded once (see
-    /// `park_pinned_player`).
+    /// **It carries nothing about the film**: the film is not paused for a cover, so whether it is
+    /// held is the transport's own fact and nothing of it is written here (see
+    /// `park_pinned_player_for_seek`).
     pub(super) parked: bool,
     /// Where the playback of a video is, which is what the transport bar is drawn from and what
     /// a seek or a pause is measured against (see `PinTransport`).
@@ -637,19 +632,6 @@ pub(super) struct PinTransport {
     /// player, which a press of the play button has to be able to take back — and the press that
     /// takes it back is the answer it changes (see `toggle_pinned_playback`).
     pub(super) pending_hold: bool,
-    /// Whether the hold in `paused_at` is a gesture's rather than a press of the pause button's.
-    ///
-    /// It is a field of this struct rather than a flag of its own beside the pin because a claim
-    /// about a player belongs to the player it was made against: every path that begins, holds,
-    /// lets go of, loses or replaces a player writes *here*, and a pin taken down or a file swapped
-    /// takes this with it. A flag beside the pin outlives all of them, and a claim that outlives
-    /// its film is a claim the next film to be dragged is answered with — and it is answered with a
-    /// pause, because the key a drag posts is a toggle (see `video_drag_hold_apply`).
-    ///
-    /// So it is reconciled by those same writes rather than asked of anything, and the one that
-    /// must *not* reconcile it is a relaunch carrying the hold: the film is still held for the
-    /// gesture that is still in flight (see `PinTransport::begun`).
-    pub(super) drag_held: bool,
     /// Where the pointer is dragging the bar, while it is: what the playhead is drawn at rather
     /// than where the file really is, since a drag that is still going is not a seek yet.
     pub(super) seeking: Option<f64>,
@@ -691,13 +673,6 @@ impl PinTransport {
         self.paused_at = holding.then_some(from);
         self.pending_hold = holding && up;
         self.seeking = None;
-        // A claim of a gesture's goes with the player it was made against, so it survives a
-        // relaunch exactly where the hold does: a seek or a resize settling underneath a hand in
-        // flight begins another player that is held for that same gesture, and dropping the claim
-        // there would leave the film frozen for good the moment the hand let go of the window. A
-        // relaunch that carries no hold is a film playing on, and no gesture is holding a film that
-        // is playing (see `drag_held`).
-        self.drag_held = self.drag_held && holding;
     }
 
     /// The player was told to hold where it is, at `at`.
@@ -738,11 +713,6 @@ impl PinTransport {
         self.paused_at = None;
         self.pending_hold = false;
         self.seeking = None;
-        // A film playing on is held by nothing, so whatever put the hold there is taken back: the
-        // gesture that was holding it has either just let go of it — which is the whole of what
-        // this write is — or a press of the pause button has, and a claim left standing here is a
-        // claim the *next* film to be dragged is answered with (see `drag_held`).
-        self.drag_held = false;
     }
 
     /// The player behind this transport is gone, and had got to `at`.
@@ -766,11 +736,6 @@ impl PinTransport {
         self.paused_at = Some(at);
         self.pending_hold = false;
         self.seeking = None;
-        // The hold is kept and the claim over it is dropped, and the asymmetry is the point: the
-        // second is the only record of where the film stopped, so nothing else holds it, but the
-        // claim is about a player and there is no player left to hold. So a drag that ends after
-        // this finds a film that nothing is holding rather than one it believes it is.
-        self.drag_held = false;
     }
 
     /// The file was taken to `to`, by a seek taken while it was held.

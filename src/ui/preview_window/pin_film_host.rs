@@ -252,12 +252,6 @@ pub(super) fn the_film_is_shown_in_a_host(path: &Path, kind: Option<MediaType>) 
         && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
 }
 
-/// Whether a pinned film is drawn in a host: a film, at a pin standing in its own window, whichever
-/// engine plays it. The drag and relayout roads read this one answer.
-pub(super) fn the_pinned_film_is_drawn_in_a_host(path: &Path) -> bool {
-    the_film_is_shown_in_a_host(path, None)
-}
-
 /// The box the host is placed at, from the band the pin says its picture stands in. The band *is* a
 /// screen region (see `PinnedPreview::content`), and a host of the desktop's is placed at it.
 fn the_film_host_box(content: ScreenRegion) -> (i32, i32, i32, i32) {

@@ -1194,21 +1194,6 @@ pub fn run_preview_window() {
                 let _ = pin_ask_keyboard_back(hwnd);
             }
 
-            // A window being carried or pulled to a new size stops playing for the length of the
-            // gesture and picks the film up where it left off on release. A video whose picture is
-            // another program's window is re-scaled and re-presented on every one of the pointer's
-            // messages, and doing that to a film that is also decoding is what makes a drag stutter;
-            // every other kind of pinned window does the same work out of a surface it owns and is
-            // not troubled (see `video_drag_hold`).
-            //
-            // **The gesture's own two ends settle this, so on a gesture of this window's own there
-            // is nothing left for the tick to do** — it is here for the gestures that are not: one
-            // begun off the hook's published press count is carried on from the pointer's position
-            // rather than from a release message, so the tick is what finds it ended (see
-            // `settle_pinned_engine_drag`).
-            let dragging = pin_is_dragging();
-            settle_video_drag_hold(dragging);
-
             // Advance animation frames if needed
             let mut needs_repaint = false;
             // Whether this tick takes a full look at the media behind the preview: a

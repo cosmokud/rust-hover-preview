@@ -21,11 +21,10 @@ fn parked_pin(content: ScreenRegion) -> RecordedPinWindow {
     stand_pin(Some(pin));
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
     clear_park_swap_arm();
     assert!(
-        park_pinned_player(HWND(0x1000 as *mut _), (content.0, content.1), true),
+        park_pinned_player_for_seek(HWND(0x1000 as *mut _), (content.0, content.1)),
         "the first gesture parks: the cover stands before anything relaunches"
     );
     RecordedPinWindow::new(0x1000)
@@ -51,7 +50,6 @@ fn spend_the_swap_bound() {
 fn restore(previous_pin: Option<PinnedPreview>, previous_pid: u32) {
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
     clear_park_swap_arm();
     stand_pin(previous_pin);
@@ -81,7 +79,7 @@ fn superseded_relaunch_dies_unpublished_and_reaped() {
 
     // The instant regrab: a newer gesture bumps the generation, killing the
     // in-flight relaunch before it can publish.
-    park_pinned_player(HWND(0x1000 as *mut _), (100, 80), true);
+    park_pinned_player_for_seek(HWND(0x1000 as *mut _), (100, 80));
     bump_pinned_generation();
 
     assert_eq!(
@@ -130,7 +128,7 @@ fn settle_shows_only_the_current_generation_at_the_final_box() {
 
     // First gesture's relaunch, superseded by the regrab's bump.
     fake_relaunch(101, 10.0, false);
-    park_pinned_player(HWND(0x1000 as *mut _), (100, 80), true);
+    park_pinned_player_for_seek(HWND(0x1000 as *mut _), (100, 80));
     bump_pinned_generation();
 
     // Second gesture's relaunch at the box the hand moved to.
@@ -189,7 +187,7 @@ fn instant_regrab_ends_with_one_player_one_swap() {
     fake_relaunch(101, 10.0, false);
 
     // Regrab: the extend keeps the cover, the bump kills the in-flight.
-    park_pinned_player(HWND(0x1000 as *mut _), (120, 90), true);
+    park_pinned_player_for_seek(HWND(0x1000 as *mut _), (120, 90));
     bump_pinned_generation();
     assert_eq!(
         VIDEO_PID.load(Ordering::SeqCst),
@@ -283,36 +281,6 @@ fn kill_path_reaps_and_clears() {
     );
 
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
-}
-
-/// A kill strands the cover over no player: the release's own recovery
-/// predicate says so, while a live player and a swapped park say otherwise.
-#[test]
-fn stranded_cover_predicate() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-
-    let content = (100, 80, 420, 320);
-    let _window = parked_pin(content);
-
-    // A live player behind the cover: nothing stranded.
-    VIDEO_PID.store(101, Ordering::SeqCst);
-    assert!(
-        !park_stranded_without_a_player(),
-        "a parked player is not stranded"
-    );
-
-    // The kill: no pending, no pid, cover standing.
-    VIDEO_PID.store(0, Ordering::SeqCst);
-    assert!(
-        park_stranded_without_a_player(),
-        "a cover over a killed in-flight needs its release to relaunch"
-    );
-
-    restore(previous_pin, previous_pid);
 }
 
 /// A kill not yet taken holds the cover and is retried: the generation moved

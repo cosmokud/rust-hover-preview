@@ -409,12 +409,9 @@ pub(super) unsafe fn pinned_transport_release(
         return false;
     }
 
-    // The kill road the press may have armed, read before the pointer is let
-    // go of: the release below re-enters `pin_capture_lost` synchronously
-    // through `WM_CAPTURECHANGED`. Through the window seam rather than a bare
-    // `ReleaseCapture` so a test can stand in that re-entrancy; on the machine
-    // the two are the same release, the press having taken the capture.
-    let kill_road = gesture_snapshot_active();
+    // Through the window seam rather than a bare `ReleaseCapture` so a test can stand in the
+    // re-entrancy of `WM_CAPTURECHANGED`; on the machine the two are the same release, the press
+    // having taken the capture.
     release_the_pointer(window, hwnd.0 as isize);
 
     if let Some(part) = part {
@@ -469,15 +466,7 @@ pub(super) unsafe fn pinned_transport_release(
             update_pin_transport(|transport| transport.seeking = Some(seconds));
         }
 
-        // The kill road owns the gesture's one relaunch, at the aimed second
-        // rather than the press's: the take inside `relaunch_gesture_end_at`
-        // makes it the only one across the capture-lost re-entered above and
-        // this release, whichever runs first.
-        if kill_road {
-            if let Some((_, content, _, _)) = pinned_playback_state() {
-                relaunch_gesture_end_at(content, Some(seconds));
-            }
-        } else if let Some((path, content, _, _)) = pinned_playback_state() {
+        if let Some((path, content, _, _)) = pinned_playback_state() {
             // The cover, the end and the relaunch, in the order a park owns: the frame is read and
             // painted flat before the window is hidden and before the player is killed, and the
             // player taking its place is begun last (see `park_pinned_player_for_seek`). Only the
@@ -495,9 +484,6 @@ pub(super) unsafe fn pinned_transport_release(
                 kill_pinned_player_async();
             }
             seek_pinned_playback(&path, content, seconds);
-            // A relaunch that never came up leaves no swap to disarm the
-            // dead interval: a snapshot some other road left standing goes with it.
-            disarm_gesture_if_no_relaunch();
         }
     }
 
@@ -623,23 +609,9 @@ pub(super) unsafe fn pinned_volume_press(hwnd: HWND, x: i32, y: i32) -> bool {
 
     let _ = SetCapture(hwnd);
     with_pin(|pin| pin.volume.dragging = true);
-    // The kill road, once at the first step iff a player lives: the press
-    // snapshots the playhead and freezes the clock, the park captures the
-    // frame and stands the cover, and only then is the player killed. Rapid
-    // steps find the snapshot standing and rewrite the owed level only — one
-    // relaunch at the settle, at the latest level.
-    if current_media_type() == Some(MediaType::Video) && gesture_press_freeze() {
-        let at = window_origin(hwnd)
-            .map(|origin| (origin.0, origin.1))
-            .or_else(|| pinned_content().map(|content| (content.0, content.1)))
-            .unwrap_or((0, 0));
-        // The record the cover's own end will wait on, written by the road that raised it and by
-        // nobody else: a press that arrives over a file step's cover extends that record and
-        // leaves its arm alone (see `park_pinned_player_for_gesture`).
-        park_pinned_player_for_gesture(hwnd, at, false);
-        kill_pinned_player_async();
-        bump_pinned_generation();
-    }
+    // **The press does nothing to the player.** FFmpeg's player cannot be told a level, so the
+    // player that plays at the new one is begun at the release — one relaunch for the change
+    // (see `settle_pin_volume`), and the film plays on under the hand until then.
     set_pin_volume((pin_chrome::volume_share_at(y, popup.track) * 100.0).round() as u32);
     render_layered_preview(hwnd);
     true
@@ -686,33 +658,10 @@ pub(super) unsafe fn pinned_volume_release(hwnd: HWND, window: &dyn PinWindow) -
         return false;
     }
 
-    // The kill road the press may have armed, read before the pointer is let
-    // go of: the release below re-enters `pin_capture_lost` synchronously
-    // through `WM_CAPTURECHANGED`, and that road relaunches — so the check
-    // after it would find the take already spent and settle the level a
-    // second time behind the first relaunch. Through the window seam rather
-    // than a bare `ReleaseCapture` so a test can stand in that re-entrancy;
-    // on the machine the two are the same release, the press having taken the
-    // capture.
-    let kill_road = gesture_snapshot_active();
+    // Through the window seam rather than a bare `ReleaseCapture` so a test can stand in the
+    // re-entrancy of `WM_CAPTURECHANGED`; on the machine the two are the same release, the press
+    // having taken the capture.
     release_the_pointer(window, hwnd.0 as isize);
-    // A gesture that killed settles in the one relaunch its press armed: at
-    // the snapshot second, the box the hand left behind, the latest level —
-    // carrying was-held or the gesture's hold for the swap to settle without
-    // a key. The take inside `relaunch_gesture_kill_at` makes it the only one
-    // across the capture-lost re-entered above and this release, whichever
-    // runs first. The remembered level is still written once, where the knob
-    // was let go of.
-    if kill_road {
-        if let Some((_, content, _, volume)) = pinned_playback_state() {
-            save_remembered_pin_volume(volume.level);
-            relaunch_gesture_kill_at(content);
-        } else {
-            take_gesture_snapshot();
-        }
-        render_layered_preview(hwnd);
-        return true;
-    }
     settle_pin_volume();
     render_layered_preview(hwnd);
     true

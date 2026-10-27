@@ -367,10 +367,8 @@ fn a_swap_onto_a_players_film_is_held_where_a_cover_is_standing() {
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_video_engine_in(None);
-    take_gesture_snapshot();
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
@@ -475,10 +473,8 @@ fn a_second_pick_over_a_standing_cover_is_held_for_the_frame_it_holds() {
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_video_engine_in(None);
-    take_gesture_snapshot();
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
@@ -569,10 +565,8 @@ fn a_wait_that_ends_with_no_window_gives_the_cover_up() {
          the frame it holds would be stretched into the shape the install just gave the window"
     );
 
-    take_gesture_snapshot();
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
@@ -1136,7 +1130,7 @@ fn a_loop_is_begun_again_from_the_beginning_and_carries_what_the_relaunch_needs(
 
 /// A held film is neither begun again nor left with a clock that has run on underneath the hand.
 ///
-/// A drag holds the player with a pause key (see `video_drag_hold_apply`), so a film a second
+/// The pin holds the player with a pause key, so a film a second
 /// from its end would otherwise be begun again *underneath the hand holding it* — and the second
 /// it was held at would keep counting up in the clock underneath the record, so that a film held
 /// for a minute near its end was past its end the moment it was let go of and was rewound on the

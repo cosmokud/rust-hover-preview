@@ -1115,7 +1115,7 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
         pin.collapsed = false;
         // The playback goes back to being the switches' rather than the hand's: a pin up again is
         // a window a park would be written for, and a claim carried up out of the bubble would be
-        // one the next collapse is answered with (see `PinTransport::drag_held`).
+        // one the next collapse is answered with (see `pin_bubble_pause`).
         pin.bubble_run = false;
 
         // The window goes back up where it went down while the bubble is the one the collapse

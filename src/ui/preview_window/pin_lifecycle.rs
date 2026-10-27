@@ -809,14 +809,6 @@ pub(super) fn end_pin_beside_the_state() {
         hide_pin_menu_window();
     }
 
-    // And the gesture that killed with its end still to come. A pin taken
-    // down mid-dead-band never reaches its relaunch, and the snapshot left
-    // behind is a resume for a pin that has gone: no end will ever take it,
-    // and the next gesture would relaunch at a stale second. Given up with
-    // the pin — the player is already dead or riding the orphan reaper, so
-    // there is nothing here left to kill.
-    take_gesture_snapshot();
-
     // And the relaunch that never landed: a pin taken down with one in flight behind its cover —
     // a walk stepping off, the watchdog — leaves a player nothing will ever show. It dies
     // unpublished rather than lingering, and reaped rather than orphaned. Only a confirmed kill
@@ -923,12 +915,6 @@ pub(super) fn pin_media_is_alive(navigating: bool) -> bool {
 
     match kind {
         MediaType::Video => {
-            // A gesture that killed leaves the player gone with its end
-            // relaunch still to come: the cover stands over a dead band, and
-            // that is not a pin that came apart.
-            if gesture_snapshot_active() {
-                return true;
-            }
             // A supersede-kill leaves the player gone with its replacement on its way — the
             // cover standing over a relaunch still to come, or one still in flight. That is not
             // a pin that came apart: the release relaunches, the in-flight one lands, and the
@@ -1011,13 +997,13 @@ pub(super) fn pin_media_failed_before_a_frame(player_started: Option<Instant>) -
         MediaType::NativeVideo => video_player::failing_before_a_frame()
             .filter(|path| pinned_path().as_deref() == Some(path.as_path())),
         MediaType::Video => {
-            // A player ended for a gesture or a park is not a file that failed: it was killed on
-            // purpose and its replacement is on its way, which is exactly how `pin_media_is_alive`
-            // reads the same two facts. Without this the tick after a kill road's own player is
-            // read as a dead file — inside the give-up window — and the pin falls to the failure
-            // mark before the relaunch that road owes can arrive (the "window breaks permanently"
-            // after a Next: a film's player is killed and the pin is stuck on the cross).
-            if gesture_snapshot_active() || pin_park_covers_a_relaunch() {
+            // A player ended for a cover is not a file that failed: it was killed on purpose and
+            // its replacement is on its way, which is exactly how `pin_media_is_alive` reads the
+            // same fact. Without this the tick after a step's own player is read as a dead file —
+            // inside the give-up window — and the pin falls to the failure mark before the
+            // replacement can arrive (the "window breaks permanently" after a Next: a film's
+            // player is killed and the pin is stuck on the cross).
+            if pin_park_covers_a_relaunch() {
                 return None;
             }
 

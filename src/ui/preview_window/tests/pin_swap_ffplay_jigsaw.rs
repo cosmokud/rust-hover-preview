@@ -417,10 +417,8 @@ fn a_portrait_to_landscape_pick_on_ffplay() {
         }
     }
     give_up_pinned_park();
-    take_gesture_snapshot();
     forget_pin_park_swap();
     forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);

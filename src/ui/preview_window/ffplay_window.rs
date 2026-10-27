@@ -610,17 +610,13 @@ pub(super) fn video_window_for(pid: u32) -> Option<HWND> {
 /// `hold_pinned_player_without_a_key`). A hold that has not reached its player yet is not a player
 /// holding at any level — it is a player that is playing, and the key owed it is the thing being
 /// delivered (see `settle_pending_hold`), which a level turned in the meantime does not cancel.
-/// And a hold that is a *gesture's* is the end of that gesture rather than a press of the pause
-/// button's: a window dragged for a second and released has to carry on from the second it was
-/// watching, which a player begun again is the one way not to do (see `video_drag_hold_apply`).
 pub(super) fn level_is_owed_to_the_next_player(
     held: bool,
-    drag_held: bool,
     hold_owed: bool,
     playing_at: u32,
     level: u32,
 ) -> bool {
-    held && !drag_held && !hold_owed && playing_at != level
+    held && !hold_owed && playing_at != level
 }
 
 /// The same answer as `level_is_owed_to_the_next_player`, over the pin that is up.
@@ -628,7 +624,6 @@ pub(super) fn pinned_level_is_owed_to_the_next_player() -> bool {
     pinned_playback_state().is_some_and(|(_, _, transport, volume)| {
         level_is_owed_to_the_next_player(
             transport.paused_at.is_some(),
-            transport.drag_held,
             transport.pending_hold,
             volume.playing_at,
             volume.level,
@@ -642,8 +637,8 @@ pub(super) fn pinned_level_is_owed_to_the_next_player() -> bool {
 /// test stands in is a number no process holds (see `spawn_player`), `video_window_for` answers
 /// nothing for it, and the post below is never reached — so a key that is posted and a key that is
 /// not look exactly alike from the transport, which is the only trace a test has. That is not
-/// enough for the one decision the key stands behind: whether a gesture tells the player to hold
-/// at all (see `video_drag_hold_apply`). What is counted is the telling rather than the delivery,
+/// enough for the one decision the key stands behind: whether the pin tells the player to hold at
+/// all. What is counted is the telling rather than the delivery,
 /// and it is a test's alone — the release binary carries no part of it.
 #[cfg(test)]
 static PAUSE_POSTS: AtomicU64 = AtomicU64::new(0);
@@ -796,7 +791,7 @@ pub(super) fn terminate_player_pid(pid: u32) {
 /// where the death confirms — never a wait, never the UI thread.
 ///
 /// A kill confirmed on the spot clears the pid with it, so `VIDEO_PID == 0`
-/// asserts silence for the whole dead interval. A kill not yet taken is
+/// asserts silence for the whole interval the cover stands. A kill not yet taken is
 /// handed to the orphan reaper that outlives every gesture, which asks again
 /// on every tick until the death confirms: never dropped, never waited on
 /// (see `retire_orphaned_player`).

@@ -1284,97 +1284,20 @@ pub(super) fn relayout_pinned_media(
         .unzip();
 
     match kind {
-        // A player with a window of its own — FFmpeg's or mpv's — draws in it and scales the
-        // picture to it, so the box that changed is a window that has to be moved — and, because
-        // the player rendered at whatever size it was begun at, one that has to be *begun again*
-        // to be rendered sharply at the size it has settled on.
-        //
-        // The two happen at different times and that is the whole of the two-phase resize. While
-        // the hand is still moving the edge, what is on screen is asked for on every pointer move
-        // (see `place_pinned_siblings`, called from `apply_pin_drag`): the window is put to the
-        // new size with `SetWindowPos` and the frame already rendered is scaled into it. It is
-        // responsive, it follows the pointer at the pointer's own pace, and it is soft — a 1440p
-        // frame shown in a box half its size and scaled back up is not the picture the user is
-        // choosing a size for.
-        //
-        // This is the settle, and it is the only place a relaunch happens for a resize. The
-        // player is ended and begun again at the box the drag ended up with, cropped from the
-        // same geometry probe the first launch cropped from, so the file that comes up is the
-        // file that was already there at full resolution — and it arrives over the old window
-        // rather than after it (see `retire_replaced_player`), so the soft frame under the hand
-        // is replaced by a sharp one without the band ever showing the desktop.
-        //
-        // The alternative — holding the old size until the relaunch lands — was rejected, and
-        // the reason is what a resize *is* while it is happening. A window that refused to follow
-        // the hand and sprang to a new size at the end is not a window being resized; it is a
-        // window that was closed and opened again, and the thing the user is doing — judging a
-        // size by how the film looks in it — cannot be done against a picture that does not
-        // change. Softness for the duration of a drag is a cost paid while the hand is moving
-        // and nothing else is happening; a band that stays at the old size until a relaunch
-        // completes is a visible discontinuity in the middle of a gesture, and it is the
-        // discontinuity the user would notice rather than the softness.
-        //
-        // The position is kept, so a resize does not throw away where the film was: the bar is
-        // read for the second the player had got to and the new one is begun there. A resize that
-        // restarted the film at the beginning would be the one thing about a resize that has to be
-        // undone by hand afterwards — and a hold is kept for the same reason, because a pin that
-        // was holding the film and was resized is a pin holding the film at a different size, not a
-        // pin that has started playing it (see `restart_pinned_player`).
+        // A film — FFmpeg's player's or mpv's — is drawn through a host of this app's, and the
+        // Shell stretches the source into whatever box the host reports. So the box that changed
+        // is one rectangle, and the picture follows it on the next frame; nothing is resized and
+        // nothing is begun again (see `pin_film_thumbnail`).
         Some(MediaType::Video) => {
-            // **A box change is a player being ended and another begun, so it takes the press road
-            // first**: the cover stands over the outgoing frame and the old player is killed before
-            // the replacement exists, which is what keeps the replacement's window — published within
-            // milliseconds and empty until the file is open and the first frame is decoded — from
-            // being raised over a transparent band (see `begin_covered_box_change`).
+            // **A film is drawn through a host, and a box change is the host fitted to the new
+            // box — no player is ended for it.** The source was placed once at the film's own size
+            // and the Shell stretches it into whatever destination the pin's host reports, so a
+            // resize is a rectangle and the picture plays on through it (see `pin_film_thumbnail`
+            // and `ensure_pinned_sibling_box`).
             //
-            // **And nothing else does.** A take-up has pressed nothing: it builds the pin whole
-            // for a file this window has not stood on before, with no hand in it and no player
-            // behind it to kill. Asking the press road anyway is not harmless even so — it is silent
-            // about the absence of a press, not deaf to it. A press snapshots the film it found and
-            // freezes the clock (`gesture_press_freeze`), and the relaunch below reads its hold out
-            // of that snapshot, so a road with no press in it has no snapshot to read: what it gets
-            // is either no relaunch at all (the end finds nothing to take) or the second and the
-            // hold of a press belonging to some other road — with a cover left standing over the
-            // frame and nothing in the pin's own state to end it (see `relaunch_gesture_end_at` and
-            // `pin_park_carried_forward`).
-            //
-            // A resize's own press has already run this road and left its cover standing, so on that
-            // box change the call answers false too, and the relaunch below is the one the resize's
-            // release armed: one press, one player.
-            let covered =
-                matches!(road, PinRelayoutRoad::BoxChange) && unsafe { begin_covered_box_change() };
-            ensure_pinned_sibling_box(content);
-            match pinned_media_owner() {
-                // The press's end: it takes the snapshot, so this is the one relaunch the box
-                // change owes — at the second the film had got to, and not twice across the
-                // release that re-enters behind the settle (see `relaunch_gesture_end_at`).
-                Some(_) if covered => {
-                    relaunch_gesture_end_at(content, None);
-                }
-                Some((path, _)) if pin_film_host::the_pinned_film_is_drawn_in_a_host(&path) => {
-                    // **A hosted film rescales itself when its host is given a new box**, and the
-                    // host is fitted by `ensure_pinned_sibling_box` above (see
-                    // `place_the_pin_film_host`), so a resize is a move and not a relaunch: nothing
-                    // is begun again and the film plays on through the settle. mpv and FFmpeg's
-                    // player are both hosted here (see `pin_film_host`).
-                    //
-                    // **And the film's window is not asked for the new box**: a source drawn through
-                    // the Shell's thumbnail was placed once, at the film's own size, and a box that
-                    // settled is a destination rectangle (see `pin_film_thumbnail`).
-                }
-                Some((path, _)) => {
-                    // And with no press behind it the hold is the pin's own: what the transport says
-                    // the film is doing now, which for a take-up is the transport that take-up built
-                    // rather than one a press has frozen (see `pinned_is_held`).
-                    restart_pinned_player(
-                        &path,
-                        content,
-                        pinned_playhead().unwrap_or(0.0),
-                        pinned_is_held(),
-                    );
-                }
-                None => {}
-            }
+            // This is what a resize, a maximize and a take-up all are, and the restart the film
+            // used to take here — a player ended and another begun at the same second — is gone
+            // with the child-window film that needed it.
             None
         }
         // The media engine draws into a surface of the size it was started at, and this window
@@ -1498,23 +1421,20 @@ fn box_is_covered(
 /// one size it is asked at.
 ///
 /// Every kind lays its media out again in whatever box it is given, so the road is a fact only a video
-/// needs — and a video needs it because a box change for one is a player being ended and another begun,
-/// which is the WS-J press road: freeze the clock, cover the outgoing frame, kill the old player before
-/// the replacement's window is on screen to be seen empty over a transparent band (see
-/// `begin_covered_box_change`).
+/// needs — and what a video needs it for is the one *size* the file is decoded at. A box change for a
+/// film is the host fitted to the new box and nothing else; no player is ended for it (see
+/// `pin_film_thumbnail`).
 ///
 /// The box a zoom is laid out for is the other thing a road decides, and it is the only one the scale
 /// below is read from (see `relayout_pinned_media`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum PinRelayoutRoad {
     /// A take-up: the pin is being built whole for a file this window has not stood on before. No
-    /// hand is in it, no player was killed, and nothing is owed a resume — so this road relaunches
-    /// the film that is there, at the second it is at, in whatever state the transport the take-up
-    /// just built says it is in (see `pinned_is_held`).
+    /// hand is in it and no player was killed.
     TakeUp,
-    /// A box change: the window the player is standing in has been given another box, so the
-    /// player is ended and begun again in it. The press road, and the relaunch the press's own end
-    /// makes (see `begin_covered_box_change` and `relaunch_gesture_end_at`).
+    /// A box change: the window the pin stands in has been given another box — a resize, a
+    /// maximize, a reset. The film follows it as a thumbnail and no player is ended for it (see
+    /// `pin_film_thumbnail`).
     BoxChange,
     /// A zoom: the wheel has taken a picture past the box its window has, so what is laid out again is
     /// not a window's own room but the size the picture is drawn at.

@@ -506,36 +506,29 @@ fn pin_level_settled_by_owes_a_level_to_a_playing_player_only() {
 /// The facts it is refused over are refusals rather than permissions, and each is a different
 /// mistake. A file that is playing is a file the key is being used to stop, where ending its player
 /// instead would take a picture away to answer a pause. A hold that has not reached its player yet
-/// is a key that is *being delivered*, which a level turned in the meantime must not cancel. And a
-/// hold that is a gesture's is the end of that gesture rather than a press of the pause button's.
+/// is a key that is *being delivered*, which a level turned in the meantime must not cancel.
 #[test]
 fn a_held_player_at_a_level_the_pin_has_moved_on_from_cannot_be_let_go_of_with_a_key() {
     assert!(
-        level_is_owed_to_the_next_player(true, false, false, 40, 80),
+        level_is_owed_to_the_next_player(true, false, 40, 80),
         "a held file whose player was begun at 40 with the bar drawn at 80 owes the level to the \
              player that begins when the file is let go of — and letting it go of the hold with a \
              key would start the film at 40, which is the level the hand moved away from"
     );
     assert!(
-        !level_is_owed_to_the_next_player(true, false, false, 80, 80),
+        !level_is_owed_to_the_next_player(true, false, 80, 80),
         "a held file whose player was begun at the level the bar is drawn at is owed nothing, and \
              the key is the whole of letting it go of the hold: the player that never stopped stays"
     );
     assert!(
-        !level_is_owed_to_the_next_player(false, false, false, 40, 80),
+        !level_is_owed_to_the_next_player(false, false, 40, 80),
         "a file that is not held has this key pressed on it to stop it, so the answer has to be \
              there: ending the player instead would leave the pin's band showing the desktop"
     );
     assert!(
-        !level_is_owed_to_the_next_player(true, false, true, 40, 80),
+        !level_is_owed_to_the_next_player(true, true, 40, 80),
         "and a hold that has not reached its player yet is not a player holding at any level: it is \
              a player playing, waiting for exactly this key, which is what delivers it"
-    );
-    assert!(
-        !level_is_owed_to_the_next_player(true, true, false, 40, 80),
-        "a hold that is a gesture's is the end of that gesture rather than a press of the pause \
-             button's: a window dragged for a second and released has to carry on from the second \
-             it was watching, and a player begun again is the one way not to do that"
     );
 }
 
