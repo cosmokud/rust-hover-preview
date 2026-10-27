@@ -5494,3 +5494,94 @@ fn a_relaunch_of_a_held_film_posts_no_pause_key_to_it() {
     clear_restart_count();
     pin_trace::clear_noted();
 }
+
+/// **The picture that is standing is the one the tracker and the z-order follow, not the replacement
+/// that has made no window yet.** A relaunch records its new player and begins it; for the whole of the
+/// wait the player before it is frozen and is what the host is drawing — so the host is drawing, the
+/// fit and topmost re-assert keep working, and a seek is not the instant the pin is declared empty (see
+/// `pin_film_host::the_host_is_drawing` and `pin_film_thumbnail::the_standing_source_process`).
+#[test]
+fn the_standing_source_is_what_the_tracker_and_the_topmost_road_follow() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let pid = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(pid);
+
+    // The pin's own player, adopted and registered: the picture the host has.
+    let first = unsafe { a_source_of_the_host(host) };
+    pin_film_thumbnail::the_band_was_placed(host);
+    pin_trace::clear_noted();
+    assert!(
+        pin_film_host::the_host_is_drawing(),
+        "a host with a registration standing has a picture in it"
+    );
+    assert!(
+        pin_trace::noted_lines().iter().any(|line| line
+            == &format!("hosted drawing pid {pid} host {host:?} drawing 1")),
+        "and the tracker names the player whose source it is: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    // A seek's relaunch: another player is recorded and begun, and it has made no window at all.
+    pin_trace::clear_noted();
+    pin_film_thumbnail::clear_the_unregistrations();
+    let hides = pin_film_host::host_hides_asked();
+    restart_pinned_player(&path, film.box_, 90.0, false, RestartReason::Seek);
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    assert_ne!(replacement, pid, "a replacement player was begun");
+
+    assert!(
+        pin_film_host::the_host_is_drawing(),
+        "the frozen picture the seek left behind is what the host is drawing"
+    );
+    assert!(
+        !pin_film_host::the_hosted_player_is_drawing(replacement),
+        "and the replacement is not the picture: it has made no window"
+    );
+    let _ = ensure_video_window_topmost(film.box_.0, film.box_.1, 320, 240);
+    assert!(
+        !pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("topmost skipped: pin host not drawing yet")),
+        "so the z-order re-assert is not skipped for a seek: {:?}",
+        pin_trace::noted_lines()
+    );
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line == "topmost shown: pin host drawing"),
+        "and the host the frozen frame is drawn in is shown: {:?}",
+        pin_trace::noted_lines()
+    );
+    assert_eq!(
+        pin_film_host::host_hides_asked(),
+        hides,
+        "with nothing hidden behind the freeze"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "and the registration standing never taken down for the wait"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    let _ = unsafe { DestroyWindow(first) };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    clear_restart_count();
+    clear_pending_subtitles();
+    clear_pending_pinned_relaunch();
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
