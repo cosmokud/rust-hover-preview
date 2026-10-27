@@ -1,7 +1,14 @@
 //! The window FFmpeg draws a film into, and the process standing behind it: finding the
 //! window, keeping it out of the foreground, sending it a key, and killing what is left over.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+};
+use windows::Win32::System::Threading::{
+    OpenThread, ResumeThread, SuspendThread, THREAD_SUSPEND_RESUME,
+};
 
 // Expected executable names of the players a video or a sound is spawned as, used to verify a
 // recorded PID still belongs to that process before killing it.
@@ -797,6 +804,175 @@ pub(super) fn is_player_pid_alive(pid: u32) -> bool {
     }
 }
 
+/// The players this app has suspended and not let go of, each with how many of its threads were
+/// suspended (see `suspend_player_threads`).
+///
+/// It is the whole record a freeze of this kind leaves: the player is never resumed on the road that
+/// suspends it — it is ended once its replacement has the picture — so what is written down is only
+/// what a kill the system refuses would otherwise leave standing frozen for ever (see
+/// `terminate_player_pid`).
+static SUSPENDED_PLAYERS: Lazy<Mutex<Vec<(u32, usize)>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// **Suspend every thread of the player being replaced, which is the freeze for an engine with no
+/// command channel.** FFmpeg's player is told nothing once it runs, and the one thing it can be told —
+/// the pause key — clears the window the Shell draws the pin through, which is the black placeholder
+/// the key road was measured leaving behind (see `pin_playback::FreezeRoad`). A player whose threads
+/// are suspended draws nothing, clears nothing and presents nothing, so the frame it last put up is
+/// the frame that stays.
+///
+/// It is a handful of `OpenThread`/`SuspendThread` calls over the threads the snapshot names, made
+/// once per relaunch and never on a gesture. A player already suspended is answered with the threads
+/// that were suspended for it rather than suspended again, because a second suspension takes a second
+/// resume to undo (see `resume_suspended_player`).
+pub(super) fn suspend_player_threads(pid: u32) -> usize {
+    if pid == 0 {
+        return 0;
+    }
+
+    if let Ok(held) = SUSPENDED_PLAYERS.lock() {
+        if let Some((_, threads)) = held.iter().find(|(suspended, _)| *suspended == pid) {
+            return *threads;
+        }
+    }
+
+    let threads = suspend_the_threads(pid);
+    if threads > 0 {
+        if let Ok(mut held) = SUSPENDED_PLAYERS.lock() {
+            held.push((pid, threads));
+        }
+    }
+    threads
+}
+
+/// Let a suspended player go again, answering how many of its threads were suspended: **the road a
+/// kill that is not taken takes** (see `terminate_player_pid`), and nothing else.
+///
+/// A player this app froze is ended, never resumed — but a process left suspended for ever is a film
+/// standing frozen behind a window nothing owns, which is worse than the film going on, so the one
+/// road that can leave one behind lets it go instead.
+pub(super) fn resume_suspended_player(pid: u32) -> usize {
+    let threads = {
+        let Ok(mut held) = SUSPENDED_PLAYERS.lock() else {
+            return 0;
+        };
+        let Some(at) = held.iter().position(|(suspended, _)| *suspended == pid) else {
+            return 0;
+        };
+        held.remove(at).1
+    };
+
+    #[cfg(test)]
+    if SUSPEND_STAND_IN.lock().is_ok_and(|held| held.is_some()) {
+        return threads;
+    }
+
+    resume_the_threads(pid);
+    threads
+}
+
+/// Forget that a player was suspended, answered where a kill is requested or refused: the record is
+/// a claim about a live process, and the system hands a process id to another process (see
+/// `suspend_player_threads`).
+pub(super) fn forget_suspended_player(pid: u32) {
+    if let Ok(mut held) = SUSPENDED_PLAYERS.lock() {
+        held.retain(|(suspended, _)| *suspended != pid);
+    }
+}
+
+/// The players this app has suspended and not ended, as a test reads the freeze: it is how a run says
+/// that the player on screen was the one suspended and the replacement was not (see
+/// `suspend_player_threads`).
+#[cfg(test)]
+pub(super) fn suspended_players() -> Vec<u32> {
+    SUSPENDED_PLAYERS
+        .lock()
+        .map(|held| held.iter().map(|(pid, _)| *pid).collect())
+        .unwrap_or_default()
+}
+
+/// Forget every suspension a test stood in, so each test reads its own (see `suspended_players`).
+#[cfg(test)]
+pub(super) fn clear_suspended_players() {
+    if let Ok(mut held) = SUSPENDED_PLAYERS.lock() {
+        held.clear();
+    }
+}
+
+/// How many of a player's threads are suspended, or the answer a test stood in for it (see
+/// `SUSPEND_STAND_IN`).
+fn suspend_the_threads(pid: u32) -> usize {
+    #[cfg(test)]
+    if let Some(threads) = SUSPEND_STAND_IN.lock().ok().and_then(|held| *held) {
+        return threads;
+    }
+    // Safety: the snapshot is this app's own to close, and each thread handle is opened for the one
+    // right `SuspendThread` needs and closed straight after it.
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) else {
+            return 0;
+        };
+        let mut entry = THREADENTRY32 {
+            dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
+        let mut suspended = 0;
+        if Thread32First(snapshot, &mut entry).is_ok() {
+            loop {
+                if entry.th32OwnerProcessID == pid {
+                    if let Ok(thread) = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID) {
+                        if SuspendThread(thread) != u32::MAX {
+                            suspended += 1;
+                        }
+                        let _ = CloseHandle(thread);
+                    }
+                }
+                if Thread32Next(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+        suspended
+    }
+}
+
+/// Resume every thread of `pid` that the snapshot names and is still openable: a thread that ended
+/// between the snapshot and the open is one `OpenThread` answers nothing for, which is not an error.
+fn resume_the_threads(pid: u32) {
+    // Safety: as above — the snapshot and each thread handle are this call's own and closed here.
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) else {
+            return;
+        };
+        let mut entry = THREADENTRY32 {
+            dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
+        if Thread32First(snapshot, &mut entry).is_ok() {
+            loop {
+                if entry.th32OwnerProcessID == pid {
+                    if let Ok(thread) = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID) {
+                        let _ = ResumeThread(thread);
+                        let _ = CloseHandle(thread);
+                    }
+                }
+                if Thread32Next(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+    }
+}
+
+/// The suspension a test is answered with in place of the machine's own.
+///
+/// The player a test stands in is a process id no process holds — and on the hover's road it is the
+/// test process's own — so the real road must never run from a test. The machine's own answer is
+/// asked of real processes by the two tests that begin one (see `suspend_the_threads`).
+#[cfg(test)]
+static SUSPEND_STAND_IN: Mutex<Option<usize>> = Mutex::new(Some(1));
+
 /// Terminate `pid` when it is still the player we spawned. Non-blocking: it only
 /// requests the termination, it never waits for the process to exit.
 ///
@@ -804,21 +980,34 @@ pub(super) fn is_player_pid_alive(pid: u32) -> bool {
 /// player went while its window was the picture is written here: an end made before its replacement
 /// stands is the black band the relaunch's order exists to keep out (see
 /// `video_retire::note_an_end_while_standing`).
+///
+/// **A suspended player is ended by the same request** — `TerminateProcess` ends a process whether its
+/// threads are running or suspended — so what is left here is the one road a request the system does
+/// not take leaves. The record goes with the request either way, and a player still alive after a
+/// refusal is let go of rather than left frozen: a frozen process nothing will ever resume is the
+/// leak this record exists to rule out (see `resume_suspended_player`).
 pub(super) fn terminate_player_pid(pid: u32) {
     note_an_end_while_standing(pid);
-    unsafe {
-        let Ok(handle) = OpenProcess(
+    // Safety: the handle is opened for the two rights the calls below need and closed before this
+    // answers, and the image check is what keeps a kill by id alone impossible.
+    let requested = unsafe {
+        OpenProcess(
             PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
             false,
             pid,
-        ) else {
-            return;
-        };
-        if process_image_matches(handle, video_process_image()) {
-            let _ = TerminateProcess(handle, 1);
-        }
-        let _ = CloseHandle(handle);
+        )
+        .is_ok_and(|handle| {
+            let requested = process_image_matches(handle, video_process_image())
+                && TerminateProcess(handle, 1).is_ok();
+            let _ = CloseHandle(handle);
+            requested
+        })
+    };
+
+    if !requested && is_player_pid_alive(pid) && resume_suspended_player(pid) > 0 {
+        note_pin_trace!("suspended player could not be ended pid {pid}: let go of");
     }
+    forget_suspended_player(pid);
 }
 
 /// Clear the recorded video process state once `pid` is confirmed gone.
@@ -899,5 +1088,85 @@ mod tests {
             100,
             "and nothing pending is the idle cadence the monitor always had"
         );
+    }
+
+    /// A process begun for a test to suspend: it makes no window and plays nothing, and its own thirty
+    /// seconds are bounded by the kill and the wait in whatever this test leaves behind.
+    #[allow(clippy::zombie_processes)]
+    fn a_process_to_suspend() -> std::process::Child {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("cmd")
+            .args(["/c", "ping", "-n", "30", "127.0.0.1"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            // The console program's own window is not this suite's to put on the desktop.
+            .creation_flags(0x08000000)
+            .spawn()
+            .expect("a process to suspend")
+    }
+
+    /// **A process this app has suspended can still be ended**, which is the fact a relaunch's freeze
+    /// rests on: the end of a player is a termination and not a request for its threads to stop, so a
+    /// player frozen where it stands dies like any other and is never left behind (see
+    /// `terminate_player_pid`).
+    ///
+    /// Asked of a real process because it is a fact about the machine rather than about this code: the
+    /// suspension below is the same enumeration and the same `SuspendThread` calls a relaunch makes.
+    #[test]
+    fn a_suspended_process_can_still_be_ended() {
+        let mut child = a_process_to_suspend();
+        assert!(
+            suspend_the_threads(child.id()) >= 1,
+            "every thread of it is suspended"
+        );
+
+        assert!(child.kill().is_ok(), "the kill is still taken");
+        assert!(
+            child.wait().is_ok(),
+            "and a suspended process goes: nothing is left standing frozen"
+        );
+    }
+
+    /// **And a suspension is let go of where the end is refused.** The other road out of a freeze is a
+    /// resume, and a resumed process is running again rather than merely alive.
+    #[test]
+    fn a_suspended_process_runs_again_once_it_is_resumed() {
+        let mut child = a_process_to_suspend();
+        assert!(suspend_the_threads(child.id()) >= 1);
+        resume_the_threads(child.id());
+        assert!(
+            child.try_wait().is_ok_and(|ended| ended.is_none()),
+            "the process the resume let go of is still running"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// **One suspension per player, and one resume to let it go.** A second suspension of the same
+    /// player would take a second resume to undo, which is the frozen process a refused kill would
+    /// leave behind (see `suspend_player_threads` and `resume_suspended_player`).
+    #[test]
+    fn a_suspension_is_recorded_once_and_let_go_of_once() {
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+        let pid = 4242;
+        clear_suspended_players();
+        assert_eq!(suspend_player_threads(pid), 1);
+        assert_eq!(
+            suspend_player_threads(pid),
+            1,
+            "a player already suspended is not suspended again"
+        );
+        assert_eq!(suspended_players(), vec![pid]);
+        assert_eq!(resume_suspended_player(pid), 1);
+        assert_eq!(
+            resume_suspended_player(pid),
+            0,
+            "and there is nothing left to let go of"
+        );
+        assert!(suspended_players().is_empty());
     }
 }

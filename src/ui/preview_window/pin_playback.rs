@@ -304,7 +304,7 @@ fn relaunch_pinned_player(
     // on through the whole wait and then jumps back to the second that was asked for, which reads as
     // a stall and a jump rather than as a wait behind a still frame (see
     // `freeze_the_outgoing_picture`).
-    freeze_the_outgoing_picture(replaced);
+    freeze_the_outgoing_picture(replaced, freeze_road());
 
     // **A relaunch is a new generation**, so a replacement an earlier one began can never publish
     // under this one, and the unpublished one is killed BEFORE this replacement is spawned rather
@@ -422,11 +422,11 @@ fn relaunch_pinned_player(
 
 /// Hold the hover where it stands and read back the second its picture is at.
 ///
-/// **Pausing is the freeze** (see `freeze_the_outgoing_picture`), and what is left here is the read:
-/// mpv leaves the frame it was showing on screen when it is told to hold, so the hover window the
-/// user is looking at keeps that frame for as long as the take-up takes — nothing is captured,
-/// nothing is painted over it, and nothing hides it (see
-/// `begin_the_pinned_film_at_the_hovers_frame`).
+/// **The freeze is the hold the relaunch already made** (see `freeze_the_outgoing_picture`), and what
+/// is left here is the read: mpv leaves the frame it was showing on screen when it is told to hold (and
+/// a suspended player is not told anything at all), so the hover window the user is looking at keeps
+/// that frame for as long as the take-up takes — nothing is captured, nothing is painted over it, and
+/// nothing hides it (see `begin_the_pinned_film_at_the_hovers_frame`).
 ///
 /// `None` where the player did not answer with its position, which leaves the caller's own clock as
 /// the second to begin the pin on: a frozen picture this app cannot read is still a frozen picture,
@@ -442,26 +442,28 @@ fn freeze_the_hover(pid: u32) -> Option<f64> {
 ///
 /// It is a hold of the player being replaced and nothing else: no capture, no scaling, no painting
 /// over the band and no hide. The registration the host wears goes on drawing that window (see
-/// `pin_film_thumbnail::the_source_is_standing`), and a player told to hold keeps the frame it was
+/// `pin_film_thumbnail::the_source_is_standing`), and a player that is held keeps the frame it was
 /// showing, which is exactly the placeholder the wait is owed. The player is never resumed: it is
 /// ended once its replacement has taken the picture over (see `settle_video_retirement`).
 ///
-/// The two engines are told differently and both instantly. mpv takes `set_property pause true` down
-/// the pipe it listens on. FFmpeg's player is posted the pause key the bar's own button posts, which
-/// is the one thing a running player of this app's can be told at all (see `video_key_pause_for`),
-/// and a posted key is directed at the player's own window whatever that window's extended style
-/// says.
+/// **The two engines are held differently, and the difference is what each can be told.** mpv takes
+/// `set_property pause true` down the pipe it listens on and holds its last frame. FFmpeg's player has
+/// no command channel, and the one thing it can be told — the pause key — is a *toggle* that clears
+/// the very window the Shell draws the pin through, which is a registration of a black window (see
+/// `FreezeRoad`). So a player with no pipe is **suspended** where it stands instead: it stops drawing
+/// without being given anything to redraw (see `ffplay_window::suspend_player_threads`).
 ///
-/// **A film already held is already frozen, and the key toggles**: a key posted to a player that is
-/// holding would set it going again, which is the one thing this must not do. What says so is the
-/// hold this app has written down for the transport — including a hold still owed to a player that
-/// has not been given it yet, which is a player that is still playing (see `PinTransport`).
+/// **And whether the frame survived is sampled on the spot**, of the player's own client, so a run
+/// says whether the picture DWM goes on drawing is really there. `ok` is a window that kept its
+/// frame; `black` is a window with nothing in it, which is the answer that leaves the capture road —
+/// grab the last presented frame into a still painted in the film host — as the only thing left (see
+/// `pin_film_thumbnail::the_sources_picture_is_lit`).
 ///
 /// Answers whether a player on screen was frozen, which is nothing on screen where the player had no
 /// window of its own to be told through: that wait is the walk-and-jump it always was rather than a
 /// failure.
-fn freeze_the_outgoing_picture(pid: u32) -> bool {
-    if pid == 0 {
+pub(super) fn freeze_the_outgoing_picture(pid: u32, road: FreezeRoad) -> bool {
+    if pid == 0 || road == FreezeRoad::Off {
         return false;
     }
 
@@ -470,16 +472,100 @@ fn freeze_the_outgoing_picture(pid: u32) -> bool {
         return true;
     }
 
-    if the_player_on_screen_is_held() {
-        return true;
+    if road == FreezeRoad::Key {
+        // **A film already held is already frozen, and the key toggles**: a key posted to a player
+        // that is holding would set it going again, which is the one thing this must not do. What
+        // says so is the hold this app has written down for the transport — including a hold still
+        // owed to a player that has not been given it yet, which is a player that is still playing
+        // (see `PinTransport`). A suspension has no such toggle and no such question (see
+        // `FreezeRoad`).
+        if the_player_on_screen_is_held() {
+            return true;
+        }
+
+        if video_key_pause_for(pid) {
+            note_pin_trace!("outgoing picture frozen pid {pid} by the key");
+            return true;
+        }
+
+        return false;
     }
 
-    if video_key_pause_for(pid) {
-        note_pin_trace!("outgoing picture frozen pid {pid} by the key");
-        return true;
+    // **An engine with no command channel is suspended rather than told** (see `FreezeRoad`): the
+    // handful of calls that stop it drawing is the whole of the freeze, and the frame it last put up
+    // is left exactly where it is.
+    let threads = suspend_player_threads(pid);
+    if threads == 0 {
+        return false;
     }
 
-    false
+    let sample = match pin_film_thumbnail::the_sources_picture_is_lit(pid) {
+        Some(true) => "ok",
+        Some(false) => "black",
+        None => "none",
+    };
+    note_pin_trace!("outgoing picture frozen pid {pid} suspended threads {threads} sample {sample}");
+    true
+}
+
+/// The road a relaunch freezes its outgoing player by, from `RHP_FREEZE`, read once per run.
+///
+/// **`suspend` is the road that ships** (see `freeze_the_outgoing_picture`): a player with no command
+/// channel is suspended where it stands, so the frame it last presented is untouched.
+///
+/// **`key` is the dead road, and it is kept as the A/B arm rather than deleted** because the
+/// measurement that killed it is one line to repeat: FFmpeg's player clears its own window when the
+/// pause key pauses it, so the registration the host went on wearing drew a black window for the
+/// whole wait — three relaunches traced with the freeze line 11 ms before each restart, the outgoing
+/// window standing as the source throughout, and the placeholder black. A key is a toggle and not a
+/// setting besides: a held film is already a still frame, and a second key would set it going.
+///
+/// `off` freezes nothing, which is the road before there was a freeze at all: the film walks on under
+/// the registration and jumps back to the second the relaunch asked for when the new source draws.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FreezeRoad {
+    Suspend,
+    Key,
+    Off,
+}
+
+/// `RHP_FREEZE` as a freeze road: `key` and `off` are the two named arms, and anything else —
+/// including nothing at all — is the suspension (see `FreezeRoad`).
+pub(super) fn freeze_road_from(setting: Option<&str>) -> FreezeRoad {
+    match setting.map(str::trim) {
+        Some("key") => FreezeRoad::Key,
+        Some("off") => FreezeRoad::Off,
+        _ => FreezeRoad::Suspend,
+    }
+}
+
+/// The freeze road this run was begun on: a question about the run rather than about a relaunch, so
+/// it is read once and every relaunch of the run agrees on it (see `FreezeRoad`).
+static FREEZE_ROAD: Lazy<FreezeRoad> =
+    Lazy::new(|| freeze_road_from(std::env::var("RHP_FREEZE").ok().as_deref()));
+
+/// The freeze road of this relaunch: the run's own, or the answer a test stood in (see
+/// `stand_the_freeze_road_in`).
+pub(super) fn freeze_road() -> FreezeRoad {
+    #[cfg(test)]
+    if let Some(road) = FREEZE_ROAD_STAND_IN.lock().ok().and_then(|held| *held) {
+        return road;
+    }
+    *FREEZE_ROAD
+}
+
+/// The road a test is answered with in place of the run's own, which `RHP_FREEZE` names and a suite
+/// does not set (see `freeze_road`).
+#[cfg(test)]
+static FREEZE_ROAD_STAND_IN: Mutex<Option<FreezeRoad>> = Mutex::new(None);
+
+/// Stand a freeze road in place of the run's own, or give the run's own answer back with `None`, so
+/// each test puts the slot back rather than leaving it to the test the runner reaches next.
+#[cfg(test)]
+pub(super) fn stand_the_freeze_road_in(road: Option<FreezeRoad>) {
+    if let Ok(mut held) = FREEZE_ROAD_STAND_IN.lock() {
+        *held = road;
+    }
 }
 
 /// Whether the player the pin is drawing is already holding its film, which is what says the pause

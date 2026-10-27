@@ -5391,6 +5391,307 @@ fn a_relaunch_freezes_the_picture_on_screen_down_the_pipe_the_player_answers_on(
     pin_trace::clear_noted();
 }
 
+/// **The freeze road is the run's own setting, read once, and the arm that lost is still nameable**
+/// (see `FreezeRoad`). Everything that is not one of the two named arms is the road that ships, because
+/// a value this build does not know must not silently turn the freeze off.
+#[test]
+fn the_freeze_road_is_the_runs_own_setting() {
+    assert_eq!(freeze_road_from(None), FreezeRoad::Suspend);
+    assert_eq!(freeze_road_from(Some("suspend")), FreezeRoad::Suspend);
+    assert_eq!(freeze_road_from(Some(" key ")), FreezeRoad::Key);
+    assert_eq!(freeze_road_from(Some("off")), FreezeRoad::Off);
+    assert_eq!(freeze_road_from(Some("anything else")), FreezeRoad::Suspend);
+}
+
+/// **A player with no command channel is suspended where it stands, and the line says whether the
+/// frame it left survived** — the whole of what that freeze is bet on (see `FreezeRoad` and
+/// `pin_film_thumbnail::the_sources_picture_is_lit`).
+///
+/// The sample is the signal the capture road waits for: `ok` is a window that still holds the frame the
+/// registration draws, and `black` is a window with nothing in it — which says DWM has nothing to draw
+/// either, and that freezing is only ever going to be a frame captured out of the player.
+#[test]
+fn a_player_with_no_command_channel_is_suspended_and_its_frame_sampled() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (_host, _source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+    ffplay_window::clear_suspended_players();
+    ffplay_window::clear_pause_posts();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+    pin_film_thumbnail::stand_the_drawn_probe_in(Some(true));
+
+    assert!(
+        freeze_the_outgoing_picture(pid, FreezeRoad::Suspend),
+        "a player FFmpeg draws into a window of its own is frozen by its own threads"
+    );
+    assert_eq!(
+        pin_trace::noted_lines(),
+        vec![format!(
+            "outgoing picture frozen pid {pid} suspended threads 1 sample ok"
+        )],
+        "one line says that it was frozen, how, and whether the frame it left is still lit"
+    );
+    assert_eq!(
+        ffplay_window::suspended_players(),
+        vec![pid],
+        "and the player the pin is drawing is the one that was suspended"
+    );
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        0,
+        "no key is posted: the key road is the one that cleared the window"
+    );
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "and nothing of the freeze is a command"
+    );
+    assert!(
+        pin_film_thumbnail::the_source_is_up(pid),
+        "the registration goes on drawing the frame that is standing"
+    );
+
+    // **A sample that comes back black is said out loud rather than read as a failed freeze**: the
+    // suspension happened, and what it left is a window with nothing in it for DWM to draw.
+    pin_film_thumbnail::stand_the_drawn_probe_in(Some(false));
+    pin_trace::clear_noted();
+    assert!(freeze_the_outgoing_picture(pid, FreezeRoad::Suspend));
+    assert_eq!(
+        pin_trace::noted_lines(),
+        vec![format!(
+            "outgoing picture frozen pid {pid} suspended threads 1 sample black"
+        )]
+    );
+
+    // **And the player is never left suspended**: the road that ends it forgets the suspension with it,
+    // so nothing this app froze outlives the end (see `terminate_player_pid`).
+    retire_orphaned_player(pid);
+    assert!(
+        ffplay_window::suspended_players().is_empty(),
+        "no suspended player survives the road that ends it"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    pin_film_thumbnail::stand_the_drawn_probe_in(Some(true));
+    pin_trace::clear_noted();
+}
+
+/// **Only the outgoing player of a relaunch is suspended**: the player the host is drawing and the
+/// replacement are untouched, and the suspension is ended with the player it froze once the new
+/// source has taken the picture over.
+#[test]
+fn only_the_outgoing_player_of_a_relaunch_is_suspended() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (host, _source, outgoing) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    ffplay_window::clear_suspended_players();
+    ffplay_window::clear_pause_posts();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+    clear_restart_count();
+
+    restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Seek);
+
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    assert_ne!(replacement, outgoing, "a relaunch begins another player");
+    assert_eq!(
+        ffplay_window::suspended_players(),
+        vec![outgoing],
+        "the player being replaced is the one suspended, and the replacement is not"
+    );
+    assert!(
+        pin_film_thumbnail::the_source_is_up(outgoing),
+        "and it is still the picture, so what the host draws is what was frozen"
+    );
+
+    // The replacement's own window arrives and draws: the picture changes hands in one step, which
+    // suspends nothing.
+    let second = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(second, replacement, host) };
+    pin_film_thumbnail::hand_the_picture_over(host);
+    assert!(
+        pin_film_thumbnail::the_source_is_up(replacement),
+        "the replacement is the picture once it can draw"
+    );
+    assert_eq!(
+        ffplay_window::suspended_players(),
+        vec![outgoing],
+        "a picture taking the band over suspends neither side"
+    );
+
+    // The loop's retirement ends the player the swap replaced — a suspended process is ended like any
+    // other — and the record of the suspension goes with it.
+    settle_video_retirement();
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line == &format!("player retired after the swap pid {outgoing}")),
+        "the retirement line still appears for a player that was suspended: {:?}",
+        pin_trace::noted_lines()
+    );
+    assert!(
+        ffplay_window::suspended_players().is_empty(),
+        "and no suspended player is left behind once it has gone"
+    );
+    assert!(
+        !pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("suspended player could not be ended")),
+        "the end was taken, so nothing was let go of instead: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    let _ = unsafe { DestroyWindow(second) };
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::forget_pipe(outgoing);
+    mpv_ipc::clear_reads();
+    clear_restart_count();
+    pin_trace::clear_noted();
+}
+
+/// **A hover frozen for a handover that never draws is ended, not left suspended.** The wait fails —
+/// no player behind it — and the one road out ends the hover's player through the same terminate the
+/// loop uses, which is where a suspension's record goes with it (see `retire_the_frozen_hover`).
+#[test]
+fn a_failed_handover_ends_the_player_it_suspended() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (_host, _source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+    ffplay_window::clear_suspended_players();
+    pin_trace::clear_noted();
+    assert!(freeze_the_outgoing_picture(pid, FreezeRoad::Suspend));
+    assert_eq!(ffplay_window::suspended_players(), vec![pid]);
+
+    // The hover is held for a handover of a film mpv is meant to begin in the host, and no player of
+    // mpv's ever arrives: the wait ends the other way and the player it froze is ended with it.
+    pin_film_host::hold_the_hover_for_the_handover(pid, 10.0);
+    pin_film_host::arm_pin_handover();
+    assert_eq!(
+        unsafe { pin_film_host::settle_pin_handover() },
+        pin_film_host::PinHandover::Failed,
+        "no player behind the wait is a handover that failed"
+    );
+    assert!(
+        ffplay_window::suspended_players().is_empty(),
+        "so the player the suspension froze is ended and not left standing frozen"
+    );
+    assert_eq!(
+        pin_film_host::held_hover_for_a_test(),
+        None,
+        "and nothing is still held for it"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
+
+/// **`off` freezes nothing, not even a player that would take a command**, and it is a stand-in for the
+/// run's own setting because `RHP_FREEZE` is one value for the whole process (see `freeze_road`).
+#[test]
+fn a_relaunch_on_the_off_road_freezes_nothing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (_host, _source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Mpv) };
+    stand_the_freeze_road_in(Some(FreezeRoad::Off));
+    ffplay_window::clear_suspended_players();
+    ffplay_window::clear_pause_posts();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+
+    assert!(!freeze_the_outgoing_picture(pid, FreezeRoad::Off));
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "a player with a pipe is not told to hold on the off road either: {:?}",
+        mpv_ipc::noted_lines()
+    );
+    assert!(
+        pin_trace::noted_lines().is_empty(),
+        "and no line claims a freeze that was not made"
+    );
+    assert!(ffplay_window::suspended_players().is_empty());
+    assert_eq!(ffplay_window::pause_posts(), 0);
+    assert_eq!(
+        freeze_road(),
+        FreezeRoad::Off,
+        "the relaunch reads the road the test stood in"
+    );
+
+    stand_the_freeze_road_in(None);
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
+
+/// **The dead road still posts the key it is named for**, so the measurement that killed it is one line
+/// to repeat: one relaunch, one pause key, no suspension (see `FreezeRoad`).
+#[test]
+fn the_key_road_posts_the_pause_key_that_clears_the_window() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (_host, _source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+    ffplay_window::clear_suspended_players();
+    ffplay_window::clear_pause_posts();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+
+    assert!(freeze_the_outgoing_picture(pid, FreezeRoad::Key));
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        1,
+        "the key is posted, and it is the one toggle that clears the player's own window"
+    );
+    assert_eq!(
+        pin_trace::noted_lines(),
+        vec![format!("outgoing picture frozen pid {pid} by the key")]
+    );
+    assert!(
+        ffplay_window::suspended_players().is_empty(),
+        "and the key road suspends nothing"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
+
 /// **A posted key reaches a window wearing the source's own extended style.** The freeze of a film
 /// FFmpeg's player is drawing is the pause key posted to the player's own window (see
 /// `freeze_the_outgoing_picture`), and that window is the source — which wears `WS_EX_TRANSPARENT`
@@ -5450,8 +5751,10 @@ fn a_posted_pause_key_reaches_a_window_wearing_the_sources_own_style() {
 }
 
 /// **A film the user is holding is already a still frame, and the pause key toggles**: a relaunch of a
-/// held film posts nothing to it, because a key there would set it going again — which is the one
-/// thing the freeze must not do (see `the_player_on_screen_is_held`).
+/// held film on the key road posts nothing to it, because a key there would set it going again — which
+/// is the one thing that freeze must not do (see `the_player_on_screen_is_held`). The road that ships
+/// suspends the player instead and needs no such guard, since a suspension has no toggle (see
+/// `FreezeRoad`).
 #[test]
 fn a_relaunch_of_a_held_film_posts_no_pause_key_to_it() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -5465,11 +5768,15 @@ fn a_relaunch_of_a_held_film_posts_no_pause_key_to_it() {
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     with_pin(|pin| pin.transport.held(30.0));
+    // The A/B arm the key is on, because the hold is what that road must not toggle: the road that
+    // ships suspends the player instead and has no such question to ask (see `FreezeRoad`).
+    stand_the_freeze_road_in(Some(FreezeRoad::Key));
     clear_restart_count();
     ffplay_window::clear_pause_posts();
     pin_trace::clear_noted();
 
     restart_pinned_player(&path, film.box_, 30.0, true, RestartReason::Seek);
+    stand_the_freeze_road_in(None);
 
     assert_eq!(
         ffplay_window::pause_posts(),
