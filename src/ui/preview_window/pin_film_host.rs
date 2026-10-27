@@ -128,7 +128,7 @@ fn a_resize_drag_is_live() -> bool {
 /// live child stands over, which is what keeps the film untouched (see `create`).
 ///
 /// **A host the Shell is drawing a thumbnail into is erased here exactly the same way**, and that is
-/// the whole of what closes the hole a film of the picture road showed as three bands: the Shell
+/// the whole of what closes the hole a film fitted into its box once showed as three bands: the Shell
 /// composes the thumbnail *over* this app's content, so a client painted in the bars alone is a pixel
 /// nobody drew — and one of those reads as the desktop seen through the pin. The picture now fills its
 /// destination, which is the whole client, so there is no bar for this erase to show through; what it

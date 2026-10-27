@@ -24,22 +24,23 @@
 //! `DwmUpdateThumbnailProperties`** — the destination and the crop, and nothing cross-process at all
 //! (see `place_the_source` and `the_band_was_placed`).
 //!
-//! **The size is the film's own picture size, never the pin's box.** `native` (the default, see
-//! [`SOURCE_SIZE_VARIABLE`]) places the source at the size the film would be drawn at were it not
-//! fitted to a window, from the player's own `video-params` — or from the probe's measurement of the
-//! same film where the player has not opened the file yet, which is waited for rather than guessed
-//! at. A pin at or under that size is a *downscale* the Shell makes, which is sharp at every box the
-//! hand pulls it to; a pin over it is the upscale the player itself would have to make, from the
-//! film's own pixels and not from a box three times a small pin. `box` is the A/B's other arm and
-//! places the same one source at the pin's box instead.
+//! **The size is the film's own picture size, never the pin's box.** The source is placed at the size
+//! the film would be drawn at were it not fitted to a window, from the player's own `video-params` —
+//! or from the probe's measurement of the same film where the player has not opened the file yet,
+//! which is waited for rather than guessed at. A pin at or under that size is a *downscale* the
+//! Shell makes, which is sharp at every box the hand pulls it to; a pin over it is the upscale the
+//! player itself would have to make, from the film's own pixels and not from a box three times a
+//! small pin. **`RHP_THUMBNAIL_SOURCE` used to offer the pin's box as the other arm, and it is gone**:
+//! `box` only ever meant one placement at the box the pin was adopted at, which nothing measures and
+//! nothing wants, so the film's own size is the only size there is.
 //!
-//! **What a thumbnail shows is the source's picture, not its whole client** (`RHP_THUMBNAIL_PICTURE`,
-//! `picture` by default): the rectangle the film is drawn in is cropped out of the source to **the
-//! box's own shape**, and the whole box is handed over as the destination, so the film fills its pin
-//! (see `the_thumbnail_box`). `client` is the road this began on and it is dead: it stretched the
-//! whole client, margins included, into the box, which is the pillar of black that read as a pin
-//! zoomed out (measured: `client 916x515 … picture 2595x1460 margins l311t0r311b0` — 311 px a side
-//! stretched into the picture) and the upscale that read as one zoomed in.
+//! **What a thumbnail shows is the source's picture, not its whole client**: the rectangle the film
+//! is drawn in is cropped out of the source to **the box's own shape**, and the whole box is handed
+//! over as the destination, so the film fills its pin (see `the_thumbnail_box`).
+//! **`RHP_THUMBNAIL_PICTURE` used to offer `client` as the other arm, and it is gone**: stretching the
+//! whole client, margins included, into the box is the pillar of black that read as a pin zoomed out
+//! (measured: `client 916x515 … picture 2595x1460 margins l311t0r311b0` — 311 px a side stretched
+//! into the picture) and the upscale that read as one zoomed in.
 //!
 //! **Filling the box is not a detail of the crop, it is what makes a bar impossible.** The road this
 //! replaces fitted the picture into the box at the picture's own shape and left the rest to the
@@ -58,7 +59,8 @@
 //! disagree says something other than this app resized the source (see `note_the_thumbnail_pair`).
 //!
 //! **Where the source stands, and what that was measured to be.** It stands at the pin's corner,
-//! under the host. `RHP_THUMBNAIL_SOURCE` used to name two other placements and both are dead:
+//! under the host. The placement knob this road once had named two other placements and both are
+//! dead:
 //! `offscreen` (a desktop's width left and a desktop's height below the virtual screen) traced as
 //! `source adopted … 1920x1080+-4440+3880` with the registration succeeding and the pin empty, and
 //! `edge` (2 px over the screen's bottom-right corner) the same at `… 1920x1080+3438+1438`. **The
@@ -147,60 +149,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use super::pin_trace::note_pin_trace;
 use super::*;
 
-/// **The one A/B this road's size has: `RHP_THUMBNAIL_SOURCE`, absent meaning `native`.**
-///
-/// `native` places the source, once, at the film's own picture size (see the module note): a pin at or
-/// under that size is a downscale the Shell makes, which is sharp, and a pin over it is the upscale
-/// the player itself would have had to make. `box` places it, the same once, at the pin's own box
-/// instead — the arm that shows what the other one is worth, because a pin grown past the box it was
-/// adopted at is drawn from that box.
-///
-/// **The placement knob this variable used to be is dead, and the generous-and-re-place road it
-/// belonged to is not kept behind a word of its own.** A source asked for a new box at each end of a
-/// drag is the flash the module note measures, and a run of it is what the trace of this change
-/// already is. `offscreen` and `edge`, the two placements measured dead, are gone with it; the source
-/// stands under the host, which is the one placement the Shell composes. A value that names neither of
-/// the two sizes is `native`.
-const SOURCE_SIZE_VARIABLE: &str = "RHP_THUMBNAIL_SOURCE";
-
-/// What `RHP_THUMBNAIL_SOURCE` names (see [`SOURCE_SIZE_VARIABLE`]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum SourceSize {
-    /// The film's own picture size, clamped to what the window system will take.
-    Native,
-    /// The pin's box at the moment the source was adopted, and nothing else.
-    Box,
-}
-
-/// The road a `RHP_THUMBNAIL_SOURCE` value names: `box` is the only word that changes anything, and
-/// nothing set — or a word this app does not know — is `native`, the road that keeps the picture sharp.
-fn source_size_from(value: Option<&std::ffi::OsStr>) -> SourceSize {
-    match value.and_then(|value| value.to_str()) {
-        Some("box") => SourceSize::Box,
-        _ => SourceSize::Native,
-    }
-}
-
-#[cfg(not(test))]
-fn read_the_source_size() -> SourceSize {
-    source_size_from(std::env::var_os(SOURCE_SIZE_VARIABLE).as_deref())
-}
-
-#[cfg(test)]
-fn read_the_source_size() -> SourceSize {
-    // The suite is the default road whatever the machine was started with (see `THE_SOURCE_SIZE`).
-    SourceSize::Native
-}
-
-/// The size this run was started with, read once: a variable set after the app has started changes
-/// nothing, so two runs are two comparable arms rather than two halves of one (see
-/// [`SOURCE_SIZE_VARIABLE`]).
-static THE_SOURCE_SIZE: Lazy<SourceSize> = Lazy::new(read_the_source_size);
-
-/// The size road this run is on (see [`SOURCE_SIZE_VARIABLE`]).
-fn the_source_size() -> SourceSize {
-    *THE_SOURCE_SIZE
-}
+// **`RHP_THUMBNAIL_SOURCE` lost and is gone.** It named `native` (one placement at the film's own
+// picture size) or `box` (one placement at the pin's box the source was adopted at), and nothing
+// measures or wants the second: the film's own size is the only size a source is placed at (see
+// `the_one_placement`).
 
 /// **A third knob, and not a setting either: `RHP_THUMBNAIL_INVISIBLE`, on unless it says `0`.**
 ///
@@ -215,67 +167,10 @@ const INVISIBLE_VARIABLE: &str = "RHP_THUMBNAIL_INVISIBLE";
 /// absent, which is what keeps the Shell drawing it (see the module note).
 const INVISIBLE_ALPHA: u8 = 1;
 
-/// **`RHP_THUMBNAIL_PICTURE`: what a thumbnail of the source shows.** `picture` (the default) crops the
-/// source to the rectangle mpv draws the film in — the letterbox margins a film of another shape leaves
-/// in its client are not part of the film — and crops that rectangle again to the box's own shape, so a
-/// pin's film always fills its box and has no bar to be found in (see `the_thumbnail_box`).
-///
-/// **`client` is the road this began on, and it is dead.** It stretched the source's whole client,
-/// margins included, into the box: measured on the glass as `client 916x515 drawn 3217x1460 picture
-/// 2595x1460 margins l311t0r311b0`, where 311 px a side of black pillar was stretched into the pin —
-/// the picture small in a large black field that read as *zoomed out* — and the same in reverse as a
-/// source smaller than the box, the upscaled blur that read as *zoomed in*. It stays as the other arm of
-/// the A/B (see `the_thumbnail_box`).
-const PICTURE_VARIABLE: &str = "RHP_THUMBNAIL_PICTURE";
-
-/// What `RHP_THUMBNAIL_PICTURE` names.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum PictureRoad {
-    /// The source's picture rectangle, cropped to the box's own shape: the default road, and the one a
-    /// pin's film fills its box on.
-    Picture,
-    /// The source's whole client, stretched into the box: today's road, and the A/B's other arm.
-    Client,
-}
-
-impl PictureRoad {
-    /// The word the trace writes for this road: the value the variable takes.
-    fn named(self) -> &'static str {
-        match self {
-            PictureRoad::Picture => "picture",
-            PictureRoad::Client => "client",
-        }
-    }
-}
-
-/// The road a `RHP_THUMBNAIL_PICTURE` value names: `client` is the only word that changes anything, and
-/// nothing set — or a word this app does not know — is `picture`, the road that draws the film itself.
-fn picture_road_from(value: Option<&std::ffi::OsStr>) -> PictureRoad {
-    match value.and_then(|value| value.to_str()) {
-        Some("client") => PictureRoad::Client,
-        _ => PictureRoad::Picture,
-    }
-}
-
-#[cfg(not(test))]
-fn read_the_picture_road() -> PictureRoad {
-    picture_road_from(std::env::var_os(PICTURE_VARIABLE).as_deref())
-}
-
-#[cfg(test)]
-fn read_the_picture_road() -> PictureRoad {
-    // The suite is the default road whatever the machine was started with (see `THE_PICTURE_ROAD`).
-    PictureRoad::Picture
-}
-
-/// The road this run was started with, read once: a variable set after the app has started changes
-/// nothing, so two runs are two comparable arms rather than two halves of one (see [`PICTURE_VARIABLE`]).
-static THE_PICTURE_ROAD: Lazy<PictureRoad> = Lazy::new(read_the_picture_road);
-
-/// The picture road this run is on (see [`PICTURE_VARIABLE`]).
-fn the_picture_road() -> PictureRoad {
-    *THE_PICTURE_ROAD
-}
+// **`RHP_THUMBNAIL_PICTURE` lost and is gone.** It named `picture` (the rectangle of the film's own
+// picture, cropped to the box's shape) or `client` (the source's whole client stretched into the
+// box, margins and all), and the second is the pillar of black the module note measures — so the
+// picture is the only thing a thumbnail of the source shows (see `the_thumbnail_box`).
 
 /// Whether the machine asked this road to make its source invisible (see [`INVISIBLE_VARIABLE`]).
 ///
@@ -645,16 +540,10 @@ fn place_the_source(
     placed: Option<SourceShape>,
 ) -> Option<SourceShape> {
     let origin = (unsafe { client_origin(host) })?;
-    let client = (unsafe { client_size(host) })?;
     let native = the_films_native_size(pid);
-    let Some((x, y, width, height)) = the_one_placement(
-        placed,
-        Some(origin),
-        native,
-        the_max_track(),
-        the_source_size(),
-        client,
-    ) else {
+    let Some((x, y, width, height)) =
+        the_one_placement(placed, Some(origin), native, the_max_track())
+    else {
         if placed.is_some() {
             note_pin_trace!(
                 "source re-placed {:?} host {:?}: a source takes one placement and this is a second ask",
@@ -716,17 +605,12 @@ fn the_one_placement(
     host_origin: Option<(i32, i32)>,
     native: Option<(i32, i32)>,
     max_track: (i32, i32),
-    size: SourceSize,
-    box_: (i32, i32),
 ) -> Option<SourceBox> {
     if placed.is_some() {
         return None;
     }
     let (x, y) = host_origin?;
-    let wanted = match size {
-        SourceSize::Native => native?,
-        SourceSize::Box => box_,
-    };
+    let wanted = native?;
     Some((
         x,
         y,
@@ -934,15 +818,9 @@ struct ThumbnailBox {
 /// with (`pin_geometry::resize_pinned_content`) — so the crop is the picture whole and the pair handed to
 /// the Shell is the one the containing road handed it.
 ///
-/// **The `client` road, and a picture nothing has read yet, is the whole client into the whole box** —
-/// today's stretch, and the fallback for a shape this app cannot crop by.
-fn the_thumbnail_box(
-    box_: (i32, i32),
-    client: (i32, i32),
-    aspect: Option<f64>,
-    road: PictureRoad,
-) -> ThumbnailBox {
-    let aspect = (road == PictureRoad::Picture).then_some(aspect).flatten();
+/// **A picture nothing has read yet is the whole client into the whole box** — the fallback for a
+/// shape this app cannot crop by.
+fn the_thumbnail_box(box_: (i32, i32), client: (i32, i32), aspect: Option<f64>) -> ThumbnailBox {
     let client = (client.0.max(1), client.1.max(1));
     let box_ = (box_.0.max(1), box_.1.max(1));
     let (source, clamped) = match aspect {
@@ -1095,7 +973,7 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     let (source_client, aspect) = held
         .source
         .map_or((live, None), |source| (source.client, source.aspect));
-    let shown = the_thumbnail_box(client, source_client, aspect, the_picture_road());
+    let shown = the_thumbnail_box(client, source_client, aspect);
     if !the_registration_wants(held, shown) {
         note_the_thumbnail_pair("held", host, client, live, shown);
         return;
@@ -1136,7 +1014,7 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     };
     // **The source is taken from its picture and not from its whole client**: the letterbox margins mpv
     // leaves around a film of another shape are not part of the film, and stretching them into the box
-    // is the pillar of black that read as a pin zoomed out (see `PICTURE_VARIABLE`).
+    // is the pillar of black that read as a pin zoomed out (see `the_thumbnail_box`).
     if let Some((left, top, right, bottom)) = shown.source {
         properties.dwFlags |= DWM_TNP_RECTSOURCE;
         properties.rcSource = RECT {
@@ -1191,7 +1069,7 @@ fn note_the_thumbnail_pair(
         None => (0, 0, shown.client.0, shown.client.1),
     };
     note_pin_trace!(
-        "thumbnail {} host {}x{}+{}+{} box {}x{} dest {}x{}+{}+{} cli {}x{} pic {}x{} src {}x{}+{}+{} ({}={})",
+        "thumbnail {} host {}x{}+{}+{} box {}x{} dest {}x{}+{}+{} cli {}x{} pic {}x{} src {}x{}+{}+{}",
         what,
         host_width,
         host_height,
@@ -1211,8 +1089,6 @@ fn note_the_thumbnail_pair(
         bottom - top,
         left,
         top,
-        PICTURE_VARIABLE,
-        the_picture_road().named(),
     );
 }
 
@@ -1256,7 +1132,7 @@ mod tests {
             aspect,
         };
         let shown_at = |box_: (i32, i32)| {
-            the_thumbnail_box(box_, source.client, source.aspect, PictureRoad::Picture)
+            the_thumbnail_box(box_, source.client, source.aspect)
         };
         let shown = shown_at(client);
         let mut holding = Thumbnail {
@@ -1332,12 +1208,8 @@ mod tests {
                         && y + height <= picture.1 + picture.3,
                     "{width}x{height}+{x}+{y} is inside the picture {picture:?} at {shape:?}"
                 );
-                let shown = the_thumbnail_box(
-                    (box_width, box_height),
-                    (box_width, box_height),
-                    shape,
-                    PictureRoad::Picture,
-                );
+                let shown =
+                    the_thumbnail_box((box_width, box_height), (box_width, box_height), shape);
                 assert_eq!(
                     shown.destination,
                     (0, 0, box_width, box_height),
@@ -1389,7 +1261,7 @@ mod tests {
         for client in clients {
             for shape in shapes {
                 for box_ in boxes {
-                    let shown = the_thumbnail_box(box_, client, shape, PictureRoad::Picture);
+                    let shown = the_thumbnail_box(box_, client, shape);
                     assert_eq!(
                         shown.destination,
                         (0, 0, box_.0, box_.1),
@@ -1420,37 +1292,6 @@ mod tests {
         assert_eq!(Thumbnail::NOTHING.registration, 0);
         assert_eq!(Thumbnail::NOTHING.host, 0);
         assert_eq!(Thumbnail::NOTHING.shown, None);
-    }
-
-    /// **The size knob names the film's own size by default, and `box` for the one A/B**: a value this
-    /// app does not know — including the placement words the knob used to carry — is `native` (see
-    /// `source_size_from`).
-    #[test]
-    fn the_source_size_knob_is_native_unless_it_says_box() {
-        assert_eq!(
-            SOURCE_SIZE_VARIABLE, "RHP_THUMBNAIL_SOURCE",
-            "the knob is the name the branch's notes and the report give it"
-        );
-        let named = |value: Option<&str>| source_size_from(value.map(std::ffi::OsStr::new));
-        assert_eq!(named(None), SourceSize::Native);
-        assert_eq!(named(Some("native")), SourceSize::Native);
-        assert_eq!(named(Some("box")), SourceSize::Box);
-        assert_eq!(
-            named(Some("Box")),
-            SourceSize::Native,
-            "the other arm is not guessed at from another case"
-        );
-        assert_eq!(named(Some("")), SourceSize::Native);
-        assert_eq!(
-            named(Some("behind")),
-            SourceSize::Native,
-            "the placement words this knob used to carry are not roads it knows now"
-        );
-        assert_eq!(
-            the_source_size(),
-            SourceSize::Native,
-            "and the suite is the sharp one, whatever the machine was started with"
-        );
     }
 
     /// **The invisibility knob, and the style it is the whole of.** It is on unless it says exactly `0`;
@@ -1594,8 +1435,6 @@ mod tests {
                 Some((100, 200)),
                 None,
                 (3440, 1440),
-                SourceSize::Native,
-                (640, 360)
             ),
             None,
             "a film of no known size is never placed at the pin's box to be corrected later"
@@ -1621,104 +1460,42 @@ mod tests {
                 Some((100, 200)),
                 native,
                 max_track,
-                SourceSize::Native,
-                (640, 360)
             ),
             Some((100, 200, 1920, 1080)),
             "the film's own size, at the pin's corner"
-        );
-        assert_eq!(
-            the_one_placement(
-                None,
-                Some((100, 200)),
-                native,
-                max_track,
-                SourceSize::Box,
-                (640, 360)
-            ),
-            Some((100, 200, 640, 360)),
-            "and the A/B's other arm is the pin's box, once, at the same corner"
         );
 
         let placed = Some(SourceShape {
             client: (1920, 1080),
             aspect: Some(16.0 / 9.0),
         });
-        for box_ in [(640, 360), (1920, 1080), (3840, 2160)] {
-            for native in [None, Some((1920, 1080)), Some((3840, 2160))] {
-                for size in [SourceSize::Native, SourceSize::Box] {
-                    assert_eq!(
-                        the_one_placement(placed, Some((100, 200)), native, max_track, size, box_),
-                        None,
-                        "a placement already taken is not taken again, whatever the box is"
-                    );
-                }
-            }
+        for native in [None, Some((1920, 1080)), Some((3840, 2160))] {
+            assert_eq!(
+                the_one_placement(placed, Some((100, 200)), native, max_track),
+                None,
+                "a placement already taken is not taken again, whatever the film is"
+            );
         }
         assert_eq!(
-            the_one_placement(None, None, native, max_track, SourceSize::Native, (640, 360)),
+            the_one_placement(None, None, native, max_track),
             None,
             "no host is no corner to place at"
         );
         assert_eq!(
-            the_one_placement(
-                None,
-                Some((0, 0)),
-                None,
-                max_track,
-                SourceSize::Native,
-                (10_000, 10_000)
-            ),
+            the_one_placement(None, Some((0, 0)), None, max_track),
             None,
             "a native size that is not known yet is not the box: it is waited for"
         );
         assert_eq!(
-            the_one_placement(
-                None,
-                Some((0, 0)),
-                Some((8192, 4608)),
-                max_track,
-                SourceSize::Native,
-                (640, 360)
-            ),
+            the_one_placement(None, Some((0, 0)), Some((8192, 4608)), max_track),
             Some((0, 0, 3440, 1440)),
             "a film bigger than the desktop is clamped to what a window may be"
         );
         assert_eq!(
-            the_one_placement(
-                None,
-                Some((0, 0)),
-                Some((0, 0)),
-                max_track,
-                SourceSize::Native,
-                (640, 360)
-            ),
+            the_one_placement(None, Some((0, 0)), Some((0, 0)), max_track),
             Some((0, 0, 1, 1)),
             "and never to nothing at all"
         );
-    }
-
-    /// **The picture road is the default and the only other word is `client`**: a value this app does
-    /// not know is not a second way to ask for a stretch of the whole client (see `picture_road_from`).
-    #[test]
-    fn the_picture_knob_names_the_picture_road_and_the_client_one() {
-        assert_eq!(
-            PICTURE_VARIABLE, "RHP_THUMBNAIL_PICTURE",
-            "the knob is the name the report and the run's own trace give it"
-        );
-        let named = |value: Option<&str>| picture_road_from(value.map(std::ffi::OsStr::new));
-        assert_eq!(named(None), PictureRoad::Picture);
-        assert_eq!(named(Some("picture")), PictureRoad::Picture);
-        assert_eq!(named(Some("client")), PictureRoad::Client);
-        assert_eq!(
-            named(Some("Client")),
-            PictureRoad::Picture,
-            "the dead road is not guessed at from another case"
-        );
-        assert_eq!(named(Some("")), PictureRoad::Picture);
-        assert_eq!(named(Some("stretch")), PictureRoad::Picture);
-        assert_eq!(PictureRoad::Picture.named(), "picture");
-        assert_eq!(PictureRoad::Client.named(), "client");
     }
 
     /// **A picture is fitted into a client of another shape and centred in it, and the box a pin draws it
@@ -1810,15 +1587,14 @@ mod tests {
         assert_eq!(a_picture_fitted_to(Some(f64::NAN), (800, 600)), (0, 0, 800, 600));
     }
 
-    /// **The picture road crops the source to the part of its picture that fills the box; the client road
-    /// and a picture nothing has read are the whole client into the whole box** — the two arms of the
-    /// A/B, and the fallback that is byte for byte today's road (see `the_thumbnail_box`).
+    /// **The thumbnail shows the picture's rectangle and never the whole client**: the crop is the part
+    /// of the picture that fills the box, and a picture nothing has read is the whole client into the
+    /// whole box — the fallback for a shape this app cannot crop by (see `the_thumbnail_box`).
     #[test]
-    fn a_thumbnail_shows_the_pictures_rectangle_or_the_whole_client() {
-        // The measured source: a 16:9 film in a 3217x1460 client, 311 px of pillar either side.
+    fn a_thumbnail_shows_the_pictures_rectangle() {
         // The measured source: a 16:9 film in a 3217x1460 client, 311 px of pillar either side.
         let aspect = Some(2595.0 / 1460.0);
-        let shown = the_thumbnail_box((1000, 560), (3217, 1460), aspect, PictureRoad::Picture);
+        let shown = the_thumbnail_box((1000, 560), (3217, 1460), aspect);
         assert_eq!(shown.client, (3217, 1460));
         assert_eq!(
             shown.source,
@@ -1832,11 +1608,7 @@ mod tests {
             "and the box is filled by it: no pillar, and no letterbox above or below"
         );
 
-        let whole = the_thumbnail_box((1000, 560), (3217, 1460), aspect, PictureRoad::Client);
-        assert_eq!(whole.source, None, "the dead road hands the Shell the whole client");
-        assert_eq!(whole.destination, (0, 0, 1000, 560));
-
-        let nothing_read = the_thumbnail_box((1000, 560), (3217, 1460), None, PictureRoad::Picture);
+        let nothing_read = the_thumbnail_box((1000, 560), (3217, 1460), None);
         assert_eq!(nothing_read.source, None, "a picture nothing has read is not cropped by");
         assert_eq!(nothing_read.destination, (0, 0, 1000, 560));
     }
@@ -1872,14 +1644,12 @@ mod tests {
                     Some((100, 200)),
                     Some((1920, 1080)),
                     (3440, 1440),
-                    SourceSize::Native,
-                    box_
                 ),
                 None,
                 "{box_:?} is a moment of the gesture, and the gesture asks for no box"
             );
             let shown =
-                the_thumbnail_box(box_, source.client, source.aspect, PictureRoad::Picture);
+                the_thumbnail_box(box_, source.client, source.aspect);
             assert_eq!(
                 shown.destination,
                 (0, 0, box_.0, box_.1),
@@ -1899,12 +1669,12 @@ mod tests {
             );
             assert_eq!(
                 shown,
-                the_thumbnail_box(box_, source.client, source.aspect, PictureRoad::Picture),
+                the_thumbnail_box(box_, source.client, source.aspect),
                 "and the same box is always the same pair: nothing else is an input"
             );
         }
 
-        let over = the_thumbnail_box((3840, 2160), source.client, source.aspect, PictureRoad::Picture);
+        let over = the_thumbnail_box((3840, 2160), source.client, source.aspect);
         assert_eq!(
             over.source,
             Some((
