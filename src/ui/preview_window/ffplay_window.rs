@@ -414,14 +414,17 @@ pub(super) fn ensure_noactivate_monitor() {
                 }
 
                 let elapsed = pid_started.elapsed();
-                let delay_ms = if elapsed < Duration::from_millis(250) {
-                    5
-                } else if elapsed < Duration::from_secs(2) {
-                    20
-                } else {
-                    100
-                };
-                wait_for_noactivate_wake(delay_ms);
+                // **A replacement that is being waited for is looked for at the start's cadence, not
+                // the idle one.** The placeholder is already on screen (see
+                // `pin_playback::freeze_the_outgoing_picture`), so the only thing left of a relaunch's
+                // wait is its window being found and handed the picture — and the pass that finds it is
+                // the pass the freeze ends. It is bounded by the same wait the handover is bounded by,
+                // and it costs nothing at all while no relaunch is pending.
+                let launching = elapsed < Duration::from_secs(VIDEO_START_WAIT_SECS)
+                    && pinned()
+                    && !pin_is_collapsed()
+                    && pin_playback::a_relaunch_is_in_flight();
+                wait_for_noactivate_wake(the_monitor_wait(elapsed, launching));
             } else {
                 // Nothing is playing: the wait is the player's own start, which is what
                 // signals this thread rather than a clock.
@@ -436,6 +439,19 @@ pub(super) fn ensure_noactivate_monitor() {
 /// How long the monitor thread waits while nothing is playing, which is a bound on how long
 /// it takes to notice the run ending rather than a cadence anything is kept in step at.
 pub(super) const NOACTIVATE_IDLE_WAIT_MS: u64 = 500;
+
+/// How long the monitor waits before its next look at the player it follows: the start's own cadence
+/// while the player is young or a relaunch is waiting for its window, and the idle one once it is up and
+/// nothing is pending (see `ensure_noactivate_monitor`).
+pub(super) fn the_monitor_wait(elapsed: Duration, launching: bool) -> u64 {
+    if elapsed < Duration::from_millis(250) || launching {
+        5
+    } else if elapsed < Duration::from_secs(2) {
+        20
+    } else {
+        100
+    }
+}
 
 /// The event the monitor thread waits on: signalling it is a player's window having been
 /// handed over (see `set_noactivate_for_process`). A handle that could not be created is the
@@ -845,5 +861,43 @@ pub fn kill_stray_video_process() {
 
     if !is_player_pid_alive(pid) {
         clear_video_process_state(pid);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A relaunch is looked for at the start's cadence, and nothing else is.** What is left of a
+    /// relaunch's wait behind a frozen picture is its window being found, so the monitor passes every
+    /// few milliseconds while a replacement is pending — bounded by the player-start wait — and goes
+    /// back to the idle cadence the moment nothing is pending (see `the_monitor_wait`).
+    #[test]
+    fn a_pending_relaunch_is_looked_for_at_the_starts_cadence() {
+        assert_eq!(
+            the_monitor_wait(Duration::from_millis(10), false),
+            5,
+            "a player that has just been begun"
+        );
+        assert_eq!(
+            the_monitor_wait(Duration::from_secs(30), true),
+            5,
+            "a replacement waiting for its window, however long the pin has been up"
+        );
+        assert_eq!(
+            the_monitor_wait(Duration::from_secs(1), true),
+            5,
+            "and the same inside the first two seconds"
+        );
+        assert_eq!(
+            the_monitor_wait(Duration::from_secs(1), false),
+            20,
+            "a young player is watched closer than the idle cadence"
+        );
+        assert_eq!(
+            the_monitor_wait(Duration::from_secs(30), false),
+            100,
+            "and nothing pending is the idle cadence the monitor always had"
+        );
     }
 }
