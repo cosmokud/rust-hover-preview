@@ -130,11 +130,16 @@
 //! overruled and traced as overruled rather
 //! than dropped on the floor (see `video_launch::the_thumbnail_swapchain_flip`).
 //!
-//! **The source is never hidden and never resized.** Hidden the Shell stops drawing it — the
-//! thumbnail of a `SW_HIDE` window is frozen at its last frame, which is the one sentence this road
-//! has never measured and which `RHP_FREEZE=hide` exists to settle (see `hide_probe`) — so it is taken
-//! off the screen only where the host it is seen in is going away for good, and on that road only once
-//! the player drawing it has a replacement (see `set_the_source_visible`, `hide_the_outgoing_source`).
+//! **The source is never hidden and never resized.** Hidden, the Shell stops drawing it: the thumbnail
+//! goes black **18 to 71 ms** after the `SW_HIDE` and stays black until something draws over it —
+//! measured on glass, five seeks, gaps of 415, 500, 520, 555 and 700 ms (`RHP_FREEZE=hide`, see
+//! `still_probe` and the seek road table in `ARCHITECTURE.md`). **The sentence this file used to
+//! carry here — that a hidden window's thumbnail is frozen at its last frame — was measured and is
+//! false**, and believing it cost four cover roads that each froze the outgoing player. A DWM
+//! thumbnail cannot outlive the drawing of its source, so a cover has to be a picture of this app's
+//! own (see `stand_the_pressed_still`). The source is therefore taken off the screen only where the
+//! host it is seen in is going away for good, and on that road only once the player drawing it has a
+//! replacement (see `set_the_source_visible`, `hide_the_outgoing_source`).
 //! Resized is the
 //! flash this road was measured with. Moved it is, but only to keep the crop on the screen and never
 //! with a new size: one placement, and then a slide at an edge and nothing else until teardown (see
@@ -164,7 +169,7 @@
 //! the film standing around it. That road is an A/B of the invisibility and nothing else. Upgrade it
 //! by clipping the source in a window of this app's, not by following the pin with a window of mpv's.
 
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -190,7 +195,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 #[cfg(not(test))]
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
-use super::pin_trace::note_pin_trace;
+use super::pin_trace::{note_pin_trace, path_name};
 use super::*;
 
 // `PrintWindow`, which is the one call that asks a window for the frame it last presented.
@@ -762,6 +767,16 @@ pub(super) fn the_source_is_standing(pid: u32) -> bool {
     })
 }
 
+/// Whether any registration is standing in the pin's host, whichever player it draws: the state the
+/// still probe reads beside the pixels, because `thumb=unregistered` is half of what proving the
+/// still road takes (see `still_probe`).
+pub(super) fn a_registration_stands() -> bool {
+    THUMBNAIL
+        .lock()
+        .ok()
+        .is_some_and(|held| held.registration != 0)
+}
+
 /// **The player whose window the registration standing in `host` is drawing**, where one stands: the
 /// picture that host has on screen, whoever began it.
 ///
@@ -1315,9 +1330,6 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     // pixels**, which is the whole of what "it has drawn" can mean for a player that answers nothing
     // (see `the_source_drew`).
     let ready = sized && the_source_drew(pending, source, shape.client);
-    if ready {
-        super::hide_probe::note_drawn(pending.process);
-    }
     let waited = pending.since.elapsed();
     if !ready {
         note_the_source_not_ready(pending, live);
@@ -1384,9 +1396,9 @@ pub(super) fn hand_the_picture_over(host: HWND) {
         pending.process,
         waited.as_millis(),
     );
-    // **And the hide road's measurement closes on the same step**: one thing happened, so the swap and
-    // the answer to what the pin showed waiting for it are adjacent lines (see `hide_probe`).
-    super::hide_probe::note_swapped(pending.process);
+    // **And the still probe's measurement closes on the same step**: one thing happened, so the swap
+    // and the answer to what the pin showed waiting for it are adjacent lines (see `still_probe`).
+    super::still_probe::note_swapped();
     // **The replacement is the picture, so the relaunch that began it is over.** Until this line the
     // record is a player a newer gesture may kill before it publishes; from here it is the source the
     // host draws, and killing it is the black band (see `pin_playback::settle_the_published_relaunch`).
@@ -1900,6 +1912,10 @@ pub(super) fn forget_the_thumbnail() {
     forget_the_hidden_source();
     STILL_HOST.store(0, Ordering::SeqCst);
     STILL_PID.store(0, Ordering::SeqCst);
+    // The still a seek press decoded goes with the pin, and so does the measurement of what the pin
+    // was left showing (see `begin_the_seek_still`, `still_probe`).
+    forget_the_pressed_still();
+    super::still_probe::forget("the pin is going");
     if let Ok(mut held) = HELD_FRAMES.lock() {
         // The pin that counted these is gone, so the next one opens its own first second.
         *held = HeldFrames::default();
@@ -2147,6 +2163,249 @@ static THE_STILLS_CROP: Mutex<Option<SourceBox>> = Mutex::new(None);
 #[cfg(test)]
 pub(super) fn the_stills_crop() -> Option<SourceBox> {
     THE_STILLS_CROP.lock().ok().and_then(|held| *held)
+}
+
+/// **The still a seek press decodes while the hand is still dragging**, waiting in memory for the
+/// release that may paint it.
+///
+/// The frame on screen is the outgoing player's and that player cannot be asked where it is, but a
+/// seek press is the one moment this app knows the second (see `pin_playback::pin_playhead`) — and
+/// the relaunch the release makes costs more than half a second of process start while a decode of
+/// one frame costs tens of milliseconds, so the drag almost always outlives the grab.
+///
+/// **It is a decode of the file, not a capture of the window.** The source wears `WS_EX_LAYERED` at
+/// alpha 1/255 (`RHP_THUMBNAIL_INVISIBLE`), and such a window answers `PrintWindow` with black (see
+/// `surfaces`), which is what made the capture road structurally dead for a pin; FFmpeg reading its
+/// own frames is the one road to a lit still of an FFmpeg film, and it is the grab a hover bubble
+/// already uses (`pin_bubble::grab_a_frame`) at the box's own shape.
+///
+/// **Nothing waits for it.** The release takes what has landed and a grab that has not landed by then
+/// is the `off` road for that relaunch (see `stand_the_pressed_still`). A second press, or the pin
+/// going, drops the token, so a frame nobody asked for is never painted.
+///
+/// **mpv is not on this road at all**: its seek is a command down the pipe and it never relaunches,
+/// so there is no wait for a still to cover (see `pin_playback::seek_pinned_playback`).
+pub(super) fn begin_the_seek_still() {
+    if pin_playback::freeze_road() != pin_playback::FreezeRoad::Still {
+        return;
+    }
+    if current_media_type() != Some(MediaType::Video) {
+        return;
+    }
+    let Some((path, _, transport, _)) = pin_playback::pinned_playback_state() else {
+        return;
+    };
+    if video_route(&path) == VideoRoute::Mpv {
+        return;
+    }
+    let Some(host) = pin_film_host::film_host() else {
+        return;
+    };
+    // Safety: the host is this app's own window, and the question is about the box the still fills.
+    let Some(size) = (unsafe { client_size(host) })
+        .filter(|(width, height)| *width > 0 && *height > 0)
+        .map(|(width, height)| (width as u32, height as u32))
+    else {
+        return;
+    };
+    let at = pin_playback::pin_playhead(&transport).unwrap_or(0.0);
+    let generation = PRESSED_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Ok(mut held) = PRESSED_STILL.lock() {
+        *held = Some(PressedStill {
+            generation,
+            host: host.0 as isize,
+            size,
+            frame: None,
+        });
+    }
+    note_pin_trace!(
+        "still grabbed at the press for {} at {at:.3} {}x{}",
+        path_name(&path),
+        size.0,
+        size.1,
+    );
+
+    // **The suite starts no process at all**, and a grab is a process: what a test build answers is
+    // the ask, and a frame lands through `a_grab_landed` (see `pin_bubble::grab_bubble_frame`).
+    #[cfg(test)]
+    {
+        if let Ok(mut noted) = NOTED_STILL_GRABS.lock() {
+            noted.push((path, at, size.0, size.1));
+        }
+        return;
+    }
+    #[cfg(not(test))]
+    std::thread::spawn(move || {
+        // **Bounded at half a second**: a still that is not in hand while the hand is on the bar is a
+        // still the release will not have, so a decode that runs long is a process killed and the
+        // `off` road for that relaunch (see `stand_the_pressed_still`).
+        let Some(frame) = pin_bubble::grab_a_frame(
+            &path,
+            at,
+            size,
+            Duration::from_millis(STILL_GRAB_BOUND_MS),
+        ) else {
+            note_pin_trace!("still grab answered nothing for {} at {at:.3}", path_name(&path));
+            return;
+        };
+        if let Ok(mut held) = PRESSED_STILL.lock() {
+            if let Some(still) = held.as_mut().filter(|still| still.generation == generation) {
+                still.frame = Some(frame);
+            }
+        }
+    });
+}
+
+/// How long a press's grab is given before it is a process killed rather than a still: half a second,
+/// which is the shortest a drag on the bar is and a small multiple of what one frame costs.
+#[cfg(not(test))]
+const STILL_GRAB_BOUND_MS: u64 = 500;
+
+/// A still a press asked for: where it goes when it lands, and the frame itself once FFmpeg has
+/// answered (see `begin_the_seek_still`).
+struct PressedStill {
+    /// Which press this is: a worker lands its frame only while its own press is still the one waiting.
+    #[cfg_attr(test, allow(dead_code))]
+    generation: u64,
+    /// The host whose whole client the still will fill, as a handle number: a static that holds a
+    /// window of this app's holds it the way `Thumbnail` does.
+    host: isize,
+    /// The size FFmpeg was asked for, which is the box's own shape.
+    size: (u32, u32),
+    /// The decoded frame, BGRA, `size` pixels — or nothing while the grab is still in flight.
+    frame: Option<Vec<u8>>,
+}
+
+/// The still the last press asked for, or nothing between presses: one at a time, because a pin has
+/// one film on screen and a second press is a newer still rather than a second one.
+static PRESSED_STILL: Mutex<Option<PressedStill>> = Mutex::new(None);
+
+/// The press a grab belongs to, so a worker whose press has been superseded drops its frame instead
+/// of painting it into another press's gap (see `PressedStill::generation`).
+static PRESSED_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Give up the still a press decoded: the pin is going, so what was in hand is nobody's picture.
+fn forget_the_pressed_still() {
+    PRESSED_GENERATION.fetch_add(1, Ordering::SeqCst);
+    if let Ok(mut held) = PRESSED_STILL.lock() {
+        *held = None;
+    }
+}
+
+/// **Paint the still the press decoded, let the registration go, and answer whether the pin now
+/// stands on a picture of this app's own** — the cover `RHP_FREEZE=still` is (see
+/// `pin_playback::FreezeRoad`).
+///
+/// `false` is the road as it was before there was a cover: nothing painted, nothing unregistered and
+/// nothing ended, so the outgoing player goes on playing until its replacement draws — the `off` road
+/// for that one relaunch, and **never a black band** (see `pin_playback::relaunch_pinned_player`).
+///
+/// **The crop is the box's own shape, not the still's**: the grab asked FFmpeg for the box's shape at
+/// the press, and the box is read again here, so a still cut for one shape and painted into another
+/// is cut by the one it lands in (see `the_pictures_crop`). The paint is the capture road's — one
+/// `StretchBlt` of the whole client, `HALFTONE` — and the host is only ever repainted without its
+/// erase, because the host's black is the one thing a still must not show.
+///
+/// It is once per relaunch and never on a frame: the decode happened at the press, so all this does is
+/// copy the bytes into a surface, cut it and paint it.
+pub(super) fn stand_the_pressed_still(pid: u32) -> bool {
+    let Some(pressed) = PRESSED_STILL.lock().ok().and_then(|mut held| held.take()) else {
+        note_pin_trace!("placeholder unavailable pid {pid}: no still was asked for");
+        return false;
+    };
+    let Some(frame) = pressed.frame else {
+        note_pin_trace!("placeholder unavailable pid {pid}: the grab had not landed");
+        return false;
+    };
+    let (width, height) = pressed.size;
+    let expected = width as usize * height as usize * 4;
+    // **A frame that is not the size it was asked for is not painted**: what arrives here came from a
+    // child process, and a still cut from a short frame is a smear rather than a picture.
+    if frame.len() < expected {
+        note_pin_trace!("placeholder unavailable pid {pid}: the grab came back short");
+        return false;
+    }
+    let Some(surface) = DibSurface::create(width, height) else {
+        note_pin_trace!("placeholder unavailable pid {pid}: the still has no surface");
+        return false;
+    };
+    // Safety: the surface is this call's own of exactly these pixels, and `frame` was checked for them.
+    unsafe { std::ptr::copy_nonoverlapping(frame.as_ptr(), surface.bits(), expected) };
+    // Safety: the handle is the host this still was decoded for, a window of this app's, read for the
+    // box the still must fill now.
+    let host = HWND(pressed.host as *mut _);
+    let Some((box_width, box_height)) = (unsafe { client_size(host) })
+        .filter(|(width, height)| *width > 0 && *height > 0)
+    else {
+        note_pin_trace!("placeholder unavailable pid {pid}: the pin has no box to fill");
+        return false;
+    };
+    let crop = the_pictures_crop(
+        (width as i32, height as i32),
+        (box_width, box_height),
+        Some(box_width as f64 / box_height as f64),
+    )
+    .0;
+    let still = CapturedStill {
+        pixels: surface,
+        crop,
+        host,
+    };
+    if !unsafe { paint_the_still(&still) } {
+        note_pin_trace!("placeholder unavailable pid {pid}: the still could not be painted");
+        return false;
+    }
+    // **Let go of before the registration is**, so the pass that watches the outgoing player cannot
+    // adopt it back in between (see `STILL_PID`).
+    STILL_PID.store(pid, Ordering::SeqCst);
+    forget_the_thumbnail();
+    STILL_HOST.store(host.0 as isize, Ordering::SeqCst);
+    #[cfg(test)]
+    if let Ok(mut held) = THE_STILLS_CROP.lock() {
+        *held = Some(still.crop);
+    }
+    // **One repaint and no erase**: the host's own erase is the black a still must never show (see
+    // `stand_the_outgoing_picture_as_a_still`).
+    unsafe {
+        let _ = InvalidateRect(host, None, false);
+        let _ = UpdateWindow(host);
+    }
+    note_pin_trace!("placeholder painted from a still pid {pid} {width}x{height}");
+    // **The measurement begins on the unregister**: from this line the pin is standing on a picture of
+    // this app's own with its player ending, which is the state the question is asked about (see
+    // `still_probe`).
+    super::still_probe::start(pid, true);
+    true
+}
+
+/// The films a still has been asked for, with the second and the box it was asked at, for a test
+/// build (see `begin_the_seek_still`).
+#[cfg(test)]
+static NOTED_STILL_GRABS: Mutex<Vec<(PathBuf, f64, u32, u32)>> = Mutex::new(Vec::new());
+
+/// The presses that asked for a still since a test last read them (see `NOTED_STILL_GRABS`).
+#[cfg(test)]
+pub(super) fn take_the_still_grabs() -> Vec<(PathBuf, f64, u32, u32)> {
+    NOTED_STILL_GRABS
+        .lock()
+        .map(|mut noted| std::mem::take(&mut *noted))
+        .unwrap_or_default()
+}
+
+/// Land a lit frame in the still the press is waiting on, as the worker does when FFmpeg answers: a
+/// test has no process to ask, so this is what stands in for it. The size is the one the answer came
+/// back at, which is what a still cut by the box's shape is read against (see `begin_the_seek_still`).
+#[cfg(test)]
+pub(super) fn a_grab_landed(width: u32, height: u32) -> bool {
+    let Ok(mut held) = PRESSED_STILL.lock() else {
+        return false;
+    };
+    let Some(still) = held.as_mut() else {
+        return false;
+    };
+    still.size = (width, height);
+    still.frame = Some(vec![0x80u8; width as usize * height as usize * 4]);
+    true
 }
 
 /// The rectangle a picture of `aspect` is drawn in inside a `box_`: fitted to the box's own shape and

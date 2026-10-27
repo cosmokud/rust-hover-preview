@@ -5854,7 +5854,7 @@ fn a_black_or_failed_capture_paints_nothing_and_leaves_the_old_picture_playing()
 /// on wearing a registration for — is hidden, once, and the process stands until the swap (see
 /// `pin_playback::FreezeRoad::Hide`). What that leaves the pin showing is not a question this test can
 /// answer, because it is a question about what the Shell draws: the run's own probe reads it off the
-/// desk (see `hide_probe`), and this holds the road to the two facts a test can see — one hide, of the
+/// desk (see `still_probe`), and this holds the road to the two facts a test can see — one hide, of the
 /// outgoing source's window, and a retirement that comes after the swap and not before it.
 #[test]
 fn the_hide_road_hides_the_outgoing_source_once_and_reaps_it_after_the_swap() {
@@ -6017,6 +6017,378 @@ fn the_hide_road_hides_the_outgoing_source_once_and_reaps_it_after_the_swap() {
     clear_restart_count();
     pin_trace::clear_noted();
 }
+/// **The `still` road decodes the frame on screen at the press and paints it at the release**: one
+/// grab a press, one paint a relaunch, the outgoing player ended at once, and the registration let go
+/// of only after the paint — so the whole wait for a replacement stands on a picture of this app's own
+/// rather than on a window the Shell is asked to go on drawing (see
+/// `pin_film_thumbnail::begin_the_seek_still` and `stand_the_pressed_still`).
+///
+/// The crop is read as the rectangle the road wrote down rather than as pixels no test can see, and it
+/// is cut by the **box's** shape and not the still's: a still landed square is painted into the 4:3
+/// band, and the rectangle says so.
+#[test]
+fn the_still_road_grabs_at_the_press_and_paints_at_the_release() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_retirement = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let path = PathBuf::from("a-film.mkv");
+    let outgoing = unsafe { GetCurrentProcessId() };
+    probed_at(&path, 1920, 1080);
+    pin_film_thumbnail::forget_the_thumbnail();
+    film.drawn_in_the_host(outgoing);
+    let source = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(source, outgoing, host) };
+    VIDEO_PID.store(outgoing, Ordering::SeqCst);
+    // A film at a second, so the grab the press asks for is a frame of the film on screen rather than
+    // the beginning of the file (see `pin_playback::pin_playhead`).
+    with_pin(|pin| pin.transport.begun(30.0, true, false));
+
+    stand_the_freeze_road_in(Some(FreezeRoad::Still));
+    ffplay_window::clear_suspended_players();
+    ffplay_window::clear_pause_posts();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+    clear_restart_count();
+    pin_film_thumbnail::clear_the_unregistrations();
+    let _ = pin_film_thumbnail::take_the_still_grabs();
+    let erases = pin_film_host::host_erases();
+
+    // (a) The press starts exactly one grab: of the film on screen, at the box the pin's host is.
+    let mut client = RECT::default();
+    let _ = unsafe { GetClientRect(host, &mut client) };
+    pin_film_thumbnail::begin_the_seek_still();
+    let asked = pin_film_thumbnail::take_the_still_grabs();
+    assert_eq!(
+        asked.len(),
+        1,
+        "one press is one grab, and a second is the newer still: {asked:?}"
+    );
+    let (grabbed, at, width, height) = asked[0].clone();
+    assert_eq!(grabbed, path, "the film on screen is the file asked for");
+    assert!(
+        (30.0..32.0).contains(&at),
+        "the frame asked for is the one on screen, not the second the aim is at: {at}"
+    );
+    assert_eq!(
+        (width as i32, height as i32),
+        (client.right, client.bottom),
+        "and it is asked for at the box the still will fill"
+    );
+
+    // (b) A frame that lands between the press and the release is what the release paints.
+    assert!(
+        pin_film_thumbnail::a_grab_landed(480, 480),
+        "a press is waiting for its frame"
+    );
+    restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Seek);
+
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    let lines = pin_trace::noted_lines();
+    let at_line = |starts: &str| lines.iter().position(|noted| noted.starts_with(starts));
+    let painted = format!("placeholder painted from a still pid {outgoing} 480x480");
+    let ended = format!("outgoing player ended at once pid {outgoing}");
+    let restarted = format!("player restarted for seek from {outgoing} to {replacement}");
+    let (at_grabbed, at_painted, at_ended, at_restarted) = (
+        at_line("still grabbed at the press"),
+        lines.iter().position(|line| *line == painted),
+        lines.iter().position(|line| *line == ended),
+        lines.iter().position(|line| *line == restarted),
+    );
+    assert!(
+        at_grabbed.is_some() && at_painted.is_some(),
+        "the press asked for a frame and the release painted one: {lines:?}"
+    );
+    assert!(
+        at_grabbed < at_painted && at_painted < at_ended && at_ended < at_restarted,
+        "the grab, the still under the registration, then the player ended and its replacement begun: \
+         {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("placeholder unavailable")),
+        "a grab that landed is not the fallback: {lines:?}"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        1,
+        "the outgoing registration is let go of, once, and only after the still is painted"
+    );
+    assert!(
+        pin_film_thumbnail::a_still_stands(),
+        "the still is what the host is showing for the whole of the wait"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_stills_crop(),
+        Some((0, 60, 480, 360)),
+        "the still is cut by the box's own shape: a 480x480 answer cut to the 320x240 band"
+    );
+    assert!(
+        ffplay_window::suspended_players().is_empty(),
+        "the still road suspends nothing"
+    );
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        0,
+        "and the pause key is not part of it either"
+    );
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "nor is a hold down a pipe: the player is ended, not frozen"
+    );
+    assert_eq!(
+        pin_film_host::host_erases(),
+        erases,
+        "nothing erases the host while the still stands"
+    );
+
+    // (d) The replacement draws and the registration takes the box over: the still goes with the swap
+    // and the player it was decoded beside is reaped after it.
+    let second = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(second, replacement, host) };
+    assert!(
+        pin_film_thumbnail::a_still_stands(),
+        "a source that has not drawn does not take the still's box"
+    );
+    pin_film_thumbnail::hand_the_picture_over(host);
+    assert!(
+        pin_film_thumbnail::the_source_is_up(replacement),
+        "the replacement is the picture once it can draw"
+    );
+    assert!(
+        !pin_film_thumbnail::a_still_stands(),
+        "and the still goes with the registration that covers it"
+    );
+    settle_video_retirement();
+    let lines = pin_trace::noted_lines();
+    let at_swap = lines
+        .iter()
+        .position(|line| line.starts_with("thumbnail swapped old"))
+        .expect("a swap line");
+    let at_ended = lines
+        .iter()
+        .position(|line| *line == ended)
+        .unwrap_or_else(|| panic!("the player the still was taken of is ended at the paint: {lines:?}"));
+    assert!(
+        at_ended < at_swap,
+        "the player went before the picture changed hands, not after it: {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("player retired after the swap")),
+        "and nothing was left to reap at the swap, because the still ended it at the paint: {lines:?}"
+    );
+    assert!(
+        VIDEO_RETIREMENT.lock().ok().and_then(|held| *held).is_none(),
+        "a player ended at once is not parked for the loop either"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("player ended while standing")),
+        "and no path ended the source while the host was drawing it: {lines:?}"
+    );
+
+    let _ = unsafe { DestroyWindow(second) };
+    let _ = unsafe { DestroyWindow(source) };
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        *held = previous_retirement;
+    }
+    stand_the_freeze_road_in(None);
+    pin_film_thumbnail::forget_the_thumbnail();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+    pin_trace::clear_noted();
+}
+
+/// **A grab that has not landed by the release paints nothing, unregisters nothing and ends nothing**,
+/// so the outgoing player goes on playing under the registration until its replacement draws — the
+/// `off` road for that relaunch, and never a blank band and never the host's black (see
+/// `pin_film_thumbnail::stand_the_pressed_still`).
+#[test]
+fn a_still_that_has_not_landed_leaves_the_old_picture_playing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_retirement = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let path = PathBuf::from("a-film.mkv");
+    let outgoing = unsafe { GetCurrentProcessId() };
+    probed_at(&path, 1920, 1080);
+    pin_film_thumbnail::forget_the_thumbnail();
+    film.drawn_in_the_host(outgoing);
+    let source = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(source, outgoing, host) };
+    VIDEO_PID.store(outgoing, Ordering::SeqCst);
+    with_pin(|pin| pin.transport.begun(30.0, true, false));
+
+    stand_the_freeze_road_in(Some(FreezeRoad::Still));
+    ffplay_window::clear_suspended_players();
+    ffplay_window::clear_pause_posts();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+    clear_restart_count();
+    pin_film_thumbnail::clear_the_unregistrations();
+    let _ = pin_film_thumbnail::take_the_still_grabs();
+    let erases = pin_film_host::host_erases();
+
+    // The press asks for the still and the release arrives before the decode has: nothing is in hand.
+    pin_film_thumbnail::begin_the_seek_still();
+    restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Seek);
+
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    let lines = pin_trace::noted_lines();
+    let at = |line: &str| lines.iter().position(|noted| noted == line);
+    let fallback = format!("placeholder unavailable pid {outgoing}: the grab had not landed");
+    let restarted = format!("player restarted for seek from {outgoing} to {replacement}");
+    assert!(
+        at(&fallback).is_some() && at(&fallback) < at(&restarted),
+        "the fallback is named before the replacement is begun: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.starts_with("placeholder painted")
+            || line.starts_with("outgoing player ended at once")
+            || line.starts_with("outgoing picture frozen")),
+        "and nothing is painted over, ended or frozen on the fallback: {lines:?}"
+    );
+    assert!(
+        !pin_film_thumbnail::a_still_stands(),
+        "and nothing stands where a cover would be"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "the registration goes on drawing the picture that is on screen"
+    );
+    assert!(
+        pin_film_thumbnail::the_source_is_up(outgoing),
+        "which is the outgoing player's own frame"
+    );
+    assert_eq!(
+        VIDEO_RETIREMENT
+            .lock()
+            .ok()
+            .and_then(|held| *held)
+            .map(|parked| parked.retiring),
+        Some(outgoing),
+        "and the player is kept for the loop to end once the replacement draws"
+    );
+    assert!(
+        ffplay_window::suspended_players().is_empty(),
+        "nothing is suspended on the fallback either"
+    );
+    assert_eq!(ffplay_window::pause_posts(), 0, "and no key is posted");
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "nor is there a hold down a pipe"
+    );
+    assert_eq!(
+        pin_film_host::host_erases(),
+        erases,
+        "and nothing erases the host for it"
+    );
+
+    let _ = unsafe { DestroyWindow(source) };
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        *held = previous_retirement;
+    }
+    stand_the_freeze_road_in(None);
+    pin_film_thumbnail::forget_the_thumbnail();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+    pin_trace::clear_noted();
+}
+
+/// **A pin with no seek behind a relaunch asks for no still at all**, and the release says so rather
+/// than painting anything: the grab is the press's own, so a relaunch the press did not begin (a
+/// level, a track, a file step) finds nothing in hand and takes the `off` road (see
+/// `pin_film_thumbnail::begin_the_seek_still`).
+#[test]
+fn a_relaunch_with_no_press_behind_it_asks_for_no_still() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_retirement = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    let film = ffplay_standing_film();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let path = PathBuf::from("a-film.mkv");
+    let outgoing = unsafe { GetCurrentProcessId() };
+    probed_at(&path, 1920, 1080);
+    pin_film_thumbnail::forget_the_thumbnail();
+    film.drawn_in_the_host(outgoing);
+    let source = unsafe { a_window_of_the_players_own() };
+    unsafe { pin_film_thumbnail::adopt_the_source(source, outgoing, host) };
+    VIDEO_PID.store(outgoing, Ordering::SeqCst);
+
+    stand_the_freeze_road_in(Some(FreezeRoad::Still));
+    pin_trace::clear_noted();
+    clear_restart_count();
+    pin_film_thumbnail::clear_the_unregistrations();
+    let _ = pin_film_thumbnail::take_the_still_grabs();
+
+    restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Volume);
+
+    assert!(
+        pin_film_thumbnail::take_the_still_grabs().is_empty(),
+        "no seek was pressed, so no frame was decoded for one"
+    );
+    let lines = pin_trace::noted_lines();
+    assert!(
+        lines.iter().any(|line| *line
+            == format!("placeholder unavailable pid {outgoing}: no still was asked for")),
+        "and the release says there was nothing to paint rather than claiming one: {lines:?}"
+    );
+    assert!(
+        !pin_film_thumbnail::a_still_stands(),
+        "nothing stands where no still was ever asked for"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "and the registration is left where it was"
+    );
+    assert!(
+        pin_film_thumbnail::the_source_is_up(outgoing),
+        "drawing the picture the player is still playing"
+    );
+
+    let _ = unsafe { DestroyWindow(source) };
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        *held = previous_retirement;
+    }
+    stand_the_freeze_road_in(None);
+    pin_film_thumbnail::forget_the_thumbnail();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+    pin_trace::clear_noted();
+}
+
 #[test]
 fn a_failed_handover_ends_the_player_it_suspended() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
