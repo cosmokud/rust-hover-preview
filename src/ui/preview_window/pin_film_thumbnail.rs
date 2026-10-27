@@ -740,6 +740,10 @@ pub(super) fn forget_the_thumbnail() {
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(0, Ordering::SeqCst);
     SOURCE_PROCESS.store(0, Ordering::SeqCst);
+    if let Ok(mut held) = HELD_FRAMES.lock() {
+        // The pin that counted these is gone, so the next one opens its own first second.
+        *held = HeldFrames::default();
+    }
 }
 
 /// Take the registration down where it is drawn in `host`: a host of the hover's that goes while it
@@ -975,7 +979,7 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
         .map_or((live, None), |source| (source.client, source.aspect));
     let shown = the_thumbnail_box(client, source_client, aspect);
     if !the_registration_wants(held, shown) {
-        note_the_thumbnail_pair("held", host, client, live, shown);
+        note_a_held_frame(live != shown.client);
         return;
     }
 
@@ -1044,7 +1048,7 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     // the invariant above: the Shell composes the thumbnail over this app's content, so a client the
     // host never erased is a pixel nobody drew — and one of those is the desktop seen through the pin.
     let _ = unsafe { InvalidateRect(host, None, true) };
-    note_the_thumbnail_pair("update", host, client, live, shown);
+    note_the_thumbnail_pair(host, client, live, shown);
 }
 
 /// The one line that makes a hole visible at a glance: the host the Shell is drawing into (its own box
@@ -1055,7 +1059,6 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
 /// was resized by something that is not this app**, which is the one way a crop can be of a surface the
 /// Shell is not sampling.
 fn note_the_thumbnail_pair(
-    what: &str,
     host: HWND,
     client: (i32, i32),
     live: (i32, i32),
@@ -1069,8 +1072,7 @@ fn note_the_thumbnail_pair(
         None => (0, 0, shown.client.0, shown.client.1),
     };
     note_pin_trace!(
-        "thumbnail {} host {}x{}+{}+{} box {}x{} dest {}x{}+{}+{} cli {}x{} pic {}x{} src {}x{}+{}+{}",
-        what,
+        "thumbnail update host {}x{}+{}+{} box {}x{} dest {}x{}+{}+{} cli {}x{} pic {}x{} src {}x{}+{}+{}",
         host_width,
         host_height,
         host_x,
@@ -1090,6 +1092,100 @@ fn note_the_thumbnail_pair(
         left,
         top,
     );
+}
+
+/// **A held frame: counted, not printed.** A tick that found the pair unchanged says almost nothing —
+/// the source's side is a constant, so the only thing a held line could carry is that the pin has not
+/// moved — and a run of 2,375 of them against 446 updates is 84% of the trace reading the same thing.
+/// So a held frame is counted, a **heartbeat** is written at most once a second while a pin lives (the
+/// frames of that second and whether any of them disagreed with the pair), and one **summary** line is
+/// written at each settle with every frame held since the last summary (`thumbnail held n=2375
+/// disagrees=0`). The updates are untouched: they are the measurement (see `note_the_thumbnail_pair`).
+#[derive(Default)]
+struct HeldFrames {
+    /// The instant the second being counted opened, and the frames counted in it. Nothing until the
+    /// first held frame, which opens the first second and prints nothing itself.
+    heartbeat: Option<Instant>,
+    in_the_second: u32,
+    /// The frames held since the last summary, and whether any of them found the source's live client
+    /// disagreeing with the client the crop was built from (see `note_the_thumbnail_pair`).
+    since_summary: u32,
+    disagrees: bool,
+}
+
+impl HeldFrames {
+    /// Count one held frame, answering the heartbeat line where a whole second has passed since the
+    /// last one: at most one line a second, and nothing at all for the first second's opening frame.
+    fn a_frame(&mut self, now: Instant, disagrees: bool) -> Option<String> {
+        self.in_the_second += 1;
+        self.since_summary += 1;
+        self.disagrees |= disagrees;
+        let opened = *self.heartbeat.get_or_insert(now);
+        if now.duration_since(opened) < Duration::from_secs(1) {
+            return None;
+        }
+        let line = format!(
+            "thumbnail held heartbeat n={} disagrees={}",
+            self.in_the_second,
+            self.disagrees as u8,
+        );
+        self.heartbeat = Some(now);
+        self.in_the_second = 0;
+        Some(line)
+    }
+
+    /// The summary line a settle is owed: every frame held since the last summary, and whether any of
+    /// them disagreed with the pair. Nothing at all where no frame has been held since then.
+    fn a_summary(&mut self) -> Option<String> {
+        if self.since_summary == 0 {
+            return None;
+        }
+        let line = format!(
+            "thumbnail held n={} disagrees={}",
+            self.since_summary,
+            self.disagrees as u8,
+        );
+        self.since_summary = 0;
+        self.disagrees = false;
+        Some(line)
+    }
+}
+
+/// The held frames this pin has seen (see [`HeldFrames`]), which is one pin's at a time: a registration
+/// belongs to the pin that took it up, and its teardown settles what it counted.
+static HELD_FRAMES: Mutex<HeldFrames> = Mutex::new(HeldFrames {
+    heartbeat: None,
+    in_the_second: 0,
+    since_summary: 0,
+    disagrees: false,
+});
+
+/// Count one held frame, and write the heartbeat it is owed where a second of them has passed.
+///
+/// **Nothing is counted while the trace is off**: this is a trace's own bookkeeping rather than a fact
+/// about the pin, so a run without `RHP_PIN_TRACE` pays one read of a flag (see `pin_trace::asked`).
+fn note_a_held_frame(disagrees: bool) {
+    if !super::pin_trace::asked() {
+        return;
+    }
+    if let Ok(mut held) = HELD_FRAMES.lock() {
+        if let Some(line) = held.a_frame(Instant::now(), disagrees) {
+            note_pin_trace!("{}", line);
+        }
+    }
+}
+
+/// Write the one summary line a settle is owed, and start counting again from it (see [`HeldFrames`]).
+///
+/// **The settle is a gesture's** — a drag's release and the capture lost under one are the two ends
+/// this road has — and a pin's teardown is the last of them: what a pin held before it went is still
+/// worth one line, and a pin's own life is a settle of its own.
+pub(super) fn settle_the_held_frames() {
+    if let Ok(mut held) = HELD_FRAMES.lock() {
+        if let Some(line) = held.a_summary() {
+            note_pin_trace!("{}", line);
+        }
+    }
 }
 
 /// The corner of a window's client area, on the screen.
@@ -1283,6 +1379,55 @@ mod tests {
                 }
             }
         }
+    }
+
+
+    /// **A held frame prints nothing on its own, and a second of standing still prints exactly one
+    /// line.** The trace's own collapse, asked of the counter rather than of a run: a step that finds
+    /// the pair unchanged opens the second and says nothing, a whole second of them is one heartbeat,
+    /// and the frames are all still summed for the settle (see `HeldFrames`).
+    #[test]
+    fn a_held_frame_prints_nothing_and_a_second_of_standing_still_prints_one_line() {
+        let mut held = HeldFrames::default();
+        let opened = Instant::now();
+        let at = |ms: u64| opened + Duration::from_millis(ms);
+
+        assert_eq!(
+            held.a_frame(at(0), false),
+            None,
+            "a step that does not move the pair prints no line"
+        );
+        assert_eq!(
+            held.a_frame(at(999), false),
+            None,
+            "and neither does the rest of the second it opened"
+        );
+        assert_eq!(
+            held.a_frame(at(1000), false).as_deref(),
+            Some("thumbnail held heartbeat n=3 disagrees=0"),
+            "a second of standing still is exactly one line, and it carries that second's frames"
+        );
+        assert_eq!(
+            held.a_frame(at(1500), true),
+            None,
+            "the next second is still inside its first half, and a disagreement is not a line"
+        );
+        assert_eq!(
+            held.a_frame(at(2000), false).as_deref(),
+            Some("thumbnail held heartbeat n=2 disagrees=1"),
+            "one heartbeat a second, and whether any of them disagreed with the pair"
+        );
+
+        assert_eq!(
+            held.a_summary().as_deref(),
+            Some("thumbnail held n=5 disagrees=1"),
+            "the settle sums every frame held since the last summary, not just the last second"
+        );
+        assert_eq!(
+            held.a_summary(),
+            None,
+            "and a settle with nothing held since the last one prints nothing at all"
+        );
     }
 
     /// The registration is nobody's where none was taken: a thumbnail record with no pair stands in no
