@@ -276,3 +276,65 @@ fn a_seek_cover_with_nothing_in_flight_is_given_up_by_the_cover_bound() {
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
 }
+
+/// **A seek's release ends nothing on the spot.** FFmpeg's player is the one picture the pin has until
+/// the player that replaces it has drawn its own, so the player under the hand is retired by the loop
+/// once that picture stands rather than killed at the release — the kill is the band the host's black
+/// shows through for the length of a decode (see `retire_replaced_player` and
+/// `pin_playback::park_pinned_player_for_seek`).
+///
+/// The line read here is the relaunch's own `from`, which is the pid of the player the cover was raised
+/// over: a release that ended it first leaves `VIDEO_PID` cleared before the relaunch reads it, and the
+/// line says `from 0` with no player for the retirement to hold.
+#[test]
+fn a_seek_release_ends_no_player_before_its_replacement_can_draw() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("seek-release-ends-nothing.mkv");
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    stand_pin(Some(a_banded_video_pin(&film, content)));
+    forget_pin_park_swap();
+    clear_restart_count();
+    pin_trace::clear_noted();
+
+    let bar = pinned_transport_geometry().expect("a banded video pin carries a bar");
+    let (x, y) = (bar.width / 2, bar.top + bar.height / 2);
+    let window = RecordedPinWindow::new(0x1000);
+    assert!(unsafe { pinned_transport_press(HWND(0x1000 as *mut _), x, y) });
+    assert!(unsafe { pinned_transport_drag(HWND(0x1000 as *mut _), bar.width / 4) });
+    assert!(unsafe { pinned_transport_release(HWND(0x1000 as *mut _), x, y, &window) });
+
+    assert_eq!(restart_count(), 1, "the seek is one relaunch on this engine");
+    let lines = pin_trace::noted_lines();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("player restarted for seek from 101 to ")),
+        "the player on screen is still the one the relaunch replaces, so nothing ended it: {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("player ended while standing")),
+        "no end is written against a picture that is still on screen: {lines:?}"
+    );
+
+    forget_pin_park_swap();
+    clear_restart_count();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}

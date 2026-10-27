@@ -1,6 +1,7 @@
 //! Handing a film over: retiring the player that is up while its replacement is launched, and
 //! what the end of a pinned film means.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 use crate::formats::routing::NavCategory;
 
@@ -95,9 +96,36 @@ pub(super) fn retire_replaced_player(retiring: u32, replacement: u32) {
         // Ended the same way a settled retirement is ended, and for the same reason: this player
         // has left the media and `VIDEO_PID` already names its replacement, so this call is the
         // only one that will ever end it or stop holding it (see `end_retired_player`).
-        end_retired_player(ending);
+        note_the_retirement(end_retired_player(ending), ending);
     }
     *held = parked;
+}
+
+/// One line when a retired player is confirmed gone: **the last step of a relaunch**, written only
+/// where the player really has gone so a run can read the swap and the ending in the order they
+/// happened.
+fn note_the_retirement(end: RetireEnd, pid: u32) {
+    if end == RetireEnd::Gone {
+        note_pin_trace!("player retired after the swap pid {pid}");
+    }
+}
+
+/// Write the line that must never appear: a player ended while its own window is the source the pin's
+/// host is drawing, with nothing over the band.
+///
+/// **A park is the one cover that answers this differently, and honestly so**: the band is the frozen
+/// frame a cover took, so a player ended behind it is not exposed — what is on screen is not its window.
+/// Every other case is a player whose going takes the picture with it, and the order the relaunch is
+/// built on is that no player is ended until its replacement stands (see `retire_replaced_player`).
+pub(super) fn note_an_end_while_standing(pid: u32) {
+    // **Asked without waiting for the pin's lock**, because a line about a player must never be the
+    // reason a caller's lock is waited on for a second time (see `pin_state_try`): a pin whose state is
+    // busy is read as one without a cover over it, which is the direction that says more, not less.
+    let covered = pin_window::pin_state_try()
+        .is_some_and(|pinned| pinned.pin().is_some_and(|pin| pin.parked));
+    if pid != 0 && !covered && pin_film_thumbnail::the_source_is_standing(pid) {
+        note_pin_trace!("player ended while standing pid {pid}: the picture went with it");
+    }
 }
 
 /// The wait that is left when one player is retired while a replacement for another may already be
@@ -432,6 +460,7 @@ pub(super) fn settle_video_retirement() {
         // the next tick, because nothing else here would ask it: the wait is over either way, and
         // what is left of it is only the pid (see `end_retired_player`).
         if end_retired_player(pending.retiring) == RetireEnd::Gone {
+            note_the_retirement(RetireEnd::Gone, pending.retiring);
             *held = None;
         }
     }
