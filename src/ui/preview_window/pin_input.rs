@@ -318,6 +318,11 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             update_pin_transport(|transport| {
                 transport.seeking = aim;
             });
+            // **The frame on screen is decoded now, while the hand is still choosing** (see
+            // `pin_film_thumbnail::begin_the_seek_still`): a drag on the bar outlives a one-frame
+            // decode, so the release has a still in memory when it ends the player it was taken from.
+            // Nothing waits on it here — the drag, the paints and the release are all the release's.
+            pin_film_thumbnail::begin_the_seek_still();
             // **The hand takes the bar and the film plays on**, which is the whole of what a press
             // on the track does to the player. The end belongs to the release, where the second is
             // known: FFmpeg's player is taken to one by being ended and begun again, and there is no

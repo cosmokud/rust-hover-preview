@@ -920,26 +920,33 @@ pub(super) fn take_noted_grabs() -> Vec<(PathBuf, f64, u32)> {
 }
 
 /// One frame of a film a player of somebody else's is drawing, taken for the bubble the pin
-/// collapses into.
+/// collapses into: `grab_a_frame` cut to a `side × side` square — the same shape, and from the same
+/// corner, that every other bubble's picture is cut to (see `bubble_thumbnail`).
+pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8>> {
+    grab_a_frame(path, at, (side, side), Duration::from_secs(3))
+}
+
+/// One frame of a film at a second, scaled to cover `width × height` and cropped to the middle of
+/// that shape, as raw BGRA on stdout.
 ///
 /// The frame is *read* rather than copied, and that is the whole of the difference between this and
 /// every other kind's picture: what a bubble shows of a film the media engine plays is the frame
 /// already in memory, where this engine's picture is on the screen and nowhere else. So the file is
-/// opened at the second the bar is showing, one frame is decoded, and it comes back scaled to cover
-/// a `side × side` square and cropped to the middle of it — the same shape, and from the same
-/// corner, that every other bubble's picture is cut to (see `bubble_thumbnail`).
+/// opened at the second named, one frame is decoded, and it comes back the shape asked for — which
+/// is a bubble's square, and a seek's still at the pin's box (see
+/// `pin_film_thumbnail::begin_the_seek_still`).
 ///
-/// The output is raw BGRA on stdout, which is what the preview's own frame is in: a picture is not
+/// The output is raw BGRA, which is what the preview's own frame is in: a picture is not
 /// encoded and decoded again for a process boundary when the bytes are what is wanted either side
 /// of it. `-pix_fmt bgra` is asked for by name rather than left to the file, because what the file
 /// holds is a codec's own arrangement of the colour and this side wants the one the compositor
 /// reads.
 ///
-/// It is bounded at three seconds and it is a *bound* on the wait rather than a budget for it
+/// It is bounded by the caller and it is a *bound* on the wait rather than a budget for it
 /// (`video_probe::wait_bounded`): a grab that outlasts it is a process killed rather than a thread
 /// held, and the answer is the same `None` a file FFmpeg cannot open gives — the bubble keeps the
-/// face it was painted with. The child is hidden and adopted like every other process this app
-/// starts, so a machine closed mid-grab leaves no `ffmpeg` behind.
+/// face it was painted with, and a seek's still never lands. The child is hidden and adopted like
+/// every other process this app starts, so a machine closed mid-grab leaves no `ffmpeg` behind.
 ///
 /// **The frame is drained on a thread of its own, and the bound is what that thread is for.** A
 /// child has to write the whole of its frame before it can leave, and a pipe that nobody is
@@ -947,9 +954,14 @@ pub(super) fn take_noted_grabs() -> Vec<(PathBuf, f64, u32)> {
 /// scale is a few tens of kilobytes, which is at or past the buffer — blocks `ffmpeg` in the middle
 /// of its write, so the wait below would expire on a grab that was never given the chance to
 /// finish. Reading as the child writes is what lets it reach the end of its one frame and exit; the
-/// answer is the first `side × side × 4` bytes of what was read.
-pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8>> {
-    let expected = side as usize * side as usize * 4;
+/// answer is the first `width × height × 4` bytes of what was read.
+pub(super) fn grab_a_frame(
+    path: &Path,
+    at: f64,
+    (width, height): (u32, u32),
+    bound: Duration,
+) -> Option<Vec<u8>> {
+    let expected = width as usize * height as usize * 4;
     if expected == 0 {
         return None;
     }
@@ -967,7 +979,7 @@ pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8
         .arg("1")
         .arg("-vf")
         .arg(format!(
-            "scale={side}:{side}:force_original_aspect_ratio=increase,crop={side}:{side}"
+            "scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
         ))
         .arg("-f")
         .arg("rawvideo")
@@ -993,7 +1005,7 @@ pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8
         bytes
     });
 
-    let landed = video_probe::wait_bounded(child, Duration::from_secs(3));
+    let landed = video_probe::wait_bounded(child, bound);
     let bytes = reader.join().unwrap_or_default();
 
     // A grab that ran past its bound answered nothing, whatever the reader had taken by the time
