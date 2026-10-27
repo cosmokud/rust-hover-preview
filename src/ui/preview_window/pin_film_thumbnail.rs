@@ -261,8 +261,8 @@ const NATIVE_SIZE_WAIT: Duration = Duration::from_millis(3);
 /// mpv adds to the position it is given (`options/m_option.c`'s `m_geometry_apply` and
 /// `video/out/win_state.c`, which offsets by the work area's origin). That origin is (0, 0) unless
 /// the taskbar is docked along the primary's left or top edge, where an uncorrected launch would be a
-/// taskbar's thickness away from the pin's corner. The offset is taken off the corner and nothing
-/// else.
+/// taskbar's thickness away from the corner of the box showing the film. The offset is taken off the
+/// corner and nothing else.
 ///
 /// **Nothing here is clamped by mpv.** Its geometry parser takes the numbers as integers and its
 /// Windows backend applies them exactly where `--geometry` names an x and a y — the first placement
@@ -561,8 +561,9 @@ pub(super) fn the_band_was_placed(host: HWND) {
     settle_the_registration(&mut held, host);
 }
 
-/// **The one placement a pin's source ever takes**: the film's own picture size at the pin's corner,
-/// asked for once, at adoption, and never asked for again until the window is taken down.
+/// **The one placement a source ever takes**: the film's own picture size at the corner of the host
+/// showing it — the pin's, or the hover's the pin is taken up from — asked for once, at adoption, and
+/// never asked for again until the window is taken down.
 ///
 /// **What the record it leaves says is why a resize cannot flash.** The client the ask named and the
 /// shape the film came with are kept beside the registration (see [`SourceShape`]), and every frame
@@ -642,9 +643,9 @@ fn place_the_source(
     })
 }
 
-/// The one box a pin's source is ever asked for — the film's own picture size at the pin's corner,
-/// clamped to what the window system will take — and nothing at all for a source that has been placed
-/// already, for a host that is not there, or for a film whose own size is not known yet.
+/// The one box a source is ever asked for — the film's own picture size at the corner of the host
+/// showing it, clamped to what the window system will take — and nothing at all for a source that has
+/// been placed already, for a host that is not there, or for a film whose own size is not known yet.
 ///
 /// **Every `None` is a promise.** A placed source is a source whose client, whose picture and whose
 /// shape cannot change under the Shell again, so a press, a drag, a release and a settle have nothing
