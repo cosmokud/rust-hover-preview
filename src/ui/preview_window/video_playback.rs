@@ -1543,15 +1543,20 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // a hover's top-level player has a host standing empty until a relaunch fills it, and that
     // player still has a window this road places (see `pin_film_host`).
     if pin_film_host::the_pinned_player_was_begun_in_the_host() {
-        // The band is owed its picture back, and the picture is the host — but only once the player
-        // has put a child of its own in it: a host shown empty is a black rectangle over the band,
-        // which is the film the hover was playing, blanked (see `pin_film_host::create`).
+        // The band is owed its picture back, and the picture is the host — but only once the host has
+        // a picture in it: a host shown empty is a black rectangle over the band, which is the film the
+        // hover was playing, blanked (see `pin_film_host::create`).
+        //
+        // **"Has a picture" is the registration standing in the host and not the newest player**: for
+        // the whole of a relaunch's wait the player before the replacement is frozen on screen and is
+        // what the host is drawing, so asking the newest one declares a pin empty at a seek's instant
+        // and takes the z-order re-assert off it for the wait (see `pin_film_host::the_host_is_drawing`).
         //
         // **Where the host stands is not this road's to say**, and the box it was handed is a
         // top-level player's rather than the band's: the band's box is the pin's, and it is given
         // by the roads that read it (see `ensure_pinned_sibling_box`).
         let host = pin_film_host::film_host().map_or(0, |host| host.0 as isize);
-        if pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
+        if pin_film_host::the_host_is_drawing() {
             trace_the_raised_film(host, "topmost shown: pin host drawing");
             // SAFETY: the host is this app's own window — a child of the pin's or a window of the
             // desktop's — and `ShowWindow` takes any window and reports rather than faults.

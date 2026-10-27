@@ -543,6 +543,11 @@ struct Thumbnail {
     /// to take the picture over draws nothing until it is ready, and the picture before it keeps the
     /// host until then (see `hand_the_picture_over`).
     registered: isize,
+    /// The player whose window `registered` is. It is kept beside the window rather than read off the
+    /// shape, because a source is registered before its one placement in the corner where the film's
+    /// own size is not known yet — and the host is drawing that player either way (see
+    /// `the_standing_source_process`).
+    registered_process: u32,
     /// The rectangle pair the registration was last handed — the host's client it is drawn in, the
     /// picture's rectangle in the source and the source's own client — or nothing where none stands.
     /// **A change of either is a re-point** (see `settle_the_registration`).
@@ -557,6 +562,7 @@ impl Thumbnail {
         host: 0,
         registration: 0,
         registered: 0,
+        registered_process: 0,
         shown: None,
         source: None,
     };
@@ -720,6 +726,23 @@ pub(super) fn the_source_is_standing(pid: u32) -> bool {
     let number = SOURCE.load(Ordering::SeqCst);
     THUMBNAIL.lock().ok().is_some_and(|held| {
         held.registration != 0 && held.registered == number && number != 0
+    })
+}
+
+/// **The player whose window the registration standing in `host` is drawing**, where one stands: the
+/// picture that host has on screen, whoever began it.
+///
+/// It is deliberately not the newest pid. A relaunch records its replacement before that player has
+/// made a window, and the player before it is **frozen** and is what the host goes on drawing until the
+/// swap (see `hand_the_picture_over`), so a road that reads the newest pid as the picture sees a host
+/// with a still frame in it and calls it empty — which is a seek's instant declared a hole, with the
+/// z-order re-assert taken off the pin for the whole wait that follows (see
+/// `pin_film_host::the_host_is_drawing`).
+pub(super) fn the_standing_source_process(host: HWND) -> Option<u32> {
+    THUMBNAIL.lock().ok().and_then(|held| {
+        let standing =
+            held.registration != 0 && held.registered != 0 && held.host == host.0 as isize;
+        standing.then_some(held.registered_process).filter(|pid| *pid != 0)
     })
 }
 
@@ -1964,10 +1987,13 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     // to take the picture over is not the picture until it is ready, so what a standing registration
     // draws is read out of the record rather than out of the source this road has just adopted (see
     // `hand_the_picture_over`).
-    let number = if held.registration != 0 && held.registered != 0 {
-        held.registered
+    let (number, process) = if held.registration != 0 && held.registered != 0 {
+        (held.registered, held.registered_process)
     } else {
-        SOURCE.load(Ordering::SeqCst)
+        (
+            SOURCE.load(Ordering::SeqCst),
+            SOURCE_PROCESS.load(Ordering::SeqCst),
+        )
     };
     if number == 0 {
         return;
@@ -2020,6 +2046,7 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
         };
         held.registration = registration;
         held.registered = number;
+        held.registered_process = process;
     }
 
     let (x, y, width, height) = shown.destination;
@@ -2456,6 +2483,7 @@ mod tests {
             host: 0x2000,
             registration: 9,
             registered: source.source,
+            registered_process: source.process,
             shown: Some(shown),
             source: Some(source),
         };
@@ -2860,6 +2888,7 @@ mod tests {
             host: 0x2000,
             registration: 0,
             registered: 0,
+            registered_process: 0,
             shown: None,
             source: Some(a),
         };

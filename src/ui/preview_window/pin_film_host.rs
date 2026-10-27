@@ -320,22 +320,22 @@ pub(super) fn the_video_window_is_owed_the_front(current_video_path: Option<&Pat
 /// `ensure_video_window_topmost`).
 ///
 /// It says the pairing and not that the film is drawing: a player begun into the host has not put
-/// a child of its own there for a moment or more, and that wait is `the_hosted_player_is_drawing`.
+/// a child of its own there for a moment or more, and that wait is `the_host_is_drawing`.
 pub(super) fn the_pinned_player_was_begun_in_the_host() -> bool {
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     pid != 0 && film_host().is_some() && hosted_player_pid() == Some(pid)
 }
 
-/// How often an unchanged `the_hosted_player_is_drawing` answer is written down: the tick asks it
-/// hundreds of times a second, and on-change plus this heartbeat is what makes the trace readable
-/// (see `trace_the_hosted_drawing`).
+/// How often an unchanged `the_host_is_drawing` answer is written down: the tick asks it hundreds of
+/// times a second, and on-change plus this heartbeat is what makes the trace readable (see
+/// `trace_the_hosted_drawing`).
 const HOSTED_DRAWING_TRACE_EVERY: Duration = Duration::from_secs(1);
 
-/// One `the_hosted_player_is_drawing` answer as the trace last wrote it: the player, the host (zero
-/// for none), the answer, and when it was written.
+/// One `the_host_is_drawing` answer as the trace last wrote it: the player whose source the host is
+/// drawing, the host (zero for none), the answer, and when it was written.
 type HostedDrawingTrace = (u32, isize, bool, Instant);
 
-/// The last answer `the_hosted_player_is_drawing` wrote down (see `trace_the_hosted_drawing`).
+/// The last answer `the_host_is_drawing` wrote down (see `trace_the_hosted_drawing`).
 static LAST_HOSTED_DRAWING: Lazy<Mutex<Option<HostedDrawingTrace>>> =
     Lazy::new(|| Mutex::new(None));
 
@@ -378,22 +378,49 @@ fn the_drawing_trace_is_due(
     })
 }
 
-/// Whether this player is up as the pin's picture: the source the Shell draws into the host is the
+/// **Whether the pin's host has a picture in it at all**, whichever player began it: the registration
+/// standing in that host, which is the frame on screen (see
+/// `pin_film_thumbnail::the_standing_source_process`).
+///
+/// It is the question every road that would show, raise or order the host asks, and it is asked of the
+/// registration rather than of the newest player because of the whole of a relaunch's wait: the
+/// replacement is recorded before it has made a window, while the player before it is **frozen** and is
+/// what the host is drawing (see `pin_playback::freeze_the_outgoing_picture`). Asked of the newest pid
+/// instead, a seek's instant is a pin declared empty — the z-order re-assert skipped, the band treated
+/// as a hole — with a still frame standing in it. A host with no registration in it yet is the player's
+/// own window, which is all there is while the source is being adopted and the Shell has not been handed
+/// it (see `pin_film_thumbnail::adopt_the_source`).
+pub(super) fn the_host_is_drawing() -> bool {
+    let Some(host) = film_host() else {
+        trace_the_hosted_drawing(0, None, false);
+        return false;
+    };
+    if let Some(standing) = pin_film_thumbnail::the_standing_source_process(host) {
+        trace_the_hosted_drawing(standing, Some(host), true);
+        return true;
+    }
+    // A host with no registration in it yet is the pass between a source being adopted and the
+    // Shell being handed it, and the player's own window is all there is to show for it.
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    let drawing = the_hosted_player_is_drawing(pid);
+    trace_the_hosted_drawing(pid, Some(host), drawing);
+    drawing
+}
+
+/// Whether **this** player is up as the pin's picture: the source the Shell draws into the host is the
 /// window this player made, adopted and still live (see `pin_film_thumbnail::the_source_is_up`).
 ///
 /// **It is asked of the process rather than of the host alone**, because the host outlives the player
 /// it holds: a file step begins a new player for the same host, and the old source would answer "a
 /// film is drawing" for a film about to be killed. The source records the player it was adopted for,
-/// so the pid and the window are one question.
+/// so the pid and the window are one question. What it is *not* is "has the host a picture": a
+/// replacement that has made no window yet answers no here while the frozen picture it replaced is
+/// still drawing (see `the_host_is_drawing`).
 pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
-    let Some(host) = film_host() else {
-        trace_the_hosted_drawing(pid, None, false);
-        return false;
-    };
-    let drawing =
-        pid != 0 && hosted_player_pid() == Some(pid) && pin_film_thumbnail::the_source_is_up(pid);
-    trace_the_hosted_drawing(pid, Some(host), drawing);
-    drawing
+    film_host().is_some()
+        && pid != 0
+        && hosted_player_pid() == Some(pid)
+        && pin_film_thumbnail::the_source_is_up(pid)
 }
 
 /// Whether this player has a window on screen: a source the Shell is drawing through a host of this
@@ -935,7 +962,7 @@ const PIN_HANDOVER_FRAME_SECS: f64 = 1.0;
 /// Whether this hosted player has a frame of its own on screen: the source the Shell draws it from
 /// *and*, where the player can be asked, a video output it says is configured for a frame.
 ///
-/// A window is not a picture (see `the_hosted_player_is_drawing`), and `vo-configured` is the
+/// A window is not a picture (see `the_host_is_drawing`), and `vo-configured` is the
 /// player's own word that its video output has been set up for a frame. The answer is latched per
 /// player because the read is bounded by a pipe timeout rather than free: once this player has
 /// proved a frame it has one, and every later tick answers at once. A step begins a new player, so
