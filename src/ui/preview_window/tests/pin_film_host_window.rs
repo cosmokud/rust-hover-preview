@@ -4807,3 +4807,92 @@ fn a_hover_drawn_through_a_thumbnail_that_is_never_pinned_leaves_no_source() {
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
 }
+
+/// **One source per film: placed once, never resized, never placed again.** A whole gesture — the
+/// hover, its take-up into the pin, the press that begins a resize, both directions of its drag, the
+/// release and the settle that follows it, and the teardown — leaves the source at the film's own
+/// size, with exactly one placement and no second ask (see `pin_film_thumbnail`).
+#[test]
+fn a_film_is_placed_once_and_never_resized_across_a_whole_gesture() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (host, source, pid) = unsafe { a_hover_drawn_through_a_thumbnail(&film, &path) };
+    let placed = unsafe { window_rect(source) };
+    let size = (placed.2 - placed.0, placed.3 - placed.1);
+    assert_eq!(
+        pin_film_thumbnail::the_source_placements(),
+        1,
+        "one placement, at adoption"
+    );
+    assert_eq!(size, (1920, 1080), "at the film's own size");
+    let still = |what: &str| {
+        let box_ = unsafe { window_rect(source) };
+        assert_eq!(
+            (box_.2 - box_.0, box_.3 - box_.1),
+            size,
+            "the source is not resized by {what}"
+        );
+        assert_eq!(
+            pin_film_thumbnail::the_source_placements(),
+            1,
+            "nor placed again by {what}"
+        );
+        assert_eq!(
+            pin_film_thumbnail::the_source_replacements(),
+            0,
+            "nor asked for a second placement by {what}"
+        );
+    };
+
+    // The hover moves and is re-cropped; a box at an edge may slide the source, never size it.
+    for box_ in [(100, 100, 740, 460), (900, 700, 1700, 1150), (0, 0, 640, 360)] {
+        unsafe { hover_film_host::place_the_hover_film_host(box_) };
+        still("a hover moving");
+    }
+
+    // The press is a take-up: the host is promoted, nothing is begun and nothing is placed.
+    clear_restart_count();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert_eq!(restart_count(), 0, "a take-up begins no player");
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(host),
+        "the hover's host is the pin's"
+    );
+    still("the take-up");
+
+    // The drag, both ways: every step is a box for the host and nothing of the source.
+    for box_ in [
+        (0, 0, 1200, 675),
+        (900, 500, 1900, 1060),
+        (-100, 0, 900, 560),
+        (200, 100, 700, 400),
+    ] {
+        unsafe { pin_film_host::place_the_pin_film_host(box_) };
+        still("a step of a resize drag");
+    }
+
+    // The release and the settle: the settled box again, then the same box once more.
+    for box_ in [(200, 100, 1000, 550), (200, 100, 1000, 550)] {
+        unsafe { pin_film_host::place_the_pin_film_host(box_) };
+        still("the release and the settle");
+    }
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    assert_eq!(
+        pin_film_thumbnail::the_source_placements(),
+        1,
+        "a teardown places nothing"
+    );
+    assert!(
+        !pin_film_thumbnail::the_source_is_up(pid),
+        "and leaves no source behind it"
+    );
+
+    let _ = unsafe { DestroyWindow(source) };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+}

@@ -73,6 +73,13 @@
 //! the crop was built from) are the same number for the pin's whole life, and a frame where they
 //! disagree says something other than this app resized the source (see `note_the_thumbnail_pair`).
 //!
+//! **The invariant has teeth in this module, not only in prose.** Three calls name the source's
+//! geometry and there are no others: `size_the_source` — the one placement, reached only through
+//! `place_the_source` — `move_the_source`, which carries `SWP_NOSIZE` and so cannot change a size,
+//! and `lower_the_source`, which carries `SWP_NOMOVE | SWP_NOSIZE` and only changes the z-order. A
+//! second placement is refused out loud (`source re-placed`) and counted, so a path that reaches one
+//! is a line in the trace rather than a frame nobody explained.
+//!
 //! **Where the source stands, and what that was measured to be.** It stands at the pin's corner,
 //! under the host, and it is **moved when the piece of it the shell samples would otherwise leave the
 //! screen** (see `keep_the_crop_on_the_screen` and below). The placement knob this road once had named
@@ -308,6 +315,10 @@ static THUMBNAIL: Mutex<Thumbnail> = Mutex::new(Thumbnail::NOTHING);
 /// re-crops the one picture rather than asking the player for anything (see `place_the_source`).
 #[cfg(test)]
 static SOURCE_PLACEMENTS: AtomicU32 = AtomicU32::new(0);
+/// How many times a second placement has been refused since a test last cleared it: the seam that
+/// says no path reached `source re-placed` silently (see `place_the_source`).
+#[cfg(test)]
+static SOURCE_REPLACEMENTS: AtomicU32 = AtomicU32::new(0);
 
 /// The one host this road has drawn a picture into, or nothing while no registration is recorded: a
 /// pin's host and a hover's are the same one at the take-up that promotes it (see
@@ -326,10 +337,17 @@ pub(super) fn the_source_placements() -> u32 {
     SOURCE_PLACEMENTS.load(Ordering::SeqCst)
 }
 
+/// How many second placements this run has refused (see `place_the_source`).
+#[cfg(test)]
+pub(super) fn the_source_replacements() -> u32 {
+    SOURCE_REPLACEMENTS.load(Ordering::SeqCst)
+}
+
 /// Forget the placements counted before a test (see `place_the_source`).
 #[cfg(test)]
 pub(super) fn clear_the_source_placements() {
     SOURCE_PLACEMENTS.store(0, Ordering::SeqCst);
+    SOURCE_REPLACEMENTS.store(0, Ordering::SeqCst);
 }
 
 /// A box as a trace and a placement carry it: origin, width and height.
@@ -503,17 +521,7 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
             source,
         );
     }
-    let _ = unsafe {
-        SetWindowPos(
-            source,
-            HWND_BOTTOM,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
-        )
-    };
+    lower_the_source(source);
 
     // **A window that made itself the foreground gives it back.** mpv shows its own window when it has
     // opened the file, which is after the click that made the pin, and the style above stops it taking
@@ -716,11 +724,15 @@ fn place_the_source(
     native: NativeSize,
 ) -> Option<SourceShape> {
     if placed.is_some() {
+        // **The line that must never appear in a run**, and the counter a test reads when it checks
+        // that no road can reach a second placement without it being said out loud.
         note_pin_trace!(
             "source re-placed {:?} host {:?}: a source takes one placement and this is a second ask",
             source,
             host,
         );
+        #[cfg(test)]
+        SOURCE_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
         return None;
     }
     let origin = (unsafe { client_origin(host) })?;
@@ -736,17 +748,7 @@ fn place_the_source(
         }
         return None;
     };
-    let asked = unsafe {
-        SetWindowPos(
-            source,
-            HWND::default(),
-            x,
-            y,
-            width,
-            height,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
-        )
-    };
+    let asked = size_the_source(source, (x, y, width, height));
     let aspect = native.aspect();
     let (left, top, picture_width, picture_height) = a_picture_fitted_to(aspect, (width, height));
     match native {
@@ -761,7 +763,7 @@ fn place_the_source(
             height,
             x,
             y,
-            asked.is_ok() as u8,
+            asked as u8,
         ),
         // **The answer that came after adoption gave up waiting** is this road's own line: the same
         // one placement, and the film's own size it names.
@@ -778,7 +780,7 @@ fn place_the_source(
             height,
             x,
             y,
-            asked.is_ok() as u8,
+            asked as u8,
         ),
         NativeSize::Known(_) => note_pin_trace!(
             "thumbnail source native {}x{}+{}+{} aspect {:.4} placed once {:?} at {}x{}+{}+{} ok {}",
@@ -792,7 +794,7 @@ fn place_the_source(
             height,
             x,
             y,
-            asked.is_ok() as u8,
+            asked as u8,
         ),
         // A film still waiting for its size never reaches the ask above.
         NativeSize::NotYet => return None,
@@ -1625,17 +1627,7 @@ fn keep_the_crop_on_the_screen(host: HWND, source: HWND, shown: ThumbnailBox, a_
         return;
     }
 
-    let asked = unsafe {
-        SetWindowPos(
-            source,
-            HWND::default(),
-            to_x,
-            to_y,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
-        )
-    };
+    let asked = move_the_source(source, (to_x, to_y));
     note_pin_trace!(
         "thumbnail source moved {},{} -> {},{} because {} (work {}x{}+{}+{} ok {})",
         at_x,
@@ -1647,7 +1639,7 @@ fn keep_the_crop_on_the_screen(host: HWND, source: HWND, shown: ThumbnailBox, a_
         height,
         work.left,
         work.top,
-        asked.is_ok() as u8,
+        asked as u8,
     );
 }
 
@@ -1700,6 +1692,61 @@ fn a_source_axis(at: i32, crop: (i32, i32), work: (i32, i32)) -> (i32, bool) {
         rounded
     };
     (rounded.clamp(low, high), false)
+}
+
+/// **The only call in this module that ever sizes the source.** One source per film is placed once,
+/// at the film's own size, and **never resized**: a resize gesture may move the box and the source's
+/// position, and nothing else (see `place_the_source` and the module note). The flags say so — no
+/// `SWP_NOSIZE` — and the only caller is the one placement.
+fn size_the_source(source: HWND, box_: SourceBox) -> bool {
+    let (x, y, width, height) = box_;
+    debug_assert!(width >= 1 && height >= 1, "a source is never asked for an empty box");
+    unsafe {
+        SetWindowPos(
+            source,
+            HWND::default(),
+            x,
+            y,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+        )
+    }
+    .is_ok()
+}
+
+/// **The only other call in this module that touches the source's geometry, and it cannot change a
+/// size**: `SWP_NOSIZE` is the whole of that promise. What a gesture does to the source is a slide
+/// back onto the screen, and a slide is not a resize (see `keep_the_crop_on_the_screen`).
+fn move_the_source(source: HWND, at: (i32, i32)) -> bool {
+    unsafe {
+        SetWindowPos(
+            source,
+            HWND::default(),
+            at.0,
+            at.1,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+        )
+    }
+    .is_ok()
+}
+
+/// Put the source at the bottom of the desktop's order without touching its geometry: a source that
+/// is behind the pin rather than merely layered at it (see `adopt_the_source`).
+fn lower_the_source(source: HWND) {
+    let _ = unsafe {
+        SetWindowPos(
+            source,
+            HWND_BOTTOM,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+        )
+    };
 }
 
 /// The corner of a window's client area, on the screen.
@@ -2081,6 +2128,40 @@ mod tests {
             y >= work.1 && y + 720 <= work.3,
             "and the axis that fits is still moved onto the work area, at {y}"
         );
+    }
+
+    /// **A second placement is refused out loud and counted**, so no road can reach one silently:
+    /// the trace says `source re-placed`, and the seam a test reads counts it (see
+    /// `place_the_source`).
+    #[test]
+    fn a_second_placement_is_refused_out_loud_and_counted() {
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+        clear_the_source_placements();
+        let placed = SourceShape {
+            source: 0x1000,
+            process: 0x10,
+            client: (1920, 1080),
+            aspect: Some(16.0 / 9.0),
+        };
+        assert_eq!(
+            place_the_source(
+                HWND(0x1000 as *mut _),
+                HWND(0x2000 as *mut _),
+                0x10,
+                Some(placed),
+                NativeSize::Known((1920, 1080)),
+            ),
+            None,
+            "a source that has been placed is not placed again"
+        );
+        assert_eq!(
+            the_source_replacements(),
+            1,
+            "and the refusal is counted rather than swallowed"
+        );
+        clear_the_source_placements();
     }
 
     /// The registration is nobody's where none was taken: a thumbnail record with no pair stands in no
