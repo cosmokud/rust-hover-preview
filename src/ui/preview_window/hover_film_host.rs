@@ -182,7 +182,10 @@ pub(super) fn the_hover_player_is_drawing(pid: u32) -> bool {
 /// the player has drawn into it: the window FFmpeg's child is adopted into, and the destination of
 /// mpv's thumbnail.
 pub(super) unsafe fn take_up_the_hover_film_host(rect: ScreenRegion) -> Option<HWND> {
-    let host = match hover_film_host() {
+    // **A handle to nothing is not answered as the host**: a window belongs to the thread that made
+    // it, and one whose thread has gone is destroyed with it (see `take_down_the_hover_film_host`,
+    // which forgets the same handle for the same reason).
+    let host = match hover_film_host().filter(|host| unsafe { IsWindow(*host) }.as_bool()) {
         Some(host) => host,
         None => unsafe { create()? },
     };

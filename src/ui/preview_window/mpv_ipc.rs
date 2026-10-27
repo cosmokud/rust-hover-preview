@@ -305,6 +305,36 @@ pub(super) fn cycle_subtitles(pid: u32) -> bool {
     )
 }
 
+/// Give a running mpv a subtitle file and draw it, which is the one thing that makes a film's late
+/// copy cost no relaunch.
+///
+/// **A copy that becomes ready while the pin is up used to begin the player again** so that the file
+/// it names was drawn, and a player begun again is the black frame and the second decode this road
+/// removes (see `pin_playback::reload_pinned_subtitles`). mpv can simply be handed the file: the copy
+/// is a whole subtitle with no streams of its own, so `select` is what says to draw it.
+pub(super) fn add_subtitles(pid: u32, file: &std::path::Path) -> bool {
+    write(
+        pid,
+        format!(
+            r#"{{"command":["sub-add",{},"select"],"async":true}}"#,
+            a_json_string(&file.to_string_lossy()),
+        ) + "\n",
+    )
+}
+
+/// One command argument as the JSON IPC reads it.
+///
+/// **A Windows path is backslashes**, and a backslash in a JSON string is an escape: an unescaped one
+/// is a line mpv cannot parse, so the file would never be added and every test that asserted the
+/// string would still be green (see `a_real_mpv_quits_on_the_line_this_app_writes` for why that is
+/// the half a string cannot hold). A quote is escaped with it, because a quote ends the string.
+fn a_json_string(text: &str) -> String {
+    format!(
+        "\"{}\"",
+        text.replace('\\', "\\\\").replace('"', "\\\"")
+    )
+}
+
 /// How long an answer is waited for, and how long between two looks at a pipe that has not answered
 /// yet.
 ///
@@ -675,6 +705,7 @@ mod tests {
         assert!(set_paused(7, false));
         assert!(set_ontop(7, false));
         assert!(cycle_subtitles(7));
+        assert!(add_subtitles(7, std::path::Path::new(r"films\an episode.srt")));
 
         assert_eq!(
             noted_lines(),
@@ -696,8 +727,13 @@ mod tests {
                     r#"{"command":["set_property","ontop",false],"async":true}"#
                 ),
                 format!("{}\n", r#"{"command":["cycle","sub"],"async":true}"#),
+                format!(
+                    "{}\n",
+                    r#"{"command":["sub-add","films\\an episode.srt","select"],"async":true}"#
+                ),
             ],
-            "each line names the command and its argument, and every one is async"
+            "each line names the command and its argument, and every one is async — and a \
+             Windows path is escaped, because a backslash is what JSON reads a string's escape by"
         );
 
         forget_pipe(7);

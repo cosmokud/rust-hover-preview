@@ -1538,7 +1538,8 @@ fn trace_the_raised_film_with(window: isize, answer: &'static str, line: impl Fn
         return;
     }
     *last = (window, answer);
-    note_pin_trace!("{}", line());
+    let said = line();
+    note_pin_trace!("{}", said);
 }
 
 pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {

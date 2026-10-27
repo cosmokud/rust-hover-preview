@@ -47,13 +47,47 @@ pub(super) fn path_name(path: &std::path::Path) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-/// Write one line, and build nothing at all where the trace is off.
+/// The lines a test run wrote, so a test can hold the road to what it said rather than to what the
+/// log happened to be configured to keep: the same seam `mpv_ipc` keeps its command lines with, and
+/// for the same reason (see `note_pin_trace`).
+#[cfg(test)]
+static NOTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Write one line down for a test that reads it (see `NOTED`).
+#[cfg(test)]
+pub(super) fn note_a_line_for_a_test(line: String) {
+    if let Ok(mut noted) = NOTED.lock() {
+        noted.push(line);
+    }
+}
+
+/// The lines this run has written (see `NOTED`).
+#[cfg(test)]
+pub(super) fn noted_lines() -> Vec<String> {
+    NOTED
+        .lock()
+        .map(|noted| noted.clone())
+        .unwrap_or_default()
+}
+
+/// Forget the lines written before a test (see `NOTED`).
+#[cfg(test)]
+pub(super) fn clear_noted() {
+    if let Ok(mut noted) = NOTED.lock() {
+        noted.clear();
+    }
+}
+
+/// Write one line, and build nothing at all where the trace is off. A test run keeps every line it
+/// wrote, whether the log is on or not (see `NOTED`).
 macro_rules! note_pin_trace {
-    ($($line:tt)*) => {
+    ($($line:tt)*) => {{
         if super::pin_trace::asked() {
             super::pin_trace::write(&format!($($line)*));
         }
-    };
+        #[cfg(test)]
+        super::pin_trace::note_a_line_for_a_test(format!($($line)*));
+    }};
 }
 
 pub(super) use note_pin_trace;
