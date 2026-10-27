@@ -415,6 +415,11 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
                 // a window that is *the same handle* styled again is never adopted again (see
                 // `pin_film_thumbnail::keep_the_source_invisible`).
                 unsafe { pin_film_thumbnail::keep_the_source_invisible() };
+                // **And the pass that sizes a film adoption had no answer for**: the player opens the
+                // file after its window exists, and the one placement is made here as soon as it
+                // answers rather than at the box the player chose for itself (see
+                // `pin_film_thumbnail::place_the_source_when_the_player_answers`).
+                pin_film_thumbnail::place_the_source_when_the_player_answers(host);
             }
             return false;
         }

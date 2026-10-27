@@ -19,10 +19,12 @@
 //! the press with the crop 2.1–2.4× too small, and 72–130 frames (145 ms) at the release with the
 //! crop sampling 2.9–3.3× past the live client, which is the zoom-out with black around it. The
 //! middle of a drag was perfect, because nothing moved there. So nothing moves here: the source takes
-//! its box in the adoption pass, the picture adoption read is a constant for the pin's life, and a
-//! resize, a maximize, a restore, a zoom, a walk, a press, a release and a settle are all **one
-//! `DwmUpdateThumbnailProperties`** — the destination and the crop, and nothing cross-process at all
-//! (see `place_the_source` and `the_band_was_placed`).
+//! its box as soon as the film's own size is known — at adoption, or on the pass that watches the
+//! player where the player had not opened the file yet — the picture adoption read is a constant for
+//! the pin's life, and a resize, a maximize, a restore, a zoom, a walk, a press, a release and a
+//! settle are all **one `DwmUpdateThumbnailProperties`** — the destination and the crop, and nothing
+//! cross-process at all (see `place_the_source`, `place_the_source_when_the_player_answers` and
+//! `the_band_was_placed`).
 //!
 //! **The size is the film's own picture size, never the pin's box.** The source is placed at the size
 //! the film would be drawn at were it not fitted to a window, from the player's own `video-params` —
@@ -58,6 +60,12 @@
 //! The destination is the client and the crop is the part of the picture that has the client's
 //! shape, so there is no rectangle left over to read as the wrong thing — whatever order anything is
 //! ordered in, and whatever the two shapes are.
+//!
+//! **A shape is one film's.** The client and the shape the crop is cut by are invalidated with the
+//! film — teardown forgets them, adoption of another window resets them, and every frame checks the
+//! record still belongs to the source it was placed for (see `forget_the_shape_of_another_film`) —
+//! and the probe answers only for the film the player was begun for (see `the_films_own_size`), so no
+//! frame of the film that follows can be cropped by the shape of the one that ended.
 //!
 //! **The composition invariant is one line**: the destination is the host's whole client, so the
 //! Shell draws every pixel of the pin, and the host's own erase paints that same client under it —
@@ -241,15 +249,25 @@ fn source_ex_style(current: isize, invisible: bool) -> isize {
     }
 }
 
-/// How many times adoption asks the player for the film's own picture size before it takes the
-/// probe's measurement of the same film instead: a handful of bounded reads a few milliseconds apart,
-/// which is what a player that has made its window and not yet opened the file needs to answer (see
-/// `the_films_native_size`).
+/// How many times adoption asks the player for the film's own picture size before it leaves the
+/// placement to the road that watches the player: a handful of bounded reads a few milliseconds
+/// apart, which is what a player that has made its window and not yet opened the file needs to
+/// answer (see `the_films_native_size`).
 const NATIVE_SIZE_ASKS: u8 = 4;
 /// How long adoption waits between two of those reads. **This is the only wait this road makes and it
 /// is not on a drag's road**: it happens once, in the adoption pass, and it is bounded by
 /// `NATIVE_SIZE_ASKS` reads that are each bounded themselves (see `adopt_the_source`).
 const NATIVE_SIZE_WAIT: Duration = Duration::from_millis(3);
+
+/// How long a film that was not sized at adoption is given to answer before the road stops asking:
+/// the player answers when it has opened the file, and a placement that waits for that answer is a
+/// placement at the film's own size rather than at whatever box the player made for itself (see
+/// `place_the_source_when_the_player_answers`).
+const LATE_NATIVE_WAIT: Duration = Duration::from_secs(1);
+/// How often the road asks a player that has not answered yet: a paced read rather than a read on
+/// every pass of the monitor that asks it (see `a_late_placement_is_due`).
+const LATE_NATIVE_EVERY: Duration = Duration::from_millis(64);
+
 
 /// Where a source is launched: the pin's own corner.
 ///
@@ -324,6 +342,11 @@ type SourceBox = (i32, i32, i32, i32);
 /// shape fitted inside it (see `the_one_placement` and `the_thumbnail_box`).
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct SourceShape {
+    /// The window and the player the shape was placed for. **A shape is one film's**: the record out
+    /// of which a pair is built is invalidated with the film, so no frame of the film that follows
+    /// can be cropped by the shape of the one that ended (see `forget_the_shape_of_another_film`).
+    source: isize,
+    process: u32,
     /// The source's client, as the placement asked for it. **Never read again**: nothing asks the
     /// window for another box, so the crop's window is a constant for the pin's whole life.
     client: (i32, i32),
@@ -331,6 +354,54 @@ struct SourceShape {
     /// could not be read, which is the whole client into the whole box.
     aspect: Option<f64>,
 }
+
+impl SourceShape {
+    /// Whether this shape was placed for the window and player of `source`: a shape is never read
+    /// for a film other than the one it was placed for.
+    fn belongs_to(self, source: HWND, process: u32) -> bool {
+        self.source == source.0 as isize && self.process == process
+    }
+}
+
+/// The film's own size at the moment a placement is asked for, and which of the two roads is asking.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NativeSize {
+    /// The picture's own size, from the player or the probe, as adoption asked it.
+    Known((i32, i32)),
+    /// The picture's own size as the road that watches the player answered it, after adoption had
+    /// given up waiting: the same one placement, made late (see
+    /// `place_the_source_when_the_player_answers`).
+    Late((i32, i32)),
+    /// Nothing yet: the placement waits for the player rather than guessing a box that would have to
+    /// be corrected later.
+    NotYet,
+    /// Nothing the player or the probe will answer: the source is placed once at the largest box the
+    /// road can justify and nothing asks the window for another one.
+    Unobtainable,
+}
+
+impl NativeSize {
+    /// The size a placement is asked for, or nothing where the road is still waiting.
+    fn box_size(self, fallback: (i32, i32)) -> Option<(i32, i32)> {
+        match self {
+            NativeSize::Known(size) | NativeSize::Late(size) => Some(size),
+            NativeSize::Unobtainable => Some(fallback),
+            NativeSize::NotYet => None,
+        }
+    }
+
+    /// The film's shape as the source's picture is fitted into its client, or nothing where the size
+    /// is not the picture's own — an unobtainable size is a box the road guessed, not a shape.
+    fn aspect(self) -> Option<f64> {
+        match self {
+            NativeSize::Known((width, height)) | NativeSize::Late((width, height)) => {
+                Some(width as f64 / height.max(1) as f64)
+            }
+            NativeSize::NotYet | NativeSize::Unobtainable => None,
+        }
+    }
+}
+
 
 #[derive(Clone, Copy)]
 struct Thumbnail {
@@ -354,6 +425,43 @@ impl Thumbnail {
         source: None,
     };
 }
+
+/// A film the road adopted without a size of its own, and the asks it owes the player until the size
+/// is known (see `place_the_source_when_the_player_answers`).
+#[derive(Clone, Copy)]
+struct LatePlacement {
+    source: isize,
+    process: u32,
+    /// When adoption found the source was not sized: what the wait `LATE_NATIVE_WAIT` is measured
+    /// from.
+    since: Instant,
+    /// When the player was last asked, so a monitor that passes every few milliseconds asks a paced
+    /// handful of times rather than on every pass.
+    asked: Option<Instant>,
+}
+
+/// The film the road is still waiting to place, or nothing while none is.
+static LATE_PLACEMENT: Mutex<Option<LatePlacement>> = Mutex::new(None);
+
+/// Wait for the size of a film this adoption could not size (see `LatePlacement`).
+fn arm_the_late_placement(source: HWND, process: u32) {
+    if let Ok(mut armed) = LATE_PLACEMENT.lock() {
+        *armed = Some(LatePlacement {
+            source: source.0 as isize,
+            process,
+            since: Instant::now(),
+            asked: None,
+        });
+    }
+}
+
+/// Give up waiting for a size: the film was placed, or there is no film of this one left.
+fn forget_the_late_placement() {
+    if let Ok(mut armed) = LATE_PLACEMENT.lock() {
+        *armed = None;
+    }
+}
+
 
 /// Take a player's own window as the film the pin's host shows: out of the Shell's lists, at the
 /// bottom of the desktop's order, and registered in the host that shows it.
@@ -444,16 +552,29 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
     // registration draws anything: the film's own picture size at the destination host's corner, asked
     // once and never asked for again (see `place_the_source`).
     //
-    // **A film whose own size the player has not answered is waited for rather than guessed at**,
-    // and where even the probe has nothing the source is left where mpv put it — which is still a
-    // box this app never asks again, and the crop is of the picture that is there (see
-    // `the_films_native_size`). The wait happens before the lock is taken, so a read and a sleep are
-    // never spent holding what the pin's own resize steps want.
-    let placed = THUMBNAIL.lock().ok().and_then(|held| held.source);
-    let placed = place_the_source(source, host, pid, placed);
+    // **A film whose own size the player has not answered is waited for rather than guessed at**, and
+    // the road that watches the player goes on asking: the placement is made as soon as the player
+    // answers, still once and never a second time (see `place_the_source_when_the_player_answers`).
+    // The wait happens before the lock is taken, so a read and a sleep are never spent holding what
+    // the pin's own resize steps want.
+    let placed = THUMBNAIL
+        .lock()
+        .ok()
+        .and_then(|held| held.source)
+        // A shape recorded for another film is not this one's: the placement is this film's first.
+        .filter(|shape| shape.belongs_to(source, pid));
+    let native = the_films_native_size(pid).map_or(NativeSize::NotYet, NativeSize::Known);
+    let placed = place_the_source(source, host, pid, placed, native);
     if let Ok(mut held) = THUMBNAIL.lock() {
         if let Some(placed) = placed {
             held.source = Some(placed);
+        }
+        // **A film adopted without a size is one the road is still waiting for**, and what waits is
+        // the pass that watches the player rather than a second placement made here.
+        if held.source.is_none() {
+            arm_the_late_placement(source, pid);
+        } else {
+            forget_the_late_placement();
         }
         settle_the_registration(&mut held, host);
     }
@@ -473,6 +594,7 @@ pub(super) fn note_the_source(source: HWND, pid: u32) {
         }
         *held = Thumbnail::NOTHING;
     }
+    forget_the_late_placement();
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(number, Ordering::SeqCst);
     SOURCE_PROCESS.store(pid, Ordering::SeqCst);
@@ -562,8 +684,10 @@ pub(super) fn the_band_was_placed(host: HWND) {
 }
 
 /// **The one placement a source ever takes**: the film's own picture size at the corner of the host
-/// showing it — the pin's, or the hover's the pin is taken up from — asked for once, at adoption, and
-/// never asked for again until the window is taken down.
+/// showing it — the pin's, or the hover's the pin is taken up from — asked for once, at adoption, or
+/// by the road that watches the player as soon as the film's size is known (see
+/// `place_the_source_when_the_player_answers`), and never asked for again until the window is taken
+/// down.
 ///
 /// **What the record it leaves says is why a resize cannot flash.** The client the ask named and the
 /// shape the film came with are kept beside the registration (see [`SourceShape`]), and every frame
@@ -583,26 +707,33 @@ pub(super) fn the_band_was_placed(host: HWND) {
 /// **Nothing is held while the player is waited for**: the reads and the sleep that may follow them
 /// are this function's own, and the record is written once when the answer is in (see
 /// `adopt_the_source`).
+///
+/// `native` is what the road knows about the film's own size, and it is also what tells the trace
+/// which of the roads this placement is: the adoption pass, the late one after the player answered,
+/// a film still to be sized, or a film the road gave its wait to and was answered nothing.
 fn place_the_source(
     source: HWND,
     host: HWND,
     pid: u32,
     placed: Option<SourceShape>,
+    native: NativeSize,
 ) -> Option<SourceShape> {
+    if placed.is_some() {
+        note_pin_trace!(
+            "source re-placed {:?} host {:?}: a source takes one placement and this is a second ask",
+            source,
+            host,
+        );
+        return None;
+    }
     let origin = (unsafe { client_origin(host) })?;
-    let native = the_films_native_size(pid);
+    let wanted = native.box_size(the_max_track());
     let Some((x, y, width, height)) =
-        the_one_placement(placed, Some(origin), native, the_max_track())
+        the_one_placement(None, Some(origin), wanted, the_max_track())
     else {
-        if placed.is_some() {
+        if native == NativeSize::NotYet {
             note_pin_trace!(
-                "source re-placed {:?} host {:?}: a source takes one placement and this is a second ask",
-                source,
-                host,
-            );
-        } else {
-            note_pin_trace!(
-                "thumbnail source native unknown {:?}: no box asked, and none will be",
+                "thumbnail source native unknown {:?}: no box asked yet, the player has not answered",
                 source,
             );
         }
@@ -619,28 +750,138 @@ fn place_the_source(
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
         )
     };
-    let aspect = native.map(|native| native.0 as f64 / native.1.max(1) as f64);
+    let aspect = native.aspect();
     let (left, top, picture_width, picture_height) = a_picture_fitted_to(aspect, (width, height));
-    note_pin_trace!(
-        "thumbnail source native {}x{}+{}+{} aspect {:.4} placed once {:?} at {}x{}+{}+{} ok {}",
-        picture_width,
-        picture_height,
-        left,
-        top,
-        aspect.unwrap_or(0.0),
-        source,
-        width,
-        height,
-        x,
-        y,
-        asked.is_ok() as u8,
-    );
+    match native {
+        // **A film the road could not size is placed once at the largest box it can justify**: the
+        // picture is upscaled into that box and cropped by the box's shape like every other, and the
+        // line says the size was never read so a run cannot mistake the box for the film's own.
+        NativeSize::Unobtainable => note_pin_trace!(
+            "thumbnail source native unobtainable {:?}: no answer from the player or the probe, \
+             placed once at the largest box {}x{}+{}+{} ok {}",
+            source,
+            width,
+            height,
+            x,
+            y,
+            asked.is_ok() as u8,
+        ),
+        // **The answer that came after adoption gave up waiting** is this road's own line: the same
+        // one placement, and the film's own size it names.
+        NativeSize::Late(_) => note_pin_trace!(
+            "thumbnail source native late {}x{}+{}+{} aspect {:.4} placed once {:?} at {}x{}+{}+{} \
+             ok {}",
+            picture_width,
+            picture_height,
+            left,
+            top,
+            aspect.unwrap_or(0.0),
+            source,
+            width,
+            height,
+            x,
+            y,
+            asked.is_ok() as u8,
+        ),
+        NativeSize::Known(_) => note_pin_trace!(
+            "thumbnail source native {}x{}+{}+{} aspect {:.4} placed once {:?} at {}x{}+{}+{} ok {}",
+            picture_width,
+            picture_height,
+            left,
+            top,
+            aspect.unwrap_or(0.0),
+            source,
+            width,
+            height,
+            x,
+            y,
+            asked.is_ok() as u8,
+        ),
+        // A film still waiting for its size never reaches the ask above.
+        NativeSize::NotYet => return None,
+    }
     #[cfg(test)]
     SOURCE_PLACEMENTS.fetch_add(1, Ordering::SeqCst);
     Some(SourceShape {
+        source: source.0 as isize,
+        process: pid,
         client: (width, height),
         aspect,
     })
+}
+
+/// **The one placement a film that adoption could not size is owed, made as soon as the player
+/// answers** — and the source placed once at the largest box the road can justify where the film has
+/// had its wait and was answered nothing.
+///
+/// The monitor that keeps the player's window styled passes here every few milliseconds (see
+/// `ffplay_window::ensure_noactivate_monitor`), which is the road that already waits on the player: it
+/// asks once per `LATE_NATIVE_EVERY` rather than on every pass, and it asks nothing at all while a
+/// resize gesture is live — the one invariant is that no resize gesture may have the source sized
+/// under it (see `pin_film_host::a_resize_drag_is_live`). A drag that ends before the size is known
+/// does not stop the placement; a drag in flight does.
+///
+/// **It is the same placement and not a second one.** A source that has a shape is left alone, and
+/// the wait is given up with the placement, so nothing asks this window for another box again.
+pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
+    if pin_film_host::a_resize_drag_is_live() {
+        return;
+    }
+    let number = SOURCE.load(Ordering::SeqCst);
+    let process = SOURCE_PROCESS.load(Ordering::SeqCst);
+    if number == 0 || process == 0 {
+        forget_the_late_placement();
+        return;
+    }
+    let Ok(mut held) = THUMBNAIL.lock() else {
+        return;
+    };
+    if held.source.is_some() {
+        forget_the_late_placement();
+        return;
+    }
+    let Ok(mut armed) = LATE_PLACEMENT.lock() else {
+        return;
+    };
+    let Some(waiting) =
+        (*armed).filter(|waiting| waiting.source == number && waiting.process == process)
+    else {
+        return;
+    };
+    let waited = waiting.since.elapsed();
+    if !a_late_placement_is_due(waited, waiting.asked.map(|asked| asked.elapsed())) {
+        return;
+    }
+    if let Some(waiting) = armed.as_mut() {
+        waiting.asked = Some(Instant::now());
+    }
+    drop(armed);
+
+    let source = HWND(number as *mut _);
+    let native = match the_players_picture_size(process).or_else(|| the_films_own_size(process)) {
+        Some(size) => NativeSize::Late(size),
+        // **A film that has had its wait and answered nothing is placed once at the largest box the
+        // road can justify**, rather than left at the box the player chose for itself: that box is
+        // not the film's picture and nothing on this road ever reads it again.
+        None if waited >= LATE_NATIVE_WAIT => NativeSize::Unobtainable,
+        None => return,
+    };
+    let placed = place_the_source(source, host, process, None, native);
+    if placed.is_some() {
+        held.source = placed;
+        forget_the_late_placement();
+    }
+    settle_the_registration(&mut held, host);
+}
+
+/// Whether the road owes the player an ask: the first one as soon as the film is waiting, then one
+/// per `LATE_NATIVE_EVERY`, and the last one at the end of the wait (which is the one that places the
+/// film at the largest box where the player never answered).
+fn a_late_placement_is_due(waited: Duration, since_the_last_ask: Option<Duration>) -> bool {
+    if waited >= LATE_NATIVE_WAIT {
+        return true;
+    }
+    since_the_last_ask.is_none_or(|since| since >= LATE_NATIVE_EVERY)
 }
 
 /// The one box a source is ever asked for — the film's own picture size at the corner of the host
@@ -692,8 +933,9 @@ fn the_max_track() -> (i32, i32) {
 /// **A player that has just made its window has not opened the file yet**, so adoption waits for the
 /// answer rather than placing the box it could guess: a handful of bounded reads a few milliseconds
 /// apart, and then the size the same film was probed at before it was launched. The wait is on the
-/// adoption pass and nowhere near a drag (see `adopt_the_source`), and what it buys is the one
-/// placement this road makes.
+/// adoption pass and nowhere near a drag (see `adopt_the_source`), and a film neither the player nor
+/// the probe can answer for is left to the road that watches the player (see
+/// `place_the_source_when_the_player_answers`).
 fn the_films_native_size(pid: u32) -> Option<(i32, i32)> {
     for ask in 0..NATIVE_SIZE_ASKS {
         if let Some(size) = the_players_picture_size(pid) {
@@ -703,17 +945,50 @@ fn the_films_native_size(pid: u32) -> Option<(i32, i32)> {
             std::thread::sleep(NATIVE_SIZE_WAIT);
         }
     }
-    the_films_own_size()
+    the_films_own_size(pid)
 }
 
 /// The film's own picture size as the probe measured it when the film was loaded: read out of the
 /// geometry cache and never asked of the player, which is the fallback for a player that has not
-/// opened the file by the time its window is adopted (see `the_films_native_size` and
-/// `dimensions::video_box`).
-fn the_films_own_size() -> Option<(i32, i32)> {
+/// opened the file by the time its window is adopted (see `the_films_native_size`).
+///
+/// **The probe only answers for the film the player was begun for.** The pin's own file is the
+/// outgoing one for the moment a step's source is adopted — the pin does not install the new file
+/// until its player has drawn — and a probe of that file would place the new film's source at the old
+/// film's size and shape, which is the previous film's shape cropping the next one's first frames.
+/// A player this app cannot name a file for is answered nothing here, and the player's own
+/// `video-params` is what places it (see `the_film_the_player_plays`).
+fn the_films_own_size(pid: u32) -> Option<(i32, i32)> {
+    let path = the_film_the_player_plays(pid)?;
+    match cached_video_geometry(&path)? {
+        ProbedGeometry::Measured(geometry) => Some((geometry.width as i32, geometry.height as i32)),
+        // A file the probe could not measure is not a size: the player's answer is what is waited
+        // for, and nothing is placed on the shape of a file nothing measured.
+        ProbedGeometry::Unmeasurable => None,
+    }
+}
+
+/// The file the player `pid` was begun for, where this app has it on record: the hover's own file
+/// beside the hover's player, and the pin's file only while the player the pin holds is that very
+/// one.
+///
+/// **The second half is what keeps a step's outgoing film from answering for the incoming one.** The
+/// pin's media is replaced when the new file is installed, and the player is adopted before that; a
+/// path read without the player beside it is the old film's (see `the_films_own_size`).
+fn the_film_the_player_plays(pid: u32) -> Option<PathBuf> {
+    if pid == 0 {
+        return None;
+    }
+    if hover_film_host::hover_film_host_player() == Some(pid) {
+        return hover_film_host::the_hover_players_file(pid);
+    }
     let (path, _) = pinned_media_owner()?;
-    let (width, height) = dimensions::video_box(&path)?;
-    Some((width as i32, height as i32))
+    let held = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.video_process.as_ref().map(|process| process.id()))
+    });
+    (held == Some(pid)).then_some(path)
 }
 
 /// The film's own picture size out of the player's `video-params`, in one read: `dw`/`dh` are the
@@ -789,6 +1064,8 @@ pub(super) fn forget_the_thumbnail() {
         }
         *held = Thumbnail::NOTHING;
     }
+    // The film this road was waiting to size went with the window it was going to place.
+    forget_the_late_placement();
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(0, Ordering::SeqCst);
     SOURCE_PROCESS.store(0, Ordering::SeqCst);
@@ -984,6 +1261,30 @@ fn the_source_client(source: HWND, host: (i32, i32)) -> (i32, i32) {
     }
 }
 
+/// **Give up the shape of the film before this one.** A [`SourceShape`] is the placement of one
+/// source window in one player, and it is invalidated with that film: teardown forgets the whole
+/// record, adoption of another window resets it (see `note_the_source`), and this is the check every
+/// frame makes — a record left by a film that has gone is dropped rather than cropping the first
+/// frames of the film that followed it by the old film's shape.
+///
+/// The line is written once, where the record goes, so a run says the shape was given up rather than
+/// leaving the missing crop to be guessed at.
+fn forget_the_shape_of_another_film(held: &mut Thumbnail) {
+    let current = HWND(SOURCE.load(Ordering::SeqCst) as *mut _);
+    let process = SOURCE_PROCESS.load(Ordering::SeqCst);
+    let Some(shape) = held
+        .source
+        .filter(|shape| !shape.belongs_to(current, process))
+    else {
+        return;
+    };
+    held.source = None;
+    note_pin_trace!(
+        "thumbnail source shape forgotten {:?}: it was placed for another film",
+        HWND(shape.source as *mut _),
+    );
+}
+
 /// Whether a registration wearing `held.shown` has to be pointed at `wanted`: **nothing else is a
 /// reason not to re-point.** Another host client is another destination and another box shape is
 /// another crop, and a registration left wearing the old pair is a picture cropped off the surface the
@@ -1026,6 +1327,10 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     // the pair was cropped against, so a frame where the two disagree says which window a flash would
     // have to come from (see `note_the_thumbnail_pair`).
     let live = the_source_client(source, client);
+    // **The shape is the film's and is invalidated with it**: a record left by the film that ended is
+    // given up here rather than used to crop the first frames of the one that followed it (see
+    // `forget_the_shape_of_another_film`).
+    forget_the_shape_of_another_film(held);
     let (source_client, aspect) = held
         .source
         .map_or((live, None), |source| (source.client, source.aspect));
@@ -1436,6 +1741,8 @@ mod tests {
         let client = (1000, 560);
         let aspect = Some(2595.0 / 1460.0);
         let source = SourceShape {
+            source: 0x1000,
+            process: 0x10,
             client: (2731, 1536),
             aspect,
         };
@@ -1788,6 +2095,196 @@ mod tests {
         assert_eq!(Thumbnail::NOTHING.shown, None);
     }
 
+    /// **A film adopted after another is never cropped by the shape the last one left.** A shape is the
+    /// one placement of one source window in one player (see `SourceShape`), and the record out of
+    /// which a pair is built is invalidated with the film: a left-over shape is given up before any
+    /// frame of the next film is built, so that film's first frames are either its own shape or no
+    /// crop at all — never the previous film's crop.
+    #[test]
+    fn a_film_adopted_after_another_is_never_cropped_by_the_old_films_shape() {
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+
+        // Film A: a 2.39:1 picture placed once at its own size.
+        let a = SourceShape {
+            source: 0xA1,
+            process: 0xAA,
+            client: (2595, 1460),
+            aspect: Some(2595.0 / 1460.0),
+        };
+
+        // Film B is the next player's window, and its own size has not been read yet.
+        SOURCE.store(0xB2, Ordering::SeqCst);
+        SOURCE_PROCESS.store(0xBB, Ordering::SeqCst);
+
+        // A record left as it was has no claim on B's frames: it is given up where they are built.
+        let mut held = Thumbnail {
+            host: 0x2000,
+            registration: 0,
+            shown: None,
+            source: Some(a),
+        };
+        forget_the_shape_of_another_film(&mut held);
+        assert_eq!(
+            held.source, None,
+            "the shape A's placement left is given up with A"
+        );
+        let first = the_thumbnail_box((1000, 560), (1687, 949), held.source.and_then(|s| s.aspect));
+        assert_eq!(
+            first.source, None,
+            "B's first frame is not cropped by a shape nobody has read for B"
+        );
+        assert_eq!(
+            first.destination,
+            (0, 0, 1000, 560),
+            "and the whole box is still what B is drawn in"
+        );
+
+        // When B's own size is known, the one placement is B's own and the crop is B's shape.
+        let b_size = (1920, 1080);
+        assert_eq!(
+            the_one_placement(None, Some((0, 0)), Some(b_size), (3440, 1440)),
+            Some((0, 0, 1920, 1080)),
+            "the film's own size, and not the shape the film before it was placed at"
+        );
+        let b = SourceShape {
+            source: 0xB2,
+            process: 0xBB,
+            client: b_size,
+            aspect: NativeSize::Known(b_size).aspect(),
+        };
+        let second = the_thumbnail_box((1000, 560), b.client, b.aspect);
+        let (left, top, right, bottom) = second
+            .source
+            .expect("B's own picture is what its frames are cropped by");
+        let crop_aspect = (right - left) as f64 / (bottom - top) as f64;
+        assert!(
+            (crop_aspect - 16.0 / 9.0).abs() < 0.01,
+            "B is cropped by B's 16:9 picture, not by A's 2.39 one: {crop_aspect}"
+        );
+
+        // And the adoption of B resets the record it is made into, whatever the last film left.
+        if let Ok(mut recorded) = THUMBNAIL.lock() {
+            recorded.source = Some(a);
+        }
+        SOURCE.store(0, Ordering::SeqCst);
+        SOURCE_PROCESS.store(0, Ordering::SeqCst);
+        note_the_source(HWND(0xB2 as *mut _), 0xBB);
+        assert_eq!(
+            THUMBNAIL.lock().ok().and_then(|held| held.source),
+            None,
+            "a source adopted is a record emptied of the film that ended"
+        );
+
+        forget_the_thumbnail();
+    }
+
+    /// **A probe measures the film the player was begun for and no other.** The pin's file is the
+    /// outgoing one for the moment a step's source is adopted, and a probe read without the player
+    /// beside it would place the incoming film at the outgoing film's size and shape — the previous
+    /// film's shape cropping the next one's first frames (see `the_films_own_size`).
+    #[test]
+    fn a_probe_answers_only_for_the_film_the_player_was_begun_for() {
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+        let path = PathBuf::from("a-probed-film.mkv");
+        let key = VideoGeometryKey {
+            path: path.clone(),
+            version: file_version(&path),
+        };
+        video_geometry_cache().insert(
+            key.clone(),
+            ProbedGeometry::Measured(VideoGeometry {
+                width: 2595,
+                height: 1460,
+                frame_width: 2595,
+                frame_height: 1460,
+                crop: None,
+                duration: None,
+                subtitles: SubtitleStreams::default(),
+                sidecar: None,
+                derived: None,
+                subtitle_codecs: Vec::new(),
+                attachment_codecs: Vec::new(),
+                subtitle_extraction_failed: false,
+            }),
+        );
+
+        let pid = 0x5eed;
+        hover_film_host::note_hover_film_host_player(pid, &path);
+        assert_eq!(
+            the_films_own_size(pid),
+            Some((2595, 1460)),
+            "the film the player was begun for is the film the probe answers for"
+        );
+        assert_eq!(
+            the_films_own_size(pid + 1),
+            None,
+            "and another player — the next film of a step — is answered nothing rather than the \
+             size of the film before it"
+        );
+
+        unsafe { hover_film_host::take_down_the_hover_film_host() };
+        video_geometry_cache().remove(&key);
+    }
+
+    /// **A film neither the player nor the probe answers for is placed once at the largest box the road
+    /// can justify**, and the road gives the player a bounded wait to answer in before it does: a first
+    /// ask at once, one per `LATE_NATIVE_EVERY` after it, and the placement at the end of
+    /// `LATE_NATIVE_WAIT`. A film still waiting is placed at nothing at all.
+    #[test]
+    fn a_film_with_no_answer_is_placed_at_the_largest_box_after_its_wait() {
+        assert_eq!(
+            NativeSize::NotYet.box_size((3440, 1440)),
+            None,
+            "a film still waiting is not placed on a guess"
+        );
+        assert_eq!(
+            NativeSize::Known((1920, 1080)).box_size((3440, 1440)),
+            Some((1920, 1080)),
+            "the player's answer is the box"
+        );
+        assert_eq!(
+            NativeSize::Late((1920, 1080)).box_size((3440, 1440)),
+            Some((1920, 1080)),
+            "and the answer that came after adoption is the same box, placed once"
+        );
+        assert_eq!(
+            NativeSize::Unobtainable.box_size((3440, 1440)),
+            Some((3440, 1440)),
+            "and a film answered nothing is the largest box the road can justify"
+        );
+        assert_eq!(
+            NativeSize::Unobtainable.aspect(),
+            None,
+            "which is a box and not the film's shape"
+        );
+        assert_eq!(
+            NativeSize::Known((1920, 1080)).aspect(),
+            Some(16.0 / 9.0),
+            "while the film's own size is the shape its crop is cut by"
+        );
+
+        assert!(
+            a_late_placement_is_due(Duration::ZERO, None),
+            "the first pass after adoption asks the player"
+        );
+        assert!(
+            !a_late_placement_is_due(Duration::from_millis(10), Some(Duration::ZERO)),
+            "and the next passes wait out the pace rather than asking on every one"
+        );
+        assert!(
+            a_late_placement_is_due(Duration::from_millis(100), Some(LATE_NATIVE_EVERY)),
+            "one ask per pace"
+        );
+        assert!(
+            a_late_placement_is_due(LATE_NATIVE_WAIT, Some(Duration::from_millis(1))),
+            "and the end of the wait is the last ask, which places the box where nothing answers"
+        );
+    }
+
     /// **The invisibility knob, and the style it is the whole of.** It is on unless it says exactly `0`;
     /// on, the source wears `WS_EX_LAYERED` beside the three bits this road always asserts and keeps the
     /// app-window and topmost bits off; off, the layered bit is not on it at all (see
@@ -1915,7 +2412,7 @@ mod tests {
 
         assert_eq!(
             the_films_native_size(pid),
-            the_films_own_size(),
+            the_films_own_size(pid),
             "a player that never answers is the probe's own measurement, not a box this app guessed"
         );
         assert_eq!(
@@ -1960,6 +2457,8 @@ mod tests {
         );
 
         let placed = Some(SourceShape {
+            source: 0x1000,
+            process: 0x10,
             client: (1920, 1080),
             aspect: Some(16.0 / 9.0),
         });
@@ -2116,6 +2615,8 @@ mod tests {
     fn a_press_a_drag_a_release_and_a_settle_ask_the_source_for_no_box() {
         // The one placement, as adoption left it: a 1920x1080 film, placed at its own size.
         let source = SourceShape {
+            source: 0x1000,
+            process: 0x10,
             client: (1920, 1080),
             aspect: Some(16.0 / 9.0),
         };
