@@ -59,16 +59,26 @@
 //! disagree says something other than this app resized the source (see `note_the_thumbnail_pair`).
 //!
 //! **Where the source stands, and what that was measured to be.** It stands at the pin's corner,
-//! under the host. The placement knob this road once had named two other placements and both are
-//! dead:
-//! `offscreen` (a desktop's width left and a desktop's height below the virtual screen) traced as
-//! `source adopted … 1920x1080+-4440+3880` with the registration succeeding and the pin empty, and
-//! `edge` (2 px over the screen's bottom-right corner) the same at `… 1920x1080+3438+1438`. **The
-//! Shell does not keep a thumbnail live for a window the user cannot see**: the composition surface
-//! of a source that is not genuinely on screen is not composed, so its thumbnail is empty. The knob
-//! is gone with them — a placement that cannot draw is not an arm of an A/B — and the source is
-//! launched where it will stand rather than moved there after it is styled, because mpv shows its
-//! window as soon as it opens the file (see `the_source_launch_origin`).
+//! under the host, and it is **moved when the piece of it the shell samples would otherwise leave the
+//! screen** (see `keep_the_crop_on_the_screen` and below). The placement knob this road once had named
+//! two other placements and both are dead: `offscreen` (a desktop's width left and a desktop's height
+//! below the virtual screen) traced as `source adopted … 1920x1080+-4440+3880` with the registration
+//! succeeding and the pin empty, and `edge` (2 px over the screen's bottom-right corner) the same at
+//! `… 1920x1080+3438+1438`. **The Shell does not keep a thumbnail live for a window the user cannot
+//! see**: the composition surface of a source that is not genuinely on screen is not composed, so its
+//! thumbnail is empty. The knob is gone with them — a placement that cannot draw is not an arm of an
+//! A/B — and the source is launched where it will stand rather than moved there after it is styled,
+//! because mpv shows its window as soon as it opens the file (see `the_source_launch_origin`).
+//!
+//! **The source is moved, and never resized, to keep the sampled rectangle on the screen.** The
+//! source is native-sized and no longer follows the pin, so a pin at an edge or a corner of the
+//! desktop has its crop hanging off it — and that is the black the dead placements measured, from the
+//! other side. A move cannot change the content the crop describes (the crop is relative to the
+//! source's client, and its shape is the box's), while a resize is the flash this road exists to not
+//! have; so when a frame's crop rect in screen coordinates would leave the work area of the monitor
+//! the pin is on, the source is slid the shortest way back onto it, on a 64 px grid so a slow drag at
+//! an edge moves it once every 64 px rather than every frame. **A source that already fits is not
+//! touched**, which is every ordinary centred drag (see `keep_the_crop_on_the_screen`).
 //!
 //! **A box over the film's own size upscales the picture whole.** The crop of a box the picture does
 //! not fill is the picture, cut to nothing, and the Shell stretches it into the box — cropping a
@@ -95,12 +105,12 @@
 //! flip-model swapchain, so `RHP_THUMBNAIL_FLIP` is read, overruled and traced as overruled rather
 //! than dropped on the floor (see `video_launch::the_thumbnail_swapchain_flip`).
 //!
-//! **The source is never hidden, moved or resized.** Hidden the Shell stops drawing it — the
+//! **The source is never hidden and never resized.** Hidden the Shell stops drawing it — the
 //! thumbnail of a `SW_HIDE` window is frozen at its last frame — so it is taken off the screen only
-//! where the host it is seen in is going away for good (see `set_the_source_visible`). Moved it
-//! would be a second window writing the same fact as the pin's own drag, and the crop does not care
-//! where the source stands (the pair is relative to its client). Resized is the flash this road was
-//! measured with. One placement, and then nothing until teardown.
+//! where the host it is seen in is going away for good (see `set_the_source_visible`). Resized is the
+//! flash this road was measured with. Moved it is, but only to keep the crop on the screen and never
+//! with a new size: one placement, and then a slide at an edge and nothing else until teardown (see
+//! `keep_the_crop_on_the_screen`).
 //!
 //! **On this road it is also made invisible rather than merely covered** (`RHP_THUMBNAIL_INVISIBLE`,
 //! on by default and off with `=0`): the source wears `WS_EX_LAYERED` with
@@ -120,11 +130,11 @@
 //! why nothing here hides the window to achieve the invisibility: the two failures are told apart by
 //! whether the player is still there, and a hidden source would answer that question with itself.
 //!
-//! shortcut: a source never moved is a source that stays where it was placed, so on
+//! shortcut: a source only ever slides far enough to keep its crop on the screen, so on
 //! `RHP_THUMBNAIL_INVISIBLE=0` — the visible road, where the film is covered rather than composited
 //! away — a pin carried across the screen leaves its film behind and a pin smaller than its film has
 //! the film standing around it. That road is an A/B of the invisibility and nothing else. Upgrade it
-//! by clipping the source in a window of this app's, not by moving a window of mpv's again.
+//! by clipping the source in a window of this app's, not by following the pin with a window of mpv's.
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -978,7 +988,12 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
         .source
         .map_or((live, None), |source| (source.client, source.aspect));
     let shown = the_thumbnail_box(client, source_client, aspect);
-    if !the_registration_wants(held, shown) {
+    let a_re_point = the_registration_wants(held, shown);
+    // **The crop the Shell samples is kept on the screen before anything is handed over**: a held
+    // frame can need the source slid too, because a pin dragged to another monitor has the same pair
+    // and a different work area (see `keep_the_crop_on_the_screen`).
+    keep_the_crop_on_the_screen(host, source, shown, a_re_point);
+    if !a_re_point {
         note_a_held_frame(live != shown.client);
         return;
     }
@@ -1186,6 +1201,156 @@ pub(super) fn settle_the_held_frames() {
             note_pin_trace!("{}", line);
         }
     }
+}
+
+/// How far a source may slide at an edge: the grid a moved position lands on, so that a slow drag
+/// towards a screen edge moves the source once every 64 px rather than on every frame.
+const SOURCE_STEP: i32 = 64;
+
+/// Why a source's position was asked for: the two reasons a crop can need the source moved, and the
+/// word the trace writes for it (see `the_sources_position`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SourceFit {
+    /// The crop left the work area and the source slides the shortest way back onto it.
+    Moved,
+    /// The crop is longer than the work area on an axis, so no position holds it whole and the source
+    /// is put where the crop starts with the work area instead.
+    Cramped,
+}
+
+/// **Keep the rectangle the Shell actually samples on the screen, by moving the source and never
+/// resizing it.** The source is native-sized and does not follow the pin, so a pin at an edge or a
+/// corner of the desktop leaves its crop hanging off it — and DWM does not compose a source that is
+/// off the screen, which is black where the pin is (see the module note and the two placements it
+/// measured dead). A move cannot change the content the crop describes, because the crop is relative
+/// to the source's client and its shape is the box's; a resize could, which is why this only ever
+/// moves.
+///
+/// **Nothing moves unless it has to.** The position asked for is the one the source already stands
+/// at, unless the crop at that position leaves the work area of the monitor the pin is on: an
+/// ordinary centred drag never asks for anything, and neither does a pin standing still. A move is
+/// posted, like every other call on a window of mpv's here, and it never carries a size: a moved
+/// source is a slid source, not a resized one.
+///
+/// `a_re_point` is whether this frame is handing over a new pair: the one thing a crop that cannot
+/// be held on the screen is traced for, rather than on every tick it stays that way.
+fn keep_the_crop_on_the_screen(host: HWND, source: HWND, shown: ThumbnailBox, a_re_point: bool) {
+    let Some((at_x, at_y)) = (unsafe { client_origin(source) }) else {
+        return;
+    };
+    // The rectangle DWM samples, in the source's own client coordinates: the crop where there is one,
+    // and the whole client where a picture nothing has read hands it that (see `the_thumbnail_box`).
+    let crop = shown.source.map_or((0, 0, shown.client.0, shown.client.1), |(left, top, right, bottom)| {
+        (left, top, right - left, bottom - top)
+    });
+    let Some((host_x, host_y, host_width, host_height)) = (unsafe { window_box(host) }) else {
+        return;
+    };
+    // **The monitor the pin is on** is the one its band's middle is on, which is the display the user
+    // is dragging the window across rather than whichever one a corner is nearest.
+    let work = displays::work_area_at(host_x + host_width / 2, host_y + host_height / 2);
+    let Some(((to_x, to_y), fit)) = the_sources_position((at_x, at_y), crop, work.region()) else {
+        return;
+    };
+
+    let (width, height) = (work.right - work.left, work.height());
+    let why = match fit {
+        SourceFit::Moved => "the crop left the work area",
+        SourceFit::Cramped => "the crop is longer than the work area on an axis",
+    };
+    if (to_x, to_y) == (at_x, at_y) {
+        // **A crop that cannot be held on the screen is said out loud** rather than left to draw black
+        // in silence, once per settle and not once per tick.
+        if fit == SourceFit::Cramped && a_re_point {
+            note_pin_trace!(
+                "thumbnail source cannot hold the crop on screen at {},{}: {} (work {}x{}+{}+{})",
+                at_x,
+                at_y,
+                why,
+                width,
+                height,
+                work.left,
+                work.top,
+            );
+        }
+        return;
+    }
+
+    let asked = unsafe {
+        SetWindowPos(
+            source,
+            HWND::default(),
+            to_x,
+            to_y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+        )
+    };
+    note_pin_trace!(
+        "thumbnail source moved {},{} -> {},{} because {} (work {}x{}+{}+{} ok {})",
+        at_x,
+        at_y,
+        to_x,
+        to_y,
+        why,
+        width,
+        height,
+        work.left,
+        work.top,
+        asked.is_ok() as u8,
+    );
+}
+
+/// The position the source must stand at for its sampled rectangle to be wholly on `work`, and why —
+/// or nothing at all where that rectangle is already there (see `keep_the_crop_on_the_screen`).
+///
+/// `crop` is the sampled rectangle in the source's own client coordinates, as left, top, width and
+/// height, and `work` the work area in screen coordinates. The size is never part of the answer.
+fn the_sources_position(
+    at: (i32, i32),
+    crop: SourceBox,
+    work: ScreenRegion,
+) -> Option<((i32, i32), SourceFit)> {
+    let (left, top, width, height) = crop;
+    let (x, x_cramped) = a_source_axis(at.0, (left, width), (work.0, work.2));
+    let (y, y_cramped) = a_source_axis(at.1, (top, height), (work.1, work.3));
+    let cramped = x_cramped || y_cramped;
+    if (x, y) == at && !cramped {
+        return None;
+    }
+    Some(((x, y), if cramped { SourceFit::Cramped } else { SourceFit::Moved }))
+}
+
+/// One axis of `the_sources_position`: where the source stood when the crop was inside the work area,
+/// the shortest slide back when it was not, and the work area's own start when the crop is longer than
+/// the work area and no position can hold it — with whether that is the case.
+///
+/// **The slide lands on a 64 px grid, away from the edge it was over**, which is what keeps a slow
+/// drag's many frames from each moving the source: a step of the drag that asks for the same side of
+/// the same grid is answered with the same position and moves nothing. Rounding towards the inside is
+/// what keeps a grid step from putting the crop back out of the work area, and the one case it cannot
+/// reach — a work area shorter than a grid step — is the bound itself.
+fn a_source_axis(at: i32, crop: (i32, i32), work: (i32, i32)) -> (i32, bool) {
+    let (offset, extent) = (crop.0, crop.1.max(1));
+    let low = work.0 - offset;
+    let high = work.1 - offset - extent;
+    if at >= low && at <= high {
+        return (at, false);
+    }
+    if high < low {
+        // No position holds the whole crop: start it where the work area starts, so the pin draws from
+        // the picture's own beginning rather than from a band of desktop (the trace says so).
+        return (low, true);
+    }
+    let wanted = at.clamp(low, high);
+    let rounded = wanted.div_euclid(SOURCE_STEP) * SOURCE_STEP;
+    let rounded = if wanted == low && rounded != wanted {
+        rounded + SOURCE_STEP
+    } else {
+        rounded
+    };
+    (rounded.clamp(low, high), false)
 }
 
 /// The corner of a window's client area, on the screen.
@@ -1427,6 +1592,143 @@ mod tests {
             held.a_summary(),
             None,
             "and a settle with nothing held since the last one prints nothing at all"
+        );
+    }
+
+
+    /// The crop the pair would hand the Shell, as the rectangle DWM samples in the source's own
+    /// client: the crop where there is one, and the whole client where there is not.
+    fn a_crop_of(box_: (i32, i32), client: (i32, i32), aspect: Option<f64>) -> SourceBox {
+        let shown = the_thumbnail_box(box_, client, aspect);
+        shown.source.map_or(
+            (0, 0, shown.client.0, shown.client.1),
+            |(left, top, right, bottom)| (left, top, right - left, bottom - top),
+        )
+    }
+
+    /// The rectangle the Shell actually samples, on the screen: where the source stands plus the crop
+    /// inside its client.
+    fn a_sampled_rect(at: (i32, i32), crop: SourceBox) -> ScreenRegion {
+        (at.0 + crop.0, at.1 + crop.1, at.0 + crop.0 + crop.2, at.1 + crop.1 + crop.3)
+    }
+
+    /// **A pin flush with any edge or corner of the desktop has its crop slid back onto the work
+    /// area**, and the same on a monitor left of the primary one whose work area does not start at
+    /// zero — the two shapes a screen edge comes in (see `the_sources_position`).
+    #[test]
+    fn a_crop_at_any_edge_or_corner_ends_up_inside_the_work_area() {
+        let film = (1280, 720);
+        let box_ = (640, 360);
+        let crop = a_crop_of(box_, film, Some(16.0 / 9.0));
+        for work in [(0, 0, 1920, 1080), (-1920, 0, 0, 1040)] {
+            let xs = [work.0, (work.0 + work.2 - box_.0) / 2, work.2 - box_.0];
+            let ys = [work.1, (work.1 + work.3 - box_.1) / 2, work.3 - box_.1];
+            for x in xs {
+                for y in ys {
+                    // The source was adopted at the pin's own corner, which is the box's.
+                    let at = (x, y);
+                    let (to, _) = the_sources_position(at, crop, work).unwrap_or((at, SourceFit::Moved));
+                    let sampled = a_sampled_rect(to, crop);
+                    assert!(
+                        sampled.0 >= work.0
+                            && sampled.1 >= work.1
+                            && sampled.2 <= work.2
+                            && sampled.3 <= work.3,
+                        "a crop {sampled:?} is inside the work area {work:?} for a pin at {at:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **A centred drag asks the source for no position at all.** The source stands centred on the
+    /// desktop with its whole picture inside the work area, and every box a drag passes through crops
+    /// inside that picture — so nothing the hand does to the pin's shape moves the source (see
+    /// `keep_the_crop_on_the_screen`).
+    #[test]
+    fn a_centred_drag_asks_the_source_for_no_position() {
+        let film = (1280, 720);
+        let work = (0, 0, 1920, 1080);
+        let at = ((work.2 - film.0) / 2, (work.3 - film.1) / 2);
+        for box_ in [
+            (640, 360),
+            (700, 394),
+            (800, 450),
+            (1000, 560),
+            (1280, 720),
+            (1200, 675),
+            (2263, 1274),
+        ] {
+            let crop = a_crop_of(box_, film, Some(16.0 / 9.0));
+            assert_eq!(
+                the_sources_position(at, crop, work),
+                None,
+                "a centred drag's {box_:?} moves the source not at all"
+            );
+        }
+    }
+
+    /// **A move lands on the grid, and a source that has been moved is a source that stays put**: the
+    /// position asked for is inside the work area, and the next frame at that same position asks for
+    /// nothing — which is what keeps a slow drag at an edge from moving the source on every frame.
+    #[test]
+    fn a_move_lands_on_the_grid_and_is_then_stable() {
+        let work = (0, 0, 1920, 1080);
+        let crop = (97, 41, 1000, 600);
+        for at in [(-400, -400), (1800, 900), (-97, 500), (900, 0)] {
+            let (to, _) = the_sources_position(at, crop, work).expect("the crop left the work area");
+            let sampled = a_sampled_rect(to, crop);
+            assert!(
+                sampled.0 >= work.0
+                    && sampled.1 >= work.1
+                    && sampled.2 <= work.2
+                    && sampled.3 <= work.3,
+                "the moved crop {sampled:?} is on the work area {work:?}"
+            );
+            for (from, to) in [(at.0, to.0), (at.1, to.1)] {
+                if from != to {
+                    assert_eq!(
+                        to % SOURCE_STEP,
+                        0,
+                        "an axis that slides lands on the {SOURCE_STEP} px grid, at {to}"
+                    );
+                }
+            }
+            assert_eq!(
+                the_sources_position(to, crop, work),
+                None,
+                "and a source already there is not asked to move again"
+            );
+        }
+    }
+
+    /// **A crop longer than the work area cannot be held inside it, and the trace is told so rather
+    /// than the pin drawing black in silence**: the source is put where the crop starts with the work
+    /// area, and the axis that does fit is still slid onto it (a 4K film on a smaller desktop).
+    #[test]
+    fn a_crop_longer_than_the_work_area_is_cramped_and_says_so() {
+        let work = (0, 0, 1920, 1040);
+        assert_eq!(
+            the_sources_position((300, 200), (0, 0, 3840, 2160), work),
+            Some(((0, 0), SourceFit::Cramped)),
+            "both axes are longer than the work area, so the crop starts where it does"
+        );
+        assert_eq!(
+            the_sources_position((0, 0), (0, 0, 3840, 2160), work),
+            Some(((0, 0), SourceFit::Cramped)),
+            "and a source already there is still answered as cramped, so the trace can say so"
+        );
+        let Some(((x, y), fit)) = the_sources_position((300, 900), (0, 0, 3840, 720), work) else {
+            panic!("the crop is longer than the work area on one axis");
+        };
+        assert_eq!(
+            (x, fit),
+            (0, SourceFit::Cramped),
+            "the axis longer than the work area is aligned with its start, and the trace says so"
+        );
+        assert!(
+            y >= work.1 && y + 720 <= work.3,
+            "and the axis that fits is still moved onto the work area, at {y}"
         );
     }
 
