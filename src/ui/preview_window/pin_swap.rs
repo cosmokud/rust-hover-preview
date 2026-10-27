@@ -236,7 +236,7 @@ pub(super) fn take_pin_engine_answer(
 /// `request_pin_engine_render`).
 pub(super) fn pin_update_content(
     space: PinSwapSpace,
-    path: &PathBuf,
+    path: &Path,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<PinBox> {
@@ -257,7 +257,7 @@ pub(super) fn pin_update_content(
 /// separate step.
 fn pin_update_content_measured(
     space: PinSwapSpace,
-    path: &PathBuf,
+    path: &Path,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<PinBox> {

@@ -402,7 +402,7 @@ pub(super) fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(
 /// It is asked of the answer rather than of the path because the caller is `media_dimensions`,
 /// which was handed the same answer a few lines above and used to read the file's directory
 /// entry again to get it (see `HoverFacts`).
-pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u32)> {
+pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &Path) -> Option<(u32, u32)> {
     // What the file's content says it is comes ahead of what its name does, where the two
     // disagree: the box a file is placed at is the box of the kind its content belongs to,
     // and a format no kind previews is placed nowhere at all — see `content_type`.
@@ -546,7 +546,7 @@ pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Opt
 ///
 /// Two kinds have no size of their own: an archive listing and a text preview are both laid
 /// out from the frame the loader paints rather than from anything their file says.
-pub(super) fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u32)> {
+pub(super) fn media_dimensions_of_kind(kind: PreviewType, path: &Path) -> Option<(u32, u32)> {
     if !kind.enabled() {
         return None;
     }
@@ -680,7 +680,7 @@ pub(super) fn magick_box(path: &Path) -> Option<(u32, u32)> {
 
 /// A picture's own size, read the way this app reads one: its own header, and the codec
 /// Windows keeps for the picture formats this app's decoder has no reader for.
-pub(super) fn picture_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+pub(super) fn picture_dimensions(path: &Path) -> Option<(u32, u32)> {
     image_dimensions_with_header_check(path)
 }
 
@@ -734,7 +734,7 @@ pub(super) fn page_is_on_the_way(path: &Path) -> bool {
 /// can fit it into the space beside the cursor, and the text renderer is handed
 /// the box that comes out of that.
 pub(super) fn media_dimensions(
-    path: &PathBuf,
+    path: &Path,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<(u32, u32)> {
@@ -746,7 +746,7 @@ pub(super) fn media_dimensions(
 /// this and `get_media_dimensions` used to read between them (see `HoverFacts`).
 pub(super) fn media_dimensions_of(
     hover: &HoverFacts,
-    path: &PathBuf,
+    path: &Path,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<(u32, u32)> {

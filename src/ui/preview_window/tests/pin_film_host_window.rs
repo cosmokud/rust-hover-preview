@@ -248,7 +248,11 @@ fn a_hosted_park_holds_the_frame_the_host_is_showing() {
 /// Every erase a stand-in host was handed, by window: whether a point inside the child the test gave
 /// it, a point outside that child, and a point beyond the box it was made at were in the device
 /// context's system region (see `an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be`).
-static ERASE_CLIPS: Lazy<Mutex<Vec<(isize, bool, bool, bool)>>> =
+/// One erase as the watcher recorded it: the window, whether a point inside and one outside were
+/// in the clip region, and whether a point past the box was.
+type EraseClip = (isize, bool, bool, bool);
+
+static ERASE_CLIPS: Lazy<Mutex<Vec<EraseClip>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
 
 /// A window of a test's own that records what an erase of it is clipped to, and answers the erase the

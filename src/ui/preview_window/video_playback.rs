@@ -1518,6 +1518,36 @@ pub(super) fn settle_pinned_mpv_ontop() {
 /// swap out of a park fills *before* the cover comes down (see `unpark_pinned_player`). A window
 /// that is not being drawn is not carried over a strip the pin is showing by being put back
 /// (see `put_a_player_that_is_not_on_screen_back`).
+/// What the last pass wrote about the film's window, and the answer it wrote: the raise road is asked
+/// on every tick, and an answer that has not moved is the heartbeat a normal session's trace does not
+/// need (938 of a 114 s run's lines were this family and `host visible`). A line is written where the
+/// answer changes, so a run reads the transitions and the measurements rather than the polling.
+static LAST_RAISED_FILM: Lazy<Mutex<(isize, &'static str)>> = Lazy::new(|| Mutex::new((0, "")));
+
+/// Write what became of the film's window on this pass, where it is not what the last pass wrote.
+fn trace_the_raised_film(window: isize, answer: &'static str) {
+    trace_the_raised_film_with(window, answer, || answer.to_string());
+}
+
+/// Whether an answer is one the trace has not written yet: the same answer for the same window is the
+/// polling line a normal session's trace does not need (see `trace_the_raised_film`).
+fn the_raise_is_new(last: (isize, &str), window: isize, answer: &str) -> bool {
+    last != (window, answer)
+}
+
+/// The same, with the line built only where the answer changed — the handle a shown window carries is
+/// worth naming, and naming it on every tick is not.
+fn trace_the_raised_film_with(window: isize, answer: &'static str, line: impl FnOnce() -> String) {
+    let Ok(mut last) = LAST_RAISED_FILM.lock() else {
+        return;
+    };
+    if !the_raise_is_new(*last, window, answer) {
+        return;
+    }
+    *last = (window, answer);
+    note_pin_trace!("{}", line());
+}
+
 pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
     // A collapsed pin has no band on screen, so nothing of the *pin's* is placed — not even the
     // hidden window a hold-off would otherwise put back: that place is a chrome-less film over
@@ -1528,7 +1558,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // `bubble_stream`), so there is nothing of the player's to carry into the circle and nothing to
     // put back where something has moved it.
     if pin_is_collapsed() {
-        note_pin_trace!("topmost skipped: pin collapsed");
+        trace_the_raised_film(0, "topmost skipped: pin collapsed");
         return false;
     }
     // **A film drawn into the pin's host has no window of the desktop's to order, style or raise.**
@@ -1550,17 +1580,17 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         // places it at the band the hand settled on before the flag comes down (see
         // `unpark_player_window`). A show here is the tick undoing the cover at its own pace.
         if pin_player_is_parked() {
-            note_pin_trace!("topmost skipped: pin host parked");
+            trace_the_raised_film(0, "topmost skipped: pin host parked");
             return true;
         }
+        let host = pin_film_host::film_host().map_or(0, |host| host.0 as isize);
         if pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
-            note_pin_trace!("topmost shown: pin host drawing");
-            // SAFETY: the host is this app's own window — a child of the pin's on the child road,
-            // a window of the desktop's on the thumbnail one — and `ShowWindow`
-            // takes any window and reports rather than faults.
+            trace_the_raised_film(host, "topmost shown: pin host drawing");
+            // SAFETY: the host is this app's own window — a child of the pin's or a window of the
+            // desktop's — and `ShowWindow` takes any window and reports rather than faults.
             unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
         } else {
-            note_pin_trace!("topmost skipped: pin host not drawing yet");
+            trace_the_raised_film(host, "topmost skipped: pin host not drawing yet");
         }
         return true;
     }
@@ -1572,11 +1602,12 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     let hover_pid = VIDEO_PID.load(Ordering::SeqCst);
     if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid) {
         unsafe { hover_film_host::place_the_hover_film_host((x, y, x + width, y + height)) };
+        let host = hover_film_host::hover_film_host().map_or(0, |host| host.0 as isize);
         if hover_film_host::the_hover_player_is_drawing(hover_pid) {
-            note_pin_trace!("topmost shown: hover host drawing");
+            trace_the_raised_film(host, "topmost shown: hover host drawing");
             unsafe { hover_film_host::set_the_hover_film_host_visible(true) };
         } else {
-            note_pin_trace!("topmost skipped: hover host not drawing yet");
+            trace_the_raised_film(host, "topmost skipped: hover host not drawing yet");
         }
         return true;
     }
@@ -1597,7 +1628,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         false,
     );
     if order == PlayerOrder::Leave {
-        note_pin_trace!("topmost skipped: raise held off");
+        trace_the_raised_film(0, "topmost skipped: raise held off");
         // The raise is what is held off and the band is still owed (see the note over this
         // function): a window that is not on screen goes back where it stands in the band, with no
         // raise for anything to be put back over.
@@ -1616,14 +1647,14 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
 
     let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
     if hwnd_val == 0 {
-        note_pin_trace!("topmost skipped: no player hwnd");
+        trace_the_raised_film(0, "topmost skipped: no player hwnd");
         return false;
     }
 
     unsafe {
         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
         if hwnd.is_invalid() {
-            note_pin_trace!("topmost skipped: player hwnd invalid");
+            trace_the_raised_film(0, "topmost skipped: player hwnd invalid");
             VIDEO_HWND.store(0, Ordering::SeqCst);
             return false;
         }
@@ -1643,7 +1674,9 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        note_pin_trace!("topmost shown: player hwnd {:?}", hwnd);
+        trace_the_raised_film_with(hwnd.0 as isize, "topmost shown: player hwnd", || {
+            format!("topmost shown: player hwnd {hwnd:?}")
+        });
     }
 
     true
@@ -1751,4 +1784,32 @@ pub(super) unsafe fn player_stands_over_the_pin(pin: HWND) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **An answer the trace already wrote is not written again**: the raise road is asked on every
+    /// tick, so the same answer for the same window is one line and every transition is one more.
+    #[test]
+    fn a_raise_answer_is_written_when_it_changes_and_not_on_every_pass() {
+        assert!(
+            the_raise_is_new((0, ""), 0x1000, "topmost shown: pin host drawing"),
+            "the first answer of a run is the state it began in"
+        );
+        let shown = (0x1000, "topmost shown: pin host drawing");
+        assert!(
+            !the_raise_is_new(shown, 0x1000, "topmost shown: pin host drawing"),
+            "and the same answer for the same window is not written on every tick"
+        );
+        assert!(
+            the_raise_is_new(shown, 0x1000, "topmost skipped: pin host parked"),
+            "a park is a change"
+        );
+        assert!(
+            the_raise_is_new(shown, 0x2000, "topmost shown: pin host drawing"),
+            "and so is another window"
+        );
+    }
 }

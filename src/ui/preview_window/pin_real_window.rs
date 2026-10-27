@@ -185,7 +185,7 @@ pub(super) fn stand_real_pin_window_for_a_test(hwnd: Option<HWND>) {
 /// know whether there is one.
 pub(super) fn real_pin_window() -> Option<HWND> {
     let hwnd = REAL_PIN_HWND.load(Ordering::SeqCst);
-    (hwnd != 0).then(|| HWND(hwnd as *mut _))
+    (hwnd != 0).then_some(HWND(hwnd as *mut _))
 }
 
 /// The pin's own window, made where there is none and put at the box the pin says, off the screen.

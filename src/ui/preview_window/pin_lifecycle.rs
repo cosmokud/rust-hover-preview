@@ -1463,10 +1463,8 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // to explain (see the top of this function, which is where it used to go).
     let preview = PREVIEW_HWND.load(Ordering::SeqCst);
     let preview_up = unsafe { preview != 0 && IsWindowVisible(HWND(preview as *mut _)).as_bool() };
-    if pin_is_its_own_window() {
-        if preview != 0 && preview != hwnd.0 as isize {
-            let _ = ShowWindow(HWND(preview as *mut _), SW_HIDE);
-        }
+    if pin_is_its_own_window() && preview != 0 && preview != hwnd.0 as isize {
+        let _ = ShowWindow(HWND(preview as *mut _), SW_HIDE);
     }
 
     if !pin_always_on_top() {

@@ -1013,6 +1013,29 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
 /// band, and the pin paints its held frame in its place (see `park_pinned_player_inner`). The
 /// chrome stays where the chrome state puts it: the strips are the pin's window's rather than the
 /// host's, and a park hides the picture rather than the chrome (see `pin_chrome_strips`).
+/// The last show this host was asked for, and the host it was asked for: the tick asks on every
+/// pass, so the trace's `host visible` line is written where the answer changes rather than on every
+/// ask (938 of a 114 s run's lines were this family and `topmost shown`).
+static LAST_HOST_SHOW: Lazy<Mutex<Option<(isize, bool)>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether a show is one the trace has not written yet: the answer the last pass wrote is the
+/// polling line a normal session's trace does not need (see `trace_the_host_show`).
+fn the_show_is_new(last: Option<(isize, bool)>, host: isize, visible: bool) -> bool {
+    last != Some((host, visible))
+}
+
+/// Write the show this host was asked for, where it is not the one the last pass asked for.
+fn trace_the_host_show(host: HWND, visible: bool) {
+    let Ok(mut last) = LAST_HOST_SHOW.lock() else {
+        return;
+    };
+    if !the_show_is_new(*last, host.0 as isize, visible) {
+        return;
+    }
+    *last = Some((host.0 as isize, visible));
+    note_pin_trace!("host visible {} {:?}", visible as u8, host);
+}
+
 pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
     if let Some(host) = film_host() {
         // **A host the Shell has minimized is the Shell's to bring back.** Showing a minimized
@@ -1023,7 +1046,7 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
         if visible && unsafe { IsIconic(host) }.as_bool() {
             return;
         }
-        note_pin_trace!("host visible {} {:?}", visible as u8, host);
+        trace_the_host_show(host, visible);
         let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
         // **The film follows the host off the screen and back**, which is the one road a source is
         // hidden on: the Shell stops drawing the thumbnail of a hidden window, and there is no host
@@ -1456,6 +1479,28 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A show the trace already wrote is not written again**: the tick asks every pass, so a host
+    /// shown, a host hidden and a host shown again are three lines, and a host shown once is one.
+    #[test]
+    fn a_host_show_is_written_when_it_changes_and_not_on_every_pass() {
+        assert!(
+            the_show_is_new(None, 0x2000, true),
+            "the first show of a run is the state it began in"
+        );
+        assert!(
+            !the_show_is_new(Some((0x2000, true)), 0x2000, true),
+            "and an answer that has not moved is not written on every tick"
+        );
+        assert!(
+            the_show_is_new(Some((0x2000, true)), 0x2000, false),
+            "a hide is a change"
+        );
+        assert!(
+            the_show_is_new(Some((0x2000, true)), 0x3000, true),
+            "and so is another host"
+        );
+    }
 
     /// **The per-tick line is written on change and at most once a second otherwise**, which is what
     /// keeps a run's trace readable: the tick asks `the_hosted_player_is_drawing` hundreds of times a
