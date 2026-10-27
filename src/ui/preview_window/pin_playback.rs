@@ -2217,9 +2217,6 @@ fn park_pinned_player_inner(
     awaiting: bool,
     owner: ParkArm,
 ) -> bool {
-    // A park owns the band from its own capture: a move cover still standing is the outgoing
-    // picture, and the frame this park takes replaces it (see `pin_film_host::clear_the_move_cover`).
-    pin_film_host::clear_the_move_cover();
     let begin = pin_state().and_then(|mut pinned| {
         let pin = pinned.pin_mut()?;
 

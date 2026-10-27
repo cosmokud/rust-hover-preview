@@ -125,6 +125,14 @@ fn held_player(pid: u32) -> Option<HeldPlayer> {
         .and_then(|slot| slot.as_ref().filter(|held| held.pid == pid).cloned())
 }
 
+/// Whether this player can be asked a property at all: the pipe this app opened to it when it was
+/// begun. FFmpeg's player is begun with none, so it answers nothing and has no video output to
+/// report — the source being up is the whole of what it proves (see
+/// `pin_film_host::the_hosted_frame_is_up`).
+pub(super) fn answers_properties(pid: u32) -> bool {
+    held_player(pid).is_some()
+}
+
 /// Where a command actually goes: the pipe of the player behind `pid`, or nothing where there is
 /// no such player.
 fn write(pid: u32, line: String) -> bool {

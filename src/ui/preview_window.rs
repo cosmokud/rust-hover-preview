@@ -209,8 +209,8 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EndPaint, GdiFlush, GetDC, MonitorFromWindow, ReleaseDC, SelectObject, AC_SRC_ALPHA,
+    BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
+    EndPaint, GdiFlush, MonitorFromWindow, SelectObject, AC_SRC_ALPHA,
     AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC,
     HGDIOBJ, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
 };

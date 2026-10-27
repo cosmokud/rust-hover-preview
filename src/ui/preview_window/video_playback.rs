@@ -46,14 +46,6 @@ pub(super) fn the_renderer_asked_for(asked_by_hand: Option<&str>) -> String {
     }
 }
 
-/// Whether the renderer a film is begun with is the composed one, which is the question the pin's own
-/// form and paint road are answered by: a film presented through the composed road is drawn into a pin
-/// that is not layered and paints through its own DC, and a flip-model renderer named by hand keeps the
-/// layered pin its swapchain can present under (see `pin_film_host::ffplay_is_presented_composed`).
-pub(super) fn the_film_is_presented_composed() -> bool {
-    the_renderer_a_film_is_begun_with() == FFPLAY_COMPOSED_RENDERER
-}
-
 /// The films whose most recently begun player was drawing subtitles: a sidecar, the film's own
 /// track, or the small files this app copied out of it (see `subtitle_filter`).
 ///
@@ -461,24 +453,26 @@ fn start_video_playback_where(
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = engine_processes::hidden_command("ffplay");
 
-    // **Where this film's picture will be drawn, before the command is built.** FFmpeg's player has
-    // no switch that names a window, so it is begun with the frame it will lose and adopted into the
-    // host once its own window exists (see `ffplay_window::adopt_the_players_window`). A hosted launch is born off every display with
-    // `-left/-top` and **without `-noborder`**: `-noborder` makes SDL create a non-resizable window
-    // whose cached flags then clamp every external resize, so the band could never follow the pin.
-    let hosted = if route == VideoRoute::Ffplay {
-        match pin_film_host::host_for_the_pins_ffplay(path, kind) {
-            Some(host) => Some((host, true)),
-            None => (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
-                .then(|| unsafe {
-                    hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
-                })
-                .flatten()
-                .map(|host| (host, false)),
-        }
-    } else {
-        None
-    };
+    // **Where this film's picture is drawn, before the command is built.** FFmpeg's player has no
+    // switch that names a window and SDL has no embed one on Windows, so it makes a window of its
+    // own and the host shows it through the Shell's thumbnail — the road mpv's film is on, and the
+    // only one a resize can be cheap on (see `pin_film_thumbnail`). A film kept for a host is born
+    // **on the desktop and at its own size**: a source the Shell does not compose has no picture to
+    // draw, and the one placement asks the window for no box it was not already born with.
+    //
+    // **`-noborder` is passed on every launch.** It costs the player nothing now — the source is
+    // never asked to resize again — and it is what makes the window's box and its client the same
+    // rectangle, which is the rectangle the crop is cut from (see `pin_film_thumbnail`).
+    let the_pins_film = pin_film_host::the_pins_film_is_kept_in_its_host(path, kind);
+    let hover_destination = !the_pins_film
+        && allow_the_hover_host
+        && hover_film_host::the_hover_film_is_kept_in_a_host(path);
+    let hover_host = hover_destination
+        .then(|| unsafe {
+            hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
+        })
+        .flatten();
+    let kept_for_a_host = the_pins_film || hover_host.is_some();
 
     // **What the film is presented through, on every launch.** The composed renderer, and the reason
     // it is Direct3D 9 rather than Direct3D 11 is the whole of this app's answer to the panel
@@ -631,28 +625,28 @@ fn start_video_playback_where(
     // to be numbered — which is also the numbering a next-track press walks in, and the one
     // `si=` is given in (see `next_subtitle`).
 
-    let width_arg = width.to_string();
-    let height_arg = height.to_string();
-    let left_arg = if hosted.is_some() {
-        "-32000".to_string()
-    } else {
-        x.to_string()
+    // **The film's own size, where it is kept for a host**: the one placement the road makes is then
+    // the box the player was born at, and nothing of the source is resized under the Shell (see
+    // `pin_film_thumbnail::the_one_placement`). A film drawn over the preview is the preview's box.
+    let (asked_width, asked_height) = match (kept_for_a_host, measured.as_ref()) {
+        (true, Some(geometry)) => (
+            (geometry.width as i32).max(1),
+            (geometry.height as i32).max(1),
+        ),
+        _ => (width.max(1), height.max(1)),
     };
-    let top_arg = if hosted.is_some() {
-        "-32000".to_string()
-    } else {
-        y.to_string()
-    };
-    let mut cmd = cmd.args([
+    let width_arg = asked_width.to_string();
+    let height_arg = asked_height.to_string();
+    let left_arg = x.to_string();
+    let top_arg = y.to_string();
+    let cmd = cmd.args([
         "-err_detect",
         "ignore_err", // Ignore header/stream errors
         "-fflags",
         "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
         "-framedrop",                    // Drop undecodable frames instead of stalling
+        "-noborder",                     // No window border: the box is the client
     ]);
-    if hosted.is_none() {
-        cmd = cmd.arg("-noborder"); // No window border
-    }
     let child = cmd
         .args([
             "-left",
@@ -689,14 +683,13 @@ fn start_video_playback_where(
     if let Some(ref player) = child {
         // The host holds this player and no older one, recorded before the player has a window of
         // its own to adopt: the monitor's wait for that window is a wait for *this* player's (see
-        // `host_for_a_hosted_player`).
-        if let Some((_, in_the_pin)) = hosted {
-            if in_the_pin {
-                pin_film_host::note_the_pins_film_route(path);
-                pin_film_host::note_hosted_player(player.id());
-            } else {
-                hover_film_host::note_hover_film_host_player(player.id(), path);
-            }
+        // `host_for_a_hosted_player`). A pin's player is recorded even where the host is still being
+        // made, because what the host is to draw is a fact of the launch and not of the order the
+        // two windows happen to arrive in.
+        if the_pins_film {
+            pin_film_host::note_hosted_player(player.id());
+        } else if hover_host.is_some() {
+            hover_film_host::note_hover_film_host_player(player.id(), path);
         }
         note_player_started(
             player_image(VideoRoute::Ffplay),
@@ -766,13 +759,13 @@ fn start_mpv_video_playback(
     // box. No window of this app's is handed to mpv on any of those roads: the only one this app
     // ever named was the child road's `--wid`, and it is gone.
     let the_pins_film = pin_film_host::the_film_is_shown_in_a_host(path, kind);
-    // **A hover's film on the thumbnail road is a thumbnail of its own**, so that pinning it is the
-    // same picture re-cropped into the pin's host rather than a second player begun on a frozen frame
+    // **A hover's film on this road is a thumbnail of its own**, so that pinning it is the same
+    // picture re-cropped into the pin's host rather than a second player begun on a frozen frame
     // (see `hover_film_host` and `pin_playback::adopt_the_hovered_film_in_the_host`). The host is
     // the destination here: what shows the picture is the Shell.
     let hover_destination = allow_the_hover_host
-        && hover_film_host::the_hover_film_is_kept_in_a_host(path)
-        && video_route(path) == VideoRoute::Mpv;
+        && !the_pins_film
+        && hover_film_host::the_hover_film_is_kept_in_a_host(path);
     let behind_the_host = hover_destination || the_pins_film;
     // **The source is launched where it will stand rather than wherever mpv would put itself.** mpv
     // shows its own window as soon as it has opened the file — before this app has found the window

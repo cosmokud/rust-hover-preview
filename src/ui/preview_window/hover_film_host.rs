@@ -1,27 +1,25 @@
 //! The window a hovered film is drawn in: a top-level host of this app's own, so that the
 //! hover's picture can be moved into a pin's window later without beginning a second player.
 //!
-//! **Why it is not the player's own window.** A window of the desktop's cannot be reparented into
-//! the pin's without losing it, and FFmpeg's player has no switch that names a window of this app's:
-//! it is begun off-screen and its own window is restyled and adopted into the host once SDL makes it
-//! (see `pin_film_host`). mpv's film has a window of the desktop's of its own on purpose, and this
-//! host is the Shell's destination for a thumbnail of it rather than its parent.
+//! **Why it is not the player's own window.** A window of the desktop's cannot be turned into the
+//! pin's chrome window without losing it, and the hover wants a destination the Shell can draw a
+//! thumbnail into anyway. Both engines make a window of their own — mpv is launched with no `--wid`
+//! and FFmpeg's player has no embed switch — and this host is the Shell's destination for a
+//! thumbnail of it rather than its parent (see `pin_film_thumbnail`).
 //!
-//! **Why it is top-level and hidden.** Until the player has put a child of its own in it, the host
-//! draws nothing but black — so it is made off the screen, shown only once the player is drawing,
-//! and placed at the hover's own box rather than letting the player place a window of the desktop's.
+//! **Why it is top-level and hidden.** Until the Shell has composed the picture in it, the host
+//! draws nothing but black — so it is made off the screen, shown only once the player's source is
+//! adopted, and placed at the hover's own box.
 //!
 //! **Why it is disabled.** A press on the picture is the hover's press, and a disabled window is
 //! skipped by `WindowFromPoint` — the same arrangement the pin's host keeps (see
 //! `pin_film_host`). It also never activates: a hover must never take the focus from a file being
 //! renamed.
 //!
-//! **An mpv film's host is a destination rather than a parent**: mpv is launched with no `--wid` and
-//! makes its own window, which is adopted as the source and drawn into the host by the Shell (see
-//! `pin_film_thumbnail`). The host is still the thing the hover is, and the thing a pin takes up: it
-//! is promoted into the pin's host, so the registration the source is drawn with is already in the
-//! window that becomes the pin's and a take-up asks neither the player nor the source for anything
-//! (see `pin_film_host::promote_the_hover_film_host`).
+//! The host is still the thing the hover is, and the thing a pin takes up: it is promoted into the
+//! pin's host, so the registration the source is drawn with is already in the window that becomes
+//! the pin's and a take-up asks neither the player nor the source for anything (see
+//! `pin_film_host::promote_the_hover_film_host`).
 //!
 //! The host belongs to the hover, not to the player: a hover that replaces this one takes the same
 //! host when the old player is still in it, and every road that ends the hover destroys it (see
@@ -119,11 +117,10 @@ pub(super) fn the_hover_film_to_adopt(path: &Path) -> Option<HWND> {
         return None;
     }
 
-    // **The registration follows the host rather than a picture being begun again** where the film is
-    // mpv's, whose picture is the Shell's thumbnail of the player's own window (see
-    // `pin_film_thumbnail` and `pin_film_host::promote_the_hover_film_host`); FFmpeg's is the child
-    // the player put in the host. A hover whose player is not drawing yet is not adopted: there is no
-    // picture to move.
+    // **The registration follows the host rather than a picture being begun again**: the host is the
+    // destination of the Shell's thumbnail of the player's own window, whichever engine made it (see
+    // `pin_film_thumbnail` and `pin_film_host::promote_the_hover_film_host`). A hover whose source is
+    // not adopted yet is not taken up: there is no picture to move.
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     if !the_hover_player_was_begun_in_the_host(pid) || !the_hover_player_is_drawing(pid) {
         return None;
@@ -173,21 +170,12 @@ pub(super) fn the_hover_player_was_begun_in_the_host(pid: u32) -> bool {
 /// Whether this player has put a picture in the hover's host — the fact a hover's start waits on,
 /// and the one that says there is a picture to show rather than a black rectangle.
 ///
-/// **A picture in the host is a child of FFmpeg's player, and a thumbnail of mpv's own window** where
-/// the host holds no child at all: mpv's source is adopted as a window of the desktop's and the Shell
-/// draws it into the host (see `pin_film_thumbnail` and `pin_film_host::a_child_of_the_host`).
+/// **The picture is the source the Shell draws into the host**: the player's own window, adopted and
+/// still live (see `pin_film_thumbnail::the_source_is_up`), whichever engine made it.
 pub(super) fn the_hover_player_is_drawing(pid: u32) -> bool {
-    the_hover_players_window(pid).is_some() || pin_film_thumbnail::the_source_is_up(pid)
-}
-
-/// The window mpv made under the hover's host, where it is drawing: the player's window, for the
-/// roads that ask whether a player's window is up (see `video_window_for`).
-pub(super) fn the_hover_players_window(pid: u32) -> Option<HWND> {
-    let host = hover_film_host()?;
-    if !the_hover_player_was_begun_in_the_host(pid) {
-        return None;
-    }
-    pin_film_host::a_child_of_the_host(host, pid)
+    hover_film_host().is_some()
+        && the_hover_player_was_begun_in_the_host(pid)
+        && pin_film_thumbnail::the_source_is_up(pid)
 }
 
 /// Make the hover's host where there is none, put it at `rect`, and leave it off the screen until
@@ -202,8 +190,8 @@ pub(super) unsafe fn take_up_the_hover_film_host(rect: ScreenRegion) -> Option<H
     Some(host)
 }
 
-/// Put the hover's host at the hover's box, without showing it: a move, a relayout or a hover
-/// re-shown at another box, with the player's child following inside it.
+/// Put the host at the hover's box, without showing it: a move, a relayout or a hover re-shown at
+/// another box, with the Shell's picture cropped to it.
 pub(super) unsafe fn place_the_hover_film_host(rect: ScreenRegion) {
     let Some(host) = hover_film_host() else {
         return;
@@ -222,28 +210,9 @@ pub(super) unsafe fn place_the_hover_film_host(rect: ScreenRegion) {
     );
     // **A picture the Shell is drawing into this host follows the box it is drawn in**, which is the
     // thumbnail's crop re-asked of the film's own source rectangle and nothing of the player's (see
-    // `pin_film_thumbnail::the_band_was_placed`). A host with no such picture has nothing to re-point.
+    // `pin_film_thumbnail::the_band_was_placed`). A host with no such picture has nothing to re-point,
+    // and nothing of the player's is ever asked for a box on this road.
     pin_film_thumbnail::the_band_was_placed(host);
-    // FFmpeg's child does not follow its parent's resize: fit it to the box the hover is at now.
-    fit_the_hosted_ffplay(host);
-}
-
-/// Fit the hover's hosted FFmpeg child to the host, where the player is the one the host holds and
-/// the film is FFmpeg's. mpv's child sizes itself and is untouched (see `pin_film_host`).
-fn fit_the_hosted_ffplay(host: HWND) {
-    let path = HOVER_FILM_HOST_PATH
-        .lock()
-        .ok()
-        .and_then(|held| held.clone());
-    if !path.is_some_and(|path| video_route(&path) == VideoRoute::Ffplay) {
-        return;
-    }
-    let Some(pid) = hover_film_host_player() else {
-        return;
-    };
-    if let Some(child) = pin_film_host::a_child_of_the_host(host, pid) {
-        unsafe { ffplay_window::fit_the_hosted_player_to_the_host(child, host) };
-    }
 }
 
 /// Show or hide the hover's host: what a player's first frame is revealed by, and what a hover
@@ -271,8 +240,8 @@ pub(super) unsafe fn reveal_the_hover_film_host(pid: u32, rect: ScreenRegion) {
     unsafe { set_the_hover_film_host_visible(true) };
 }
 
-/// Destroy the hover's host and forget the player it held. Destroying a host takes mpv with it,
-/// so the player is also asked to end where the caller has one (see `kill_player_process`).
+/// Destroy the hover's host and forget the player it held. The player's own window outlives the host,
+/// so it is also asked to end where the caller has one (see `kill_player_process`).
 pub(super) unsafe fn take_down_the_hover_film_host() {
     // A window belongs to the thread that made it. A hover ended from the Explorer hook's thread
     // leaves the host to the loop's own `Hide`, which runs on the host's thread (see
