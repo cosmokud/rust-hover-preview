@@ -103,6 +103,9 @@ impl StandingFilm {
         // a handle to nothing by now; the stand begins from no host at all. Taken down before the
         // player is noted, because taking it down forgets the player beside it.
         unsafe { pin_film_host::take_down_the_pin_film_host() };
+        // And no hover's either: a host the stand does not own would be the one a take-up promotes.
+        unsafe { hover_film_host::take_down_the_hover_film_host() };
+        pin_film_thumbnail::forget_the_thumbnail();
         // And no strips either: they belong to the pin's window rather than to the host, so a
         // take-down of the host leaves whatever handles a test before this one stood behind.
         unsafe { pin_chrome_strips::take_the_strips_down() };
@@ -4475,23 +4478,73 @@ unsafe fn a_window_of_the_players_own() -> HWND {
     .expect("a window of the player's own, in this process")
 }
 
-/// A hover on the thumbnail road: its own host as the destination, its own source adopted into it,
-/// and the player's one placement made. Answers the host and the source the caller destroys.
-unsafe fn a_hover_drawn_through_a_thumbnail(film: &StandingFilm, path: &Path) -> (HWND, HWND, u32) {
+/// Where a hover's film's own size comes from, when the player is one that answers nothing: the
+/// probe's measurement of the same film, held where the launch reads it (see `probed_as` in
+/// `video_hold`).
+fn probed_at(path: &Path, width: u32, height: u32) {
+    video_geometry_cache().insert(
+        VideoGeometryKey {
+            path: path.to_path_buf(),
+            version: file_version(path),
+        },
+        ProbedGeometry::Measured(VideoGeometry {
+            width,
+            height,
+            frame_width: width,
+            frame_height: height,
+            crop: None,
+            duration: None,
+            subtitles: SubtitleStreams::default(),
+            sidecar: None,
+            derived: None,
+            subtitle_codecs: Vec::new(),
+            attachment_codecs: Vec::new(),
+            subtitle_extraction_failed: false,
+        }),
+    );
+}
+
+/// A hover on the film road: its own host as the destination, its own source adopted into it, and
+/// the player's one placement made. Answers the host and the source the caller destroys.
+///
+/// `route` is the player drawing it: **mpv answers its own `video-params` and FFmpeg's player answers
+/// nothing at all**, so the film's own size comes from the probe instead (see
+/// `pin_film_thumbnail::the_films_own_size`).
+unsafe fn a_hover_drawn_through_a_thumbnail(
+    film: &StandingFilm,
+    path: &Path,
+    route: VideoRoute,
+) -> (HWND, HWND, u32) {
     let pid = unsafe { GetCurrentProcessId() };
     let source = unsafe { a_window_of_the_players_own() };
+    // The stand begins from no picture at all: a registration left by another test is not this
+    // film's, and a source window's handle is a handle the system reuses.
+    pin_film_thumbnail::forget_the_thumbnail();
     let host = unsafe { hover_film_host::take_up_the_hover_film_host(film.box_) }
         .expect("the hover's own host");
     hover_film_host::note_hover_film_host_player(pid, path);
-    VIDEO_PID.store(pid, Ordering::SeqCst);
-    mpv_ipc::remember_pipe(pid, "the-hover-sources-pipe", false);
-    mpv_ipc::answer_a_read(
-        pid,
-        "video-params",
-        Some(r#"{"w":1920,"h":1080,"dw":1920,"dh":1080}"#),
-    );
+    match route {
+        VideoRoute::Mpv => {
+            mpv_ipc::remember_pipe(pid, "the-hover-sources-pipe", false);
+            mpv_ipc::answer_a_read(
+                pid,
+                "video-params",
+                Some(r#"{"w":1920,"h":1080,"dw":1920,"dh":1080}"#),
+            );
+        }
+        _ => {
+            mpv_ipc::forget_pipe(pid);
+            probed_at(path, 1920, 1080);
+        }
+    }
     pin_film_thumbnail::clear_the_source_placements();
+    pin_film_thumbnail::clear_the_registrations();
+    // **The adoption is this test's, not the monitor's.** The pass that watches a player is a
+    // thread of the whole process and would adopt a window of the process's own as the picture the
+    // moment it saw a player recorded and no source; it is kept off this one by the pid it follows
+    // being written after the picture is up (see `ensure_noactivate_monitor`).
     unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
+    VIDEO_PID.store(pid, Ordering::SeqCst);
     (host, source, pid)
 }
 
@@ -4506,7 +4559,8 @@ fn a_hover_drawn_through_a_thumbnail_is_taken_up_without_a_player_or_a_placement
         .unwrap_or_else(|held| held.into_inner());
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
-    let (hover, source, pid) = unsafe { a_hover_drawn_through_a_thumbnail(&film, &path) };
+    let (hover, source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Mpv) };
 
     assert_eq!(
         pin_film_thumbnail::the_source_placements(),
@@ -4578,7 +4632,8 @@ fn a_hover_drawn_through_a_thumbnail_that_is_never_pinned_leaves_no_source() {
         .unwrap_or_else(|held| held.into_inner());
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
-    let (_, source, pid) = unsafe { a_hover_drawn_through_a_thumbnail(&film, &path) };
+    let (_, source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Mpv) };
 
     assert!(pin_film_thumbnail::the_source_is_up(pid));
     unsafe { hover_film_host::take_down_the_hover_film_host() };
@@ -4607,9 +4662,36 @@ fn a_film_is_placed_once_and_never_resized_across_a_whole_gesture() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
-    let film = StandingFilm::new();
+    a_whole_gesture_places_a_source_once(StandingFilm::new(), VideoRoute::Mpv);
+}
+
+/// **The same gesture on the other engine**, which is the report this road was put under: dragging
+/// the pin, resizing it, moving it and clicking the picture all paused an FFmpeg film, because its
+/// window was fitted to the host on every step. Nothing on this road touches the source's geometry
+/// after the one placement — `size_the_source` is the only call that can size it, `move_the_source`
+/// is the only other that touches it and carries `SWP_NOSIZE`, and both are posted
+/// (`SWP_ASYNCWINDOWPOS`) so neither can block a drag on the player's thread. What a test can hold
+/// is the count and the box: one placement, no second ask, and the same size from the hover to the
+/// teardown.
+#[test]
+fn an_ffmpeg_film_is_placed_once_and_never_resized_across_a_whole_gesture() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    a_whole_gesture_places_a_source_once(ffplay_standing_film(), VideoRoute::Ffplay);
+}
+
+/// The gesture both engines' tests above are: hover, take-up, the steps of a resize drag, the
+/// release, the settle and the teardown, with the source's box and the placement count read at each
+/// of them (see `a_film_is_placed_once_and_never_resized_across_a_whole_gesture`).
+fn a_whole_gesture_places_a_source_once(film: StandingFilm, route: VideoRoute) {
     let path = PathBuf::from("a-film.mkv");
-    let (host, source, pid) = unsafe { a_hover_drawn_through_a_thumbnail(&film, &path) };
+    let (host, source, pid) = unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, route) };
+    assert_eq!(
+        pin_film_thumbnail::the_registrations(),
+        1,
+        "one source, one registration, whichever engine made it"
+    );
     let placed = unsafe { window_rect(source) };
     let size = (placed.2 - placed.0, placed.3 - placed.1);
     assert_eq!(
@@ -4683,6 +4765,84 @@ fn a_film_is_placed_once_and_never_resized_across_a_whole_gesture() {
     );
 
     let _ = unsafe { DestroyWindow(source) };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+}
+
+/// **A window that replaced itself is a new source, and a new source is adopted once.** FFmpeg's
+/// player can make its window again — and every relaunch of it is another process with another
+/// window — so the monitor's pass finds a pid whose picture it is not drawing, adopts the new
+/// window, places it once, registers it and drops the registration the old one had (see
+/// `pin_film_thumbnail::note_the_source`). A pass that finds the source already up adopts nothing,
+/// which is what keeps one window from being placed twice.
+#[test]
+fn a_source_that_replaced_itself_is_adopted_once_and_registered_once() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (host, first, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Mpv) };
+    assert_eq!(
+        (pin_film_thumbnail::the_source_placements(), pin_film_thumbnail::the_registrations()),
+        (1, 1),
+        "the film's first window is placed once and registered once"
+    );
+
+    // The player's window goes and another takes its place, under the same pid: the pass that
+    // watches the player adopts what it finds, and only what it finds.
+    unsafe { DestroyWindow(first) }.expect("the first source goes");
+    let second = unsafe { a_window_of_the_players_own() };
+    pin_film_thumbnail::clear_the_source_placements();
+    pin_film_thumbnail::clear_the_registrations();
+    let the_monitors_pass = || {
+        if !pin_film_thumbnail::the_source_is_up(pid) {
+            unsafe { pin_film_thumbnail::adopt_the_source(second, pid, host) };
+        }
+    };
+    the_monitors_pass();
+
+    assert_eq!(
+        pin_film_thumbnail::the_source_window(),
+        Some(second),
+        "the record follows the window the player made last"
+    );
+    assert!(
+        pin_film_thumbnail::the_source_is_up(pid),
+        "and the pin is drawing that one"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_source_placements(),
+        1,
+        "the new window takes its own one placement"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_source_replacements(),
+        0,
+        "and is never asked for a second one"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_registrations(),
+        1,
+        "exactly one registration: the one the old window had is dropped with it"
+    );
+
+    // The next pass finds the source up and asks for nothing at all.
+    the_monitors_pass();
+    assert_eq!(
+        (pin_film_thumbnail::the_source_placements(), pin_film_thumbnail::the_registrations()),
+        (1, 1),
+        "a source that is already the picture is not adopted, placed or registered again"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    assert!(
+        !pin_film_thumbnail::the_source_is_up(pid),
+        "and the pin's end leaves no source behind it"
+    );
+
+    let _ = unsafe { DestroyWindow(second) };
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
 }

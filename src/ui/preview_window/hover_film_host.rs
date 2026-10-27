@@ -250,7 +250,13 @@ pub(super) unsafe fn take_down_the_hover_film_host() {
         // It can still be taken off the screen from here: the hide is posted to the host's own
         // thread, so the film does not linger between this road and the loop's `Hide`.
         if let Some(host) = hover_film_host() {
-            let _ = ShowWindowAsync(host, SW_HIDE);
+            if unsafe { IsWindow(host) }.as_bool() {
+                let _ = ShowWindowAsync(host, SW_HIDE);
+            } else {
+                // **The thread that made it has gone, and the window with it**: a handle to nothing
+                // is forgotten rather than answered as the host by every road that asks.
+                forget_the_hover_film_host_that_was_handed_over(host);
+            }
         }
         return;
     }
