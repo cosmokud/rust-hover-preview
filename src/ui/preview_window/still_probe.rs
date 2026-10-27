@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::RECT;
+use windows::Win32::Foundation::{HWND, RECT};
 
 use super::pin_trace::{asked, note_pin_trace};
 
@@ -55,6 +55,9 @@ struct Probe {
     /// The player the pin was showing when the measurement began: the one a still is painted from and
     /// a hide took off the screen, whose end is what `outgoing=` reads.
     pid: u32,
+    /// The host the pin's box is drawn through, as a handle number: what `z=` asks the registration
+    /// for, since the window actually drawn is the Shell's to answer and the record is this app's.
+    host: isize,
     /// The pin's own box on the desk, read while it was still a box.
     area: RECT,
     /// The moment the measurement began — the release that owes the cover, or the hide — so every
@@ -68,6 +71,15 @@ struct Probe {
     /// The first sample that found nothing lit between the paint and the swap, or `None` where the
     /// pin never went black after the cover went up.
     black_at: Option<u128>,
+    /// The first sample that found **the outgoing source's own client** black, or `None` where the
+    /// player drew its own picture all the way to the swap — the field that tells a player that
+    /// stopped drawing from a picture the compositor stopped drawing (see `the_source_reading`).
+    src_first_black_at: Option<u128>,
+    /// The last percentage the outgoing source was read at, which is what `src_lit_at_swap` is taken
+    /// from at the moment the picture changes hands (see `note_swapped`).
+    last_src: Option<u32>,
+    /// What the outgoing source was read at when the picture changed hands.
+    src_lit_at_swap: Option<u32>,
     /// Whether the player drew its own first frame before a still could cover the wait: the race the
     /// road is, written as `painted=lost-race`.
     lost_race: bool,
@@ -108,7 +120,7 @@ impl Probe {
             _ => "no",
         };
         note_pin_trace!(
-            "still probe result painted={painted} black_at={} covered_gap_ms={} generation={}",
+            "still probe result painted={painted} black_at={} covered_gap_ms={} src_first_black_at={} src_lit_at_swap={} generation={}",
             match self.black_at {
                 Some(t) => format!("+{t}ms"),
                 None => "never".to_string(),
@@ -116,6 +128,14 @@ impl Probe {
             match (self.painted_at, self.swapped_at) {
                 (Some(painted), Some(swapped)) => swapped.duration_since(painted).as_millis(),
                 _ => 0,
+            },
+            match self.src_first_black_at {
+                Some(t) => format!("+{t}ms"),
+                None => "never".to_string(),
+            },
+            match self.src_lit_at_swap {
+                Some(pct) => format!("{pct}%"),
+                None => "-".to_string(),
             },
             self.generation,
         );
@@ -143,6 +163,10 @@ pub(super) fn start(pid: u32, generation: u64) {
     if !asked() {
         return;
     }
+    // **What the pin's box is drawn through as this app believes it**, written at the release beside
+    // the measurement it is read against: a run can then tell a registration that stood from one this
+    // app thought stood (see `pin_film_thumbnail::note_the_covering_registration`).
+    super::pin_film_thumbnail::note_the_covering_registration();
     let Some(host) = super::pin_film_host::film_host() else {
         announce_unmeasured(pid, generation, "the pin has no host to be read from");
         return;
@@ -164,11 +188,15 @@ pub(super) fn start(pid: u32, generation: u64) {
     }
     *held = Some(Probe {
         pid,
+        host: host.0 as isize,
         area,
         started: now,
         painted_at: None,
         generation,
         black_at: None,
+        src_first_black_at: None,
+        last_src: None,
+        src_lit_at_swap: None,
         lost_race: false,
         swapped_at: None,
         result: false,
@@ -187,7 +215,7 @@ pub(super) fn start(pid: u32, generation: u64) {
 fn announce_unmeasured(pid: u32, generation: u64, why: &str) {
     note_pin_trace!("still probe unavailable pid {pid}: {why}");
     note_pin_trace!(
-        "still probe result painted=no black_at=never covered_gap_ms=0 generation={generation}"
+        "still probe result painted=no black_at=never covered_gap_ms=0 src_first_black_at=never src_lit_at_swap=- generation={generation}"
     );
 }
 
@@ -220,6 +248,9 @@ pub(super) fn note_swapped() {
         return;
     }
     probe.swapped_at = Some(Instant::now());
+    // **The last reading taken of the outgoing source before the picture changed hands** is what the
+    // swap is answered with: the samples after it are the replacement's (see `the_source_reading`).
+    probe.src_lit_at_swap = probe.last_src;
     // **The player drew its own first frame before a cover could go up**: that is the race this road
     // runs, so it is written as the answer it is rather than as a still that failed.
     probe.lost_race = probe.painted_at.is_none();
@@ -240,11 +271,12 @@ pub(super) fn forget(why: &str) {
 }
 
 /// One sample's record, copied out under the lock so the pixels are read without it held.
-fn the_step() -> Option<(u32, RECT, Instant, Option<Instant>, Option<Instant>)> {
+fn the_step() -> Option<(u32, isize, RECT, Instant, Option<Instant>, Option<Instant>)> {
     let held = PROBE.lock().ok()?;
     let probe = held.as_ref()?;
     Some((
         probe.pid,
+        probe.host,
         probe.area,
         probe.started,
         probe.painted_at,
@@ -267,7 +299,7 @@ fn the_measurement_is_over() -> bool {
 /// The sampling thread: one line a sample, and the pin read off the desk rather than asked of itself.
 fn run() {
     loop {
-        let Some((pid, area, started, painted_at, swapped_at)) = the_step() else {
+        let Some((pid, host, area, started, painted_at, swapped_at)) = the_step() else {
             if the_measurement_is_over() {
                 return;
             }
@@ -275,6 +307,21 @@ fn run() {
         };
         let t = started.elapsed().as_millis();
         let lit = the_pin_is_lit(area);
+        // **The outgoing window's own client is read beside the pin's box**, because the pin going
+        // black cannot say which of the two stopped: a source still lit under a black pin is a
+        // picture the compositor stopped drawing, and a source read black with it is a player that
+        // stopped drawing (see `pin_film_thumbnail::the_sources_window_facts`).
+        let source = super::pin_film_thumbnail::the_sources_picture_is_lit(pid);
+        let facts = super::pin_film_thumbnail::the_sources_window_facts(pid);
+        // **Whose window the box is drawn through, as the record answers it**: the outgoing player is
+        // `pid` and any other is `other`, which is a registration re-pointed rather than one gone.
+        let drawn =
+            super::pin_film_thumbnail::the_standing_source_process(HWND(host as *mut _));
+        let z = match drawn {
+            Some(drawn) if drawn == pid => "pid",
+            Some(_) => "other",
+            None => "none",
+        };
         // **Both facts are this app's own to answer honestly**: whether the player that was on screen
         // is still running, and whether a registration is still standing in the host. A road that
         // claims a still is proven must be read with `outgoing=ended thumb=unregistered`.
@@ -296,7 +343,11 @@ fn run() {
             "waiting"
         };
         note_pin_trace!(
-            "still probe t=+{t}ms pin lit={lit}% outgoing={outgoing} thumb={thumb} state={state}"
+            "still probe t=+{t}ms pin lit={lit}% src lit={} vis={} layered={} topmost={} z={z} outgoing={outgoing} thumb={thumb} state={state}",
+            the_source_reading(source),
+            a_flag(facts.map(|facts| facts.0)),
+            a_flag(facts.map(|facts| facts.1)),
+            a_flag(facts.map(|facts| facts.2)),
         );
 
         let done = {
@@ -314,6 +365,14 @@ fn run() {
             let covered = probe.painted_at.is_some() && probe.swapped_at.is_none();
             if covered && probe.black_at.is_none() && lit == 0 {
                 probe.black_at = Some(t);
+            }
+            // **The source's own reading is kept from the release**, not only inside the covered gap:
+            // where it first went black is the whole of the answer this field exists for.
+            if probe.src_first_black_at.is_none() && source == Some(false) {
+                probe.src_first_black_at = Some(t);
+            }
+            if let Some(pct) = source.map(|lit| u32::from(lit) * 100) {
+                probe.last_src = Some(pct);
             }
             let done = probe
                 .swapped_at
@@ -373,6 +432,26 @@ fn the_pin_is_lit(area: RECT) -> u32 {
     lit * 100 / (GRID * GRID) as u32
 }
 
+/// The outgoing source's own client as one field: the percentage a reading is worth, and which
+/// reading it was — because a window that answered nothing and a window that answered black are two
+/// different facts, and a run must never read one as the other.
+fn the_source_reading(lit: Option<bool>) -> &'static str {
+    match lit {
+        Some(true) => "100%|ok",
+        Some(false) => "0%|black",
+        None => "-|none",
+    }
+}
+
+/// One window fact as a field: `1` or `0` where there was a window to ask, `-` where there was none.
+fn a_flag(asked: Option<bool>) -> &'static str {
+    match asked {
+        Some(true) => "1",
+        Some(false) => "0",
+        None => "-",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,11 +460,15 @@ mod tests {
         let now = Instant::now();
         Probe {
             pid: 0,
+            host: 0,
             area: RECT::default(),
             started: now,
             painted_at: painted.then_some(now),
             generation: 7,
             black_at: None,
+            src_first_black_at: None,
+            last_src: None,
+            src_lit_at_swap: None,
             lost_race: false,
             swapped_at: None,
             result: false,
@@ -441,7 +524,10 @@ mod tests {
         let lines = super::super::pin_trace::noted_lines();
         assert_eq!(
             lines,
-            vec!["still probe result painted=lost-race black_at=never covered_gap_ms=0 generation=7"],
+            vec![
+                "still probe result painted=lost-race black_at=never covered_gap_ms=0 \
+                 src_first_black_at=never src_lit_at_swap=- generation=7"
+            ],
             "a player that won the race is written as that, not as a failed paint"
         );
 
@@ -458,6 +544,43 @@ mod tests {
         assert!(
             lines[1].starts_with("still probe result painted=no black_at=never"),
             "and a road with no still in it never claims one was painted: {lines:?}"
+        );
+        super::super::pin_trace::clear_noted();
+    }
+
+    /// **The one field this measurement was extended for**: a pin read black says nothing about why,
+    /// so the outgoing source's own client is written beside it — and the difference between a source
+    /// that stayed lit (`100%|ok`, a picture the compositor stopped drawing) and one that went black
+    /// with the pin (`0%|black`, a player that stopped drawing) is the whole of what it is read for. A
+    /// window that answered nothing is `-|none`, and is never counted as a black one.
+    #[test]
+    fn the_source_is_read_beside_the_pin_and_says_which_of_the_two_went_black() {
+        assert_eq!(the_source_reading(Some(true)), "100%|ok");
+        assert_eq!(the_source_reading(Some(false)), "0%|black");
+        assert_eq!(the_source_reading(None), "-|none");
+        assert_eq!(
+            (a_flag(Some(true)), a_flag(Some(false)), a_flag(None)),
+            ("1", "0", "-"),
+            "a fact no window answered is not a zero"
+        );
+
+        // The first black reading of the source is where it is counted, and the last reading before
+        // the swap is what the picture changed hands on.
+        super::super::pin_trace::clear_noted();
+        let mut probe = a_probe(true);
+        probe.src_first_black_at = Some(72);
+        probe.last_src = Some(0);
+        probe.swapped_at = Some(Instant::now());
+        probe.src_lit_at_swap = probe.last_src;
+        probe.announce(None);
+        let lines = super::super::pin_trace::noted_lines();
+        let result = lines
+            .iter()
+            .find(|line| line.starts_with("still probe result"))
+            .unwrap_or_else(|| panic!("the source's readings are written with the pin's: {lines:?}"));
+        assert!(
+            result.ends_with("src_first_black_at=+72ms src_lit_at_swap=0% generation=7"),
+            "where the source first went black, and what it was at the swap: {result}"
         );
         super::super::pin_trace::clear_noted();
     }

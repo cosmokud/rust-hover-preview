@@ -6064,6 +6064,27 @@ fn a_press_aims_the_still_at_the_seek_and_a_newer_aim_supersedes_it() {
     assert_eq!((width, height), box_, "asked for at the box the still fills");
     let first = pin_film_thumbnail::the_pressed_generation();
 
+    // **A grab's life is timed from the press**, and the registration the box is drawn through says
+    // what this app believes covers it — the two lines a run of a black pin is read with (see
+    // `pin_film_thumbnail::the_grab_ended`, `pin_film_thumbnail::note_the_covering_registration`).
+    let lines = pin_trace::noted_lines();
+    assert!(
+        lines.iter().any(|line| *line
+            == format!("still grab begun pid {outgoing} at 70.000 generation {first}")),
+        "the grab says when it began, at which aim: {lines:?}"
+    );
+    pin_film_thumbnail::note_the_covering_registration();
+    let lines = pin_trace::noted_lines();
+    let covering = lines
+        .iter()
+        .find(|line| line.starts_with("covering registration: "))
+        .unwrap_or_else(|| panic!("the registration the pin is drawn through is written down: {lines:?}"));
+    assert!(
+        covering.starts_with(&format!("covering registration: source {source:?} pid {outgoing} dest="))
+            && covering.ends_with(" visible=1 standing=1"),
+        "the source, the player, the box it is drawn in and that it stood: {covering}"
+    );
+
     // (b) The hand moves: the aim is re-issued, and what the older grab would have painted is nobody's
     // picture — nothing painted, nothing unregistered, nothing ended.
     with_pin(|pin| pin.transport.seeking = Some(100.0));
@@ -6084,6 +6105,11 @@ fn a_press_aims_the_still_at_the_seek_and_a_newer_aim_supersedes_it() {
             || line.starts_with("outgoing player ended at once")),
         "a superseded generation neither paints nor kills anything: {lines:?}"
     );
+    assert!(
+        lines.iter().any(|line| line.starts_with("still grab dropped after ")
+            && line.ends_with("ms: superseded")),
+        "a grab the hand moved off reaches that end and says which one it was: {lines:?}"
+    );
     assert!(!pin_film_thumbnail::a_still_stands(), "and nothing stands where a cover would be");
     assert_eq!(
         pin_film_thumbnail::the_unregistrations(),
@@ -6096,6 +6122,15 @@ fn a_press_aims_the_still_at_the_seek_and_a_newer_aim_supersedes_it() {
     assert!(
         pin_film_thumbnail::a_grab_landed(box_.0, box_.1),
         "the newest aim is the one waiting"
+    );
+    let landed = format!(": {}x{} painting=no", box_.0, box_.1);
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("still grab landed after ")
+                && line.ends_with(&landed)),
+        "a frame that lands before the release is in hand rather than painted: {:?}",
+        pin_trace::noted_lines()
     );
     restart_pinned_player(&path, film.box_, 100.0, false, RestartReason::Seek);
     assert!(
