@@ -777,6 +777,49 @@ pub(super) fn a_registration_stands() -> bool {
         .is_some_and(|held| held.registration != 0)
 }
 
+/// **The registration the pin's box is being drawn through, as this app believes it**: the source
+/// window, the player it belongs to, the destination it was last handed, whether that window is on
+/// the screen and whether a registration stands at all — one line, written at a release.
+///
+/// It is the same picture the still probe's own samples are read beside, at the one moment that
+/// matters: a pin read black with this line saying a registration stood over a visible source is a
+/// box nothing was drawn in, while the same black with `standing=0` is a registration this app never
+/// had. `standing` is the record's own answer and not the Shell's (see `still_probe`).
+pub(super) fn note_the_covering_registration() {
+    let (registered, process, destination, standing) = THUMBNAIL
+        .lock()
+        .ok()
+        .map(|held| {
+            (
+                held.registered,
+                held.registered_process,
+                held.shown.map(|shown| shown.destination),
+                held.registration != 0 && held.registered != 0,
+            )
+        })
+        .unwrap_or((0, 0, None, false));
+    // Safety: the handle is the source this module adopted from a player's own window, and the
+    // question is about the window rather than a change to it.
+    let visible = registered != 0
+        && unsafe { IsWindowVisible(HWND(registered as *mut _)) }.as_bool();
+    let destination = match destination {
+        Some((left, top, right, bottom)) => format!(
+            "{}x{}+{}+{}",
+            right - left,
+            bottom - top,
+            left,
+            top
+        ),
+        None => "none".to_string(),
+    };
+    note_pin_trace!(
+        "covering registration: source {:?} pid {process} dest={destination} visible={} standing={}",
+        HWND(registered as *mut _),
+        u8::from(visible),
+        u8::from(standing),
+    );
+}
+
 /// **The player whose window the registration standing in `host` is drawing**, where one stands: the
 /// picture that host has on screen, whoever began it.
 ///
@@ -1508,6 +1551,33 @@ pub(super) fn the_sources_picture_is_lit(pid: u32) -> Option<bool> {
     // read a few of its pixels or report that they cannot.
     let client = unsafe { client_size(source) }.unwrap_or((0, 0));
     Some(the_source_sample(source, (client.0.max(1), client.1.max(1))))
+}
+
+/// The same window read as what it is rather than what it draws: **whether it is on the screen, and
+/// the two extended styles that decide whether the Shell can compose it at all** — `visible`,
+/// `layered`, `topmost` — or nothing where this player has no source window, which is a reading no
+/// window answered.
+///
+/// It is `the_sources_picture_is_lit`'s companion and nothing else asks it: a pin read black with its
+/// source still lit is a picture the compositor stopped drawing, and the same black with the source's
+/// own window black is a player that stopped drawing — two answers the pin's pixels alone cannot tell
+/// apart (see `still_probe`).
+pub(super) fn the_sources_window_facts(pid: u32) -> Option<(bool, bool, bool)> {
+    if !the_source_is_up(pid) {
+        return None;
+    }
+    let source = the_source_window()?;
+    // Safety: the handle is the source this module adopted from a player's own window, and both
+    // questions are about the window rather than changes to it.
+    unsafe {
+        let visible = IsWindowVisible(source).as_bool();
+        let style = GetWindowLongPtrW(source, GWL_EXSTYLE) as u32;
+        Some((
+            visible,
+            style & WS_EX_LAYERED.0 != 0,
+            style & WS_EX_TOPMOST.0 != 0,
+        ))
+    }
 }
 
 /// Whether a few pixels of the source's own window are lit: **the only "it has drawn" there is for a
@@ -2278,6 +2348,11 @@ pub(super) fn begin_the_seek_still() {
         let Ok(mut held) = PRESSED_STILL.lock() else {
             return;
         };
+        // A still the hand has moved off is a grab whose frame is nobody's picture: it reaches its end
+        // here rather than vanishing with the record (see `the_grab_ended`).
+        if let Some(older) = held.as_mut() {
+            the_grab_ended(older, "dropped", format_args!(": superseded"));
+        }
         let in_flight = held
             .as_ref()
             .is_some_and(|still| still.in_flight && still.host == host.0 as isize);
@@ -2289,6 +2364,8 @@ pub(super) fn begin_the_seek_still() {
             frame: None,
             cover_for: None,
             in_flight,
+            begun: Instant::now(),
+            reported: false,
         });
         !in_flight
     };
@@ -2297,6 +2374,10 @@ pub(super) fn begin_the_seek_still() {
         path_name(&path),
         size.0,
         size.1,
+    );
+    note_pin_trace!(
+        "still grab begun pid {} at {at:.3} generation {generation}",
+        VIDEO_PID.load(Ordering::SeqCst),
     );
     arm_the_grab(start, (generation, at, size), path);
 }
@@ -2339,13 +2420,36 @@ fn the_still_worker(mut asked: (u64, f64, (u32, u32)), path: PathBuf) {
 /// One aim's decode: the frame FFmpeg's player opens on for `-ss <aim>`, at the box's own shape.
 #[cfg(not(test))]
 fn grab_the_still(path: &Path, aim: f64, size: (u32, u32)) -> Option<((u32, u32), Vec<u8>)> {
-    let at = the_keyframe_at_or_before(path, aim).unwrap_or(aim);
+    // **The two steps are timed apart and to their own beginnings**, so a decode that never lands says
+    // which half it never left rather than only that it was slow (see `the_still_worker`).
+    let probed = Instant::now();
+    let keyframe = the_keyframe_at_or_before(path, aim);
+    match keyframe {
+        Some(at) => note_pin_trace!(
+            "still probe of the keyframe answered after {}ms: {at:.3}",
+            probed.elapsed().as_millis(),
+        ),
+        None => note_pin_trace!(
+            "still probe of the keyframe failed after {}ms: the container answered no packet",
+            probed.elapsed().as_millis(),
+        ),
+    }
+    // A failed probe leaves the grab at the aim, and the grab is then not a drop: the decode is asked
+    // for the second the hand chose and lands or does not on its own (see `the_keyframe_at_or_before`).
+    let at = keyframe.unwrap_or(aim);
     note_pin_trace!(
         "seek keyframe offset {}ms at {at:.3} for {}",
         ((aim - at).max(0.0) * 1000.0).round() as i64,
         path_name(path),
     );
+    let begun = Instant::now();
     let frame = pin_bubble::grab_a_frame(path, at, size, Duration::from_millis(STILL_GRAB_BOUND_MS))?;
+    note_pin_trace!(
+        "still frame answered after {}ms: {}x{}",
+        begun.elapsed().as_millis(),
+        size.0,
+        size.1,
+    );
     Some((size, frame))
 }
 
@@ -2425,6 +2529,29 @@ struct PressedStill {
     cover_for: Option<u32>,
     /// Whether a worker is decoding for this still, so a newer aim is queued rather than stacked.
     in_flight: bool,
+    /// When this aim was asked for, which is what every `still grab … after <N>ms` is counted from.
+    begun: Instant,
+    /// Whether this grab has reached its one end, so a run never shows a grab with two ends — or, if
+    /// this were ever false where a grab is gone, one with none (see `the_grab_ended`).
+    reported: bool,
+}
+
+/// **The one end a grab owes, and one only**: it lands, it is dropped, or it loses to the swap — and
+/// every road that lets go of a still comes through here, so a grab that reached none of them is a
+/// line missing from the run rather than a silence nobody notices (see `PressedStill::reported`).
+///
+/// `end` names the end and `detail` is what came of it, written after the milliseconds the end took:
+/// `still grab landed after <N>ms: <W>x<H> painting=<yes|no>`, `still grab dropped after <N>ms:
+/// <reason>`, `still grab lost to the swap after <N>ms`.
+fn the_grab_ended(still: &mut PressedStill, end: &str, detail: std::fmt::Arguments<'_>) {
+    if still.reported {
+        return;
+    }
+    still.reported = true;
+    note_pin_trace!(
+        "still grab {end} after {}ms{detail}",
+        still.begun.elapsed().as_millis()
+    );
 }
 
 /// The still the last press asked for, or nothing between presses: one at a time, because a pin has
@@ -2439,6 +2566,9 @@ static PRESSED_GENERATION: AtomicU64 = AtomicU64::new(0);
 fn forget_the_pressed_still() {
     PRESSED_GENERATION.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut held) = PRESSED_STILL.lock() {
+        if let Some(still) = held.as_mut() {
+            the_grab_ended(still, "dropped", format_args!(": pin gone"));
+        }
         *held = None;
     }
 }
@@ -2465,6 +2595,7 @@ pub(super) fn stand_the_pressed_still(pid: u32, seconds: f64) -> bool {
         };
         if (still.aim - seconds).abs() > STILL_AIM_SECONDS {
             // A relaunch the hand did not aim this still at: nothing of it is this picture.
+            the_grab_ended(still, "dropped", format_args!(": superseded"));
             *held = None;
             drop(held);
             note_pin_trace!("placeholder unavailable pid {pid}: the still is for another second");
@@ -2586,7 +2717,9 @@ fn land_the_still(
         still.in_flight = false;
         if still.generation != generation || (still.aim - aim).abs() > STILL_AIM_SECONDS {
             // Superseded while the decode ran: this frame is nobody's picture, and the aim that is
-            // waiting now is the one the worker takes up next.
+            // waiting now is the one the worker takes up next. **The end this frame belongs to is the
+            // aim it was asked for**, which was written as dropped when the newer one replaced it —
+            // the record here is still waiting and owes nothing yet.
             Some((still.generation, still.aim, still.size))
         } else {
             match answered {
@@ -2595,7 +2728,18 @@ fn land_the_still(
                 {
                     // **A cover owed is painted now**; one that is not waits in hand for the release
                     // that will ask for it.
-                    match still.cover_for.take() {
+                    let owed = still.cover_for.take();
+                    the_grab_ended(
+                        still,
+                        "landed",
+                        format_args!(
+                            ": {}x{} painting={}",
+                            size.0,
+                            size.1,
+                            if owed.is_some() { "yes" } else { "no" },
+                        ),
+                    );
+                    match owed {
                         Some(pid) => {
                             painting =
                                 Some((still.host, pid, still.aim, size, pixels, still.generation));
@@ -2603,7 +2747,10 @@ fn land_the_still(
                         None => still.frame = Some((size, pixels)),
                     }
                 }
-                _ => unanswered = still.cover_for.take(),
+                _ => {
+                    the_grab_ended(still, "dropped", format_args!(": decode failed"));
+                    unanswered = still.cover_for.take();
+                }
             }
             None
         }
@@ -2626,6 +2773,9 @@ fn the_picture_changed_hands() {
         let Ok(mut held) = PRESSED_STILL.lock() else {
             return;
         };
+        if let Some(still) = held.as_mut() {
+            the_grab_ended(still, "lost to the swap", format_args!(""));
+        }
         let owed = held.as_ref().and_then(|still| still.cover_for);
         *held = None;
         owed
