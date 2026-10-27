@@ -1792,7 +1792,7 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     // to take the picture over is not the picture until it is ready, so what a standing registration
     // draws is read out of the record rather than out of the source this road has just adopted (see
     // `hand_the_picture_over`).
-    let number = if held.registration != 0 {
+    let number = if held.registration != 0 && held.registered != 0 {
         held.registered
     } else {
         SOURCE.load(Ordering::SeqCst)
