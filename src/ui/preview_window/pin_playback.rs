@@ -316,8 +316,9 @@ fn relaunch_pinned_player(
         // **A hover is held, whatever the run's cover road is**: its player is the frame the pin's is
         // begun on and is read back before it is let go of, so it is never replaced by a still of this
         // app's (see `begin_the_pinned_film_at_the_hovers_frame`). The hold is the dead suspension
-        // road's, which for an mpv hover is the pipe it answers on anyway.
-        (FreezeRoad::Capture, true) => {
+        // road's, which for an mpv hover is the pipe it answers on anyway — and `hide` takes the same
+        // one, because the window it hides is the picture the pin is being begun on.
+        (FreezeRoad::Capture | FreezeRoad::Hide, true) => {
             freeze_the_outgoing_picture(replaced, FreezeRoad::Suspend);
             false
         }
@@ -530,6 +531,20 @@ pub(super) fn freeze_the_outgoing_picture(pid: u32, road: FreezeRoad) -> bool {
         return false;
     }
 
+    if road == FreezeRoad::Hide {
+        // **FFmpeg's player only**: an mpv player was frozen down its pipe above, on every road, and
+        // a window of mpv's is not this app's to take off the screen (see `FreezeRoad::Hide`).
+        if mpv_ipc::answers_properties(pid) {
+            return false;
+        }
+        if !pin_film_thumbnail::hide_the_outgoing_source(pid) {
+            return false;
+        }
+        note_pin_trace!("outgoing picture hidden pid {pid}: the pin keeps its last composed frame");
+        super::hide_probe::start(pid);
+        return true;
+    }
+
     // **An engine with no command channel is suspended rather than told** (see `FreezeRoad`): the
     // handful of calls that stop it drawing is the whole of the freeze, and the frame it last put up
     // is left exactly where it is.
@@ -571,8 +586,28 @@ pub(super) fn freeze_the_outgoing_picture(pid: u32, road: FreezeRoad) -> bool {
 /// is a toggle and not a setting besides: a held film is already a still frame, and a second key
 /// would set it going. **Neither dead arm is reached by a pin's own relaunch on the road that ships.**
 ///
-/// `off` covers nothing, which is the road before there was a cover at all: the film walks on under
-/// the registration and jumps back to the second the relaunch asked for when the new source draws.
+/// **`hide` is the road this build is measuring, and it is FFmpeg's player's alone**: the player being
+/// replaced is not told anything — no key, no suspension, no capture — and is not ended either. Its
+/// own window is taken off the screen with the one hide this app has (see
+/// `pin_film_thumbnail::hide_the_outgoing_source`) and left standing, so the registration the pin's host
+/// wears goes on drawing a window the Shell is not showing. **Everything then rests on one sentence that
+/// had never been measured**: that the Shell leaves a hidden window's thumbnail frozen at its last frame
+/// rather than stopping it (see the module note of `pin_film_thumbnail`). If it does, the pin holds the
+/// frame the film was at for the whole wait with nothing decoding into it, and the player is ended after
+/// the swap like any other; if it does not, the pin goes black and one line says so. That is why the
+/// road is instrumented where the pixels are — `hide probe t=…` per sample and one
+/// `hide probe result frozen=… black_at=…` at the swap, read off the desktop (see `hide_probe`) — and
+/// why `capture` stays the road that ships until it has been read on glass.
+///
+/// **A hidden player still holds its file, its sound device and its GPU device** for the length of the
+/// gap, which is what made `suspend` slower than no cover at all; whether it holds the replacement back
+/// the same way is the second thing the probe's timings answer. Its sound is **not** muted: the only
+/// thing FFmpeg's player can be told is a key, and a mute key is a toggle on a window that is not being
+/// shown — a second one is a silent pin. The overlap is the one the `off` road already has, and it lasts
+/// the length of the swap.
+///
+/// `off` covers nothing, which is the road before there was a cover at all: the film walks on under the
+/// registration and jumps back to the second the relaunch asked for when the new source draws.
 /// It is also what a failed capture falls back to for that one relaunch, without the setting being
 /// changed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -580,16 +615,18 @@ pub(super) enum FreezeRoad {
     Capture,
     Suspend,
     Key,
+    Hide,
     Off,
 }
 
-/// `RHP_FREEZE` as a cover road: `suspend`, `key` and `off` are the named arms, and anything else —
-/// including nothing at all, and the value this build writes for its own default — is the capture
-/// (see `FreezeRoad`).
+/// `RHP_FREEZE` as a cover road: `suspend`, `key`, `hide` and `off` are the named arms, and anything
+/// else — including nothing at all, and the value this build writes for its own default — is the
+/// capture (see `FreezeRoad`).
 pub(super) fn freeze_road_from(setting: Option<&str>) -> FreezeRoad {
     match setting.map(str::trim) {
         Some("suspend") => FreezeRoad::Suspend,
         Some("key") => FreezeRoad::Key,
+        Some("hide") => FreezeRoad::Hide,
         Some("off") => FreezeRoad::Off,
         _ => FreezeRoad::Capture,
     }
