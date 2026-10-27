@@ -308,6 +308,14 @@ fn relaunch_pinned_player(
     // being confirmed does, so it still names the process that was there a moment ago.
     let replaced = VIDEO_PID.load(Ordering::SeqCst);
 
+    // **The picture on screen is frozen before anything is begun over it**, and it is the whole of
+    // the placeholder a relaunch is owed: the player being replaced is left standing until its
+    // replacement has drawn (see `retire_replaced_player`), and a player left playing walks the film
+    // on through the whole wait and then jumps back to the second that was asked for, which reads as
+    // a stall and a jump rather than as a wait behind a still frame (see
+    // `freeze_the_outgoing_picture`).
+    freeze_the_outgoing_picture(replaced);
+
     // **A relaunch is a new generation**, so a replacement an earlier one began can never publish
     // under this one, and the unpublished one is killed BEFORE this replacement is spawned rather
     // than after it. A spawn first leaves a start-to-kill window in which the stale player can
@@ -328,12 +336,12 @@ fn relaunch_pinned_player(
     }
 
     // **A hover's second is read off the player rather than counted by this app**, and the read is
-    // asked before the pipe is dropped: the frame the user is looking at is mpv's own last one, and
-    // the clock this app keeps is an estimate of where that frame is — good enough to begin a film
-    // on and not good enough to *stand* one on, which is what the handover asks (see
-    // `pin_film_host::the_hosted_frame_is_presented`). A read that does not answer leaves the
-    // estimate as the second to begin on, which is the launch this road had before the hover was
-    // frozen at all.
+    // asked after the freeze above and before the pipe is dropped: the frame the user is looking at
+    // is mpv's own last one, and the clock this app keeps is an estimate of where that frame is —
+    // good enough to begin a film on and not good enough to *stand* one on, which is what the
+    // handover asks (see `pin_film_host::the_hosted_frame_is_presented`). A read that does not
+    // answer leaves the estimate as the second to begin on, which is the launch this road had before
+    // the hover was frozen at all.
     let frozen = if handover {
         freeze_the_hover(replaced)
     } else {
@@ -413,21 +421,71 @@ fn relaunch_pinned_player(
 
 /// Hold the hover where it stands and read back the second its picture is at.
 ///
-/// **Pausing is the freeze.** mpv leaves the frame it was showing on screen when it is told to hold,
-/// so the hover window the user is looking at keeps that frame for as long as the take-up takes —
-/// nothing is captured, nothing is painted over it, and nothing hides it (see
+/// **Pausing is the freeze** (see `freeze_the_outgoing_picture`), and what is left here is the read:
+/// mpv leaves the frame it was showing on screen when it is told to hold, so the hover window the
+/// user is looking at keeps that frame for as long as the take-up takes — nothing is captured,
+/// nothing is painted over it, and nothing hides it (see
 /// `begin_the_pinned_film_at_the_hovers_frame`).
 ///
-/// `None` where the player did not take the hold or did not answer with its position, which leaves
-/// the caller's own clock as the second to begin the pin on: a frozen picture this app cannot read is
-/// still a frozen picture, and the launch is the one it would have been before the read existed (see
+/// `None` where the player did not answer with its position, which leaves the caller's own clock as
+/// the second to begin the pin on: a frozen picture this app cannot read is still a frozen picture,
+/// and the launch is the one it would have been before the read existed (see
 /// `mpv_ipc::get_property`).
 fn freeze_the_hover(pid: u32) -> Option<f64> {
-    if !mpv_ipc::set_paused(pid, true) {
-        return None;
+    mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse().ok())
+}
+
+/// **Freeze the picture on screen before its replacement is launched**, so that the whole wait for a
+/// new source to draw is a still frame rather than the film walking on and then jumping back to the
+/// second the relaunch asked for.
+///
+/// It is a hold of the player being replaced and nothing else: no capture, no scaling, no painting
+/// over the band and no hide. The registration the host wears goes on drawing that window (see
+/// `pin_film_thumbnail::the_source_is_standing`), and a player told to hold keeps the frame it was
+/// showing, which is exactly the placeholder the wait is owed. The player is never resumed: it is
+/// ended once its replacement has taken the picture over (see `settle_video_retirement`).
+///
+/// The two engines are told differently and both instantly. mpv takes `set_property pause true` down
+/// the pipe it listens on. FFmpeg's player is posted the pause key the bar's own button posts, which
+/// is the one thing a running player of this app's can be told at all (see `video_key_pause_for`),
+/// and a posted key is directed at the player's own window whatever that window's extended style
+/// says.
+///
+/// **A film already held is already frozen, and the key toggles**: a key posted to a player that is
+/// holding would set it going again, which is the one thing this must not do. What says so is the
+/// hold this app has written down for the transport — including a hold still owed to a player that
+/// has not been given it yet, which is a player that is still playing (see `PinTransport`).
+///
+/// Answers whether a player on screen was frozen, which is nothing on screen where the player had no
+/// window of its own to be told through: that wait is the walk-and-jump it always was rather than a
+/// failure.
+fn freeze_the_outgoing_picture(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
     }
 
-    mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse().ok())
+    if mpv_ipc::set_paused(pid, true) {
+        note_pin_trace!("outgoing picture frozen pid {pid} by the pipe");
+        return true;
+    }
+
+    if the_player_on_screen_is_held() {
+        return true;
+    }
+
+    if video_key_pause_for(pid) {
+        note_pin_trace!("outgoing picture frozen pid {pid} by the key");
+        return true;
+    }
+
+    false
+}
+
+/// Whether the player the pin is drawing is already holding its film, which is what says the pause
+/// key must not be posted to it (see `freeze_the_outgoing_picture`).
+fn the_player_on_screen_is_held() -> bool {
+    pinned_playback_state()
+        .is_some_and(|(_, _, transport, _)| transport.paused_at.is_some() && !transport.pending_hold)
 }
 
 /// Whether the pinned window is showing a held file, for a relaunch that has no transport of its
