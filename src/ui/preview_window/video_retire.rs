@@ -107,6 +107,17 @@ pub(super) fn retire_replaced_player(retiring: u32, replacement: u32) {
     *held = parked;
 }
 
+/// A player a cover ended at once is not parked any more: the wait that record stands for was a
+/// picture changing hands, and a still of this app's ended the player before that was needed (see
+/// `pin_film_thumbnail::stand_the_still`).
+pub(super) fn forget_the_retirement_of(pid: u32) {
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        if held.is_some_and(|pending| pending.retiring == pid) {
+            *held = None;
+        }
+    }
+}
+
 /// One line when a retired player is confirmed gone: **the last step of a relaunch**, written only
 /// where the player really has gone so a run can read the swap and the ending in the order they
 /// happened.

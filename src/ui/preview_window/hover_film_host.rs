@@ -63,6 +63,13 @@ unsafe extern "system" fn the_default_answer(
         unsafe { pin_film_host::paint_the_host_behind_the_film(hwnd, HDC(wparam.0 as *mut _)) };
         return LRESULT(1);
     }
+    // **And a cover this app painted is this window's picture too**, because the pin takes this very
+    // window up rather than making another one: a paint of it stands on the cover the pin's own road
+    // put there (see `pin_film_host::answer_the_paint_of_a_cover`).
+    if let Some(answer) = unsafe { pin_film_host::answer_the_paint_of_a_cover(hwnd, msg) }
+    {
+        return answer;
+    }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 

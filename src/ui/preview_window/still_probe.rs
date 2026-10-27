@@ -1,14 +1,19 @@
 //! **What the pin is actually showing while a relaunch has no source of its own drawing in it**,
 //! read off the desktop rather than off this app's own bookkeeping.
 //!
-//! It began as the measurement of one sentence and it is now the measurement of the road that ships.
-//! A seek press asks FFmpeg for the frame on screen while the hand is still on the bar, and the
-//! release paints it into the pin's host, lets the registration go and ends the outgoing player at
-//! once (see `pin_film_thumbnail::stand_the_pressed_still`). **Whether that still is what the pin
-//! then shows is not a question this app can answer about itself** — a DWM thumbnail cannot outlive
-//! the drawing of its source, so the still is what replaces it — and the pin's own box is sampled as
-//! composed on the desk instead: a percentage of lit points, twenty times a second, from the
-//! unregister to a moment past the swap.
+//! A seek press asks FFmpeg for the frame the seek is *going to* — the destination, so the cover does
+//! not have to beat the 106-157 ms a real press-to-release costs, only the ~520 ms the replacement
+//! player takes to draw its first frame — and the release begins that replacement regardless. The
+//! grab lands afterwards and paints the pin's host, flushes, lets the registration go and ends the
+//! outgoing player at once (see `pin_film_thumbnail::stand_the_still`). **Whether that still is what
+//! the pin then shows is not a question this app can answer about itself** — a DWM thumbnail cannot
+//! outlive the drawing of its source, so a picture of this app's own is what replaces it — and the
+//! pin's own box is sampled as composed on the desk instead: a percentage of lit points, twenty times
+//! a second, from the paint to a moment past the swap.
+//!
+//! **Every measurement ends with one result line**, whatever end it reaches: the swap, a newer
+//! relaunch, the pin going, or the bound — including a player that won the race to its own first
+//! frame, which is written `painted=lost-race` rather than as a still that failed.
 //!
 //! The same sample convicted `RHP_FREEZE=hide`: measured on glass, a hidden source's thumbnail went
 //! black **18 to 71 ms** after the hide and stayed black until the swap — gaps of 415, 500, 520, 555
@@ -47,19 +52,25 @@ const GRID: u32 = 16;
 
 /// One relaunch's measurement.
 struct Probe {
-    /// The player the pin was showing when the measurement began: the one a still was painted from
-    /// and a hide took off the screen, whose end is what `outgoing=` reads.
+    /// The player the pin was showing when the measurement began: the one a still is painted from and
+    /// a hide took off the screen, whose end is what `outgoing=` reads.
     pid: u32,
     /// The pin's own box on the desk, read while it was still a box.
     area: RECT,
-    /// The moment the still was painted and the registration let go — or, on the hide road, the
-    /// moment of the hide: every `t=+<N>ms` is counted from it, and so is `covered_gap_ms`.
+    /// The moment the measurement began — the release that owes the cover, or the hide — so every
+    /// `t=+<N>ms` is counted from it.
     started: Instant,
-    /// The first sample that found nothing lit, or `None` where the pin never went black.
+    /// The moment the still was painted, or `None` while none has been: **the gap that counts is from
+    /// here**, because before it the pin is the outgoing player's own picture (see `note_painted`).
+    painted_at: Option<Instant>,
+    /// The seek this measurement belongs to, so a paint for another one is not counted here.
+    generation: u64,
+    /// The first sample that found nothing lit between the paint and the swap, or `None` where the
+    /// pin never went black after the cover went up.
     black_at: Option<u128>,
-    /// Whether a still this app painted was what the pin was meant to be showing: the road's whole
-    /// claim, and what `painted=` answers (see `announce`).
-    painted: bool,
+    /// Whether the player drew its own first frame before a still could cover the wait: the race the
+    /// road is, written as `painted=lost-race`.
+    lost_race: bool,
     /// The moment the picture changed hands, or `None` while the swap is still owed (see
     /// `note_swapped`).
     swapped_at: Option<Instant>,
@@ -87,21 +98,26 @@ impl Probe {
         if let Some(note) = note {
             note_pin_trace!("still probe ended without a swap: {note}");
         }
+        // **`painted=yes` is the road proven**: a still of this app's went up and no sample between it
+        // and the swap found the pin black. `no` is a pin that went black under the cover, `lost-race`
+        // is a player that drew its own first frame first, and a measurement that ends before either
+        // is `no` — nothing was painted.
+        let painted = match (self.lost_race, self.painted_at) {
+            (true, _) => "lost-race",
+            (false, Some(_)) if self.black_at.is_none() => "yes",
+            _ => "no",
+        };
         note_pin_trace!(
-            "still probe result painted={} black_at={} covered_gap_ms={}",
-            if self.painted && self.black_at.is_none() {
-                "yes"
-            } else {
-                "no"
-            },
+            "still probe result painted={painted} black_at={} covered_gap_ms={} generation={}",
             match self.black_at {
                 Some(t) => format!("+{t}ms"),
                 None => "never".to_string(),
             },
-            self.swapped_at
-                .unwrap_or_else(Instant::now)
-                .duration_since(self.started)
-                .as_millis(),
+            match (self.painted_at, self.swapped_at) {
+                (Some(painted), Some(swapped)) => swapped.duration_since(painted).as_millis(),
+                _ => 0,
+            },
+            self.generation,
         );
     }
 }
@@ -113,30 +129,36 @@ static PROBE: Mutex<Option<Probe>> = Mutex::new(None);
 /// Whether the sampling thread is up, so one probe is one thread however many relaunches it spans.
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// Begin measuring a relaunch: the player the pin was showing, and whether a still of this app's was
-/// painted under the registration (`true`) or the film is waiting on a source that is off the screen
-/// or gone (`false`, the hide road's answer).
+/// Begin measuring a relaunch: the player the pin was showing, and the seek the measurement belongs
+/// to.
+///
+/// It is begun at the **release** that owes the cover — not at the paint, which a grab that never
+/// lands would never reach, and which is what left the last build with a probe that wrote no result at
+/// all. The gap that counts is the stretch from the paint to the swap (see `note_painted`), and a
+/// measurement that reaches the swap without a paint is the race the player won.
 ///
 /// Nothing is measured without `RHP_PIN_TRACE`, and nothing is measured for a pin with no host to be
 /// read from — a measurement with no box to sample has nothing to answer.
-pub(super) fn start(pid: u32, painted: bool) {
+pub(super) fn start(pid: u32, generation: u64) {
     if !asked() {
         return;
     }
     let Some(host) = super::pin_film_host::film_host() else {
-        note_pin_trace!("still probe unavailable pid {pid}: the pin has no host to be read from");
+        announce_unmeasured(pid, generation, "the pin has no host to be read from");
         return;
     };
     // Safety: the host is this app's own window, and what is asked of it is where its client stands
     // on the screen.
     let Some(area) = (unsafe { super::pin_taskbar_mirror::client_area_on_the_screen(host) }) else {
-        note_pin_trace!("still probe unavailable pid {pid}: the pin's box is not on the screen");
+        announce_unmeasured(pid, generation, "the pin's box is not on the screen");
         return;
     };
     let now = Instant::now();
     let Ok(mut held) = PROBE.lock() else {
         return;
     };
+    // **A newer relaunch does not swallow the older one's answer**: what the last one measured is
+    // written out in full before the record is replaced.
     if let Some(mut older) = held.take() {
         older.announce(Some("a newer relaunch is the one measured"));
     }
@@ -144,8 +166,10 @@ pub(super) fn start(pid: u32, painted: bool) {
         pid,
         area,
         started: now,
+        painted_at: None,
+        generation,
         black_at: None,
-        painted,
+        lost_race: false,
         swapped_at: None,
         result: false,
     });
@@ -155,6 +179,32 @@ pub(super) fn start(pid: u32, painted: bool) {
         return;
     }
     std::thread::spawn(run);
+}
+
+/// A measurement that has nothing to measure still answers, **once and with the line every other end
+/// writes**: a run is never left with a relaunch whose measurement said nothing at all (see
+/// `announce`).
+fn announce_unmeasured(pid: u32, generation: u64, why: &str) {
+    note_pin_trace!("still probe unavailable pid {pid}: {why}");
+    note_pin_trace!(
+        "still probe result painted=no black_at=never covered_gap_ms=0 generation={generation}"
+    );
+}
+
+/// The still this measurement was waiting on has been painted: **the gap the probe answers for begins
+/// here**, since before it the pin is the outgoing player's own picture and after it a still of this
+/// app's own (see `pin_film_thumbnail::stand_the_still`).
+pub(super) fn note_painted(generation: u64) {
+    let Ok(mut held) = PROBE.lock() else {
+        return;
+    };
+    let Some(probe) = held.as_mut() else {
+        return;
+    };
+    if probe.generation != generation || probe.painted_at.is_some() {
+        return;
+    }
+    probe.painted_at = Some(Instant::now());
 }
 
 /// The picture has changed hands, so the gap is over: the result is written once, here, and the
@@ -170,6 +220,9 @@ pub(super) fn note_swapped() {
         return;
     }
     probe.swapped_at = Some(Instant::now());
+    // **The player drew its own first frame before a cover could go up**: that is the race this road
+    // runs, so it is written as the answer it is rather than as a still that failed.
+    probe.lost_race = probe.painted_at.is_none();
     probe.announce(None);
 }
 
@@ -187,14 +240,14 @@ pub(super) fn forget(why: &str) {
 }
 
 /// One sample's record, copied out under the lock so the pixels are read without it held.
-fn the_step() -> Option<(u32, RECT, Instant, bool, Option<Instant>)> {
+fn the_step() -> Option<(u32, RECT, Instant, Option<Instant>, Option<Instant>)> {
     let held = PROBE.lock().ok()?;
     let probe = held.as_ref()?;
     Some((
         probe.pid,
         probe.area,
         probe.started,
-        probe.painted,
+        probe.painted_at,
         probe.swapped_at,
     ))
 }
@@ -214,7 +267,7 @@ fn the_measurement_is_over() -> bool {
 /// The sampling thread: one line a sample, and the pin read off the desk rather than asked of itself.
 fn run() {
     loop {
-        let Some((pid, area, started, painted, swapped_at)) = the_step() else {
+        let Some((pid, area, started, painted_at, swapped_at)) = the_step() else {
             if the_measurement_is_over() {
                 return;
             }
@@ -237,7 +290,7 @@ fn run() {
         };
         let state = if swapped_at.is_some() {
             "swapped"
-        } else if painted {
+        } else if painted_at.is_some() {
             "painted"
         } else {
             "waiting"
@@ -255,9 +308,11 @@ fn run() {
                 RUNNING.store(false, Ordering::Release);
                 return;
             };
-            // **Only the gap counts as the gap**: a sample after the swap is the picture the
-            // replacement put there, and a film that opens on black is not a pin that went black.
-            if probe.swapped_at.is_none() && probe.black_at.is_none() && lit == 0 {
+            // **Only the covered gap counts as the gap**: the samples before the paint are the
+            // outgoing player's own picture and the ones after the swap are the replacement's, and a
+            // film that opens on black is not a pin that went black (see `note_painted`).
+            let covered = probe.painted_at.is_some() && probe.swapped_at.is_none();
+            if covered && probe.black_at.is_none() && lit == 0 {
                 probe.black_at = Some(t);
             }
             let done = probe
@@ -328,33 +383,40 @@ mod tests {
             pid: 0,
             area: RECT::default(),
             started: now,
+            painted_at: painted.then_some(now),
+            generation: 7,
             black_at: None,
-            painted,
+            lost_race: false,
             swapped_at: None,
             result: false,
         }
     }
 
     /// **The result is written once, and it is the whole of the road's claim**: a still painted and a
-    /// pin never read black is `painted=yes black_at=never`, one black sample inside the gap is
-    /// `painted=no black_at=+Nms` — and a second end arriving after the first writes nothing.
+    /// pin never read black is `painted=yes black_at=never` with the gap measured from the paint, one
+    /// black sample inside the gap is `painted=no black_at=+Nms`, and a second end arriving after the
+    /// first writes nothing.
     #[test]
     fn the_still_probe_answers_once_and_says_what_it_saw() {
         super::super::pin_trace::clear_noted();
 
         let mut proven = a_probe(true);
+        proven.swapped_at = Some(Instant::now());
         proven.announce(None);
         proven.announce(Some("the pin is going"));
         let lines = super::super::pin_trace::noted_lines();
         assert_eq!(
             lines.len(),
             1,
-            "a still that was never read black is the road proven, and one end is one line: \
-             {lines:?}"
+            "a still that was never read black is the road proven, and one end is one line:              {lines:?}"
         );
         assert!(
             lines[0].starts_with("still probe result painted=yes black_at=never covered_gap_ms="),
             "{lines:?}"
+        );
+        assert!(
+            lines[0].ends_with(" generation=7"),
+            "the seek it measured goes with the answer: {lines:?}"
         );
 
         super::super::pin_trace::clear_noted();
@@ -367,6 +429,20 @@ mod tests {
         assert!(
             lines[0].starts_with("still probe result painted=no black_at=+142ms covered_gap_ms="),
             "a pin read black inside the gap is not the road proven: {lines:?}"
+        );
+
+        // **The race the road is**: the player drew its own first frame before a cover could go up,
+        // and the measurement says so rather than claiming a still that was never painted.
+        super::super::pin_trace::clear_noted();
+        let mut raced = a_probe(false);
+        raced.swapped_at = Some(Instant::now());
+        raced.lost_race = true;
+        raced.announce(None);
+        let lines = super::super::pin_trace::noted_lines();
+        assert_eq!(
+            lines,
+            vec!["still probe result painted=lost-race black_at=never covered_gap_ms=0 generation=7"],
+            "a player that won the race is written as that, not as a failed paint"
         );
 
         super::super::pin_trace::clear_noted();
