@@ -1307,7 +1307,7 @@ pub(super) fn note_the_seek_picture(pid: u32, seconds: f64) {
         _ => "",
     };
     note_pin_trace!(
-        "seek picture to {seconds:.3} cli {} pic {} asked {} source {:?}{differs}",
+        "seek picture cli {} pic {} asked {} source {:?}{differs} second {seconds:.3}",
         a_box_as_text(cli),
         a_box_as_text(pic),
         a_box_as_text(asked),
