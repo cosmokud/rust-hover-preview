@@ -29,15 +29,19 @@ use std::sync::Once;
 
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, NULL_BRUSH};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, EndPaint, FillRect, GetStockObject, SetBrushOrgEx, SetStretchBltMode, StretchBlt,
+    BLACK_BRUSH, HBRUSH, HALFTONE, NULL_BRUSH, SRCCOPY,
+};
+use windows::Win32::Graphics::Gdi::PAINTSTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
     RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE,
     HWND_NOTOPMOST, HWND_TOPMOST, SC_CLOSE, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WM_CLOSE, WM_ERASEBKGND, WM_SYSCOMMAND, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_POPUP,
+    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WM_CLOSE, WM_ERASEBKGND, WM_PAINT, WM_SYSCOMMAND,
+    WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_POPUP,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -67,6 +71,12 @@ unsafe extern "system" fn the_default_answer(
         return LRESULT(1);
     }
 
+    // A cover this app painted stands where the film was, and this paint is its own (see
+    // `answer_the_paint_of_a_cover`).
+    if let Some(answer) = unsafe { answer_the_paint_of_a_cover(hwnd, msg) } {
+        return answer;
+    }
+
     // **A host that is the Shell's window is the Shell's close too.** Its taskbar button's Close
     // arrives here as a `WM_CLOSE` or an `SC_CLOSE`, and taken it would destroy the window the pin's
     // chrome is owned by — the pin with it, under a state that still believes a pin is up. What a
@@ -93,6 +103,28 @@ pub(super) fn a_resize_drag_is_live() -> bool {
         .is_some_and(|drag| matches!(drag.action, PinDragAction::Resize(_)))
 }
 
+/// **A cover this app painted is the host's picture until the replacement's registration takes the
+/// box** (see `put_the_cover_in`), so the two messages that would otherwise draw the host's black
+/// over it answer differently: the erase fills nothing, and the paint draws the retained frame
+/// again, re-cropped to the client this paint is for.
+///
+/// It is one function rather than two window procedures' worth, because a pin's host can be a
+/// hover's promoted into it (see `promote_the_hover_film_host`), and the cover is owed by whichever
+/// class the host was made from.
+pub(super) unsafe fn answer_the_paint_of_a_cover(hwnd: HWND, msg: u32) -> Option<LRESULT> {
+    if msg != WM_PAINT || !the_cover_stands() {
+        return None;
+    }
+    let mut paint = PAINTSTRUCT::default();
+    // Safety: the context is the one Windows hands this paint with, and it is given back below.
+    let dc = unsafe { BeginPaint(hwnd, &mut paint) };
+    if !dc.is_invalid() {
+        unsafe { paint_the_cover(hwnd, dc) };
+    }
+    unsafe { let _ = EndPaint(hwnd, &paint); };
+    Some(LRESULT(0))
+}
+
 /// Paint the host's whole client black: the film is the Shell's thumbnail (see `pin_film_thumbnail`)
 /// or FFmpeg's child, which fills the client box itself.
 ///
@@ -105,6 +137,12 @@ pub(super) fn a_resize_drag_is_live() -> bool {
 /// a pin can show its film through are erased through here — the pin's own class, and the hover's a
 /// pin took up (see `hover_film_host`).
 pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
+    // **Nothing paints the host's black over a cover it owes the screen**, and the count above says
+    // the same thing: an erase that fills here is the black a still must never show (see
+    // `the_cover_stands`).
+    if the_cover_stands() {
+        return;
+    }
     #[cfg(test)]
     HOST_ERASES.fetch_add(1, Ordering::SeqCst);
     let mut client = RECT::default();
@@ -116,6 +154,128 @@ pub(super) unsafe fn paint_the_host_behind_the_film(host: HWND, dc: HDC) {
     // client box read above; GDI reports rather than faults for a device context that has gone.
     let brush = HBRUSH(unsafe { GetStockObject(BLACK_BRUSH) }.0);
     unsafe { FillRect(dc, &client, brush) };
+}
+
+/// The frame a still of this app's painted into the host, kept so the host can go on standing on it
+/// for the whole of a relaunch's wait: BGRA bytes at the size FFmpeg answered (see
+/// `pin_film_thumbnail::stand_the_still`).
+///
+/// It is bytes rather than a `DibSurface` because a static has to be `Send` and a device context is
+/// not; the surface a paint needs is made, filled and given back inside that paint.
+struct CoverFrame {
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+/// The cover this app painted, or nothing while the host owes no picture of its own.
+static COVER: Mutex<Option<CoverFrame>> = Mutex::new(None);
+
+/// Whether a cover this app painted is what the host owes the screen (see `COVER`).
+pub(super) fn the_cover_stands() -> bool {
+    COVER.lock().is_ok_and(|held| held.is_some())
+}
+
+/// Keep a landed still as the host's cover until the picture changes hands (see
+/// `put_the_cover_away`).
+///
+/// **The frame goes with the host it was decoded for**: a paint that lands after that host has gone
+/// is nobody's picture, and a cover left standing would keep the next pin's host from erasing.
+///
+/// A frame that is not the size it claims is refused rather than kept: what arrives here came out of
+/// a child process, and a short frame is a smear rather than a picture.
+pub(super) fn put_the_cover_in(host: HWND, pixels: Vec<u8>, width: u32, height: u32) -> bool {
+    if film_host() != Some(host)
+        || width == 0
+        || height == 0
+        || pixels.len() < width as usize * height as usize * 4
+    {
+        return false;
+    }
+    match COVER.lock() {
+        Ok(mut held) => {
+            *held = Some(CoverFrame {
+                pixels,
+                width,
+                height,
+            });
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Give the cover up: the replacement's registration has taken the box, so the Shell draws the
+/// picture and the host owes nothing of its own (see `pin_film_thumbnail::hand_the_picture_over`).
+pub(super) fn put_the_cover_away() {
+    if let Ok(mut held) = COVER.lock() {
+        *held = None;
+    }
+}
+
+/// Draw the cover into `dc`, **cover-cropped to the host's client as it is now**: the same centred
+/// crop the registration wears, so a resize or an invalidation in the middle of a gap re-crops the
+/// picture instead of showing the host's black (see `pin_film_thumbnail::the_pictures_crop`).
+///
+/// Safety: `dc` is a context for `host`, as the erase and the paint are handed theirs.
+pub(super) unsafe fn paint_the_cover(host: HWND, dc: HDC) -> Option<(i32, i32, i32, i32)> {
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(host, &mut client) }.is_err() {
+        return None;
+    }
+    let (width, height) = (client.right - client.left, client.bottom - client.top);
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let held = COVER.lock().ok()?;
+    let cover = held.as_ref()?;
+    let (left, top, crop_width, crop_height) = super::pin_film_thumbnail::the_pictures_crop(
+        (cover.width as i32, cover.height as i32),
+        (width, height),
+        Some(width as f64 / height as f64),
+    )
+    .0;
+    let surface = DibSurface::create(cover.width, cover.height)?;
+    let length = cover.width as usize * cover.height as usize * 4;
+    // Safety: the surface is this call's own of exactly these pixels, and the cover was checked for
+    // them when it was put in.
+    unsafe { std::ptr::copy_nonoverlapping(cover.pixels.as_ptr(), surface.bits(), length) };
+    // Safety: the two contexts are this call's and the host's, and one scaling copy is asked of them.
+    let painted = unsafe {
+        let _ = SetStretchBltMode(dc, HALFTONE);
+        // The brush origin travels with the mode: halftone measures the destination from it.
+        let _ = SetBrushOrgEx(dc, 0, 0, None);
+        StretchBlt(
+            dc,
+            0,
+            0,
+            width,
+            height,
+            surface.dc,
+            left,
+            top,
+            crop_width,
+            crop_height,
+            SRCCOPY,
+        )
+        .as_bool()
+    };
+    #[cfg(test)]
+    if let Ok(mut held) = THE_COVERS_CROP.lock() {
+        *held = Some((left, top, crop_width, crop_height));
+    }
+    painted.then_some((left, top, crop_width, crop_height))
+}
+
+/// The crop the cover was last drawn with, for a test that reads the road rather than the pixels
+/// (see `paint_the_cover`).
+#[cfg(test)]
+static THE_COVERS_CROP: Mutex<Option<(i32, i32, i32, i32)>> = Mutex::new(None);
+
+/// The crop the cover was last drawn with (see `THE_COVERS_CROP`).
+#[cfg(test)]
+pub(super) fn the_covers_crop() -> Option<(i32, i32, i32, i32)> {
+    THE_COVERS_CROP.lock().ok().and_then(|held| *held)
 }
 
 /// Registered once per run: the class a film's host is made from (see `create`).
@@ -736,6 +896,9 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
 /// `pin_film_thumbnail::forget_the_thumbnail`).
 pub(super) unsafe fn take_the_film_off_the_band() {
     pin_film_thumbnail::forget_the_thumbnail();
+    // A cover standing in the host is that film's, and the host is about to show another one (see
+    // `put_the_cover_away`).
+    put_the_cover_away();
     unsafe { set_the_pin_film_host_visible(false) };
 }
 
@@ -752,6 +915,9 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     // that counted them goes (see `pin_film_thumbnail::settle_the_held_frames`).
     pin_film_thumbnail::settle_the_held_frames();
     pin_film_thumbnail::forget_the_thumbnail();
+    // The cover went with the picture: there is no host left for it to be re-cropped into (see
+    // `put_the_cover_away`).
+    put_the_cover_away();
     // **The pin's chrome is given back to the Shell before the host that owns it goes.** Destroying
     // a window destroys the windows it owns, and the pin's window is kept between pins — so a
     // teardown that destroyed the owner first would take the pin's own window with it (see

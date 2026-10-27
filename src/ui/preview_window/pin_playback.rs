@@ -313,11 +313,14 @@ fn relaunch_pinned_player(
         (FreezeRoad::Capture, false) => {
             pin_film_thumbnail::stand_the_outgoing_picture_as_a_still(replaced)
         }
-        // **The still the press decoded, painted while the registration is still drawing** (see
-        // `pin_film_thumbnail::stand_the_pressed_still`): a grab that has not landed paints nothing,
-        // unregisters nothing and ends nothing, so the old picture plays on — the `off` road for that
-        // relaunch, and never the host's black.
-        (FreezeRoad::Still, false) => pin_film_thumbnail::stand_the_pressed_still(replaced),
+        // **The still the press decoded, for the very second the release is taking the film to** (see
+        // `pin_film_thumbnail::stand_the_pressed_still`): a frame in hand is painted now and the
+        // outgoing player ended at once; a grab that has not landed paints nothing and ends nothing,
+        // and the relaunch is begun regardless — the frame paints the cover when it lands, if it beats
+        // the replacement's own first drawn frame (see `begin_the_seek_still`).
+        (FreezeRoad::Still, false) => {
+            pin_film_thumbnail::stand_the_pressed_still(replaced, seconds)
+        }
         // **A hover is held, whatever the run's cover road is**: its player is the frame the pin's is
         // begun on and is read back before it is let go of, so it is never replaced by a still of this
         // app's (see `begin_the_pinned_film_at_the_hovers_frame`). The hold is the dead suspension
@@ -548,7 +551,7 @@ pub(super) fn freeze_the_outgoing_picture(pid: u32, road: FreezeRoad) -> bool {
             return false;
         }
         note_pin_trace!("outgoing picture hidden pid {pid}: the pin keeps its last composed frame");
-        super::still_probe::start(pid, false);
+        super::still_probe::start(pid, 0);
         return true;
     }
 
