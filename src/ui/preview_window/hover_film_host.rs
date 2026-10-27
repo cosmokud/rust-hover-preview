@@ -16,6 +16,13 @@
 //! `pin_film_host`). It also never activates: a hover must never take the focus from a file being
 //! renamed.
 //!
+//! **On the thumbnail road this host is a destination rather than a parent**: mpv is launched with no
+//! `--wid` and makes its own window, which is adopted as the source and drawn into the host by the
+//! Shell (see `pin_film_thumbnail`). The host is still the thing the hover is, and the thing a pin
+//! takes up: it is promoted into the pin's host, so the registration the source is drawn with is
+//! already in the window that becomes the pin's and a take-up asks neither the player nor the source
+//! for anything (see `pin_film_host::promote_the_hover_film_host`).
+//!
 //! The host belongs to the hover, not to the player: a hover that replaces this one takes the same
 //! host when the old player is still in it, and every road that ends the hover destroys it (see
 //! `kill_player_process`, `hide_preview`, and the loop's `Hide`). A host a pin took up belongs to
@@ -100,18 +107,11 @@ pub(super) fn the_hover_film_to_adopt(path: &Path) -> Option<HWND> {
         return None;
     }
 
-    // **A hover's host is not promoted into a pin whose film is drawn through a thumbnail.** On that
-    // road the picture is a window of mpv's own and the host only shows it, so a host holding mpv's
-    // child is the wrong shape for it: the take-up begins the pin's own player instead, on the frame
-    // the hover was frozen at, which is the road every hover that was never kept in a host takes (see
-    // `pin_film_thumbnail`, `begin_the_pinned_film_at_the_hovers_frame`).
-    if pin_film_host::a_film_is_drawn_by_a_thumbnail(
-        video_route(path),
-        pin_film_host::the_pin_shows_its_film_by_thumbnail(),
-    ) {
-        return None;
-    }
-
+    // **This is the same road on both of the ways a film can be drawn in a host.** On the child road
+    // the host holds mpv's child; on the thumbnail road it is the destination of a picture that is
+    // mpv's own window, and the registration follows the host rather than a picture being begun again
+    // (see `pin_film_thumbnail` and `pin_film_host::promote_the_hover_film_host`). A hover whose
+    // player is not drawing yet is not adopted, whichever road it is on: there is no picture to move.
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     if !the_hover_player_was_begun_in_the_host(pid) || !the_hover_player_is_drawing(pid) {
         return None;
@@ -160,11 +160,15 @@ pub(super) fn the_hover_player_was_begun_in_the_host(pid: u32) -> bool {
     pid != 0 && hover_film_host().is_some() && hover_film_host_player() == Some(pid)
 }
 
-/// Whether this player has put a shown child of its own under the hover's host — the fact a
-/// hover's start waits on, and the one that says there is a picture to show rather than a black
-/// rectangle (see `pin_film_host::host_has_a_child_of`).
+/// Whether this player has put a picture in the hover's host — the fact a hover's start waits on,
+/// and the one that says there is a picture to show rather than a black rectangle.
+///
+/// **A picture in the host is a child of the player's on the child road and a thumbnail of the
+/// player's own window on the thumbnail one**, where the host holds no child at all: the source is
+/// adopted as a window of the desktop's and the Shell draws it into the host (see `pin_film_thumbnail`
+/// and `pin_film_host::host_has_a_child_of`).
 pub(super) fn the_hover_player_is_drawing(pid: u32) -> bool {
-    the_hover_players_window(pid).is_some()
+    the_hover_players_window(pid).is_some() || pin_film_thumbnail::the_source_is_up(pid)
 }
 
 /// The window mpv made under the hover's host, where it is drawing: the player's window, for the
@@ -206,6 +210,10 @@ pub(super) unsafe fn place_the_hover_film_host(rect: ScreenRegion) {
         height,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
+    // **A picture the Shell is drawing into this host follows the box it is drawn in**, which is the
+    // thumbnail's crop re-asked of the film's own source rectangle and nothing of the player's (see
+    // `pin_film_thumbnail::the_band_was_placed`). A host with no such picture has nothing to re-point.
+    pin_film_thumbnail::the_band_was_placed(host);
     // FFmpeg's child does not follow its parent's resize: fit it to the box the hover is at now.
     fit_the_hosted_ffplay(host);
 }

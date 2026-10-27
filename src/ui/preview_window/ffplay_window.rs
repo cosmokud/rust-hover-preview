@@ -388,8 +388,11 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
         // with no `--wid`, so what is found under this pid is the film's own window rather than a
         // child of the host's: it is adopted as the picture the host shows by a DWM thumbnail, and
         // never moved into the host the way FFmpeg's player is (see `pin_film_thumbnail`).
-        if pin_film_host::hosted_player_pid() == Some(pid)
-            && pin_film_host::the_pin_shows_its_film_by_thumbnail()
+        //
+        // **The host is whichever one is showing the film** — a pin's, or the hover's the pin will
+        // take up: a hover's film is drawn by a thumbnail of its own so that pinning it is a
+        // re-pointing of the same picture rather than a second player (see `hover_film_host`).
+        if pin_film_host::the_pin_shows_its_film_by_thumbnail()
             && video_process_image() == MPV_IMAGE_NAME
         {
             if !pin_film_thumbnail::the_source_is_up(pid) {
@@ -403,7 +406,7 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
                     LPARAM(&mut data as *mut EnumWindowsData as isize),
                 );
                 if !data.found_hwnd.is_invalid() {
-                    unsafe { pin_film_thumbnail::adopt_the_source(data.found_hwnd, pid) };
+                    unsafe { pin_film_thumbnail::adopt_the_source(data.found_hwnd, pid, host) };
                 }
             } else {
                 // **And this is the pass that keeps the source invisible**: the style is put on at
