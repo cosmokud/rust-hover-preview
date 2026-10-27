@@ -157,10 +157,11 @@ pub enum PreviewMessage {
     /// moment the extraction's one pass finishes (see `subtitle_files`).
     ///
     /// Only a pinned window acts on it: a pin has its film on screen already, so what the
-    /// copy landing changes is what the frame after it should be drawn with — the player is
-    /// begun again to draw that (see `reload_pinned_subtitles`). A hover is deliberately not
-    /// begun again under the pointer, and this message is not for one (see the note on the
-    /// first hover in `video_launch::subtitle_filter`).
+    /// copy landing changes is what its *next* relaunch is drawn with — the copy is preloaded
+    /// for that rather than the picture being changed hands for a subtitle (see
+    /// `reload_pinned_subtitles`). A hover is deliberately not begun again under the pointer,
+    /// and this message is not for one (see the note on the first hover in
+    /// `video_launch::subtitle_filter`).
     VideoSubtitlesReady(PathBuf),
     /// The ImageMagick engine is done with a file: the picture it developed is in hand, or
     /// there is none — a file it cannot read is remembered as one it will not draw. The

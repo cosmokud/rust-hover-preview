@@ -52,7 +52,8 @@ pub(super) fn the_renderer_asked_for(asked_by_hand: Option<&str>) -> String {
 /// What asks is the pin's take-up, and it asks because a pin does not begin a player of its
 /// own over a hover's: the `ffplay` a hover began is adopted as it stands, subtitles and all —
 /// so a player that was begun *without* them is one a pinned window would keep drawing without
-/// them, and the take-up is the moment to begin it again (see `reload_adopted_subtitles`). The
+/// them, and the take-up is the moment to preload them for the next relaunch (see
+/// `reload_adopted_subtitles`). The
 /// list holds only the films whose player is drawing; an absence is the answer that the player
 /// last begun for that film is not — which is also the answer for a film no player was begun
 /// for at all, and the one the take-up wants for it, because a film with no player up has

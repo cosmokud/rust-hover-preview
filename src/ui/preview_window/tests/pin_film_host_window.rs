@@ -4511,13 +4511,12 @@ fn a_source_that_replaced_itself_is_adopted_once_and_takes_the_picture_when_it_i
     pin_trace::clear_noted();
 }
 
-/// **A relaunch for a late subtitle keeps the picture until its new source can draw**, on the engine
-/// that cannot be told: FFmpeg's player is begun again (one player, as a subtitle copy always was), the
-/// registration the host wears goes on drawing the window before it, and the swap is one registration
-/// and one old registration let go of once the new window's client is the box the placement asked for
-/// (see `pin_playback::reload_pinned_subtitles` and `pin_film_thumbnail::hand_the_picture_over`).
+/// **A copy landing under a pin swaps nothing.** FFmpeg's player can be told nothing, so the copy is
+/// preloaded for the next relaunch rather than the picture changing hands for a subtitle: no player is
+/// begun, no registration is taken down or made, and the film on screen is the one it was (see
+/// `pin_playback::preload_the_subtitles_for_the_next_relaunch`).
 #[test]
-fn a_relaunch_for_a_late_subtitle_keeps_the_picture_until_its_new_source_is_ready() {
+fn a_late_subtitle_swaps_nothing_and_rides_the_relaunch_the_user_asks_for() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -4525,6 +4524,7 @@ fn a_relaunch_for_a_late_subtitle_keeps_the_picture_until_its_new_source_is_read
     let path = PathBuf::from("a-film.mkv");
     let (host, _first, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+    let _ = host;
 
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
@@ -4537,72 +4537,63 @@ fn a_relaunch_for_a_late_subtitle_keeps_the_picture_until_its_new_source_is_read
 
     assert!(
         reload_pinned_subtitles(&path),
-        "a copy that lands while the pin is up begins FFmpeg's player again"
+        "a copy that lands while the pin is up is answered"
     );
-    assert_eq!(restart_count(), 1, "one relaunch, and only one");
     assert_eq!(
-        last_restart_reason(),
-        Some(RestartReason::Subtitle),
-        "and the line says the subtitles are what asked for it"
+        restart_count(),
+        0,
+        "and no player is begun for it: a copy is not a reason to change the picture's hands"
     );
+    assert_eq!(last_restart_reason(), None, "so no relaunch happened at all");
     assert!(
         pin_film_thumbnail::the_standing_source_is_the_current_one(),
-        "the picture on screen is still the window before the relaunch"
+        "the picture on screen is the source it was"
+    );
+    assert!(
+        !pin_film_thumbnail::a_source_is_waiting_to_take_the_picture(),
+        "and nothing is waiting to take it"
     );
     assert_eq!(
-        pin_film_thumbnail::the_unregistrations(),
-        0,
-        "and it is not taken down for a player that is still opening its file"
+        (
+            pin_film_thumbnail::the_registrations(),
+            pin_film_thumbnail::the_unregistrations(),
+        ),
+        (0, 0),
+        "nothing was registered and nothing was let go of"
     );
     assert_eq!(
         pin_film_host::host_hides_asked(),
         hides,
-        "the host the picture is drawn in is never hidden for a subtitle load"
-    );
-    assert!(
-        !pin_trace::noted_lines()
-            .iter()
-            .any(|line| line.starts_with("film host hidden while a pin lives")),
-        "and the run says nothing was taken off the screen: {:?}",
-        pin_trace::noted_lines()
-    );
-
-    // The replacement's own window arrives — the way the monitor adopts it — and its client is the
-    // box the placement asks for, so the picture changes hands in one step.
-    let second = unsafe { a_window_of_the_players_own() };
-    unsafe { pin_film_thumbnail::adopt_the_source(second, pid, host) };
-    pin_film_thumbnail::hand_the_picture_over(host);
-
-    assert!(
-        pin_film_thumbnail::the_standing_source_is_the_current_one(),
-        "the new source is the picture once it can draw"
-    );
-    assert_eq!(
-        pin_film_thumbnail::the_registrations(),
-        1,
-        "exactly one swap: one registration for the new source"
-    );
-    assert_eq!(
-        pin_film_thumbnail::the_unregistrations(),
-        1,
-        "and exactly one old registration let go of, after the new one was handed over"
+        "the host the picture is drawn in is never hidden for a subtitle"
     );
     assert!(
         pin_trace::noted_lines()
             .iter()
-            .any(|line| line.starts_with("thumbnail swapped old")),
-        "and the run says the old picture stood until the swap"
+            .any(|line| line.starts_with("subtitle preloaded for the next relaunch")),
+        "and the run says the copy is waiting for a relaunch: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    // The relaunch the user asks for is where it is activated, and one line says it is being carried.
+    restart_pinned_player(&path, film.box_, 90.0, false, RestartReason::Seek);
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("subtitle carried into a relaunch")),
+        "the copy rides the next relaunch: {:?}",
+        pin_trace::noted_lines()
     );
 
     unsafe { pin_film_host::take_down_the_pin_film_host() };
-    let _ = unsafe { DestroyWindow(second) };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_video_engine_in(None);
+    clear_restart_count();
+    clear_pending_subtitles();
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
-    clear_restart_count();
+    clear_pending_pinned_relaunch();
     pin_trace::clear_noted();
 }
 
