@@ -673,13 +673,29 @@ pub(super) fn video_key_pause() -> bool {
         return false;
     }
 
+    video_key_pause_for(VIDEO_PID.load(Ordering::SeqCst))
+}
+
+/// The same key, posted to the player that is to be given it: the press's own hold everywhere, and
+/// the freeze of the player on screen when its replacement is launched (see
+/// `pin_playback::freeze_the_outgoing_picture`).
+///
+/// **The key toggles, and which way it lands is the caller's fact to know.** A player already
+/// holding a film is already the still frame the next one has to be begun over, and a key posted to
+/// it would set it going again — so the one road that freezes a player asks whether it is held
+/// before it posts (see `pin_playback::the_player_on_screen_is_held`).
+///
+/// A key posted is directed at the window it is posted to, whatever that window's extended style
+/// says, so the press-through and no-activate bits a source wears do not keep the player from
+/// reading it.
+pub(super) fn video_key_pause_for(pid: u32) -> bool {
     // Counted where the app commits to telling the player rather than where the key lands, because
     // it lands nowhere a test can see: there is no player's window here to post one through (see
     // `PAUSE_POSTS`).
     #[cfg(test)]
     PAUSE_POSTS.fetch_add(1, Ordering::Relaxed);
 
-    let Some(hwnd) = video_window_for(VIDEO_PID.load(Ordering::SeqCst)) else {
+    let Some(hwnd) = video_window_for(pid) else {
         return false;
     };
 

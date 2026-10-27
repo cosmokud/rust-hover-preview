@@ -25,20 +25,25 @@ use crate::formats::routing::NavCategory;
 /// relaunch that arrives while another is parked ends the player in between rather than stacking
 /// a third wait on top of the first (see `retire_replaced_player`).
 ///
-/// What the overlap costs is *sound*, and it is a price paid on purpose rather than an oversight:
-/// the player on screen is a whole player, not a window, and nothing can take the sound out of it
-/// while it is there. Its own window cannot even be addressed — `video_window_for` answers out of
-/// the one published handle, which through the overlap names whichever window the monitor found
-/// last, so a key posted to the parked player would reach it only on the ticks where its own window
-/// happens to be that one, and this app could not tell whether it arrived (see
-/// `transport_playing`). The other trade is worse: a replacement begun silent cannot be un-silenced
-/// afterwards, because the level of a running player is a key this app has no way to confirm and a
-/// mute is a toggle rather than a setting, so a film begun at zero stays at zero for good.
+/// What the overlap used to cost was *sound*: the player on screen is a whole player, not a window,
+/// and nothing could take the sound out of it while it was there. Its own window cannot even be
+/// addressed — `video_window_for` answers out of the one published handle, which through the overlap
+/// names whichever window the monitor found last, so a key posted to the parked player would reach it
+/// only on the ticks where its own window happens to be that one, and this app could not tell whether
+/// it arrived (see `transport_playing`). The other trade is worse: a replacement begun silent cannot
+/// be un-silenced afterwards, because the level of a running player is a key this app has no way to
+/// confirm and a mute is a toggle rather than a setting, so a film begun at zero stays at zero for
+/// good.
 ///
-/// So two audio streams run at once for as long as the swap takes — bounded by the same
-/// `VIDEO_START_WAIT_SECS` the picture's hold is bounded by, and in practice a few hundred
-/// milliseconds, a player having to open the file, seek and put its window up — and the overlap ends
-/// the moment the wait does, whether that is the replacement arriving or the pin being gone.
+/// **So the player on screen is frozen rather than left playing.** A hold is the one thing both
+/// engines take instantly, and it is taken before its replacement is begun (see
+/// `pin_playback::freeze_the_outgoing_picture`), so what overlaps the replacement is a still frame
+/// and nothing else: the walk-and-jump the waiting picture used to do, and the second audio stream
+/// that went with it, are both gone. What the hold costs is a picture that does not move for as long
+/// as the swap takes — bounded by the same `VIDEO_START_WAIT_SECS` the picture's hold is bounded by,
+/// and in practice a few hundred milliseconds, a player having to open the file, seek and put its
+/// window up — and the overlap ends the moment the wait does, whether that is the replacement
+/// arriving or the pin being gone.
 #[derive(Clone, Copy)]
 pub(super) struct VideoRetirement {
     /// The player being replaced, verified still to be `ffplay.exe` before it is ended however

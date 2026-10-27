@@ -4852,14 +4852,60 @@ fn every_relaunch_ends_its_old_player_only_after_the_new_picture_stands() {
     let mut standing = old_pid;
     let mut sources = Vec::new();
     for reason in reasons {
+        let hides = pin_film_host::host_hides_asked();
         pin_trace::clear_noted();
         clear_restart_count();
+        mpv_ipc::clear_noted();
+        ffplay_window::clear_pause_posts();
+        pin_film_thumbnail::clear_the_unregistrations();
         restart_pinned_player(&path, film.box_, 10.0, false, reason);
 
         let replacement = VIDEO_PID.load(Ordering::SeqCst);
         assert_ne!(replacement, 0, "a replacement player was begun");
         assert_ne!(replacement, standing, "and it is another player");
         assert_eq!(last_restart_reason(), Some(reason));
+
+        // **The picture on screen is frozen before anything is begun over it, and stays frozen**: one
+        // telling at most, because the key toggles and a second would set it going again (see
+        // `freeze_the_outgoing_picture`).
+        let lines = pin_trace::noted_lines();
+        let at_freeze = lines
+            .iter()
+            .position(|line| line.starts_with(&format!("outgoing picture frozen pid {standing} ")))
+            .unwrap_or_else(|| {
+                panic!("the picture is frozen for a relaunch for {reason:?}: {lines:?}")
+            });
+        let at_restart = lines
+            .iter()
+            .position(|line| line.starts_with("player restarted for "))
+            .unwrap_or_else(|| panic!("a restart line: {lines:?}"));
+        assert!(
+            at_freeze < at_restart,
+            "the picture is frozen before its replacement is begun, for {reason:?}: {lines:?}"
+        );
+        assert!(
+            ffplay_window::pause_posts() <= 1,
+            "at most one key is posted to the player it replaces, for {reason:?}"
+        );
+        assert!(
+            !mpv_ipc::noted_lines()
+                .iter()
+                .any(|line| line.contains(r#"["pause",false]"#)),
+            "and nothing sets it going again, for {reason:?}: {:?}",
+            mpv_ipc::noted_lines()
+        );
+        assert_eq!(
+            pin_film_thumbnail::the_unregistrations(),
+            0,
+            "the registration the host wears is never taken down for a relaunch's wait, for \
+             {reason:?}"
+        );
+        assert_eq!(
+            pin_film_host::host_hides_asked(),
+            hides,
+            "and nothing hides the host for it, for {reason:?}"
+        );
+
         assert!(
             pin_trace::noted_lines().iter().any(|line| line
                 == &format!(
@@ -4931,6 +4977,7 @@ fn every_relaunch_ends_its_old_player_only_after_the_new_picture_stands() {
 
         sources.push(second);
         standing = replacement;
+        mpv_ipc::clear_noted();
     }
 
     for source in sources {
@@ -5282,5 +5329,177 @@ fn the_swap_forgets_the_relaunch_that_put_the_picture_up() {
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
+    pin_trace::clear_noted();
+}
+
+/// **The picture on screen is frozen down the pipe where the player answers on one, and nothing else
+/// is asked of it.** mpv takes `set_property pause true` in microseconds and holds the frame it was
+/// showing, which is the whole of what the host goes on drawing while its replacement opens the file
+/// — no capture, no cover, no hide (see `freeze_the_outgoing_picture`).
+#[test]
+fn a_relaunch_freezes_the_picture_on_screen_down_the_pipe_the_player_answers_on() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (_host, _source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Mpv) };
+    // The replacement is begun as the route a test can stand in for; what is being read here is how
+    // the player *on screen* is told, which the pipe it answers on decides.
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    let hides = pin_film_host::host_hides_asked();
+    clear_restart_count();
+    ffplay_window::clear_pause_posts();
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+
+    restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Seek);
+
+    let lines = pin_trace::noted_lines();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == &format!("outgoing picture frozen pid {pid} by the pipe")),
+        "the player on screen is told to hold, and the run says how: {lines:?}"
+    );
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![format!(
+            "{}\n",
+            r#"{"command":["set_property","pause",true],"async":true}"#
+        )],
+        "one command, and it is the hold: a player that answers on a pipe is not posted a key"
+    );
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        0,
+        "so nothing of the freeze is a key on this road"
+    );
+    assert_eq!(
+        pin_film_host::host_hides_asked(),
+        hides,
+        "and nothing hides the host the frozen frame is drawn in"
+    );
+    assert!(
+        pin_film_thumbnail::the_source_is_up(pid),
+        "the registration standing goes on drawing the frame that was frozen"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_noted();
+    mpv_ipc::clear_reads();
+    clear_restart_count();
+    pin_trace::clear_noted();
+}
+
+/// **A posted key reaches a window wearing the source's own extended style.** The freeze of a film
+/// FFmpeg's player is drawing is the pause key posted to the player's own window (see
+/// `freeze_the_outgoing_picture`), and that window is the source — which wears `WS_EX_TRANSPARENT`
+/// and `WS_EX_NOACTIVATE` (see `player_ex_style_for`). Neither bit is about queued input: a key
+/// posted to a window is delivered to that window's queue whatever it is styled, and this is that
+/// measured rather than assumed. What a test cannot reach is the player's own reading of the key.
+#[test]
+fn a_posted_pause_key_reaches_a_window_wearing_the_sources_own_style() {
+    let window = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            64,
+            32,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a window to post to");
+    unsafe {
+        let ex = GetWindowLongPtrW(window, GWL_EXSTYLE);
+        SetWindowLongPtrW(
+            window,
+            GWL_EXSTYLE,
+            ex | WS_EX_TRANSPARENT.0 as isize | WS_EX_NOACTIVATE.0 as isize,
+        );
+    }
+
+    let (vk, scan) = ffplay_window::VIDEO_PAUSE_KEY;
+    let lparam = ffplay_window::ffplay_key_lparam(scan);
+    unsafe {
+        let _ = PostMessageW(window, WM_KEYDOWN, WPARAM(vk as usize), lparam);
+        let _ = PostMessageW(window, WM_KEYUP, WPARAM(vk as usize), lparam);
+    }
+
+    let mut seen = Vec::new();
+    let mut message = MSG::default();
+    // SAFETY: the queue belongs to this thread and the two messages above are the only ones in this
+    // range, so the loop ends on them.
+    unsafe {
+        while PeekMessageW(&mut message, window, WM_KEYDOWN, WM_KEYUP, PM_REMOVE).as_bool() {
+            seen.push((message.message, message.lParam.0));
+        }
+    }
+    assert_eq!(
+        seen,
+        vec![(WM_KEYDOWN, lparam.0), (WM_KEYUP, lparam.0)],
+        "the press and the release both arrive, in order, at the window the source style was put on"
+    );
+    let _ = unsafe { DestroyWindow(window) };
+}
+
+/// **A film the user is holding is already a still frame, and the pause key toggles**: a relaunch of a
+/// held film posts nothing to it, because a key there would set it going again — which is the one
+/// thing the freeze must not do (see `the_player_on_screen_is_held`).
+#[test]
+fn a_relaunch_of_a_held_film_posts_no_pause_key_to_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (_host, _source, pid) =
+        unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    with_pin(|pin| pin.transport.held(30.0));
+    clear_restart_count();
+    ffplay_window::clear_pause_posts();
+    pin_trace::clear_noted();
+
+    restart_pinned_player(&path, film.box_, 30.0, true, RestartReason::Seek);
+
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        0,
+        "no key is posted to a player that is already holding its film"
+    );
+    assert!(
+        !pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.starts_with("outgoing picture frozen")),
+        "and nothing claims a freeze that was not needed: {:?}",
+        pin_trace::noted_lines()
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+    clear_restart_count();
     pin_trace::clear_noted();
 }
