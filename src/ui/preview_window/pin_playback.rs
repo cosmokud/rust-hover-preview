@@ -370,9 +370,10 @@ fn relaunch_pinned_player(
         }
     }
 
-    // The player being replaced is retired once the replacement exists, and it is retired *and
-    // still running* — a relaunch that ended it instead would leave the band empty for the whole
-    // of the wait, and the wait is as long as a player takes to open the file.
+    // The player being replaced is retired once the replacement exists, and it is retired *and still
+    // standing* — a relaunch that ended it instead would leave the band empty for the whole of the
+    // wait, and the wait is as long as a player takes to open the file. It is a frozen frame it holds
+    // there, not a film still playing (see `freeze_the_outgoing_picture`).
     if pid != 0 {
         // ...unless it is the superseded one just killed: nothing waits on its arrival and
         // nothing will ever show it.
