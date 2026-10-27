@@ -1589,9 +1589,9 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     }
     // **A hover's film in the app's own top-level host is not a window of the desktop's to order,
     // style or raise either.** The host is the picture and the box this road was handed is the
-    // hover's own, so placing the host at it and showing it once the player draws is the whole of
-    // what the hover is owed; neither the host nor mpv's child is enumerated or styled as a
-    // player's own top-level window (see `hover_film_host`).
+    // hover's own, so placing the host at it and showing it once the player's source is adopted is
+    // the whole of what the hover is owed; neither the host nor the player's window is enumerated or
+    // styled as a top-level window of its own (see `hover_film_host`).
     let hover_pid = VIDEO_PID.load(Ordering::SeqCst);
     if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid) {
         unsafe { hover_film_host::place_the_hover_film_host((x, y, x + width, y + height)) };

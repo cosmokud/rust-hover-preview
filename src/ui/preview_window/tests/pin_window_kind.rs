@@ -126,7 +126,7 @@ fn a_hosted_film_leaves_nothing_for_a_drag_to_park() {
 /// engine row can change under a pin that is already up, and both players draw into the pin's own
 /// host (see `MediaType::draws_in_a_window_of_its_own`).
 #[test]
-fn a_pins_film_is_a_host_child_whichever_route_it_is_drawn_by_now() {
+fn a_pins_film_is_drawn_in_its_host_whichever_route_it_is_drawn_by_now() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());

@@ -56,9 +56,9 @@ unsafe extern "system" fn the_default_answer(
 ) -> LRESULT {
     // **This window can be a pin's host, so it is erased by the pin's own road.** A pin taken up on
     // a hover's running film keeps this window rather than making another one (see
-    // `pin_film_host`), and the strip its band gains while mpv's child catches up is filled with the
-    // frame the drag holds (see `pin_film_host::paint_the_host_behind_the_film`). A host that is a
-    // hover's is not the pin's and that road erases it black — the picture it wore as a class brush.
+    // `pin_film_host`), and the band behind the picture is filled from the frame the drag holds (see
+    // `pin_film_host::paint_the_host_behind_the_film`). A host that is a hover's is not the pin's
+    // and that road erases it black — the picture it wore as a class brush.
     if msg == WM_ERASEBKGND {
         unsafe { pin_film_host::paint_the_host_behind_the_film(hwnd, HDC(wparam.0 as *mut _)) };
         return LRESULT(1);
@@ -303,9 +303,10 @@ unsafe fn create() -> Option<HWND> {
 
     let hinstance = GetModuleHandleW(None).ok()?;
     // A black window behind the film and nothing else: no border, no taskbar entry, no activation,
-    // no topmost band of its own to give back, and no press of its own — the picture is mpv's child
-    // and a press on it is the hover's press (see the module doc). Made off every display and
-    // without `WS_VISIBLE`: it is shown by the tick that finds the player drawing.
+    // no topmost band of its own to give back, and no press of its own — the picture is the Shell's
+    // thumbnail of the player's window and a press on it is the hover's press (see the module doc).
+    // Made off every display and without `WS_VISIBLE`: it is shown by the tick that finds the
+    // player's source adopted.
     //
     // `WS_CLIPCHILDREN` for the same reason the pin's own window wears it: the window procedure
     // fills the band behind the film on every erase, and an erase that is not clipped to the area
