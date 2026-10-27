@@ -6023,3 +6023,150 @@ fn an_owned_pin_begins_one_player_and_no_show_begins_a_second() {
     drop(hover);
     drop(film);
 }
+
+/// The window of the player's own that a thumbnail samples, on this test's own process: the source a
+/// launch without `--wid` gives mpv, with a box of its own so a placement has somewhere to land.
+unsafe fn a_window_of_the_players_own() -> HWND {
+    unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP | WS_VISIBLE,
+            NOWHERE,
+            NOWHERE,
+            1920,
+            1080,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a window of the player's own, in this process")
+}
+
+/// A hover on the thumbnail road: its own host as the destination, its own source adopted into it,
+/// and the player's one placement made. Answers the host and the source the caller destroys.
+unsafe fn a_hover_drawn_through_a_thumbnail(film: &StandingFilm, path: &Path) -> (HWND, HWND, u32) {
+    pin_film_host::stand_the_owned_road_in(Some(true));
+    pin_film_host::stand_the_thumbnail_road_in(Some(true));
+    let pid = unsafe { GetCurrentProcessId() };
+    let source = unsafe { a_window_of_the_players_own() };
+    let host = unsafe { hover_film_host::take_up_the_hover_film_host(film.box_) }
+        .expect("the hover's own host");
+    hover_film_host::note_hover_film_host_player(pid, path);
+    VIDEO_PID.store(pid, Ordering::SeqCst);
+    mpv_ipc::remember_pipe(pid, "the-hover-sources-pipe", false);
+    mpv_ipc::answer_a_read(
+        pid,
+        "video-params",
+        Some(r#"{"w":1920,"h":1080,"dw":1920,"dh":1080}"#),
+    );
+    pin_film_thumbnail::clear_the_source_placements();
+    unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
+    (host, source, pid)
+}
+
+/// **A film pinned from a hover on the thumbnail road is the same player and the same source.**
+/// The take-up begins nothing, asks the player for no box, and leaves the one registration where it
+/// already is — in the window that was the hover's host and is the pin's (see `pin_film_thumbnail`
+/// and `pin_lifecycle`). The pin's end takes the source and the registration down with it.
+#[test]
+fn a_hover_drawn_through_a_thumbnail_is_taken_up_without_a_player_or_a_placement() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (hover, source, pid) = unsafe { a_hover_drawn_through_a_thumbnail(&film, &path) };
+
+    assert_eq!(
+        pin_film_thumbnail::the_source_placements(),
+        1,
+        "a source is placed once, at its own size"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_registration_host(),
+        Some(hover.0 as isize),
+        "and the hover's host is where the Shell draws it"
+    );
+    assert!(
+        pin_film_thumbnail::the_source_is_up(pid),
+        "the hover's own source is the film's picture"
+    );
+
+    clear_restart_count();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        restart_count(),
+        0,
+        "the take-up keeps the player the hover began rather than beginning one of its own"
+    );
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover),
+        "the hover's host is the pin's host"
+    );
+    assert_eq!(
+        pin_film_host::hosted_player_pid(),
+        Some(pid),
+        "and the pin holds the player it took up"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_source_placements(),
+        1,
+        "nothing asks the source for another box across the promotion"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_registration_host(),
+        Some(hover.0 as isize),
+        "exactly one registration, in the pin's host"
+    );
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    assert!(
+        !pin_film_thumbnail::the_source_is_up(pid),
+        "a pin's end leaves no source behind it"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_registration_host(),
+        None,
+        "and no registration either"
+    );
+
+    let _ = unsafe { DestroyWindow(source) };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+}
+
+/// **A hover that is never pinned leaves nothing behind it**: the source it adopted and the
+/// registration in its host go with the host, and no pin has to exist for either to be taken down
+/// (see `hover_film_host` and `pin_film_thumbnail::forget_the_thumbnail_of`).
+#[test]
+fn a_hover_drawn_through_a_thumbnail_that_is_never_pinned_leaves_no_source() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let (_, source, pid) = unsafe { a_hover_drawn_through_a_thumbnail(&film, &path) };
+
+    assert!(pin_film_thumbnail::the_source_is_up(pid));
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+
+    assert!(
+        !pin_film_thumbnail::the_source_is_up(pid),
+        "the hover ending takes the source it adopted with it"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_registration_host(),
+        None,
+        "and the registration its host was drawn with"
+    );
+
+    let _ = unsafe { DestroyWindow(source) };
+    mpv_ipc::forget_pipe(pid);
+    mpv_ipc::clear_reads();
+}

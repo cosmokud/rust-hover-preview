@@ -789,14 +789,26 @@ fn start_mpv_video_playback(
     // window**, so no window of this app's is named and no place in the desktop's order is asked for:
     // the host shows the player rather than holding it (see `pin_film_thumbnail`).
     let pin_host = pin_film_host::host_for_the_pins_film(path, kind);
-    let behind_the_host =
-        pin_host.is_some() && pin_film_host::the_pin_shows_its_film_by_thumbnail();
+    // **A hover's film on this road is a thumbnail of its own**, so that pinning it is the same
+    // picture re-cropped into the pin's host rather than a second player begun on a frozen frame
+    // (see `hover_film_host` and `pin_playback::adopt_the_hovered_film_in_the_host`). The host is
+    // the destination here, exactly as the pin's host is: what shows the picture is the Shell, and
+    // no window of this app's is handed to mpv.
+    let hover_destination = allow_the_hover_host
+        && hover_film_host::the_hover_film_is_kept_in_a_host(path)
+        && pin_film_host::a_film_is_drawn_by_a_thumbnail(
+            video_route(path),
+            pin_film_host::the_pin_shows_its_film_by_thumbnail(),
+        );
+    let behind_the_host = hover_destination
+        || (pin_host.is_some() && pin_film_host::the_pin_shows_its_film_by_thumbnail());
     // **The source is launched where it will stand rather than wherever mpv would put itself.** mpv
     // shows its own window as soon as it has opened the file — before this app has found the window
-    // and adopted it — so a launch at the pin's corner is a window of mpv's standing under the pin
-    // for the moment that takes, rather than over a hover's frozen frame on a take-up from one (see
-    // `pin_film_thumbnail` and `begin_the_pinned_film_at_the_hovers_frame`). Its *size* is not named
-    // here: the one placement asks for that after the launch (see `pin_film_thumbnail`).
+    // and adopted it — so a launch at the corner of the box that will show it is a window of mpv's
+    // standing under that box for the moment that takes, rather than over a hover's frozen frame on
+    // a take-up from one (see `pin_film_thumbnail` and
+    // `begin_the_pinned_film_at_the_hovers_frame`). Its *size* is not named here: the one placement
+    // asks for that after the launch (see `pin_film_thumbnail`).
     let (launch_x, launch_y) = if behind_the_host {
         pin_film_thumbnail::the_source_launch_origin((x, y))
     } else {
@@ -832,14 +844,26 @@ fn start_mpv_video_playback(
     if pin_host.is_some() {
         pin_film_host::note_the_pins_film_route(path);
     }
-    let host = mpv_launch_host(path, kind).or_else(|| {
-        (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
-            .then(|| unsafe {
-                hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
-                    .map(|host| host.0 as usize as u32)
-            })
-            .flatten()
-    });
+    // **A hover's host is made here where the picture is a thumbnail of mpv's own window**: the
+    // player is given no `--wid` on that road, so the host is the destination the Shell draws into
+    // and not a parent the player draws in (see `pin_film_thumbnail`).
+    let hover_host = hover_destination
+        .then(|| unsafe {
+            hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
+        })
+        .flatten();
+    let host = if hover_destination {
+        None
+    } else {
+        mpv_launch_host(path, kind).or_else(|| {
+            (allow_the_hover_host && hover_film_host::the_hover_film_is_kept_in_a_host(path))
+                .then(|| unsafe {
+                    hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
+                        .map(|host| host.0 as usize as u32)
+                })
+                .flatten()
+        })
+    };
 
     let mut command = engine_processes::hidden_command(program);
     command
@@ -871,7 +895,7 @@ fn start_mpv_video_playback(
     // `hover_film_host`).
     if pin_host.is_some() {
         pin_film_host::note_hosted_player(child.id());
-    } else if host.is_some() {
+    } else if host.is_some() || hover_host.is_some() {
         hover_film_host::note_hover_film_host_player(child.id(), path);
     }
     // The pipe the player is told on, and the one thing a later command has to know about the

@@ -1163,7 +1163,12 @@ pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
 /// have one question — has this player arrived — and a hosted player never publishes a `VIDEO_HWND`
 /// to be found by (see `video_window_for`, `settle_video_retirement` and `PinSwapHold::settle`).
 pub(super) fn the_players_window_is_up(pid: u32) -> bool {
-    video_window_for(pid).is_some() || the_hosted_player_is_drawing(pid)
+    video_window_for(pid).is_some()
+        || the_hosted_player_is_drawing(pid)
+        // **A hover's film drawn through a thumbnail has no child of this app's and no published
+        // top-level handle**: its window is the source, a window of mpv's the Shell draws into the
+        // host (see `pin_film_thumbnail` and `hover_film_host`).
+        || pin_film_thumbnail::the_source_is_up(pid)
 }
 
 /// The window a player of `pid`'s has made under `host`, where it is drawing: the shown child with

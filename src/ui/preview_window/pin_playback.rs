@@ -923,20 +923,18 @@ pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
 /// Move the hover's already-running host into the pin, and give the film the pin's level.
 ///
 /// **Nothing is begun and nothing is frozen.** The player in the host is the one that was drawing
-/// the hover: the same child, the same pid, the same playhead. The only changes are the window it
-/// draws in and the level the pin plays it at; the transport was already written at the take-up
-/// from `video_loop_playhead`, so the bar continues from where the hover had reached rather than
-/// from a frozen second.
-pub(super) fn adopt_the_hovered_film_in_the_host() -> bool {
-    let Some((path, _)) = pinned_media_owner() else {
-        return false;
-    };
-
-    let Some(host) = hover_film_host::the_hover_film_to_adopt(&path) else {
-        return false;
-    };
-
+/// the hover: the same child — or, on the thumbnail road, the same source window, which the Shell
+/// draws into the very host that becomes the pin's — the same pid, the same playhead. What changes is
+/// the box the picture is cropped to and the level the pin plays it at; the transport was already
+/// written at the take-up from `video_loop_playhead`, so the bar continues from where the hover had
+/// reached rather than from a frozen second.
+pub(super) fn adopt_the_hovered_film_in_the_host(host: HWND) -> bool {
     unsafe { pin_film_host::take_up_the_pin_film_host(Some(host)) };
+    if pin_film_host::film_host() != Some(host) {
+        // The window went between the take-up's own reading and this call, so there is no film in
+        // the pin for the level below to be about (see `take_up_the_pin_film_host`).
+        return false;
+    }
 
     // This also asks `aid` back where the hover was begun muted and the pin has a level to hear.
     let volume = pinned_volume_level();

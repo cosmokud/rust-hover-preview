@@ -42,6 +42,15 @@
 //! (measured: `client 916x515 … picture 2595x1460 margins l311t0r311b0` — 311 px a side stretched
 //! into the picture) and the upscale that read as one zoomed in.
 //!
+//! **One source per live film, and one registration per destination host.** The source is the live
+//! film's own window, placed once at the film's own size, and the registration that draws it lives in
+//! the host showing it: the hover's while a hover is up, and the pin's once the hover is taken up.
+//! **A take-up begins no player and places nothing**: the hover's host is promoted into the pin's, so
+//! the destination is the very window the registration is already in, and the pin's box is one
+//! re-crop of the same picture (see `pin_film_host::promote_the_hover_film_host` and
+//! `hover_film_host`). A hover that is never pinned takes its source and its registration down with
+//! it (see `forget_the_thumbnail_of`).
+//!
 //! **Filling the box is not a detail of the crop, it is what makes a bar impossible.** The road this
 //! replaces fitted the picture into the box at the picture's own shape and left the rest to the
 //! host's black: a destination *smaller* than the client whenever the box's aspect and the film's
@@ -280,6 +289,34 @@ static REGISTERED_HOST: AtomicIsize = AtomicIsize::new(0);
 /// The registration, and the box it was last told the picture goes in.
 static THUMBNAIL: Mutex<Thumbnail> = Mutex::new(Thumbnail::NOTHING);
 
+/// How many times a source has been placed since a test last cleared it: the seam that says a take-up
+/// re-crops the one picture rather than asking the player for anything (see `place_the_source`).
+#[cfg(test)]
+static SOURCE_PLACEMENTS: AtomicU32 = AtomicU32::new(0);
+
+/// The one host this road has drawn a picture into, or nothing while no registration is recorded: a
+/// pin's host and a hover's are the same one at the take-up that promotes it (see
+/// `settle_the_registration`).
+#[cfg(test)]
+pub(super) fn the_registration_host() -> Option<isize> {
+    THUMBNAIL
+        .lock()
+        .ok()
+        .and_then(|held| (held.host != 0).then_some(held.host))
+}
+
+/// How many placements this run has made (see `place_the_source`).
+#[cfg(test)]
+pub(super) fn the_source_placements() -> u32 {
+    SOURCE_PLACEMENTS.load(Ordering::SeqCst)
+}
+
+/// Forget the placements counted before a test (see `place_the_source`).
+#[cfg(test)]
+pub(super) fn clear_the_source_placements() {
+    SOURCE_PLACEMENTS.store(0, Ordering::SeqCst);
+}
+
 /// A box as a trace and a placement carry it: origin, width and height.
 type SourceBox = (i32, i32, i32, i32);
 
@@ -333,8 +370,12 @@ impl Thumbnail {
 /// costs is the window standing on its own for the moment it takes mpv to pump it, which is behind
 /// the hover the pin is being taken up from.
 ///
+/// **`host` is the window the picture is drawn in**: the pin's film host, or the hover's on the road
+/// a hover is shown through a thumbnail of its own (see `hover_film_host`). One source per live film,
+/// and the destination is whatever host is showing it — the source's box does not depend on which.
+///
 /// Safety: `source` is a window the caller found by `pid` and this app did not make.
-pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32) {
+pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
     let ex = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
     let invisible = the_source_is_invisible();
     let _ = unsafe { SetWindowLongPtrW(source, GWL_EXSTYLE, source_ex_style(ex, invisible)) };
@@ -383,9 +424,9 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32) {
     note_the_source(source, pid);
 
     // **Where mpv put the window it made for itself, before this app asks it for anything.** The
-    // source is launched at the pin's corner (see `the_source_launch_origin`) and this is the line
-    // that says whether mpv honoured it; the one placement's own line follows it with what this app
-    // asked for instead.
+    // source is launched at the corner of the box that shows it (see `the_source_launch_origin`) and
+    // this is the line that says whether mpv honoured it; the one placement's own line follows it
+    // with what this app asked for instead.
     let mut created = RECT::default();
     if unsafe { GetWindowRect(source, &mut created) }.is_ok() {
         note_pin_trace!(
@@ -399,24 +440,22 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32) {
         );
     }
 
-    if let Some(host) = pin_film_host::film_host() {
-        // **The one placement the source ever takes is made here**, in the adoption pass and before
-        // the registration draws anything: the film's own picture size at the host's corner, asked
-        // once and never asked for again (see `place_the_source`).
-        //
-        // **A film whose own size the player has not answered is waited for rather than guessed at**,
-        // and where even the probe has nothing the source is left where mpv put it — which is still a
-        // box this app never asks again, and the crop is of the picture that is there (see
-        // `the_films_native_size`). The wait happens before the lock is taken, so a read and a sleep
-        // are never spent holding what the pin's own resize steps want.
-        let placed = THUMBNAIL.lock().ok().and_then(|held| held.source);
-        let placed = place_the_source(source, host, pid, placed);
-        if let Ok(mut held) = THUMBNAIL.lock() {
-            if let Some(placed) = placed {
-                held.source = Some(placed);
-            }
-            settle_the_registration(&mut held, host);
+    // **The one placement the source ever takes is made here**, in the adoption pass and before the
+    // registration draws anything: the film's own picture size at the destination host's corner, asked
+    // once and never asked for again (see `place_the_source`).
+    //
+    // **A film whose own size the player has not answered is waited for rather than guessed at**,
+    // and where even the probe has nothing the source is left where mpv put it — which is still a
+    // box this app never asks again, and the crop is of the picture that is there (see
+    // `the_films_native_size`). The wait happens before the lock is taken, so a read and a sleep are
+    // never spent holding what the pin's own resize steps want.
+    let placed = THUMBNAIL.lock().ok().and_then(|held| held.source);
+    let placed = place_the_source(source, host, pid, placed);
+    if let Ok(mut held) = THUMBNAIL.lock() {
+        if let Some(placed) = placed {
+            held.source = Some(placed);
         }
+        settle_the_registration(&mut held, host);
     }
 }
 
@@ -595,6 +634,8 @@ fn place_the_source(
         y,
         asked.is_ok() as u8,
     );
+    #[cfg(test)]
+    SOURCE_PLACEMENTS.fetch_add(1, Ordering::SeqCst);
     Some(SourceShape {
         client: (width, height),
         aspect,
@@ -994,7 +1035,12 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     // and a different work area (see `keep_the_crop_on_the_screen`).
     keep_the_crop_on_the_screen(host, source, shown, a_re_point);
     if !a_re_point {
-        note_a_held_frame(live != shown.client);
+        // **A held frame is counted for a pin, and only while one is up**: a hover's host is asked the
+        // same question on every tick and is not what the heartbeat and the summary are about (see
+        // `HeldFrames`).
+        if pin_film_host::film_host() == Some(host) {
+            note_a_held_frame(live != shown.client);
+        }
         return;
     }
 

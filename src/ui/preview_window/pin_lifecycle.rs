@@ -1449,8 +1449,8 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // The pin is painted and on the screen over the hover's still-top-level host, and only now is
     // that host moved into this window: the move is the visible handover, and the picture never
     // sits in a hidden parent or behind a pin that has not appeared yet.
-    if adopts_the_hover_host {
-        adopt_the_hovered_film_in_the_host();
+    if let Some((host, _)) = the_hover_host {
+        adopt_the_hovered_film_in_the_host(host);
     }
 
     // Traced for the take-up that shows the pin: a step's cover was painted before this line, so
