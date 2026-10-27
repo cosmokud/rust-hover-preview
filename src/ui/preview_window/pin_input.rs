@@ -119,9 +119,9 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         // way the tick asks it: it is the strip the pointer is in, not the window it is over.
         let (_, height) = pin.window_size();
         let bar_top = height - pinned_transport_height(pin.dpi, pin.transport_bar);
-        // A step on its way, a handover, or a step's park holds the strips down: a move must not
-        // bring one back over the film it is holding (see `pin_chrome_is_held_down`).
-        let held_down = pin_chrome_is_held_down(pin);
+        // A handover holds the strips down: a move must not bring one back over the film it is
+        // taking the picture from (see `pin_chrome_is_held_down`).
+        let held_down = pin_chrome_is_held_down();
         if !held_down && y < caption.height {
             pin.chrome.caption = true;
         }
@@ -446,40 +446,27 @@ pub(super) unsafe fn pinned_transport_release(
     // A drag of the bar: the file is taken to the second the hand stopped at, which is the one
     // moment an FFmpeg player is ended and begun again (see `seek_pinned_playback`). The film was
     // playing under the hand until this moment — the press ends nothing (see
-    // `pinned_transport_press`) — so the cover is raised here, over the frame the hand let go on,
-    // and the player ends behind it with the replacement begun on the next line.
+    // `pinned_transport_press`) — and it goes on being the picture while the replacement opens the
+    // file: the registration standing in the pin's host is what covers a relaunch.
     if let Some(seconds) = seeking {
         // The aim is put back into the transport before any road below can paint from it: letting go
         // of the pointer above re-entered `pin_capture_lost`, and that road takes the aim with it —
-        // a capture taken away is a drag abandoned. A cover is painted *from* the transport, so
-        // without this the strip under the still stood at the second the ended player's own clock
-        // had reached, which is where the thumb was before the drag, and that is the strip handed to
-        // the compositor until the relaunch rebases the clock: the frame that flashes at the release,
-        // for as long as the kill and the spawn take. Nothing is left standing by it either, because
+        // a capture taken away is a drag abandoned. The transport is what the strips and the bar are
+        // painted from, so without this the strip under the hand stood at the second the player's own
+        // clock had reached until the relaunch rebased it: the frame that flashed at the release, for
+        // as long as the kill and the spawn took. Nothing is left standing by it either, because
         // every road that takes a file somewhere clears the aim itself (`begun` and `sought`).
         if current_media_type() == Some(MediaType::Video) {
             update_pin_transport(|transport| transport.seeking = Some(seconds));
         }
 
         if let Some((path, content, _, _)) = pinned_playback_state() {
-            // The cover, and the relaunch, in the order a park owns: the frame is read and painted
-            // flat before the window is hidden, and the player taking its place is begun last (see
-            // `park_pinned_player_for_seek`). **Nothing kills the player that is on screen here**, and
-            // that is the whole of what the cover is for: it is retired by the relaunch once the
-            // picture that replaces it is standing, so the host is never handed the box while the
-            // window the registration draws is a dead one (see `retire_replaced_player`). Only the
-            // roads that end a player raise the cover: a film the media engine draws is told where
-            // to go and gets there itself, and mpv's is a command written down its pipe and answered
-            // while the film runs (see `seek_pinned_playback` and `mpv_ipc`).
-            if current_media_type() == Some(MediaType::Video)
-                && video_route(&path) != VideoRoute::Mpv
-            {
-                let at = window_origin(hwnd)
-                    .map(|origin| (origin.0, origin.1))
-                    .or_else(|| pinned_content().map(|content| (content.0, content.1)))
-                    .unwrap_or((0, 0));
-                park_pinned_player_for_seek(hwnd, at);
-            }
+            // **Nothing is taken off the screen here**, and that is the whole of the order: the
+            // player the hand was watching keeps drawing, its source keeps the registration, and the
+            // player taking its place is begun behind it (see `seek_pinned_playback`). Only the roads
+            // that end a player relaunch: a film the media engine draws is told where to go and gets
+            // there itself, and mpv's is a command written down its pipe and answered while the film
+            // runs (see `mpv_ipc`).
             seek_pinned_playback(&path, content, seconds);
         }
     }

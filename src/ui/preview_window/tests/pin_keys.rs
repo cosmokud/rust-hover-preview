@@ -108,20 +108,10 @@ fn a_press_that_cannot_be_measured_takes_nothing_at_all() {
 /// halves — a `SetCapture` on the way in and a `release_pin_capture` on the way out — and
 /// nothing said they had to agree about which window.
 ///
-/// The player's window is **not** on this list any more, and the reason is the second of the two
-/// flashes a drag used to have. A move has no relaunch behind it, so the release used to put the
-/// picture back itself — the flag down, the band transparent, and the compositor's first look at a
-/// window that has been hidden for the length of a drag still filling in. The band is now filled
-/// with the frame the drag was holding until there is a player to see through it, and that is the
-/// settle's question on the loop's tick rather than a window procedure's (see
-/// `settle_pinned_park`). What this asserts is the negative of it: the release puts the pointer
-/// back and repaints, and touches nothing of somebody else's.
-///
-/// The band is moved by the hand while the drag runs, which is what a move *is*, and the player's
-/// window has not followed it: the park is a hide and nothing else, so the rect the window is
-/// still standing at is the one the drag started from. The swap puts it back at the band as it
-/// stands rather than the box the drag began at, which is the same place it did before — a tick
-/// later.
+/// The player's window is **not** on this list, and the reason is what a drag is: a gesture moves
+/// this app's window and one rectangle, and the film is a thumbnail of a source window nothing of
+/// the gesture touches (see `pin_film_thumbnail`). What this asserts is the negative of it: the
+/// release puts the pointer back and repaints, and touches nothing of somebody else's.
 #[test]
 fn a_drag_lets_go_of_the_pointer_it_took() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME

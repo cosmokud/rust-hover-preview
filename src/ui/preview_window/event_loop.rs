@@ -572,10 +572,10 @@ pub fn run_preview_window() {
                 // rather than because it died, and the loop that replaces them is this one (see
                 // `loop_ended_pinned_player`).
                 //
-                // Not while the cover is owed a player: a supersede-kill leaves the clock near
-                // the film's end with no player behind it, and a loop begun at the beginning
-                // here would stack a second relaunch onto the replacement already on its way.
-                if !pin_park_covers_a_relaunch() {
+                // Not while a relaunch is in flight: a supersede-kill leaves the clock near the
+                // film's end with no player behind it, and a loop begun at the beginning here
+                // would stack a second relaunch onto the replacement already on its way.
+                if !a_relaunch_is_in_flight() {
                     // An advance already on its way is not asked for again (see
                     // `loop_ended_pinned_player`): the wait, the walk and the load are
                     // what say one is.
@@ -728,12 +728,6 @@ pub fn run_preview_window() {
                     .is_some_and(|wait| wait.started.elapsed() >= PIN_JOB_GIVEUP)
                 {
                     pin_walk_wait = None;
-                    // A walk given up on is a step that will not land, and the pin keeps the file
-                    // it is showing: the strips come back rather than stay suppressed for a file
-                    // nobody is fetching (see `clear_pin_step_chrome`).
-                    if pin_walk.is_none() {
-                        clear_pin_step_chrome();
-                    }
                 }
 
                 // And a wait that is no longer a wait takes its arc down with it, once: a
@@ -858,11 +852,6 @@ pub fn run_preview_window() {
                 {
                     pin_request = Some(end_pin_state(Reason::MediaGone));
                 }
-                // And the band a drag's parking is holding: it is a hole again only once the
-                // player's own window is standing in it, which for a relaunch begun on a resize's
-                // release is the first tick that finds the replacement up (see
-                // `settle_pinned_park`).
-                settle_pinned_park();
                 settle_pending_hold();
 
                 // And what the taskbar button's own hover is offering, which is settled by the same
@@ -1143,12 +1132,6 @@ pub fn run_preview_window() {
                 // this is a question of which of the two is nearer the front of one band, and the
                 // answer is put in rather than left to whoever raised last.
                 //
-                // And a player parked for the length of a drag is not raised at all, which this arm
-                // is where a hand resting on an edge is answered: the drag's own raises only run
-                // while the pointer is moving, so a raise here is the whole of what a still hand
-                // would be looking at — and it put the film back over a band being held flat (see
-                // `pin_player_is_parked`). The slider is still raised over a parked player, because
-                // it is drawn into the pin's own window and that window is the one thing on screen.
                 video_playback::bring_the_video_window_to_the_front(video_pos);
             }
 
@@ -2558,12 +2541,10 @@ pub fn run_preview_window() {
                                         // of starting another (see `pin_walk_synced_its_playlist`).
                                         pin_walk_synced_its_playlist(&walk);
                                         pin_walk = Some(walk);
-                                    } else {
-                                        // The pin has left the file this walk was asked from:
-                                        // the answer is dropped, and with it the step whose
-                                        // file will not land (see `clear_pin_step_chrome`).
-                                        clear_pin_step_chrome();
                                     }
+                                    // The pin has left the file this walk was asked from: the
+                                    // answer is dropped rather than carried onto the file that
+                                    // replaced it.
                                 }
                                 // The hand-off button's name, for the file the pin is showing
                                 // now. An answer for a file the pin has already left is
@@ -2581,9 +2562,6 @@ pub fn run_preview_window() {
                             }
                         } else {
                             pin_walk_wait = None;
-                            // A walk answered for a pin that is over is a step with no band to
-                            // land in (see `clear_pin_step_chrome`).
-                            clear_pin_step_chrome();
                         }
                     }
                     PreviewMessage::MeasureProbed { path, size } => {
@@ -3228,14 +3206,6 @@ pub fn run_preview_window() {
                     // behind it, so the next press still steps the order it holds.
                     pin_walk = walk;
                 }
-
-                // A step whose file was stepped over or never planned has nothing left on its
-                // way to the band, so the suppression it raised ends here rather than waiting
-                // for an install that is not coming (see `clear_pin_step_chrome`). A walk still
-                // held, or a load still running, keeps it for the file that is.
-                if pin_load.is_none() && pin_walk.is_none() {
-                    clear_pin_step_chrome();
-                }
             }
 
             // A relayout of a pinned window's own media has answered, and is installed here on this
@@ -3315,21 +3285,12 @@ pub fn run_preview_window() {
                         arm_pin_to_the_front();
                         extend_pin_front_owed(&mut pin_front_owed);
 
-                        // And the band a step's cover is holding, where this install came out of
-                        // a hold: the park's own settle ran earlier in this tick, before the pin
-                        // had the box it has just been given, so it is asked again now the file
-                        // the window was held for is in it. A cover left standing over a band
-                        // that has moved is the outgoing frame stretched into the incoming
-                        // file's shape, which is the whole of what the hold was for (see
-                        // `PinSwapHold` and `settle_pinned_park`).
-                        settle_pinned_park();
-
                         // The chrome a step took down comes back with the file that replaced its
-                        // film: asked here, after the take-up has cleared the step, because the
-                        // park's own settle can run earlier in this tick — before this install —
-                        // and its ask is then answered as held down. The repaint below carries the
-                        // new file's caption into the strips and syncs them, so the strips stand
-                        // with the first paint of the film rather than a tick later.
+                        // film: asked here, after the take-up has cleared the step, because a
+                        // refresh earlier in this tick — before this install — is answered as held
+                        // down. The repaint below carries the new file's caption into the strips
+                        // and syncs them, so the strips stand with the first paint of the film
+                        // rather than a tick later.
                         if refresh_the_pin_chrome_now() {
                             refresh_requested = true;
                         }

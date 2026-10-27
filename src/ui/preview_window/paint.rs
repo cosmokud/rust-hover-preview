@@ -170,14 +170,12 @@ pub(super) unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
 /// change no eye can see and the pin's own point to win (see `fill_band_hit_testable`).
 ///
 /// The kind is what is read, because a film is the only band a player of somebody else's stands
-/// in; every other kind's band is this app's own pixels already, and a band a park has painted
-/// flat is left alone, since what stands in it is the parked film rather than a hole to close. The
-/// chrome's own rows are the same claim wherever they are not the media's own: a kind whose chrome
-/// stands in bands around its media owes them the same least pixel (see
-/// `chrome_rows_are_hit_testable`), and a kind whose chrome is drawn over its media has no such
-/// rows — they are the band's own, answered here.
-pub(super) fn film_band_is_hit_testable(media: MediaType, parked: bool) -> bool {
-    !parked && matches!(media, MediaType::Video)
+/// in; every other kind's band is this app's own pixels already. The chrome's own rows are the
+/// same claim wherever they are not the media's own: a kind whose chrome stands in bands around its
+/// media owes them the same least pixel (see `chrome_rows_are_hit_testable`), and a kind whose
+/// chrome is drawn over its media has no such rows — they are the band's own, answered here.
+pub(super) fn film_band_is_hit_testable(media: MediaType) -> bool {
+    matches!(media, MediaType::Video)
 }
 
 /// Whether the chrome's own rows of a pinned window are the pin's claim rather than its chrome:
@@ -342,42 +340,6 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         );
     }
 
-    // A player parked for the length of a drag is painted over rather than painted through: the
-    // band is transparent everywhere else so that FFmpeg's own window shows through it, and a
-    // transparent band with the player hidden is a hole in the desktop shaped like a video. So the
-    // band is filled with the last frame the player had on screen, scaled to the box being dragged
-    // to exactly as a picture's own frame is (see `compose_parked_band`), and black under it rather
-    // than the configured `Background -> Video` — that setting is allowed to be `Transparent`, and
-    // a deliberately transparent band is exactly the hole this is here not to leave.
-    if paint.parked {
-        if mem_dc.is_some() {
-            let held = held_video_frame();
-            compose_parked_band(
-                held.as_ref()
-                    .map(|frame| (frame.pixels.as_slice(), (frame.width, frame.height))),
-                band_width,
-                BandTarget {
-                    out,
-                    width: band_width,
-                    origin_y: band_top.max(0) as u32,
-                    height: band_height,
-                    frame,
-                    // A parked film is stood in for by the frame it was holding, scaled to the place the
-                    // box is: the film is in a window of its own over this band, so this is the last frame
-                    // before the drag and not a picture the wheel has placed.
-                    exact: (
-                        frame.0 as f32,
-                        frame.1 as f32,
-                        frame.2 as f32,
-                        frame.3 as f32,
-                    ),
-                },
-            );
-        } else {
-            fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
-        }
-    }
-
     if mem_dc.is_some() {
         if let Ok(media) = CURRENT_MEDIA.lock() {
             if let Some(media) = media.as_ref() {
@@ -412,10 +374,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                             exact,
                         },
                     );
-                } else if film_band_is_hit_testable(
-                    media.media_type,
-                    paint.parked,
-                ) {
+                } else if film_band_is_hit_testable(media.media_type) {
                     // Nothing is composed into this band — the film is in a window under it — so
                     // what is written here is only ever the pin's own claim on the pixel (see
                     // `film_band_is_hit_testable`). A hosted film with no first frame in the host
@@ -428,7 +387,6 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     // bitmap keeps the pin's claim the way the strips' own test reads it (see
                     // `the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows`).
                     let hosted_needs_cover = pin_film_host::film_host().is_some()
-                        && !paint.parked
                         && !pin_film_host::the_hosted_player_is_drawing(
                             VIDEO_PID.load(Ordering::Acquire),
                         );
@@ -817,14 +775,6 @@ pub(super) struct PinnedPaint {
     pub(super) playing: bool,
     pub(super) position: Option<f64>,
     pub(super) duration: Option<f64>,
-    /// Whether this pin's player has been put away for the length of a drag, which is what makes
-    /// the band a flat colour rather than a hole the player is supposed to show through.
-    ///
-    /// It is a field rather than a question asked of the pin at the paint because the paint may
-    /// not hold the pin's lock, and because the answer changes without anything about the window
-    /// changing — the same window, the same media, the same box, painted a different colour
-    /// because a hand is on its edge (see `park_pinned_player`).
-    pub(super) parked: bool,
 }
 
 /// A repaint's one tooltip, taken out of the pin as a value: which button is saying it and what
@@ -894,7 +844,6 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             volume: pin.volume,
             volume_popup: None,
             transport_live: pin.transport_live,
-            parked: pin.parked,
         }
     };
 
@@ -1074,42 +1023,6 @@ pub(super) fn copy_frame_into_band(
         destination.copy_from_slice(source);
     }
 
-    true
-}
-
-///
-/// **This is the whole of what a drag of a pinned film is drawn from, and both halves of it are
-/// load-bearing.** The opaque fill is there whatever else happens: the band is transparent
-/// everywhere a film is playing, and a transparent band with nothing behind it is a hole in the
-/// desktop shaped like a video, so a picture that could not be taken has to leave black rather
-/// than leave a hole. And the picture is the *last frame the player had on screen*, scaled to the
-/// box the window is being dragged to by the same road a resized picture is scaled by — so a band
-/// grown shows the film larger and a band shrunk shows it smaller, and a hand is choosing a size
-/// against the film rather than against a rectangle (see `compose_media_into_band`).
-///
-/// A frame that is no longer held is not a reason to paint black twice over: the flat fill is the
-/// fallback and the frame goes on top of it, so a frame of a size that does not cover the whole
-/// band — or a road that declines to draw at all — leaves a band that is still opaque.
-pub(super) fn compose_parked_band(
-    held: Option<(&[u8], (u32, u32))>,
-    width: u32,
-    target: BandTarget<'_>,
-) -> bool {
-    fill_band_opaque(&mut *target.out, width, target.origin_y, target.height);
-
-    let Some((pixels, (frame_width, frame_height))) = held else {
-        return false;
-    };
-
-    compose_media_into_band(
-        pixels,
-        frame_width,
-        frame_height,
-        (width, target.height),
-        TransparentBackground::Black,
-        true,
-        target,
-    );
     true
 }
 

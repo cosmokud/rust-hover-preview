@@ -504,21 +504,6 @@ pub(super) struct PinnedPreview {
     pub(super) tooltip: PinTooltip,
     /// A drag or a resize in progress.
     pub(super) dragging: Option<PinDrag>,
-    /// Whether the player behind this pin has been put away under a cover.
-    ///
-    /// **No gesture raises one.** A press, a move, a drag and a resize are this app's own window
-    /// work, and the film follows them as a thumbnail of a source window nothing moves. A cover is
-    /// what a *relaunch* the user asked for raises — a seek and a step — because that player is
-    /// ended and the band would be the desktop until its replacement decodes (see
-    /// `park_pinned_player_for_seek`).
-    ///
-    /// While this is set the player's window is hidden and the band is painted a flat colour
-    /// instead of being left for it to show through.
-    ///
-    /// **It carries nothing about the film**: the film is not paused for a cover, so whether it is
-    /// held is the transport's own fact and nothing of it is written here (see
-    /// `park_pinned_player_for_seek`).
-    pub(super) parked: bool,
     /// Where the playback of a video is, which is what the transport bar is drawn from and what
     /// a seek or a pause is measured against (see `PinTransport`).
     pub(super) transport: PinTransport,
@@ -571,7 +556,6 @@ impl PinnedPreview {
             last_press: None,
             tooltip: PinTooltip::default(),
             dragging: None,
-            parked: false,
             transport: PinTransport::default(),
             volume: PinVolume::default(),
             audio_hovered: None,

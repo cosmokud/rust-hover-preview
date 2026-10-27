@@ -44,21 +44,18 @@
 //! share one list, and that the list can be read back on a machine with no display and no pin
 //! in it.
 //!
-//! It grew by five for a reason worth recording, because the five are not lifecycle operations
+//! It grew by four for a reason worth recording, because the four are not lifecycle operations
 //! at all: they are *a drag*, which is the other thing this window is asked of a pin and the
-//! only one that had no test surface. `pointer`, `window_box`, `capture`, `repaint` and
-//! `unpark_player_window` are the whole of what "a press becomes a carried drag, and the drag is
-//! let go of" costs the machine. They are here rather than in a second trait over the same window
-//! for the reason the two ends of the capture are here: they are two halves of one handoff, and a
-//! handoff whose halves are asked of two different objects is a handoff that can disagree with
-//! itself — which is what a window left holding the pointer for the whole desktop was (see
-//! `begin_pin_drag`).
+//! only one that had no test surface. `pointer`, `window_box`, `capture` and `repaint` are the
+//! whole of what "a press becomes a carried drag, and the drag is let go of" costs the machine.
+//! They are here rather than in a second trait over the same window for the reason the two ends of
+//! the capture are here: they are two halves of one handoff, and a handoff whose halves are asked
+//! of two different objects is a handoff that can disagree with itself — which is what a window
+//! left holding the pointer for the whole desktop was (see `begin_pin_drag`).
 //!
-//! The last of the five is a window of *another* process, and it earns its place the same way the
-//! others do: the defect it covers is a film on screen at a box nobody put it at, and a test can
-//! only see that by being shown the call. Every other way of undoing a drag's park was invisible
-//! from here — the flag came down and nothing was recorded, so an unpark that showed the window
-//! without placing it read exactly like one that placed it (see `unpark_pinned_player`).
+//! Nothing of the player is asked through this seam, and that is the film road's own rule: a drag
+//! moves this app's window and one rectangle, and the film is a thumbnail of a source window no
+//! gesture moves (see `pin_film_thumbnail`).
 //!
 //! What is deliberately still *not* here is the rest of a drag: `apply_pin_drag` moves the
 //! window and resizes it, and that is a `SetWindowPos` and an `UpdateLayeredWindow` on

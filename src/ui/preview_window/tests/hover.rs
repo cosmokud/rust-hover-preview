@@ -497,7 +497,10 @@ fn a_name_a_language_and_a_format_share_is_the_page_the_file_is() {
     let hover = HoverFacts::read(&image);
     assert_eq!(hover.routed_kind(), Some(PreviewType::Peazip));
     assert!(hover.engine_archive(), "a disk image is the engine's");
-    assert!(!hover.is_text(), "and not a page of the source it is named with");
+    assert!(
+        !hover.is_text(),
+        "and not a page of the source it is named with"
+    );
 
     // A DIF spreadsheet, under the name the video list reads as a DV stream.
     let sheet = folder.join("sheet.dif");
@@ -505,7 +508,10 @@ fn a_name_a_language_and_a_format_share_is_the_page_the_file_is() {
 
     let hover = HoverFacts::read(&sheet);
     assert_eq!(hover.routed_kind(), Some(PreviewType::Libre));
-    assert!(!hover.is_video(), "a spreadsheet is not the film of that name");
+    assert!(
+        !hover.is_video(),
+        "a spreadsheet is not the film of that name"
+    );
     assert!(
         !video_probe_due(&hover),
         "so no shape is probed for, and no wait is shown for one"

@@ -89,7 +89,8 @@ pub(super) fn retire_replaced_player(retiring: u32, replacement: u32) {
         // host answers with the source the registration draws rather than with a window of its own (see
         // `pin_film_thumbnail::the_source_is_standing`). A replacement whose window is up but which has
         // not been handed the picture yet covers nothing: the player it displaced is still on screen.
-        video_window_for(retiring).is_some() || pin_film_thumbnail::the_source_is_standing(retiring),
+        video_window_for(retiring).is_some()
+            || pin_film_thumbnail::the_source_is_standing(retiring),
         Instant::now(),
     );
     if let Some(ending) = ending {
@@ -111,19 +112,14 @@ fn note_the_retirement(end: RetireEnd, pid: u32) {
 }
 
 /// Write the line that must never appear: a player ended while its own window is the source the pin's
-/// host is drawing, with nothing over the band.
+/// host is drawing.
 ///
-/// **A park is the one cover that answers this differently, and honestly so**: the band is the frozen
-/// frame a cover took, so a player ended behind it is not exposed — what is on screen is not its window.
-/// Every other case is a player whose going takes the picture with it, and the order the relaunch is
-/// built on is that no player is ended until its replacement stands (see `retire_replaced_player`).
+/// Nothing covers this except the registration itself: what keeps the picture on screen across a
+/// relaunch is the registration the *old* player's window is drawn through, so a player ended while
+/// its source still stands is a picture taken off the screen. The order the relaunch is built on is
+/// that no player is ended until its replacement stands (see `retire_replaced_player`).
 pub(super) fn note_an_end_while_standing(pid: u32) {
-    // **Asked without waiting for the pin's lock**, because a line about a player must never be the
-    // reason a caller's lock is waited on for a second time (see `pin_state_try`): a pin whose state is
-    // busy is read as one without a cover over it, which is the direction that says more, not less.
-    let covered = pin_window::pin_state_try()
-        .is_some_and(|pinned| pinned.pin().is_some_and(|pin| pin.parked));
-    if pid != 0 && !covered && pin_film_thumbnail::the_source_is_standing(pid) {
+    if pid != 0 && pin_film_thumbnail::the_source_is_standing(pid) {
         note_pin_trace!("player ended while standing pid {pid}: the picture went with it");
     }
 }
@@ -200,28 +196,6 @@ pub(super) fn retirement_after_relaunch(
         }),
         Some(retiring),
     )
-}
-
-/// Whether the player standing in the band is a different process from the one a park captured its
-/// frame for — which is the whole of what "the replacement has not put a frame up yet" can be asked
-/// of anything this app knows.
-///
-/// **It is asked of the pids and not of the window, because a window says nothing about whether the
-/// process behind it has decoded anything.** A player that has just been begun has a window of its
-/// own within a few milliseconds — SDL makes it before it opens the file — and that window is
-/// visible, correctly sized and empty: which is exactly the state a park that hands the band back
-/// on visibility alone leaves the desktop behind for as long as the decode takes (see
-/// `park_swap_arm`). A pid is the one fact that tells a player carrying the picture the park
-/// captured from a player that has not opened the file yet, and it is a fact this app wrote down
-/// itself rather than read out of a process of somebody else's.
-///
-/// A pid of zero on either side is not a replacement but a player that is not there: `VIDEO_PID` is
-/// cleared by every path that ends a player, so a cleared one says the pin has nothing playing
-/// rather than that something new has taken its place — and a park whose player has gone has no
-/// replacement to wait for (see `PIN_PARK_SWAP_TIMEOUT`).
-pub(super) fn player_replaced_since(parked: u32) -> bool {
-    let now = VIDEO_PID.load(Ordering::Acquire);
-    parked != 0 && now != 0 && parked != now
 }
 
 /// Whether a player being replaced can be ended now, or is still the one on screen.

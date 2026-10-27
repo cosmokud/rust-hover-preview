@@ -79,26 +79,6 @@ pub(crate) trait PinWindow {
     /// memory rather than a test.
     fn repaint(&self);
 
-    /// Put the window FFmpeg draws the picture into back where the pin's media band is, and put it
-    /// up there — which is the whole of what undoes a drag's park.
-    ///
-    /// One method rather than a show and a place, because on a window of another process the show
-    /// *is* the place: `ShowWindow` un-hides a window where it stands, and both halves of undoing
-    /// a park are one `SetWindowPos` carrying `SWP_SHOWWINDOW` (see `ensure_video_window_topmost`).
-    /// Split into two, the second is the half that can be left out, and a show without the place
-    /// is a film on screen at the box the drag began at — the failure this call exists to be able
-    /// to assert about.
-    ///
-    /// The band is read at the moment the park ends rather than remembered from before it, which
-    /// is the whole of what a move changes: the hand carries the window somewhere else and every
-    /// place that would have told the player about it was answered out of the hand while the park
-    /// stood, so the rect the player's window is still at is the one the drag started from.
-    ///
-    /// `None` for a pin with no band to go back into — collapsed, or already gone — where there is
-    /// no rect to be told and only the window's own hiddenness left to take back. That is a real
-    /// answer rather than a degenerate one, and the recorder can be given it.
-    fn unpark_player_window(&self, band: Option<ScreenRegion>);
-
     /// Leave a message for the loop to answer, rather than making it answer now.
     fn post(&self, hwnd: isize, message: u32);
 }
@@ -135,13 +115,6 @@ pub(crate) enum PinWindowCall {
     /// The pin's own window drawn as it stands, which is what a drag's end owes after letting
     /// go of the pointer: the window is where the hand left it and the screen has to be told.
     Repaint,
-    /// The player's own window put back where the pin's band is and put up there — the band, or
-    /// nothing at all where there is no band to put it back into.
-    ///
-    /// Recorded whole rather than as a show and a place, because the two are one `SetWindowPos` on
-    /// a window of another process and a test that could only see one of them would pass against
-    /// the defect this records: a picture on screen at the box the drag began at.
-    UnparkPlayerWindow(Option<ScreenRegion>),
     Post(u32),
 }
 
@@ -254,10 +227,6 @@ impl PinWindow for RecordedPinWindow {
 
     fn repaint(&self) {
         self.record(PinWindowCall::Repaint);
-    }
-
-    fn unpark_player_window(&self, band: Option<ScreenRegion>) {
-        self.record(PinWindowCall::UnparkPlayerWindow(band));
     }
 
     fn post(&self, _hwnd: isize, message: u32) {
