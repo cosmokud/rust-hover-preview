@@ -5788,18 +5788,36 @@ fn a_relaunch_on_the_off_road_freezes_nothing() {
     ffplay_window::clear_pause_posts();
     mpv_ipc::clear_noted();
     pin_trace::clear_noted();
+    clear_restart_count();
+    pin_film_thumbnail::clear_the_unregistrations();
+
+    restart_pinned_player(&path, film.box_, 10.0, false, RestartReason::Seek);
 
     assert!(
-        mpv_ipc::noted_lines().is_empty(),
-        "the off road tells the player nothing: {:?}",
+        !mpv_ipc::noted_lines()
+            .iter()
+            .any(|line| line.contains("pause")),
+        "the off road tells the player nothing of a hold: {:?}",
         mpv_ipc::noted_lines()
     );
+    let lines = pin_trace::noted_lines();
     assert!(
-        pin_trace::noted_lines().is_empty(),
-        "and no line claims a freeze that was not made"
+        !lines.iter().any(|line| line.starts_with("outgoing picture frozen")
+            || line.starts_with("placeholder")
+            || line.starts_with("still captured")),
+        "and no line claims a freeze or a cover that was not made: {lines:?}"
     );
     assert!(ffplay_window::suspended_players().is_empty());
     assert_eq!(ffplay_window::pause_posts(), 0);
+    assert!(
+        pin_film_thumbnail::the_source_is_up(pid),
+        "the registration goes on drawing the frame that is on screen"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "which is never taken down for the wait"
+    );
     assert_eq!(
         freeze_road(),
         FreezeRoad::Off,
@@ -5815,12 +5833,12 @@ fn a_relaunch_on_the_off_road_freezes_nothing() {
     pin_trace::clear_noted();
 }
 
-/// **A posted key reaches a window wearing the source's own extended style.** The freeze of a film
-/// FFmpeg's player is drawing is the pause key posted to the player's own window (see
-/// `freeze_the_outgoing_picture`), and that window is the source — which wears `WS_EX_TRANSPARENT`
-/// and `WS_EX_NOACTIVATE` (see `player_ex_style_for`). Neither bit is about queued input: a key
-/// posted to a window is delivered to that window's queue whatever it is styled, and this is that
-/// measured rather than assumed. What a test cannot reach is the player's own reading of the key.
+/// **A posted key reaches a window wearing the source's own extended style.** The pause key the
+/// transport posts to an FFmpeg player (see `ffplay_window::video_key_pause_for`) is sent to the
+/// player's own window, and that window is the source — which wears `WS_EX_TRANSPARENT` and
+/// `WS_EX_NOACTIVATE` (see `player_ex_style_for`). Neither bit is about queued input: a key posted to
+/// a window is delivered to that window's queue whatever it is styled, and this is that measured rather
+/// than assumed. What a test cannot reach is the player's own reading of the key.
 #[test]
 fn a_posted_pause_key_reaches_a_window_wearing_the_sources_own_style() {
     let window = unsafe {
@@ -5875,9 +5893,12 @@ fn a_posted_pause_key_reaches_a_window_wearing_the_sources_own_style() {
 
 /// **The picture that is standing is the one the tracker and the z-order follow, not the replacement
 /// that has made no window yet.** A relaunch records its new player and begins it; for the whole of the
-/// wait the player before it is frozen and is what the host is drawing — so the host is drawing, the
-/// fit and topmost re-assert keep working, and a seek is not the instant the pin is declared empty (see
+/// wait the player before it is still drawing — so the host is drawing, the fit and topmost re-assert
+/// keep working, and a seek is not the instant the pin is declared empty (see
 /// `pin_film_host::the_host_is_drawing` and `pin_film_thumbnail::the_standing_source_process`).
+///
+/// The `off` road is the one where that player stays on screen: `dc` ends it at once and stands on a
+/// cover of this app's own, which the host already owes the screen (see `FreezeRoad`).
 #[test]
 fn the_standing_source_is_what_the_tracker_and_the_topmost_road_follow() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -5912,13 +5933,17 @@ fn the_standing_source_is_what_the_tracker_and_the_topmost_road_follow() {
     pin_trace::clear_noted();
     pin_film_thumbnail::clear_the_unregistrations();
     let hides = pin_film_host::host_hides_asked();
+    // **The road the outgoing player stays on screen under**: `dc` ends it and stands on a cover, which
+    // is a different question from the one this test asks (see `FreezeRoad`).
+    stand_the_freeze_road_in(Some(FreezeRoad::Off));
     restart_pinned_player(&path, film.box_, 90.0, false, RestartReason::Seek);
+    stand_the_freeze_road_in(None);
     let replacement = VIDEO_PID.load(Ordering::SeqCst);
     assert_ne!(replacement, pid, "a replacement player was begun");
 
     assert!(
         pin_film_host::the_host_is_drawing(),
-        "the frozen picture the seek left behind is what the host is drawing"
+        "the picture the seek left standing is what the host is drawing"
     );
     assert!(
         !pin_film_host::the_hosted_player_is_drawing(replacement),
@@ -5936,13 +5961,13 @@ fn the_standing_source_is_what_the_tracker_and_the_topmost_road_follow() {
         pin_trace::noted_lines()
             .iter()
             .any(|line| line == "topmost shown: pin host drawing"),
-        "and the host the frozen frame is drawn in is shown: {:?}",
+        "and the host the standing frame is drawn in is shown: {:?}",
         pin_trace::noted_lines()
     );
     assert_eq!(
         pin_film_host::host_hides_asked(),
         hides,
-        "with nothing hidden behind the freeze"
+        "with nothing hidden behind the wait"
     );
     assert_eq!(
         pin_film_thumbnail::the_unregistrations(),
@@ -6141,8 +6166,8 @@ fn a_cover_standing_leaves_the_pins_band_to_the_host() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
-    // FFmpeg's player is the road a relaunch's still is painted on (see
-    // `pin_film_thumbnail::stand_the_pressed_still`).
+    // FFmpeg's player is the road a relaunch's cover is painted on (see
+    // `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`).
     let film = ffplay_standing_film();
     with_pin(|pin| pin.transport_bar = true);
     unsafe { show_pinned_window(film.pin_hwnd) };

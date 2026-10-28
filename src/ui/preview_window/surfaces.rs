@@ -87,12 +87,12 @@ thread_local! {
 /// The pixels the desktop is showing in a screen rectangle, or nothing where there is no picture to
 /// take.
 ///
-/// It is read off the desktop with `BitBlt` rather than asked of a window with `PrintWindow`, and the
-/// reason is what is being taken: a picture the user is looking at is read where it is. A window that
-/// draws through D3D — which FFmpeg's player does whenever the decoder is hardware-accelerated, which
-/// a page's own window does, and which a layered window like a preview does whatever it holds —
-/// answers `PrintWindow` with a black rectangle or with nothing, and that is the one thing a picture
-/// of a pin cannot be (see `take_the_pin_picture`).
+/// It is read off the desktop with `BitBlt` rather than asked of a window for the frame it last
+/// presented, and the reason is what is being taken: a picture the user is looking at is read where it
+/// is. A window that draws through D3D — which FFmpeg's player does whenever the decoder is
+/// hardware-accelerated, which a page's own window does, and which a layered window like a preview does
+/// whatever it holds — answers an ask for that frame with a black rectangle or with nothing, and that is
+/// the one thing a picture of a pin cannot be (see `take_the_pin_picture`).
 ///
 /// GDI writes colour and not alpha, since the desktop has nothing behind it to be transparent over: a
 /// caller that composites these pixels premultiplied has to fill it in.
