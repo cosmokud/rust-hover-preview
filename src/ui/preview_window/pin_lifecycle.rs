@@ -3,6 +3,7 @@
 
 use super::pin_trace::note_pin_trace;
 use super::*;
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 
 /// A pin was asked to come down, by the Explorer hook (previews were turned off, or the</path>
 /// trigger key is holding them back), by the tray, or by the resumption of the machine
@@ -63,6 +64,19 @@ pub(super) unsafe fn take_the_hover_down(
         return;
     }
 
+    // **The player goes with the hover, and the foreground goes before it.** Killing a player that
+    // holds the foreground hands it to the desktop, which is a window over every listing on the
+    // display: the next hover is then hidden behind it and nothing is previewed until the user
+    // clicks something else. So the listing the player took it from is asked for it back first —
+    // and, where that ask was refused, once more after the kill has left the desktop in front. Only
+    // this road asks: a pin owns its own foreground question, and a hover under a pin holds none
+    // (see `a_pin_owns_the_window_a_hide_would_take_down`).
+    let refused = if pinned() {
+        false
+    } else {
+        unsafe { give_the_foreground_back_from_a_hover_player() }
+    };
+
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(ref mut media) = *current {
             media.cancel_background_work();
@@ -74,6 +88,10 @@ pub(super) unsafe fn take_the_hover_down(
     *video_pos = (0, 0, 0, 0);
 
     unsafe { hover_film_host::take_down_the_hover_film_host() };
+
+    if refused {
+        unsafe { give_the_foreground_back_from_the_desktop() };
+    }
 }
 
 impl PinnedPreview {
@@ -2353,6 +2371,208 @@ pub(super) unsafe fn give_the_foreground_back_from(player: HWND) {
         note_pin_trace!("foreground given back {:?} -> {:?}", player, behind);
         let _ = SetForegroundWindow(behind);
     }
+}
+
+/// Whether `window` is a player this app began — the one kind of window a hover has to take the
+/// foreground back from.
+///
+/// A window of this app's own is deliberately not one: the loop's window and the hover's film host
+/// are `WS_EX_NOACTIVATE` and nothing makes either the foreground, so a hand-back that reached for
+/// one would be the pin's question and not the hover's (see `a_window_of_ours`). The player the
+/// launch recorded is answered first, because it is the answer the tick pays for once a frame and
+/// it costs one atomic read (see `VIDEO_PID`).
+fn a_player_this_app_began(window: HWND) -> bool {
+    if window.is_invalid() {
+        return false;
+    }
+
+    #[cfg(test)]
+    if a_recorded_foreground_is_standing()
+        && window.0 as isize == A_RECORDED_FOREGROUND.load(Ordering::SeqCst)
+    {
+        return A_RECORDED_PLAYER_IN_FRONT.load(Ordering::SeqCst);
+    }
+
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+    pid != 0
+        && (pid == VIDEO_PID.load(Ordering::SeqCst)
+            || crate::app::engine_processes::holds_a_player(pid))
+}
+
+/// The window a hover owes the foreground to, where `front` is a player this app began: the window
+/// the launch found in front — the listing the user was working in — and, where that one has gone
+/// or is itself one of ours, the ordinary window behind the player (see `the_window_behind`, which
+/// refuses a window of ours as a target, and `a_players_foreground_goes_to`, which is the pin's own
+/// ask of the same question).
+///
+/// `front_is_a_player` is handed in rather than read here, so the rule can be answered on a machine
+/// with no player begun on it — the discipline `explorer_state_from_counts` keeps for the same
+/// reason.
+pub(super) fn a_hovers_foreground_goes_to(
+    front: HWND,
+    recorded: isize,
+    front_is_a_player: bool,
+) -> Option<HWND> {
+    if front.is_invalid() || !front_is_a_player {
+        return None;
+    }
+
+    let behind = HWND(the_window_behind(recorded, front.0 as isize) as *mut _);
+    (!behind.is_invalid() && behind != front).then_some(behind)
+}
+
+/// Put `behind` in front, asking the way a program that is not the foreground can: the plain ask
+/// first and — where Windows refuses it — the one retry every launcher needs.
+///
+/// **`SetForegroundWindow` is refused to a process that is not the foreground's**, which is exactly
+/// where a hover stands: the player is in front, this app did not receive the machine's last input
+/// event, and the call is answered with the *target's* taskbar button flashing over a window it was
+/// never given — the flash the user sees over Explorer. What makes the second ask this app's to
+/// make is joining the foreground thread's own input queue for the length of it, after which the
+/// same call is granted; it is detached again whatever the answer, so no queue is left joined. One
+/// attempt and no loop: a target that cannot take the keyboard is the next tick's question.
+///
+/// Safety: `behind` is a window read from the desktop rather than held by the caller.
+unsafe fn put_the_foreground_in_front(behind: HWND) -> bool {
+    #[cfg(test)]
+    if a_recorded_foreground_is_standing() {
+        THE_FOREGROUND_ASKED_FOR.store(behind.0 as isize, Ordering::SeqCst);
+        return true;
+    }
+
+    if unsafe { SetForegroundWindow(behind) }.as_bool() {
+        return true;
+    }
+
+    let front = unsafe { GetForegroundWindow() };
+    let our_thread = unsafe { GetCurrentThreadId() };
+    let front_thread = if front.is_invalid() {
+        0
+    } else {
+        unsafe { GetWindowThreadProcessId(front, None) }
+    };
+    if front_thread == 0 || front_thread == our_thread {
+        return false;
+    }
+    if !unsafe { AttachThreadInput(our_thread, front_thread, true) }.as_bool() {
+        return false;
+    }
+    let landed = unsafe { SetForegroundWindow(behind) }.as_bool();
+    let _ = unsafe { AttachThreadInput(our_thread, front_thread, false) };
+    landed
+}
+
+/// Give the foreground back where a *hover's* player has taken it, answering whether a hand-back
+/// was asked for and refused — the one answer the end of a hover needs (see `take_the_hover_down`).
+///
+/// **A hover's player takes the keyboard from the listing the moment its window opens.** Both
+/// engines make their window activated and only style it afterwards, and on the hosted road nothing
+/// styles the source at all — the hover's road has no `apply_noactivate_to_hwnd` of its own (see
+/// `ffplay_window::apply_noactivate_to_hwnd`, which is answered by the host). So for as long as the
+/// player holds it, Explorer is not the window the user is working in, and asking for it back is
+/// refused unless the ask is made this app's own first (see `put_the_foreground_in_front`).
+pub(super) unsafe fn give_the_foreground_back_from_a_hover_player() -> bool {
+    let front = the_foreground_in_front();
+    let Some(behind) = a_hovers_foreground_goes_to(
+        front,
+        FOREGROUND_BEFORE_A_PLAYER.load(Ordering::SeqCst),
+        a_player_this_app_began(front),
+    ) else {
+        return false;
+    };
+
+    let landed = unsafe { put_the_foreground_in_front(behind) };
+    note_pin_trace!(
+        "hover foreground: player {:?} behind {:?} landed {}",
+        front,
+        behind,
+        landed as u8
+    );
+    !landed
+}
+
+/// Give the foreground back where a *hover's* own windows have left it on the desktop, which is
+/// what killing a player that held it does: nothing of ours is in front any more, and the desktop a
+/// kill hands the foreground to is a window that hides every listing on it (see
+/// `foreground_cover_rect`). It is asked after the kill and only where the hand-back before it was
+/// refused, so a desktop the user put in front themselves is not answered by this app.
+pub(super) unsafe fn give_the_foreground_back_from_the_desktop() {
+    let front = the_foreground_in_front();
+    if front.is_invalid() || !unsafe { foreground_is_the_desktop(front) } {
+        return;
+    }
+
+    let behind = HWND(
+        the_window_behind(FOREGROUND_BEFORE_A_PLAYER.load(Ordering::SeqCst), front.0 as isize)
+            as *mut _,
+    );
+    if behind.is_invalid() || behind == front {
+        return;
+    }
+
+    let landed = unsafe { put_the_foreground_in_front(behind) };
+    note_pin_trace!(
+        "hover foreground: desktop {:?} behind {:?} landed {}",
+        front,
+        behind,
+        landed as u8
+    );
+}
+
+/// The window in front, as a hover's hand-backs read it.
+fn the_foreground_in_front() -> HWND {
+    #[cfg(test)]
+    if a_recorded_foreground_is_standing() {
+        return HWND(A_RECORDED_FOREGROUND.load(Ordering::SeqCst) as *mut _);
+    }
+
+    unsafe { GetForegroundWindow() }
+}
+
+// The recorded foreground a test reads a hover's hand-backs through, and the window they asked for:
+// a test process cannot make a window of its own the foreground, and a player of this app's cannot
+// be begun over somebody's desktop — the same seam `RecordedPinWindow` gives the pin's own roads.
+#[cfg(test)]
+static A_RECORDED_FOREGROUND: AtomicIsize = AtomicIsize::new(0);
+#[cfg(test)]
+static A_RECORDED_PLAYER_IN_FRONT: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static THE_FOREGROUND_ASKED_FOR: AtomicIsize = AtomicIsize::new(0);
+
+/// Whether a test has recorded what is in front (see `A_RECORDED_FOREGROUND`).
+#[cfg(test)]
+fn a_recorded_foreground_is_standing() -> bool {
+    A_RECORDED_FOREGROUND.load(Ordering::SeqCst) != 0
+}
+
+/// Stand a recorded foreground where a hover's hand-backs will read it, and say whether it is a
+/// player this app began (see `a_player_this_app_began`).
+#[cfg(test)]
+pub(super) fn record_the_foreground_in_front(foreground: isize, a_player: bool) {
+    A_RECORDED_PLAYER_IN_FRONT.store(a_player, Ordering::SeqCst);
+    A_RECORDED_FOREGROUND.store(foreground, Ordering::SeqCst);
+}
+
+/// The window a recorded foreground last had the foreground handed to it, or nothing.
+#[cfg(test)]
+pub(super) fn the_foreground_asked_for() -> isize {
+    THE_FOREGROUND_ASKED_FOR.swap(0, Ordering::SeqCst)
+}
+
+/// Put the desktop back as the desk a run of the suite reads, with nothing recorded in front.
+#[cfg(test)]
+pub(super) fn forget_the_recorded_foreground() {
+    THE_FOREGROUND_ASKED_FOR.store(0, Ordering::SeqCst);
+    A_RECORDED_PLAYER_IN_FRONT.store(false, Ordering::SeqCst);
+    A_RECORDED_FOREGROUND.store(0, Ordering::SeqCst);
+}
+
+/// Record the window a launch found in front, for a test that cannot make its own window the
+/// foreground (see `note_the_foreground_before_a_player`).
+#[cfg(test)]
+pub(super) fn record_the_window_the_launch_found_in_front(window: isize) {
+    FOREGROUND_BEFORE_A_PLAYER.store(window, Ordering::SeqCst);
 }
 
 /// The window a keyboard belongs to where one of this app's own has it: the window that had the

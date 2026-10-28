@@ -1197,6 +1197,18 @@ pub fn run_preview_window() {
                 let _ = pin_ask_keyboard_back(hwnd);
             }
 
+            // **And a hover's player gives the foreground back from here, on the same tick and the
+            // other side of the gate.** A hover's player is begun over the listing and its window
+            // is created activated, so the keyboard Explorer had is on the player from the frame it
+            // opens until something asks for it back — and nothing of a hover's own road does, the
+            // pin's give-back being the pin's (see
+            // `pin_lifecycle::give_the_foreground_back_from_a_hover_player`). A tick with nothing
+            // of ours in front costs one read of it and asks nothing: it is for the frame after the
+            // player's window comes up, which is the frame the user's hand is already on.
+            if !pinned() {
+                let _ = pin_lifecycle::give_the_foreground_back_from_a_hover_player();
+            }
+
             // Advance animation frames if needed
             let mut needs_repaint = false;
             // Whether this tick takes a full look at the media behind the preview: a

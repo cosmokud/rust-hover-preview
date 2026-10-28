@@ -27,7 +27,7 @@ const NOWHERE: i32 = -32000;
 /// The hover's own window: the preview a `Hide` was posted for, which is not the pin's window.
 ///
 /// Safety: the window is the caller's to destroy.
-unsafe fn a_hover_window_of_the_tests_own() -> HWND {
+pub(super) unsafe fn a_hover_window_of_the_tests_own() -> HWND {
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
