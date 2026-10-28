@@ -14,7 +14,7 @@
 
 use super::commands::open_link;
 use super::ids::{
-    EngineIdleIds, AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
+    AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
     BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES,
     ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE,
     ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_MPV_BASE,
@@ -1184,16 +1184,16 @@ pub(super) fn append_office_engine_menu(parent: HMENU) {
 }
 
 /// The `Away Timer` submenu: how long Explorer may be out of reach before an
-/// engine that is not marked `Persistent` is let go. The setting it asks
+/// engine set to `Until away` is let go. The setting it asks
 /// about is `afk_timer_seconds`, which keeps its name.
 ///
 /// It is one setting for every engine this app keeps, because the question it answers is
 /// about the user rather than about an engine: nothing this app holds is being looked at
 /// while no Explorer window is reachable, and which of those engines is worth holding until
-/// the user comes back is what the `Persistent` toggles below are for. It is listed longest
-/// first, like every other menu of times here, and it marks the time it is on: a value a
-/// hand-edited `config.ini` asks for that is not one of these is shown with nothing marked
-/// rather than rounded to the nearest.
+/// the user comes back is what the `Until away` item of each `… TTL` submenu below is for. It
+/// is listed longest first, like every other menu of times here, and it marks the time it is
+/// on: a value a hand-edited `config.ini` asks for that is not one of these is shown with
+/// nothing marked rather than rounded to the nearest.
 pub(super) fn append_afk_timer_menu(parent: HMENU) {
     let seconds = CONFIG
         .lock()
@@ -1251,42 +1251,26 @@ pub(super) fn append_afk_timer_menu(parent: HMENU) {
     };
 }
 
-/// One `… Engine TTL` submenu: how far it may go, as the `Persistent` toggle at the top of
-/// it and the idle times below that, with the time the engine is on marked and nothing
-/// marked for a time the menu does not offer — which is what a hand-edited `config.ini` can
-/// ask for.
+/// One `… Engine TTL` submenu: the idle times every engine is offered, with the time the
+/// engine is on marked and nothing marked for a time the menu does not offer — which is what a
+/// hand-edited `config.ini` can ask for.
 ///
-/// The toggle is what decides what the times mean. On, they are the whole of how long the
-/// engine is kept, whatever the user is doing; off, `Engine → Away Timer` is what
-/// bounds it
-/// and the times are not consulted at all, so an engine is kept while Explorer is in front
-/// of the user and let go once it has not been for that long. The toggle is at the top and
-/// the times below a separator because it is a different kind of answer — a checkmark rather
-/// than one of the times — and because nothing below it applies until it is on.
+/// What each item means is its own answer: `Until away` is `Engine → Away Timer`, which keeps
+/// the engine while Explorer is in front of the user and lets it go once it has not been for
+/// that long, while a time is how long the engine is kept after its last document whatever the
+/// user is doing. `Indefinitely` is never, and `Never (0 seconds)` is as soon as it has drawn
+/// one (see `EngineIdle`).
 ///
 /// An engine that is not on the machine at all is greyed out, since there is nothing there
 /// to keep.
 pub(super) fn append_engine_idle_menu(
     parent: HMENU,
     label: PCWSTR,
-    ids: EngineIdleIds,
+    base: u16,
     idle: EngineIdle,
-    persistent: bool,
-    default_seconds: u64,
     enabled: bool,
 ) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
-
-    let persistent_flags = MF_STRING | if persistent { MF_CHECKED } else { MF_UNCHECKED };
-    let _ = unsafe {
-        AppendMenuW(
-            menu,
-            persistent_flags,
-            ids.persistent as usize,
-            w!("Persistent"),
-        )
-    };
-    let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
@@ -1294,7 +1278,7 @@ pub(super) fn append_engine_idle_menu(
     let labels: Vec<Vec<u16>> = ENGINE_IDLE_CHOICES
         .iter()
         .map(|choice| {
-            engine_idle_label(*choice, default_seconds)
+            engine_idle_label(*choice)
                 .encode_utf16()
                 .chain(std::iter::once(0))
                 .collect()
@@ -1306,7 +1290,7 @@ pub(super) fn append_engine_idle_menu(
             AppendMenuW(
                 menu,
                 MF_STRING,
-                (ids.times + index as u16) as usize,
+                (base + index as u16) as usize,
                 PCWSTR(label.as_ptr()),
             )
         };
@@ -1319,9 +1303,9 @@ pub(super) fn append_engine_idle_menu(
         let _ = unsafe {
             CheckMenuRadioItem(
                 menu,
-                ids.times as u32,
-                (ids.times + ENGINE_IDLE_CHOICES.len() as u16 - 1) as u32,
-                (ids.times + index as u16) as u32,
+                base as u32,
+                (base + ENGINE_IDLE_CHOICES.len() as u16 - 1) as u32,
+                (base + index as u16) as u32,
                 MF_BYCOMMAND.0,
             )
         };
@@ -1610,16 +1594,17 @@ fn codec_row(index: usize) -> Option<Row> {
 /// engine is kept for by default marked. The shortest is the only one that is not a
 /// whole minute, and the longest is the only one that is not a whole number of
 /// minutes.
-pub(super) fn engine_idle_label(idle: EngineIdle, default_seconds: u64) -> String {
-    let label = match idle {
-        EngineIdle::Indefinite => "Indefinitely".to_string(),
-        EngineIdle::Seconds(0) => "0 seconds".to_string(),
-        EngineIdle::Seconds(60) => "1 minute".to_string(),
-        EngineIdle::Seconds(3600) => "1 hour".to_string(),
-        EngineIdle::Seconds(seconds) => format!("{} minutes", seconds / 60),
-    };
-
-    default_label(&label, idle == EngineIdle::Seconds(default_seconds))
+pub(super) fn engine_idle_label(idle: EngineIdle) -> String {
+    match idle {
+        EngineIdle::Away => "Until away (Default)",
+        EngineIdle::Indefinite => "Indefinitely",
+        EngineIdle::Seconds(0) => "Never (0 seconds)",
+        EngineIdle::Seconds(30) => "30 seconds",
+        EngineIdle::Seconds(60) => "1 minute",
+        EngineIdle::Seconds(3600) => "1 hour",
+        EngineIdle::Seconds(seconds) => return format!("{} minutes", seconds / 60),
+    }
+    .to_string()
 }
 
 /// The idle time an item of an `… Engine TTL` submenu stands for, by the position it
@@ -1629,8 +1614,7 @@ pub(super) fn engine_idle_at(index: u16) -> Option<EngineIdle> {
 }
 
 /// What an away time is called in the `Away Timer` submenu: the time, with
-/// the one an engine
-/// that is not `Persistent` is bounded by marked as the default.
+/// the one an engine set to `Until away` is bounded by marked as the default.
 ///
 /// Three of the seven are not a whole number of minutes, and each says itself which one it
 /// is — a half of a minute and a quarter of one are what the bottom of the list is for, so

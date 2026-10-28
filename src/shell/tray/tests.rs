@@ -2,24 +2,99 @@ use super::*;
 use crate::config::config::DEFAULT_IMAGE_CACHE_MB;
 use std::path::PathBuf;
 
-/// The order the submenu is built in is the order it is read in, and it is
-/// built top down: the engine that is never let go is the topmost item and the
-/// one let go at once is the bottom one, which is what the choices are listed
-/// in.
+/// Every `… TTL` submenu offers the same nine answers in the same order: the `Away` one an
+/// engine nobody has given a time is kept by at the top, a time each below it, and the two
+/// ends — never let go, and let go at once — at the bottom. `Until away` is the item the app
+/// starts at, which is why it is the one labelled as the default.
 #[test]
-fn engine_idle_is_offered_longest_first() {
+fn engine_idle_is_offered_away_first_and_never_last() {
     assert_eq!(
-        ENGINE_IDLE_CHOICES.map(|idle| engine_idle_label(idle, DEFAULT_OFFICE_ENGINE_IDLE_SECS)),
+        ENGINE_IDLE_CHOICES.map(engine_idle_label),
         [
-            "Indefinitely".to_string(),
-            "1 hour".to_string(),
-            "30 minutes".to_string(),
-            "10 minutes (Default)".to_string(),
-            "5 minutes".to_string(),
+            "Until away (Default)".to_string(),
+            "30 seconds".to_string(),
             "1 minute".to_string(),
-            "0 seconds".to_string(),
+            "5 minutes".to_string(),
+            "10 minutes".to_string(),
+            "30 minutes".to_string(),
+            "1 hour".to_string(),
+            "Indefinitely".to_string(),
+            "Never (0 seconds)".to_string(),
         ]
     );
+
+    assert_eq!(
+        ENGINE_IDLE_CHOICES[0],
+        crate::config::config::AppConfig::default().office_engine_idle,
+        "the item the app starts at is the first one"
+    );
+}
+
+/// The submenu a person opens is that list: nine radios, in that order, with the one the
+/// setting holds marked and nothing marked for a value the menu does not offer — and the
+/// submenu greyed when the engine it is about is not on the machine.
+#[test]
+fn every_ttl_submenu_offers_nine_radios_with_the_setting_marked() {
+    use windows::core::w;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreatePopupMenu, DestroyMenu, GetMenuItemCount, GetMenuState, GetMenuStringW, GetSubMenu,
+        MFS_CHECKED, MFS_GRAYED, MF_BYPOSITION,
+    };
+
+    use submenus::append_engine_idle_menu;
+
+    // One id per engine, so a submenu built here is never read as another's.
+    for base in [
+        ID_TRAY_MPV_IDLE_BASE,
+        ID_TRAY_ENGINE_IDLE_BASE,
+        ID_TRAY_LIBREOFFICE_IDLE_BASE,
+        ID_TRAY_WEBVIEW_IDLE_BASE,
+    ] {
+        for (index, idle) in ENGINE_IDLE_CHOICES.iter().enumerate() {
+            let parent = unsafe { CreatePopupMenu().unwrap() };
+            append_engine_idle_menu(parent, w!("A TTL"), base, *idle, true);
+
+            let menu = unsafe { GetSubMenu(parent, 0) };
+            assert_eq!(
+                unsafe { GetMenuItemCount(menu) },
+                ENGINE_IDLE_CHOICES.len() as i32,
+                "the submenu offers one item per answer and nothing else"
+            );
+
+            for (position, choice) in ENGINE_IDLE_CHOICES.iter().enumerate() {
+                let mut text = [0u16; 64];
+                let written = unsafe {
+                    GetMenuStringW(menu, position as u32, Some(&mut text), MF_BYPOSITION)
+                };
+                assert_eq!(
+                    String::from_utf16_lossy(&text[..written as usize]),
+                    engine_idle_label(*choice),
+                    "the item at {position} is the answer it lists"
+                );
+
+                let state = unsafe { GetMenuState(menu, position as u32, MF_BYPOSITION) };
+                assert_eq!(
+                    state & MFS_CHECKED.0 != 0,
+                    position == index,
+                    "only the answer the setting holds is marked"
+                );
+            }
+
+            let _ = unsafe { DestroyMenu(parent) };
+        }
+
+        // And the engine the submenu is about not being there greys the whole of it.
+        let parent = unsafe { CreatePopupMenu().unwrap() };
+        append_engine_idle_menu(parent, w!("A TTL"), base, EngineIdle::Away, false);
+
+        let state = unsafe { GetMenuState(parent, 0, MF_BYPOSITION) };
+        assert!(
+            state & MFS_GRAYED.0 != 0,
+            "a machine without the engine has nothing to keep",
+        );
+
+        let _ = unsafe { DestroyMenu(parent) };
+    }
 }
 
 #[test]
@@ -1097,8 +1172,8 @@ fn the_renamed_rows_say_what_they_do() {
 /// id the app hands out — not another scale's range, not the avoid
 /// ways, the reset rows, the volume switches, the engine-idle times,
 /// the cache sizes, the font sizes, the theme folder's own ids, the
-/// codec rows, the delays and the tick, the away timer, the persistent
-/// toggles, the hardware-acceleration row, nor any single row of the
+/// codec rows, the delays and the tick, the away timer, the four TTL
+/// ranges, the hardware-acceleration row, nor any single row of the
 /// menu — and no two of those overlap each other either. Holding the
 /// range against the scale ranges alone is how a range landing on the
 /// reset rows went unnoticed, so every id the app hands out is held
@@ -1164,6 +1239,10 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
         ),
         // The engine-idle times, one range apiece.
         (
+            ID_TRAY_MPV_IDLE_BASE,
+            ID_TRAY_MPV_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16,
+        ),
+        (
             ID_TRAY_ENGINE_IDLE_BASE,
             ID_TRAY_ENGINE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16,
         ),
@@ -1209,15 +1288,10 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_TICK_BASE,
             ID_TRAY_TICK_BASE + TICK_CHOICES_MS.len() as u16,
         ),
-        // The away times, the persistent toggles above them, and the
-        // theme folder's own items up to where the cache sizes begin.
+        // The away times, and the theme folder's own items up to where the cache sizes begin.
         (
             ID_TRAY_AFK_TIMER_BASE,
             ID_TRAY_AFK_TIMER_BASE + AFK_TIMER_CHOICES_SECS.len() as u16,
-        ),
-        (
-            ID_TRAY_ENGINE_PERSISTENT_BASE,
-            ID_TRAY_ENGINE_PERSISTENT_BASE + 3,
         ),
         (ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_IMAGE_CACHE_BASE),
         // The codec rows, wider than the list is long.
@@ -1477,7 +1551,30 @@ fn every_offered_idle_time_is_one_the_setting_keeps() {
         None,
         "an id past the last item is not one the menu offered"
     );
-    assert_eq!(engine_idle_at(0), Some(EngineIdle::Indefinite));
+    assert_eq!(
+        engine_idle_at(0),
+        Some(EngineIdle::Away),
+        "the top item is the one an engine nobody has given a time is kept by"
+    );
+}
+
+/// What an item of a `… TTL` submenu stands for is what the setting holds: the id is a position
+/// in the same list the menu lists, so a click selects the answer it was pointed at.
+#[test]
+fn a_ttl_choice_is_one_the_setting_keeps() {
+    for (index, idle) in ENGINE_IDLE_CHOICES.iter().enumerate() {
+        assert_eq!(
+            engine_idle_at(index as u16),
+            Some(*idle),
+            "the item at {index} sets the answer it lists"
+        );
+    }
+
+    let config = crate::config::config::AppConfig::default();
+    assert_eq!(config.video_engine_idle, EngineIdle::Away);
+    assert_eq!(config.office_engine_idle, EngineIdle::Away);
+    assert_eq!(config.libreoffice_idle, EngineIdle::Away);
+    assert_eq!(config.webview_idle, EngineIdle::Away);
 }
 
 /// The `Engine → Video Engine` rows are ids of their own, and none of them falls inside

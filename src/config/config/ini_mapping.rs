@@ -465,6 +465,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "video_engine_idle",
+            Some(self.video_engine_idle.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "office_engine_idle",
             Some(self.office_engine_idle.as_str()),
         );
@@ -482,21 +487,6 @@ impl AppConfig {
             CONFIG_SECTION,
             "afk_timer_seconds",
             Some(sanitize_afk_timer_secs(self.afk_timer_seconds).to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "office_engine_persistent",
-            Some(self.office_engine_persistent.to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "webview_persistent",
-            Some(self.webview_persistent.to_string()),
-        );
-        ini.set(
-            CONFIG_SECTION,
-            "libreoffice_persistent",
-            Some(self.libreoffice_persistent.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -1171,32 +1161,18 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_subtitles") {
             self.video_subtitles = value;
         }
-        if let Some(value) = ini.get(CONFIG_SECTION, "office_engine_idle") {
+        if let Some(value) = ini.get(CONFIG_SECTION, "video_engine_idle") {
             if let Some(idle) = EngineIdle::from_str(&value) {
-                self.office_engine_idle = idle;
+                self.video_engine_idle = idle;
             }
         }
-        if let Some(value) = ini.get(CONFIG_SECTION, "webview_idle") {
-            if let Some(idle) = EngineIdle::from_str(&value) {
-                self.webview_idle = idle;
-            }
-        }
-        if let Some(value) = ini.get(CONFIG_SECTION, "libreoffice_idle") {
-            if let Some(idle) = EngineIdle::from_str(&value) {
-                self.libreoffice_idle = idle;
-            }
-        }
+        self.office_engine_idle =
+            engine_idle_from_ini(ini, "office_engine_idle", "office_engine_persistent");
+        self.webview_idle = engine_idle_from_ini(ini, "webview_idle", "webview_persistent");
+        self.libreoffice_idle =
+            engine_idle_from_ini(ini, "libreoffice_idle", "libreoffice_persistent");
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "afk_timer_seconds") {
             self.afk_timer_seconds = sanitize_afk_timer_secs(value);
-        }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "office_engine_persistent") {
-            self.office_engine_persistent = value;
-        }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "webview_persistent") {
-            self.webview_persistent = value;
-        }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "libreoffice_persistent") {
-            self.libreoffice_persistent = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_hw_accel") {
             self.video_hw_accel = value;
@@ -1241,6 +1217,24 @@ impl AppConfig {
         // ran over the file before this did, and which list it walks is a fact about the row
         // rather than about this read.
         lists::read_all(ini, self);
+    }
+}
+
+/// The idle time an engine is read as, from the two keys a build before this one wrote for it.
+///
+/// `*_persistent` is legacy and read only: off is what `Away` now says, and on is whatever
+/// `*_idle` holds — `Indefinitely` where it holds nothing this build can read. A file without
+/// the toggle at all is one this build wrote, or one a person wrote by hand, and it says what
+/// its `*_idle` says: `Away` only where it says nothing.
+fn engine_idle_from_ini(ini: &Ini, idle_key: &str, persistent_key: &str) -> EngineIdle {
+    let idle = ini
+        .get(CONFIG_SECTION, idle_key)
+        .and_then(|value| EngineIdle::from_str(&value));
+
+    match ini.getboolcoerce(CONFIG_SECTION, persistent_key) {
+        Ok(Some(false)) => EngineIdle::Away,
+        Ok(Some(true)) => idle.unwrap_or(EngineIdle::Indefinite),
+        _ => idle.unwrap_or(EngineIdle::Away),
     }
 }
 

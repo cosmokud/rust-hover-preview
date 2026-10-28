@@ -1,5 +1,5 @@
-//! How long Explorer has been out of reach, which is what bounds an engine that is not
-//! marked `Persistent` — the `Engine → AFK Timer` setting.
+//! How long Explorer has been out of reach, which is what bounds an engine set to
+//! `Until away` — the `Engine → Away Timer` setting.
 //!
 //! The count is kept here rather than by the engines because only the Explorer hook can
 //! answer it, and it answers it already: out of reach is every Explorer window minimized, or

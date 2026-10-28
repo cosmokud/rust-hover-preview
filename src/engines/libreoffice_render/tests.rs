@@ -269,7 +269,7 @@ fn engine_warmth_probe() {
     let_go_if_expired();
     println!("0 seconds: engine gone {}", gone(pid));
     if let Ok(mut config) = CONFIG.lock() {
-        config.libreoffice_idle = EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS);
+        config.libreoffice_idle = EngineIdle::Away;
     }
 
     document_cache::forget(&source, OfficeEngine::LibreOffice.as_str());
