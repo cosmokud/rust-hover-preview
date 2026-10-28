@@ -128,7 +128,7 @@ pub(super) fn is_window_fullscreen(hwnd: HWND) -> bool {
 /// The region the window in front hides what is behind, where that window is one
 /// that hides anything at all: a maximized or fullscreen window that is not
 /// Explorer's. `None` is a foreground window nothing is hidden behind — an ordinary
-/// one, Explorer itself, or no window at all.
+/// one, Explorer itself, the desktop, or no window at all.
 ///
 /// What it is for is asking whether an Explorer window is behind it. Taking the
 /// foreground window alone for the answer — a maximized window, so Explorer must be
@@ -146,6 +146,15 @@ pub(super) fn foreground_cover_rect() -> Option<RECT> {
             return None;
         }
 
+        // And the class before the rectangle: a window of the desktop's in front covers nothing,
+        // whatever its own box says (see `a_foreground_of_this_class_covers_what_is_behind`).
+        let mut name = [0u16; 32];
+        let len = GetClassNameW(foreground, &mut name).max(0) as usize;
+        let class = String::from_utf16_lossy(&name[..len.min(name.len())]);
+        if !a_foreground_of_this_class_covers_what_is_behind(&class) {
+            return None;
+        }
+
         // Only a maximized or fullscreen window covers anything whole.
         if !(is_window_maximized(foreground) || is_window_fullscreen(foreground)) {
             return None;
@@ -155,6 +164,20 @@ pub(super) fn foreground_cover_rect() -> Option<RECT> {
         GetWindowRect(foreground, &mut rect).ok()?;
         Some(rect)
     }
+}
+
+/// Whether a window in front of this class may hide a listing behind it at all.
+///
+/// **The desktop never does**, whatever its rectangle says: `Progman` and `WorkerW` are drawn over
+/// the display to the pixel, so read as ordinary windows they are a fullscreen window hiding every
+/// Explorer window on it — the state that leaves the loop sleeping and the previews dead until some
+/// other window is clicked. The desktop is the bottom of the desktop's own list and hides nothing; a
+/// foreground that has been *left* on it — by a player of this app's killed in front, or by a press
+/// on the wallpaper — is not a window over the listing. The two classes are kept out of Explorer's
+/// own windows for the same reason (see `is_explorer_window`), and this is the same fact asked of a
+/// class rather than of a window, so that it can be answered without a desktop underneath it.
+pub(super) fn a_foreground_of_this_class_covers_what_is_behind(class: &str) -> bool {
+    !(class.eq_ignore_ascii_case("Progman") || class.eq_ignore_ascii_case("WorkerW"))
 }
 
 /// Whether a window is hidden behind the region the window in front covers.
