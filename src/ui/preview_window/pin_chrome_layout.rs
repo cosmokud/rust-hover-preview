@@ -646,9 +646,16 @@ pub(super) fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -
 /// **A window of the film the pin is showing is the pin, not a window over it.** A player begun for
 /// the pin is born at the band and shows itself there before the host has it (see
 /// `pin_film_thumbnail::the_source_launch_origin`), so the hand resting on a strip during a step is
-/// over the incoming player's own window — a film the pin is showing, arriving, and not a program
+/// over a window of a player this app began for a film — the incoming one, or the outgoing one it is
+/// kept on screen until the incoming one draws — and a film the pin is showing is not a program
 /// standing over it. The film's host answers the same way for a step whose player is already drawing
 /// in it.
+///
+/// **The player is asked of the app's own record rather than of the pid the host happens to hold**,
+/// and that is what makes the answer the same at every tick of a handover: the host names whichever
+/// player the step last recorded, while the window under the hand is whichever of the two is in
+/// front, and a rule keyed on that one pid answers the same window as somebody else's on the ticks
+/// where the two disagree — the intermittent strip (see `engine_processes::holds_a_player`).
 ///
 /// Asked of the window under the point rather than of the order, because the pin's children —
 /// the host, the strips — are disabled and `WindowFromPoint` skips them, so the pin's own window
@@ -672,22 +679,19 @@ fn pin_chrome_occluded(cursor: Option<(i32, i32)>) -> bool {
 
 /// Whether a window under the pointer belongs to the film the pin is showing rather than to
 /// somebody else: the film's host — a window of this app's standing at the band the pin is in —
-/// and the player's own window, which a player begun for the pin makes at that band and shows
-/// there before the host has it (see `pin_film_thumbnail::the_source_launch_origin`).
+/// and a window of any player this app began for a film.
 ///
 /// The player is asked for by its process, which is the same question the hover's own probe asks of
-/// a film's window: a window a player makes is a window of the player's process, and a window of any
-/// other process is somebody else's however close it stands (see `hover_facts::cursor_preview_hover`).
+/// a film's window — and of the app's record of the players it began rather than of the host, because
+/// the host names one player and the handover has two (see `pin_chrome_occluded`). A window of any
+/// other process is somebody else's however close it stands.
 fn the_pins_own_film_window(under: isize) -> bool {
     if pin_film_host::film_host().is_some_and(|host| host.0 as isize == under) {
         return true;
     }
-    let Some(player) = pin_film_host::hosted_player_pid() else {
-        return false;
-    };
     let mut owner = 0;
     unsafe { GetWindowThreadProcessId(HWND(under as *mut _), Some(&mut owner)) };
-    owner == player
+    engine_processes::holds_a_player(owner) || pin_film_host::hosted_player_pid() == Some(owner)
 }
 
 /// The window under a screen point, which a test stands in rather than reading off the desktop:
