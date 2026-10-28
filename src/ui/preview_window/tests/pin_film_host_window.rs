@@ -6963,3 +6963,228 @@ fn a_seeks_picture_line_calls_nothing_a_mismatch_that_was_never_read() {
     mpv_ipc::clear_reads();
     pin_trace::clear_noted();
 }
+
+/// The pin's own band as one paint left it: every pixel of it, and the row of the window it begins
+/// at — the rows between the caption's strip and the transport's, which is where the film shows
+/// through (see `pinned_band_rows`).
+///
+/// The arc a pin waiting on a file draws is taken down before the paint: it is drawn *over* the
+/// band, and what these tests read is the band's own fill rather than a spinner standing in it.
+fn the_band_one_paint_left(film: &StandingFilm) -> (Vec<[u8; 4]>, usize, usize) {
+    pin_arc_set(None);
+    // The paint's own surface, read out of a window of the test's own rather than the pin's: what
+    // is asserted is the pixels the paint composed, not the window they were blitted to.
+    let hwnd = HWND(0x1000 as *mut _);
+    unsafe { render_pinned_preview_at(hwnd, film.box_.0, film.box_.1) };
+
+    let (width, height, top, rows) = pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                let (width, height) = pin.window_size();
+                let (top, rows) = pinned_band_rows(
+                    height,
+                    pin.caption,
+                    pinned_transport_height(pin.dpi, pin.transport_bar),
+                    pin.overlay,
+                );
+                (
+                    width as usize,
+                    height as usize,
+                    top.max(0) as usize,
+                    rows.max(0) as usize,
+                )
+            })
+        })
+        .expect("the pin the paint read");
+    let bits = ensure_layered_surface(hwnd.0 as isize, width as u32, height as u32)
+        .expect("the surface the paint drew into");
+    let surface = unsafe { std::slice::from_raw_parts(bits, width * height * 4) };
+    let band = (top..top + rows)
+        .flat_map(|row| {
+            surface[row * width * 4..(row + 1) * width * 4]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .copied()
+        })
+        .collect();
+
+    (band, top, rows)
+}
+
+/// **A host with nothing drawing in it still owes the pin's band the black it was filled with**, and
+/// that invariant is why the cover needed a condition rather than the fill being dropped: with no
+/// cover standing and no player drawing, the band is opaque rather than a hole to the desktop (see
+/// `fill_band_opaque`).
+#[test]
+fn a_host_with_no_picture_owes_the_pins_band_black() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert!(
+        pin_film_host::film_host().is_some(),
+        "the film's host stands in the pin's band"
+    );
+    assert!(
+        !pin_film_host::the_cover_stands(),
+        "and the host owes no cover of this app's"
+    );
+    assert!(
+        !pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
+        "and the player begun into it has no window in it yet: the band is the empty host's"
+    );
+
+    let (band, top, rows) = the_band_one_paint_left(&film);
+    assert!(rows > 0, "the pin has a band to assert");
+    assert!(
+        band.iter().all(|pixel| *pixel == [0, 0, 0, 255]),
+        "rows {top}..{} of the pin's bitmap are the opaque black an empty host owes the screen \
+         rather than a hole through to the desktop",
+        top + rows
+    );
+}
+
+/// **A cover this app painted is the picture the host is standing, so the pin's band over it is a
+/// hole** (see `pin_film_host::the_cover_stands`). This is the whole of the bug the trace measured:
+/// the pin's next repaint — ~70 ms after the seek — filled that band black over the host's frame and
+/// the cover was off the screen for the rest of the gap.
+#[test]
+fn a_cover_standing_leaves_the_pins_band_to_the_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    // FFmpeg's player is the road a relaunch's still is painted on (see
+    // `pin_film_thumbnail::stand_the_pressed_still`).
+    let film = ffplay_standing_film();
+    with_pin(|pin| pin.transport_bar = true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    assert!(
+        !pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
+        "the replacement is begun and has no window in the host yet: the cover is the picture"
+    );
+    assert!(
+        pin_film_host::put_the_cover_in(host, vec![60u8; 8 * 8 * 4], 8, 8),
+        "the host takes the still it was decoded for"
+    );
+
+    let (band, top, rows) = the_band_one_paint_left(&film);
+    assert!(rows > 0, "the pin has a band to assert");
+    assert!(
+        band.iter().all(|pixel| *pixel == [1, 1, 1, 1]),
+        "rows {top}..{} of the pin's bitmap are the pin's least claim on the point, so the host's \
+         cover is what shows through them",
+        top + rows
+    );
+    assert!(
+        pin_film_host::the_cover_stands(),
+        "and the cover is still the host's picture after the pin painted over its band"
+    );
+
+    pin_film_host::put_the_cover_away();
+}
+
+/// **The pin repainting in the middle of a relaunch's wait neither takes the cover down nor erases
+/// the host**: what a repaint of the pin's band writes is a hole, and nothing of the host's own erase
+/// runs while it holds a cover (see `pin_film_host::paint_the_host_behind_the_film`).
+#[test]
+fn a_pin_repainting_under_a_cover_leaves_the_host_alone() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = ffplay_standing_film();
+    with_pin(|pin| pin.transport_bar = true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    assert!(
+        pin_film_host::put_the_cover_in(host, vec![60u8; 8 * 8 * 4], 8, 8),
+        "the host takes the still it was decoded for"
+    );
+    let erases = pin_film_host::host_erases();
+
+    // The pin's own repaints: the tick's, a settle's and a resize's all reach this one painter.
+    for _ in 0..3 {
+        unsafe { render_pinned_preview_at(film.pin_hwnd, film.box_.0, film.box_.1) };
+    }
+
+    assert!(
+        pin_film_host::the_cover_stands(),
+        "the cover stands for the whole of the wait, repaint or no repaint"
+    );
+    assert_eq!(
+        pin_film_host::host_erases(),
+        erases,
+        "and nothing erases the host it is standing in"
+    );
+
+    // The host's own paint is the cover rather than its black, re-cropped to the client it is asked
+    // for (see `pin_film_host::answer_the_paint_of_a_cover`).
+    let mut client = RECT::default();
+    let _ = unsafe { GetClientRect(host, &mut client) };
+    let (width, height) = (client.right as u32, client.bottom as u32);
+    let surface = a_surface_of(width, height, [0, 0, 0, 255]);
+    assert!(
+        unsafe { pin_film_host::paint_the_cover(host, surface.dc) }.is_some(),
+        "the cover paints into the host's client"
+    );
+    // SAFETY: the surface is this call's own, of exactly the pixels read.
+    let lit = unsafe {
+        let pixels = std::slice::from_raw_parts(
+            surface.bits() as *const u8,
+            width as usize * height as usize * 4,
+        );
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[0] | pixel[1] | pixel[2] != 0)
+            .count()
+    };
+    assert!(
+        lit > (width as usize * height as usize) / 2,
+        "and it is the frame rather than the host's black: {lit} lit"
+    );
+
+    pin_film_host::put_the_cover_away();
+}
+
+/// **The engine makes no difference to the band**, because the condition is about the host and the
+/// cover and neither belongs to mpv: mpv's road answers exactly as it did before a cover was ever
+/// considered — opaque with no cover standing, and the cover's own pixels with one.
+#[test]
+fn an_mpv_film_takes_the_bands_answers_as_they_were() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    assert!(
+        !pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
+        "mpv's player has no window in the host yet either"
+    );
+
+    let (band, ..) = the_band_one_paint_left(&film);
+    assert!(
+        band.iter().all(|pixel| *pixel == [0, 0, 0, 255]),
+        "no cover, no picture: the band is the black it always was, on mpv's road too"
+    );
+
+    assert!(
+        pin_film_host::put_the_cover_in(host, vec![60u8; 8 * 8 * 4], 8, 8),
+        "the host takes a cover of this app's"
+    );
+    let (band, ..) = the_band_one_paint_left(&film);
+    assert!(
+        band.iter().all(|pixel| *pixel == [1, 1, 1, 1]),
+        "and with one standing the band is the hole it is on every other engine's road"
+    );
+
+    pin_film_host::put_the_cover_away();
+}

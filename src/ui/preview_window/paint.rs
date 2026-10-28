@@ -381,12 +381,18 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     // yet is not a hole to see through: the band stays opaque until the player's
                     // shown child arrives, so chrome up over an empty host is chrome over black
                     // rather than over the desktop (see `pin_film_host`).
-                    // shortcut: opaque black where a held frame would be; upgrade to the held frame
-                    // where one is in hand if this ever shows.
+                    //
+                    // **Except where this app's own cover stands in the host**, which is the frame a
+                    // relaunch holds for the whole of the wait: that picture is the host's, drawn
+                    // under this band, and an opaque fill here paints over it. Measured without this
+                    // line, the pin's next repaint — ~70 ms after the seek — is a lit band and then a
+                    // black one for the rest of the gap (see `pin_film_host::the_cover_stands`).
+                    //
                     // Only where the host stands: a pin never shown has no host yet, and its
                     // bitmap keeps the pin's claim the way the strips' own test reads it (see
                     // `the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows`).
                     let hosted_needs_cover = pin_film_host::film_host().is_some()
+                        && !pin_film_host::the_cover_stands()
                         && !pin_film_host::the_hosted_player_is_drawing(
                             VIDEO_PID.load(Ordering::Acquire),
                         );
