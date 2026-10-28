@@ -1193,6 +1193,11 @@ pub fn run_preview_window() {
                 );
             }
 
+            // The hover road's own player is kept between hovers, and this is the tick that says
+            // whether it is still wanted: a fresh one a pin's take-over owes, and one standing by
+            // that its `MPV TTL` setting has let go (see `mpv_resident`).
+            mpv_resident::tick();
+
             // A pin that still believes it holds the keyboard, and that Windows says does not, is
             // asked for it back. The player is begun again on every navigation and every resize, and
             // its window is created activatable and only styled once this app finds it — so an arrow

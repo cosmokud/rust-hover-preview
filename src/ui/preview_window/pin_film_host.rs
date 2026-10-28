@@ -778,6 +778,12 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
 unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
     let pid = hover_film_host::hover_film_host_player().unwrap_or(0);
 
+    // **A hover's player the pin has just taken is the resident, where a resident was serving it.**
+    // The process is the pin's from here — the same window and the same player, not a copy — so its
+    // record as this app's hover player goes, and a fresh one is begun once this pin has closed (see
+    // `mpv_resident::a_pin_took_it_over`).
+    mpv_resident::a_pin_took_it_over();
+
     // The pin's host from here, written before the roads that ask the host questions through the
     // pin's own lock can run: the player the hover began is the pin's own, and the frame it is
     // drawing is already on the screen — the hover had proved it.
