@@ -780,6 +780,64 @@ fn a_stand_in_left_iconic_under_a_pin_on_the_screen_comes_back_up_on_the_tick() 
     stand_pin(previous_pin);
 }
 
+/// **A stand-in a pin leaves standing with nothing behind it goes down on the tick**, and what it
+/// leaves is the nothing a pin that never wore one leaves. A pin's own close hides the stand-in with
+/// the windows it takes down, but the close is one road out of a pin and the tick is what runs after
+/// all of them: the watchdog's end, a Shell gesture on the button, and a stand-in shown for a pin
+/// that is already gone all leave a window of this app's in the Shell's list with nothing behind it —
+/// the button a hover then finds over a file the app is not showing (see `keep_the_stand_in_up` and
+/// `a_button_is_owed`).
+#[test]
+fn a_stand_in_left_for_a_pin_that_is_gone_leaves_what_a_close_without_one_leaves() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // What a close leaves, with a stand-in left behind it or without one: whether a pin is up at
+    // all, and whether the app still holds a window the Shell lists a button for.
+    fn what_a_close_leaves(a_stand_in_is_up: bool) -> (bool, bool) {
+        let previous_pin = take_pin_for_a_test();
+        forget_the_stand_in();
+        stand_pin(Some(overlay_pin((100, 80, 420, 320), PinChrome::always())));
+
+        if a_stand_in_is_up {
+            let stand_in = the_stand_in();
+            // Safety: the handle is this app's own stand-in, and it is only asked up.
+            unsafe {
+                let _ = ShowWindow(stand_in, SW_SHOWNOACTIVATE);
+            }
+            assert!(
+                showing_taskbar_window().is_some(),
+                "the stand-in is up before the pin goes"
+            );
+        }
+
+        // The end that is not the loop's own: nothing of the pin's windows is hidden with it, so
+        // whatever the Shell has standing is still standing after it (see `Reason::Hung`).
+        let _ = end_pin(Reason::Hung, &Win32PinWindow);
+
+        keep_the_stand_in_up();
+
+        let left = (pinned(), showing_taskbar_window().is_some());
+        forget_the_stand_in();
+        stand_pin(previous_pin);
+        left
+    }
+
+    let with_no_stand_in = what_a_close_leaves(false);
+    let with_a_stand_in = what_a_close_leaves(true);
+
+    assert_eq!(
+        with_a_stand_in, with_no_stand_in,
+        "a stand-in left by a pin that is gone leaves what a pin that wore none leaves"
+    );
+    assert_eq!(
+        with_a_stand_in,
+        (false, false),
+        "which is no pin up and no window of ours for the Shell to list"
+    );
+}
+
 /// The client box of a window, which is the box the Shell draws a taskbar hover's picture in.
 ///
 /// Safety: the handle is a window of this app's own or of the test's, and the question is a

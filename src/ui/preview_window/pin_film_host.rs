@@ -1266,6 +1266,23 @@ pub(super) fn disarm_pin_handover() {
     }
 }
 
+/// End the wait a take-up began and the hover it froze, for a pin that is going away before the
+/// picture could change hands.
+///
+/// **What the hover was being kept for is the pin's**, so the pin's own end is the other end of
+/// that wait: the second the pin's player was begun on is of no use to a window that is not going to
+/// appear, and the hover it froze is a whole player of this app's held on one frame with nothing
+/// left that would ever let go of it — the player was taken out of the media at the take-up, so the
+/// handover is the only call that would have ended it. The loop's own settle disarms it too, on the
+/// first tick that finds no pin up, but the close is where that state has to be given back rather
+/// than a tick after it — the same reason a step's parked player is ended from the same exit (see
+/// `settle_the_retirement_for_a_pin_that_is_going` and `settle_pin_handover`).
+pub(super) unsafe fn settle_the_handover_for_a_pin_that_is_going() {
+    let frozen = held_hover();
+    disarm_pin_handover();
+    retire_the_frozen_hover(frozen);
+}
+
 /// Stand a handover wait's beginning in place of the take-up's own, or give the take-up's own
 /// answer back with `None` — a test of the timeout the wait is bounded by, which cannot wait out
 /// the start timeout itself (see `settle_pin_handover`).
