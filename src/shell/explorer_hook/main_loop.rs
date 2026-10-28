@@ -615,8 +615,16 @@ pub fn run_explorer_hook() {
 
         // Periodically re-evaluate the state
         if last_state_check.elapsed() > Duration::from_millis(state_recheck_ms) {
+            let was = current_state;
             current_state = read_explorer_state();
             last_state_check = Instant::now();
+            // **The one line a run needs when the previews stop with the pointer over a listing**,
+            // written on the transition into the state rather than on every recheck of it: what it
+            // says about a window is a fact of that moment, and a state re-read every two seconds
+            // would bury the transition in repetitions of itself (see `RHP_PIN_TRACE`).
+            if current_state == ExplorerState::HiddenByForeground && was != current_state {
+                note_the_window_that_hides_the_shell();
+            }
         }
 
         // If Explorer is not accessible, hide preview and sleep
@@ -1701,4 +1709,39 @@ pub fn run_explorer_hook() {
     unsafe {
         CoUninitialize();
     }
+}
+
+/// Write down who is in front when the gate decides that no listing can be reached: the window, its
+/// process, its class, and the region its own rectangle was read as covering.
+///
+/// The state alone says only that nothing is reachable, and every answer that makes it readable is a
+/// fact about the window in front rather than about the loop: a player of this app's left there, a
+/// window of somebody else's, and a rectangle that was read as a cover although its class hides
+/// nothing (see `foreground_cover_rect` and `a_foreground_of_this_class_covers_what_is_behind`).
+/// Written through the preview's own `RHP_PIN_TRACE` log, because it is the same run being read.
+fn note_the_window_that_hides_the_shell() {
+    if !crate::ui::preview_window::pin_trace_asked() {
+        return;
+    }
+
+    let foreground = unsafe { GetForegroundWindow() };
+    let mut pid = 0u32;
+    let mut name = [0u16; 64];
+    let (pid, class) = unsafe {
+        GetWindowThreadProcessId(foreground, Some(&mut pid));
+        let len = GetClassNameW(foreground, &mut name).max(0) as usize;
+        (pid, String::from_utf16_lossy(&name[..len.min(name.len())]))
+    };
+
+    let cover = match foreground_cover_rect() {
+        Some(cover) => format!(
+            "cover {}, {}, {}, {}",
+            cover.left, cover.top, cover.right, cover.bottom
+        ),
+        None => "cover none".to_string(),
+    };
+
+    crate::ui::preview_window::note_a_trace_line(&format!(
+        "hidden by foreground {foreground:?} pid {pid} class {class} {cover}"
+    ));
 }
