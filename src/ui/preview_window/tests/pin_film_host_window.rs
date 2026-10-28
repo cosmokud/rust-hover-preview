@@ -6930,6 +6930,105 @@ fn a_steps_wait_for_its_first_frame_leaves_the_hands_chrome_up() {
     mpv_ipc::clear_reads();
 }
 
+/// **The window a step's own player makes for itself is not a window standing over the pin**, even
+/// though the desktop answers it under the hand: a player begun for the pin is born at the band and
+/// shows itself there before the host has it (see `pin_film_thumbnail::the_source_launch_origin`),
+/// so the hand resting on the caption is over a window of the film the pin is showing rather than
+/// over somebody else's program — and the strip it is on stays up through that gap (see
+/// `pin_chrome_occluded`).
+///
+/// The other half is the rule itself: a window of another process under the same hand is still a
+/// window over the pin, and still hides the strip (see
+/// `a_pointer_over_a_window_covering_the_pin_shows_no_chrome`).
+#[test]
+fn a_steps_own_player_window_under_the_hand_is_not_a_window_over_the_pin() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let _parked = AStepParkedTheOldPlayer::take();
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+    let shows = |strip| unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
+    // The hand rests at the head of the caption, and the window under it is stood in: a test's pin
+    // stands off the desktop and no hand is over it (see `pin_chrome_occluded`).
+    let the_hand_asks = || {
+        let (left, top, ..) = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+            .expect("a pin up");
+        pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            Some(refresh_pin_chrome(
+                pin,
+                Instant::now(),
+                Some((left + 5, top + 1)),
+            ))
+        });
+        unsafe { pin_chrome_strips::sync_the_chrome_strips() };
+    };
+
+    // The film the pin is showing has its frame, and the hand's caption is up over it.
+    the_hosted_player_has_the_frame(VIDEO_PID.load(Ordering::SeqCst), "0.000000");
+    stand_window_at_point_in(Some(film.pin_hwnd.0 as isize));
+    the_hand_asks();
+    assert!(
+        shows(caption),
+        "the caption the hand is resting on is the chrome the pin is showing"
+    );
+
+    // The step, and the gap it leaves: the player it began has a window of its own at the band and
+    // is not the host's source yet, so the pin has no picture of it and nothing of it is proved.
+    // The player a test makes a window for is this process, which is the pid every stand in this
+    // file records (see `StandingFilm`).
+    assert!(
+        matches!(a_step_onto_the_next_film(&film), PinSwap::Ready(_)),
+        "the step begins a player for the next film"
+    );
+    pin_film_thumbnail::forget_the_thumbnail();
+    let player = unsafe { GetCurrentProcessId() };
+    pin_film_host::note_hosted_player(player);
+    VIDEO_PID.store(player, Ordering::SeqCst);
+    assert!(
+        !pin_film_host::the_hosted_player_is_drawing(player),
+        "the incoming player's window is not the picture the host is drawing yet"
+    );
+    let the_players_window = unsafe { a_players_own_window() };
+    // **The desktop answers the player's own window under the hand**, which is what stands at the
+    // band until the host has it: the pin's window is not what is under the pointer there.
+    stand_window_at_point_in(Some(the_players_window.0 as isize));
+
+    the_hand_asks();
+    assert!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar)))
+            == Some((true, false)),
+        "a window of the film's own player is the film, not a window standing over the pin"
+    );
+    assert!(
+        shows(caption),
+        "and the strip the hand is resting on stays on the screen over it"
+    );
+    assert!(
+        pin_chrome_up(),
+        "which is what holds the player's raise off through the gap (see `player_order`)"
+    );
+
+    // And a window of somebody else's under the same hand is still a window over the pin.
+    stand_window_at_point_in(Some(0x2000));
+    the_hand_asks();
+    assert!(
+        !shows(caption),
+        "a window of another program's over the pin still hides the strip the hand is on"
+    );
+
+    stand_window_at_point_in(None);
+    unsafe {
+        let _ = DestroyWindow(the_players_window);
+    }
+    mpv_ipc::clear_reads();
+    mpv_ipc::clear_noted();
+}
+
 /// **A step leaves the chrome a hand is resting on standing, from its take-up through the wait for
 /// the incoming film's first frame**, and the box a step comes in changes none of it.
 ///
