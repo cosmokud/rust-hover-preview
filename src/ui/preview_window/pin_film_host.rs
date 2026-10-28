@@ -973,23 +973,39 @@ pub(super) unsafe fn take_the_film_off_the_band() {
 /// minimized host the pin rather than the icon the Shell falls back on (see
 /// `the_buttons_still_is_the_apps_own`).
 ///
-/// shortcut: a pin put away into the *bubble* and then asked for the taskbar from the bubble's own row
-/// has no window of its own on the screen by then, and a picture of a window that is not there is a
-/// picture of the desk — so the button keeps whatever still it already had. Upgrade it by taking the
-/// picture at the bubble's own collapse, if that road's hover is ever reported.
+/// **The picture is taken while the host is still on the screen, and the button is told to hold it
+/// whether or not this row could take one.** The row that puts a pin away into the taskbar takes it
+/// here; the row that asks for the taskbar from the *bubble* has had no window of the pin's on the
+/// screen since the bubble's own collapse, and the picture that collapse took — the last frame the
+/// user saw — is what the button is handed (see `take_the_pins_picture`, `collapse_pin_to`). A row
+/// that forced nothing here left the hover of such a pin blank, because a window that is down has no
+/// composition of its own for the Shell to freeze.
 ///
 /// Safety: `host` is the pin's own film host, asked by the collapse before the pin leaves the screen.
 pub(super) unsafe fn keep_the_pins_picture_for_the_taskbar(host: HWND) {
-    // The one rule the mirror's own picture keeps, and the reason it is asked here rather than left to
-    // the read: a window that is not drawn where it stands is no picture at all, and what the button
-    // already holds is the picture to keep (see `pin_taskbar_mirror::take_the_picture_of`).
+    unsafe { take_the_pins_picture(host) };
+    pin_taskbar_mirror::the_stills_are_out_of_date(host);
+    unsafe { pin_taskbar::the_buttons_still_is_the_apps_own(host, true) };
+}
+
+/// Take the host's picture, to be handed to the Shell as the still of its button: the film and the
+/// chrome as the desktop is showing them, which is the last frame of a pin that is put away.
+///
+/// **It is taken at every collapse and not only at a put-away into the taskbar**, because the last
+/// moment the host is on the screen is the collapse — a pin moved on to the taskbar from the bubble
+/// wears the host's button too, and every window of the pin's has been off the screen since (see
+/// `keep_the_pins_picture_for_the_taskbar`).
+///
+/// A window that is not drawn where it stands is no picture at all, and what the button already holds
+/// is the picture to keep (see `pin_taskbar_mirror::take_the_picture_of`).
+///
+/// Safety: `host` is the pin's own film host, asked by the collapse before the pin leaves the screen.
+pub(super) unsafe fn take_the_pins_picture(host: HWND) {
     if the_pin_window_is_down(host) {
         return;
     }
 
     pin_taskbar_mirror::take_the_picture_of(host);
-    pin_taskbar_mirror::the_stills_are_out_of_date(host);
-    unsafe { pin_taskbar::the_buttons_still_is_the_apps_own(host, true) };
 }
 
 /// Put the film back on the band when the pin comes back up: the host shown again with the source the
@@ -1013,11 +1029,16 @@ pub(super) unsafe fn bring_the_film_back() {
         return;
     };
 
-    // **A host the Shell has not finished restoring is the Shell's to show** (see
-    // `set_the_pin_film_host_visible`): a pin that is still away is not one whose film is owed the
-    // screen, and the pass that follows the restore asks again.
+    // **A pin the user asked for is up with its film, whatever the Shell has not finished doing.** The
+    // window the Shell restores is the host, and the size that says it is back can arrive before the
+    // iconic bit has gone — the gate in `set_the_pin_film_host_visible` holds a *tick* back from
+    // showing a host the user minimized, and it must not hold this road back: the pin's state is up
+    // here because the Shell brought the window back, and a host left iconic is the black band with
+    // the pin's own window standing over it, recovered only by whatever pass happens to show it later.
+    // So the host is asked up rather than waited for, without activating it — the pin's own window is
+    // the one the restore gave the front to.
     if unsafe { IsIconic(host) }.as_bool() {
-        return;
+        let _ = unsafe { ShowWindow(host, SW_SHOWNOACTIVATE) };
     }
 
     unsafe { set_the_pin_film_host_visible(true) };

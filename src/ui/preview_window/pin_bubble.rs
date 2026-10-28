@@ -811,6 +811,15 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
             keep_the_pin_for_the_taskbar();
         }
 
+        // **And the film host's own picture is taken on every collapse, because this is the last moment
+        // it is on the screen.** A pin put away into the bubble wears no button of the host's, and one
+        // the bubble's own row moves on to the taskbar does: its hover is a still of a window that has
+        // been off the screen since, so the frame composed here — the last one the user saw — is what
+        // that button is handed (see `pin_film_host::take_the_pins_picture`).
+        if let Some(host) = pin_film_host::film_host() {
+            pin_film_host::take_the_pins_picture(host);
+        }
+
         hide_pinned_windows();
         if target == PinMinimizeTo::Taskbar {
             show_pin_taskbar();

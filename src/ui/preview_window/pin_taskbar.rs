@@ -170,6 +170,10 @@ pub(super) unsafe fn show_pin_taskbar() {
 /// Asked of both windows a pin can be put away as: the stand-in (see `show_pin_taskbar`), and the film
 /// host that owns a pin's chrome on a film a player draws (see `pin_film_host`).
 pub(super) unsafe fn the_buttons_still_is_the_apps_own(hwnd: HWND, the_apps_own: bool) {
+    #[cfg(test)]
+    if the_apps_own {
+        STILLS_FORCED.fetch_add(1, Ordering::SeqCst);
+    }
     let forced = BOOL(the_apps_own as i32);
     let _ = DwmSetWindowAttribute(
         hwnd,
@@ -177,6 +181,20 @@ pub(super) unsafe fn the_buttons_still_is_the_apps_own(hwnd: HWND, the_apps_own:
         &forced as *const BOOL as *const core::ffi::c_void,
         std::mem::size_of::<BOOL>() as u32,
     );
+}
+
+/// How many times this run has told the Shell that a button's still is the app's own.
+///
+/// **The attribute is write-only** — `DwmGetWindowAttribute` refuses `DWMWA_FORCE_ICONIC_REPRESENTATION`
+/// — so a test can see that the ask was made and not what it left behind (see
+/// `the_buttons_still_is_the_apps_own`).
+#[cfg(test)]
+static STILLS_FORCED: AtomicU32 = AtomicU32::new(0);
+
+/// The asks this run has made for a button's still to be the app's own (see `STILLS_FORCED`).
+#[cfg(test)]
+pub(super) fn stills_forced() -> u32 {
+    STILLS_FORCED.load(Ordering::SeqCst)
 }
 
 /// Put the stand-in up in the form that shows the pin: off the screen, and *shown* — a window the
