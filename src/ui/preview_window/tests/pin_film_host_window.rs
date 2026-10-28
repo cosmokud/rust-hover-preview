@@ -6487,6 +6487,50 @@ fn the_standing_source_is_what_the_tracker_and_the_topmost_road_follow() {
     pin_trace::clear_noted();
 }
 
+/// **A registration whose source window has gone is not a picture, and the host says so.** The
+/// registration outlives the window it draws: a player ended under it leaves the record naming a
+/// window that is gone, and the Shell composes nothing into the host for it. A host answering "a
+/// film is drawing" there is a pin's band painted as a claim on the pixel with nothing behind it —
+/// the desk showing through the whole card where the film was, for the ticks between one film's
+/// source going and the next one's registration standing (see `pin_film_host::the_host_is_drawing`
+/// and `paint::hosted_needs_cover`, which fills the band black rather than as a hole).
+///
+/// The record is the same one whichever engine is drawing: a film of mpv's and one of FFmpeg's
+/// player are both adopted as the host's source, and the registration names the source's window in
+/// either case. Both engines' stands are run, because the rare mpv flash is the same hole.
+#[test]
+fn a_registration_whose_source_has_gone_is_not_a_host_drawing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+
+    // One engine's stand at a time, because each stands the pin's host and the pin's globals over
+    // again.
+    let on_one_engine = |film: StandingFilm, engine: &str| {
+        let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+        let source = pin_film_thumbnail::the_source_window().expect("the picture the host was given");
+        assert!(
+            pin_film_host::the_host_is_drawing(),
+            "the host has a picture while its source is a window ({engine})"
+        );
+
+        // The player is ended under the registration, which is what a step's outgoing film does
+        // once its replacement is the newer one the host records.
+        unsafe { DestroyWindow(source) }.expect("the source's window goes");
+
+        assert!(
+            !pin_film_host::the_host_is_drawing(),
+            "a registration naming a window that has gone is no picture: the band it stood in is \
+             owed the pin's own fill rather than a hole to the desk ({engine})"
+        );
+
+        unsafe { pin_film_host::take_down_the_pin_film_host() };
+    };
+
+    on_one_engine(StandingFilm::new(), "mpv");
+    on_one_engine(ffplay_standing_film(), "FFmpeg's player");
+}
+
 /// **`pic none` is nothing read, not a mismatch, and a picture that really disagrees stays loud.** A
 /// seek whose frame drawn by FFmpeg's player is written as one line, and the line a run is convicted by
 /// — `pic!=asked` — is only written where a picture was actually read (see `note_the_seek_picture`).
