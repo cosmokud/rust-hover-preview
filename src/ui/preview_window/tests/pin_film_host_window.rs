@@ -5411,6 +5411,7 @@ fn the_freeze_road_is_the_runs_own_setting() {
     assert_eq!(freeze_road_from(Some(" key ")), FreezeRoad::Key);
     assert_eq!(freeze_road_from(Some("off")), FreezeRoad::Off);
     assert_eq!(freeze_road_from(Some(" hide ")), FreezeRoad::Hide);
+    assert_eq!(freeze_road_from(Some(" dc ")), FreezeRoad::Dc);
     assert_eq!(freeze_road_from(Some("anything else")), FreezeRoad::Capture);
 }
 
