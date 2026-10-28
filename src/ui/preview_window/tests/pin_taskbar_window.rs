@@ -16,10 +16,10 @@ use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GetDC, ReleaseDC
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    IsIconic, IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, ShowWindow, GWL_EXSTYLE,
-    GW_HWNDPREV, SC_RESTORE, SW_MINIMIZE, SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE,
-    WM_ACTIVATE, WM_SYSCOMMAND, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP,
+    IsIconic, IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, SetWindowPos, ShowWindow,
+    GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, SC_RESTORE, SWP_NOACTIVATE, SW_MINIMIZE,
+    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SYSCOMMAND, WNDCLASSEXW,
+    WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// Register the class the stand-in is made from, once for the run.
@@ -1509,6 +1509,76 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     }
     pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
+}
+
+/// **A film host's button holds a picture of the host itself**, and it is what the Shell is handed when
+/// it asks for the still of a button that is down.
+///
+/// The fault this is a regression test for: a pin whose film a player of its own draws is put away by
+/// minimizing the host that owns its chrome, and the Shell's still of a window that is down is taken of
+/// the window's own rows — while the film in a host is a thumbnail the Shell composes *over* those rows,
+/// which are the black the host is erased to. So the button of a put-away film pin had a blank hover.
+/// What the button holds has to be a picture of the host as the desktop shows it, taken before the
+/// collapse (see `pin_film_host::keep_the_pins_picture_for_the_taskbar`), and handed over when the Shell
+/// asks (see `answer_a_thumbnail_ask`).
+#[test]
+fn a_film_hosts_button_holds_a_picture_of_the_host_itself() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back when
+    // the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+
+    // The host on the desk and in a colour of its own: the picture is read off the desktop where the
+    // window stands, so one read anywhere else is the desk rather than the pin.
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(
+            host,
+            HWND_TOPMOST,
+            A_BOX_ON_THE_DESK.0,
+            A_BOX_ON_THE_DESK.1,
+            64,
+            48,
+            SWP_NOACTIVATE,
+        );
+        fill_the_window(host, A_COLOUR_OF_ITS_OWN);
+    }
+    let _ = unsafe { DwmFlush() };
+    // The box the picture is to be of, read before the collapse: a minimized window has no client area
+    // for anything to be measured in.
+    let host_box = unsafe { the_client_box(host) };
+
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+
+    let (pixels, width, height) = the_pin_picture()
+        .expect("a put-away pin whose film a player draws holds a picture of its host");
+    assert_eq!(
+        (width as i32, height as i32),
+        host_box,
+        "the picture is taken of the host's own client area, which is where the film and the chrome over \
+         it stand"
+    );
+    assert_eq!(
+        the_colour_in(&pixels, width, 0, 0),
+        A_COLOUR_OF_ITS_OWN.0,
+        "and it is the host's own colour rather than the black its rows are erased to"
+    );
+
+    // And the Shell's own ask for the still of the button that is down is answered with it: the high
+    // word of the message's `lparam` is the widest thumbnail it will take and the low word the tallest.
+    let handed_over = thumbnails_handed_over();
+    unsafe { answer_a_thumbnail_ask(host, LPARAM((160 << 16) | 90)) };
+    assert_eq!(
+        thumbnails_handed_over(),
+        handed_over + 1,
+        "the ask is answered with a bitmap made in the box it asked in"
+    );
 }
 
 /// A picture already taken is not taken down by a window that is not there any more.

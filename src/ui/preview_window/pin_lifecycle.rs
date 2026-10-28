@@ -257,8 +257,9 @@ pub(crate) enum PinCommand {
     Restore,
     /// The Shell brought a pin's window back on its own: a pin put away as a window is minimized rather
     /// than hidden, and the button that restores it belongs to the window rather than to this app, so no
-    /// press of the app's arrives to ask for the pin (see `PinRestore::TheShell`). The state follows the
-    /// window — what a collapse parks is given back, and the pin stops answering as one that is away.
+    /// press of the app's arrives to ask for the pin (see `PinRestore::TheShell`, `the_pin_came_back`).
+    /// The state follows the window — what a collapse parks is given back, and the pin stops answering as
+    /// one that is away.
     CameBack,
     /// Hold what is on screen where it stands, or set it going again: what a Space in a pinned
     /// sound or a pinned video is, and which of the two it is a question the file in the window
@@ -1136,6 +1137,45 @@ pub(super) fn pinned_window() -> HWND {
 /// `step_pin_zoom`).
 pub(super) fn the_pin_window_is_down(hwnd: HWND) -> bool {
     !unsafe { IsWindowVisible(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool()
+}
+
+/// **A pin put away as a window comes back as a window, and the pin's state has to follow it.**
+///
+/// The collapse into the taskbar minimizes the window the pin stands in (see `collapse_pin_to`), and
+/// what brings it back is the button Windows draws for that window: no window of this app's is pressed
+/// for it, so no press arrives to ask for the pin. What a pin left believing it is away costs is
+/// everything a collapse holds back — playback parked, previews held — and the next minimize answered
+/// by nothing at all, because the pin is still away as far as the app knows.
+///
+/// The size is the message rather than the system command, because `SIZE_RESTORED` is what every road
+/// that puts a minimized window back leaves: the Shell's own restore of its button, a `ShowWindow` from
+/// anywhere, and a `Win`+`D` handing back the windows it took. `WM_SYSCOMMAND` is what some of them send
+/// and not what all of them do.
+///
+/// And the window has to be *on the screen* as well, since a pin put away into the bubble is a pin whose
+/// window is hidden rather than minimized: that collapse holds the pin, and only this one is undone by a
+/// window coming back (see `the_pin_window_is_down`). The ask this app makes for a window's own minimize
+/// is told apart from the Shell's by who asked, because the same call can leave a `SIZE_RESTORED` behind
+/// it on its way down (see `the_pin_is_being_put_down`).
+///
+/// **Asked of both windows a pin can be put away as**, and it is one function because the two roads must
+/// not drift: the pin's own window (see `window_proc`) and the film host that owns its chrome, which is
+/// the window the Shell's button belongs to on that road (see `pin_film_host`). The host answered
+/// nothing here once, and a pin came back onto the screen still believing it was away — chrome refused,
+/// drag and resize refused, and every row of its menu answered by a pin that is not there.
+pub(super) fn the_pin_came_back(hwnd: HWND, msg: u32, wparam: WPARAM) -> bool {
+    if msg != WM_SIZE
+        || wparam.0 as u32 != SIZE_RESTORED
+        || !pin_is_collapsed()
+        || !pin_is_its_own_window()
+        || the_pin_is_being_put_down()
+        || the_pin_window_is_down(hwnd)
+    {
+        return false;
+    }
+
+    ask_pin(PinCommand::CameBack);
+    true
 }
 
 /// Whether the tick is to put a pin's window back on the screen: the pin is up, its window is away, and

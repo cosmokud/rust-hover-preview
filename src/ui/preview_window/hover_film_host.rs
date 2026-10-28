@@ -37,8 +37,8 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, ShowWindow, ShowWindowAsync,
-    SW_HIDE, SW_SHOWNOACTIVATE, WM_ERASEBKGND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use super::*;
@@ -54,22 +54,15 @@ unsafe extern "system" fn the_default_answer(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // **This window can be a pin's host, so it is erased by the pin's own road.** A pin taken up on
-    // a hover's running film keeps this window rather than making another one (see
-    // `pin_film_host`), and the band behind the picture is filled from the frame the drag holds (see
-    // `pin_film_host::paint_the_host_behind_the_film`). A host that is a hover's is not the pin's
-    // and that road erases it black — the picture it wore as a class brush.
-    if msg == WM_ERASEBKGND {
-        unsafe { pin_film_host::paint_the_host_behind_the_film(hwnd, HDC(wparam.0 as *mut _)) };
-        return LRESULT(1);
-    }
-    // **And a cover this app painted is this window's picture too**, because the pin takes this very
-    // window up rather than making another one: a paint of it stands on the cover the pin's own road
-    // put there (see `pin_film_host::answer_the_paint_of_a_cover`).
-    if let Some(answer) = unsafe { pin_film_host::answer_the_paint_of_a_cover(hwnd, msg) }
-    {
+    // **This window can be a pin's host, so it answers everything a pin's host does.** A pin taken up
+    // on a hover's running film keeps this window rather than making another one (see `pin_film_host`,
+    // `promote_the_hover_film_host`), so the band behind the picture, the cover a relaunch left
+    // standing, the Shell's close, the window coming back out of the taskbar and the still its button is
+    // drawn of are all one answer shared with the pin's own class (see `answer_a_host`).
+    if let Some(answer) = unsafe { pin_film_host::answer_a_host(hwnd, msg, wparam, lparam) } {
         return answer;
     }
+
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
@@ -339,6 +332,10 @@ unsafe fn create() -> Option<HWND> {
     .ok()?;
 
     let _ = EnableWindow(host, false);
+    // The still its button's hover is drawn of is this app's own picture, taken when a pin puts it away
+    // into the taskbar: this window is composed of a thumbnail the Shell draws *over* it, so its own
+    // rows are no picture of the film (see `pin_taskbar::supply_the_stills_of_this_window`).
+    unsafe { pin_taskbar::supply_the_stills_of_this_window(host) };
     HOVER_FILM_HOST.store(host.0 as isize, Ordering::SeqCst);
     HOVER_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
     HOVER_FILM_HOST_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);

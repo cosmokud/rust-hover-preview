@@ -16,8 +16,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindowLongPtrW,
     IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow, GWL_EXSTYLE, GWL_STYLE,
-    HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_ERASEBKGND,
-    WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE,
+    WM_ERASEBKGND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -63,9 +64,12 @@ unsafe fn window_rect(hwnd: HWND) -> ScreenRegion {
 ///
 /// Every global written here is put back when the stand is dropped, and the two windows are the
 /// test's to destroy.
-struct StandingFilm {
+///
+/// It is shared with the tests of the taskbar button, because those are about what a button of a pin put
+/// away holds and the host is the window a film's button belongs to (see `pin_taskbar_window`).
+pub(super) struct StandingFilm {
     box_: ScreenRegion,
-    pin_hwnd: HWND,
+    pub(super) pin_hwnd: HWND,
     previous_pin: Option<PinnedPreview>,
     previous_own: bool,
     previous_window: Option<HWND>,
@@ -77,7 +81,7 @@ struct StandingFilm {
 impl StandingFilm {
     /// The same stand with the film drawing in the host: `drawn` is the player whose child under it
     /// is the picture (see `the_hosted_player_is_drawing`), and it owns no window of the desktop's.
-    fn drawn_in_the_host(&self, drawn: u32) {
+    pub(super) fn drawn_in_the_host(&self, drawn: u32) {
         pin_film_host::note_hosted_player(drawn);
         VIDEO_PID.store(drawn, Ordering::SeqCst);
     }
@@ -90,7 +94,7 @@ impl StandingFilm {
         VIDEO_PID.store(hovered, Ordering::SeqCst);
     }
 
-    fn new() -> StandingFilm {
+    pub(super) fn new() -> StandingFilm {
         let previous_pin = take_pin_for_a_test();
         let previous_own = pin_is_its_own_window();
         let previous_window = pin_real_window::real_pin_window();
@@ -4084,6 +4088,97 @@ fn an_mpv_pin_put_away_in_the_taskbar_leaves_its_film_standing_for_the_shells_st
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     a_pin_put_away_in_the_taskbar_leaves_its_film_standing(false);
+}
+
+/// **The Shell's own restore of a film host's button is the pin coming back**, and the film comes back
+/// with it.
+///
+/// The fault this is a regression test for: a pin whose chrome is owned by its film host is put away by
+/// minimizing *the host*, and the host answered nothing to the window coming back — so the pin stayed
+/// collapsed with its window on the screen: drag, resize, the chrome strips, playback and every row of
+/// its menu refused by a pin that believed it was away. And the band the restore placed was a black one,
+/// because the host and the source the Shell draws through it were hidden by the collapse and no road of
+/// the restore's showed either (see `the_pin_came_back`, `pin_film_host::bring_the_film_back`).
+#[test]
+fn a_film_host_brought_back_is_the_pin_and_its_film_coming_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let source = unsafe { a_source_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(source, SW_SHOWNOACTIVATE);
+    }
+    assert!(
+        unsafe { IsWindowVisible(source) }.as_bool(),
+        "the source is the picture the Shell draws in the host"
+    );
+
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(host) }.as_bool(),
+        "the pin is put away as a window — the host is the window the Shell's button belongs to"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the ask this app made of its own host is no restore of the Shell's"
+    );
+    let_the_posted_shows_land();
+    assert!(
+        !unsafe { IsWindowVisible(source) }.as_bool(),
+        "the source goes down with the host it is drawn in"
+    );
+
+    // What the button Windows draws for the host does when it is clicked: the Shell restores the window
+    // it holds, and nothing of this app's was pressed for it. It is a `ShowWindow` and not an
+    // `SC_RESTORE`, because a host is a *disabled* window — the press on the picture belongs to the pin
+    // — and the system command route restores and activates, which is nothing a disabled window is
+    // given. What arrives either way is the size the gate reads.
+    unsafe {
+        let _ = ShowWindow(host, SW_RESTORE);
+    }
+    assert!(
+        !unsafe { IsIconic(host) }.as_bool(),
+        "the Shell's own call puts the host back on the screen"
+    );
+    assert!(
+        matches!(take_pin_command(), Some(PinCommand::CameBack)),
+        "and the pin's state comes back with it: a pin left believing it is away holds everything a \
+         collapse holds back, and answers no minimize with anything"
+    );
+
+    // The road the answer takes: the pin's own restore, without a window of the app's pressed for it.
+    restore_pin(&a_restored_window(), PinRestore::TheShell);
+    assert!(!pin_is_collapsed(), "the pin is up again");
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool() && !unsafe { IsIconic(host) }.as_bool(),
+        "and the film's host is on the screen with it"
+    );
+    let_the_posted_shows_land();
+    assert!(
+        unsafe { IsWindowVisible(source) }.as_bool(),
+        "and the source the Shell draws through the host is up again: a restore that showed the host \
+         alone left the band black"
+    );
+}
+
+/// Let the shows a restore asks for land: the source is shown with `ShowWindowAsync`, which is a message
+/// to the thread that owns it — this one, in a test (see `pin_film_thumbnail::set_the_source_visible`).
+fn let_the_posted_shows_land() {
+    let mut message = MSG::default();
+    // SAFETY: this thread's own queue, drained of everything waiting on it; what is dispatched is a
+    // message of this process's own.
+    unsafe {
+        while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
 }
 
 /// A pin's own player that a step began as a window of the desktop's is adopted by the show that
