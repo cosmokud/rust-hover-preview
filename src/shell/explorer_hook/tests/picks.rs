@@ -271,8 +271,14 @@ impl Drop for BubbleHwndPutBack {
 /// is answered there rather than out here (see `bubble_menu_press`). The bubble's handle
 /// is a slot rather than a window on somebody's screen, so this is the one identity of
 /// the pin's own a test can put in the reading.
+///
+/// **And the bubble's menu is one of the pin's own panels for the hook's chrome rule too.** The menu
+/// has no window of its own: the bubble grows down to hold it, so a press on a row lands on the
+/// bubble while the panel is up, and on the listing the panel covered on the tick after the row was
+/// pressed. Both ticks have to read as the menu's press, or that press becomes a click on the file
+/// behind it (see `window_is_menu_popup_chrome` and `press_is_on_the_pins_own_menu`).
 #[test]
-fn a_press_on_the_bubble_is_not_published() {
+fn a_press_on_the_bubble_is_the_pins_own_and_is_not_published() {
     // Whatever the slot held before this test asked is put back when the test is done,
     // even by a failure: a handle left in it is a handle every test after it reads (see
     // `BubbleHwndPutBack`).
@@ -295,6 +301,29 @@ fn a_press_on_the_bubble_is_not_published() {
     assert!(
         pin_menu_dismiss_ask(true, Some(&elsewhere)),
         "and one on anything else is still the press that puts the menu away"
+    );
+
+    assert!(
+        window_is_menu_popup_chrome(HWND(0x2000 as *mut _)),
+        "a press on the bubble's menu is a press on the pin's own chrome"
+    );
+    assert!(
+        press_is_on_the_pins_own_menu(HWND(0x2000 as *mut _)),
+        "and it spends the rest of the hand rather than leaving it as a hover of the file"
+    );
+    assert!(
+        !window_is_menu_popup_chrome(HWND(0x3000 as *mut _)),
+        "while a window the slot does not hold is read by its class as it always was"
+    );
+    assert!(
+        !press_is_a_listing(
+            true,
+            false,
+            false,
+            false,
+            window_is_menu_popup_chrome(HWND(0x2000 as *mut _))
+        ),
+        "and the tick after the bubble's menu closed is that menu's press, not a click on the file"
     );
 }
 

@@ -260,13 +260,18 @@ impl PinUpdateWatch {
         // read as a hover of the file the panel was covering (see `a_rest_is_a_hover`). Asked on both
         // ticks the press could be read on: while the panel is still up, and on the poll after the
         // shell has taken it down and the point reads as the listing again (see
-        // `pin_menu_window_is_at`).
+        // `press_is_on_the_pins_own_menu`).
+        //
+        // The bubble's menu is read by the same rule: it is drawn in the bubble's own window rather
+        // than in a window of its own, so the window under the hand is the bubble on the tick the row
+        // is pressed and — the panel gone with the press — the listing the panel covered on the tick
+        // after it.
         //
         // Spent here rather than beside the press's own answer below, because the tick that reads the
         // press is the tick that would offer the file: the rest is measured from this, once, below.
         if clicked
-            && (pin_menu_window_is_at(pointer.window)
-                || previous_window.is_some_and(pin_menu_window_is_at))
+            && (press_is_on_the_pins_own_menu(pointer.window)
+                || previous_window.is_some_and(press_is_on_the_pins_own_menu))
         {
             self.probed = true;
         }

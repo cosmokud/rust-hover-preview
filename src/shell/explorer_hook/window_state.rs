@@ -331,6 +331,11 @@ pub(super) fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -
 /// Whether `window` is the bubble's: the circle a collapsed pin leaves on screen, which is
 /// the only window of the pin's own a press can land on while the pin's window is hidden (see
 /// `pin_menu_dismiss_ask`).
+///
+/// **It carries the bubble's own menu too.** The window grows down to hold the panel beneath the
+/// circle when a right-click opens it (see `open_bubble_menu`), so the window under a hand on one of
+/// its rows is the bubble whether the panel is up or — on the tick after a row was pressed — the
+/// listing the panel and the bubble were standing over (see `press_is_on_the_pins_own_menu`).
 pub(super) fn bubble_window_is_at(window: HWND) -> bool {
     let bubble = crate::ui::preview_window::PIN_BUBBLE_HWND.load(Ordering::SeqCst);
     window_is_the_slot(window, bubble)
@@ -459,27 +464,41 @@ pub(super) fn a_rest_is_a_hover(on_hover: bool, arrived: bool, spent: bool, sett
 /// under has one: the list is `SysListView32` under `DirectUIHWND`, the frame and the view are
 /// `ExplorerWClass` and `CabinetWClass`, and this app's own window is `RustHoverPreviewWindow`.
 ///
-/// The second is the window itself, for the one panel this app puts over a listing: a pinned
-/// window's own menu (see `pin_menu_window_is_at`). It is asked about by its handle rather than by
-/// its name, so that the pin is free to rename its own window without quietly making a press on a
-/// row of its menu a press on the file behind the panel. That press is the pin's own while the menu
-/// is up — the window under it is the panel, which is no listing — but the press is read on
-/// whichever tick the shell spends the press bit on, and the tick after the menu closes finds the
-/// point reading as the listing the panel was covering. The tick before is asked about for exactly
-/// that, and this rule has to answer for the panel for it to be of any use.
+/// The second is the window itself, for the two panels this app puts over a listing: the menu a
+/// pinned window draws in a window of its own, and the menu a collapsed pin draws in its bubble (see
+/// `press_is_on_the_pins_own_menu`). They are asked about by their handles rather than by their
+/// names, so that the pin is free to rename its own windows without quietly making a press on a row
+/// of a menu a press on the file behind the panel. That press is the pin's own while the menu is up
+/// — the window under it is the panel, which is no listing — but the press is read on whichever tick
+/// the shell spends the press bit on, and the tick after the menu closes finds the point reading as
+/// the listing the panel was covering. The tick before is asked about for exactly that, and this
+/// rule has to answer for the panel for it to be of any use.
 ///
 /// Read per call rather than cached: up to two `GetClassNameW` calls on a pinned tick, and none at
-/// all where the app's own panel is what answered.
+/// all where one of the app's own panels is what answered.
 pub(super) fn window_is_menu_popup_chrome(window: HWND) -> bool {
-    pin_menu_window_is_at(window) || class_is_menu_popup_chrome(&window_class_of(window))
+    press_is_on_the_pins_own_menu(window) || class_is_menu_popup_chrome(&window_class_of(window))
 }
 
-/// Whether `window` is the pin's own menu: the panel a pinned window draws in a window of its own
-/// over the listing (see `pin_menu_window`).
+/// Whether a press on `window` is a press on one of this app's own menus rather than on the file the
+/// panel covers: the panel a pinned window draws in a window of its own, and the panel a collapsed
+/// pin draws in its bubble (see `pin_menu_window_is_at` and `bubble_window_is_at`).
 ///
-/// The one window this app has over a listing where a press is not a press on the file behind it:
-/// the card holds the pointer while its menu is up, and a press the hook reads off the panel is a
-/// row rather than the file that row covers (see `window_is_menu_popup_chrome`).
+/// These are the two panels of this app that answer a press with a row rather than with the listing
+/// underneath, and answering one leaves the hand resting over the file the row covered — a file
+/// nobody chose. So the rest of that hand is spent, and is not read as a hover of that file (see
+/// `a_rest_is_a_hover`). A popup of Explorer's is deliberately not one of them: it is the listing
+/// being worked in, and what it leaves under the hand is a file the user may well mean to see.
+pub(super) fn press_is_on_the_pins_own_menu(window: HWND) -> bool {
+    pin_menu_window_is_at(window) || bubble_window_is_at(window)
+}
+
+/// Whether `window` is a standing pin's own menu: the panel a pinned window draws in a window of
+/// its own over the listing (see `pin_menu_window`).
+///
+/// A window where a press is not a press on the file behind it: the card holds the pointer while
+/// its menu is up, and a press the hook reads off the panel is a row rather than the file that row
+/// covers (see `press_is_on_the_pins_own_menu`, which the bubble's own panel answers beside it).
 pub(super) fn pin_menu_window_is_at(window: HWND) -> bool {
     let menu = crate::ui::preview_window::PIN_MENU_HWND.load(Ordering::SeqCst);
     window_is_the_slot(window, menu)
