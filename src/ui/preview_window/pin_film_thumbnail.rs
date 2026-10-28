@@ -972,6 +972,7 @@ pub(super) fn note_the_source(source: HWND, pid: u32) {
         arm_the_pending_source(source, pid);
         SOURCE.store(number, Ordering::SeqCst);
         SOURCE_PROCESS.store(pid, Ordering::SeqCst);
+        note_where_the_source_stands(source);
         if drawn != 0 {
             note_pin_trace!(
                 "thumbnail source waiting {:?} pid {}: the picture standing is {:?} and draws until it \
@@ -1001,6 +1002,19 @@ pub(super) fn note_the_source(source: HWND, pid: u32) {
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(number, Ordering::SeqCst);
     SOURCE_PROCESS.store(pid, Ordering::SeqCst);
+    note_where_the_source_stands(source);
+}
+
+/// Write where a source this road has just begun to draw stands, as the ask that follows is compared
+/// against: **a window recorded here has nothing in flight**, so its own answer is the truth rather
+/// than a message that may not have landed (see `set_the_source_visible`).
+fn note_where_the_source_stands(source: HWND) {
+    // Safety: the handle is one a player made and this module has just recorded, and the question is
+    // about the window rather than a change to it.
+    let up = unsafe { IsWindowVisible(source) }.as_bool();
+    if let Ok(mut held) = THE_SOURCE_SHOW.lock() {
+        *held = Some((source.0 as isize, up));
+    }
 }
 
 /// The window the Shell is drawing the pin's film from, where there is one: the window of mpv's the
@@ -1868,19 +1882,38 @@ fn a_pixel_count(answer: &str) -> Option<i32> {
 /// host goes down with it — a pin put away, a park over the band — and never while the host is up.
 /// The call is posted rather than made, for the reason every call on this window is (see
 /// `adopt_the_source`).
+///
+/// **The ask is remembered, because the window's own answer is a message that may still be on its
+/// way.** `ShowWindowAsync` to a player's window is a post to another process, so a hide asked for at
+/// a collapse can still be in flight when the restore asks for the show — and a show that read
+/// `IsWindowVisible` would see the window still up, decline to ask for anything, and let the queued
+/// hide land last: the source down, the host up, and the pin a black band over a film that is playing.
+/// What is compared against here is therefore the last ask (see `THE_SOURCE_SHOW`), not the window,
+/// and a host's show on every tick of a pin that is drawing still costs one comparison and no message.
 pub(super) fn set_the_source_visible(visible: bool) {
     let Some(source) = the_source_window() else {
         return;
     };
-    // Safety: the handle is a window this module adopted, and the question is about it rather than a
-    // change to it. A window already where it is wanted is left alone: a host's show runs on every
-    // tick of a pin that is drawing, and a `ShowWindow` a tick is a message mpv's thread owes nothing.
-    if unsafe { IsWindowVisible(source) }.as_bool() != visible {
-        let _ = unsafe {
-            ShowWindowAsync(source, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE })
-        };
+    let number = source.0 as isize;
+    let asked = THE_SOURCE_SHOW.lock().ok().and_then(|held| *held);
+    if asked == Some((number, visible)) {
+        return;
     }
+    if let Ok(mut held) = THE_SOURCE_SHOW.lock() {
+        *held = Some((number, visible));
+    }
+    // Safety: the handle is a window this module adopted, and the form asked for is the one the pin's
+    // own state wants.
+    let _ = unsafe { ShowWindowAsync(source, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE }) };
 }
+
+/// The source this road last asked a show or a hide for, and which of the two: the record that keeps a
+/// hide still in flight from being read as "already hidden" by the restore that follows it (see
+/// `set_the_source_visible`).
+///
+/// It is written where the source is recorded — a player's window is up when it is adopted, and it is
+/// that window the next ask is about — and cleared with the source it names.
+static THE_SOURCE_SHOW: Mutex<Option<(isize, bool)>> = Mutex::new(None);
 
 /// Take the registration down: the host it was drawn in is going, and a registration left behind a
 /// window that is gone is a leak of the Shell's own resources.
@@ -1915,6 +1948,10 @@ fn let_the_picture_go() {
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(0, Ordering::SeqCst);
     SOURCE_PROCESS.store(0, Ordering::SeqCst);
+    if let Ok(mut held) = THE_SOURCE_SHOW.lock() {
+        // The window this was an ask about is nobody's source now (see `set_the_source_visible`).
+        *held = None;
+    }
 }
 
 /// **Let the outgoing player's registration go so a cover can stand where it was, without taking a

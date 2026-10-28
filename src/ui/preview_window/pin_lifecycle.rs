@@ -1158,6 +1158,13 @@ pub(super) fn the_pin_window_is_down(hwnd: HWND) -> bool {
 /// is told apart from the Shell's by who asked, because the same call can leave a `SIZE_RESTORED` behind
 /// it on its way down (see `the_pin_is_being_put_down`).
 ///
+/// **A window still finishing its restore is the same window coming back, and it is not waited for.** The
+/// iconic bit and the size are not one instant: the Shell restores the window a message at a time, and a
+/// gate that also asked `IsIconic` here refused the very message it exists for — leaving the pin on the
+/// screen and away as far as the app knows, which is the black band with a seek refusing every press and
+/// the film coming back only when something else happened to show the window. So the question is whether
+/// the window is hidden, and a window the Shell is bringing back answers it the moment it is shown.
+///
 /// **Asked of both windows a pin can be put away as**, and it is one function because the two roads must
 /// not drift: the pin's own window (see `window_proc`) and the film host that owns its chrome, which is
 /// the window the Shell's button belongs to on that road (see `pin_film_host`). The host answered
@@ -1169,7 +1176,7 @@ pub(super) fn the_pin_came_back(hwnd: HWND, msg: u32, wparam: WPARAM) -> bool {
         || !pin_is_collapsed()
         || !pin_is_its_own_window()
         || the_pin_is_being_put_down()
-        || the_pin_window_is_down(hwnd)
+        || !unsafe { IsWindowVisible(hwnd) }.as_bool()
     {
         return false;
     }

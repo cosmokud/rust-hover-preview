@@ -197,7 +197,7 @@ impl Drop for StandingFilm {
 /// recorded as the source the Shell draws into `_host` (see `pin_film_thumbnail`). It is this
 /// process's window, which is the player every stand in this file records, and the caller destroys
 /// it.
-unsafe fn a_source_of_the_host(_host: HWND) -> HWND {
+pub(super) unsafe fn a_source_of_the_host(_host: HWND) -> HWND {
     let source = unsafe { a_players_own_window() };
     pin_film_thumbnail::note_the_source(source, VIDEO_PID.load(Ordering::SeqCst));
     source
@@ -4169,7 +4169,7 @@ fn a_film_host_brought_back_is_the_pin_and_its_film_coming_back() {
 
 /// Let the shows a restore asks for land: the source is shown with `ShowWindowAsync`, which is a message
 /// to the thread that owns it — this one, in a test (see `pin_film_thumbnail::set_the_source_visible`).
-fn let_the_posted_shows_land() {
+pub(super) fn let_the_posted_shows_land() {
     let mut message = MSG::default();
     // SAFETY: this thread's own queue, drained of everything waiting on it; what is dispatched is a
     // message of this process's own.

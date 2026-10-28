@@ -17,8 +17,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW, GetWindowRect,
     IsIconic, IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, SetWindowPos, ShowWindow,
-    GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, SC_RESTORE, SWP_NOACTIVATE, SW_MINIMIZE,
-    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SYSCOMMAND, WNDCLASSEXW,
+    GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, SC_RESTORE, SWP_NOACTIVATE, SW_MINIMIZE, SW_RESTORE,
+    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SIZE, WM_SYSCOMMAND,
+    WNDCLASSEXW,
     WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -1579,6 +1580,300 @@ fn a_film_hosts_button_holds_a_picture_of_the_host_itself() {
         handed_over + 1,
         "the ask is answered with a bitmap made in the box it asked in"
     );
+}
+
+/// **A pin moved from the bubble into the taskbar keeps the picture its bubble collapse took.**
+///
+/// The fault this is a regression test for: the bubble's own `To Taskbar` row asks the host for the
+/// picture the button is to hold when the host has been off the screen for as long as the bubble has
+/// been up, so nothing was taken and the app's still was never forced — the hover of a film pin
+/// brought back from the bubble into the taskbar was blank. **The last moment the host is on the
+/// screen is the bubble's own collapse**, and the frame composed there is the last one the user saw,
+/// which is exactly what a hover of a put-away pin is for (see taking the picture at every collapse,
+/// `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
+#[test]
+fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubble_collapse_took() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back
+    // when the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(
+            host,
+            HWND_TOPMOST,
+            A_BOX_ON_THE_DESK.0,
+            A_BOX_ON_THE_DESK.1,
+            64,
+            48,
+            SWP_NOACTIVATE,
+        );
+        fill_the_window(host, A_COLOUR_OF_ITS_OWN);
+    }
+    let _ = unsafe { DwmFlush() };
+    let host_box = unsafe { the_client_box(host) };
+
+    // The road the user takes: the pin goes away into the round bubble first.
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "the bubble's collapse is what takes the host off the screen"
+    );
+
+    let (pixels, width, height) = the_pin_picture().expect(
+        "the bubble's collapse takes the picture the button of a pin moved from it into the taskbar \
+         is to hold",
+    );
+    assert_eq!(
+        (width as i32, height as i32),
+        host_box,
+        "and it is taken of the host's own client area, before the collapse takes it off the screen"
+    );
+    assert_eq!(
+        the_colour_in(&pixels, width, 0, 0),
+        A_COLOUR_OF_ITS_OWN.0,
+        "and it is the host as the desktop showed it rather than the black its rows are erased to"
+    );
+
+    // The bubble's own menu row moves the pin into the taskbar, where the button is the host's.
+    let forced = stills_forced();
+    bubble_to_taskbar();
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool() && unsafe { IsIconic(host) }.as_bool(),
+        "the host is the window the Shell's button belongs to, and it is put away visibly: a hidden \
+         window wears no button at all"
+    );
+    assert_eq!(
+        stills_forced(),
+        forced + 1,
+        "and the button is told to hold the app's own still for as long as the pin is away, whether or          not this row had a window of the pin's on the screen to picture"
+    );
+    let (pixels, width, _) = the_pin_picture().expect("and the picture taken at the collapse is kept");
+    assert_eq!(
+        the_colour_in(&pixels, width, 0, 0),
+        A_COLOUR_OF_ITS_OWN.0,
+        "a row that could take no picture of a window that is not there hands over no second one"
+    );
+}
+
+/// **A film host moved from the bubble into the taskbar comes back with its film and its source.**
+///
+/// The fault this is a regression test for: the pin restored from the taskbar this way had a black
+/// band with a moving seekbar — the host and the source the Shell draws through it stayed down, or
+/// the registration between them was gone, and the seek that followed had no picture to take. The
+/// pin's own restore re-establishes the pair in the one pass it happens in (see
+/// `pin_film_host::bring_the_film_back`).
+#[test]
+fn a_film_host_moved_from_the_bubble_into_the_taskbar_comes_back_with_its_film() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back
+    // when the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let source = unsafe { super::pin_film_host_window::a_source_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(source, SW_SHOWNOACTIVATE);
+    }
+
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    bubble_to_taskbar();
+    super::pin_film_host_window::let_the_posted_shows_land();
+    assert!(
+        !unsafe { IsWindowVisible(source) }.as_bool(),
+        "the source goes down with the host it is drawn in"
+    );
+
+    // What the Shell does when the host's button is clicked: it restores the window it holds, and
+    // nothing of this app's was pressed for it (see `the_pin_came_back`).
+    unsafe {
+        let _ = ShowWindow(host, SW_RESTORE);
+    }
+    assert!(
+        matches!(take_pin_command(), Some(PinCommand::CameBack)),
+        "the pin's state comes back with the window the Shell restored"
+    );
+
+    restore_pin(&a_restored_window(), PinRestore::TheShell);
+    assert!(!pin_is_collapsed(), "the pin is up again");
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool() && !unsafe { IsIconic(host) }.as_bool(),
+        "and the film's host is on the screen with it"
+    );
+    super::pin_film_host_window::let_the_posted_shows_land();
+    assert!(
+        unsafe { IsWindowVisible(source) }.as_bool(),
+        "and the source the Shell draws through the host is up again"
+    );
+    assert!(
+        pin_film_thumbnail::the_standing_source_process(host).is_some(),
+        "and the film's registration stands for that host again: a host with no registration in it \
+         is the black it erases to behind the picture"
+    );
+
+    // Safety: the source is this test's own window.
+    unsafe {
+        let _ = DestroyWindow(source);
+    }
+}
+
+/// **A pin restored before its film's hide has landed still brings the film back.**
+///
+/// The fault this is a regression test for: a hide of the source is `ShowWindowAsync` — a post to
+/// another process — so at the restore the window can still be up while the hide is on its way. The
+/// restore used to read the window, find it up, ask for nothing, and let the queued hide land last:
+/// the host on the screen with the source down, which is the black band with a moving seekbar and a
+/// seek that changes nothing, for as long as no later pass asks again. What the restore compares
+/// against is the last ask rather than the window (see `pin_film_thumbnail::set_the_source_visible`).
+#[test]
+fn a_film_host_restored_before_its_films_hide_has_landed_brings_the_film_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back
+    // when the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let source = unsafe { super::pin_film_host_window::a_source_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(source, SW_SHOWNOACTIVATE);
+    }
+
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    bubble_to_taskbar();
+    // **The posted hides are deliberately left where they are**: that is the state this test is
+    // about, and the drain below is what lets them land after the restore has said what it wants.
+    assert!(
+        unsafe { IsWindowVisible(source) }.as_bool(),
+        "the hide the collapse asked for is still on its way to the player"
+    );
+
+    unsafe {
+        let _ = ShowWindow(host, SW_RESTORE);
+    }
+    restore_pin(&a_restored_window(), PinRestore::TheShell);
+    super::pin_film_host_window::let_the_posted_shows_land();
+    assert!(
+        unsafe { IsWindowVisible(source) }.as_bool(),
+        "the hide that was in flight does not land last: the source is up with the pin that asked for it"
+    );
+    assert!(
+        pin_film_thumbnail::the_standing_source_process(host).is_some(),
+        "and the film's registration stands for that host"
+    );
+
+    // Safety: the source is this test's own window.
+    unsafe {
+        let _ = DestroyWindow(source);
+    }
+}
+
+/// **The size the Shell sends is the pin coming back, even while the host is still iconic.**
+///
+/// The fault this is a regression test for: the Shell restores the window it holds a message at a time,
+/// and the gate that reads the restore also asked the window whether it was iconic. A `SIZE_RESTORED`
+/// that arrived before the iconic bit had gone was refused — the pin stood on the screen with a black
+/// band, a seek that changed nothing, and the film coming back only when some later pass happened to
+/// show the window, which is the "sometimes it recovers by itself" of the user's own report. What the
+/// gate asks is whether the window is hidden: a window the Shell is bringing back is not (see
+/// `the_pin_came_back`).
+#[test]
+fn a_film_host_still_iconic_when_the_size_says_it_came_back_is_the_pins_restore() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back
+    // when the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    bubble_to_taskbar();
+    assert!(
+        unsafe { IsIconic(host) }.as_bool() && unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host is the window the Shell's button put away, and it is visibly away"
+    );
+
+    // What the window is sent as it comes back, before its iconic bit has gone: the pin asked for a
+    // restore is a pin whose state has to follow the window (see `the_pin_came_back`).
+    unsafe {
+        SendMessageW(host, WM_SIZE, WPARAM(SIZE_RESTORED as usize), LPARAM(0));
+    }
+    assert!(
+        matches!(take_pin_command(), Some(PinCommand::CameBack)),
+        "the pin comes back with the window the Shell is restoring"
+    );
+}
+
+/// **A pin whose host the Shell has not finished restoring comes up with its film anyway.**
+///
+/// The fault this is a regression test for: the window the Shell restores is the host, and the size
+/// that says it is back can arrive before its iconic bit has gone. The restore left a still-iconic
+/// host alone — the picture never came back, the band was black, and only whatever later pass
+/// happened to show the host recovered it, which is the "sometimes it plays perfectly" of the user's
+/// own report. A pin the user asked for is up with its film, so the host is asked up rather than
+/// waited for (see `pin_film_host::bring_the_film_back`).
+#[test]
+fn a_film_host_still_iconic_when_its_pin_is_restored_comes_back_up_with_its_film() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back
+    // when the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let source = unsafe { super::pin_film_host_window::a_source_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(source, SW_SHOWNOACTIVATE);
+    }
+
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    bubble_to_taskbar();
+    super::pin_film_host_window::let_the_posted_shows_land();
+    assert!(
+        unsafe { IsIconic(host) }.as_bool(),
+        "the host is the window the Shell's button put away"
+    );
+
+    // The pin's own restore, with the host left in the state the Shell's restore can be read in
+    // while it is still finishing.
+    restore_pin(&a_restored_window(), PinRestore::TheShell);
+    assert!(
+        !unsafe { IsIconic(host) }.as_bool() && unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host is up with the pin the user asked for rather than left to a later pass"
+    );
+    super::pin_film_host_window::let_the_posted_shows_land();
+    assert!(
+        unsafe { IsWindowVisible(source) }.as_bool(),
+        "and the source the Shell draws through it is up again"
+    );
+
+    // Safety: the source is this test's own window.
+    unsafe {
+        let _ = DestroyWindow(source);
+    }
 }
 
 /// A picture already taken is not taken down by a window that is not there any more.
