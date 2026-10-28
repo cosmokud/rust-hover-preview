@@ -715,3 +715,30 @@ fn a_hover_that_ends_takes_the_foreground_back_from_its_player() {
          which is what keeps the kill from leaving the desktop in front"
     );
 }
+
+/// **The pass that answers a desktop left in front asks nothing of any other window.** It runs after
+/// a hover's player has been killed, and it is the one hand-back that is made without a player having
+/// held the foreground a moment before — so what it must never do is take the foreground off a window
+/// the user is in. A window of somebody else's in front is left exactly where it is.
+#[test]
+fn a_desktop_residue_hand_back_leaves_another_window_in_front_alone() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let front = unsafe { pin_film_host_window::a_hover_window_of_the_tests_own() };
+    pin_lifecycle::record_the_foreground_in_front(front.0 as isize, false);
+
+    unsafe { pin_lifecycle::give_the_foreground_back_from_the_desktop() };
+
+    let asked = pin_lifecycle::the_foreground_asked_for();
+    pin_lifecycle::forget_the_recorded_foreground();
+    unsafe {
+        let _ = DestroyWindow(front);
+    }
+
+    assert_eq!(
+        asked, 0,
+        "a window in front that is not the desktop is the user's, and no hand-back of this app's \
+         asks for the foreground off it"
+    );
+}
