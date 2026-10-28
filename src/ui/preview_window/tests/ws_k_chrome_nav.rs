@@ -876,7 +876,11 @@ fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_land
         "and the step leaves the chrome up while the outgoing film is live, with the pointer still on the chevron it clicked"
     );
 
-    // The file lands: the take-up hides the chrome it draws for this file.
+    // The file lands, and this stand-in is a caption *above* its media while the kind the file is
+    // arrives with its chrome drawn over the film — so the step is a change of kind, and the take-up
+    // arrives as the new kind's own chrome does: hidden (see `take_up_pinned_window`). A step of
+    // one kind carries the chrome the pointer asked for; that is the strip tests' question (see
+    // `a_step_leaves_the_chrome_that_the_pointer_is_resting_on_up`).
     let arrived = take_up_pinned_window(Path::new("ws-k-chrome-nav-next.mkv"), content);
     stand_pin(Some(arrived));
 

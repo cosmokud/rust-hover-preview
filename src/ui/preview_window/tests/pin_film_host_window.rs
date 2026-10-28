@@ -6725,3 +6725,85 @@ fn an_mpv_film_takes_the_bands_answers_as_they_were() {
 
     pin_film_host::put_the_cover_away();
 }
+
+/// **The chrome the pointer is resting on stays up across a step**, and nothing about the step can
+/// take a strip off the screen: a hand on the caption of the film just left is on the caption of the
+/// film that replaced it, so a strip that went down with the take-up and came back on the next tick
+/// is a caption blinking out from under that hand (see `take_up_pinned_window`).
+///
+/// Asked of both shapes of step, because the box is not what the chrome hangs on: a walk lays the
+/// incoming film out in a box of its own, and a maximized window fits every file to the room it
+/// already fills — a road that changes no box at all, and so answers the same way.
+#[test]
+fn a_step_leaves_the_chrome_that_the_pointer_is_resting_on_up() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+    let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
+    let shows = |strip| unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
+    // The window under the pointer is stood in, because a test's pin stands off the desktop and no
+    // hand is over it (see `pin_chrome_occluded`).
+    stand_window_at_point_in(Some(film.pin_hwnd.0 as isize));
+    // The hand goes to the head or the foot of the strip the pin stands at, which is read of the
+    // pin rather than of the box the film was asked for: a take-up keeps the window on the display.
+    let rest_the_hand_at = |at_the_top: bool| {
+        let (head, _, _, foot) = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+            .expect("a pin up");
+        let y = if at_the_top { head + 1 } else { foot - 1 };
+        pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            Some(refresh_pin_chrome(pin, Instant::now(), Some((head + 5, y))))
+        });
+        unsafe { show_pinned_window(film.pin_hwnd) };
+    };
+
+    // A hand on the caption, and a step of a walk: the take-up that installs the file in the box
+    // the swap laid it out in, and the show that paints it there.
+    rest_the_hand_at(true);
+    assert!(
+        shows(caption) && !shows(transport),
+        "the strip the pointer asked for is the strip the strips carry"
+    );
+    stand_pin(Some(take_up_pinned_window(
+        Path::new("the-next-film.mkv"),
+        (
+            film.box_.0,
+            film.box_.1,
+            film.box_.0 + 480,
+            film.box_.1 + 270,
+        ),
+    )));
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert!(
+        shows(caption) && !shows(transport),
+        "a walk's step changes the film and the box, and takes no strip off the hand resting on it"
+    );
+
+    // A hand on the bar at the foot, and a maximized window's step: every file of a maximized pin
+    // is fitted to the room the window already fills, so the box it lands in is the one it stands
+    // in — and the bar answers it exactly as the caption answered the walk.
+    rest_the_hand_at(false);
+    assert!(
+        !shows(caption) && shows(transport),
+        "the hand at the foot asks the bar and leaves the caption to its own end"
+    );
+    with_pin(|pin| pin.restore = Some((0, 0, 1280, 720)));
+    let standing = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+        .expect("a pin up");
+    stand_pin(Some(take_up_pinned_window(
+        Path::new("the-film-after-that.mkv"),
+        standing,
+    )));
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert!(
+        !shows(caption) && shows(transport),
+        "and a step whose box does not change answers the chrome the same way, because nothing          about a step is the chrome's business"
+    );
+
+    stand_window_at_point_in(None);
+}
