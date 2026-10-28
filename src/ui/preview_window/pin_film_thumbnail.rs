@@ -182,8 +182,8 @@ use windows::Win32::Graphics::Gdi::{
     BitBlt, ClientToScreen, GetDC, GetPixel, InvalidateRect, ReleaseDC, UpdateWindow, CLR_INVALID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
-    IsWindow, IsWindowVisible, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW,
+    GetClientRect, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, IsWindow,
+    IsWindowVisible, SetLayeredWindowAttributes, SetWindowLongPtrW,
     SetWindowPos, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK,
     SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
@@ -869,14 +869,12 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
 
     // **A window that made itself the foreground gives it back.** mpv shows its own window when it has
     // opened the file, which is after the click that made the pin, and the style above stops it taking
-    // the keyboard but not from having taken it already: the pin is asked for it here where the Shell
-    // says the player's window is the one in front. A window of this app's own was the foreground a
-    // moment ago, so the ask is one Windows grants.
-    if unsafe { GetForegroundWindow() } == source {
-        if let Some(pin) = pin_real_window::real_pin_window() {
-            let _ = unsafe { SetForegroundWindow(pin) };
-        }
-    }
+    // the keyboard but not from having taken it already: the window the launch recorded as the one in
+    // front is asked for it here — the pin's own window where the user was in the pin, the listing
+    // where the user was working in it, and, where that window has gone, the ordinary window behind
+    // (see `pin_lifecycle::a_players_foreground_goes_to`). A window of this app's own was the
+    // foreground a moment ago, so the ask is one Windows grants.
+    unsafe { pin_lifecycle::give_the_foreground_back_from(source) };
 
     note_the_source(source, pid);
 

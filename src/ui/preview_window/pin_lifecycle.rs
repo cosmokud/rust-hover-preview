@@ -2208,7 +2208,7 @@ pub(super) unsafe fn pin_stands_over(hwnd: HWND, window: HWND) -> bool {
 /// What a press in a topmost window — the taskbar, a tooltip, another app's band window — has to
 /// go behind. A pin put under such a window is still over every ordinary one, and the ordinary one
 /// the user is looking at is the listing it was taken behind.
-unsafe fn front_ordinary_window(except: HWND) -> HWND {
+pub(super) unsafe fn front_ordinary_window(except: HWND) -> HWND {
     let mut window = GetTopWindow(HWND(ptr::null_mut())).unwrap_or_default();
     let mut seen = 0;
     while !window.is_invalid() && seen < 200 {
@@ -2236,6 +2236,134 @@ pub(super) unsafe fn foreground_is_ours(window: HWND) -> bool {
     let mut pid = 0u32;
     GetWindowThreadProcessId(window, Some(&mut pid));
     pid_is_the_previews(pid)
+}
+
+/// Whether `window` is a window of this app's own — one it draws in, or one of the players it began
+/// for a film, whether that player is the one showing now or the one a step is replacing.
+///
+/// **A player's window is one of ours**, which `foreground_is_ours` alone cannot say: it knows the
+/// app's own process and the player it is showing, and a step has two players alive at once (see
+/// `pid_is_the_previews` and `engine_processes::holds_a_player`). It is asked where a keyboard is
+/// about to be given to a window, and there the second player is exactly the wrong answer: it is
+/// ended by the close that is handing the keyboard back.
+pub(super) fn a_window_of_ours(window: HWND) -> bool {
+    if window.is_invalid() {
+        return false;
+    }
+
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+    pid_is_the_previews(pid) || crate::app::engine_processes::holds_a_player(pid)
+}
+
+/// The window in front when the last player was begun: where that player's own window gives the
+/// foreground back to when it has taken it (see `give_the_foreground_back_from`).
+static FOREGROUND_BEFORE_A_PLAYER: AtomicIsize = AtomicIsize::new(0);
+
+/// Remember the window in front before a player is begun, because a window this app begins is never
+/// the window the user is in.
+///
+/// The player's window is created *activated* — `WS_EX_NOACTIVATE` is put on it afterwards, by the
+/// monitor's first pass (see `apply_noactivate_to_hwnd`) — so the launch takes the keyboard from
+/// whatever had it and nothing gives it back. Read here rather than at the give-back, because by
+/// then the window that had it is behind the player's own.
+pub(super) fn note_the_foreground_before_a_player() {
+    FOREGROUND_BEFORE_A_PLAYER.store(
+        unsafe { GetForegroundWindow().0 as isize },
+        Ordering::SeqCst,
+    );
+}
+
+/// Where the foreground goes when a player this app began has taken it: nowhere where it has not,
+/// and otherwise the window the keyboard belongs to (see `a_foreground_to_give_back`).
+///
+/// A player's window holding the foreground is not a cosmetic fault. It is the window a low-level
+/// keyboard hook compares against the two handles the pin publishes
+/// (`key_input::pin_owns_caret`), so for as long as it holds it a standing pin answers **every**
+/// `Space` on the machine — the one pressed in the listing to pin a file, the one typed at a name —
+/// and a pin that is not Always On Top claims a keyboard nobody offered it.
+pub(super) fn a_players_foreground_goes_to(front: HWND, player: HWND) -> Option<HWND> {
+    if player.is_invalid() || front != player {
+        return None;
+    }
+
+    let behind = a_foreground_to_give_back(
+        FOREGROUND_BEFORE_A_PLAYER.load(Ordering::SeqCst),
+        player.0 as isize,
+    );
+    let behind = HWND(behind as *mut _);
+    (!behind.is_invalid() && behind != player).then_some(behind)
+}
+
+/// The window a player's window gives the foreground back to: the window the launch found in front,
+/// where that one is still there and is not itself a player, and the ordinary window behind the
+/// player where it has gone.
+///
+/// **A window of this app's own is allowed here, and it is the whole point of recording the window
+/// before the launch.** A step begins a player while the user is in the pin, and the window that had
+/// the keyboard a moment before the player was begun is the pin's own: giving it back there is what
+/// keeps an arrow walking the pin's folder after a step, where looking through it to the listing
+/// would take the pin's keyboard away each time it stepped. What is not allowed is a *player* — the
+/// outgoing film's window, which the launch found in front because it had taken the foreground
+/// itself, and which a hand-over may be about to end.
+///
+/// The ordinary window behind is what a launch with nothing recorded — or with a player recorded —
+/// leaves the keyboard with: the listing the user was working in, which is the window their own next
+/// click would have made the foreground anyway (see `the_window_behind`).
+fn a_foreground_to_give_back(recorded: isize, player: isize) -> isize {
+    let recorded = HWND(recorded as *mut _);
+    let a_player = |window: HWND| {
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+        crate::app::engine_processes::holds_a_player(pid)
+    };
+
+    if !recorded.is_invalid() && unsafe { IsWindow(recorded).as_bool() } && !a_player(recorded) {
+        return recorded.0 as isize;
+    }
+
+    unsafe { front_ordinary_window(HWND(player as *mut _)) }.0 as isize
+}
+
+/// Give the foreground back where a window this app began has taken it (see
+/// `a_players_foreground_goes_to`).
+///
+/// Safety: `player` is a window this app began, and the window handed the foreground is read from
+/// the desktop rather than held by the caller.
+pub(super) unsafe fn give_the_foreground_back_from(player: HWND) {
+    let front = GetForegroundWindow();
+    if let Some(behind) = a_players_foreground_goes_to(front, player) {
+        let _ = SetForegroundWindow(behind);
+    }
+}
+
+/// The window a keyboard belongs to where one of this app's own has it: the window that had the
+/// keyboard before it — `recorded` — and, where that one has gone or is one of ours, the ordinary
+/// window behind `ours`.
+///
+/// **A keyboard handed to a window that cannot take it is a keyboard nobody has.** The pin records
+/// where its keyboard came from when it takes it (`PinKeyboard { behind }`) and hands it back when
+/// it ends, and a step begins a player between the two: recorded as the window behind, the
+/// hand-back asks for a window the pin is about to kill, `SetForegroundWindow` is refused, and the
+/// foreground stays on a window of this app's — which publishes no pin, answers no pointer and
+/// hovers nothing until the user clicks the listing to make it the foreground again. Which is the
+/// whole of what "nothing at all, until I click Explorer" was.
+pub(super) fn the_window_behind(recorded: isize, ours: isize) -> isize {
+    let recorded = HWND(recorded as *mut _);
+    if !recorded.is_invalid()
+        && recorded.0 as isize != ours
+        && !a_window_of_ours(recorded)
+        && unsafe { IsWindow(recorded).as_bool() }
+    {
+        return recorded.0 as isize;
+    }
+
+    let behind = unsafe { front_ordinary_window(HWND(ours as *mut _)) };
+    if behind.is_invalid() {
+        0
+    } else {
+        behind.0 as isize
+    }
 }
 
 /// Whether a process is this app or the player it runs the film with.

@@ -135,6 +135,10 @@ pub(crate) struct RecordedPinWindow {
     /// Where the window stands, for a drag begun from the screen's own box rather than the pin's.
     box_: Option<ScreenRegion>,
     calls: Mutex<Vec<PinWindowCall>>,
+    /// The windows the keyboard was handed to, in the order it was handed over, which the call list
+    /// above cannot say: `PinWindowCall::SetForeground` is one item whatever it was asked with, and
+    /// what a hand-back owes is a window that can still take it (see `hand_keyboard_back`).
+    foreground: Mutex<Vec<isize>>,
 }
 
 #[cfg(test)]
@@ -162,6 +166,7 @@ impl RecordedPinWindow {
             pointer,
             box_,
             calls: Mutex::new(Vec::new()),
+            foreground: Mutex::new(Vec::new()),
         }
     }
 
@@ -170,6 +175,14 @@ impl RecordedPinWindow {
         self.calls
             .lock()
             .map(|calls| calls.clone())
+            .unwrap_or_default()
+    }
+
+    /// The windows the keyboard was handed to (see `foreground`).
+    pub(crate) fn handed_the_keyboard_to(&self) -> Vec<isize> {
+        self.foreground
+            .lock()
+            .map(|foreground| foreground.clone())
             .unwrap_or_default()
     }
 
@@ -213,7 +226,10 @@ impl PinWindow for RecordedPinWindow {
         self.record(PinWindowCall::SetFocus);
     }
 
-    fn set_foreground(&self, _hwnd: isize) {
+    fn set_foreground(&self, hwnd: isize) {
+        if let Ok(mut foreground) = self.foreground.lock() {
+            foreground.push(hwnd);
+        }
         self.record(PinWindowCall::SetForeground);
     }
 
