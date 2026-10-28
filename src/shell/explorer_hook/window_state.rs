@@ -125,10 +125,71 @@ pub(super) fn is_window_fullscreen(hwnd: HWND) -> bool {
     }
 }
 
+/// What the window in front is, as the one question that decides whether anything Explorer has
+/// showing is hidden behind it.
+///
+/// The three facts are handed in rather than read where the question is asked, for the reason every
+/// other rule here is: a rule that can only be tested by putting a maximized window on somebody's
+/// screen is a rule that goes untested (see `window_in_front_hides_the_listing`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct WindowInFront {
+    /// There is a window in front at all.
+    pub(super) there: bool,
+    /// It is one of Explorer's own frames.
+    pub(super) is_explorer: bool,
+    /// It is a window of this app's own: one it draws in, one of the stand-ins it leaves, or a
+    /// player it began for a film (see `a_window_of_ours_is_at`).
+    pub(super) is_our_own: bool,
+    /// It is maximized, or covers the display it is on.
+    pub(super) covers: bool,
+}
+
+/// Whether the window in front hides every Explorer window behind it, and so is the region a cover
+/// is taken from (see `foreground_cover_rect`).
+///
+/// **A window of this app's own is never one**, whatever its size. The pin's own window can be
+/// maximized by the user like any other, a player is placed at the film's own size — which on a
+/// smaller display is a window that covers it whole — and a stand-in or a host is a window of ours
+/// wherever it stands, and none of them is a program the user is working in: the listing is still
+/// under the pointer, and a pointer over it is still the pointer's own hover to answer. Read as a
+/// cover, any of them answered `HiddenByForeground` — which takes the preview down and never asks
+/// where the cursor is — so every hover after such a window was left in front was answered
+/// "nothing" until something else became the foreground window: the click on Explorer that made
+/// it one. Which window of ours it was does not change the rule, and that is the point: the
+/// question is whose the window is, and one of this app's own is never a reason for the pointer not
+/// to be answered.
+pub(super) fn window_in_front_hides_the_listing(in_front: WindowInFront) -> bool {
+    in_front.there && !in_front.is_explorer && !in_front.is_our_own && in_front.covers
+}
+
+/// Whether `window` is a window of this app's own: one it draws in — the hover's, the pin's, a
+/// film's host, the bubble, the stand-in, a menu — or one of the players it began for a film.
+///
+/// The process is the whole of the first answer, because every window this app draws in is its
+/// own, and asking the handles one by one is the answer that goes stale the moment a road makes a
+/// window nobody wrote into the list. The player is the app's own answer for the same reason it is
+/// on the pin's side of this: a player's window is the preview's, though its process is not, and the
+/// app's record of the players it began is asked as well as the one it is showing, because a step's
+/// handover has two of them and the record names whichever was last begun (see
+/// `pid_is_the_previews` and `engine_processes::holds_a_player`).
+pub(super) fn a_window_of_ours_is_at(window: HWND) -> bool {
+    if window.is_invalid() {
+        return false;
+    }
+
+    let mut owner = 0;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut owner)) };
+
+    owner != 0
+        && (crate::ui::preview_window::pid_is_the_previews(owner)
+            || engine_processes::holds_a_player(owner))
+}
+
 /// The region the window in front hides what is behind, where that window is one
 /// that hides anything at all: a maximized or fullscreen window that is not
-/// Explorer's. `None` is a foreground window nothing is hidden behind — an ordinary
-/// one, Explorer itself, or no window at all.
+/// Explorer's and not one of this app's own. `None` is a foreground window nothing is
+/// hidden behind — an ordinary one, Explorer itself, a window of ours, or no window at
+/// all.
 ///
 /// What it is for is asking whether an Explorer window is behind it. Taking the
 /// foreground window alone for the answer — a maximized window, so Explorer must be
@@ -142,12 +203,15 @@ pub(super) fn is_window_fullscreen(hwnd: HWND) -> bool {
 pub(super) fn foreground_cover_rect() -> Option<RECT> {
     unsafe {
         let foreground = GetForegroundWindow();
-        if foreground.is_invalid() || is_explorer_window(foreground) {
-            return None;
-        }
-
-        // Only a maximized or fullscreen window covers anything whole.
-        if !(is_window_maximized(foreground) || is_window_fullscreen(foreground)) {
+        let there = !foreground.is_invalid();
+        let in_front = WindowInFront {
+            there,
+            is_explorer: there && is_explorer_window(foreground),
+            is_our_own: there && a_window_of_ours_is_at(foreground),
+            // Only a maximized or fullscreen window covers anything whole.
+            covers: there && (is_window_maximized(foreground) || is_window_fullscreen(foreground)),
+        };
+        if !window_in_front_hides_the_listing(in_front) {
             return None;
         }
 
@@ -573,5 +637,26 @@ pub(super) fn read_explorer_state() -> ExplorerState {
         ExplorerState::VisibleNotFocused | ExplorerState::ActiveFocus
     ));
 
+    note_the_state_a_tick_answers_from(state);
+
     state
+}
+
+/// Write the state a tick answers from, where it is not the one the last line wrote (see
+/// `note_explorer_state`).
+///
+/// Read here rather than at the loop's own reads of it, because every one of them goes through this
+/// call and a state this function did not answer is a state no line was written for.
+fn note_the_state_a_tick_answers_from(state: ExplorerState) {
+    static LAST_NOTED: Mutex<Option<ExplorerState>> = Mutex::new(None);
+
+    let Ok(mut last) = LAST_NOTED.lock() else {
+        return;
+    };
+    if *last == Some(state) {
+        return;
+    }
+    *last = Some(state);
+
+    note_explorer_state(state);
 }
