@@ -15,10 +15,10 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
-    GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow, GWL_EXSTYLE,
-    GWL_STYLE, GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, SW_SHOWNOACTIVATE,
-    WINDOW_EX_STYLE, WM_ERASEBKGND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW,
-    WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
+    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
+    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_ERASEBKGND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED,
+    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -6824,10 +6824,7 @@ fn a_step_leaves_the_pin_standing_over_the_films_host() {
         .and_then(|pinned| pinned.pin().map(|pin| pin.content))
         .expect("a pin up");
     assert!(
-        matches!(
-            a_step_onto_the_next_film_at(standing),
-            PinSwap::Ready(_)
-        ),
+        matches!(a_step_onto_the_next_film_at(standing), PinSwap::Ready(_)),
         "a step of the same box begins its player too"
     );
     stand_pin(Some(take_up_pinned_window(
@@ -6837,6 +6834,96 @@ fn a_step_leaves_the_pin_standing_over_the_films_host() {
     unsafe { show_pinned_window(film.pin_hwnd) };
     the_pair("a step whose box did not change");
 
+    unsafe {
+        let _ = DestroyWindow(next_source);
+    }
+    mpv_ipc::clear_reads();
+}
+/// **A step's wait for its player's first frame does not take the hand's chrome down**: while the
+/// incoming player has a window under the host and no frame of it proved yet, the strip the hand is
+/// resting on stands over it (see `refresh_pin_chrome`).
+///
+/// The chrome that comes and goes with the picture is the arrival window's — a pin put up over a film
+/// that is not drawing yet — and a step is not an arrival: the hand was on the caption of the film
+/// just left and is on the caption of the film that replaced it, and what stands behind that caption
+/// is the picture the incoming player has begun rather than nothing at all.
+#[test]
+fn a_steps_wait_for_its_first_frame_leaves_the_hands_chrome_up() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let _parked = AStepParkedTheOldPlayer::take();
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+    let shows = |strip| unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
+    // The window under the pointer is stood in, because a test's pin stands off the desktop and no
+    // hand is over it (see `pin_chrome_occluded`).
+    stand_window_at_point_in(Some(film.pin_hwnd.0 as isize));
+    let hand_on_the_caption = || {
+        let (left, top, ..) = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+            .expect("a pin up");
+        pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            Some(refresh_pin_chrome(
+                pin,
+                Instant::now(),
+                Some((left + 5, top + 1)),
+            ))
+        })
+    };
+
+    // The film the pin is showing has proved its frame, and the hand is on the caption: the strip is
+    // the chrome the pointer asked for.
+    the_hosted_player_has_the_frame(VIDEO_PID.load(Ordering::SeqCst), "0.000000");
+    assert_eq!(
+        hand_on_the_caption(),
+        Some(true),
+        "the caption the hand is on comes up over a film whose frame is up"
+    );
+    unsafe { pin_chrome_strips::sync_the_chrome_strips() };
+    assert!(shows(caption), "and the strip carrying it is on the screen");
+
+    // The step: the incoming player's own window is adopted as the source the host draws, and the
+    // frame it stands on is a wait of two properties away.
+    assert!(
+        matches!(a_step_onto_the_next_film(&film), PinSwap::Ready(_)),
+        "the step begins a player for the next film"
+    );
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    mpv_ipc::answer_a_read(
+        replacement,
+        "video-params",
+        Some(r#"{"w":320,"h":180,"dw":320,"dh":180}"#),
+    );
+    let next_source = unsafe { a_players_own_window() };
+    unsafe { pin_film_thumbnail::adopt_the_source(next_source, replacement, host) };
+    assert!(
+        pin_film_host::the_hosted_player_is_drawing(replacement),
+        "the player the step began is the picture the host is drawing"
+    );
+    assert!(
+        !pin_film_host::the_hosted_frame_is_up(replacement),
+        "and its frame is the wait this is about"
+    );
+
+    // The tick under the hand: the pointer is where it was and the chrome is what it asked for, so
+    // the strip stays up over the picture that is still arriving.
+    hand_on_the_caption();
+    unsafe { pin_chrome_strips::sync_the_chrome_strips() };
+    assert!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar)))
+            == Some((true, false)),
+        "the caption the hand is resting on is not taken down by the step's wait"
+    );
+    assert!(
+        shows(caption),
+        "and the strip carrying it stays on the screen through it"
+    );
+
+    stand_window_at_point_in(None);
     unsafe {
         let _ = DestroyWindow(next_source);
     }

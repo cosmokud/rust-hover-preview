@@ -419,11 +419,16 @@ pub(super) fn refresh_pin_chrome(
         // `pin_chrome_is_held_down`).
         //
         // A hosted film whose player has a window but no frame yet is a band that would be black
-        // behind the chrome: the strips wait for the picture the player itself says it drew.
+        // behind an *arrival's* chrome: the strips of an arrival window wait for the picture the
+        // player itself says it drew. What they do not wait for is the pointer's chrome, which is
+        // the strip a hand is already resting on: a file step's incoming player has its window under
+        // the host for a tick or more before its frame is proved, and a step is not an arrival —
+        // taking the hand's strip down there is the blink a step used to have (see
+        // `take_up_pinned_window`).
         let pid = VIDEO_PID.load(Ordering::SeqCst);
         let film_window_without_a_picture = pin_film_host::the_hosted_player_is_drawing(pid)
             && !pin_film_host::the_hosted_frame_is_up(pid);
-        let (caption, bar) = if pin_chrome_is_held_down() || film_window_without_a_picture {
+        let (caption, bar) = if pin_chrome_is_held_down() {
             (false, false)
         } else {
             // The arrival window is spent the moment it closes, and there is no bringing it back:
@@ -433,14 +438,24 @@ pub(super) fn refresh_pin_chrome(
             }
 
             match pin.chrome.until.is_some() {
+                true if film_window_without_a_picture => (false, false),
                 true => (true, true),
                 false => {
                     let (caption, bar) = pin_chrome_near(pin, cursor);
                     // Near is only geometric: a pointer over a window standing over the pin is near
                     // it without hovering it, so the strips stay hidden there (see
                     // `pin_chrome_occluded`).
-                    if (caption || bar) && pin_chrome_occluded(cursor) {
+                    let (caption, bar) = if (caption || bar) && pin_chrome_occluded(cursor) {
                         (false, false)
+                    } else {
+                        (caption, bar)
+                    };
+                    // **A strip that is already on the screen stays while the film it belongs to has
+                    // no frame yet**: the band behind it is black either way, and taking it out from
+                    // under a hand resting on it is the blink a step's wait used to be. What the gate
+                    // above keeps is a strip that is *down* down (see `PinChrome::hidden`).
+                    if film_window_without_a_picture {
+                        (caption && pin.chrome.caption, bar && pin.chrome.bar)
                     } else {
                         (caption, bar)
                     }
