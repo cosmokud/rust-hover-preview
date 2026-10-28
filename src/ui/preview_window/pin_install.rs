@@ -1106,13 +1106,6 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         hides_chrome,
         caption,
         chrome: match carried {
-            // A step hides the chrome rather than carrying it: the swap stands a new film where
-            // the outgoing one was, and chrome carried verbatim — or an arrival armed again for
-            // a kind that hides it — is a strip showing over a film nobody has asked for
-            // anything about. The chrome stood while the outgoing film was live and went down
-            // with the step; the tick's hover rules show it again on the next qualifying hover,
-            // so nothing is lost but the flash (see `refresh_pin_chrome`).
-            Some(_) if hides_chrome => PinChrome::hidden(),
             // Chrome belongs to the kind it was drawn over: one kind's
             // strip has nothing to say about another's, so a swap that
             // changes it arrives as the new kind's own does. What is
@@ -1121,16 +1114,28 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
             // arrived-and-gone title bar is a strip of chrome, and a kind
             // that keeps its chrome in bands has never shown one (see
             // `pin_hides_chrome`).
+            //
+            // **A step of the same kind carries the chrome as it stands**,
+            // because the pointer is the one thing a step changes nothing
+            // about: a hand resting on the caption of the film just left is
+            // resting on the caption of the film that replaced it, and a
+            // strip that went down with the step and came back on the tick
+            // after it is a caption blinking out from under that hand. What
+            // is not carried is an arrival window: that belongs to the file
+            // the window arrived on, and a step is not an arrival.
             Some((_, chrome, _, was_overlay, was_hiding, _))
                 if was_overlay == overlay && was_hiding == hides_chrome =>
             {
-                // The file the step was for has landed: the strips are the pointer's again.
-                chrome
+                PinChrome {
+                    until: None,
+                    ..chrome
+                }
             }
             _ => {
-                // An install brings the chrome up hidden, whatever road it is: a first pin, a
-                // re-pin, a step or a relaunch all stand a new picture where a strip would
-                // flash. Only the pointer asks a strip back (see
+                // An install with no chrome of its own kind to carry — a first pin, a file of
+                // another kind, a relaunch — brings the chrome up hidden: there is no answer
+                // of the pointer's to carry, and a strip standing where a new picture arrives is
+                // a strip flashing over it. Only the pointer asks a strip back (see
                 // `refresh_pin_chrome`). A kind whose chrome is in bands around its media keeps
                 // its chrome, which is `PinChrome::always` and not an arrival.
                 if hides_chrome {

@@ -6929,3 +6929,192 @@ fn a_steps_wait_for_its_first_frame_leaves_the_hands_chrome_up() {
     }
     mpv_ipc::clear_reads();
 }
+
+/// **A step leaves the chrome a hand is resting on standing, from its take-up through the wait for
+/// the incoming film's first frame**, and the box a step comes in changes none of it.
+///
+/// The strips go down with a step only for the kind change or the arrival a step is not (see
+/// `take_up_pinned_window`): the hand that stepped is still on the caption or the bar it stepped
+/// from, and what stands under it is the film that replaced the one it was watching.
+#[test]
+fn a_step_leaves_the_hand_chrome_up_from_its_take_up_to_its_first_frame() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let _parked = AStepParkedTheOldPlayer::take();
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+    let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
+    let shows = |strip| unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
+    // The window under the pointer is stood in, because a test's pin stands off the desktop and no
+    // hand is over it (see `pin_chrome_occluded`).
+    stand_window_at_point_in(Some(film.pin_hwnd.0 as isize));
+    // The hand rests at the head of the strip the pin stands at, read of the pin rather than of the
+    // box the film was asked for: a take-up keeps the window on the display.
+    let the_hand_asks = || {
+        let (left, top, ..) = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+            .expect("a pin up");
+        pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            Some(refresh_pin_chrome(
+                pin,
+                Instant::now(),
+                Some((left + 5, top + 1)),
+            ))
+        });
+        unsafe { pin_chrome_strips::sync_the_chrome_strips() };
+    };
+    // A step of the walk's kind: the step is begun, the file it is for is taken up in the box it was
+    // laid out in, and the show paints that box.
+    let the_step = |content: ScreenRegion| {
+        assert!(
+            matches!(a_step_onto_the_next_film_at(content), PinSwap::Ready(_)),
+            "the step begins a player for the next film"
+        );
+        let mut next = create_loading_media(320, 240);
+        next.media_type = MediaType::Video;
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(next);
+        }
+        stand_pin(Some(take_up_pinned_window(
+            Path::new("the-next-film.mkv"),
+            content,
+        )));
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        assert!(
+            shows(caption) && !shows(transport),
+            "the take-up that installs the next film leaves the caption the hand is on standing"
+        );
+
+        // The incoming player's own window is the source the host draws, and the frame it stands on
+        // is the wait that follows.
+        let replacement = VIDEO_PID.load(Ordering::SeqCst);
+        mpv_ipc::answer_a_read(
+            replacement,
+            "video-params",
+            Some(r#"{"w":320,"h":180,"dw":320,"dh":180}"#),
+        );
+        let source = unsafe { a_players_own_window() };
+        unsafe { pin_film_thumbnail::adopt_the_source(source, replacement, host) };
+        the_hand_asks();
+        assert!(
+            shows(caption) && !shows(transport),
+            "and the wait for its first frame does not take it down either"
+        );
+        the_hosted_player_has_the_frame(replacement, "12.0");
+        the_hand_asks();
+        assert!(
+            shows(caption) && !shows(transport),
+            "and the frame it lands on leaves the hand's strip what it was"
+        );
+        unsafe {
+            let _ = DestroyWindow(source);
+        }
+    };
+
+    // The film the pin is showing has proved its frame, and the hand finds the caption.
+    the_hosted_player_has_the_frame(VIDEO_PID.load(Ordering::SeqCst), "0.000000");
+    the_hand_asks();
+    assert!(
+        shows(caption) && !shows(transport),
+        "the caption the hand is resting on is the chrome the pin is showing"
+    );
+
+    // A walk's step, which lays the incoming film out in a box of its own.
+    the_step(film.box_);
+    // And a step whose box does not change: every file of a maximized pin is fitted to the room the
+    // window already fills.
+    let standing = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+        .expect("a pin up");
+    the_step(standing);
+
+    stand_window_at_point_in(None);
+    mpv_ipc::clear_reads();
+    mpv_ipc::clear_noted();
+}
+
+/// **The chrome the pointer is resting on stays up across a step**, and nothing about the step can
+/// take a strip off the screen: a hand on the caption of the film just left is on the caption of the
+/// film that replaced it, so a strip that went down with the take-up and came back on the next tick
+/// is a caption blinking out from under that hand (see `take_up_pinned_window`).
+///
+/// Asked of both shapes of step, because the box is not what the chrome hangs on: a walk lays the
+/// incoming film out in a box of its own, and a maximized window fits every file to the room it
+/// already fills — a road that changes no box at all, and so answers the same way.
+#[test]
+fn a_step_leaves_the_chrome_that_the_pointer_is_resting_on_up() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+    let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
+    let shows = |strip| unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
+    // The window under the pointer is stood in, because a test's pin stands off the desktop and no
+    // hand is over it (see `pin_chrome_occluded`).
+    stand_window_at_point_in(Some(film.pin_hwnd.0 as isize));
+    // The hand goes to the head or the foot of the strip the pin stands at, which is read of the
+    // pin rather than of the box the film was asked for: a take-up keeps the window on the display.
+    let rest_the_hand_at = |at_the_top: bool| {
+        let (head, _, _, foot) = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+            .expect("a pin up");
+        let y = if at_the_top { head + 1 } else { foot - 1 };
+        pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            Some(refresh_pin_chrome(pin, Instant::now(), Some((head + 5, y))))
+        });
+        unsafe { show_pinned_window(film.pin_hwnd) };
+    };
+
+    // A hand on the caption, and a step of a walk: the take-up that installs the file in the box
+    // the swap laid it out in, and the show that paints it there.
+    rest_the_hand_at(true);
+    assert!(
+        shows(caption) && !shows(transport),
+        "the strip the pointer asked for is the strip the strips carry"
+    );
+    stand_pin(Some(take_up_pinned_window(
+        Path::new("the-next-film.mkv"),
+        (
+            film.box_.0,
+            film.box_.1,
+            film.box_.0 + 480,
+            film.box_.1 + 270,
+        ),
+    )));
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert!(
+        shows(caption) && !shows(transport),
+        "a walk's step changes the film and the box, and takes no strip off the hand resting on it"
+    );
+
+    // A hand on the bar at the foot, and a maximized window's step: every file of a maximized pin
+    // is fitted to the room the window already fills, so the box it lands in is the one it stands
+    // in — and the bar answers it exactly as the caption answered the walk.
+    rest_the_hand_at(false);
+    assert!(
+        !shows(caption) && shows(transport),
+        "the hand at the foot asks the bar and leaves the caption to its own end"
+    );
+    with_pin(|pin| pin.restore = Some((0, 0, 1280, 720)));
+    let standing = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+        .expect("a pin up");
+    stand_pin(Some(take_up_pinned_window(
+        Path::new("the-film-after-that.mkv"),
+        standing,
+    )));
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert!(
+        !shows(caption) && shows(transport),
+        "and a step whose box does not change answers the chrome the same way, because nothing          about a step is the chrome's business"
+    );
+
+    stand_window_at_point_in(None);
+}
