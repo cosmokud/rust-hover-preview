@@ -2346,13 +2346,37 @@ fn a_foreground_to_give_back(recorded: isize, player: isize) -> isize {
 /// the desktop rather than held by the caller.
 pub(super) unsafe fn give_the_foreground_back_from(player: HWND) {
     let front = GetForegroundWindow();
-    if let Some(behind) = a_players_foreground_goes_to(front, player) {
+    if let Some(taken_from) = a_players_foreground_goes_to(front, player) {
+        let behind = a_hand_back_goes_to(taken_from, a_pin_that_stands());
         // The one line a run needs to say which window a player had taken the foreground from, and
         // where it went: written only where one really was taken, so a run that reads the trace for
         // the `Space` that toggled a pin out of the listing has the window that let it happen.
         note_pin_trace!("foreground given back {:?} -> {:?}", player, behind);
         let _ = SetForegroundWindow(behind);
     }
+}
+
+/// The pin's own window, where a pin stands in one — the window a step's hand-back goes to.
+///
+/// A pin drawn in the preview window, a hover and an audio pin stand in no window of their own, and
+/// there is nothing to prefer (see `pin_real_window::real_pin_window`).
+pub(super) fn a_pin_that_stands() -> Option<HWND> {
+    pinned().then(pin_real_window::real_pin_window).flatten()
+}
+
+/// The window a player's hand-back goes to: **the pin's own window where a pin stands**, and
+/// otherwise `taken_from`, the window the launch found in front (see `a_players_foreground_goes_to`).
+///
+/// **The window recorded before a step is often the listing.** A pin that is not Always On Top does
+/// not hold the foreground between its steps, so the launch finds the listing in front and that is
+/// what the hand-back would raise — over the pin the user has just clicked a file into, which is the
+/// new window coming up behind the listing. The step's own window is the pin, and the pin is the
+/// window the keyboard belongs to, so that is where the hand-back goes.
+///
+/// The preference lives here and not in `a_players_foreground_goes_to`: the pin's own hand-backs
+/// (`the_window_behind`) ask the same question and need the recorded window, ours included.
+pub(super) fn a_hand_back_goes_to(taken_from: HWND, the_pin: Option<HWND>) -> HWND {
+    the_pin.unwrap_or(taken_from)
 }
 
 /// The window a keyboard belongs to where one of this app's own has it: the window that had the
