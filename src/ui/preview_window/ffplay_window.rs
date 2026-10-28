@@ -231,15 +231,7 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // window of ours in front is the handle `key_input::pin_owns_caret` compares against, so for as
     // long as it holds the foreground a standing pin answers every `Space` pressed anywhere (see
     // `pin_lifecycle::a_players_foreground_goes_to`).
-    //
-    // **A hover asks nothing here**, for the same reason its adopt does not: the player holding the
-    // keyboard was begun in the hover's host, where a plain ask is refused and the refusal flashes
-    // the target's taskbar button — Explorer. The gate is that host's marker, so a pin's player (a
-    // pin's host, or no host) asks exactly as it always did (see
-    // `pin_lifecycle::give_the_foreground_back_from_a_hover_player`).
-    if !hover_film_host::the_hover_player_was_begun_in_the_host(VIDEO_PID.load(Ordering::SeqCst)) {
-        pin_lifecycle::give_the_foreground_back_from(hwnd);
-    }
+    pin_lifecycle::give_the_foreground_back_from(hwnd);
 
     // The style is put on whatever else is happening, and the *raise* is not. This is the one
     // place every raise of the player's window goes through — the monitor thread calls it about
