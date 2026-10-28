@@ -353,6 +353,17 @@ pub fn end_recorded(image: &str) -> bool {
     })
 }
 
+/// Whether this process is one this app began for a film and is still running: the question a
+/// window's owner is asked where a window under the pointer has to be told from a program standing
+/// over the pin (see `pin_chrome_occluded`).
+///
+/// The record is the app's own — the players `record_player` took charge of and nothing has
+/// confirmed gone — and the live check is what keeps a record whose id a program has since been
+/// given from answering for that program.
+pub fn holds_a_player(pid: u32) -> bool {
+    pid != 0 && recorded_pids(None, Some(Kind::Player)).contains(&pid) && is_running(pid)
+}
+
 fn record_of(pid: u32) -> Option<(String, u64)> {
     let owned = OWNED.lock().ok()?;
 
@@ -360,6 +371,12 @@ fn record_of(pid: u32) -> Option<(String, u64)> {
         .iter()
         .find(|owned| owned.pid == pid)
         .map(|owned| (owned.image.clone(), owned.created))
+}
+
+/// The ids this app is holding, for a test that reads what a road left behind.
+#[cfg(test)]
+pub fn held_for_a_test() -> Vec<u32> {
+    recorded_pids(None, None)
 }
 
 /// The ids this app is holding, for one image or for all of them, and for one kind of
