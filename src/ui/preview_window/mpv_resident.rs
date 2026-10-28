@@ -21,11 +21,19 @@
 //! **What ends a hover does not end the resident.** `stop_video_playback` stops the film on it
 //! (mpv goes idle with its window still up) rather than killing it, and every other pid — a pin's,
 //! FFmpeg's — is killed exactly as before (see `video_playback::kill_player_process`, which is the
-//! one place that rule lives). What lets the resident go is the app ending, or a file it could not
-//! take.
+//! one place that rule lives). What ends the resident is the `MPV TTL` setting (`video_engine_idle`,
+//! an `EngineIdle`): `Away` keeps it while the user is at the keyboard, a number of seconds keeps it
+//! that long after its last hover, `Indefinitely` never lets it go and `0` lets it go the moment the
+//! hover ends. A resident that is showing a hover, or that a pin has taken over, is never reaped.
+//!
+//! **A pin that takes a hover's player takes the resident with it, and it is not this app's from
+//! there.** The player a pin adopts *is* the resident (same process), so its record here is cleared
+//! at the take-over and a fresh resident is begun once that pin has closed (see
+//! `a_pin_took_it_over` and `tick`).
 
 use super::pin_trace::note_pin_trace;
 use super::*;
+use crate::config::config::EngineIdle;
 
 /// Where the resident's window is parked: off every display, at the smallest window there is, so
 /// that nothing of it is ever on the screen before a hover places it (see the module note).
@@ -90,6 +98,10 @@ struct Resident {
 /// The one resident, or nothing while there is none.
 static RESIDENT: Mutex<Option<Resident>> = Mutex::new(None);
 
+/// Whether the tick owes a fresh resident after a pin took the last one over (see
+/// `a_pin_took_it_over`).
+static RE_WARM: AtomicBool = AtomicBool::new(false);
+
 /// Whether the hover road keeps a resident at all: on in a run, and in a test only where the test
 /// asks for it.
 ///
@@ -136,6 +148,45 @@ pub(super) struct Served {
 /// and a film begun under it is the one it has today.
 pub(super) fn the_resident_may_serve(a_pin_stands: bool) -> bool {
     !a_pin_stands
+}
+
+/// Whether this resident may be let go: only a standby one, whose TTL has run out.
+///
+/// A resident that is serving a hover is the picture on screen, and one a pin has taken over is the
+/// pin's — neither is this app's to end, however long the clock has run.
+pub(super) fn the_resident_may_be_reaped(
+    serving: bool,
+    pin_owned: bool,
+    idle: EngineIdle,
+    idle_for: Duration,
+) -> bool {
+    !serving && !pin_owned && idle.has_expired(idle_for)
+}
+
+/// Whether the tick begins a fresh resident: one is owed by a pin that took the last over, no pin
+/// stands, and none is held.
+pub(super) fn the_resident_is_owed_a_re_warm(
+    owed: bool,
+    a_pin_stands: bool,
+    a_resident_is_held: bool,
+) -> bool {
+    owed && !a_pin_stands && !a_resident_is_held
+}
+
+/// The word a reaped resident's line says: which half of `MPV TTL` let it go.
+fn the_ttl_word(idle: EngineIdle) -> &'static str {
+    match idle {
+        EngineIdle::Away => "away",
+        EngineIdle::Seconds(_) | EngineIdle::Indefinite => "ttl",
+    }
+}
+
+/// The `MPV TTL` setting as it stands.
+fn the_ttl() -> EngineIdle {
+    CONFIG
+        .lock()
+        .map(|config| config.video_engine_idle)
+        .unwrap_or(EngineIdle::Away)
 }
 
 /// Whether the resident that was begun with `begun` is the player the settings ask for now.
@@ -383,4 +434,95 @@ pub(super) fn finish(pid: u32) -> bool {
     resident.serving = false;
     resident.idle_since = Some(Instant::now());
     true
+}
+
+/// A pin has taken the hover's player over as its own picture (see
+/// `pin_film_host::promote_the_hover_film_host`): the resident is the pin's from here.
+///
+/// The record goes and the process is not touched — the pin is drawing it — so nothing loads a
+/// hover's file on it, nothing reaps it, and nothing but the pin ends it. A fresh resident is begun
+/// once that pin has closed (see `tick`).
+pub(super) fn a_pin_took_it_over() {
+    let Ok(mut slot) = RESIDENT.lock() else {
+        return;
+    };
+    let took_it = slot
+        .as_ref()
+        .is_some_and(|resident| resident.player.id() == VIDEO_PID.load(Ordering::SeqCst));
+    if !took_it {
+        return;
+    }
+    if let Some(resident) = slot.take() {
+        note_pin_trace!(
+            "mpv resident let go (a pin took it over) pid {}",
+            resident.player.id()
+        );
+    }
+    RE_WARM.store(true, Ordering::Release);
+}
+
+/// One pass of the preview tick's own work on the resident: a fresh one that a pin's take-over owes,
+/// and one standing by whose TTL has run out.
+pub(super) fn tick() {
+    if !keeping_a_resident() {
+        return;
+    }
+    let Ok(mut slot) = RESIDENT.lock() else {
+        return;
+    };
+
+    // A resident that has ended — a pin's relaunch ended it, or it came apart — is no resident, and
+    // the next one is begun when it is wanted rather than left as a record of a process that is
+    // gone.
+    if slot
+        .as_mut()
+        .is_some_and(|resident| the_player_has_ended(&mut resident.player))
+    {
+        if let Some(resident) = slot.take() {
+            mpv_ipc::forget_pipe(resident.player.id());
+            note_pin_trace!("mpv resident let go (exit)");
+        }
+        RE_WARM.store(true, Ordering::Release);
+    }
+
+    if the_resident_is_owed_a_re_warm(
+        RE_WARM.load(Ordering::Acquire),
+        pinned(),
+        slot.is_some(),
+    ) {
+        RE_WARM.store(false, Ordering::Release);
+        let ttl_volume = current_video_volume();
+        if let Some(signature) = LaunchSignature::of_the_machine(false) {
+            *slot = begun(
+                signature,
+                ttl_volume,
+                video_launch::mpv_launched_without_audio(ttl_volume),
+            );
+        }
+    }
+
+    let idle = the_ttl();
+    let expired = slot.as_ref().is_some_and(|resident| {
+        !resident.serving
+            && resident
+                .idle_since
+                .is_some_and(|since| the_resident_may_be_reaped(false, false, idle, since.elapsed()))
+    });
+    if expired {
+        if let Some(resident) = slot.take() {
+            end(resident);
+            note_pin_trace!("mpv resident let go ({})", the_ttl_word(idle));
+        }
+    }
+}
+
+/// End the resident, because the app is ending.
+pub(crate) fn shut_down_the_resident() {
+    let Ok(mut slot) = RESIDENT.lock() else {
+        return;
+    };
+    if let Some(resident) = slot.take() {
+        end(resident);
+        note_pin_trace!("mpv resident let go (the app is ending)");
+    }
 }

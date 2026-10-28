@@ -251,6 +251,10 @@ fn main() {
     // the app.
     engines::webview_preview::shutdown();
 
+    // The mpv a hover's film was loaded into is kept between hovers and is this app's own
+    // process: a run that ends leaves nothing of it behind (see `mpv_resident`).
+    ui::preview_window::shut_down_the_resident();
+
     // Wait for the threads that end by themselves. The hook is not one of them: every probe
     // it makes crosses into Explorer, and a shell that has stopped answering holds one of
     // those crossings for as long as it likes — which is the wait the Office engine's own

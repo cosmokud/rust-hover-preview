@@ -6,6 +6,7 @@
 //! test's launch (see `keep_a_resident_in_a_test`).
 
 use super::*;
+use crate::config::config::EngineIdle;
 
 /// The hover road's resident, kept for the length of one test and taken down on the way out.
 struct ResidentStand {
@@ -249,6 +250,98 @@ fn any_other_player_is_killed_as_before() {
     );
 }
 
+/// **The TTL item says when a standby resident expires**, in all four shapes the setting takes: a
+/// number of seconds after its last hover, the away timer for `Away`, never for `Indefinitely`, and at
+/// once for `0`.
+#[test]
+fn the_ttl_item_says_when_a_standby_resident_expires() {
+    let _one = one_at_a_time();
+
+    let minute = Duration::from_secs(60);
+    let year = Duration::from_secs(365 * 24 * 60 * 60);
+
+    assert!(
+        !mpv_resident::the_resident_may_be_reaped(
+            false,
+            false,
+            EngineIdle::Seconds(60),
+            minute - Duration::from_secs(1)
+        ),
+        "a resident kept for a minute is kept until it has stood by that long"
+    );
+    assert!(mpv_resident::the_resident_may_be_reaped(
+        false,
+        false,
+        EngineIdle::Seconds(60),
+        minute
+    ));
+    assert!(
+        mpv_resident::the_resident_may_be_reaped(
+            false,
+            false,
+            EngineIdle::Seconds(0),
+            Duration::ZERO
+        ),
+        "a resident let go as soon as its hover ends is let go at once"
+    );
+    assert!(
+        !mpv_resident::the_resident_may_be_reaped(
+            false,
+            false,
+            EngineIdle::Indefinite,
+            year
+        ),
+        "one kept for the life of the app never expires"
+    );
+
+    // `Away` is the away timer's answer rather than the resident's own clock, which is what makes it
+    // the one shape a duration cannot answer (see `EngineIdle::has_expired`).
+    let timer = CONFIG.lock().map(|config| config.afk_timer_seconds).unwrap();
+    crate::app::afk::note_explorer_reachable(true);
+    assert!(
+        !mpv_resident::the_resident_may_be_reaped(false, false, EngineIdle::Away, year),
+        "a user at the keyboard keeps the resident however long it has stood by"
+    );
+    if let Ok(mut config) = CONFIG.lock() {
+        config.afk_timer_seconds = 0;
+    }
+    crate::app::afk::note_explorer_reachable(false);
+    assert!(
+        mpv_resident::the_resident_may_be_reaped(false, false, EngineIdle::Away, Duration::ZERO),
+        "and one who is away lets it go"
+    );
+    if let Ok(mut config) = CONFIG.lock() {
+        config.afk_timer_seconds = timer;
+    }
+    crate::app::afk::note_explorer_reachable(true);
+}
+
+/// **A resident that is serving a hover, or that a pin has taken over, is never reaped** — whatever
+/// the TTL says and however long it has stood by. Only a standby one is ever let go.
+#[test]
+fn a_serving_or_pin_owned_resident_is_never_reaped() {
+    let year = Duration::from_secs(365 * 24 * 60 * 60);
+
+    for idle in [
+        EngineIdle::Seconds(0),
+        EngineIdle::Seconds(60),
+        EngineIdle::Indefinite,
+    ] {
+        assert!(
+            !mpv_resident::the_resident_may_be_reaped(true, false, idle, year),
+            "the picture on screen is never let go: {idle:?}"
+        );
+        assert!(
+            !mpv_resident::the_resident_may_be_reaped(false, true, idle, year),
+            "and neither is a pin's: {idle:?}"
+        );
+    }
+    assert!(
+        mpv_resident::the_resident_may_be_reaped(false, false, EngineIdle::Seconds(60), year),
+        "the one that is let go is the standby resident its TTL has run out on"
+    );
+}
+
 /// **A setting the resident's command line names is a resident begun again**: a hover that asks for a
 /// player its resident was not begun as takes the old one down and loads on a fresh one.
 #[test]
@@ -334,4 +427,45 @@ fn the_stray_sweep_spares_the_resident() {
         Some(pid),
         "the resident outlives the sweep that would have taken a stray"
     );
+}
+
+/// **A pin that took the resident over re-warms one after it closes.** The player is the pin's from
+/// the take-over, so the record goes then; the fresh one is begun by the tick, once no pin stands.
+#[test]
+fn a_pin_that_took_the_resident_over_re_warms_one_after_it_closes() {
+    let _one = one_at_a_time();
+    let _stand = ResidentStand::new(true);
+
+    let pid = a_resident(true);
+    VIDEO_PID.store(pid, Ordering::SeqCst);
+    mpv_resident::a_pin_took_it_over();
+
+    assert_eq!(
+        mpv_resident::the_resident_pid(),
+        None,
+        "the resident is the pin's now, and no longer this app's to serve with"
+    );
+    assert!(
+        !mpv_resident::the_resident_is_owed_a_re_warm(true, true, false),
+        "nothing is begun while the pin that took it stands"
+    );
+
+    scene_the_pin_closed();
+    mpv_resident::tick();
+
+    let warmed = mpv_resident::the_resident_pid().expect("a fresh resident once the pin has closed");
+    assert_ne!(warmed, pid, "one begun anew, not the pin's");
+    assert!(
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line.contains("mpv resident begun pid")),
+        "and the run says one was begun: {:?}",
+        pin_trace::noted_lines()
+    );
+}
+
+/// The pin that took the resident over has closed: its state is down and nothing of it stands.
+fn scene_the_pin_closed() {
+    stand_pin(None);
+    VIDEO_PID.store(0, Ordering::SeqCst);
 }
