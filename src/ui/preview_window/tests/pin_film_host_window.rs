@@ -7583,3 +7583,52 @@ fn a_step_leaves_the_chrome_that_the_pointer_is_resting_on_up() {
 
     stand_window_at_point_in(None);
 }
+
+/// **A step gives the foreground back to the pin that stands, not to the listing behind it.** A pin
+/// that is not Always On Top does not hold the foreground between its steps, so the window the
+/// launch records is often the listing: before this rule the step's hand-back raised that listing
+/// over the pin, and the window the step opened came up behind it. Where no pin window is up — a pin
+/// drawn in the preview window, a hover, an audio pin — the window the launch found in front is the
+/// answer it always was.
+///
+/// The foreground cannot be rearranged on a desktop a test may not take, so the hand-back's two
+/// answers are asked of the choice itself: the listing handed in as what the player took the
+/// foreground from, and the pin's own window read off the seams that stand it.
+#[test]
+fn a_steps_hand_back_goes_to_the_pin_that_stands() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+
+    // The pin's own window, and the listing the pin's last launch found in front.
+    let pin = HWND(0x2A00 as *mut _);
+    let listing = HWND(0x2B00 as *mut _);
+    pin_real_window::stand_real_pin_window_for_a_test(Some(pin));
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    assert!(pinned(), "the step this test is about is a standing pin's");
+
+    assert_eq!(
+        pin_lifecycle::a_hand_back_goes_to(listing, pin_lifecycle::a_pin_that_stands()),
+        pin,
+        "the window the keyboard belongs to between steps is the pin, so that is where the hand-back \
+         goes rather than to the listing behind the player"
+    );
+
+    // Taken down, there is no window of the pin's own to prefer, and the recorded window answers.
+    stand_pin(None);
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    assert!(!pinned(), "no pin stands here");
+    assert_eq!(
+        pin_lifecycle::a_hand_back_goes_to(listing, pin_lifecycle::a_pin_that_stands()),
+        listing,
+        "a pin drawn in a window that is not its own leaves the hand-back where it always was"
+    );
+
+    stand_pin(previous_pin);
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+}
