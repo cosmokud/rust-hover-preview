@@ -882,7 +882,15 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
     // where the user was working in it, and, where that window has gone, the ordinary window behind
     // (see `pin_lifecycle::a_players_foreground_goes_to`). A window of this app's own was the
     // foreground a moment ago, so the ask is one Windows grants.
-    unsafe { pin_lifecycle::give_the_foreground_back_from(source) };
+    //
+    // **A hover asks nothing here**: its player was begun in the hover's own host, where a plain ask
+    // made while that player is in front is refused — and a refusal flashes the *target's* taskbar
+    // button, which is the Explorer flash. A hover's ask is the tick's, made the way it is granted
+    // (see `pin_lifecycle::give_the_foreground_back_from_a_hover_player`). A pin's player was begun
+    // for the pin's host, so the marker is false and the pin's call is the one it always made.
+    if !hover_film_host::the_hover_player_was_begun_in_the_host(pid) {
+        unsafe { pin_lifecycle::give_the_foreground_back_from(source) };
+    }
 
     note_the_source(source, pid);
 

@@ -73,6 +73,20 @@ fn a_film() -> PathBuf {
     PathBuf::from("a-hovered-film.mkv")
 }
 
+/// The hover's own player, begun in the hover's host: the one fact every hand-back of the hover
+/// road is gated on (see `pin_lifecycle::a_hover_player_was_begun_in_the_host`). The stand's own
+/// take-down of the host is what clears it again.
+fn a_hover_player_begun_in_the_host() -> u32 {
+    let pid = unsafe { GetCurrentProcessId() };
+    unsafe {
+        hover_film_host::take_up_the_hover_film_host((NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 180))
+    }
+    .expect("the hover's own host");
+    hover_film_host::note_hover_film_host_player(pid, &a_film());
+    VIDEO_PID.store(pid, Ordering::SeqCst);
+    pid
+}
+
 fn video_media() -> MediaData {
     let mut media = create_loading_media(16, 16);
     media.media_type = MediaType::Video;
@@ -679,6 +693,8 @@ fn a_hovers_foreground_goes_to_the_window_the_launch_found_in_front() {
 /// and the listing is behind it here, which is the arrangement the player's own window makes when it
 /// opens; both are recorded, because neither can be staged on a desktop a test may not rearrange (see
 /// `record_the_foreground_in_front`, and `RecordedPinWindow`, which is the pin-side of the same seam).
+/// The player is a hover's, begun in the hover's host, because that marker is what the hand-back is
+/// gated on.
 #[test]
 fn a_hover_that_ends_takes_the_foreground_back_from_its_player() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -689,6 +705,8 @@ fn a_hover_that_ends_takes_the_foreground_back_from_its_player() {
         "a hover's teardown is the road no pin owns"
     );
 
+    let _stand = HoverHostStand::new(true);
+    a_hover_player_begun_in_the_host();
     let shell = unsafe { GetShellWindow() };
     assert!(
         unsafe { IsWindow(shell) }.as_bool(),
@@ -754,6 +772,8 @@ fn a_refused_hand_back_is_asked_again_only_after_a_wait() {
     );
 
     let shell = unsafe { GetShellWindow() };
+    let _stand = HoverHostStand::new(true);
+    a_hover_player_begun_in_the_host();
     pin_lifecycle::record_the_window_the_launch_found_in_front(shell.0 as isize);
     pin_lifecycle::record_the_foreground_in_front(player.0 as isize, true);
 
@@ -807,5 +827,140 @@ fn a_desktop_residue_hand_back_leaves_another_window_in_front_alone() {
         asked, 0,
         "a window in front that is not the desktop is the user's, and no hand-back of this app's \
          asks for the foreground off it"
+    );
+}
+
+/// **A pin's step is never answered by a hover's hand-back.** `pinned()` is transiently false through
+/// a take-up and every step of it, so a gate made of it alone lets the hover's ask into a pin step:
+/// the window in front is then the pin's own new player, the window behind resolves to Explorer, and
+/// Explorer is raised over the pin the user has just clicked open — which is the new window coming up
+/// behind Explorer. The gate is the *player's* host, and this player was begun in nobody's host, so
+/// neither the tick's ask nor the take-down's records an ask and no z-order call is made on either.
+#[test]
+fn a_pin_step_is_never_answered_by_the_hovers_hand_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _stand = HoverHostStand::new(true);
+    assert!(
+        !pinned(),
+        "a step begins its player while the pin is not up, which is the moment `pinned()` lies"
+    );
+
+    let player = unsafe { pin_film_host_window::a_hover_window_of_the_tests_own() };
+    let shell = unsafe { GetShellWindow() };
+    pin_lifecycle::record_the_window_the_launch_found_in_front(shell.0 as isize);
+    pin_lifecycle::record_the_foreground_in_front(player.0 as isize, true);
+    let _ = pin_lifecycle::the_foreground_asked_for();
+
+    let _ = unsafe { pin_lifecycle::give_the_foreground_back_from_a_hover_player_on_the_tick() };
+    let ticked = pin_lifecycle::the_foreground_asked_for();
+
+    let mut path = Some(PathBuf::from("a-film.mkv"));
+    let mut pos = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240);
+    let hover = unsafe { pin_film_host_window::a_hover_window_of_the_tests_own() };
+    unsafe { pin_lifecycle::take_the_hover_down(hover, &mut path, &mut pos) };
+    let taken_down = pin_lifecycle::the_foreground_asked_for();
+
+    pin_lifecycle::forget_the_recorded_foreground();
+    unsafe {
+        let _ = DestroyWindow(hover);
+        let _ = DestroyWindow(player);
+    }
+
+    assert_eq!(
+        (ticked, taken_down),
+        (0, 0),
+        "a player not begun in the hover's host is a pin's, and the hover's ask is not the pin's to \
+         make: neither the tick nor the take-down records one, so Explorer is never raised over the \
+         window the step opened"
+    );
+}
+
+/// **A hover's hand-back asks only the window its launch found in front**, and asks nothing where
+/// that window has gone or is one of ours.
+///
+/// The fallback behind a missing or ours-recorded window is `the_window_behind`, whose own answer is
+/// the ordinary window behind — Explorer. Reading it is what turns a pin step into "raise Explorer
+/// over the pin", so the rule is held to the window the launch recorded and to no other.
+#[test]
+fn a_hovers_hand_back_asks_only_the_window_the_launch_found_in_front() {
+    let player = HWND(0x1000 as *mut _);
+    let ours = unsafe { pin_film_host_window::a_hover_window_of_the_tests_own() };
+    let shell = unsafe { GetShellWindow() };
+
+    assert!(
+        pin_lifecycle::a_hovers_foreground_goes_to(player, 0, true).is_none(),
+        "a launch that recorded no window asks for nothing, rather than for whatever stands behind"
+    );
+    assert!(
+        pin_lifecycle::a_hovers_foreground_goes_to(player, ours.0 as isize, true).is_none(),
+        "and a recorded window of ours is the one the fallback answers Explorer with, so it is no \
+         target at all"
+    );
+    assert_eq!(
+        pin_lifecycle::a_hovers_foreground_goes_to(player, shell.0 as isize, true)
+            .map(|behind| behind.0 as isize),
+        Some(shell.0 as isize),
+        "the listing the launch found in front is still the one a hover gives the foreground back to"
+    );
+
+    // Safety: the window is this test's own, and nothing of the app holds a handle on it.
+    unsafe {
+        let _ = DestroyWindow(ours);
+    }
+}
+
+/// **A hover's adopt makes no ask for the foreground at all.** Its player is in front in the hover's
+/// host, so a plain `SetForegroundWindow` here is refused — and a refusal flashes the *target's*
+/// taskbar button, which is the flash over Explorer. The ask is the tick's, made the granted way, so
+/// nothing on the adopt road asks; the tick's own ask, recorded here as well, is the check that the
+/// recording would have caught the adopt's.
+#[test]
+fn a_hover_adopt_never_asks_for_the_foreground_plainly() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _stand = HoverHostStand::new(true);
+    assert!(!pinned(), "a hover's adopt is the road no pin owns");
+
+    let pid = a_hover_player_begun_in_the_host();
+    let host = hover_film_host::hover_film_host().expect("the hover's own host");
+    mpv_ipc::remember_pipe(pid, "the-hover-sources-pipe", false);
+    mpv_ipc::answer_a_read(
+        pid,
+        "video-params",
+        Some(r#"{"w":320,"h":180,"dw":320,"dh":180}"#),
+    );
+    let source = unsafe { a_source_of_the_host(pid) };
+    pin_film_thumbnail::forget_the_thumbnail();
+    pin_film_thumbnail::clear_the_source_placements();
+    pin_film_thumbnail::clear_the_registrations();
+
+    let shell = unsafe { GetShellWindow() };
+    pin_lifecycle::record_the_window_the_launch_found_in_front(shell.0 as isize);
+    pin_lifecycle::record_the_foreground_in_front(source.0 as isize, true);
+    let _ = pin_lifecycle::the_foreground_asked_for();
+
+    unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
+
+    let adopted = pin_lifecycle::the_foreground_asked_for();
+    let _ = unsafe { pin_lifecycle::give_the_foreground_back_from_a_hover_player_on_the_tick() };
+    let ticked = pin_lifecycle::the_foreground_asked_for();
+
+    pin_lifecycle::forget_the_recorded_foreground();
+    mpv_ipc::forget_pipe(pid);
+    unsafe {
+        let _ = DestroyWindow(source);
+    }
+
+    assert_eq!(
+        adopted, 0,
+        "adopting a hover's source asks for nothing: a plain ask made while its player is in front \
+         is the refusal that flashes Explorer"
+    );
+    assert_eq!(
+        ticked, shell.0 as isize,
+        "and the ask is the tick's, which is what the recording would have caught the adopt's as"
     );
 }
