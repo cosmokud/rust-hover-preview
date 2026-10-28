@@ -18,13 +18,13 @@ use super::commands::{
     set_document_cache_mb, set_document_scale, set_ebook_scale, set_follow_cursor,
     set_font_background, set_font_scale, set_general_disk_cache_mb, set_hover_delay,
     set_html_background, set_image_background, set_image_cache_mb, set_image_disk_cache_mb,
-    set_libreoffice_idle, set_markdown_mode, set_mpv_path, set_office_engine,
+    set_libreoffice_idle, set_markdown_mode, set_mpv_engine_idle, set_mpv_path, set_office_engine,
     set_office_engine_idle, set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek,
     set_pin_nav_audio, set_pin_nav_others, set_pin_nav_video, set_preview_scale,
     set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
     set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
     set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
-    set_zoom_background, toggle_check_for_updates, toggle_engine_persistent, toggle_loop,
+    set_zoom_background, toggle_check_for_updates, toggle_loop,
     toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_always_on_top,
     toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_shuffle,
     toggle_pin_update_enabled, toggle_pin_update_move_to_top, toggle_pin_update_on_hover,
@@ -44,14 +44,15 @@ use super::ids::{
     ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
     ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
     ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
-    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_ENGINE_PERSISTENT_BASE,
+    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS,
     ID_TRAY_EXIT, ID_TRAY_FONT_100, ID_TRAY_FONT_110, ID_TRAY_FONT_125, ID_TRAY_FONT_150,
     ID_TRAY_FONT_175, ID_TRAY_FONT_200, ID_TRAY_FONT_250, ID_TRAY_FONT_300, ID_TRAY_FONT_400,
     ID_TRAY_FONT_70, ID_TRAY_FONT_80, ID_TRAY_FONT_90, ID_TRAY_FONT_BACKGROUND_BASE,
     ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE,
     ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
     ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
-    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME,
+    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE,
+    ID_TRAY_NORMALIZE_VIDEO_VOLUME,
     ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
     ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
@@ -452,6 +453,14 @@ unsafe extern "system" fn tray_window_proc(
                     ID_TRAY_TYPE_FONTS => toggle_preview_type(PreviewType::Fonts),
                     ID_TRAY_TYPE_DESIGN => toggle_preview_type(PreviewType::Design),
                     ID_TRAY_TYPE_VECTOR => toggle_preview_type(PreviewType::Vector),
+                    // An engine's TTL, by the position it was listed at: the player, then the
+                    // three engines this app keeps warm between documents.
+                    cmd if (ID_TRAY_MPV_IDLE_BASE
+                        ..ID_TRAY_MPV_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_mpv_engine_idle(cmd - ID_TRAY_MPV_IDLE_BASE)
+                    }
                     // An Office engine's idle time, by the position it was listed at.
                     cmd if (ID_TRAY_ENGINE_IDLE_BASE
                         ..ID_TRAY_ENGINE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
@@ -479,13 +488,6 @@ unsafe extern "system" fn tray_window_proc(
                         .contains(&cmd) =>
                     {
                         set_afk_timer(cmd - ID_TRAY_AFK_TIMER_BASE)
-                    }
-                    // A `Persistent` toggle, by the submenu it heads: the Office engines, then
-                    // the render engine's, then the browser's.
-                    cmd if (ID_TRAY_ENGINE_PERSISTENT_BASE..ID_TRAY_ENGINE_PERSISTENT_BASE + 3)
-                        .contains(&cmd) =>
-                    {
-                        toggle_engine_persistent(cmd - ID_TRAY_ENGINE_PERSISTENT_BASE)
                     }
                     // Whether a video is decoded on the graphics card, which is the
                     // `Hardware Acceleration (MPV Only)` row of the `Performance`

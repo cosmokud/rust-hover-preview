@@ -13,7 +13,7 @@ use super::api::{
 use super::environment::pump_messages;
 use super::host::Host;
 
-use crate::config::config::{EngineIdle, PreviewType, DEFAULT_WEBVIEW_IDLE_SECS};
+use crate::config::config::{EngineIdle, PreviewType};
 use crate::CONFIG;
 
 /// What the preview thread asks the engine's thread to do.
@@ -53,27 +53,17 @@ impl Engine {
     }
 }
 
-/// How long the engine is kept after its last document. It is read from the
-/// configuration each time rather than captured, so an edit applies to the engine that
-/// is already warm.
-fn idle_timeout() -> Option<Duration> {
+/// Whether the browser has been kept for as long as its TTL setting says.
+///
+/// It is read from the configuration each time rather than captured, so an edit applies to
+/// the engine that is already warm. Which clock decides is the setting's own answer: `Away`
+/// is the AFK timer, and a time is the browser's own idle time (see `EngineIdle`).
+fn idle_expired(idle_since: Instant) -> bool {
     CONFIG
         .lock()
         .map(|config| config.webview_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS))
-        .as_duration()
-}
-
-/// Whether the browser is kept whatever the user is doing, which is the `Persistent` toggle
-/// at the top of the same submenu.
-///
-/// Read rather than captured, for the reason the idle time is: it is asked while the engine
-/// is up, so a click applies to the browser that is already warm.
-fn engine_persistent() -> bool {
-    CONFIG
-        .lock()
-        .map(|config| config.webview_persistent)
-        .unwrap_or(false)
+        .unwrap_or(EngineIdle::Away)
+        .has_expired(idle_since.elapsed())
 }
 
 /// Write one line to the trace file when `RHP_WEBVIEW_TRACE` is set, for the same
@@ -228,11 +218,11 @@ fn engine_thread(commands: Receiver<Command>) {
         // A document that has been off screen for as long as the engine is kept for is one
         // the engine is let go of, browser process and all.
         //
-        // Which question is asked is the `Persistent` toggle at the top of the TTL submenu.
-        // Persistent, it is the idle time, exactly as it was before the toggle existed; not
-        // persistent — the way this starts — it is the AFK timer, and the idle time is not
-        // consulted at all. What an idle time is for is the memory an engine holds while the
-        // user is elsewhere, which is the question the AFK timer asks directly.
+        // Which question is asked is the TTL setting. A time is how long the browser is kept
+        // after its last document, exactly as it was before there was a list of them; `Away`
+        // — the way this starts — is the AFK timer, and the idle time is not consulted at all.
+        // What an idle time is for is the memory an engine holds while the user is elsewhere,
+        // which is the question the AFK timer asks directly.
         //
         // The thread is not let go of with it, and that is the whole of it: the channel
         // it holds is the one a hover sends into, and a thread that ended here would
@@ -244,10 +234,7 @@ fn engine_thread(commands: Receiver<Command>) {
             // A document on screen is the engine earning its keep: the window is the
             // preview, and the browser behind it is what is drawing it.
             Some(_) if SHOWING.load(Ordering::Acquire) => false,
-            Some(_) if engine_persistent() => {
-                idle_timeout().is_some_and(|limit| idle_since.elapsed() >= limit)
-            }
-            Some(_) => crate::app::afk::expired(),
+            Some(_) => idle_expired(idle_since),
         };
 
         if expired {

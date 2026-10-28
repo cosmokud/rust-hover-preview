@@ -282,13 +282,17 @@ impl VideoEngine {
 
 /// How long an engine that is kept warm between documents is kept.
 ///
-/// Two settings are one shape: the Office engine, which is the application this app
-/// started and would rather not start again, and the WebView2 engine that draws SVG
-/// documents, which is a browser process. Both are kept for a while after the
-/// last document and then let go, both may be kept for the life of the app, and both
-/// take the same words in `config.ini`.
+/// Four settings are one shape: the Office engine, which is the application this app
+/// started and would rather not start again, the LibreOffice engine that draws the documents
+/// beside it, the WebView2 engine that draws SVG documents, which is a browser process, and
+/// mpv. All four are kept for a while after the last document and then let go, all four may be
+/// kept for the life of the app, and all four take the same words in `config.ini`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineIdle {
+    /// Kept while the user is at the keyboard, and let go once Explorer has been out of reach
+    /// for `afk_timer_seconds`: what an older build said with its `Persistent` toggle off and
+    /// its TTL ignored, said in one list rather than two controls (see `app::afk`).
+    Away,
     /// Kept for this many seconds after the family's last page, `0` included: an
     /// engine let go as soon as it has drawn one.
     Seconds(u64),
@@ -306,15 +310,17 @@ pub enum EngineIdle {
 impl EngineIdle {
     pub fn as_str(self) -> String {
         match self {
+            Self::Away => "away".to_string(),
             Self::Seconds(seconds) => sanitize_engine_idle_secs(seconds).to_string(),
             Self::Indefinite => "indefinitely".to_string(),
         }
     }
 
     /// The idle time a `config.ini` value names, or `None` for one that is
-    /// neither a number of seconds nor a word for never letting go.
+    /// neither a number of seconds nor a word for never letting go or for the AFK timer.
     pub(crate) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
+            "away" | "until_away" | "until away" | "afk" => Some(Self::Away),
             "indefinite" | "indefinitely" | "forever" | "always" => Some(Self::Indefinite),
             other => other
                 .parse::<u64>()
@@ -324,20 +330,16 @@ impl EngineIdle {
     }
 
     /// Whether an engine that has gone `idle_for` without drawing a page has been
-    /// idle long enough to be let go. An engine that is kept for the life of the
-    /// app never has.
+    /// idle long enough to be let go.
+    ///
+    /// `Away` is the one value an idle time does not answer: what bounds that engine is the
+    /// away timer, which is a clock of its own and is asked here so that every engine's test is
+    /// the same test (see `app::afk`). An engine that is kept for the life of the app never has.
     pub fn has_expired(self, idle_for: Duration) -> bool {
         match self {
+            Self::Away => crate::app::afk::expired(),
             Self::Seconds(seconds) => idle_for >= Duration::from_secs(seconds),
             Self::Indefinite => false,
-        }
-    }
-
-    /// The same, as the wait it is: `None` for an engine that is never let go.
-    pub fn as_duration(self) -> Option<Duration> {
-        match self {
-            Self::Seconds(seconds) => Some(Duration::from_secs(seconds)),
-            Self::Indefinite => None,
         }
     }
 }

@@ -31,7 +31,7 @@ pub(super) use setters::{
     set_document_cache_mb, set_document_scale, set_ebook_scale, set_follow_cursor,
     set_font_background, set_font_scale, set_general_disk_cache_mb, set_hover_delay,
     set_html_background, set_image_background, set_image_cache_mb, set_image_disk_cache_mb,
-    set_libreoffice_idle, set_markdown_mode, set_mpv_path, set_office_engine,
+    set_libreoffice_idle, set_markdown_mode, set_mpv_engine_idle, set_mpv_path, set_office_engine,
     set_office_engine_idle, set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek,
     set_pin_nav_audio, set_pin_nav_others, set_pin_nav_video, set_preview_scale,
     set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
@@ -42,7 +42,7 @@ pub(super) use setters::{
 pub(crate) use toggles::toggle_pin_always_on_top;
 pub(crate) use toggles::toggle_preview_enabled;
 pub(super) use toggles::{
-    toggle_check_for_updates, toggle_engine_persistent, toggle_normalize_video_volume,
+    toggle_check_for_updates, toggle_normalize_video_volume,
     toggle_normalize_volume, toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video,
     toggle_pin_update_enabled, toggle_pin_update_move_to_top, toggle_pin_update_on_hover,
     toggle_preview_type, toggle_prioritize_keyboard, toggle_remember_audio_volume,

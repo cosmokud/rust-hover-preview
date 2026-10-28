@@ -271,9 +271,23 @@ pub(in super::super) fn reset_lists_from_tray() {
     refresh_preview();
 }
 
-/// How long the Office engines are kept after their families' last pages — for an engine
-/// marked `Persistent`. One that is not is let go by the AFK timer instead, and this is not
-/// consulted for it (see `app::afk`).
+/// How long the mpv a film is played by is kept between films, from `Engine → MPV TTL`.
+///
+/// Nothing is rebuilt here: the setting is stored for the menu that just wrote it, and what
+/// keeps an mpv warm is not written yet.
+pub(in super::super) fn set_mpv_engine_idle(index: u16) {
+    let Some(idle) = engine_idle_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.video_engine_idle = idle;
+        config.save();
+    }
+}
+
+/// How long the Office engines are kept after their families' last pages, from
+/// `Engine → Microsoft Office TTL`.
 ///
 /// Nothing is rebuilt here and nothing on screen changes. An engine that is being
 /// let go sooner is let go by the worker the next time it looks — which is twice a
@@ -362,11 +376,11 @@ pub(in super::super) fn set_mpv_path(index: u16) {
     }
 }
 
-/// How long the browser engine is kept after the last document it drew — for a browser that
-/// is marked `Persistent`; one that is not is let go by the AFK timer instead, and this is
-/// not consulted for it. Nothing is rebuilt here either: the engine reads the setting every
-/// time it decides whether to let itself go, so a shorter time applies to the engine that is
-/// already warm.
+/// How long the browser engine is kept after the last document it drew, from
+/// `Engine → WebView2 TTL`. Every value is the setting the engine is kept by, and `Until away`
+/// is the AFK timer (see `EngineIdle`). Nothing is rebuilt here either: the engine reads the
+/// setting every time it decides whether to let itself go, so a shorter time applies to the
+/// engine that is already warm.
 pub(in super::super) fn set_webview_idle(index: u16) {
     let Some(idle) = engine_idle_at(index) else {
         return;
@@ -378,15 +392,15 @@ pub(in super::super) fn set_webview_idle(index: u16) {
     }
 }
 
-/// How long the LibreOffice engine is kept after the last page it drew — for an engine marked
-/// `Persistent`; one that is not is let go by the AFK timer instead, and this is not consulted
-/// for it.
+/// How long the LibreOffice engine is kept after the last page it drew, from
+/// `Engine → LibreOffice TTL`. `Until away` is the AFK timer and a time is the engine's own
+/// (see `EngineIdle`).
 ///
 /// Nothing is rebuilt here either, and nothing has to be: the engine thread reads the setting
 /// every second while it waits for documents, so a shorter time applies to the engine that is
-/// already running, and `0 seconds` — the bottom of the list — lets go of one within the
+/// already running, and `Never (0 seconds)` — the bottom of the list — lets go of one within the
 /// second. An engine that is kept is a process this app holds and ends itself; a setting of
-/// `indefinitely` keeps it for the rest of the run (see `libreoffice_render`).
+/// `Indefinitely` keeps it for the rest of the run (see `libreoffice_render`).
 pub(in super::super) fn set_libreoffice_idle(index: u16) {
     let Some(idle) = engine_idle_at(index) else {
         return;
@@ -398,11 +412,10 @@ pub(in super::super) fn set_libreoffice_idle(index: u16) {
     }
 }
 
-/// How long Explorer may be out of reach before an engine that is not marked `Persistent` is
-/// let go.
+/// How long Explorer may be out of reach before an engine set to `Until away` is let go.
 ///
 /// Nothing is rebuilt here and nothing on screen changes for the same reason the idle times
-/// rebuild nothing: an engine that is not persistent reads this on the look it already takes
+/// rebuild nothing: an engine set to `Until away` reads this on the look it already takes
 /// — the Office worker twice a second, the engine thread once a second, the browser every
 /// quarter of one while it is up — so a shorter time lets go of an engine that is already
 /// warm, and a longer one keeps an engine the next look would have let go of.

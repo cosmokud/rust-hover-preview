@@ -11,18 +11,19 @@
 //! handlers a click reaches are in `commands`.
 
 use super::ids::{
-    EngineIdleIds, BACKGROUND_CHOICES, DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB,
+    BACKGROUND_CHOICES, DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB,
     DISK_CACHE_SIZE_CHOICES_MB, FONT_SIZE_CHOICES, HTML_BACKGROUND_CHOICES,
     ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE,
     ID_TRAY_AUDIO_SHUFFLE, ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE, ID_TRAY_CHECK_UPDATES,
     ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE,
     ID_TRAY_DESIGN_BACKGROUND_BASE, ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE,
     ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE,
-    ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_ENGINE_PERSISTENT_BASE, ID_TRAY_EXIT,
+    ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_EXIT,
     ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE,
     ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE,
     ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE,
-    ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_NORMALIZE_VIDEO_VOLUME,
+    ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_IDLE_BASE,
+    ID_TRAY_NORMALIZE_VIDEO_VOLUME,
     ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
     ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
@@ -63,8 +64,8 @@ use crate::config::config::{
     DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
     DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS,
-    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+    DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB,
+    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME,
     DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
@@ -75,7 +76,7 @@ use crate::config::config::{
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE,
     DEFAULT_TICK_MS, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND,
     DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_LOOP,
-    DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME,
     DEFAULT_ZOOM_BACKGROUND, VOLUME_CHOICES,
 };
 use crate::config::theme_files;
@@ -1609,10 +1610,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // block below `Performance`, which is about what those engines cost while they are up.
     let engine_menu = CreatePopupMenu().unwrap();
 
-    // How long Explorer has to be out of reach before an engine that is not marked
-    // `Persistent` is let go. It is the first row here because it is what the three TTL
-    // submenus below are answered against: the times those offer are what a persistent
-    // engine is kept by, and this is what bounds one that is not (see `app::afk`).
+    // How long Explorer has to be out of reach before an engine set to `Away` is let go. It is
+    // the first row here because it is what the `Away` item of the four TTL submenus below is
+    // answered against: a time those offer is what an engine given one is kept by, and this is
+    // what bounds the engines that are not (see `app::afk`).
     append_afk_timer_menu(engine_menu);
 
     // Add the "Video Engine" and "Office Engine" submenus: which
@@ -1626,36 +1627,39 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     append_video_engine_menu(engine_menu);
     append_office_engine_menu(engine_menu);
 
+    // MPV TTL: how long the mpv a film is played by is kept between films. Nothing keeps one
+    // warm yet — this is the setting and its menu, and what reads it comes with the engine
+    // that is held — so what is listed is an engine's TTL and nothing more. It is greyed out
+    // on a machine with no `mpv.exe`, since there is nothing there to keep.
+    let mpv_idle = CONFIG
+        .lock()
+        .map(|c| c.video_engine_idle)
+        .unwrap_or(EngineIdle::Away);
+
+    append_engine_idle_menu(
+        engine_menu,
+        w!("MPV TTL"),
+        ID_TRAY_MPV_IDLE_BASE,
+        mpv_idle,
+        codecs::mpv_available(),
+    );
+
     // Microsoft Office TTL: how long the Office engine a family started is kept after
     // that family's last page. Nothing is asked of an engine while it is being kept
     // — it is a process that has already been paid for, and the document it drew a
     // page of is closed — so what the setting buys is the next document of that
     // family not paying for an Office start, and what it costs is an Office
-    // application in the process list. It is listed longest first, with the engine
-    // that is never let go at the top.
-    //
-    // The times are what an engine marked `Persistent` is kept by. One that is not is let
-    // go by the `Away Timer` above instead, and its time is not consulted — which is what a
-    // user who wants the old behaviour back switches on.
+    // application in the process list.
     let office_idle = CONFIG
         .lock()
         .map(|c| c.office_engine_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS));
-    let office_persistent = CONFIG
-        .lock()
-        .map(|c| c.office_engine_persistent)
-        .unwrap_or(false);
+        .unwrap_or(EngineIdle::Away);
 
     append_engine_idle_menu(
         engine_menu,
         w!("Microsoft Office TTL"),
-        EngineIdleIds {
-            times: ID_TRAY_ENGINE_IDLE_BASE,
-            persistent: ID_TRAY_ENGINE_PERSISTENT_BASE,
-        },
+        ID_TRAY_ENGINE_IDLE_BASE,
         office_idle,
-        office_persistent,
-        DEFAULT_OFFICE_ENGINE_IDLE_SECS,
         true,
     );
 
@@ -1668,22 +1672,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let libreoffice_idle = CONFIG
         .lock()
         .map(|c| c.libreoffice_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS));
-    let libreoffice_persistent = CONFIG
-        .lock()
-        .map(|c| c.libreoffice_persistent)
-        .unwrap_or(false);
+        .unwrap_or(EngineIdle::Away);
 
     append_engine_idle_menu(
         engine_menu,
         w!("LibreOffice TTL"),
-        EngineIdleIds {
-            times: ID_TRAY_LIBREOFFICE_IDLE_BASE,
-            persistent: ID_TRAY_ENGINE_PERSISTENT_BASE + 1,
-        },
+        ID_TRAY_LIBREOFFICE_IDLE_BASE,
         libreoffice_idle,
-        libreoffice_persistent,
-        DEFAULT_LIBREOFFICE_IDLE_SECS,
         libreoffice_render::available(),
     );
 
@@ -1717,19 +1712,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let webview_idle = CONFIG
         .lock()
         .map(|c| c.webview_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS));
-    let webview_persistent = CONFIG.lock().map(|c| c.webview_persistent).unwrap_or(false);
+        .unwrap_or(EngineIdle::Away);
 
     append_engine_idle_menu(
         engine_menu,
         w!("WebView2 TTL"),
-        EngineIdleIds {
-            times: ID_TRAY_WEBVIEW_IDLE_BASE,
-            persistent: ID_TRAY_ENGINE_PERSISTENT_BASE + 2,
-        },
+        ID_TRAY_WEBVIEW_IDLE_BASE,
         webview_idle,
-        webview_persistent,
-        DEFAULT_WEBVIEW_IDLE_SECS,
         webview_preview::is_available(),
     );
 

@@ -507,3 +507,152 @@ fn a_tests_own_folder_is_handed_to_the_thread_that_took_it_and_to_no_other() {
         "and a test beside this one, asking from its own thread, is answered with the tests' own folder"
     );
 }
+
+/// The two controls an engine used to have are one list now, and a file written by the build
+/// that had the pair is read as the item the pair meant: `Persistent` off — or not named at
+/// all — was the away timer, and on was whatever the TTL said, `Indefinitely` where the file
+/// names no time this build can read. A file with no switch is one this build wrote, so it says
+/// what its own TTL says.
+#[test]
+fn an_engine_persistent_switch_is_read_as_the_ttl_item_it_meant() {
+    let cases = [
+        (None, None, EngineIdle::Away),
+        (None, Some("false"), EngineIdle::Away),
+        (None, Some("true"), EngineIdle::Indefinite),
+        (Some("600"), None, EngineIdle::Seconds(600)),
+        (Some("600"), Some("false"), EngineIdle::Away),
+        (Some("600"), Some("true"), EngineIdle::Seconds(600)),
+        (
+            Some("indefinitely"),
+            None,
+            EngineIdle::Indefinite,
+        ),
+        (Some("indefinitely"), Some("false"), EngineIdle::Away),
+        (
+            Some("indefinitely"),
+            Some("true"),
+            EngineIdle::Indefinite,
+        ),
+        (Some("0"), None, EngineIdle::Seconds(0)),
+        (Some("0"), Some("false"), EngineIdle::Away),
+        (Some("0"), Some("true"), EngineIdle::Seconds(0)),
+    ];
+
+    for (idle_key, persistent_key, read) in [
+        (
+            "office_engine_idle",
+            "office_engine_persistent",
+            (|config: &AppConfig| config.office_engine_idle) as fn(&AppConfig) -> EngineIdle,
+        ),
+        (
+            "libreoffice_idle",
+            "libreoffice_persistent",
+            |config: &AppConfig| config.libreoffice_idle,
+        ),
+        (
+            "webview_idle",
+            "webview_persistent",
+            |config: &AppConfig| config.webview_idle,
+        ),
+    ] {
+        for (idle, persistent, expected) in cases {
+            let mut ini = Ini::new();
+            if let Some(value) = idle {
+                ini.set(CONFIG_SECTION, idle_key, Some(value.to_string()));
+            }
+            if let Some(value) = persistent {
+                ini.set(CONFIG_SECTION, persistent_key, Some(value.to_string()));
+            }
+
+            assert_eq!(
+                read(&read_file(&mut ini)),
+                expected,
+                "`{idle_key}={idle:?}` with `{persistent_key}={persistent:?}`"
+            );
+        }
+    }
+}
+
+/// And the switch is not written again: a file that still carries one is a file to write, and
+/// what is written holds the item it was read as and no `*_persistent` line at all.
+#[test]
+fn a_file_written_after_the_switch_was_dropped_carries_no_persistent_line() {
+    let persistent_keys = [
+        "office_engine_persistent",
+        "libreoffice_persistent",
+        "webview_persistent",
+    ];
+
+    let mut ini = written_file();
+    for key in persistent_keys {
+        ini.set(CONFIG_SECTION, key, Some("true".to_string()));
+    }
+    ini.set(CONFIG_SECTION, "office_engine_idle", Some("0".to_string()));
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.office_engine_idle,
+        EngineIdle::Seconds(0),
+        "a persistent engine with no time of its own is one let go at once"
+    );
+    assert!(
+        config.differs(&ini),
+        "the file names a switch this build does not write, so it is one to write"
+    );
+
+    let written = ordered_text(&config.to_ini());
+    for key in persistent_keys {
+        assert!(!written.contains(key), "`{key}` is not written again");
+    }
+    assert!(written.contains("office_engine_idle=0"));
+}
+
+/// The mpv TTL is a setting of its own: read from its own key, written as what it holds, and
+/// `Away` until someone picks one — which is the same list the other three engines are offered,
+/// so a choice made in the menu is the choice the next read finds.
+#[test]
+fn the_mpv_ttl_is_read_from_its_own_key() {
+    assert_eq!(AppConfig::default().video_engine_idle, EngineIdle::Away);
+
+    for idle in [
+        EngineIdle::Away,
+        EngineIdle::Seconds(30),
+        EngineIdle::Seconds(60),
+        EngineIdle::Seconds(300),
+        EngineIdle::Seconds(600),
+        EngineIdle::Seconds(1800),
+        EngineIdle::Seconds(3600),
+        EngineIdle::Indefinite,
+        EngineIdle::Seconds(0),
+    ] {
+        let mut ini = written_file();
+        ini.set(
+            CONFIG_SECTION,
+            "video_engine_idle",
+            Some(idle.as_str()),
+        );
+
+        let config = read_file(&mut ini);
+
+        assert_eq!(config.video_engine_idle, idle, "{idle:?} read back");
+        assert_eq!(
+            config.to_ini().get_map_ref()[CONFIG_SECTION]
+                .get("video_engine_idle")
+                .cloned()
+                .flatten(),
+            Some(idle.as_str()),
+            "and written as the item it is"
+        );
+        assert!(
+            !config.differs(&ini),
+            "a file holding this item is a file there is nothing to write"
+        );
+        assert!(
+            !config.to_ini().get_map_ref()[CONFIG_SECTION]
+                .keys()
+                .any(|key| key.ends_with("_persistent")),
+            "nothing is written beside it"
+        );
+    }
+}

@@ -1,5 +1,5 @@
 use crate::app::engine_processes;
-use crate::config::config::{EngineIdle, DEFAULT_OFFICE_ENGINE_IDLE_SECS};
+use crate::config::config::EngineIdle;
 use crate::formats::office_formats::OfficeApp;
 use crate::CONFIG;
 use std::path::Path;
@@ -30,20 +30,7 @@ fn engine_idle() -> EngineIdle {
     CONFIG
         .lock()
         .map(|config| config.office_engine_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS))
-}
-
-/// Whether the engines are kept whatever the user is doing, which is the `Persistent`
-/// toggle at the top of the same submenu.
-///
-/// Read rather than captured, and for the reason the idle time is: it is what decides
-/// whether an engine is let go at all, so it is asked at the moment that is decided rather
-/// than held from whenever the engine was started.
-fn engine_persistent() -> bool {
-    CONFIG
-        .lock()
-        .map(|config| config.office_engine_persistent)
-        .unwrap_or(false)
+        .unwrap_or(EngineIdle::Away)
 }
 
 /// The value that switches macro execution off entirely.
@@ -223,22 +210,17 @@ impl Engine {
 
     /// Whether this engine has been kept as long as the settings say it may be.
     ///
-    /// Two rules, one per `Persistent` setting at the top of the family's TTL submenu. An
-    /// engine that is marked persistent is kept for its idle time whatever the user is
-    /// doing, and one kept indefinitely never has; an engine that is not is let go once no
-    /// Explorer window has been reachable for the AFK timer, with its idle time not
-    /// consulted at all in that mode — what an idle time is for is the memory an engine
-    /// holds while the user is elsewhere, and that is the question the AFK timer asks.
+    /// Two rules, one per value of the family's TTL setting. An engine set to `Away` is let go
+    /// once no Explorer window has been reachable for the AFK timer, with its idle time not
+    /// consulted at all — what an idle time is for is the memory an engine holds while the user
+    /// is elsewhere, and that is the question the AFK timer asks; any other value is the idle
+    /// time the engine is kept by, and `Indefinitely` one that never has.
     ///
     /// What is let go of is the engine rather than what it drew: a rendered page is held in
     /// `RENDERS` and not in the automation object, so a preview on screen stays on screen
     /// while the engine that produced it goes.
     fn is_idle(&self) -> bool {
-        if engine_persistent() {
-            engine_idle().has_expired(self.idle_since.elapsed())
-        } else {
-            crate::app::afk::expired()
-        }
+        engine_idle().has_expired(self.idle_since.elapsed())
     }
 
     /// Let go of an engine that has just refused a page.

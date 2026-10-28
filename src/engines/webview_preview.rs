@@ -22,8 +22,9 @@
 //! child in — the same shape as the video path, where the player's own window is the
 //! preview.
 //!
-//! One engine is kept warm between documents and let go after `webview_idle`, ten
-//! minutes by default: beginning one costs a browser start, and pointing a warm one at
+//! One engine is kept warm between documents and let go after `webview_idle`, which is the
+//! AFK timer until the user gives it a time of its own: beginning one costs a browser start,
+//! and pointing a warm one at
 //! another file costs a few milliseconds, so what a hover pays for a second document is
 //! nothing worth measuring — and what a hover pays for the *first* one is a browser
 //! start, which is what the waiting spinner is shown for. What is let go of is the

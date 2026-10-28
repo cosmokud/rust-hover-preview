@@ -602,8 +602,8 @@ pub(super) fn explorer_pace(state: ExplorerState, tick_ms: u64) -> (u64, u64) {
 
 /// Read the state of Explorer, and record it for the engines' away timer.
 ///
-/// Whether an Explorer window is left reachable is the whole of what an engine that is not
-/// marked `Persistent` is let go by (see `app::afk`), and the answer is one this loop already
+/// Whether an Explorer window is left reachable is the whole of what an engine set to
+/// `Until away` is let go by (see `app::afk`), and the answer is one this loop already
 /// works out for its own sleeps — so the recording is done here, on the read, rather than
 /// anywhere the state is used: a state this function did not answer is a state the clock has
 /// not been told about, and the engines keep reading the last thing it was told.
