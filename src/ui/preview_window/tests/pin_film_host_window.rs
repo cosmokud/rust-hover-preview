@@ -7202,7 +7202,98 @@ fn the_window_a_step_puts_under_the_hand_is_the_films_own_at_every_tick_of_its_h
     mpv_ipc::clear_reads();
     mpv_ipc::clear_noted();
 }
+
+/// **A window of this app's own process is the pin, not a window standing over it.** With `Pin Mode →
+/// Always On Top` off a pin on the screen wears the taskbar stand-in, which is a window of this app's
+/// own standing wherever the Shell has put it — over the pin's caption, wherever the pin was dragged
+/// to — and the hand resting on a strip there is over a window of ours rather than over a program of
+/// somebody else's (see `pin_chrome_occluded`).
 ///
+/// The rule is asked of the process a window belongs to, so it is one answer for both engines: a film
+/// of mpv's and one of FFmpeg's player are hosted the same way and the window over the hand in this
+/// test is neither of them. Each engine's stand is run anyway, because what the rule is asked about
+/// on a real screen — a stand-in, a bubble, the pin's own window — is the same window of ours
+/// whichever player the pin is showing.
+#[test]
+fn a_window_of_this_apps_own_under_the_hand_is_not_a_window_over_the_pin() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    // A window of this app's own process, of the kind the pin wears with Always On Top off: what the
+    // Shell lists and stands over the caption is the taskbar stand-in, and any window of ours stands
+    // for it here (see `pin_taskbar`).
+    let ours = unsafe { a_hover_window_of_the_tests_own() };
+    // The record of the players this app began is not this test's to inherit: a record naming this
+    // process would make our own window a player's window, which is the rule that is being extended.
+    engine_processes::forget(unsafe { GetCurrentProcessId() });
+    let shows = |strip| unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
+    // The hand rests at the head of the caption, and the window under it is stood in: a test's pin
+    // stands off the desktop and no hand is over it (see `pin_chrome_occluded`).
+    let the_hand_asks = || {
+        let (left, top, ..) = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+            .expect("a pin up");
+        pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            Some(refresh_pin_chrome(
+                pin,
+                Instant::now(),
+                Some((left + 5, top + 1)),
+            ))
+        });
+        unsafe { pin_chrome_strips::sync_the_chrome_strips() };
+    };
+
+    // One engine's stand at a time, because each stands the pin's host and the pin's globals over
+    // again.
+    let on_one_engine = |film: StandingFilm, engine: &str| {
+        with_pin(|pin| pin.transport_bar = true);
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        // The film the pin is showing is drawn by a player that is not this process, which is what
+        // every player of a real pin is.
+        film.drawn_in_the_host(0x7FFF_FFF9);
+        let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+
+        // A window of this app's own under the hand is the pin: the strip the hand is resting on
+        // stays up, over the window of ours that the Shell has put there.
+        stand_window_at_point_in(Some(ours.0 as isize));
+        the_hand_asks();
+        assert_eq!(
+            pin_state()
+                .and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+            Some((true, false)),
+            "a window of this app's own process under the hand is the pin, not a cover ({engine})"
+        );
+        assert!(
+            shows(caption),
+            "and the strip the hand is resting on stays on the screen over it ({engine})"
+        );
+        assert!(
+            pin_chrome_up(),
+            "which is what holds the player's raise off (see `player_order`) ({engine})"
+        );
+
+        // And a window of somebody else's under the same hand is still a window over the pin.
+        stand_window_at_point_in(Some(0x2000));
+        the_hand_asks();
+        assert!(
+            !shows(caption),
+            "a window of another program's over the pin still hides the strip the hand is on \
+             ({engine})"
+        );
+    };
+
+    on_one_engine(StandingFilm::new(), "mpv");
+    on_one_engine(ffplay_standing_film(), "FFmpeg's player");
+
+    stand_window_at_point_in(None);
+    unsafe {
+        let _ = DestroyWindow(ours);
+    }
+    mpv_ipc::clear_reads();
+    mpv_ipc::clear_noted();
+}
+
 /// The strips go down with a step only for the kind change or the arrival a step is not (see
 /// `take_up_pinned_window`): the hand that stepped is still on the caption or the bar it stepped
 /// from, and what stands under it is the film that replaced the one it was watching.

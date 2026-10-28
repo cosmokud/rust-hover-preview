@@ -657,6 +657,13 @@ pub(super) fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -
 /// front, and a rule keyed on that one pid answers the same window as somebody else's on the ticks
 /// where the two disagree — the intermittent strip (see `engine_processes::holds_a_player`).
 ///
+/// **A window of this app's own is the pin, not a window over it**, whether it is a window of a film
+/// the pin is showing or one of the app's own: with `Pin Mode → Always On Top` off a pin on the screen
+/// wears the taskbar stand-in, which is a window of this app's own and can stand over the pin's
+/// caption — the intermittent strip the user's trace named, by a window that was neither the film's
+/// host nor the player. The question of whose window it is is the one the rest of the app asks (see
+/// `pin_lifecycle::pid_is_the_previews`), asked here of the same pids.
+///
 /// Asked of the window under the point rather than of the order, because the pin's children —
 /// the host, the strips — are disabled and `WindowFromPoint` skips them, so the pin's own window
 /// comes back wherever the pointer is genuinely over the pin. A pin with no window of its own
@@ -666,7 +673,7 @@ fn pin_chrome_occluded(cursor: Option<(i32, i32)>) -> bool {
         return false;
     };
     let under = window_at_point(x, y);
-    let occluded = under != hwnd.0 as isize && !the_pins_own_film_window(under);
+    let occluded = under != hwnd.0 as isize && !a_window_of_the_pins_own(under);
     if occluded {
         note_pin_trace!(
             "chrome occluded by {:?} over the pin {:?}: the strips the pointer asked for go down",
@@ -677,21 +684,23 @@ fn pin_chrome_occluded(cursor: Option<(i32, i32)>) -> bool {
     occluded
 }
 
-/// Whether a window under the pointer belongs to the film the pin is showing rather than to
-/// somebody else: the film's host — a window of this app's standing at the band the pin is in —
-/// and a window of any player this app began for a film.
+/// Whether a window under the pointer belongs to the pin rather than to somebody else: the film's host
+/// — a window of this app's standing at the band the pin is in — a window of any player this app began
+/// for a film, and a window of this app's own process at all (see `pin_chrome_occluded`).
 ///
 /// The player is asked for by its process, which is the same question the hover's own probe asks of
 /// a film's window — and of the app's record of the players it began rather than of the host, because
 /// the host names one player and the handover has two (see `pin_chrome_occluded`). A window of any
 /// other process is somebody else's however close it stands.
-fn the_pins_own_film_window(under: isize) -> bool {
+fn a_window_of_the_pins_own(under: isize) -> bool {
     if pin_film_host::film_host().is_some_and(|host| host.0 as isize == under) {
         return true;
     }
     let mut owner = 0;
     unsafe { GetWindowThreadProcessId(HWND(under as *mut _), Some(&mut owner)) };
-    engine_processes::holds_a_player(owner) || pin_film_host::hosted_player_pid() == Some(owner)
+    pin_lifecycle::pid_is_the_previews(owner)
+        || engine_processes::holds_a_player(owner)
+        || pin_film_host::hosted_player_pid() == Some(owner)
 }
 
 /// The window under a screen point, which a test stands in rather than reading off the desktop:
