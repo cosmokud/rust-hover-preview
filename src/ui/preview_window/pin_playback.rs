@@ -321,12 +321,20 @@ fn relaunch_pinned_player(
         (FreezeRoad::Still, false) => {
             pin_film_thumbnail::stand_the_pressed_still(replaced, seconds)
         }
+        // **The still taken out of the source's own window at this release** (see
+        // `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`): about a millisecond, so it is
+        // in hand before anything is begun over it — and a frame too dark to be a picture is never
+        // painted, which leaves this relaunch `off` rather than black.
+        (FreezeRoad::Dc, false) => {
+            pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc(replaced, seconds)
+        }
         // **A hover is held, whatever the run's cover road is**: its player is the frame the pin's is
         // begun on and is read back before it is let go of, so it is never replaced by a still of this
         // app's (see `begin_the_pinned_film_at_the_hovers_frame`). The hold is the dead suspension
-        // road's, which for an mpv hover is the pipe it answers on anyway — and `hide` and `still` take
-        // the same one, because the window they would cover is the picture the pin is being begun on.
-        (FreezeRoad::Capture | FreezeRoad::Hide | FreezeRoad::Still, true) => {
+        // road's, which for an mpv hover is the pipe it answers on anyway — and `hide`, `still` and
+        // `dc` take the same one, because the window they would cover is the picture the pin is being
+        // begun on.
+        (FreezeRoad::Capture | FreezeRoad::Hide | FreezeRoad::Still | FreezeRoad::Dc, true) => {
             freeze_the_outgoing_picture(replaced, FreezeRoad::Suspend);
             false
         }
@@ -512,8 +520,14 @@ fn freeze_the_hover(pid: u32) -> Option<f64> {
 /// failure.
 pub(super) fn freeze_the_outgoing_picture(pid: u32, road: FreezeRoad) -> bool {
     // **A still is not a freeze of the player** (see `FreezeRoad`): the frame is decoded out of the
-    // file while the hand is on the bar, so there is nothing here for that road to do.
-    if pid == 0 || matches!(road, FreezeRoad::Off | FreezeRoad::Still) {
+    // file, or taken out of the source's own window, while the hand is on the bar, so there is nothing
+    // here for those roads to do.
+    if pid == 0
+        || matches!(
+            road,
+            FreezeRoad::Off | FreezeRoad::Still | FreezeRoad::Dc
+        )
+    {
         return false;
     }
 
@@ -626,6 +640,19 @@ pub(super) fn freeze_the_outgoing_picture(pid: u32, road: FreezeRoad) -> bool {
 /// registration and jumps back to the second the relaunch asked for when the new source draws.
 /// It is also what a failed capture falls back to for that one relaunch, without the setting being
 /// changed.
+///
+/// **`dc` is the road that takes the still out of the source window's own device context**, and it is
+/// the one that answers the gap the other covers left: the source's own DC holds the picture for the
+/// whole of it — the readiness sample reads it lit twenty times a second through the very black the pin
+/// shows — so one `BitBlt` from it is the frame on screen, in about a millisecond, at the release rather
+/// than at the press. There is no grab, no worker, no deadline and no generation race here: the frame is
+/// in hand when the release needs it. **A frame whose sampled grid is not lit enough to be a picture is
+/// never painted** — that relaunch is `off`, with nothing unregistered and nothing ended — so this road
+/// can lose a cover but cannot paint the black band it exists to prevent (see
+/// `pin_film_thumbnail::capture_the_sources_dc`). Its one open risk is what a copy of a layered D3D
+/// window's own DC holds: the live frame, or a stale surface. `still captured frame pid N WxH
+/// checksum=… png=…` and the dumped PNG beside the trace log are what settle it against a frame decoded
+/// at the same second.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum FreezeRoad {
     Capture,
@@ -634,17 +661,19 @@ pub(super) enum FreezeRoad {
     Key,
     Hide,
     Off,
+    Dc,
 }
 
-/// `RHP_FREEZE` as a cover road: `still`, `suspend`, `key`, `hide` and `off` are the named arms, and
-/// anything else — including nothing at all, and the value this build writes for its own default — is
-/// the capture (see `FreezeRoad`).
+/// `RHP_FREEZE` as a cover road: `still`, `suspend`, `key`, `hide`, `dc` and `off` are the named arms,
+/// and anything else — including nothing at all, and the value this build writes for its own default —
+/// is the capture (see `FreezeRoad`).
 pub(super) fn freeze_road_from(setting: Option<&str>) -> FreezeRoad {
     match setting.map(str::trim) {
         Some("still") => FreezeRoad::Still,
         Some("suspend") => FreezeRoad::Suspend,
         Some("key") => FreezeRoad::Key,
         Some("hide") => FreezeRoad::Hide,
+        Some("dc") => FreezeRoad::Dc,
         Some("off") => FreezeRoad::Off,
         _ => FreezeRoad::Capture,
     }

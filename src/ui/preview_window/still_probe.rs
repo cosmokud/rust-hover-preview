@@ -47,8 +47,9 @@ const AFTER_SWAP: Duration = Duration::from_millis(300);
 /// with room over it, so a thread is never left reading the screen for a pin that has gone.
 const THE_BOUND: Duration = Duration::from_secs(12);
 
-/// The points a percentage is counted over, on each side of the grid.
-const GRID: u32 = 16;
+/// The points a percentage is counted over, on each side of the grid — the grid a captured frame is
+/// gated on as well, so the pin and the still it is covered by are measured the same way.
+pub(super) const GRID: u32 = 16;
 
 /// One relaunch's measurement.
 struct Probe {

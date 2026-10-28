@@ -171,7 +171,7 @@
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{BOOL, COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{
@@ -180,8 +180,8 @@ use windows::Win32::Graphics::Dwm::{
     DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, GetDC, GetPixel, InvalidateRect, ReleaseDC, SetBrushOrgEx, SetStretchBltMode,
-    StretchBlt, UpdateWindow, CLR_INVALID, HALFTONE,
+    BitBlt, ClientToScreen, GetDC, GetPixel, InvalidateRect, ReleaseDC, SetBrushOrgEx,
+    SetStretchBltMode, StretchBlt, UpdateWindow, CLR_INVALID, HALFTONE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
@@ -2249,6 +2249,172 @@ pub(super) fn stand_the_outgoing_picture_as_a_still(pid: u32) -> bool {
     true
 }
 
+/// **The still a relaunch takes out of the source window's own device context** — the cover
+/// `RHP_FREEZE=dc` is.
+///
+/// **Why the source's own DC, and neither the screen nor `PrintWindow`.** A pinned film's source wears
+/// `WS_EX_LAYERED` at alpha 1/255 so that nothing of it reaches the screen, which makes a `BitBlt` off
+/// the screen black, and a window that draws through D3D answers `PrintWindow` with black or with a
+/// remake of the frame rather than the frame (see `surfaces` and `capture_the_outgoing_picture`). What
+/// is left is the surface the player itself draws into — the one the readiness sample already reads
+/// lit twenty times a second **throughout the very gap this cover is for** (see
+/// `the_source_has_lit_pixels`), which is what makes a copy of it worth a relaunch.
+///
+/// **It costs about a millisecond, so it is taken at the release** rather than decoded at the press:
+/// there is no grab, no worker, no deadline and no generation race on this road, and the frame it
+/// paints is the frame that was on screen a moment ago rather than a decode of the second the seek is
+/// going to (see `begin_the_seek_still`, which is `still`'s road and not this one).
+///
+/// **A frame that cannot be a picture is never painted** (see `capture_the_sources_dc`): `false` is
+/// `off` for that one relaunch — nothing painted, nothing unregistered, nothing ended — so the outgoing
+/// player goes on drawing until its replacement does, and the pin is the picture it was.
+///
+/// The order from here on is `stand_the_still`'s, which is the whole correctness of every cover road:
+/// the frame into the host's retained cover, one repaint without an erase, `DwmFlush`, the registration
+/// let go, and only then the player ended.
+pub(super) fn stand_the_outgoing_picture_from_its_dc(pid: u32, seconds: f64) -> bool {
+    let Some(host) = pin_film_host::film_host() else {
+        note_pin_trace!("placeholder unavailable pid {pid}: the pin has no host to paint a still in");
+        return false;
+    };
+    // **The seek this cover belongs to**, so the probe that reads the gap and the paint that fills it
+    // are the same relaunch's (see `still_probe`). The counter is the pressed still's because a seek is
+    // one thing however its cover is taken.
+    let generation = PRESSED_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    super::still_probe::start(pid, generation);
+    let Some(((width, height), pixels)) = capture_the_sources_dc(pid) else {
+        note_pin_trace!("placeholder unavailable pid {pid}: the old picture plays on");
+        return false;
+    };
+    stand_the_still(host.0 as isize, pid, generation, (width, height), pixels, seconds)
+}
+
+/// The file the captured frame is dumped to, beside the trace log in the temp folder, so a run can be
+/// held against a frame decoded at the same second (see `dump_the_frame`).
+const THE_DC_STILL_PNG: &str = "rhp-pin-dc-still.png";
+
+/// **How much of the sampled grid must be lit for a captured frame to be a picture at all**: 2% of a
+/// 16×16 grid, which is six of its points.
+///
+/// It rejects the all-zero surface an empty, dead or never-drawn window answers with and accepts a
+/// genuinely dark scene, because a dark frame's pixels are small numbers rather than zeros. It is a
+/// fraction rather than one lit point for the reason the readiness sample's single point is not enough
+/// here: a stale or garbage surface can hold one bright pixel, and a cover painted from one is a black
+/// band with a speck in it.
+const THE_DC_STILL_MIN_LIT_SHARE: u32 = 2;
+
+/// The frame in the source's own window as the BGRA pixels and the size a still is painted from, or
+/// nothing where the window holds no picture (see `stand_the_outgoing_picture_from_its_dc`).
+fn capture_the_sources_dc(pid: u32) -> Option<((u32, u32), Vec<u8>)> {
+    let begun = Instant::now();
+    if !the_source_is_up(pid) {
+        return None;
+    }
+    let source = the_source_window()?;
+    // Safety: the handle is the source this module adopted from a player's own window.
+    let (width, height) = unsafe { client_size(source) }.filter(|(w, h)| *w > 0 && *h > 0)?;
+    let surface = DibSurface::create(width as u32, height as u32)?;
+    // Safety: the two contexts are the source's own client and this call's surface, and what is asked
+    // of them is one `SRCCOPY` between them; the source's is given back before this answers.
+    let copied = unsafe {
+        let dc = GetDC(source);
+        if dc.is_invalid() {
+            return None;
+        }
+        let copied = BitBlt(surface.dc, 0, 0, width, height, dc, 0, 0, SRCCOPY).is_ok();
+        ReleaseDC(source, dc);
+        // GDI batches its calls and what is read next is not a GDI call.
+        let _ = GdiFlush();
+        copied
+    };
+    if !copied {
+        note_pin_trace!("still captured from the source dc pid {pid}: the copy failed");
+        return None;
+    }
+    // `DibSurface::pixels` is BGRA at the size of the surface, which is the shape the cover is put in
+    // as, so the crop and the paint below are the ones a still of this app's always has.
+    let pixels = surface.pixels();
+    let lit = the_frames_lit_share(&pixels, width as u32, height as u32);
+    note_pin_trace!(
+        "still captured from the source dc pid {pid} {width}x{height} lit={lit}% in {}ms",
+        begun.elapsed().as_millis(),
+    );
+    if lit < THE_DC_STILL_MIN_LIT_SHARE {
+        note_pin_trace!(
+            "still captured from the source dc pid {pid} rejected: lit={lit}% is under {THE_DC_STILL_MIN_LIT_SHARE}%, so it is not a picture"
+        );
+        return None;
+    }
+    // **A run holds the frame to something other than a judge's eye**: the checksum and the size are
+    // what a frame decoded at the same second is compared against, and the PNG beside the trace log is
+    // the picture itself (see `dump_the_frame`).
+    if super::pin_trace::asked() {
+        let dumped = dump_the_frame(&pixels, width as u32, height as u32);
+        note_pin_trace!(
+            "still captured frame pid {pid} {width}x{height} checksum={:016x} png={}",
+            the_frames_checksum(&pixels),
+            if dumped { THE_DC_STILL_PNG } else { "-" },
+        );
+    }
+    Some(((width as u32, height as u32), pixels))
+}
+
+/// The percentage of a 16×16 grid over the inner half of a BGRA frame that is lit: **the pin's own
+/// probe's grid**, applied to the captured frame rather than to the desk (see `still_probe`).
+///
+/// The grid sits in the middle of the frame for the reason it does there: a player's own border and
+/// letterbox are at the edges, and a lit border over a black frame would read as a picture that is
+/// there.
+fn the_frames_lit_share(pixels: &[u8], width: u32, height: u32) -> u32 {
+    let grid = super::still_probe::GRID;
+    if width == 0 || height == 0 || pixels.len() < width as usize * height as usize * 4 {
+        return 0;
+    }
+    let stride = width as usize * 4;
+    let (left, right) = (width / 4, width * 3 / 4);
+    let (top, bottom) = (height / 4, height * 3 / 4);
+    let mut lit = 0;
+    for row in 0..grid {
+        let y = top + (bottom - top) * row / grid;
+        for column in 0..grid {
+            let x = left + (right - left) * column / grid;
+            let at = y as usize * stride + x as usize * 4;
+            if pixels[at] | pixels[at + 1] | pixels[at + 2] != 0 {
+                lit += 1;
+            }
+        }
+    }
+    lit * 100 / (grid * grid)
+}
+
+/// FNV-1a over the frame's bytes: the one number a run can hold against a frame decoded at the same
+/// second (see `dump_the_frame`).
+fn the_frames_checksum(pixels: &[u8]) -> u64 {
+    pixels.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+/// **Write the captured frame beside the trace log**, so the next run compares a picture rather than a
+/// percentage: BGRA from GDI carries no alpha, so it is written opaque.
+///
+/// It is a dump for a measurement and not a feature of the road: one file, overwritten by each capture,
+/// and nothing reads it back.
+fn dump_the_frame(pixels: &[u8], width: u32, height: u32) -> bool {
+    let rgba: Vec<u8> = pixels
+        .chunks_exact(4)
+        .flat_map(|bgra| [bgra[2], bgra[1], bgra[0], 0xFF])
+        .collect();
+    image::save_buffer(
+        std::env::temp_dir().join(THE_DC_STILL_PNG),
+        &rgba,
+        width,
+        height,
+        image::ExtendedColorType::Rgba8,
+    )
+    .is_ok()
+}
+
 /// The answer a test stands in for the machine's capture: `true` is a lit frame, `false` a black
 /// one, and `None` asks the machine (see `the_machine_prints_the_source`).
 #[cfg(test)]
@@ -3590,6 +3756,55 @@ unsafe fn window_box(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A captured frame is gated on the same grid the pin is measured with, and a dark scene passes
+    /// it while an empty surface does not** — the gate that keeps a `dc` capture from painting the black
+    /// band it exists to prevent (see `the_frames_lit_share`).
+    #[test]
+    fn a_captured_frame_is_a_picture_or_it_is_not_painted() {
+        let (width, height) = (64u32, 64u32);
+        let frame = |shade: u8| vec![shade; width as usize * height as usize * 4];
+
+        assert_eq!(
+            the_frames_lit_share(&frame(0), width, height),
+            0,
+            "an all-zero surface is what an empty or dead window answers with"
+        );
+        assert!(
+            0 < THE_DC_STILL_MIN_LIT_SHARE,
+            "and it must be rejected rather than painted as a still"
+        );
+        assert_eq!(
+            the_frames_lit_share(&frame(4), width, height),
+            100,
+            "a genuinely dark scene is small numbers rather than zeros, so it passes the gate"
+        );
+
+        // **One bright point is not a picture**: the grid is a fraction for exactly this reason.
+        let mut speck = frame(0);
+        speck[32 * 64 * 4 + 32 * 4] = 0xFF;
+        assert!(
+            the_frames_lit_share(&speck, width, height) < THE_DC_STILL_MIN_LIT_SHARE,
+            "a single lit pixel of a stale surface does not pass for a frame"
+        );
+        assert_eq!(
+            the_frames_lit_share(&frame(0), 0, 0),
+            0,
+            "and a frame that is not a frame has no share at all"
+        );
+
+        // The checksum is the number a run compares against a frame decoded at the same second.
+        assert_ne!(
+            the_frames_checksum(&frame(0)),
+            the_frames_checksum(&frame(4)),
+            "two different pictures are two different checksums"
+        );
+        assert_eq!(
+            the_frames_checksum(&frame(0)),
+            the_frames_checksum(&frame(0)),
+            "and the same picture is the same one"
+        );
+    }
 
     /// **A step re-points the registration only where the host's box changed**: the source's client and
     /// the film's shape are constants of the pin's life, fixed by the one placement, so a pair is a
