@@ -231,14 +231,7 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // window of ours in front is the handle `key_input::pin_owns_caret` compares against, so for as
     // long as it holds the foreground a standing pin answers every `Space` pressed anywhere (see
     // `pin_lifecycle::a_players_foreground_goes_to`).
-    //
-    // **A hover asks nothing here**: a plain ask made while its player is in front is refused, and a
-    // refusal flashes the window it was made for — the Explorer flash. A hover's ask is the tick's,
-    // made the way it is granted (see
-    // `pin_lifecycle::give_the_foreground_back_from_a_hover_player_on_the_tick`).
-    if pinned() {
-        pin_lifecycle::give_the_foreground_back_from(hwnd);
-    }
+    pin_lifecycle::give_the_foreground_back_from(hwnd);
 
     // The style is put on whatever else is happening, and the *raise* is not. This is the one
     // place every raise of the player's window goes through — the monitor thread calls it about

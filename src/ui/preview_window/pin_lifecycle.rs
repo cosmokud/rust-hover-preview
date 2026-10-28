@@ -3,9 +3,7 @@
 
 use super::pin_trace::note_pin_trace;
 use super::*;
-use windows::Win32::Foundation::GetLastError;
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
-use windows::Win32::UI::WindowsAndMessaging::BringWindowToTop;
 
 /// A pin was asked to come down, by the Explorer hook (previews were turned off, or the</path>
 /// trigger key is holding them back), by the tray, or by the resumption of the machine
@@ -2365,19 +2363,12 @@ fn a_foreground_to_give_back(recorded: isize, player: isize) -> isize {
 /// Safety: `player` is a window this app began, and the window handed the foreground is read from
 /// the desktop rather than held by the caller.
 pub(super) unsafe fn give_the_foreground_back_from(player: HWND) {
-    let front = the_foreground_in_front();
+    let front = GetForegroundWindow();
     if let Some(behind) = a_players_foreground_goes_to(front, player) {
         // The one line a run needs to say which window a player had taken the foreground from, and
         // where it went: written only where one really was taken, so a run that reads the trace for
         // the `Space` that toggled a pin out of the listing has the window that let it happen.
         note_pin_trace!("foreground given back {:?} -> {:?}", player, behind);
-        // A test process cannot make a window of its own the foreground, so a recorded one stands
-        // in and the ask is recorded rather than made (see `record_the_foreground_in_front`).
-        #[cfg(test)]
-        if a_recorded_foreground_is_standing() {
-            THE_FOREGROUND_ASKED_FOR.store(behind.0 as isize, Ordering::SeqCst);
-            return;
-        }
         let _ = SetForegroundWindow(behind);
     }
 }
@@ -2443,16 +2434,12 @@ pub(super) fn a_hovers_foreground_goes_to(
 /// event, and a refused ask is answered by flashing the *target's* taskbar button over a window it
 /// was never given — the flash the user sees over Explorer. Joining the foreground thread's own
 /// input queue for the length of one ask is what makes the call this app's to make, so that is done
-/// first, the window is brought to the top of the joined queue (the documented companion of the
-/// join), and the ask is made once; the queue is left again whatever the answer.
+/// first and the ask is made once; the queue is left again whatever the answer.
 ///
 /// The ask is made plainly only where it is the foreground's own — this app's thread, or no window
 /// in front at all — because a plain ask anywhere else is the flash above and not a hand-back. One
 /// attempt and no loop: a target that cannot take the keyboard is the next tick's question, and a
 /// tick that asks again is a tick the user may have moved on from.
-///
-/// **What landed is read back rather than believed**: `SetForegroundWindow` says what it asked for,
-/// and a `TRUE` that left the player in front is still a refusal whichever way it was answered.
 ///
 /// Safety: `behind` is a window read from the desktop rather than held by the caller.
 unsafe fn put_the_foreground_in_front(behind: HWND) -> bool {
@@ -2469,71 +2456,17 @@ unsafe fn put_the_foreground_in_front(behind: HWND) -> bool {
     } else {
         unsafe { GetWindowThreadProcessId(front, None) }
     };
-    let joined = front_thread != 0 && front_thread != our_thread;
 
-    let mut attached = false;
-    let asked = if joined {
-        attached = unsafe { AttachThreadInput(our_thread, front_thread, true) }.as_bool();
-        if !attached {
-            false
-        } else {
-            let _ = unsafe { BringWindowToTop(behind) };
-            unsafe { SetForegroundWindow(behind) }.as_bool()
-        }
-    } else {
-        unsafe { SetForegroundWindow(behind) }.as_bool()
-    };
-    // Read before the join is left again, which is a call of its own and would answer for itself.
-    let error = if asked {
-        0
-    } else {
-        unsafe { GetLastError() }.0
-    };
-    if attached {
-        let _ = unsafe { AttachThreadInput(our_thread, front_thread, false) };
+    if front_thread == 0 || front_thread == our_thread {
+        return unsafe { SetForegroundWindow(behind) }.as_bool();
     }
 
-    let after = unsafe { GetForegroundWindow() };
-    let landed = a_hand_back_landed(asked, after, behind);
-    note_pin_trace!(
-        "hover foreground: behind {:?} pid {} class {} attach attempted {} ok {} setforeground {} err {} front after {:?} pid {} landed {}",
-        behind,
-        the_owner_of(behind),
-        the_class_of(behind),
-        joined as u8,
-        attached as u8,
-        asked as u8,
-        error,
-        after,
-        the_owner_of(after),
-        landed as u8,
-    );
+    if !unsafe { AttachThreadInput(our_thread, front_thread, true) }.as_bool() {
+        return false;
+    }
+    let landed = unsafe { SetForegroundWindow(behind) }.as_bool();
+    let _ = unsafe { AttachThreadInput(our_thread, front_thread, false) };
     landed
-}
-
-/// The process a window belongs to, for a trace line that names it.
-fn the_owner_of(window: HWND) -> u32 {
-    let mut pid = 0u32;
-    if !window.is_invalid() {
-        unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
-    }
-    pid
-}
-
-/// The class a window was made of, for a trace line that names it.
-fn the_class_of(window: HWND) -> String {
-    let mut name = [0u16; 64];
-    let len = unsafe { GetClassNameW(window, &mut name) }.max(0) as usize;
-    String::from_utf16_lossy(&name[..len.min(name.len())])
-}
-
-/// Whether a hand-back landed: the window in front **after** the ask, not what the ask returned.
-///
-/// A `TRUE` that leaves another window in front is a refusal, and a `FALSE` whose window came up
-/// anyway is a hand-back all the same; both are traced as they happened and both feed the same
-/// refusal back-off, so a re-take by the player does not become an ask on every frame.
-pub(super) fn a_hand_back_landed(_asked: bool, front_after: HWND, behind: HWND) -> bool {
-    front_after == behind
 }
 
 /// The window a hover's last ask for the foreground was refused from, and when it was refused: what
@@ -2676,8 +2609,7 @@ pub(super) unsafe fn give_the_foreground_back_from_the_desktop() {
     );
 }
 
-/// The window in front, as this app's hand-backs read it (see `record_the_foreground_in_front`,
-/// which stands one in for a test).
+/// The window in front, as a hover's hand-backs read it.
 fn the_foreground_in_front() -> HWND {
     #[cfg(test)]
     if a_recorded_foreground_is_standing() {
