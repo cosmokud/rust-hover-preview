@@ -835,7 +835,9 @@ fn start_mpv_video_playback(
     // its own in there: the wait for the film's first frame is a wait for this player's child and
     // not the last film's, which is what the pid beside the host is for (see `pin_film_host` and
     // `hover_film_host`).
-    if hover_host.is_some() {
+    if the_pins_film {
+        pin_film_host::note_hosted_player(child.id());
+    } else if hover_host.is_some() {
         hover_film_host::note_hover_film_host_player(child.id(), path);
     }
     // The pipe the player is told on, and the one thing a later command has to know about the

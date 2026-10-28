@@ -3316,6 +3316,86 @@ fn a_step_begins_the_next_ffplay_film_into_the_same_host() {
     );
 }
 
+/// A file step begins the next film mpv plays into the same host: the host holds the player the
+/// step began, and the show that follows takes it up rather than beginning a second one.
+///
+/// **The fault this is a regression test for.** The mpv launch recorded its player only for a
+/// hover's host, so a pin's step registered nothing: the new window stood as an ordinary top-level
+/// player rather than the host's film, the player it replaced was not kept, and the pin's show
+/// began a second mpv behind the one it could not see.
+#[test]
+fn a_step_begins_the_next_mpv_film_into_the_pins_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let path = PathBuf::from("a-film.mkv");
+    let first = start_video_playback(
+        &path,
+        film.box_.0,
+        film.box_.1,
+        320,
+        240,
+        0.0,
+        false,
+        0,
+        None,
+        None,
+    )
+    .expect("a noted mpv player");
+    let next = start_video_playback(
+        &path,
+        film.box_.0,
+        film.box_.1,
+        320,
+        240,
+        12.0,
+        false,
+        0,
+        None,
+        None,
+    )
+    .expect("the next noted mpv player");
+
+    assert_ne!(first.id(), next.id());
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(host),
+        "the step does not make a second host"
+    );
+    assert_eq!(
+        pin_film_host::hosted_player_pid(),
+        Some(next.id()),
+        "and the host holds the player the step began"
+    );
+    assert!(
+        pin_film_host::the_pinned_player_was_begun_in_the_host(),
+        "so the player the step began is the pin's hosted one"
+    );
+
+    clear_restart_count();
+    let _ = take_last_spawned_command();
+
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        restart_count(),
+        0,
+        "the show takes that player up rather than beginning a second at zero"
+    );
+    assert!(
+        take_last_spawned_command().is_none(),
+        "and no second player is begun"
+    );
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(host),
+        "the film stays in the host the step began it in"
+    );
+}
+
 /// A pin that ends takes its FFmpeg film host down with it, and the picture the Shell drew goes
 /// before it: the source is the player's own window and outlives the pin, but no registration and no
 /// record of it is left behind (see `pin_film_thumbnail`).
