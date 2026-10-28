@@ -460,6 +460,11 @@ mod tests {
     /// first writes nothing.
     #[test]
     fn the_still_probe_answers_once_and_says_what_it_saw() {
+        // The trace buffer is process-wide, so the tests that read it go one at a time.
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         super::super::pin_trace::clear_noted();
 
         let mut proven = a_probe(true);
@@ -513,6 +518,11 @@ mod tests {
     /// window that answered nothing is `-|none`, and is never counted as a black one.
     #[test]
     fn the_source_is_read_beside_the_pin_and_says_which_of_the_two_went_black() {
+        // The same one-at-a-time as above: both tests announce into the one trace buffer.
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         assert_eq!(the_source_reading(Some(true)), "100%|ok");
         assert_eq!(the_source_reading(Some(false)), "0%|black");
         assert_eq!(the_source_reading(None), "-|none");
