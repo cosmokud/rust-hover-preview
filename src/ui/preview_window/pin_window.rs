@@ -68,6 +68,8 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
+use windows::Win32::Foundation::HWND;
+
 use super::pin_trace::note_pin_trace;
 use super::{pin_lifecycle, subtitle_files, PinCommand, PinStep, PinnedPreview, ScreenRegion};
 
@@ -616,7 +618,13 @@ pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
             // not asked for first here because there is no focus of ours to give up: the claim is
             // written on the answer Windows gave rather than on the asking (see `take_keyboard`),
             // so a pin holding none is not the window the keyboard is in.
-            None => make_the_window_unfocusable_again(hwnd, window),
+            None => {
+                make_the_window_unfocusable_again(hwnd, window);
+                // And the foreground, where one of ours still has it: a claim is not the question
+                // of who is in front, and a step is what separates the two (see
+                // `give_back_a_foreground_that_is_ours`).
+                give_back_a_foreground_that_is_ours(hwnd, window);
+            }
         }
     }
     // A road that finds the pin already over is told nothing about the window: the road that ended
@@ -739,6 +747,44 @@ fn make_the_window_unfocusable_again(hwnd: isize, window: &dyn PinWindow) {
     }
 
     window.set_focusable(hwnd, false);
+}
+
+/// Hand the foreground back from a close that is holding no claim to hand it back with, where the
+/// window in front is one of ours.
+///
+/// **The claim is not the question of who is in front.** A step begins the next film's player and
+/// Windows creates its window activated, which deactivates the pin and drops the claim
+/// (`WM_ACTIVATE` → `pin_release_focus` → `release_keyboard`); the player's window then gives the
+/// foreground back to the window the launch found in front of it, which is the pin's own (see
+/// `a_foreground_to_give_back`). So a pin closed after a step reaches its close holding no keyboard
+/// and with a window of ours still in front — the step's player where that pass has not run yet,
+/// and the pin's own window after it — and the claim-shaped hand-back says nothing about it. The pin
+/// comes down, the window that was left in front goes with it, and nothing hovers and no pin is
+/// published until the user clicks the listing to make it the foreground again.
+///
+/// So the two are asked separately: where the window in front is one of ours it is given back to the
+/// window a keyboard hand-back would give it to (`the_window_behind`, which is the same resolver
+/// `hand_keyboard_back` uses), and where it is somebody else's it is left alone — the user took it
+/// with their own click, and asking for it again is what brings a window up over them.
+fn give_back_a_foreground_that_is_ours(hwnd: isize, window: &dyn PinWindow) {
+    let front = window.foreground();
+    if !pin_lifecycle::a_window_of_ours(HWND(front as *mut _)) {
+        return;
+    }
+
+    let behind = pin_lifecycle::the_window_behind(front, hwnd);
+    // The one line a run needs where the report comes back: which window of ours was in front when
+    // the pin closed, and where it was handed. A `-> 0x0` is the fault still there — the desktop had
+    // no ordinary window behind the pin to give it to.
+    note_pin_trace!(
+        "pin end gives the foreground back {:?} -> {:?}",
+        front,
+        behind
+    );
+
+    if behind != 0 && behind != front {
+        window.set_foreground(behind);
+    }
 }
 
 /// Whether the pin holds a claim on the keyboard, which is this app's own record of a press that

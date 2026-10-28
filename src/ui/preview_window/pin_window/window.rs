@@ -22,6 +22,17 @@ pub(crate) trait PinWindow {
     /// The window a pin is drawn in, or zero where there is none.
     fn hwnd(&self) -> isize;
 
+    /// The window in front on the desktop, or zero where it has none.
+    ///
+    /// Asked of the window rather than read by the road for the reason `pointer` is: whether the
+    /// foreground is one of ours is not a fact about the pin's own handle, and a road that had to
+    /// look it up itself could not be read back on a machine with no desktop. It is asked where a
+    /// pin that held no keyboard comes down (see `end_pin`).
+    ///
+    /// Read and not recorded, unlike the rest of this list: it is the desktop's answer about a
+    /// window that is not the pin's, so it says nothing about what the road chose to do.
+    fn foreground(&self) -> isize;
+
     /// Where the pointer is, in screen coordinates.
     ///
     /// Read rather than taken from a mouse message, and that is the whole of why: a window being
@@ -139,6 +150,9 @@ pub(crate) struct RecordedPinWindow {
     /// above cannot say: `PinWindowCall::SetForeground` is one item whatever it was asked with, and
     /// what a hand-back owes is a window that can still take it (see `hand_keyboard_back`).
     foreground: Mutex<Vec<isize>>,
+    /// The window this recorder says is in front on the desktop (see `PinWindow::foreground`), which
+    /// is a fact a test process cannot stage: it cannot make a window of its own the foreground.
+    front: isize,
 }
 
 #[cfg(test)]
@@ -167,7 +181,17 @@ impl RecordedPinWindow {
             box_,
             calls: Mutex::new(Vec::new()),
             foreground: Mutex::new(Vec::new()),
+            front: 0,
         }
+    }
+
+    /// The recorder, standing for a desktop whose window in front is `front`.
+    ///
+    /// A builder rather than a fourth argument, because the front is asked of two roads only: the
+    /// close that held no keyboard, and nothing else (see `foreground`).
+    pub(crate) fn with_the_window_in_front(mut self, front: isize) -> Self {
+        self.front = front;
+        self
     }
 
     /// Everything the road did, in the order it did it.
@@ -197,6 +221,10 @@ impl RecordedPinWindow {
 impl PinWindow for RecordedPinWindow {
     fn hwnd(&self) -> isize {
         self.hwnd
+    }
+
+    fn foreground(&self) -> isize {
+        self.front
     }
 
     fn pointer(&self) -> Option<(i32, i32)> {
