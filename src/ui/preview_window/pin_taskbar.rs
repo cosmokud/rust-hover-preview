@@ -155,17 +155,21 @@ pub(super) unsafe fn show_pin_taskbar() {
     show_pin_taskbar_mirroring();
 }
 
-/// Tell the Shell whether the stills of this button are the bitmap this app supplies, or the
-/// window's own composition.
+/// Tell the Shell whether the stills of this window's taskbar button are the bitmap this app supplies,
+/// or the window's own composition.
 ///
 /// **It is the app's own only while the pin is put away.** A window the Shell is showing a button for
 /// is drawn from its own composition unless it is asked to be drawn from a bitmap instead, and for a
 /// put-away pin that composition is nothing at all — the stand-in is off every display, so its rows
-/// are whatever the Shell's surface for it last had — while the bitmap is the pin (see
+/// are whatever the Shell's surface for it last had, and a film host's rows are the black it is erased
+/// to behind a picture the Shell composes over it — while the bitmap is the pin (see
 /// `pin_taskbar_mirror`). A pin that is *on the screen* is the other way about: its hover is the live
 /// picture of the pin, and forcing the bitmap on it would freeze the film the user is watching in the
 /// button.
-unsafe fn the_buttons_still_is_the_apps_own(hwnd: HWND, the_apps_own: bool) {
+///
+/// Asked of both windows a pin can be put away as: the stand-in (see `show_pin_taskbar`), and the film
+/// host that owns a pin's chrome on a film a player draws (see `pin_film_host`).
+pub(super) unsafe fn the_buttons_still_is_the_apps_own(hwnd: HWND, the_apps_own: bool) {
     let forced = BOOL(the_apps_own as i32);
     let _ = DwmSetWindowAttribute(
         hwnd,
@@ -306,8 +310,10 @@ fn a_button_is_owed() -> bool {
     }
 
     // A pin standing in a window of its own holds a taskbar button of its own, named after its file
-    // and drawn by the Shell from the window itself: a stand-in beside it would be a second button for
-    // one pin, and a hover of a picture of a picture (see `pin_real_window`).
+    // and drawn by the Shell from the window itself — a stand-in beside it would be a second button for
+    // one pin, and a hover of a picture of a picture (see `pin_real_window`). Where that window is a
+    // film's host, the still the hover is drawn from is this app's own picture of the host rather than
+    // the host's rows (see `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
     if pin_is_its_own_window() {
         return false;
     }
@@ -425,15 +431,30 @@ pub(super) unsafe fn pin_taskbar_window() -> Option<HWND> {
     // made: what the still *is* is answered when the Shell asks for it, since that is the only moment
     // the app is asked to supply one, and whether the Shell is to use it at all is read from where the
     // pin is (see `the_buttons_still_is_the_apps_own`).
-    let supplies_its_own_still = BOOL(1);
-    let _ = DwmSetWindowAttribute(
-        hwnd,
-        DWMWA_HAS_ICONIC_BITMAP,
-        &supplies_its_own_still as *const BOOL as *const core::ffi::c_void,
-        std::mem::size_of::<BOOL>() as u32,
-    );
+    unsafe { supply_the_stills_of_this_window(hwnd) };
 
     Some(hwnd)
+}
+
+/// Tell the Shell that this window supplies the still its taskbar button's hover is drawn of.
+///
+/// **Every window of this app's that can wear a button is made wearing this**, because a window whose
+/// picture is not in its own rows has nothing the Shell could freeze for a hover: the stand-in beside a
+/// put-away pin is off every display and holds a mirror composed over it, and the film host that owns a
+/// pin's chrome holds a DWM thumbnail composed over its client (see `the_buttons_still_is_the_apps_own`,
+/// `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
+///
+/// Safety: `hwnd` is a window of this app's own.
+pub(super) unsafe fn supply_the_stills_of_this_window(hwnd: HWND) {
+    let supplies_its_own_still = BOOL(1);
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_HAS_ICONIC_BITMAP,
+            &supplies_its_own_still as *const BOOL as *const core::ffi::c_void,
+            std::mem::size_of::<BOOL>() as u32,
+        )
+    };
 }
 
 unsafe fn handle_taskbar_restore() {
@@ -513,14 +534,8 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
         },
         // The Shell's ask for the still of a button that is down — its own thumbnail of the window it
         // falls back on otherwise is the window's icon — answered with the pin's own picture (see
-        // `pin_taskbar_mirror`'s `answer_the_thumbnail_request`). The high word of `lparam` is the
-        // widest thumbnail the Shell will take and the low word is the tallest.
-        WM_DWMSENDICONICTHUMBNAIL => {
-            let asked = lparam.0 as u32;
-            let requested = ((asked >> 16) as i32, (asked & 0xFFFF) as i32);
-            pin_taskbar_mirror::answer_the_thumbnail_request(hwnd, requested);
-            LRESULT(0)
-        }
+        // `pin_taskbar_mirror`'s `answer_a_thumbnail_ask`).
+        WM_DWMSENDICONICTHUMBNAIL => pin_taskbar_mirror::answer_a_thumbnail_ask(hwnd, lparam),
         // The Shell asks an iconized window whether it may be opened before it opens it; this one
         // never may, because what it stands in for is not on the screen: the ask is answered by
         // putting the pin back and taking the stand-in away, and the button is never brought up.

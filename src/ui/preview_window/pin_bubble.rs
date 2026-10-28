@@ -674,8 +674,19 @@ pub(super) fn the_pin_is_being_put_down() -> bool {
 /// `hide_pinned_siblings` and `a_button_is_owed`).
 ///
 /// Nothing is taken for a stand-in either: no stand-in wears this pin's button, so a picture of the pin
-/// taken for one is a picture of nothing (see `keep_the_pin_for_the_taskbar`).
+/// taken for one is a picture of nothing. What *is* taken is the picture of the window that wears the
+/// button — the film host, where the pin has one — because the hover of a button that is down is a still
+/// of the window and a host's own rows are the black behind its film (see
+/// `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
 unsafe fn put_the_pins_window_in_the_taskbar() {
+    // **The picture the button is to hold is taken before the pin leaves the screen**, and of the host
+    // itself: a picture of a window that has been taken off the screen is a picture of nothing, and the
+    // film in a host is composed over it rather than in its rows (see
+    // `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
+    if let Some(host) = pin_film_host::film_host() {
+        unsafe { pin_film_host::keep_the_pins_picture_for_the_taskbar(host) };
+    }
+
     hide_pinned_siblings();
     // **A pin whose chrome is owned by its film host is put away by the host.** The host is the
     // window the Shell's button belongs to on this road, and minimizing it hides the pin with it —
@@ -1201,6 +1212,12 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
             place_pinned_siblings();
         }
     }
+
+    // **The film comes back with the pin.** A pin whose chrome is owned by its film host was put away
+    // by hiding that host, so a restore that only placed the windows left the band black: the host and
+    // the source the Shell draws through it are shown here, with the still the button was holding given
+    // up for the live picture a pin that is up owes its button (see `pin_film_host::bring_the_film_back`).
+    unsafe { pin_film_host::bring_the_film_back() };
 }
 
 /// What the bubble a collapsed pin left has parked, if anything (see `BubblePause`).
