@@ -12,14 +12,14 @@
 //! **Every measurement ends with one result line**, whatever end it reaches: the swap, a newer
 //! relaunch, the pin going, or the bound.
 //!
-//! The same sample convicted `RHP_FREEZE=hide`: measured on glass, a hidden source's thumbnail went
+//! The same sample convicted the `hide` road: measured on glass, a hidden source's thumbnail went
 //! black **18 to 71 ms** after the hide and stayed black until the swap — gaps of 415, 500, 520, 555
 //! and 700 ms across five seeks. No road that freezes the outgoing player can work, and the numbers
 //! are in `ARCHITECTURE.md` with the road that replaced it (see `pin_playback::FreezeRoad`).
 //!
 //! The read is `surfaces::screen_pixels`, the same `BitBlt` off the screen a pin's taskbar picture is
-//! taken with — **not** `PrintWindow`, which answers a layered or D3D window with black and would
-//! measure the sampler rather than the pin.
+//! taken with — an ask for a window's last presented frame answers a layered or D3D window with black,
+//! which would measure the sampler rather than the pin.
 //!
 //! The gate is `RHP_PIN_TRACE`, because a probe that runs is a screen read twenty times a second: a
 //! run without it spawns no thread and reads nothing.

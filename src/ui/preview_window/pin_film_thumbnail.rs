@@ -1966,13 +1966,13 @@ pub(super) fn a_still_stands() -> bool {
 /// **The still a relaunch takes out of the source window's own device context** — the cover
 /// `RHP_FREEZE=dc` is.
 ///
-/// **Why the source's own DC, and neither the screen nor `PrintWindow`.** A pinned film's source wears
-/// `WS_EX_LAYERED` at alpha 1/255 so that nothing of it reaches the screen, which makes a `BitBlt` off
-/// the screen black, and a window that draws through D3D answers `PrintWindow` with black or with a
-/// remake of the frame rather than the frame (see `surfaces`). What is left is the surface the player
-/// itself draws into — the one the readiness sample already reads lit twenty times a second
-/// **throughout the very gap this cover is for** (see `the_source_has_lit_pixels`), which is what makes
-/// a copy of it worth a relaunch.
+/// **Why the source's own DC, and neither the screen nor a window's last presented frame.** A pinned
+/// film's source wears `WS_EX_LAYERED` at alpha 1/255 so that nothing of it reaches the screen, which
+/// makes a `BitBlt` off the screen black, and a window that draws through D3D answers an ask for its own
+/// frame with black or with a remake of it rather than the frame (see `surfaces`). What is left is the
+/// surface the player itself draws into — the one the readiness sample already reads lit twenty times a
+/// second **throughout the very gap this cover is for** (see `the_source_has_lit_pixels`), which is what
+/// makes a copy of it worth a relaunch.
 ///
 /// **It costs about a millisecond, so it is taken at the release**: nothing is decoded, nothing waits,
 /// and the frame it paints is the frame that was on screen a moment ago.
