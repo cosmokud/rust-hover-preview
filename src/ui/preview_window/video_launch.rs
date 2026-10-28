@@ -45,7 +45,11 @@
 
 use super::media_types::DerivedSubtitles;
 use super::subtitles_wanted;
+use super::{codecs, video_hw};
+use crate::CONFIG;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 /// The one binding an mpv video is given, which is the key this app already pauses a film with.
 ///
@@ -100,11 +104,14 @@ pub(super) fn mpv_launched_without_audio(volume: u32) -> bool {
     volume == 0
 }
 
-/// The arguments an mpv video is begun with, which is the command line the spec settles on
-/// (`--focus-on` deliberately not among them: a `--focus-on` is a hard start failure on a build old
-/// enough not to have it, while the app applies `WS_EX_NOACTIVATE` by pid straight after the launch
-/// anyway). A video output is named, which it was not for years — why is on the flag itself (see
-/// below).
+/// The arguments an mpv video is begun with, which is the command line the spec settles on. A video
+/// output is named, which it was not for years — why is on the flag itself (see below).
+///
+/// **No `--focus-on*` is among them**, which is not an omission: this list is the launch every road
+/// gets, and a `--focus-on` is a hard start failure on a build old enough not to have it. What a
+/// *hover* is told about the foreground is asked of the installed build once and appended after this
+/// list, where nothing of a pin's launch can see it (see `hover_focus_switch` and
+/// `the_focus_on_support`).
 ///
 /// The switches are passed in rather than read here, because reading one at a hover's beginning
 /// reads it for the *next* hover: a film already playing was launched with the answer that stood
@@ -339,6 +346,126 @@ fn thumbnail_flip_from(value: Option<&std::ffi::OsStr>) -> bool {
 /// dropping it on the floor (see `video_playback::start_mpv_video_playback`).
 pub(super) fn the_thumbnail_swapchain_flip(asked: bool, invisible: bool) -> bool {
     asked && !invisible
+}
+
+/// Which of the two spells for "do not take the foreground" the installed mpv recognises.
+///
+/// **It is a measurement of the build on this machine rather than of any documented option set.**
+/// `--focus-on` is the current spelling (its `never` is one of its choices), and `--focus-on-open`
+/// is the older one mpv now lists as removed — a build may still reject it, and this machine's does
+/// (see `the_builds_focus_on_answer`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FocusOnSupport {
+    /// The installed mpv accepted `--focus-on=never`.
+    Never,
+    /// It refused that and accepted the old `--focus-on-open=no`.
+    OpenOnly,
+    /// It refused both: a hover's launch asks for nothing.
+    Neither,
+}
+
+/// The one switch a hover's mpv launch names for the foreground, or nothing where this build
+/// recognises neither spelling (see `FocusOnSupport`).
+///
+/// Hover-only, and a pure answer about the build so that what the launch appends is a value a test
+/// can hold: a pin's launch is the command line every road had before this existed
+/// (see `video_playback::start_mpv_video_playback`).
+pub(super) fn hover_focus_switch(support: FocusOnSupport) -> Option<&'static str> {
+    match support {
+        FocusOnSupport::Never => Some("--focus-on=never"),
+        FocusOnSupport::OpenOnly => Some("--focus-on-open=no"),
+        FocusOnSupport::Neither => None,
+    }
+}
+
+/// What the installed build answered when it was asked once, or nothing while it is being asked (see
+/// `probe_focus_on_once`).
+static FOCUS_ON_SUPPORT: Mutex<Option<FocusOnSupport>> = Mutex::new(None);
+
+/// Whether the one question has been asked, so a launch can never start a second probe.
+static FOCUS_ON_ASKED: AtomicBool = AtomicBool::new(false);
+
+/// Ask the installed mpv, once, which `--focus-on*` switch it recognises, and keep the answer.
+///
+/// **It is asked off every hover's road** — the answer is the same for the whole run, and a preview
+/// has no time to spend on a question about the player it is about to begin. It is asked at the
+/// preview window's start, and it finds the player on a thread of its own there, so that by the time
+/// a hand is over a film the answer is standing (see `event_loop::run_preview_window`); a launch that
+/// finds no answer yet adds nothing, which is the command line this app always had.
+///
+/// shortcut: the answer is kept for the run whatever build it was measured on, so a machine that
+/// swaps `mpv.exe` mid-run keeps the old build's answer; re-probe when the setting can change while
+/// the app runs.
+pub(super) fn probe_focus_on_once() {
+    if FOCUS_ON_ASKED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    std::thread::spawn(|| {
+        let chosen = CONFIG
+            .lock()
+            .map(|config| config.mpv_path.clone())
+            .unwrap_or_default();
+        let Some(program) = video_hw::mpv_program(&chosen, &codecs::mpv_installs()) else {
+            return;
+        };
+        let support = the_builds_focus_on_answer(&program);
+        if let Ok(mut held) = FOCUS_ON_SUPPORT.lock() {
+            *held = Some(support);
+        }
+    });
+}
+
+/// The answer the installed build gave, or `Neither` while it is still being asked (see
+/// `probe_focus_on_once`).
+pub(super) fn the_focus_on_support() -> FocusOnSupport {
+    FOCUS_ON_SUPPORT
+        .lock()
+        .ok()
+        .and_then(|held| *held)
+        .unwrap_or(FocusOnSupport::Neither)
+}
+
+/// Stand the cached answer where a test needs it, without beginning a player (see
+/// `the_focus_on_support`).
+#[cfg(test)]
+pub(super) fn pretend_the_build_answers(support: FocusOnSupport) {
+    FOCUS_ON_ASKED.store(true, Ordering::Release);
+    if let Ok(mut held) = FOCUS_ON_SUPPORT.lock() {
+        *held = Some(support);
+    }
+}
+
+/// The build's own answer, asked with the switch on a command line it has to parse.
+///
+/// **`--version` is no use as the probe**: measured on this machine's mpv 0.41.0, `--version`
+/// short-circuits before the option parser, so `mpv --no-config --version --focus-on=never` and the
+/// same line with a `--focus-on-open=no` this build does not have both exit 0. `--input-test` parses
+/// the options and then ends, which is the run that answers the question: measured here, that line
+/// with `--focus-on=never` exits 0, and with `--focus-on-open=no` — and with any option this build
+/// does not know — exits 1. It is a start of the player and nothing else, so it costs about a tenth
+/// of a second and decodes nothing.
+fn the_builds_focus_on_answer(program: &Path) -> FocusOnSupport {
+    if mpv_accepts_the_switch(program, "--focus-on=never") {
+        FocusOnSupport::Never
+    } else if mpv_accepts_the_switch(program, "--focus-on-open=no") {
+        FocusOnSupport::OpenOnly
+    } else {
+        FocusOnSupport::Neither
+    }
+}
+
+/// Whether the player at `program` parsed `switch` rather than refusing it: the run ends cleanly when
+/// the option exists and fails when it does not (see `the_builds_focus_on_answer`).
+fn mpv_accepts_the_switch(program: &Path, switch: &str) -> bool {
+    super::engine_processes::hidden_command(program)
+        .args(["--no-config", "--no-terminal", "--input-test", switch])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 /// The size a film's box is asked for, so that the window the film is drawn in is that box.
@@ -1369,6 +1496,30 @@ mod tests {
     /// The whole command line an mpv video is begun with, asserted in one piece: an edit to any
     /// flag in it is then a failing test rather than a surprise in a preview nobody on this
     /// machine can run (there is no mpv here — see the report on this ticket).
+    ///
+    /// **And no `--focus-on*` is among them**: the switch a hover is asked for the foreground with is
+    /// appended by the hover's launch alone, so that a pin's command line is the one every road had
+    /// (see `hover_focus_switch` and `video_playback::start_mpv_video_playback`).
+    #[test]
+    fn a_hover_asks_for_the_focus_switch_the_build_parses_and_nothing_where_it_parses_neither() {
+        assert_eq!(
+            hover_focus_switch(FocusOnSupport::Never),
+            Some("--focus-on=never"),
+            "the current spelling, where the installed build parses it"
+        );
+        assert_eq!(
+            hover_focus_switch(FocusOnSupport::OpenOnly),
+            Some("--focus-on-open=no"),
+            "and the older one where that is the one it knows"
+        );
+        assert_eq!(
+            hover_focus_switch(FocusOnSupport::Neither),
+            None,
+            "a build that parses neither is asked for nothing, rather than for a flag it would \
+             refuse and refuse the whole launch with"
+        );
+    }
+
     #[test]
     fn the_mpv_route_is_launched_with_the_command_line_the_spec_settles_on() {
         assert_eq!(

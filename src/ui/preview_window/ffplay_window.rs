@@ -423,7 +423,31 @@ pub(super) fn ensure_noactivate_monitor() {
                 }
             }
 
+            // **A hover's window is styled before it is shown, and this is the pass that can** (see
+            // `HOVER_BEFORE_THE_SHOW`): the show is what activates a player's window, so a style put
+            // on the window the moment it exists — before anybody has shown it — is the one that
+            // keeps the foreground where it was.
+            let eager = (pid != 0)
+                .then(|| the_hover_awaiting_its_show(Instant::now()))
+                .flatten();
+
             if pid != 0 {
+                if eager == Some(pid) {
+                    match unsafe { style_the_window_before_the_show(pid) } {
+                        BeforeTheShow::NotYet => {}
+                        BeforeTheShow::Styled => {
+                            note_pin_trace!("hover no-activate pid {pid} styled before the show");
+                            forget_the_hover_awaiting_its_show();
+                        }
+                        BeforeTheShow::ShownFirst => {
+                            note_pin_trace!(
+                                "hover no-activate pid {pid} lost the race (visible already)"
+                            );
+                            forget_the_hover_awaiting_its_show();
+                        }
+                    }
+                }
+
                 unsafe {
                     let _ = try_apply_noactivate_style(pid);
                 }
@@ -439,7 +463,9 @@ pub(super) fn ensure_noactivate_monitor() {
                     && pinned()
                     && !pin_is_collapsed()
                     && pin_playback::a_relaunch_is_in_flight();
-                wait_for_noactivate_wake(the_monitor_wait(elapsed, launching));
+                // And a hover waiting to be caught before its show is looked for at the start's
+                // cadence too, whatever age the player it belongs to is.
+                wait_for_noactivate_wake(the_monitor_wait(elapsed, launching || eager.is_some()));
             } else {
                 // Nothing is playing: the wait is the player's own start, which is what
                 // signals this thread rather than a clock.
@@ -466,6 +492,174 @@ pub(super) fn the_monitor_wait(elapsed: Duration, launching: bool) -> u64 {
     } else {
         100
     }
+}
+
+/// The hover's player whose window is to be styled **before** it is shown: the id it was begun under,
+/// and the moment it was begun.
+///
+/// **A window is activated by the show, not by anything this app does after it.** mpv makes a window
+/// of its own and shows it as soon as it has opened the file, so the ordinary passes find a window
+/// that has already taken the foreground and give it back a frame too late (see
+/// `apply_noactivate_to_hwnd`). A hover's launch says here that it has begun a player, and the
+/// monitor's first passes put `WS_EX_NOACTIVATE` alone on that player's window the instant it
+/// exists: a window carrying it cannot be activated when it is shown, whatever the player asks for
+/// (see `video_playback::start_hover_video_playback`).
+///
+/// The marker is cleared once the film's window is on screen — whether the pass caught it in time or
+/// lost the race — and it runs out on its own after `HOVER_BEFORE_THE_SHOW_WAIT` either way, so a
+/// hover whose player never makes a window leaves the monitor on the cadence it already keeps (see
+/// `a_hover_awaits_its_show` and `BeforeTheShow`).
+static HOVER_BEFORE_THE_SHOW: Mutex<Option<(u32, Instant)>> = Mutex::new(None);
+
+/// How long a hover's window is waited for, counted from the launch: a player that has made no window
+/// in this long is one whose show the eager pass has missed anyway (see `HOVER_BEFORE_THE_SHOW`).
+pub(super) const HOVER_BEFORE_THE_SHOW_WAIT: Duration = Duration::from_millis(2000);
+
+/// Write down a hover's player as one whose window is to be styled before it is shown.
+pub(super) fn note_a_hover_about_to_show(pid: u32) {
+    if let Ok(mut held) = HOVER_BEFORE_THE_SHOW.lock() {
+        *held = Some((pid, Instant::now()));
+    }
+}
+
+/// The hover still waiting for its window, as the id it was begun under — the marker's own answer,
+/// asked at `now` rather than at the moment it was written.
+///
+/// **Only a hover writes the marker, so this is the whole of where the eager style is asked for**: a
+/// pin's launch never notes one, so a pin's player is never styled by it (see
+/// `note_a_hover_about_to_show`).
+pub(super) fn a_hover_awaits_its_show(held: Option<(u32, Instant)>, now: Instant) -> Option<u32> {
+    held.filter(|(_, begun)| now.saturating_duration_since(*begun) < HOVER_BEFORE_THE_SHOW_WAIT)
+        .map(|(pid, _)| pid)
+}
+
+/// The marker as it stands, or nothing where it has run out — and one that has run out is dropped
+/// here, so nothing goes on being asked about it.
+pub(super) fn the_hover_awaiting_its_show(now: Instant) -> Option<u32> {
+    let held = HOVER_BEFORE_THE_SHOW.lock().ok().and_then(|held| *held);
+    let pid = a_hover_awaits_its_show(held, now);
+    if pid.is_none() {
+        if let Ok(mut held) = HOVER_BEFORE_THE_SHOW.lock() {
+            *held = None;
+        }
+    }
+    pid
+}
+
+/// Forget the hover whose window has been found, whether the pass caught it before the show or not.
+pub(super) fn forget_the_hover_awaiting_its_show() {
+    if let Ok(mut held) = HOVER_BEFORE_THE_SHOW.lock() {
+        *held = None;
+    }
+}
+
+/// The style the eager pass writes: `WS_EX_NOACTIVATE` and **nothing else**.
+///
+/// The rest of the style a player's window wears — the toolwindow bit, the topmost band, the
+/// press-through — is the ordinary passes' to write a moment later (see `player_ex_style_for`), and
+/// writing it here would be a second answer to a question those passes decide again. The one bit the
+/// show itself reads is this one.
+pub(super) fn eager_ex_style(current: isize) -> isize {
+    current | WS_EX_NOACTIVATE.0 as isize
+}
+
+/// What the eager pass found of a hover's player's film window.
+pub(super) enum BeforeTheShow {
+    /// The film's window is not on screen yet — it was styled and the pass goes on looking, or the
+    /// player has not made it yet.
+    NotYet,
+    /// The film's window is up and wears `WS_EX_NOACTIVATE`: an earlier pass put it there, so the show
+    /// it is now in could not activate it.
+    Styled,
+    /// The film's window is up without the bit: it was shown before this app ever had it, and today's
+    /// road is what is left.
+    ShownFirst,
+}
+
+/// The class name of the window a film is drawn in.
+///
+/// **It is what tells the film's window from the windows a player makes for everything else, and the
+/// distinction is not cosmetic: styling a helper breaks the launch it belongs to.** Measured on mpv
+/// 0.41.0 here: mpv makes a hidden `mpv-smtc` window (the media keys' own) about 20ms into the
+/// launch and its film's `mpv` window some 250ms later, which is then shown some 15–25ms after that.
+/// Giving `WS_EX_NOACTIVATE` to the helper did not merely fail to help: the film's window came out at
+/// ~500ms *and already visible*, so the pass lost the very show it exists to beat — while styling the
+/// film's own window left every timing in place and the window shown still carrying the bit.
+///
+/// A build that names its window something else is not a wrong window styled — the pass finds
+/// nothing and today's road answers it (see `style_the_window_before_the_show`).
+const A_FILMS_WINDOW_CLASS: &str = "mpv";
+
+/// What the eager enumeration carries: which process, and the film's window where one was found.
+struct TheFilmsWindowSearch {
+    target_pid: u32,
+    found: HWND,
+}
+
+/// Callback for `EnumWindows` that **does not require the window to be visible**, which is the one
+/// thing the ordinary callback refuses and the whole point of this pass: a window nobody has shown
+/// yet is the window this is for (see `enum_windows_callback` and `A_FILMS_WINDOW_CLASS`).
+unsafe extern "system" fn the_films_window_callback(
+    hwnd: HWND,
+    lparam: LPARAM,
+) -> windows::Win32::Foundation::BOOL {
+    let data = &mut *(lparam.0 as *mut TheFilmsWindowSearch);
+    let mut window_pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
+
+    if window_pid != data.target_pid {
+        return windows::Win32::Foundation::BOOL(1);
+    }
+    if let Ok(owner) = GetWindow(hwnd, GW_OWNER) {
+        if !owner.is_invalid() {
+            return windows::Win32::Foundation::BOOL(1);
+        }
+    }
+
+    let mut class: [u16; 64] = [0; 64];
+    let named = GetClassNameW(hwnd, &mut class);
+    if named <= 0
+        || !String::from_utf16_lossy(&class[..named as usize])
+            .eq_ignore_ascii_case(A_FILMS_WINDOW_CLASS)
+    {
+        return windows::Win32::Foundation::BOOL(1);
+    }
+
+    data.found = hwnd;
+    windows::Win32::Foundation::BOOL(0)
+}
+
+/// Put `WS_EX_NOACTIVATE` alone on a hover's player's film window the moment it exists, and say
+/// whether that window is on screen yet (see `BeforeTheShow`).
+pub(super) unsafe fn style_the_window_before_the_show(pid: u32) -> BeforeTheShow {
+    let mut data = TheFilmsWindowSearch {
+        target_pid: pid,
+        found: HWND::default(),
+    };
+    let _ = EnumWindows(
+        Some(the_films_window_callback),
+        LPARAM(&mut data as *mut TheFilmsWindowSearch as isize),
+    );
+
+    if data.found.is_invalid() {
+        return BeforeTheShow::NotYet;
+    }
+
+    // **The window that is up is the one that says whether the race was won**, asked off the style it
+    // is wearing rather than off a record kept across passes: a window that already carries the bit
+    // was styled by an earlier pass before it was shown, and one that does not was shown before this
+    // app ever had its handle.
+    let current = GetWindowLongPtrW(data.found, GWL_EXSTYLE);
+    if IsWindowVisible(data.found).as_bool() {
+        return if current & WS_EX_NOACTIVATE.0 as isize != 0 {
+            BeforeTheShow::Styled
+        } else {
+            BeforeTheShow::ShownFirst
+        };
+    }
+
+    SetWindowLongPtrW(data.found, GWL_EXSTYLE, eager_ex_style(current));
+    BeforeTheShow::NotYet
 }
 
 /// The event the monitor thread waits on: signalling it is a player's window having been
@@ -1092,6 +1286,139 @@ mod tests {
             100,
             "and nothing pending is the idle cadence the monitor always had"
         );
+    }
+
+    /// **Only a hover asks for the eager style, and only while its window is still to come.** The
+    /// marker is what a hover's launch writes and a pin's never does (see
+    /// `note_a_hover_about_to_show`), so this is the whole of the question the monitor asks before it
+    /// styles anything early (see `a_hover_awaits_its_show`).
+    #[test]
+    fn the_eager_style_is_asked_for_a_hover_spawn_and_never_for_a_pin_spawn() {
+        let begun = Instant::now();
+        assert_eq!(
+            a_hover_awaits_its_show(Some((42, begun)), begun),
+            Some(42),
+            "a hover that has just begun its player is the one the pass runs for"
+        );
+        assert_eq!(
+            a_hover_awaits_its_show(None, begun),
+            None,
+            "a pin's launch notes nothing, so no pin's player is ever styled before its show"
+        );
+        assert_eq!(
+            a_hover_awaits_its_show(Some((42, begun)), begun + HOVER_BEFORE_THE_SHOW_WAIT),
+            None,
+            "and a hover whose window never came is not looked for past its wait"
+        );
+    }
+
+    /// **The eager pass writes `WS_EX_NOACTIVATE` and nothing else**: the toolwindow bit, the topmost
+    /// band and the press-through are the ordinary passes' to decide again a moment later, and the one
+    /// bit a show reads is this one (see `eager_ex_style`).
+    #[test]
+    fn the_eager_style_sets_only_the_no_activate_bit() {
+        let noactivate = WS_EX_NOACTIVATE.0 as isize;
+        let toolwindow = WS_EX_TOOLWINDOW.0 as isize;
+
+        assert_eq!(
+            eager_ex_style(0),
+            noactivate,
+            "a bare window is given `WS_EX_NOACTIVATE` and nothing besides it"
+        );
+        assert_eq!(
+            eager_ex_style(toolwindow),
+            toolwindow | noactivate,
+            "and a bit the player already wears is left exactly as it was"
+        );
+    }
+
+    /// A pid with no window of its own is a engine that has not made one yet, which is the answer the
+    /// monitor keeps looking on rather than a race it has lost (see `style_the_window_before_the_show`).
+    #[test]
+    fn a_hover_with_no_window_yet_is_awaited_rather_than_styled() {
+        assert!(
+            matches!(
+                unsafe { style_the_window_before_the_show(u32::MAX - 7) },
+                BeforeTheShow::NotYet
+            ),
+            "a process that has made no window is no window to style yet"
+        );
+    }
+
+    /// **The eager pass styles the film's own window as soon as it exists and before it is shown.** A
+    /// window of this process is made with the class a film's window has and left unshown the way a
+    /// player leaves it for the few milliseconds it takes to configure it — and the pass finds it, gives
+    /// it `WS_EX_NOACTIVATE` alone, and then says the show it later saw was the one it had styled (see
+    /// `style_the_window_before_the_show` and `A_FILMS_WINDOW_CLASS`).
+    #[test]
+    fn the_eager_pass_styles_a_film_window_that_is_not_shown_yet() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, WINDOW_EX_STYLE,
+            WNDCLASSW, WS_POPUP,
+        };
+
+        unsafe extern "system" fn an_empty_window(
+            hwnd: HWND,
+            msg: u32,
+            wparam: windows::Win32::Foundation::WPARAM,
+            lparam: windows::Win32::Foundation::LPARAM,
+        ) -> windows::Win32::Foundation::LRESULT {
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+
+        unsafe {
+            let instance = GetModuleHandleW(None).expect("this module");
+            let class = w!("mpv");
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(an_empty_window),
+                hInstance: instance.into(),
+                lpszClassName: class,
+                ..Default::default()
+            };
+            // A class left registered by a test that ran before this one is the same class.
+            let _ = RegisterClassW(&wc);
+
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                class,
+                w!(""),
+                WS_POPUP,
+                -32000,
+                -32000,
+                320,
+                180,
+                None,
+                None,
+                instance,
+                None,
+            )
+            .expect("a film's window, off the desktop and unshown");
+            let noactivate = WS_EX_NOACTIVATE.0 as isize;
+
+            assert!(
+                matches!(
+                    style_the_window_before_the_show(GetCurrentProcessId()),
+                    BeforeTheShow::NotYet
+                ),
+                "a window nobody has shown is styled and the pass goes on looking"
+            );
+            assert_ne!(
+                GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & noactivate,
+                0,
+                "and what it was given is `WS_EX_NOACTIVATE`"
+            );
+
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            assert!(
+                matches!(
+                    style_the_window_before_the_show(GetCurrentProcessId()),
+                    BeforeTheShow::Styled
+                ),
+                "and the show it is now in is one the bit was already on the window for"
+            );
+
+            let _ = DestroyWindow(hwnd);
+        }
     }
 
     /// A process begun for a test to suspend: it makes no window and plays nothing, and its own thirty

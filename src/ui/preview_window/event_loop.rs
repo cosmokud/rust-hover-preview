@@ -15,6 +15,11 @@ use super::*;
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
 pub fn run_preview_window() {
+    // **The one question this app asks the installed player before any film is begun**: which
+    // `--focus-on*` spelling it parses, asked once on a thread of its own so that no hover ever waits
+    // on it (see `video_launch::probe_focus_on_once`).
+    video_launch::probe_focus_on_once();
+
     // Page sizes come from Windows.Data.Pdf and picture sizes from the codec Windows
     // has, so this thread needs an apartment before the first layout asks for one.
     pdf_preview::initialize_apartment();

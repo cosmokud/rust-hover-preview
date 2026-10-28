@@ -4095,6 +4095,65 @@ fn a_pinned_ffplay_film_is_revealed_without_a_hover_path() {
 
     drop(film);
 }
+/// **A pin's mpv launch is the command line every road had**: whatever the build probe answered, no
+/// `--focus-on*` of any kind reaches it, and no window of it is handed to the eager pass either. The
+/// probe is stood at "this build parses it" here, so a pin that read the same answer would fail this
+/// (see `video_playback::start_mpv_video_playback` and `video_launch::hover_focus_switch`).
+#[test]
+fn a_pin_mpv_launch_asks_for_no_focus_switch_and_no_eager_style() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    stand_mpv_in(Some(true));
+    stand_ffplay_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    let _ = take_last_spawned_command();
+    ffplay_window::forget_the_hover_awaiting_its_show();
+
+    video_launch::pretend_the_build_answers(video_launch::FocusOnSupport::Never);
+
+    let path = PathBuf::from("a-pinned-film.mkv");
+    let _ = start_video_playback(
+        &path,
+        film.box_.0,
+        film.box_.1,
+        320,
+        240,
+        0.0,
+        false,
+        80,
+        None,
+        None,
+    )
+    .expect("a noted mpv player");
+
+    {
+        let launched = take_last_spawned_command().expect("the pin's launch");
+        assert!(
+            launched.program.to_ascii_lowercase().contains("mpv"),
+            "the pin is on the mpv road: {}",
+            launched.program
+        );
+        assert!(
+            !launched
+                .args
+                .iter()
+                .any(|arg| arg.starts_with("--focus-on")),
+            "a pin's launch names no focus switch: {:?}",
+            launched.args
+        );
+    }
+    assert_eq!(
+        ffplay_window::the_hover_awaiting_its_show(Instant::now()),
+        None,
+        "and nothing of a pin's player is styled before it is shown"
+    );
+
+    video_launch::pretend_the_build_answers(video_launch::FocusOnSupport::Neither);
+}
+
 /// A step onto an FFmpeg film begins one player, in the pin's host, and the show that follows
 /// takes that player up rather than beginning a second one at zero.
 ///
