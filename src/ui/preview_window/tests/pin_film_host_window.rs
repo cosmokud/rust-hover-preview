@@ -14,11 +14,11 @@ use super::*;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindowLongPtrW,
-    IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow, GWL_EXSTYLE, GWL_STYLE,
-    HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE,
-    WM_ERASEBKGND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED,
-    WS_POPUP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
+    GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow, GWL_EXSTYLE,
+    GWL_STYLE, GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, SW_SHOWNOACTIVATE,
+    WINDOW_EX_STYLE, WM_ERASEBKGND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW,
+    WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -3428,12 +3428,18 @@ unsafe fn a_pin_showing_a_registered_film(film: &StandingFilm) -> HWND {
 /// A step of the pin's own walk onto another film, through the road the caption's **Next** takes
 /// (see `swap_pinned_media`).
 fn a_step_onto_the_next_film(film: &StandingFilm) -> PinSwap {
+    a_step_onto_the_next_film_at(film.box_)
+}
+
+/// The same step onto a box the loop laid the incoming film out in: a walk's own box, or the box a
+/// maximized pin already fills (see `a_step_onto_the_next_film`).
+fn a_step_onto_the_next_film_at(content: ScreenRegion) -> PinSwap {
     let mut media = create_loading_media(320, 240);
     media.media_type = MediaType::Video;
     swap_pinned_media(PinAnswer {
         path: PathBuf::from("the-next-film.mkv"),
         update: PinUpdate {
-            content: film.box_,
+            content,
             dpi: 96,
             volume: 0,
         },
@@ -6724,4 +6730,115 @@ fn an_mpv_film_takes_the_bands_answers_as_they_were() {
     );
 
     pin_film_host::put_the_cover_away();
+}
+
+/// Whether `above` stands over `below` in the desktop's z-order right now: an ask of Windows rather
+/// than a reading of what this app meant to ask for (see `pin_bubble_space`).
+///
+/// Safety: both handles are windows of this test's or of this app's own, and the question is a
+/// measurement of them rather than a change.
+unsafe fn stands_over(above: HWND, below: HWND) -> bool {
+    let mut walk = unsafe { GetWindow(below, GW_HWNDPREV) };
+    while let Ok(window) = walk {
+        if window == above {
+            return true;
+        }
+        if window.is_invalid() {
+            break;
+        }
+        walk = unsafe { GetWindow(window, GW_HWNDPREV) };
+    }
+    false
+}
+
+/// **The pin's window — and the chrome that is its children — stands over the film's host at every
+/// moment of a step**, and a step changes no box's answer.
+///
+/// A strip is only seen where the pin's window is above the host, because that is the window the
+/// picture is drawn in and the strips are the pin's own children (see `pin_chrome_strips`). What
+/// keeps them above is ownership: the host owns the pin's window, and Windows keeps an owned window
+/// over its owner — so the showing, re-placing and re-banding a step does to the host must leave that
+/// order alone (see `own_the_pin_window`, `place_the_pin_in_the_band` and `show_pinned_window`).
+///
+/// Both shapes of step are asked, because the box is not what that order rests on: a walk's step lays
+/// the incoming film out in a box of its own, and a maximized window's step is one whose box does not
+/// change at all.
+#[test]
+fn a_step_leaves_the_pin_standing_over_the_films_host() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let _parked = AStepParkedTheOldPlayer::take();
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
+    let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
+
+    let the_pair = |when: &str| unsafe {
+        assert_eq!(
+            GetParent(caption),
+            Ok(film.pin_hwnd),
+            "{when}: the caption is a child of the pin's own window"
+        );
+        assert_eq!(
+            GetParent(transport),
+            Ok(film.pin_hwnd),
+            "{when}: and so is the transport"
+        );
+        assert!(
+            stands_over(film.pin_hwnd, host),
+            "{when}: the pin's window stands over the film's host, which is the order the chrome is seen in"
+        );
+        assert!(
+            !stands_over(host, film.pin_hwnd),
+            "{when}: and the host is not standing over the pin"
+        );
+    };
+
+    the_pair("the pin standing over its film");
+
+    // A walk's step, and the whole of its wait: the outgoing player is kept as the picture while the
+    // incoming one opens its file, the band is held for it, and the source it makes takes the picture
+    // over.
+    assert!(
+        matches!(a_step_onto_the_next_film(&film), PinSwap::Ready(_)),
+        "the step begins a player for the next film"
+    );
+    the_pair("the step's wait, with its band held");
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    mpv_ipc::answer_a_read(
+        replacement,
+        "video-params",
+        Some(r#"{"w":320,"h":180,"dw":320,"dh":180}"#),
+    );
+    let next_source = unsafe { a_players_own_window() };
+    unsafe { pin_film_thumbnail::adopt_the_source(next_source, replacement, host) };
+    the_pair("the incoming source taking the picture");
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    the_pair("the step's own show");
+
+    // And a step whose box does not change: a maximized pin fits every file to the room the window
+    // already fills, so the film it steps onto is laid out in the box it stands in.
+    let standing = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+        .expect("a pin up");
+    assert!(
+        matches!(
+            a_step_onto_the_next_film_at(standing),
+            PinSwap::Ready(_)
+        ),
+        "a step of the same box begins its player too"
+    );
+    stand_pin(Some(take_up_pinned_window(
+        Path::new("the-film-after-that.mkv"),
+        standing,
+    )));
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    the_pair("a step whose box did not change");
+
+    unsafe {
+        let _ = DestroyWindow(next_source);
+    }
+    mpv_ipc::clear_reads();
 }
