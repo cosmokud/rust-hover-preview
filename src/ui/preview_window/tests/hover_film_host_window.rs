@@ -716,6 +716,73 @@ fn a_hover_that_ends_takes_the_foreground_back_from_its_player() {
     );
 }
 
+/// **A refused hand-back is asked again, but not on the next frame**, and an ask that lands forgets
+/// what the refusal left behind.
+///
+/// A refused `SetForegroundWindow` flashes the target's taskbar button — the very flash this
+/// hand-back exists to take away — so the same window is not asked again until a wait has passed,
+/// while a window in front that is not the one that refused is asked at once. The wait is asked
+/// directly, and then through the tick's own hand-back with a recorded foreground, because a
+/// refusal cannot be staged on a desktop a test may not rearrange (see
+/// `record_the_foreground_in_front`).
+#[test]
+fn a_refused_hand_back_is_asked_again_only_after_a_wait() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let player = HWND(0x1000 as *mut _);
+    let listing = HWND(0x2000 as *mut _);
+    let wait = pin_lifecycle::A_REFUSED_HAND_BACK_WAITS;
+    let refused_at = Instant::now();
+    let asked_again = pin_lifecycle::a_refused_hand_back_is_asked_again_only_after_a_while;
+
+    assert!(
+        !asked_again(player, player, Some(refused_at), refused_at + wait / 2),
+        "asking the same window again inside the wait is the refusal's flash as a strobe"
+    );
+    assert!(
+        asked_again(player, player, Some(refused_at), refused_at + wait),
+        "and the same window is asked once the wait has passed"
+    );
+    assert!(
+        asked_again(listing, player, Some(refused_at), refused_at),
+        "a window in front that is not the one that refused is asked at once"
+    );
+    assert!(
+        asked_again(player, HWND::default(), None, refused_at),
+        "and a run that has refused nothing asks at once"
+    );
+
+    let shell = unsafe { GetShellWindow() };
+    pin_lifecycle::record_the_window_the_launch_found_in_front(shell.0 as isize);
+    pin_lifecycle::record_the_foreground_in_front(player.0 as isize, true);
+
+    pin_lifecycle::record_a_refused_hand_back(player.0 as isize, Instant::now());
+    let asked = unsafe { pin_lifecycle::give_the_foreground_back_from_a_hover_player_on_the_tick() };
+    assert_eq!(
+        (asked, pin_lifecycle::the_foreground_asked_for()),
+        (false, 0),
+        "the tick that follows a refusal asks nothing, so the flash is made once"
+    );
+
+    pin_lifecycle::record_a_refused_hand_back(player.0 as isize, Instant::now() - wait);
+    let _ = unsafe { pin_lifecycle::give_the_foreground_back_from_a_hover_player_on_the_tick() };
+    assert_eq!(
+        pin_lifecycle::the_foreground_asked_for(),
+        shell.0 as isize,
+        "the tick after the wait asks the listing for the foreground again"
+    );
+
+    let _ = unsafe { pin_lifecycle::give_the_foreground_back_from_a_hover_player_on_the_tick() };
+    assert_eq!(
+        pin_lifecycle::the_foreground_asked_for(),
+        shell.0 as isize,
+        "and an ask that landed clears the refusal, so the next tick asks rather than waits"
+    );
+
+    pin_lifecycle::forget_the_recorded_foreground();
+}
+
 /// **The pass that answers a desktop left in front asks nothing of any other window.** It runs after
 /// a hover's player has been killed, and it is the one hand-back that is made without a player having
 /// held the foreground a moment before — so what it must never do is take the foreground off a window

@@ -1202,11 +1202,13 @@ pub fn run_preview_window() {
             // is created activated, so the keyboard Explorer had is on the player from the frame it
             // opens until something asks for it back — and nothing of a hover's own road does, the
             // pin's give-back being the pin's (see
-            // `pin_lifecycle::give_the_foreground_back_from_a_hover_player`). A tick with nothing
-            // of ours in front costs one read of it and asks nothing: it is for the frame after the
-            // player's window comes up, which is the frame the user's hand is already on.
+            // `pin_lifecycle::give_the_foreground_back_from_a_hover_player_on_the_tick`). A tick
+            // with nothing of ours in front costs one read of it and asks nothing: it is for the
+            // frame after the player's window comes up, which is the frame the user's hand is
+            // already on. A refused ask is not repeated on the next frame, because a refusal
+            // flashes the window it was made for (see `a_refused_hand_back_is_asked_again_only_after_a_while`).
             if !pinned() {
-                let _ = pin_lifecycle::give_the_foreground_back_from_a_hover_player();
+                let _ = pin_lifecycle::give_the_foreground_back_from_a_hover_player_on_the_tick();
             }
 
             // Advance animation frames if needed
