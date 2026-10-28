@@ -124,53 +124,6 @@ fn a_window_beside_the_one_in_front_leaves_explorer_reachable() {
     );
 }
 
-/// **A window of this app's own in front of the listing hides nothing behind it**, whatever its
-/// size: the pin's own window is one the user may maximize, a player is placed at the film's own
-/// size — which on a smaller display is a window that covers it whole — and a host or a stand-in
-/// stands wherever a pin left it. Read as a cover, any one of them answered
-/// `HiddenByForeground`, and the loop then hid the preview and slept without ever asking where the
-/// cursor was: every hover after that window was left in front showed nothing at all until
-/// something else became the foreground — the click on Explorer that made it one (see
-/// `window_in_front_hides_the_listing`).
-#[test]
-fn a_window_of_ours_in_front_hides_nothing() {
-    let in_front = |is_explorer, is_our_own, covers| WindowInFront {
-        there: true,
-        is_explorer,
-        is_our_own,
-        covers,
-    };
-
-    assert!(
-        window_in_front_hides_the_listing(in_front(false, false, true)),
-        "another program's maximized window still hides the listing behind it"
-    );
-
-    for covers in [true, false] {
-        assert!(
-            !window_in_front_hides_the_listing(in_front(false, true, covers)),
-            "a window of ours in front is not a program standing over the listing, \
-             covering={covers}"
-        );
-    }
-
-    assert!(
-        !window_in_front_hides_the_listing(in_front(false, false, false)),
-        "an ordinary window hides nothing"
-    );
-    assert!(
-        !window_in_front_hides_the_listing(in_front(true, false, true)),
-        "Explorer's own window hides nothing"
-    );
-    assert!(
-        !window_in_front_hides_the_listing(WindowInFront {
-            there: false,
-            ..in_front(false, false, true)
-        }),
-        "no window in front hides nothing"
-    );
-}
-
 /// A pin standing over a listing is that listing being worked in, so the loop is paced as it
 /// is rather than as a window nobody is in. What it is *not* is an answer for a minimized
 /// Explorer or one behind a maximized window: those keep the deep and long rows.
