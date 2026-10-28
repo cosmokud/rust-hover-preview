@@ -8,7 +8,8 @@
 use super::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WINDOW_EX_STYLE,
+    CreateWindowExW, DestroyWindow, GetShellWindow, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE,
+    WINDOW_EX_STYLE,
     WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
@@ -638,5 +639,79 @@ fn a_hosted_hover_that_never_draws_falls_back_once_without_a_host() {
     assert!(
         !hover_film_host::the_hover_player_was_begun_in_the_host(process.id()),
         "the fallback launch is an ordinary top-level one"
+    );
+}
+
+/// **The window a hover owes the foreground to is the one the launch found in front**, and the one
+/// case it owes nothing is a foreground that is not a player of this app's: a window of somebody
+/// else's in front is the user's arrangement, not a player's to be undone.
+///
+/// Both answers are the questions the tick's hand-back asks, answered without a player begun over
+/// somebody's desktop — the recorded foreground and the player that owns it are handed in rather
+/// than read (see `a_hovers_foreground_goes_to`).
+#[test]
+fn a_hovers_foreground_goes_to_the_window_the_launch_found_in_front() {
+    let shell = unsafe { GetShellWindow() };
+    let player = HWND(0x1000 as *mut _);
+
+    assert_eq!(
+        pin_lifecycle::a_hovers_foreground_goes_to(player, shell.0 as isize, true)
+            .map(|behind| behind.0 as isize),
+        Some(shell.0 as isize),
+        "the listing the player was begun over is the window it gives the foreground back to"
+    );
+    assert!(
+        pin_lifecycle::a_hovers_foreground_goes_to(player, shell.0 as isize, false).is_none(),
+        "a foreground that is not a player of ours is left where the user put it"
+    );
+    assert!(
+        pin_lifecycle::a_hovers_foreground_goes_to(HWND::default(), shell.0 as isize, true)
+            .is_none(),
+        "and a run that read no window at all asks for nothing"
+    );
+}
+
+/// **A hover that ends asks for the foreground back from its player before it kills it.**
+///
+/// Killing a player that holds the foreground leaves it on the desktop — nothing of ours is left to
+/// give it to — and the desktop is a window over every listing on the display: the next hover is
+/// hidden behind it and nothing previews until some other window is clicked. The player is in front
+/// and the listing is behind it here, which is the arrangement the player's own window makes when it
+/// opens; both are recorded, because neither can be staged on a desktop a test may not rearrange (see
+/// `record_the_foreground_in_front`, and `RecordedPinWindow`, which is the pin-side of the same seam).
+#[test]
+fn a_hover_that_ends_takes_the_foreground_back_from_its_player() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    assert!(
+        !pinned(),
+        "a hover's teardown is the road no pin owns"
+    );
+
+    let shell = unsafe { GetShellWindow() };
+    assert!(
+        unsafe { IsWindow(shell) }.as_bool(),
+        "the Shell's own window, which a hover's player is begun over"
+    );
+    pin_lifecycle::record_the_window_the_launch_found_in_front(shell.0 as isize);
+    pin_lifecycle::record_the_foreground_in_front(0x1000, true);
+
+    let hover = unsafe { pin_film_host_window::a_hover_window_of_the_tests_own() };
+    let mut path = Some(PathBuf::from("a-film.mkv"));
+    let mut pos = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240);
+
+    unsafe { pin_lifecycle::take_the_hover_down(hover, &mut path, &mut pos) };
+
+    let asked = pin_lifecycle::the_foreground_asked_for();
+    pin_lifecycle::forget_the_recorded_foreground();
+    unsafe {
+        let _ = DestroyWindow(hover);
+    }
+
+    assert_eq!(
+        asked, shell.0 as isize,
+        "the listing the player took the foreground from is asked for it back before the kill, \
+         which is what keeps the kill from leaving the desktop in front"
     );
 }
