@@ -6567,7 +6567,8 @@ fn a_registration_whose_source_has_gone_is_not_a_host_drawing() {
     // again.
     let on_one_engine = |film: StandingFilm, engine: &str| {
         let _host = unsafe { a_pin_showing_a_registered_film(&film) };
-        let source = pin_film_thumbnail::the_source_window().expect("the picture the host was given");
+        let source =
+            pin_film_thumbnail::the_source_window().expect("the picture the host was given");
         assert!(
             pin_film_host::the_host_is_drawing(),
             "the host has a picture while its source is a window ({engine})"
