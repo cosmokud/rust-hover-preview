@@ -576,6 +576,60 @@ fn every_hover_ffplay_launch_asks_for_the_composed_renderer_and_vsync_off() {
     }
 }
 
+/// **A hover's mpv is asked not to take the foreground with the one switch the installed build
+/// parses, and a build that parses neither is asked for nothing** — the two asks this app could not
+/// make before are now made where they can be, and nowhere else (see
+/// `video_launch::hover_focus_switch`). The answer is stood here rather than measured, so this holds
+/// the launch's own command line and never runs a player.
+#[test]
+fn a_hover_mpv_launch_asks_for_the_focus_switch_the_build_parses() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _stand = HoverHostStand::new(true);
+    let path = a_film();
+
+    video_launch::pretend_the_build_answers(video_launch::FocusOnSupport::Never);
+    let process = start_hover_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+        .expect("a noted mpv");
+    let launched = take_last_spawned_command().expect("the hover's launch");
+    assert!(
+        launched.program.to_ascii_lowercase().contains("mpv"),
+        "the hover is on the mpv road: {}",
+        launched.program
+    );
+    assert_eq!(
+        launched
+            .args
+            .iter()
+            .filter(|arg| arg.as_str() == "--focus-on=never")
+            .count(),
+        1,
+        "a hover's mpv is told not to focus, once: {:?}",
+        launched.args
+    );
+    assert_eq!(
+        ffplay_window::the_hover_awaiting_its_show(Instant::now()),
+        Some(process.id()),
+        "and its window is handed to the monitor to be styled before it is shown"
+    );
+
+    video_launch::pretend_the_build_answers(video_launch::FocusOnSupport::Neither);
+    ffplay_window::forget_the_hover_awaiting_its_show();
+    let _ = start_hover_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+        .expect("a noted mpv");
+    let launched = take_last_spawned_command().expect("the hover's launch");
+    assert!(
+        !launched
+            .args
+            .iter()
+            .any(|arg| arg.starts_with("--focus-on")),
+        "a build that parses neither spelling gets the command line this app always had: {:?}",
+        launched.args
+    );
+    ffplay_window::forget_the_hover_awaiting_its_show();
+}
+
 /// A hover that ends without a pin takes the FFmpeg host and its player down with it, and only the
 /// player the host holds may do so.
 #[test]

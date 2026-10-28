@@ -382,9 +382,14 @@ pub(super) fn start_video_playback(
 /// did from a plain shell launch — while SDL's own hint is honoured: with
 /// `SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN` in the child's environment the window is shown unactivated
 /// and whatever had the foreground keeps it (see the FFmpeg route in `start_video_playback_where`).
-/// mpv is given nothing, because nothing was found to give it: it ignores the same show style, its
-/// `--focus-on-open` was removed in favour of `--focus-on` (and rejected outright by the build on
-/// this machine, 0.41), and `--focus-on=never` was measured to activate the window all the same.
+///
+/// mpv is given two asks instead, and they are two because neither is enough alone: it ignores the
+/// same show style, so the window its own `ShowWindow` puts up is an activation whatever the command
+/// line says — and `--focus-on=never` on its own was measured to activate it all the same, for
+/// exactly that reason. So a hover's mpv is told not to focus where this build can be told (see
+/// `video_launch::the_focus_on_support`, asked once), *and* its window is handed to the monitor to
+/// be given `WS_EX_NOACTIVATE` the moment it exists and before it is shown (see
+/// `ffplay_window::note_a_hover_about_to_show`).
 ///
 /// A pin's launch is left exactly as it was, environment and command line alike (see
 /// `start_video_playback`): the pin's own window is the one that takes the foreground, and a player
@@ -484,6 +489,7 @@ fn start_video_playback_where(
             gain,
             allow_the_hover_host,
             kind,
+            for_a_hover,
         );
     }
 
@@ -778,6 +784,7 @@ fn start_mpv_video_playback(
     gain: Option<f64>,
     allow_the_hover_host: bool,
     kind: Option<MediaType>,
+    for_a_hover: bool,
 ) -> Option<PlayerProcess> {
     // The switches are read here, at the launch, for the reason the ffplay route reads its own
     // here: a film already playing was started with the answer that stood then and is kept
@@ -862,31 +869,41 @@ fn start_mpv_video_playback(
         })
         .flatten();
 
-    // **Nothing here asks mpv to show itself unactivated, and that is a measurement rather than an
-    // omission**: it ignores `STARTUPINFO.wShowWindow` exactly as ffplay does, `--focus-on-open`
-    // was removed from the option set in favour of `--focus-on` (and is rejected outright by the
-    // build on this machine), and `--focus-on=never` was measured to activate the window all the
-    // same. A hover's mpv film still takes the foreground; a hover's FFmpeg one no longer does (see
-    // `start_hover_video_playback`).
+    // **A hover's player is asked not to take the foreground, where this build can be asked at
+    // all**, and that is a measurement rather than an assumption: `--focus-on=never` is the current
+    // spelling and `--focus-on-open=no` the older one, and whether the installed mpv parses either is
+    // the one question the app asks it once, off this road (see `video_launch::the_focus_on_support`
+    // and `hover_focus_switch`, which is the whole of what the launch reads). Appended here rather
+    // than pushed by `mpv_args`, because a pin's launch is the command line every road had before
+    // this existed and no `--focus-on*` belongs in it.
+    let mut args = video_launch::mpv_args(
+        path,
+        launch_x,
+        launch_y,
+        asked_width,
+        asked_height,
+        start,
+        hold,
+        volume,
+        gain,
+        video_hw_accel_wanted(),
+        subtitles_wanted(),
+        video_launch::mpv_input_conf(),
+        &ipc,
+        thumbnail_flip,
+        !behind_the_host,
+    );
+    if for_a_hover {
+        if let Some(switch) =
+            video_launch::hover_focus_switch(video_launch::the_focus_on_support())
+        {
+            args.push(switch.to_string());
+        }
+    }
+
     let mut command = engine_processes::hidden_command(program);
     command
-        .args(video_launch::mpv_args(
-            path,
-            launch_x,
-            launch_y,
-            asked_width,
-            asked_height,
-            start,
-            hold,
-            volume,
-            gain,
-            video_hw_accel_wanted(),
-            subtitles_wanted(),
-            video_launch::mpv_input_conf(),
-            &ipc,
-            thumbnail_flip,
-            !behind_the_host,
-        ))
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -915,6 +932,15 @@ fn start_mpv_video_playback(
             return None;
         }
     };
+    // **And a hover's window is handed to the monitor to style before it is shown**, which is the
+    // other half of the same ask: `--focus-on=never` stops mpv *choosing* to focus, and the show
+    // itself is still an activation of a window that does not carry `WS_EX_NOACTIVATE` yet (see
+    // `ffplay_window::note_a_hover_about_to_show`). A pin's launch notes nothing, so a pin's window
+    // is styled exactly as it always was — once it is up.
+    if for_a_hover {
+        ffplay_window::note_a_hover_about_to_show(child.id());
+    }
+
     // **The host holds this player and no older one**, recorded before the player has a window of
     // its own in there: the wait for the film's first frame is a wait for this player's child and
     // not the last film's, which is what the pid beside the host is for (see `pin_film_host` and
