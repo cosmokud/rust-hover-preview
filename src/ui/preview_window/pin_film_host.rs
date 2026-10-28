@@ -906,6 +906,10 @@ pub(super) unsafe fn take_the_film_off_the_band() {
 /// a window left standing would keep the desktop's band it owns. The strips stay: they are the pin's
 /// window's, and the next take-up places them again (see `pin_chrome_strips`).
 pub(super) unsafe fn take_down_the_pin_film_host() {
+    // **A band a step held goes back before the host that owns it does.** The hold is a placement
+    // of the pair, and one cleared after the host is gone would have the pin placed topmost by its
+    // own teardown instead (see `PIN_STEP_BAND_HELD` and `own_the_pin_window`).
+    unsafe { pin_lifecycle::give_the_step_band_back() };
     // **The picture the Shell is drawing goes before the window it is drawn in.** The film's window is
     // the player's own, so a registration left behind a host that is gone is the Shell's resource
     // leaking, and the source is taken off the screen with the host it was seen in (see

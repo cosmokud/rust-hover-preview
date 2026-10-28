@@ -355,8 +355,16 @@ pub(crate) fn pin_holds_the_front() -> bool {
 /// pin's window between the press and the click, and that install places the window: answered from the
 /// setting alone, every pick put its own window back in the ordinary band a few milliseconds before the
 /// click was activated over it, which is the band given back ahead of its clock (see `PIN_BAND_HELD`).
+///
+/// **And a step between two films holds it the same way** (see `PIN_STEP_BAND_HELD`): the outgoing
+/// picture stands on the pin while the incoming player opens its file, and a placement answered from
+/// the setting alone would put the pin behind the program the user stepped from for that whole wait.
 pub(crate) fn band_place() -> HWND {
-    if pin_holds_the_front() || !pinned() || PIN_BAND_HELD.load(Ordering::SeqCst) {
+    if pin_holds_the_front()
+        || !pinned()
+        || PIN_BAND_HELD.load(Ordering::SeqCst)
+        || PIN_STEP_BAND_HELD.load(Ordering::SeqCst)
+    {
         HWND_TOPMOST
     } else {
         HWND_NOTOPMOST
@@ -421,6 +429,91 @@ pub(super) static PIN_FRONT_OWED: AtomicBool = AtomicBool::new(false);
 /// the file had been activated over it: Explorer flashed over the pin on every click, and on none of
 /// the arrows, which walk the same files without a press to hold anything (see `band_place`).
 pub(super) static PIN_BAND_HELD: AtomicBool = AtomicBool::new(false);
+
+/// The topmost band is being held for a step between two films: taken where the next film is begun
+/// over a picture the pin is still showing, and given back once the source that replaces it has
+/// taken the picture (see `hold_the_band_for_the_step` and `give_the_step_band_back`).
+///
+/// **It is a hold and not the setting.** A pin that is not Always On Top is an ordinary window, and
+/// this is the one gap it must stand over the program the user stepped from: the outgoing film's
+/// frame is the picture until the incoming player has drawn, and a program raised over the pin while
+/// it waits is the swap the user does not see. Every placement asks the setting through `band_place`,
+/// so the hold is answered there rather than in each raise.
+pub(super) static PIN_STEP_BAND_HELD: AtomicBool = AtomicBool::new(false);
+
+/// When the step hold was taken: a picture that never changes hands is a band this app has to give
+/// back by itself, and `VIDEO_START_WAIT_SECS` is how long a player is waited for at all (see
+/// `settle_the_step_band_hold`).
+static PIN_STEP_BAND_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Whether the topmost band is being held for a step between two films.
+#[cfg(test)]
+pub(super) fn the_step_band_is_held() -> bool {
+    PIN_STEP_BAND_HELD.load(Ordering::SeqCst)
+}
+
+/// Take the topmost band for the step that begins the next film over the picture the pin is showing.
+///
+/// Nothing is taken for a pin that is Always On Top — its band is the setting's and already the
+/// topmost one — nor for one that is collapsed, whose window is not the picture. The caller has
+/// already established that there is a picture or a cover standing; this is the placement that
+/// makes the band real before the player is spawned (see `start_mpv_video_playback`).
+pub(super) unsafe fn hold_the_band_for_the_step() {
+    if !pinned() || pin_always_on_top() || pin_is_collapsed() {
+        return;
+    }
+
+    if let Ok(mut since) = PIN_STEP_BAND_SINCE.lock() {
+        *since = Some(Instant::now());
+    }
+    PIN_STEP_BAND_HELD.store(true, Ordering::SeqCst);
+
+    if let Some(pin) = pin_real_window::real_pin_window() {
+        unsafe { pin_film_host::place_the_pin_in_the_band(pin, HWND_TOPMOST) };
+    }
+}
+
+/// Give the band a step took back to the setting: the new source has taken the picture, or nothing
+/// is coming to take it.
+///
+/// **The release is a placement and not a `HWND_NOTOPMOST` of its own**, because a press's own hold
+/// is a band this step must not give back: `band_place` is the one answer that knows both holds. A
+/// pin that is Always On Top keeps the band it has, and a pin that has gone leaves its window to
+/// the teardown that is already on its way.
+pub(super) unsafe fn give_the_step_band_back() {
+    if !PIN_STEP_BAND_HELD.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    if let Ok(mut since) = PIN_STEP_BAND_SINCE.lock() {
+        *since = None;
+    }
+    if !pinned() || pin_always_on_top() {
+        return;
+    }
+    if let Some(pin) = pin_real_window::real_pin_window() {
+        unsafe { pin_film_host::place_the_pin_in_the_band(pin, band_place()) };
+    }
+}
+
+/// Give the band back where a step's picture never changed hands inside the player-start bound: a
+/// player that never draws is one nothing waits for past that bound, and a hold with no release is
+/// a pin over every program on a setting that says it must not be (see `PIN_STEP_BAND_HELD`).
+pub(super) unsafe fn settle_the_step_band_hold() {
+    if !PIN_STEP_BAND_HELD.load(Ordering::SeqCst) {
+        return;
+    }
+    let Some(since) = PIN_STEP_BAND_SINCE.lock().ok().and_then(|since| *since) else {
+        return;
+    };
+    if since.elapsed() < Duration::from_secs(VIDEO_START_WAIT_SECS) {
+        return;
+    }
+    note_pin_trace!(
+        "step band released: no picture changed hands in {}ms",
+        since.elapsed().as_millis()
+    );
+    unsafe { give_the_step_band_back() };
+}
 
 /// Say that a pin that is up owes the front: what a take-up, a pick and a restore each ask for.
 ///

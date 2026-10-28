@@ -105,6 +105,13 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     let replaced = VIDEO_PID.load(Ordering::SeqCst);
     let keeping_the_picture =
         player_coming && replaced != 0 && pin_film_host::the_pinned_player_was_begun_in_the_host();
+    if keeping_the_picture {
+        // **The picture the pin keeps is held where it is**, rather than left playing on under the
+        // incoming file's wait: mpv would draw the frames that follow the one the user stepped away
+        // from, and the last of them is not the frame the pin is meant to keep. The hold is mpv's
+        // own word, and a player with no pipe is not told anything (see `mpv_ipc::set_paused`).
+        mpv_ipc::set_paused(replaced, true);
+    }
     if file.media.media_type.is_native_video() {
         stop_pinned_player();
     } else if !keeping_the_picture {
@@ -216,7 +223,12 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
         ) else {
             // A player that would not start is a file that never took the picture from the one on
             // screen: the film standing on the pin is still its own, and the walk steps over this
-            // file (see `refuse_pinned_media`).
+            // file (see `refuse_pinned_media`). A film this call paused goes on playing, and the
+            // band a step held goes back to the setting with nothing coming to take it.
+            if keeping_the_picture {
+                mpv_ipc::set_paused(replaced, false);
+            }
+            unsafe { pin_lifecycle::give_the_step_band_back() };
             return PinSwap::Refused {
                 path: file.path,
                 walk: file.walk,

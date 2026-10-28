@@ -3396,6 +3396,259 @@ fn a_step_begins_the_next_mpv_film_into_the_pins_host() {
     );
 }
 
+/// A pin standing on a film of this test's own process, with that film registered in the pin's host:
+/// the picture a step keeps while the next player opens its file (see `the_host_is_drawing`).
+///
+/// The source is a window of this process's own and the player answers the size it is placed at, so
+/// the adoption registers it rather than leaving it waiting for a shape (see
+/// `pin_film_thumbnail::place_the_source`). Answers the pin's film host.
+unsafe fn a_pin_showing_a_registered_film(film: &StandingFilm) -> HWND {
+    let pid = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(pid);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    mpv_ipc::answer_a_read(
+        pid,
+        "video-params",
+        Some(r#"{"w":320,"h":180,"dw":320,"dh":180}"#),
+    );
+    let source = unsafe { a_players_own_window() };
+    unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
+    assert!(
+        pin_film_host::the_host_is_drawing(),
+        "the film is the host's picture before the step"
+    );
+    host
+}
+
+/// A step of the pin's own walk onto another film, through the road the caption's **Next** takes
+/// (see `swap_pinned_media`).
+fn a_step_onto_the_next_film(film: &StandingFilm) -> PinSwap {
+    let mut media = create_loading_media(320, 240);
+    media.media_type = MediaType::Video;
+    swap_pinned_media(PinAnswer {
+        path: PathBuf::from("the-next-film.mkv"),
+        update: PinUpdate {
+            content: film.box_,
+            dpi: 96,
+            volume: 0,
+        },
+        media: Some(media),
+        walk: None,
+        arc: PinArc::new(),
+    })
+}
+
+/// The retirement a step parks, put back when the test ends: the player it parks is this test's own
+/// process, and a later settle must not be the one to end it.
+struct AStepParkedTheOldPlayer(Option<VideoRetirement>);
+
+impl AStepParkedTheOldPlayer {
+    fn take() -> Self {
+        Self(
+            VIDEO_RETIREMENT
+                .lock()
+                .ok()
+                .and_then(|mut held| held.take()),
+        )
+    }
+}
+
+impl Drop for AStepParkedTheOldPlayer {
+    fn drop(&mut self) {
+        if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+            *held = self.0.take();
+        }
+    }
+}
+
+/// **A step leaves the pin's band a hole while the outgoing film is still the picture**, rather than
+/// filling it black over the host the old player is drawing in: the player the step began has not
+/// adopted a source yet, and the registration the host wears is the frame the user is looking at
+/// (see `pin_film_host::the_host_is_drawing`).
+#[test]
+fn a_step_leaves_the_pins_band_to_the_outgoing_picture_until_the_next_is_adopted() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let _parked = AStepParkedTheOldPlayer::take();
+
+    let swap = a_step_onto_the_next_film(&film);
+    assert!(
+        matches!(swap, PinSwap::Ready(_)),
+        "the step begins a player for the next film"
+    );
+
+    assert!(
+        pin_film_host::the_host_is_drawing(),
+        "the outgoing film is still drawing in the host"
+    );
+    assert!(
+        !pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
+        "and the player the step began has not taken the picture yet"
+    );
+
+    let (band, top, rows) = the_band_one_paint_left(&film);
+    assert!(rows > 0, "the pin has a band to assert");
+    assert!(
+        band.iter().all(|pixel| *pixel == [1, 1, 1, 1]),
+        "rows {top}..{} of the pin's bitmap are a hole for the host's standing picture rather than \
+         the opaque black an empty host owes the screen",
+        top + rows
+    );
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(host),
+        "and the band was read over the host the outgoing film is drawn in"
+    );
+}
+
+/// **The band a step takes is the topmost one, and it is given back when the new source has the
+/// picture**: the outgoing film must not be covered by the program the user stepped from while the
+/// incoming player opens its file, and the pin must be an ordinary window again once it is drawn
+/// (see `PIN_STEP_BAND_HELD`).
+#[test]
+fn a_step_holds_the_pins_band_until_the_new_source_is_adopted() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let always_on_top = CONFIG.lock().ok().map(|config| config.pin_always_on_top);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let _parked = AStepParkedTheOldPlayer::take();
+    assert!(
+        !unsafe { window_holds_the_topmost_band(host) },
+        "a pin that is not Always On Top begins outside the topmost band"
+    );
+
+    let swap = a_step_onto_the_next_film(&film);
+    assert!(
+        matches!(swap, PinSwap::Ready(_)),
+        "the step begins a player for the next film"
+    );
+    assert!(
+        pin_lifecycle::the_step_band_is_held(),
+        "the step holds the band while the incoming player opens its file"
+    );
+    assert!(
+        unsafe { window_holds_the_topmost_band(host) },
+        "and the pair stands over the program the user stepped from"
+    );
+
+    // The new player's own window is adopted as the source: that is the step's picture changing
+    // hands, and the band is the setting's again (see `pin_film_thumbnail::adopt_the_source`).
+    let replacement = VIDEO_PID.load(Ordering::SeqCst);
+    mpv_ipc::answer_a_read(
+        replacement,
+        "video-params",
+        Some(r#"{"w":320,"h":180,"dw":320,"dh":180}"#),
+    );
+    let next_source = unsafe { a_players_own_window() };
+    unsafe { pin_film_thumbnail::adopt_the_source(next_source, replacement, host) };
+
+    assert!(
+        !pin_lifecycle::the_step_band_is_held(),
+        "the hold ends with the adoption"
+    );
+    assert!(
+        !unsafe { window_holds_the_topmost_band(host) },
+        "and the pin is an ordinary window again"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(next_source);
+    };
+    if let Ok(mut config) = CONFIG.lock() {
+        if let Some(always_on_top) = always_on_top {
+            config.pin_always_on_top = always_on_top;
+        }
+    }
+}
+
+/// **A pin taken down in the middle of a step gives the band back before its host goes**, so a hold
+/// cannot outlive the pair it was taken for (see `take_down_the_pin_film_host`).
+#[test]
+fn a_pin_taken_down_in_a_step_clears_the_band_it_held() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let always_on_top = CONFIG.lock().ok().map(|config| config.pin_always_on_top);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let _parked = AStepParkedTheOldPlayer::take();
+
+    let swap = a_step_onto_the_next_film(&film);
+    assert!(
+        matches!(swap, PinSwap::Ready(_)),
+        "the step begins a player for the next film"
+    );
+    assert!(pin_lifecycle::the_step_band_is_held());
+    assert!(unsafe { window_holds_the_topmost_band(host) });
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+
+    assert!(
+        !pin_lifecycle::the_step_band_is_held(),
+        "the teardown clears the hold"
+    );
+    assert!(
+        !unsafe { IsWindow(host) }.as_bool(),
+        "with the host it was taken for"
+    );
+    assert!(
+        !unsafe { window_holds_the_topmost_band(film.pin_hwnd) },
+        "and the pin's own window is not left in the band"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        if let Some(always_on_top) = always_on_top {
+            config.pin_always_on_top = always_on_top;
+        }
+    }
+}
+
+/// **The film a step leaves behind is held where it stands**: mpv is told to pause the player the
+/// pin is keeping, so the picture under the incoming file's wait is the frame the user stepped away
+/// from rather than the frames that follow it (see `swap_pinned_media`).
+#[test]
+fn a_step_pauses_the_outgoing_mpv_player_it_keeps() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let _parked = AStepParkedTheOldPlayer::take();
+    mpv_ipc::clear_noted();
+
+    let swap = a_step_onto_the_next_film(&film);
+    assert!(
+        matches!(swap, PinSwap::Ready(_)),
+        "the step begins a player for the next film"
+    );
+
+    let pause = format!(
+        "{}\n",
+        r#"{"command":["set_property","pause",true],"async":true}"#
+    );
+    assert!(
+        mpv_ipc::noted_lines().iter().any(|line| line == &pause),
+        "the player the pin keeps is held on the frame it is showing: {:?}",
+        mpv_ipc::noted_lines()
+    );
+
+    mpv_ipc::forget_pipe(VIDEO_PID.load(Ordering::SeqCst));
+    mpv_ipc::clear_noted();
+}
+
 /// A pin that ends takes its FFmpeg film host down with it, and the picture the Shell drew goes
 /// before it: the source is the player's own window and outlives the pin, but no registration and no
 /// record of it is left behind (see `pin_film_thumbnail`).
