@@ -712,6 +712,12 @@ impl PinWindow for Win32PinWindow {
         pinned_window().0 as isize
     }
 
+    fn foreground(&self) -> isize {
+        // Safety: asks the desktop which window is in front. Nothing is dereferenced and no handle
+        // of a caller's is named.
+        unsafe { GetForegroundWindow().0 as isize }
+    }
+
     fn pointer(&self) -> Option<(i32, i32)> {
         cursor_screen_point()
     }

@@ -273,6 +273,10 @@ impl PinWindow for LookingWindow {
         self.inner.hwnd()
     }
 
+    fn foreground(&self) -> isize {
+        self.inner.foreground()
+    }
+
     fn pointer(&self) -> Option<(i32, i32)> {
         self.inner.pointer()
     }
@@ -899,6 +903,68 @@ fn a_keyboard_belongs_to_a_window_that_is_there_and_is_not_ours() {
     );
 
     // Safety: the window is this test's own.
+    unsafe { DestroyWindow(ours) }.expect("the window goes");
+}
+
+/// **A close holds the foreground out of our own windows even where it holds no claim.**
+///
+/// A step is the case a claim cannot describe: the player's window is created activated, so the pin
+/// is deactivated and its claim dropped, and the give-back that follows puts the foreground on the
+/// pin's own window (see `give_back_a_foreground_that_is_ours`). The close then holds no keyboard to
+/// hand back and has a window of ours in front — which is why a pin closed after a step, and only
+/// after a step, left a desktop that hovers nothing until the user clicks Explorer.
+///
+/// The window behind is the desktop's to answer, so the road is asserted against the answer the same
+/// resolver gives; and where the machine has no ordinary window to give it to — `front_ordinary_window`
+/// looks through the desktop's own on purpose — what is asserted is that the close asks for none of
+/// ours rather than for one, which is the half that never depends on the desk.
+#[test]
+fn a_close_with_no_claim_hands_back_a_foreground_that_is_one_of_ours() {
+    let _one = PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // A window of this process's own is the window a step's give-back leaves in front, and it is one
+    // of ours by the only fact that makes one so. Nothing is pressed into the pin after the step, so
+    // there is no claim on the keyboard: the close is the one that holds none.
+    let ours = a_window_of_this_processs_own();
+    let behind = pin_lifecycle::the_window_behind(ours.0 as isize, 0x1000);
+
+    install(a_pin());
+    let window = RecordedPinWindow::new(0x1000).with_the_window_in_front(ours.0 as isize);
+    end_pin(Reason::Closed, &window);
+
+    assert_eq!(
+        window.handed_the_keyboard_to(),
+        if behind == 0 {
+            Vec::new()
+        } else {
+            vec![behind]
+        },
+        "a close holding no claim still gives back a foreground that is one of ours, to the \
+         window a hand-back would give it to"
+    );
+    assert!(
+        window
+            .handed_the_keyboard_to()
+            .iter()
+            .all(|handed| !pin_lifecycle::a_window_of_ours(HWND(*handed as *mut _))),
+        "and never to a window of ours, which is the one it is taking down"
+    );
+
+    // A window of somebody else's in front is the user's — their own click put it there — so the
+    // close asks for nothing and leaves it alone.
+    let shell = unsafe { GetShellWindow() };
+    install(a_pin());
+    let window = RecordedPinWindow::new(0x1000).with_the_window_in_front(shell.0 as isize);
+    end_pin(Reason::Closed, &window);
+    assert_eq!(
+        window.handed_the_keyboard_to(),
+        Vec::<isize>::new(),
+        "a foreign window in front is left exactly where the user put it"
+    );
+
+    // Safety: the window is this test's own, and it is not a window the app holds a handle on.
     unsafe { DestroyWindow(ours) }.expect("the window goes");
 }
 

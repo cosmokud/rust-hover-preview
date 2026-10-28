@@ -177,6 +177,10 @@ impl PinWindow for CapturingWindow {
         self.inner.hwnd()
     }
 
+    fn foreground(&self) -> isize {
+        self.inner.foreground()
+    }
+
     fn pointer(&self) -> Option<(i32, i32)> {
         self.inner.pointer()
     }
