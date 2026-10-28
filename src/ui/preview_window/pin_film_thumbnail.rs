@@ -2115,7 +2115,9 @@ fn the_frames_checksum(pixels: &[u8]) -> u64 {
 /// and nothing reads it back.
 fn dump_the_frame(pixels: &[u8], width: u32, height: u32) -> bool {
     let rgba: Vec<u8> = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|bgra| [bgra[2], bgra[1], bgra[0], 0xFF])
         .collect();
     image::save_buffer(
@@ -2951,10 +2953,12 @@ mod tests {
             0,
             "an all-zero surface is what an empty or dead window answers with"
         );
-        assert!(
-            0 < THE_DC_STILL_MIN_LIT_SHARE,
-            "and it must be rejected rather than painted as a still"
-        );
+        const {
+            assert!(
+                0 < THE_DC_STILL_MIN_LIT_SHARE,
+                "and it must be rejected rather than painted as a still"
+            )
+        };
         assert_eq!(
             the_frames_lit_share(&frame(4), width, height),
             100,

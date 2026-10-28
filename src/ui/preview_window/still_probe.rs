@@ -248,8 +248,12 @@ pub(super) fn forget(why: &str) {
     }
 }
 
+/// One sample: the player whose source is being measured, the host it is drawn in, the box on the desk
+/// the pin's band stands at, and the three moments a sample is timed by.
+type Step = (u32, isize, RECT, Instant, Option<Instant>, Option<Instant>);
+
 /// One sample's record, copied out under the lock so the pixels are read without it held.
-fn the_step() -> Option<(u32, isize, RECT, Instant, Option<Instant>, Option<Instant>)> {
+fn the_step() -> Option<Step> {
     let held = PROBE.lock().ok()?;
     let probe = held.as_ref()?;
     Some((
@@ -388,7 +392,6 @@ fn the_pin_is_lit(area: RECT) -> u32 {
     let Some((pixels, width, height)) = super::surfaces::screen_pixels(area) else {
         return 0;
     };
-    let (width, height) = (width as u32, height as u32);
     if width == 0 || height == 0 {
         return 0;
     }
@@ -407,7 +410,7 @@ fn the_pin_is_lit(area: RECT) -> u32 {
         }
     }
     // A point is lit or it is not; the count is over the grid, so this is the percentage of it.
-    lit * 100 / (GRID * GRID) as u32
+    lit * 100 / (GRID * GRID)
 }
 
 /// The outgoing source's own client as one field: the percentage a reading is worth, and which
