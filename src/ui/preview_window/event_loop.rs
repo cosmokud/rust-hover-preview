@@ -840,7 +840,6 @@ pub fn run_preview_window() {
                 // rather than of what this app wrote down, because everything a bar says about a
                 // video FFmpeg plays is something this app asserted (see `settle_pinned_transport`).
                 settle_pinned_transport();
-                settle_video_retirement();
                 // A pin taken up on a hover's film goes up once its hosted player draws, and comes
                 // down where that player never does: the handover is the only visible swap, and
                 // the teardown for a wait with nothing to swap to goes down the road a dead film
@@ -984,6 +983,13 @@ pub fn run_preview_window() {
                     render_layered_preview(hwnd);
                 }
             }
+
+            // **A player a film handover parked outlives no pin**: the picture it is kept on screen
+            // for is the pin's, so a pin that has gone is the other end of that wait — a step's
+            // outgoing player is ended here, and a kill not confirmed on the spot is retried, where
+            // nothing of the pin is left to ask. Asked of every tick and not of a pinned one for
+            // exactly that reason (see `settle_video_retirement`).
+            settle_video_retirement();
 
             // A player that has been started and has not put its window up yet is being
             // waited for: what is on screen is the spinner standing in for the video, at

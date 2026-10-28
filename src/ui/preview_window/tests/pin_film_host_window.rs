@@ -3659,6 +3659,69 @@ fn a_step_pauses_the_outgoing_mpv_player_it_keeps() {
     mpv_ipc::clear_noted();
 }
 
+/// **A pin that has been stepped and is closed leaves exactly what a pin that was never stepped
+/// leaves.** A step keeps the outgoing player on screen — a whole player, ended only once the one
+/// the step began has taken the picture over — so a pin closed with that wait still out is a pin
+/// that must end that player with itself: what it was being kept on screen for is the pin's
+/// (see `settle_the_retirement_for_a_pin_that_is_going`).
+///
+/// The two closes are asserted against each other field by field, because "a step leaves something
+/// behind" is precisely a difference between them: the wait still parked, a kill still waiting to
+/// be retried, and a player this app began still on the books for a pin that is gone.
+#[test]
+fn a_pin_that_ends_after_a_step_leaves_what_a_pin_that_never_stepped_leaves() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+
+    // What a close leaves, with a step of the walk behind it or without one: the wait a step parked,
+    // the kills still owed, and whether the app still holds the player the step kept.
+    fn what_a_close_leaves(step: bool) -> (Option<u32>, Vec<u32>, bool) {
+        let film = StandingFilm::new();
+        let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+        let player = unsafe { GetCurrentProcessId() };
+
+        if step {
+            assert!(
+                matches!(a_step_onto_the_next_film(&film), PinSwap::Ready(_)),
+                "the step begins a player for the next film"
+            );
+            // The player the step began is recorded the way every launch records one, so the record
+            // under test is one a real run makes.
+            engine_processes::record_player("mpv.exe", player);
+            assert!(
+                VIDEO_RETIREMENT
+                    .lock()
+                    .ok()
+                    .and_then(|held| held.map(|parked| parked.retiring))
+                    .is_some(),
+                "the outgoing player is parked until the step's player takes the picture"
+            );
+        }
+
+        let _ = end_pin(Reason::Closed, &Win32PinWindow);
+
+        let left = (
+            VIDEO_RETIREMENT
+                .lock()
+                .ok()
+                .and_then(|held| held.map(|parked| parked.retiring)),
+            orphaned_video_kills(),
+            engine_processes::holds_a_player(player),
+        );
+        drop(film);
+        left
+    }
+
+    let without_a_step = what_a_close_leaves(false);
+    let after_a_step = what_a_close_leaves(true);
+
+    assert_eq!(
+        after_a_step, without_a_step,
+        "a stepped pin's close leaves the wait, the kills and the record a pin that never stepped does"
+    );
+}
+
 /// A pin that ends takes its FFmpeg film host down with it, and the picture the Shell drew goes
 /// before it: the source is the player's own window and outlives the pin, but no registration and no
 /// record of it is left behind (see `pin_film_thumbnail`).
@@ -7095,8 +7158,14 @@ fn the_window_a_step_puts_under_the_hand_is_the_films_own_at_every_tick_of_its_h
     // in**: the host naming the player that was on screen before the step, the one it began, and
     // nobody at all.
     for (host_names, timing) in [
-        (11111, "the outgoing player, still alive behind the incoming one"),
-        (22222, "the incoming player, which has no window under the hand yet"),
+        (
+            11111,
+            "the outgoing player, still alive behind the incoming one",
+        ),
+        (
+            22222,
+            "the incoming player, which has no window under the hand yet",
+        ),
         (0, "nobody, in the gap a relaunch records its player across"),
     ] {
         pin_film_host::note_hosted_player(host_names);

@@ -874,6 +874,15 @@ pub(super) fn end_pin_beside_the_state() {
             clear_pending_pinned_relaunch();
         }
     }
+
+    // And the player a step of the walk parked behind the picture it was leaving: it is kept on
+    // screen until the player the step began has taken the picture over, and a pin that ends has no
+    // picture left to hand it over — so it is ended here rather than left to the loop's own settle,
+    // which is the answer for a pin that keeps standing but not for one that does not (see
+    // `settle_the_retirement_for_a_pin_that_is_going`). Without this a pin that had been stepped
+    // and was closed left a whole player of its own running, and the window it draws in standing,
+    // over the listing the next hover was made in.
+    settle_the_retirement_for_a_pin_that_is_going();
 }
 
 /// Whether the thing a pin is a window onto is still there.
