@@ -933,8 +933,7 @@ pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8
 /// every other kind's picture: what a bubble shows of a film the media engine plays is the frame
 /// already in memory, where this engine's picture is on the screen and nowhere else. So the file is
 /// opened at the second named, one frame is decoded, and it comes back the shape asked for — which
-/// is a bubble's square, and a seek's still at the pin's box (see
-/// `pin_film_thumbnail::begin_the_seek_still`).
+/// is a bubble's square.
 ///
 /// The output is raw BGRA, which is what the preview's own frame is in: a picture is not
 /// encoded and decoded again for a process boundary when the bytes are what is wanted either side
@@ -945,7 +944,7 @@ pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8
 /// It is bounded by the caller and it is a *bound* on the wait rather than a budget for it
 /// (`video_probe::wait_bounded`): a grab that outlasts it is a process killed rather than a thread
 /// held, and the answer is the same `None` a file FFmpeg cannot open gives — the bubble keeps the
-/// face it was painted with, and a seek's still never lands. The child is hidden and adopted like
+/// face it was painted with. The child is hidden and adopted like
 /// every other process this app starts, so a machine closed mid-grab leaves no `ffmpeg` behind.
 ///
 /// **The frame is drained on a thread of its own, and the bound is what that thread is for.** A

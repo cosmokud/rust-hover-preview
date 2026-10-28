@@ -299,49 +299,28 @@ fn relaunch_pinned_player(
     let replaced = VIDEO_PID.load(Ordering::SeqCst);
 
     // **The picture on screen is covered before anything is begun over it**, and which cover it is
-    // is the run's own setting (see `FreezeRoad`). The capture road takes a still of the window that
-    // is drawing, paints it where that window was, and ends the player at once — so the file lock,
-    // the sound device and the GPU device are all free before the replacement exists, which is the
-    // start-up a suspended player was measured holding back. A capture that comes back black or
-    // fails paints nothing and leaves the player playing, which is the road as it was before there
-    // was any cover at all (see `pin_film_thumbnail::stand_the_outgoing_picture_as_a_still`).
+    // is the run's own setting (see `FreezeRoad`). `dc` takes the frame out of the source window's
+    // own device context at this release — about a millisecond — paints it into the host's retained
+    // cover, flushes, lets the registration go and ends the player at once, so its file, sound device
+    // and GPU device are free before the replacement exists. A frame too dark to be a picture paints
+    // nothing and leaves the player playing, which is `off` for that relaunch (see
+    // `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`).
     //
     // **A take-up from a hover is not this road**: the hover's player is the picture the pin's own
     // player stands on and must live until it does, so it is held rather than replaced by a still
     // (see `begin_the_pinned_film_at_the_hovers_frame`).
     let still_stands = match (freeze_road(), handover) {
-        (FreezeRoad::Capture, false) => {
-            pin_film_thumbnail::stand_the_outgoing_picture_as_a_still(replaced)
-        }
-        // **The still the press decoded, for the very second the release is taking the film to** (see
-        // `pin_film_thumbnail::stand_the_pressed_still`): a frame in hand is painted now and the
-        // outgoing player ended at once; a grab that has not landed paints nothing and ends nothing,
-        // and the relaunch is begun regardless — the frame paints the cover when it lands, if it beats
-        // the replacement's own first drawn frame (see `begin_the_seek_still`).
-        (FreezeRoad::Still, false) => {
-            pin_film_thumbnail::stand_the_pressed_still(replaced, seconds)
-        }
-        // **The still taken out of the source's own window at this release** (see
-        // `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`): about a millisecond, so it is
-        // in hand before anything is begun over it — and a frame too dark to be a picture is never
-        // painted, which leaves this relaunch `off` rather than black.
         (FreezeRoad::Dc, false) => {
             pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc(replaced, seconds)
         }
         // **A hover is held, whatever the run's cover road is**: its player is the frame the pin's is
         // begun on and is read back before it is let go of, so it is never replaced by a still of this
-        // app's (see `begin_the_pinned_film_at_the_hovers_frame`). The hold is the dead suspension
-        // road's, which for an mpv hover is the pipe it answers on anyway — and `hide`, `still` and
-        // `dc` take the same one, because the window they would cover is the picture the pin is being
-        // begun on.
-        (FreezeRoad::Capture | FreezeRoad::Hide | FreezeRoad::Still | FreezeRoad::Dc, true) => {
-            freeze_the_outgoing_picture(replaced, FreezeRoad::Suspend);
+        // app's (see `begin_the_pinned_film_at_the_hovers_frame`).
+        (_, true) => {
+            freeze_the_outgoing_picture(replaced);
             false
         }
-        (road, _) => {
-            freeze_the_outgoing_picture(replaced, road);
-            false
-        }
+        (FreezeRoad::Off, false) => false,
     };
     if still_stands {
         // **The player the still was taken of is ended before its replacement is begun**, and the
@@ -485,49 +464,31 @@ fn freeze_the_hover(pid: u32) -> Option<f64> {
     mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse().ok())
 }
 
-/// **Cover the picture on screen before its replacement is launched**, so that the whole wait for a
-/// new source to draw is a still rather than the film walking on and then jumping back to the second
-/// the relaunch asked for.
+/// **Hold the player being replaced where it stands** — the cover a take-up from a hover asks for,
+/// and nothing else: no capture, no scaling, no painting over the band and no hide. The registration
+/// the host wears goes on drawing that window (see `pin_film_thumbnail::the_source_is_standing`), and
+/// a player that is held keeps the frame it was showing. The player is never resumed: it is ended
+/// once its replacement has taken the picture over (see `settle_video_retirement`).
 ///
-/// **This is the cover the dead roads ask for, and the one a take-up from a hover still asks
-/// for**: a hold of the player being replaced and nothing else — no capture, no scaling, no painting
-/// over the band and no hide. The registration the host wears goes on drawing that window (see
-/// `pin_film_thumbnail::the_source_is_standing`), and a player that is held keeps the frame it was
-/// showing. The player is never resumed: it is ended once its replacement has taken the picture over
-/// (see `settle_video_retirement`).
-///
-/// **A pin's own relaunch no longer comes here on any road that covers it**: `still` paints a decoded
-/// frame of this app's own and the capture road takes one out of the window, and both end the player
-/// at once (see `pin_film_thumbnail::stand_the_pressed_still`,
-/// `stand_the_outgoing_picture_as_a_still`). What is left here is `RHP_FREEZE`'s dead arms — kept as
-/// the A/B measurement that killed them — and a hover held for the pin that takes it up, where the
-/// hover's own player is the frame the pin's player is begun on and cannot be ended before it is read.
+/// **Only a take-up from a hover comes here**, because the hover's own player is the frame the pin's
+/// player is begun on and cannot be ended before it is read (see
+/// `begin_the_pinned_film_at_the_hovers_frame`). A pin's own relaunch paints a still of its own and
+/// ends the player at once (see `FreezeRoad`).
 ///
 /// **The two engines are held differently, and the difference is what each can be told.** mpv takes
 /// `set_property pause true` down the pipe it listens on and holds its last frame. FFmpeg's player has
-/// no command channel, and the one thing it can be told — the pause key — is a *toggle* that clears
-/// the very window the Shell draws the pin through, which is a registration of a black window (see
-/// `FreezeRoad`). So a player with no pipe is **suspended** where it stands instead: it stops drawing
-/// without being given anything to redraw (see `ffplay_window::suspend_player_threads`).
+/// no command channel, so it is **suspended** where it stands instead: it stops drawing without being
+/// given anything to redraw (see `ffplay_window::suspend_player_threads`).
 ///
 /// **And whether the frame survived is sampled on the spot**, of the player's own client, so a run
-/// says whether the picture DWM goes on drawing is really there. `ok` is a window that kept its
-/// frame; `black` is a window with nothing in it, which is the measurement that left the capture road
-/// as the only cover worth having (see `pin_film_thumbnail::the_sources_picture_is_lit`).
+/// says whether the picture DWM goes on drawing is really there (see
+/// `pin_film_thumbnail::the_sources_picture_is_lit`).
 ///
 /// Answers whether a player on screen was frozen, which is nothing on screen where the player had no
 /// window of its own to be told through: that wait is the walk-and-jump it always was rather than a
 /// failure.
-pub(super) fn freeze_the_outgoing_picture(pid: u32, road: FreezeRoad) -> bool {
-    // **A still is not a freeze of the player** (see `FreezeRoad`): the frame is decoded out of the
-    // file, or taken out of the source's own window, while the hand is on the bar, so there is nothing
-    // here for those roads to do.
-    if pid == 0
-        || matches!(
-            road,
-            FreezeRoad::Off | FreezeRoad::Still | FreezeRoad::Dc
-        )
-    {
+pub(super) fn freeze_the_outgoing_picture(pid: u32) -> bool {
+    if pid == 0 {
         return false;
     }
 
@@ -536,42 +497,9 @@ pub(super) fn freeze_the_outgoing_picture(pid: u32, road: FreezeRoad) -> bool {
         return true;
     }
 
-    if road == FreezeRoad::Key {
-        // **A film already held is already frozen, and the key toggles**: a key posted to a player
-        // that is holding would set it going again, which is the one thing this must not do. What
-        // says so is the hold this app has written down for the transport — including a hold still
-        // owed to a player that has not been given it yet, which is a player that is still playing
-        // (see `PinTransport`). A suspension has no such toggle and no such question (see
-        // `FreezeRoad`).
-        if the_player_on_screen_is_held() {
-            return true;
-        }
-
-        if video_key_pause_for(pid) {
-            note_pin_trace!("outgoing picture frozen pid {pid} by the key");
-            return true;
-        }
-
-        return false;
-    }
-
-    if road == FreezeRoad::Hide {
-        // **FFmpeg's player only**: an mpv player was frozen down its pipe above, on every road, and
-        // a window of mpv's is not this app's to take off the screen (see `FreezeRoad::Hide`).
-        if mpv_ipc::answers_properties(pid) {
-            return false;
-        }
-        if !pin_film_thumbnail::hide_the_outgoing_source(pid) {
-            return false;
-        }
-        note_pin_trace!("outgoing picture hidden pid {pid}: the pin keeps its last composed frame");
-        super::still_probe::start(pid, 0);
-        return true;
-    }
-
-    // **An engine with no command channel is suspended rather than told** (see `FreezeRoad`): the
-    // handful of calls that stop it drawing is the whole of the freeze, and the frame it last put up
-    // is left exactly where it is.
+    // **An engine with no command channel is suspended rather than told**: the handful of calls that
+    // stop it drawing is the whole of the hold, and the frame it last put up is left exactly where it
+    // is.
     let threads = suspend_player_threads(pid);
     if threads == 0 {
         return false;
@@ -588,94 +516,35 @@ pub(super) fn freeze_the_outgoing_picture(pid: u32, road: FreezeRoad) -> bool {
 
 /// The road a relaunch covers its outgoing player by, from `RHP_FREEZE`, read once per run.
 ///
-/// **`capture` is the default this build still reads, and it is structurally dead for a pin**: the
-/// last presented frame of the window on screen is taken with `PrintWindow`, painted in the host as a
-/// still of this app's own, and the player it was taken of is ended at once so the file, the sound
-/// device and the GPU device are free before the replacement is begun (see
-/// `pin_film_thumbnail::stand_the_outgoing_picture_as_a_still`). But a source that wears
-/// `WS_EX_LAYERED` at alpha 1/255 — which is every source on this road — answers `PrintWindow` with
-/// black, so the capture is written as `sample black` and paints nothing: the old picture plays on,
-/// which is the road below with no cover at all (see
-/// `pin_film_thumbnail::capture_the_outgoing_picture`, `surfaces`). The default stays here only until
-/// `still` has been read on glass; `still` is the road that decodes instead of capturing.
+/// **`dc` is the road that ships, and it is what an unset or unknown value means.** The still is
+/// taken out of the source window's own device context at the release — one `BitBlt`, about a
+/// millisecond, from the surface the player itself draws into — painted into the host's retained
+/// cover, flushed, the registration let go and the outgoing player ended, in that order (see
+/// `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`). A frame whose sampled grid is not
+/// lit enough to be a picture is never painted: that relaunch is `off`, with nothing unregistered and
+/// nothing ended, so this road can lose a cover but cannot paint the black band it exists to prevent.
 ///
-/// **`suspend` is a dead road, measured on glass**: a player with no command channel was suspended
-/// where it stood, the frame it last presented left untouched — and the pin stayed black anyway while
-/// the wait got *worse* than no cover at all: a suspended player still holds its file, its sound
-/// device and its GPU device, so the replacement could not start cleanly until the old process was
-/// gone. It is kept as the A/B arm rather than deleted, because the measurement is one setting to
-/// repeat (see `freeze_the_outgoing_picture`). It is also the hold a hover is given for the pin that
-/// takes it up, where no still can stand in for the frame the pin's player must be begun on.
+/// **`off` covers nothing**, which is the road before there was a cover at all: the film walks on
+/// under the registration and jumps back to the second the relaunch asked for when the new source
+/// draws. It is the only other arm, and it is also what a rejected capture falls back to for that one
+/// relaunch.
 ///
-/// **`key` is the other dead road, and the first one measured**: FFmpeg's player clears its own
-/// window when the pause key pauses it, so the registration the host went on wearing drew a black
-/// window for the whole wait — three relaunches traced with the freeze line 11 ms before each
-/// restart, the outgoing window standing as the source throughout, and the placeholder black. A key
-/// is a toggle and not a setting besides: a held film is already a still frame, and a second key
-/// would set it going. **Neither dead arm is reached by a pin's own relaunch on the road that ships.**
-///
-/// **`still` is the road a press builds, and the one that ships**: the press asks FFmpeg for the frame
-/// then on screen while the hand is still on the bar, and the release paints it into the host, lets the
-/// registration go and ends the outgoing player at once (see
-/// `pin_film_thumbnail::begin_the_seek_still`, `stand_the_pressed_still`). The cover is therefore a
-/// picture of this app's own rather than a window the Shell is asked to go on drawing — which is the
-/// mistake every arm below shares. A grab that has not landed by the release paints nothing and the old
-/// picture plays on: the `off` road for that relaunch, and never a black band. A player on the route mpv
-/// is never comes here at all: its seek is a command down the pipe and it never relaunches.
-///
-/// **`hide` is a dead road, measured on glass**: FFmpeg's player is neither told anything nor ended —
-/// its own window is taken off the screen with the one hide this app has (see
-/// `pin_film_thumbnail::hide_the_outgoing_source`) and left standing, so the registration goes on
-/// drawing a window the Shell is not showing. The sentence it rested on — that the Shell leaves a
-/// hidden window's thumbnail frozen at its last frame — **is false**: five seeks traced on glass, and
-/// the thumbnail went black **18 to 71 ms** after the hide and stayed black until the swap, gaps of
-/// 415, 500, 520, 555 and 700 ms (see `still_probe` and the seek road table in `ARCHITECTURE.md`). It
-/// is kept as the A/B arm — the probe still measures it, `still probe t=…` per sample and one
-/// `still probe result painted=no black_at=+Nms` at the swap — because one setting re-runs the
-/// measurement. A hidden player also still holds its file, its sound device and its GPU device for the
-/// length of the gap, and its sound is **not** muted: the only thing FFmpeg's player can be told is a
-/// key, and a mute key is a toggle on a window that is not being shown.
-///
-/// `off` covers nothing, which is the road before there was a cover at all: the film walks on under the
-/// registration and jumps back to the second the relaunch asked for when the new source draws.
-/// It is also what a failed capture falls back to for that one relaunch, without the setting being
-/// changed.
-///
-/// **`dc` is the road that takes the still out of the source window's own device context**, and it is
-/// the one that answers the gap the other covers left: the source's own DC holds the picture for the
-/// whole of it — the readiness sample reads it lit twenty times a second through the very black the pin
-/// shows — so one `BitBlt` from it is the frame on screen, in about a millisecond, at the release rather
-/// than at the press. There is no grab, no worker, no deadline and no generation race here: the frame is
-/// in hand when the release needs it. **A frame whose sampled grid is not lit enough to be a picture is
-/// never painted** — that relaunch is `off`, with nothing unregistered and nothing ended — so this road
-/// can lose a cover but cannot paint the black band it exists to prevent (see
-/// `pin_film_thumbnail::capture_the_sources_dc`). Its one open risk is what a copy of a layered D3D
-/// window's own DC holds: the live frame, or a stale surface. `still captured frame pid N WxH
-/// checksum=… png=…` and the dumped PNG beside the trace log are what settle it against a frame decoded
-/// at the same second.
+/// The roads this build used to carry — `capture`, `still`, `suspend`, `key` and `hide` — are gone
+/// with the measurement that killed each, and the seek road table in `ARCHITECTURE.md` keeps them so
+/// nobody rebuilds one.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum FreezeRoad {
-    Capture,
-    Still,
-    Suspend,
-    Key,
-    Hide,
     Off,
     Dc,
 }
 
-/// `RHP_FREEZE` as a cover road: `still`, `suspend`, `key`, `hide`, `dc` and `off` are the named arms,
-/// and anything else — including nothing at all, and the value this build writes for its own default —
-/// is the capture (see `FreezeRoad`).
+/// `RHP_FREEZE` as a cover road: `off` is the only named arm, and anything else — including nothing
+/// at all, and any value this build does not know — is `dc` (see `FreezeRoad`), because a value the
+/// build cannot read must not silently turn the cover off.
 pub(super) fn freeze_road_from(setting: Option<&str>) -> FreezeRoad {
     match setting.map(str::trim) {
-        Some("still") => FreezeRoad::Still,
-        Some("suspend") => FreezeRoad::Suspend,
-        Some("key") => FreezeRoad::Key,
-        Some("hide") => FreezeRoad::Hide,
-        Some("dc") => FreezeRoad::Dc,
         Some("off") => FreezeRoad::Off,
-        _ => FreezeRoad::Capture,
+        _ => FreezeRoad::Dc,
     }
 }
 
@@ -706,13 +575,6 @@ pub(super) fn stand_the_freeze_road_in(road: Option<FreezeRoad>) {
     if let Ok(mut held) = FREEZE_ROAD_STAND_IN.lock() {
         *held = road;
     }
-}
-
-/// Whether the player the pin is drawing is already holding its film, which is what says the pause
-/// key must not be posted to it (see `freeze_the_outgoing_picture`).
-fn the_player_on_screen_is_held() -> bool {
-    pinned_playback_state()
-        .is_some_and(|(_, _, transport, _)| transport.paused_at.is_some() && !transport.pending_hold)
 }
 
 /// Whether the pinned window is showing a held file, for a relaunch that has no transport of its
