@@ -180,16 +180,38 @@ pub(super) enum PlayerProcess {
     #[cfg_attr(test, allow(dead_code))]
     // The test seam notes a player instead of beginning one.
     Started(Child),
+    /// The resident that serves this hover: an id, and no process of its own — the resident's
+    /// process is held in one place, so nothing here is this handle's to end (see `mpv_resident`).
+    #[cfg(not(test))]
+    Served(u32),
     /// The player a test noted in place of beginning one.
     #[cfg(test)]
     Noted(u32),
 }
 
 impl PlayerProcess {
+    /// The handle a hover is given for the resident that serves it.
+    ///
+    /// **What comes back is the same handle every road downstream treats alike**, which is the whole
+    /// of what lets a served hover be adopted, promoted, pinned and swept as an ordinary player is: a
+    /// test build notes the id, because a test run begins no process (see `spawn_player`).
+    pub(super) fn for_the_resident(pid: u32) -> Self {
+        #[cfg(not(test))]
+        {
+            Self::Served(pid)
+        }
+        #[cfg(test)]
+        {
+            Self::Noted(pid)
+        }
+    }
+
     /// The id the player is booked in and ended under.
     pub(super) fn id(&self) -> u32 {
         match self {
             Self::Started(child) => child.id(),
+            #[cfg(not(test))]
+            Self::Served(pid) => *pid,
             #[cfg(test)]
             Self::Noted(pid) => *pid,
         }
@@ -200,6 +222,9 @@ impl PlayerProcess {
     pub(super) fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         match self {
             Self::Started(child) => child.try_wait(),
+            // The resident holds its own process, and it is the one that says when that has gone.
+            #[cfg(not(test))]
+            Self::Served(_) => Ok(None),
             #[cfg(test)]
             Self::Noted(_) => Ok(None),
         }
@@ -209,6 +234,10 @@ impl PlayerProcess {
     pub(super) fn kill(&mut self) -> std::io::Result<()> {
         match self {
             Self::Started(child) => child.kill(),
+            // A served hover's film is stopped on the resident and never ended with it (see
+            // `mpv_resident::finish`, which is the road this arm is never reached from).
+            #[cfg(not(test))]
+            Self::Served(_) => Ok(()),
             #[cfg(test)]
             Self::Noted(_) => Ok(()),
         }
@@ -869,6 +898,39 @@ fn start_mpv_video_playback(
         })
         .flatten();
 
+    // **A hover's film is loaded on the warm resident where one stands**, rather than a player begun
+    // for it: the file is a `loadfile` down the pipe this app already holds, and what comes back is the
+    // same handle every road below treats alike (see `mpv_resident`). Nothing below this block runs
+    // for a served hover — no argv, no process, no spawn — and everything downstream of the launch is
+    // unchanged: the pid is booked in, its window is placed, and a pin adopts it as it adopts any
+    // hover's player.
+    //
+    // **A served hover is not normalised.** The gain is a launch flag (`--af=lavfi=[volume=…]`) and
+    // the resident was begun before this file was known.
+    // shortcut: a normalised hover's level is the file's own until the gain can be a per-file ask
+    // over the pipe; upgrade when it can.
+    if for_a_hover && !hold && start == 0.0 {
+        if let Some(served) = mpv_resident::serve(path, volume, behind_the_host) {
+            let pid = served.player.id();
+            if hover_host.is_some() {
+                hover_film_host::note_hover_film_host_player(pid, path);
+            }
+            if pinned() && !pin_holds_the_front() {
+                let _ = mpv_ipc::set_ontop(pid, false);
+            }
+            note_player_subtitles(path, subtitles_wanted());
+            note_player_started(
+                MPV_IMAGE_NAME,
+                path,
+                &served.player,
+                (x, y, x + width, y + height),
+                start,
+                true,
+            );
+            return Some(served.player);
+        }
+    }
+
     // **A hover's player is asked not to take the foreground, where this build can be asked at
     // all**, and that is a measurement rather than an assumption: `--focus-on=never` is the current
     // spelling and `--focus-on-open=no` the older one, and whether the installed mpv parses either is
@@ -1246,6 +1308,21 @@ pub(super) fn stop_video_playback(media: &mut MediaData) {
 /// thread end the `ffplay` a hover started without reaching for the media engine, whose
 /// session is the preview thread's alone (see `stop_video_playback` and `hide_preview`).
 pub(super) fn kill_player_process(media: &mut MediaData) {
+    // **The one player this app does not kill is the resident**, and this is the whole of where that
+    // rule lives: a hover's film is stopped on it — mpv goes idle with its window still up — so the
+    // next hover loads its file on a player that is already there (see `mpv_resident`). Every other
+    // pid, a pin's included, is killed below exactly as it always was.
+    if let Some(pid) = media.video_process.as_ref().map(|process| process.id()) {
+        if mpv_resident::finish(pid) {
+            media.video_process = None;
+            // Nothing was ended, so what a kill's own bookkeeping would have cleared is cleared
+            // here: the player is no longer the film on screen, and the record of it as one goes
+            // (see `clear_video_process_state`).
+            ffplay_window::clear_video_process_state(pid);
+            return;
+        }
+    }
+
     let killed = media.video_process.as_ref().map(|process| process.id());
     if let Some(ref mut process) = media.video_process {
         // The pipe a player was told things on goes with the player: nothing is left behind for a

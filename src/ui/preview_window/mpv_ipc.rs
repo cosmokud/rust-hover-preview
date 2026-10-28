@@ -270,6 +270,30 @@ pub(super) fn seek_absolute(pid: u32, seconds: f64) -> bool {
     )
 }
 
+/// Load a file on a player that is standing, replacing whatever it holds: the whole of what a hover
+/// costs the resident, which is a file opened rather than a process started (see `mpv_resident`).
+///
+/// `replace` rather than `append`, because a hover plays one film and the one before it is the hover
+/// the pointer left. The per-file options the launch named — no `--start`, no `--pause`, the
+/// subtitle answer, `--aid=no` where the launch was muted — are given to this file as they were to
+/// the first, which is what makes a served hover the launch a hover would have had (see
+/// `video_launch::mpv_args`).
+pub(super) fn load_file(pid: u32, file: &std::path::Path) -> bool {
+    write(
+        pid,
+        format!(
+            r#"{{"command":["loadfile",{},"replace"],"async":true}}"#,
+            a_json_string(&file.to_string_lossy()),
+        ) + "\n",
+    )
+}
+
+/// Drop the file a player holds and leave it idle rather than ended: what a hover ending leaves the
+/// resident as (see `mpv_resident::finish`).
+pub(super) fn stop_playing(pid: u32) -> bool {
+    write(pid, r#"{"command":["stop"],"async":true}"#.to_string() + "\n")
+}
+
 /// Hold mpv where it is, or set it going again.
 pub(super) fn set_paused(pid: u32, paused: bool) -> bool {
     write(
