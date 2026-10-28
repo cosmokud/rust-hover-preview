@@ -1615,6 +1615,15 @@ pub fn run_explorer_hook() {
                             } else {
                                 None
                             };
+                            // One line per hover shown, so a run that shows none says so by
+                            // having none rather than by having nothing to read (see `note_pin_click`).
+                            note_pin_click!(
+                                "hover {}  at {},{}  win {}",
+                                trace_name(&file_path),
+                                cursor_pos.x,
+                                cursor_pos.y,
+                                window_class_of(pointer.window),
+                            );
                             show_preview(
                                 &file_path,
                                 cursor_pos.x,
@@ -1659,6 +1668,16 @@ pub fn run_explorer_hook() {
                                 continue;
                             }
                         } else {
+                            // A parked pointer that resolves no file, and the window it was over
+                            // instead: a hover that never appears is named here by what stood where
+                            // the file was (see `note_pin_click`).
+                            note_pin_click!(
+                                "hover: nothing under the pointer at {},{}  win {}  cls {}",
+                                cursor_pos.x,
+                                cursor_pos.y,
+                                pointer.window.0 as isize,
+                                window_class_of(pointer.window),
+                            );
                             stationary_search_miss_started_at = None;
                         }
                     }

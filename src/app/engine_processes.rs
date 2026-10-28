@@ -373,12 +373,6 @@ fn record_of(pid: u32) -> Option<(String, u64)> {
         .map(|owned| (owned.image.clone(), owned.created))
 }
 
-/// The ids this app is holding, for a test that reads what a road left behind.
-#[cfg(test)]
-pub fn held_for_a_test() -> Vec<u32> {
-    recorded_pids(None, None)
-}
-
 /// The ids this app is holding, for one image or for all of them, and for one kind of
 /// process or for both.
 fn recorded_pids(image: Option<&str>, kind: Option<Kind>) -> Vec<u32> {

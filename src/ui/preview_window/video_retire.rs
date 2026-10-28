@@ -348,6 +348,25 @@ pub(super) fn retire_orphaned_player(pid: u32) {
     }
 }
 
+/// End the player a step or a relaunch left parked, for a pin that is going.
+///
+/// **What the player was being kept on screen for is the pin's**, so the pin's own end is the other
+/// end of that wait: the picture is going with the window, there is nothing for the replacement to
+/// hand over to, and the player left parked is a whole player on the desktop with nothing left that
+/// will ever end it — the loop's settle ends it too, on the first tick that finds no pin up, but the
+/// close is where that state has to be given back rather than a tick after it (see
+/// `settle_video_retirement`). A kill not confirmed on the spot goes to the orphan reaper, which is
+/// the same road a pin's own unconfirmed kills take (see `retire_orphaned_player`).
+pub(super) fn settle_the_retirement_for_a_pin_that_is_going() {
+    let parked = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    if let Some(parked) = parked {
+        retire_orphaned_player(parked.retiring);
+    }
+}
+
 /// Retry every orphaned kill, keeping only the ones still dying.
 ///
 /// Only confirmed-gone kills leave the list, and only by being reaped — the
