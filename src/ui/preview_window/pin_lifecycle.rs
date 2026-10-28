@@ -889,6 +889,14 @@ pub(super) fn end_pin_beside_the_state() {
     // and was closed left a whole player of its own running, and the window it draws in standing,
     // over the listing the next hover was made in.
     settle_the_retirement_for_a_pin_that_is_going();
+
+    // And the same for the wait a take-up on a hover's film began: a pin closed while its own player
+    // was still opening the file has no picture to hand over and no window for one to be shown in,
+    // so the wait is disarmed and the hover it froze is ended with it (see
+    // `settle_the_handover_for_a_pin_that_is_going`).
+    unsafe {
+        pin_film_host::settle_the_handover_for_a_pin_that_is_going();
+    }
 }
 
 /// Whether the thing a pin is a window onto is still there.

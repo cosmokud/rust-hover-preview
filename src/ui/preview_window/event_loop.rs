@@ -840,17 +840,6 @@ pub fn run_preview_window() {
                 // rather than of what this app wrote down, because everything a bar says about a
                 // video FFmpeg plays is something this app asserted (see `settle_pinned_transport`).
                 settle_pinned_transport();
-                // A pin taken up on a hover's film goes up once its hosted player draws, and comes
-                // down where that player never does: the handover is the only visible swap, and
-                // the teardown for a wait with nothing to swap to goes down the road a dead film
-                // has always gone (see `pin_film_host::settle_pin_handover`).
-                if matches!(
-                    pin_film_host::settle_pin_handover(),
-                    pin_film_host::PinHandover::Failed
-                ) && pin_request.is_none()
-                {
-                    pin_request = Some(end_pin_state(Reason::MediaGone));
-                }
                 settle_pending_hold();
                 // And the topmost band a step between two films holds is given back where no picture
                 // ever changed hands inside the player-start bound: a hold with no release is a pin
@@ -863,15 +852,6 @@ pub fn run_preview_window() {
                 // transport is doing (see `refresh_pin_media_buttons`). Nothing is sent while the
                 // stand-in is not up, so this is two atomics and a comparison on a tick that has no
                 // taskbar button to draw.
-                //
-                // And the form the button is in, which the Shell has gestures of its own for — a
-                // second click on the button, `Win+M`, its own `Minimize` — so the pin's place is
-                // what it is read back against, once a tick: a stand-in the Shell has minimized
-                // under a pin that is on the screen is a hover frozen on the frame it was put down
-                // with, and a stand-in the Shell has taken away altogether is a button the user has
-                // lost until the app is restarted (see `keep_the_stand_in_up`). Nothing is asked of
-                // the Shell here: the window is this app's own, and both reads are of it.
-                keep_the_stand_in_up();
 
                 // The picture the hover shows is the same two facts and is asked the same way: what
                 // the pin is drawn by, mirrored into the stand-in by the Shell, which is a picture
@@ -990,6 +970,36 @@ pub fn run_preview_window() {
             // nothing of the pin is left to ask. Asked of every tick and not of a pinned one for
             // exactly that reason (see `settle_video_retirement`).
             settle_video_retirement();
+
+            // **And the two settles that were only asked of a pin are asked of every tick**, for the
+            // reason the retirement above is: each has a "the pin is gone" half that nothing on a
+            // tick after the pin would ever reach, so a pin closed in the middle of the thing they
+            // settle left it standing for the rest of the run.
+
+            // A pin taken up on a hover's film goes up once its hosted player draws, and comes down
+            // where that player never does: the handover is the only visible swap, and the teardown
+            // for a wait with nothing to swap to goes down the road a dead film has always gone (see
+            // `pin_film_host::settle_pin_handover`). A pin that went away down another road — closed
+            // while the wait was still out — disarms the wait and ends the hover it froze here, which
+            // is the picture that would otherwise stand over the listing with a player of its own
+            // behind it.
+            if matches!(
+                pin_film_host::settle_pin_handover(),
+                pin_film_host::PinHandover::Failed
+            ) && pin_request.is_none()
+            {
+                pin_request = Some(end_pin_state(Reason::MediaGone));
+            }
+
+            // And the form the taskbar button is in, which the Shell has gestures of its own for —
+            // a second click on the button, `Win+M`, its own `Minimize` — so the pin's place is what
+            // it is read back against, once a tick: a stand-in the Shell has minimized under a pin
+            // that is on the screen is a hover frozen on the frame it was put down with, and a
+            // stand-in the Shell has taken away altogether is a button the user has lost until the
+            // app is restarted. A pin that has gone owes no button at all, and the stand-in it left
+            // standing goes with it (see `keep_the_stand_in_up`). Nothing is asked of the Shell
+            // here: the window is this app's own, and both reads are of it.
+            keep_the_stand_in_up();
 
             // A player that has been started and has not put its window up yet is being
             // waited for: what is on screen is the spinner standing in for the video, at

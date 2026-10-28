@@ -3722,6 +3722,65 @@ fn a_pin_that_ends_after_a_step_leaves_what_a_pin_that_never_stepped_leaves() {
     );
 }
 
+/// **A pin closed while a take-up is still waiting for its film's first frame leaves nothing of that
+/// wait behind.** The take-up on a hover's film holds the hover where it stands and begins the pin's
+/// own player behind it (see `pin_film_host::FrozenHover`), and the loop's settle is what disarms the
+/// wait and ends the hover — a close is the other end of that wait, because the pin the picture was
+/// going to be handed to is not going to appear: the player was taken out of the media at the
+/// take-up, so the handover is the only call that would have ended the frozen hover.
+///
+/// What the close leaves is asserted against a pin that never waited, because "the handover leaves
+/// something behind" is exactly a difference between the two: the wait still armed, and a hover this
+/// app began still held on one frame.
+#[test]
+fn a_pin_that_ends_during_a_take_ups_handover_leaves_what_a_pin_that_never_waited_leaves() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+
+    // What a close leaves after a take-up that waited and one that did not: the wait still armed,
+    // and the hover it froze where one was held.
+    fn what_a_close_leaves(waited: bool) -> (bool, Option<(u32, f64)>) {
+        let film = StandingFilm::new();
+        let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+
+        if waited {
+            // The state the take-up leaves behind: the hover's player frozen on a second and the
+            // wait armed for the pin's player to report that same frame. The id is no process of
+            // this run's, so the end it asks for is the bookkeeping rather than a kill.
+            pin_film_host::hold_the_hover_for_the_handover(0x7FFF_FFFB, 12.0);
+            pin_film_host::arm_pin_handover();
+            assert!(
+                pin_film_host::pin_handover_armed()
+                    && pin_film_host::held_hover_for_a_test().is_some(),
+                "the take-up waits for the pin's player's first frame"
+            );
+        }
+
+        let _ = end_pin(Reason::Closed, &Win32PinWindow);
+
+        let left = (
+            pin_film_host::pin_handover_armed(),
+            pin_film_host::held_hover_for_a_test(),
+        );
+        drop(film);
+        left
+    }
+
+    let without_a_wait = what_a_close_leaves(false);
+    let after_a_wait = what_a_close_leaves(true);
+
+    assert_eq!(
+        after_a_wait, without_a_wait,
+        "a pin closed mid-handover leaves the wait and the hover a pin that never waited does"
+    );
+    assert_eq!(
+        after_a_wait,
+        (false, None),
+        "which is no wait armed and no hover held"
+    );
+}
+
 /// A pin that ends takes its FFmpeg film host down with it, and the picture the Shell drew goes
 /// before it: the source is the player's own window and outlives the pin, but no registration and no
 /// record of it is left behind (see `pin_film_thumbnail`).
