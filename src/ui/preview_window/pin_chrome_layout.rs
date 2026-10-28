@@ -1,6 +1,7 @@
 //! The pin's chrome: the heights and near-misses its caption, transport bar and volume button
 //! are drawn at, and the level they are at.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 /// What a pinned preview adds to the box its media is in, in the units every other margin
@@ -642,6 +643,13 @@ pub(super) fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -
 /// the pin is a hand somewhere else — Notepad over the pin is not a hand asking for the pin's
 /// caption (see `refresh_pin_chrome`).
 ///
+/// **A window of the film the pin is showing is the pin, not a window over it.** A player begun for
+/// the pin is born at the band and shows itself there before the host has it (see
+/// `pin_film_thumbnail::the_source_launch_origin`), so the hand resting on a strip during a step is
+/// over the incoming player's own window — a film the pin is showing, arriving, and not a program
+/// standing over it. The film's host answers the same way for a step whose player is already drawing
+/// in it.
+///
 /// Asked of the window under the point rather than of the order, because the pin's children —
 /// the host, the strips — are disabled and `WindowFromPoint` skips them, so the pin's own window
 /// comes back wherever the pointer is genuinely over the pin. A pin with no window of its own
@@ -650,7 +658,36 @@ fn pin_chrome_occluded(cursor: Option<(i32, i32)>) -> bool {
     let (Some((x, y)), Some(hwnd)) = (cursor, pin_real_window::real_pin_window()) else {
         return false;
     };
-    window_at_point(x, y) != hwnd.0 as isize
+    let under = window_at_point(x, y);
+    let occluded = under != hwnd.0 as isize && !the_pins_own_film_window(under);
+    if occluded {
+        note_pin_trace!(
+            "chrome occluded by {:?} over the pin {:?}: the strips the pointer asked for go down",
+            HWND(under as *mut _),
+            hwnd,
+        );
+    }
+    occluded
+}
+
+/// Whether a window under the pointer belongs to the film the pin is showing rather than to
+/// somebody else: the film's host — a window of this app's standing at the band the pin is in —
+/// and the player's own window, which a player begun for the pin makes at that band and shows
+/// there before the host has it (see `pin_film_thumbnail::the_source_launch_origin`).
+///
+/// The player is asked for by its process, which is the same question the hover's own probe asks of
+/// a film's window: a window a player makes is a window of the player's process, and a window of any
+/// other process is somebody else's however close it stands (see `hover_facts::cursor_preview_hover`).
+fn the_pins_own_film_window(under: isize) -> bool {
+    if pin_film_host::film_host().is_some_and(|host| host.0 as isize == under) {
+        return true;
+    }
+    let Some(player) = pin_film_host::hosted_player_pid() else {
+        return false;
+    };
+    let mut owner = 0;
+    unsafe { GetWindowThreadProcessId(HWND(under as *mut _), Some(&mut owner)) };
+    owner == player
 }
 
 /// The window under a screen point, which a test stands in rather than reading off the desktop:
