@@ -862,6 +862,10 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
         );
     }
     lower_the_source(source);
+    // **The new source has taken the picture, so the band a step held is the setting's again**:
+    // the outgoing film is behind this one from here, and the pin goes back to being the ordinary
+    // window a pin that is not Always On Top is (see `PIN_STEP_BAND_HELD`).
+    unsafe { pin_lifecycle::give_the_step_band_back() };
 
     // **A window that made itself the foreground gives it back.** mpv shows its own window when it has
     // opened the file, which is after the click that made the pin, and the style above stops it taking

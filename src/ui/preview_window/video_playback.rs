@@ -830,7 +830,31 @@ fn start_mpv_video_playback(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = spawn_player(&mut command)?;
+
+    // **A pin that steps from one film to the next holds the topmost band for the swap.** The
+    // outgoing picture is what the pin is showing while this player opens its file, and a pin that
+    // is not Always On Top is an ordinary window: a program raised over it in that gap covers the
+    // picture the step exists to keep. The hold is taken before the player exists and given back
+    // when the source it makes has taken the picture over (see `PIN_STEP_BAND_HELD`). A pin's
+    // first film has no picture standing to keep, and an Always On Top pin's band is the setting's.
+    if the_pins_film
+        && !pin_always_on_top()
+        && (pin_film_host::the_host_is_drawing() || pin_film_host::the_cover_stands())
+    {
+        unsafe { pin_lifecycle::hold_the_band_for_the_step() };
+    }
+
+    let child = match spawn_player(&mut command) {
+        Some(child) => child,
+        None => {
+            // A player that never came up is no picture to take the band over: the hold is over
+            // and the pin goes back to the band the setting gives it.
+            if the_pins_film {
+                unsafe { pin_lifecycle::give_the_step_band_back() };
+            }
+            return None;
+        }
+    };
     // **The host holds this player and no older one**, recorded before the player has a window of
     // its own in there: the wait for the film's first frame is a wait for this player's child and
     // not the last film's, which is what the pid beside the host is for (see `pin_film_host` and

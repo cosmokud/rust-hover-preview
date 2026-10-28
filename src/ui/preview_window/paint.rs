@@ -388,14 +388,17 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     // line, the pin's next repaint — ~70 ms after the seek — is a lit band and then a
                     // black one for the rest of the gap (see `pin_film_host::the_cover_stands`).
                     //
+                    // **And except where the host is already drawing a picture of any player's**,
+                    // which is the outgoing film standing while the next one is opened and adopted
+                    // (see `pin_film_host::the_host_is_drawing`). The player's own window is under
+                    // this band, so an opaque fill here is the black frame between the two films.
+                    //
                     // Only where the host stands: a pin never shown has no host yet, and its
                     // bitmap keeps the pin's claim the way the strips' own test reads it (see
                     // `the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows`).
                     let hosted_needs_cover = pin_film_host::film_host().is_some()
                         && !pin_film_host::the_cover_stands()
-                        && !pin_film_host::the_hosted_player_is_drawing(
-                            VIDEO_PID.load(Ordering::Acquire),
-                        );
+                        && !pin_film_host::the_host_is_drawing();
                     if hosted_needs_cover {
                         fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
                     } else {

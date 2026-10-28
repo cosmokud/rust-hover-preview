@@ -853,6 +853,10 @@ pub fn run_preview_window() {
                     pin_request = Some(end_pin_state(Reason::MediaGone));
                 }
                 settle_pending_hold();
+                // And the topmost band a step between two films holds is given back where no picture
+                // ever changed hands inside the player-start bound: a hold with no release is a pin
+                // over every program on a setting that says it must not be (see `PIN_STEP_BAND_HELD`).
+                pin_lifecycle::settle_the_step_band_hold();
 
                 // And what the taskbar button's own hover is offering, which is settled by the same
                 // tick for the same reason the chrome is: a pin put away into the taskbar can be
