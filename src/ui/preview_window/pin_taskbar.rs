@@ -362,6 +362,13 @@ fn a_button_is_owed() -> bool {
 /// user's "the button is gone until the app is restarted" was, and what a run must not be.
 pub(super) fn keep_the_stand_in_up() {
     if !a_button_is_owed() {
+        // **A pin that is gone owes no button**, and a stand-in left standing for one is a window of
+        // this app's in the Shell's list with nothing behind it: it goes down with the pin it was
+        // for. Asked here rather than only on the close road, because the close is one road out of a
+        // pin and this is the tick that runs after all of them (see `hide_pin_taskbar`).
+        if showing_taskbar_window().is_some() {
+            unsafe { hide_pin_taskbar() };
+        }
         return;
     }
 
