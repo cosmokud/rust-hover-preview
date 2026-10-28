@@ -2422,26 +2422,25 @@ pub(super) fn a_hovers_foreground_goes_to(
     (!behind.is_invalid() && behind != front).then_some(behind)
 }
 
-/// Put `behind` in front, asking the way a program that is not the foreground can: the plain ask
-/// first and — where Windows refuses it — the one retry every launcher needs.
+/// Put `behind` in front, asking it the way a program that is not the foreground can.
 ///
 /// **`SetForegroundWindow` is refused to a process that is not the foreground's**, which is exactly
 /// where a hover stands: the player is in front, this app did not receive the machine's last input
-/// event, and the call is answered with the *target's* taskbar button flashing over a window it was
-/// never given — the flash the user sees over Explorer. What makes the second ask this app's to
-/// make is joining the foreground thread's own input queue for the length of it, after which the
-/// same call is granted; it is detached again whatever the answer, so no queue is left joined. One
-/// attempt and no loop: a target that cannot take the keyboard is the next tick's question.
+/// event, and a refused ask is answered by flashing the *target's* taskbar button over a window it
+/// was never given — the flash the user sees over Explorer. Joining the foreground thread's own
+/// input queue for the length of one ask is what makes the call this app's to make, so that is done
+/// first and the ask is made once; the queue is left again whatever the answer.
+///
+/// The ask is made plainly only where it is the foreground's own — this app's thread, or no window
+/// in front at all — because a plain ask anywhere else is the flash above and not a hand-back. One
+/// attempt and no loop: a target that cannot take the keyboard is the next tick's question, and a
+/// tick that asks again is a tick the user may have moved on from.
 ///
 /// Safety: `behind` is a window read from the desktop rather than held by the caller.
 unsafe fn put_the_foreground_in_front(behind: HWND) -> bool {
     #[cfg(test)]
     if a_recorded_foreground_is_standing() {
         THE_FOREGROUND_ASKED_FOR.store(behind.0 as isize, Ordering::SeqCst);
-        return true;
-    }
-
-    if unsafe { SetForegroundWindow(behind) }.as_bool() {
         return true;
     }
 
@@ -2452,9 +2451,11 @@ unsafe fn put_the_foreground_in_front(behind: HWND) -> bool {
     } else {
         unsafe { GetWindowThreadProcessId(front, None) }
     };
+
     if front_thread == 0 || front_thread == our_thread {
-        return false;
+        return unsafe { SetForegroundWindow(behind) }.as_bool();
     }
+
     if !unsafe { AttachThreadInput(our_thread, front_thread, true) }.as_bool() {
         return false;
     }
