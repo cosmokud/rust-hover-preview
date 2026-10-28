@@ -69,7 +69,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use super::pin_trace::note_pin_trace;
-use super::{subtitle_files, PinCommand, PinStep, PinnedPreview, ScreenRegion};
+use super::{pin_lifecycle, subtitle_files, PinCommand, PinStep, PinnedPreview, ScreenRegion};
 
 mod window;
 
@@ -685,8 +685,13 @@ pub(super) fn give_the_keyboard_back(window: &dyn PinWindow) {
 ///
 /// The focus is given up before the style is changed, because a window that has been made
 /// non-activating while it still holds the focus holds it in a state Windows does not expect.
-/// The window behind is one that may since have gone, and the call is refused by Windows in
-/// that case rather than acted on.
+///
+/// **The window it goes to has to be one that can still take it, and one that is not ours.** A
+/// window behind that has since gone — the player a step began, which is the window in front while
+/// the player that followed it was started — is a `SetForegroundWindow` Windows refuses, and a
+/// refused hand-back leaves the foreground on a window of this app's rather than on the listing: a
+/// window that publishes no pin, answers no pointer and hovers nothing until the user clicks
+/// Explorer to make it the foreground again (see `pin_lifecycle::the_window_behind`).
 ///
 /// This is the only place the style goes back on, which used to leave the pin nobody pressed
 /// focusable after it came down — see [`make_the_window_unfocusable_again`] for what that costs
@@ -700,7 +705,10 @@ fn hand_keyboard_back(keyboard: &PinKeyboard, hwnd: isize, window: &dyn PinWindo
     window.set_focusable(hwnd, false);
 
     if keyboard.behind != 0 {
-        window.set_foreground(keyboard.behind);
+        let behind = pin_lifecycle::the_window_behind(keyboard.behind, hwnd);
+        if behind != 0 {
+            window.set_foreground(behind);
+        }
     }
 }
 

@@ -224,6 +224,10 @@ impl PlayerProcess {
 /// nothing else — the launch books the player in through `note_player_started` all the same.
 #[cfg(not(test))]
 pub(super) fn spawn_player(command: &mut std::process::Command) -> Option<PlayerProcess> {
+    // **The window in front before the player exists is the window its window must not keep.** A
+    // player's window is created activated and only styled afterwards, so it takes the keyboard from
+    // whatever had it and nothing would give it back (see `pin_lifecycle::note_the_foreground_before_a_player`).
+    pin_lifecycle::note_the_foreground_before_a_player();
     command.spawn().ok().map(PlayerProcess::Started)
 }
 
@@ -264,6 +268,7 @@ pub(super) fn spawn_player(command: &mut std::process::Command) -> Option<Player
         *last = Some(LaunchedCommand { program, args, env });
     }
     if SPAWN_REAL_PLAYER.load(Ordering::Acquire) {
+        pin_lifecycle::note_the_foreground_before_a_player();
         return command.spawn().ok().map(PlayerProcess::Started);
     }
     Some(PlayerProcess::Noted(next_noted_pid()))

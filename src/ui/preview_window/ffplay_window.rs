@@ -225,6 +225,14 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, player_ex_style_for(current_style));
 
+    // **And the keyboard the window took before this style was on it is given back here.** The style
+    // above stops the player's window taking the keyboard; it does nothing about the activation that
+    // already happened when the player opened its window, and that activation is not cosmetic: a
+    // window of ours in front is the handle `key_input::pin_owns_caret` compares against, so for as
+    // long as it holds the foreground a standing pin answers every `Space` pressed anywhere (see
+    // `pin_lifecycle::a_players_foreground_goes_to`).
+    pin_lifecycle::give_the_foreground_back_from(hwnd);
+
     // The style is put on whatever else is happening, and the *raise* is not. This is the one
     // place every raise of the player's window goes through — the monitor thread calls it about
     // every hundred milliseconds for as long as a film plays, whether or not the tick has asked for
