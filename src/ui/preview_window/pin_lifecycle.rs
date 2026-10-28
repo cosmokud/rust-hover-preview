@@ -2333,6 +2333,10 @@ fn a_foreground_to_give_back(recorded: isize, player: isize) -> isize {
 pub(super) unsafe fn give_the_foreground_back_from(player: HWND) {
     let front = GetForegroundWindow();
     if let Some(behind) = a_players_foreground_goes_to(front, player) {
+        // The one line a run needs to say which window a player had taken the foreground from, and
+        // where it went: written only where one really was taken, so a run that reads the trace for
+        // the `Space` that toggled a pin out of the listing has the window that let it happen.
+        note_pin_trace!("foreground given back {:?} -> {:?}", player, behind);
         let _ = SetForegroundWindow(behind);
     }
 }
