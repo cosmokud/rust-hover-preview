@@ -302,6 +302,23 @@ pub(crate) use pointer::text_scroll_keep_alive_try;
 pub(crate) use pointer::text_size_keep_alive_try;
 pub(crate) use pointer::AvoidRegion;
 pub(crate) use requests::hide_preview;
+
+/// Whether `RHP_PIN_TRACE` asks for the preview's road to be written out — asked by the one module
+/// outside this one that writes a line of that log, so that a run without the variable builds no
+/// line at all (see `pin_trace`).
+pub(crate) fn pin_trace_asked() -> bool {
+    pin_trace::asked()
+}
+
+/// Write one line of that log from outside this module: the Explorer hook's own gate, whose answer
+/// is the one that stops every preview with the pointer over a listing.
+pub(crate) fn note_a_trace_line(line: &str) {
+    if pin_trace::asked() {
+        pin_trace::write(line);
+    }
+    #[cfg(test)]
+    pin_trace::note_a_line_for_a_test(line.to_string());
+}
 pub(crate) use requests::is_preview_window;
 pub(crate) use requests::notify_magick_ready;
 pub(crate) use requests::notify_office_render;
