@@ -3197,6 +3197,15 @@ fn every_ffplay_launch_asks_for_the_composed_renderer_and_a_borderless_window() 
         }),
         "and asks for the composed renderer, the one no display's adaptive sync can follow"
     );
+    assert!(
+        !launched
+            .env
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN")),
+        "and nothing else: a pin's player is the film under the pin's own window, which is the \
+         window that takes the foreground, so its launch is the one it always was (see \
+         `start_hover_video_playback` for the ask a hover's launch makes)"
+    );
 
     // The same film with no pin and Pin Mode off is an unhosted hover: the same renderer, and the
     // borderless window it has always had (see `hover_film_host_window` for the hosted hover's own
@@ -3210,7 +3219,7 @@ fn every_ffplay_launch_asks_for_the_composed_renderer_and_a_borderless_window() 
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_enabled = false;
     }
-    let _ = start_video_playback(
+    let _ = start_hover_video_playback(
         &path,
         film.box_.0,
         film.box_.1,
