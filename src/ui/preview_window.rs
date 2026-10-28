@@ -47,6 +47,7 @@
 //! - `ffplay_window` - the window and the process FFmpeg draws a film into.
 //! - `video_playback` - starting and stopping a film.
 //! - `mpv_ipc` - telling a running mpv what to do, over its own JSON IPC.
+//! - `mpv_resident` - the one mpv a hover's film is loaded into, kept warm between hovers.
 //! - `video_retire` - handing one film over to the next.
 //! - `video_hw` - what a film is decoded on, and how it loops.
 //! - `audio_engine` - a sound, its loudness, its player and its clock.
@@ -80,6 +81,7 @@ mod media_data;
 mod media_types;
 mod message_utils;
 mod mpv_ipc;
+mod mpv_resident;
 mod paint;
 mod pin_bubble;
 mod pin_chrome_layout;

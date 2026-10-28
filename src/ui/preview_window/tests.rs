@@ -425,6 +425,7 @@ mod hover;
 mod hover_film_host_window;
 mod layout;
 mod media_scales;
+mod resident;
 mod pin_audio_facts;
 mod pin_audio_pause;
 mod pin_audio_seek;

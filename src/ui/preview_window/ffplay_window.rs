@@ -1239,6 +1239,12 @@ pub fn kill_stray_video_process() {
         return;
     }
 
+    // **The resident is never a stray.** It is the player this app keeps between hovers, and a sweep
+    // is for a player that outlived the hover it was begun for (see `mpv_resident`).
+    if mpv_resident::holds_the_pid(pid) {
+        return;
+    }
+
     if !is_player_pid_alive(pid) {
         clear_video_process_state(pid);
         return;
