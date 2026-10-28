@@ -805,8 +805,16 @@ pub(super) fn note_the_covering_registration() {
 /// `pin_film_host::the_host_is_drawing`).
 pub(super) fn the_standing_source_process(host: HWND) -> Option<u32> {
     THUMBNAIL.lock().ok().and_then(|held| {
-        let standing =
-            held.registration != 0 && held.registered != 0 && held.host == host.0 as isize;
+        let standing = held.registration != 0
+            && held.registered != 0
+            && held.host == host.0 as isize
+            // **A registration outlives the window it draws.** The record is what the host is asked
+            // whether it has a picture in it (see `pin_film_host::the_host_is_drawing`), and a player
+            // ended under a standing registration leaves it naming a window that is gone: the Shell
+            // composes nothing, and the band painted for a picture that is there is a claim with
+            // nothing behind it — the desktop showing through the card for the ticks between one
+            // film's source going and the next one's registration standing.
+            && unsafe { IsWindow(HWND(held.registered as *mut _)) }.as_bool();
         standing.then_some(held.registered_process).filter(|pid| *pid != 0)
     })
 }
