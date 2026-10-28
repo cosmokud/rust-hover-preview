@@ -318,13 +318,6 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             update_pin_transport(|transport| {
                 transport.seeking = aim;
             });
-            // **The frame the seek is taking the film to is decoded now, while the hand is still
-            // choosing** (see `pin_film_thumbnail::begin_the_seek_still`): the aim is the seek's own
-            // second, set from the click, so the release knows the destination already and the still
-            // only has to beat the replacement's first drawn frame — ~520 ms — rather than the
-            // 106-157 ms a real press-to-release costs. Nothing waits on it here: the drag, the
-            // paints and the release are all the release's.
-            pin_film_thumbnail::begin_the_seek_still();
             // **The hand takes the bar and the film plays on**, which is the whole of what a press
             // on the track does to the player. The end belongs to the release, where the second is
             // known: FFmpeg's player is taken to one by being ended and begun again, and there is no
@@ -375,10 +368,6 @@ pub(super) unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
 
     let share = pin_chrome::transport_share_at(x, bar.width, bar.height, bar.dpi, bar.live);
     update_pin_transport(|transport| transport.seeking = pin_seconds_at(transport, share));
-    // **The still is re-aimed with the hand**, so what a release paints is the frame for the second
-    // it is released at rather than the first second touched: one decode at a time, latest wins (see
-    // `pin_film_thumbnail::begin_the_seek_still`).
-    pin_film_thumbnail::begin_the_seek_still();
     render_layered_preview(hwnd);
     true
 }

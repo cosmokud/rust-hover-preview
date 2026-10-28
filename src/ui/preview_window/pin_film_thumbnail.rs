@@ -132,14 +132,13 @@
 //!
 //! **The source is never hidden and never resized.** Hidden, the Shell stops drawing it: the thumbnail
 //! goes black **18 to 71 ms** after the `SW_HIDE` and stays black until something draws over it —
-//! measured on glass, five seeks, gaps of 415, 500, 520, 555 and 700 ms (`RHP_FREEZE=hide`, see
+//! measured on glass, five seeks, gaps of 415, 500, 520, 555 and 700 ms (the `hide` road, see
 //! `still_probe` and the seek road table in `ARCHITECTURE.md`). **The sentence this file used to
 //! carry here — that a hidden window's thumbnail is frozen at its last frame — was measured and is
 //! false**, and believing it cost four cover roads that each froze the outgoing player. A DWM
 //! thumbnail cannot outlive the drawing of its source, so a cover has to be a picture of this app's
-//! own (see `stand_the_pressed_still`). The source is therefore taken off the screen only where the
-//! host it is seen in is going away for good, and on that road only once the player drawing it has a
-//! replacement (see `set_the_source_visible`, `hide_the_outgoing_source`).
+//! own (see `stand_the_outgoing_picture_from_its_dc`). The source is therefore taken off the screen
+//! only where the host it is seen in is going away for good (see `set_the_source_visible`).
 //! Resized is the
 //! flash this road was measured with. Moved it is, but only to keep the crop on the screen and never
 //! with a new size: one placement, and then a slide at an edge and nothing else until teardown (see
@@ -169,49 +168,33 @@
 //! the film standing around it. That road is an A/B of the invisibility and nothing else. Upgrade it
 //! by clipping the source in a window of this app's, not by following the pin with a window of mpv's.
 
-use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{BOOL, COLORREF, HWND, POINT, RECT};
+use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmFlush, DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE,
     DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, ClientToScreen, GetDC, GetPixel, InvalidateRect, ReleaseDC, SetBrushOrgEx,
-    SetStretchBltMode, StretchBlt, UpdateWindow, CLR_INVALID, HALFTONE,
+    BitBlt, ClientToScreen, GetDC, GetPixel, InvalidateRect, ReleaseDC, UpdateWindow, CLR_INVALID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
     IsWindow, IsWindowVisible, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW,
-    SetWindowPos, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, LWA_ALPHA, PW_RENDERFULLCONTENT,
-    SM_CXMAXTRACK, SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    SetWindowPos, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK,
+    SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 // Only the binary asks a window who owns it: a test has one process (see `the_source_is_up`).
 #[cfg(not(test))]
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
-use super::pin_trace::{note_pin_trace, path_name};
+use super::pin_trace::note_pin_trace;
 use super::*;
-
-// `PrintWindow`, which is the one call that asks a window for the frame it last presented.
-//
-// **It is declared here because this build's `windows` features file the call under an unrelated
-// module** (`Win32::Storage::Xps`) rather than beside the window calls it belongs to, and a feature
-// added for one name is a module of the SDK's carried for it. user32 is in every process already, so
-// this is a link and not a dependency (see `mpv_ipc`'s `PeekNamedPipe` for the same bargain).
-#[link(name = "user32")]
-extern "system" {
-    // `PrintWindow(window, dc, flags)`, which draws the window's own picture into the context and
-    // reports whether it did. `PW_RENDERFULLCONTENT` is what asks for the last *presented* frame of a
-    // window that draws through a swapchain, rather than an empty remake of it (see
-    // `the_machine_prints_the_source`).
-    fn PrintWindow(window: HWND, dc: HDC, flags: u32) -> BOOL;
-}
 
 // **`RHP_THUMBNAIL_SOURCE` lost and is gone.** It named `native` (one placement at the film's own
 // picture size) or `box` (one placement at the pin's box the source was adopted at), and nothing
@@ -375,15 +358,6 @@ pub(super) fn the_source_launch_origin(at: (i32, i32)) -> (i32, i32) {
 /// The source window as the number of its handle, read without the lock by the questions the tick
 /// asks on every pass (see `the_source_is_up`); zero while there is none.
 static SOURCE: AtomicIsize = AtomicIsize::new(0);
-/// The source this app took off the screen for a relaunch of the player behind it (see
-/// `hide_the_outgoing_source`), or zero where none was: the one window the host's own show must not
-/// put back, because that show runs on every tick of a pin that is drawing.
-static HIDDEN_FOR_A_RELAUNCH: AtomicIsize = AtomicIsize::new(0);
-/// How many player windows a pin has hidden for a relaunch since a test last cleared it: a hide
-/// posts to another process's window and a test run has no such window to see it land on, so what is
-/// counted is the asking (see `set_the_source_visible`).
-#[cfg(test)]
-static SOURCE_HIDES: AtomicU32 = AtomicU32::new(0);
 /// The process the source window belongs to, which is what tells a window given the number of one it
 /// replaced from the one this registration was taken with.
 static SOURCE_PROCESS: AtomicU32 = AtomicU32::new(0);
@@ -724,8 +698,8 @@ fn note_the_placement_of_a_pending_source(source: isize, process: u32, placed: S
 /// Whether a host has a picture in it at all — the question `note_the_source` asks before it lets the
 /// picture before this source go (see `hand_the_picture_over`).
 ///
-/// **A still this app painted is a picture too**, and it is the one a relaunch that took a capture
-/// leaves standing (see `stand_the_outgoing_picture_as_a_still`): a source adopted over it waits its
+/// **A still this app painted is a picture too**, and it is the one a relaunch's DC capture
+/// leaves standing (see `stand_the_outgoing_picture_from_its_dc`): a source adopted over it waits its
 /// turn exactly as it would behind a registration, rather than being registered before it can draw.
 fn the_picture_is_standing() -> bool {
     a_still_stands()
@@ -966,7 +940,7 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
         }
         // **A still this app painted is the picture until a source can draw over it**: registering
         // this one here would compose a window that has drawn nothing over that still, which is the
-        // blank the paint exists to keep out (see `stand_the_outgoing_picture_as_a_still`).
+        // blank the paint exists to keep out (see `stand_the_outgoing_picture_from_its_dc`).
         if !(pending && a_still_stands()) {
             settle_the_registration(&mut held, host);
         }
@@ -1420,13 +1394,9 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     drop(held);
     // **The still is covered from the line above**, and it goes with the registration that took the
     // picture over: the swap needs no clear, because the Shell composes this registration over the
-    // still this app painted (see `stand_the_outgoing_picture_as_a_still`).
+    // still this app painted (see `stand_the_outgoing_picture_from_its_dc`).
     STILL_HOST.store(0, Ordering::SeqCst);
     STILL_PID.store(0, Ordering::SeqCst);
-    // **The window a relaunch hid for itself is given up here**, on the same step that makes another
-    // window the picture: from this line the host's show is a show of the new source's (see
-    // `hide_the_outgoing_source`), and the measurement that hide was made for has its swap.
-    forget_the_hidden_source();
     forget_the_pending_source_of(pending.source, pending.process);
     // **The line names both players, not just the two windows**: a handover made onto a dead window is
     // invisible in a pair of handles, and a run should never have to read a pid off anything else to
@@ -1439,10 +1409,10 @@ pub(super) fn hand_the_picture_over(host: HWND) {
         pending.process,
         waited.as_millis(),
     );
-    // **A still this app was waiting on lost the race to the player's own first frame**, which is
-    // what the cover was racing: it is given up here rather than painted over a picture that has
-    // already changed hands (see `the_picture_changed_hands`).
-    the_picture_changed_hands();
+    // **The host's retained cover goes with the registration that covers it**: from here the Shell
+    // draws the replacement over that box, and a cover left standing would be painted again by the
+    // next erase or resize (see `pin_film_host::put_the_cover_away`).
+    pin_film_host::put_the_cover_away();
     // **And the still probe's measurement closes on the same step**: one thing happened, so the swap
     // and the answer to what the pin showed waiting for it are adjacent lines (see `still_probe`).
     super::still_probe::note_swapped();
@@ -1898,74 +1868,14 @@ pub(super) fn set_the_source_visible(visible: bool) {
     let Some(source) = the_source_window() else {
         return;
     };
-    // **A source this app hid for a relaunch is not put back by a show.** The host's own show runs on
-    // every tick of a pin that is drawing, and the window it would show here is the player a relaunch
-    // took off the screen on purpose (see `pin_playback::FreezeRoad::Hide`); the picture changes hands
-    // at the swap, which is where the record below goes.
-    if visible && HIDDEN_FOR_A_RELAUNCH.load(Ordering::SeqCst) == source.0 as isize {
-        return;
-    }
     // Safety: the handle is a window this module adopted, and the question is about it rather than a
     // change to it. A window already where it is wanted is left alone: a host's show runs on every
     // tick of a pin that is drawing, and a `ShowWindow` a tick is a message mpv's thread owes nothing.
     if unsafe { IsWindowVisible(source) }.as_bool() != visible {
-        #[cfg(test)]
-        if !visible {
-            SOURCE_HIDES.fetch_add(1, Ordering::AcqRel);
-        }
         let _ = unsafe {
             ShowWindowAsync(source, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE })
         };
     }
-}
-
-/// **Take the picture off the screen while its replacement is begun, and keep it off** (the road
-/// `RHP_FREEZE=hide` is, see `pin_playback::FreezeRoad`).
-///
-/// It is the ordinary hide — `set_the_source_visible(false)`, the one path a source window is hidden
-/// by — recorded beside it, because the source the registration draws is a window of the player's and
-/// the host's own show would otherwise put it back on the next tick: the record is what refuses that
-/// show, and the swap is what gives it up (see `hand_the_picture_over`, `forget_the_thumbnail`).
-///
-/// It answers whether the pin's picture was this player's own window: a player whose window is not
-/// the source has nothing of the pin's on screen to take off, and hiding it would be hiding a window
-/// nothing of this app's draws.
-pub(super) fn hide_the_outgoing_source(pid: u32) -> bool {
-    if !the_source_is_up(pid) {
-        return false;
-    }
-    let Some(source) = the_source_window() else {
-        return false;
-    };
-    HIDDEN_FOR_A_RELAUNCH.store(source.0 as isize, Ordering::SeqCst);
-    set_the_source_visible(false);
-    true
-}
-
-/// Give the record of a source hidden for a relaunch up: the picture has changed hands, so the next
-/// show is a show of another window's (see `hide_the_outgoing_source`).
-pub(super) fn forget_the_hidden_source() {
-    HIDDEN_FOR_A_RELAUNCH.store(0, Ordering::SeqCst);
-}
-
-/// The window hidden for a relaunch, as a handle number, or zero where none was (see
-/// `hide_the_outgoing_source`).
-#[cfg(test)]
-pub(super) fn the_hidden_for_a_relaunch() -> isize {
-    HIDDEN_FOR_A_RELAUNCH.load(Ordering::SeqCst)
-}
-
-/// How many hides a pin has posted to a player's own window since a test last cleared it (see
-/// `SOURCE_HIDES`).
-#[cfg(test)]
-pub(super) fn source_hides() -> u32 {
-    SOURCE_HIDES.load(Ordering::Acquire)
-}
-
-/// Forget the hides counted so far, so each test counts its own (see `SOURCE_HIDES`).
-#[cfg(test)]
-pub(super) fn clear_source_hides() {
-    SOURCE_HIDES.store(0, Ordering::SeqCst);
 }
 
 /// Take the registration down: the host it was drawn in is going, and a registration left behind a
@@ -1974,9 +1884,7 @@ pub(super) fn forget_the_thumbnail() {
     let_the_picture_go();
     STILL_HOST.store(0, Ordering::SeqCst);
     STILL_PID.store(0, Ordering::SeqCst);
-    // The still a seek press decoded goes with the pin, and so does the measurement of what the pin
-    // was left showing (see `begin_the_seek_still`, `still_probe`).
-    forget_the_pressed_still();
+    // The measurement of what the pin was left showing goes with the pin (see `still_probe`).
     super::still_probe::forget("the pin is going");
     if let Ok(mut held) = HELD_FRAMES.lock() {
         // The pin that counted these is gone, so the next one opens its own first second.
@@ -2003,7 +1911,6 @@ fn let_the_picture_go() {
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(0, Ordering::SeqCst);
     SOURCE_PROCESS.store(0, Ordering::SeqCst);
-    forget_the_hidden_source();
 }
 
 /// **Let the outgoing player's registration go so a cover can stand where it was, without taking a
@@ -2022,7 +1929,6 @@ fn let_the_registration_go_for_a_still() {
         let_the_registration_go(registration);
     }
     forget_the_late_placement();
-    forget_the_hidden_source();
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     if !PENDING_SOURCE.lock().is_ok_and(|pending| pending.is_some()) {
         forget_the_pending_source();
@@ -2057,219 +1963,25 @@ pub(super) fn a_still_stands() -> bool {
     STILL_HOST.load(Ordering::SeqCst) != 0
 }
 
-/// A frame captured out of the picture a relaunch is about to end, and where it goes: the host whose
-/// whole client it covers, and the rectangle of the capture that has that client's shape.
-struct CapturedStill {
-    pixels: DibSurface,
-    crop: SourceBox,
-    host: HWND,
-}
-
-/// **A still of the picture on screen, taken before anything is begun over it**, or nothing where
-/// there is no lit frame to take.
-///
-/// It is `PrintWindow` with `PW_RENDERFULLCONTENT` — the last frame the source presented, rather
-/// than a remake of it by the player — into a surface the size of the source's own client, and a
-/// handful of its pixels are read before it is offered as a picture: a window FFmpeg's player draws
-/// through a swapchain can answer with black, and a black still is the placeholder this road must
-/// never paint (see `the_machine_prints_the_source`).
-///
-/// **The crop is the one the registration already wears**, from the source's client and the film's
-/// own shape to the host's client (see `the_pictures_crop`), so the still covers exactly the pixels
-/// the Shell was composing a moment ago.
-///
-/// shortcut: `PrintWindow` is a cross-process send, and it is made once per relaunch and never on a
-/// gesture; it is also why the player it reads is still running when it is asked — a suspended
-/// process answers nothing. If a run shows the call waiting, read the frame off the source's own DC
-/// instead and take the accuracy it loses for it.
-fn capture_the_outgoing_picture(pid: u32) -> Option<CapturedStill> {
-    if !the_source_is_up(pid) {
-        return None;
-    }
-    let source = the_source_window()?;
-    // Safety: the handle is the source this module adopted from a player's own window, and the
-    // questions are about its client area.
-    let (width, height) = unsafe { client_size(source) }.filter(|(w, h)| *w > 0 && *h > 0)?;
-    let (host, aspect) = {
-        let held = THUMBNAIL.lock().ok()?;
-        let host = (held.host != 0).then_some(HWND(held.host as *mut _))?;
-        let aspect = held
-            .source
-            .filter(|shape| shape.belongs_to(source, pid))
-            .and_then(|shape| shape.aspect);
-        (host, aspect)
-    };
-    // Safety: the handle is the host the registration was drawing into, a window of this app's.
-    let (box_width, box_height) = unsafe { client_size(host) }.filter(|(w, h)| *w > 0 && *h > 0)?;
-    let still = DibSurface::create(width as u32, height as u32)?;
-    let lit = the_machine_prints_the_source(source, &still);
-    note_pin_trace!(
-        "outgoing picture captured pid {pid} {width}x{height} sample {}",
-        if lit { "ok" } else { "black" },
-    );
-    lit.then_some(CapturedStill {
-        pixels: still,
-        crop: the_pictures_crop((width, height), (box_width, box_height), aspect).0,
-        host,
-    })
-}
-
-/// Whether the source's last presented frame is in `still`, from the machine or from the answer a
-/// test stood in (see `CAPTURE_STAND_IN`).
-fn the_machine_prints_the_source(source: HWND, still: &DibSurface) -> bool {
-    #[cfg(test)]
-    if let Some(lit) = CAPTURE_STAND_IN.lock().ok().and_then(|held| *held) {
-        // A window of the test process prints itself as nothing, so what a test stands in is the
-        // result rather than the call: a lit still is filled where the sample reads it.
-        if lit {
-            let length = still.width as usize * still.height as usize * 4;
-            // Safety: the surface is this test's own, of the size this line reads.
-            unsafe { std::ptr::write_bytes(still.bits(), 0x80, length) };
-        }
-        return lit;
-    }
-    // Safety: the handle is the source this module adopted from a player's own window, and the
-    // surface is this call's own; both are given back before this answers.
-    unsafe {
-        if !PrintWindow(source, still.dc, PW_RENDERFULLCONTENT).as_bool() {
-            return false;
-        }
-        // GDI batches its calls and what is read next is not a GDI call.
-        let _ = GdiFlush();
-        the_still_is_lit(still)
-    }
-}
-
-/// Whether a handful of points well inside the captured frame are lit: **the same probe the source's
-/// own window is read with**, applied to the still instead (see `the_source_has_lit_pixels`).
-///
-/// Safety: `still` is a surface this app made and holds.
-unsafe fn the_still_is_lit(still: &DibSurface) -> bool {
-    let (width, height) = (still.width as i32, still.height as i32);
-    let points = [
-        (width / 4, height / 4),
-        (width / 2, height / 4),
-        (width / 2, height / 2),
-        (width / 4, height * 3 / 4),
-        (width * 3 / 4, height * 3 / 4),
-    ];
-    // Safety: the surface's bits are as many pixels as its own width and height say.
-    let pixels = unsafe {
-        std::slice::from_raw_parts(still.bits() as *const u32, (width * height) as usize)
-    };
-    points
-        .iter()
-        .any(|&(x, y)| pixels[(y * width + x) as usize] & 0x00FF_FFFF != 0)
-}
-
-/// Paint the still into the host's whole client, with the same `HALFTONE` stretch a picture is
-/// scaled with everywhere else (see `pin_taskbar_mirror::thumbnail_bitmap`).
-unsafe fn paint_the_still(still: &CapturedStill) -> bool {
-    // Safety: the handle is the host the registration was drawing into, a window of this app's.
-    let Some((width, height)) = (unsafe { client_size(still.host) }) else {
-        return false;
-    };
-    if width <= 0 || height <= 0 {
-        return false;
-    }
-    let (left, top, crop_width, crop_height) = still.crop;
-    // Safety: the surface is this call's, the host is a window of this app's, and what is asked of
-    // the two device contexts is one scaling copy between them.
-    unsafe {
-        let dc = GetDC(still.host);
-        if dc.is_invalid() {
-            return false;
-        }
-        let _ = SetStretchBltMode(dc, HALFTONE);
-        // The brush origin travels with the mode: halftone measures the destination from it.
-        let _ = SetBrushOrgEx(dc, 0, 0, None);
-        let painted = StretchBlt(
-            dc,
-            0,
-            0,
-            width,
-            height,
-            still.pixels.dc,
-            left,
-            top,
-            crop_width,
-            crop_height,
-            SRCCOPY,
-        )
-        .as_bool();
-        ReleaseDC(still.host, dc);
-        painted
-    }
-}
-
-/// **The placeholder a relaunch paints for itself: a still of the picture it ends, and the outgoing
-/// player let go of a moment later.**
-///
-/// It answers whether a still stands, and `false` is the road as it was before there was a cover at
-/// all: nothing is captured, painted, frozen, suspended or unregistered, so the player the relaunch
-/// replaces goes on playing until the replacement draws — `placeholder unavailable pid N: the old
-/// picture plays on` says so. A black capture is that case too: a black still is never painted (see
-/// `capture_the_outgoing_picture`).
-///
-/// **The one case where the registration goes first is this one** — its window is the player being
-/// ended, so nothing may be left drawing it. The still is painted underneath before that, which is
-/// what makes the unregister safe: the host has a picture of this app's own from the moment the
-/// Shell stops composing the window.
-///
-/// It is once per relaunch and never on a frame: the capture, the crop and the one stretch happen
-/// behind the user's own gesture, and everything after it is the swap that was already there (see
-/// `hand_the_picture_over`).
-pub(super) fn stand_the_outgoing_picture_as_a_still(pid: u32) -> bool {
-    let Some(still) = capture_the_outgoing_picture(pid) else {
-        note_pin_trace!("placeholder unavailable pid {pid}: the old picture plays on");
-        return false;
-    };
-    if !unsafe { paint_the_still(&still) } {
-        note_pin_trace!("placeholder unavailable pid {pid}: the old picture plays on");
-        return false;
-    }
-    // Safety: the handle is the host the registration was drawing into, a window of this app's.
-    let host = still.host;
-    // **Let go of before the registration is**, so the pass that watches the outgoing player cannot
-    // adopt it back in between (see `STILL_PID`).
-    STILL_PID.store(pid, Ordering::SeqCst);
-    forget_the_thumbnail();
-    STILL_HOST.store(host.0 as isize, Ordering::SeqCst);
-    #[cfg(test)]
-    if let Ok(mut held) = THE_STILLS_CROP.lock() {
-        *held = Some(still.crop);
-    }
-    // **One repaint and no erase**: the host's own erase is the black a still must never show, so the
-    // client is invalidated without it and the still this app painted is what it paints.
-    unsafe {
-        let _ = InvalidateRect(host, None, false);
-        let _ = UpdateWindow(host);
-    }
-    note_pin_trace!("placeholder painted from a capture pid {pid}");
-    true
-}
-
 /// **The still a relaunch takes out of the source window's own device context** — the cover
 /// `RHP_FREEZE=dc` is.
 ///
 /// **Why the source's own DC, and neither the screen nor `PrintWindow`.** A pinned film's source wears
 /// `WS_EX_LAYERED` at alpha 1/255 so that nothing of it reaches the screen, which makes a `BitBlt` off
 /// the screen black, and a window that draws through D3D answers `PrintWindow` with black or with a
-/// remake of the frame rather than the frame (see `surfaces` and `capture_the_outgoing_picture`). What
-/// is left is the surface the player itself draws into — the one the readiness sample already reads
-/// lit twenty times a second **throughout the very gap this cover is for** (see
-/// `the_source_has_lit_pixels`), which is what makes a copy of it worth a relaunch.
+/// remake of the frame rather than the frame (see `surfaces`). What is left is the surface the player
+/// itself draws into — the one the readiness sample already reads lit twenty times a second
+/// **throughout the very gap this cover is for** (see `the_source_has_lit_pixels`), which is what makes
+/// a copy of it worth a relaunch.
 ///
-/// **It costs about a millisecond, so it is taken at the release** rather than decoded at the press:
-/// there is no grab, no worker, no deadline and no generation race on this road, and the frame it
-/// paints is the frame that was on screen a moment ago rather than a decode of the second the seek is
-/// going to (see `begin_the_seek_still`, which is `still`'s road and not this one).
+/// **It costs about a millisecond, so it is taken at the release**: nothing is decoded, nothing waits,
+/// and the frame it paints is the frame that was on screen a moment ago.
 ///
 /// **A frame that cannot be a picture is never painted** (see `capture_the_sources_dc`): `false` is
 /// `off` for that one relaunch — nothing painted, nothing unregistered, nothing ended — so the outgoing
 /// player goes on drawing until its replacement does, and the pin is the picture it was.
 ///
-/// The order from here on is `stand_the_still`'s, which is the whole correctness of every cover road:
+/// The order from here on is `stand_the_still`'s, which is the whole correctness of the cover:
 /// the frame into the host's retained cover, one repaint without an erase, `DwmFlush`, the registration
 /// let go, and only then the player ended.
 pub(super) fn stand_the_outgoing_picture_from_its_dc(pid: u32, seconds: f64) -> bool {
@@ -2277,16 +1989,13 @@ pub(super) fn stand_the_outgoing_picture_from_its_dc(pid: u32, seconds: f64) -> 
         note_pin_trace!("placeholder unavailable pid {pid}: the pin has no host to paint a still in");
         return false;
     };
-    // **The seek this cover belongs to**, so the probe that reads the gap and the paint that fills it
-    // are the same relaunch's (see `still_probe`). The counter is the pressed still's because a seek is
-    // one thing however its cover is taken.
-    let generation = PRESSED_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    super::still_probe::start(pid, generation);
+    // The probe that reads the pin throughout the wait begins where the cover does (see `still_probe`).
+    super::still_probe::start(pid);
     let Some(((width, height), pixels)) = capture_the_sources_dc(pid) else {
         note_pin_trace!("placeholder unavailable pid {pid}: the old picture plays on");
         return false;
     };
-    stand_the_still(host.0 as isize, pid, generation, (width, height), pixels, seconds)
+    stand_the_still(host.0 as isize, pid, (width, height), pixels, seconds)
 }
 
 /// The file the captured frame is dumped to, beside the trace log in the temp folder, so a run can be
@@ -2415,384 +2124,8 @@ fn dump_the_frame(pixels: &[u8], width: u32, height: u32) -> bool {
     .is_ok()
 }
 
-/// The answer a test stands in for the machine's capture: `true` is a lit frame, `false` a black
-/// one, and `None` asks the machine (see `the_machine_prints_the_source`).
-#[cfg(test)]
-static CAPTURE_STAND_IN: Mutex<Option<bool>> = Mutex::new(None);
-
-/// Stand a capture answer in place of the machine's own, or give the machine's own back with `None`.
-#[cfg(test)]
-pub(super) fn stand_the_capture_in(answer: Option<bool>) {
-    if let Ok(mut held) = CAPTURE_STAND_IN.lock() {
-        *held = answer;
-    }
-}
-
-/// The crop the last still was painted with, as a test reads the road it took rather than the pixels
-/// it put there: the rectangle of the capture that filled the host's client (see
-/// `stand_the_outgoing_picture_as_a_still`).
-#[cfg(test)]
-static THE_STILLS_CROP: Mutex<Option<SourceBox>> = Mutex::new(None);
-
-/// The crop the last still was painted with (see `THE_STILLS_CROP`).
-#[cfg(test)]
-pub(super) fn the_stills_crop() -> Option<SourceBox> {
-    THE_STILLS_CROP.lock().ok().and_then(|held| *held)
-}
-
-/// **The still a seek press decodes, aimed at the second the seek is taking the film to**, and the
-/// cover a relaunch stands on while it waits for the player it began.
-///
-/// **The aim is the destination, not the frame on screen.** A press sets the seek's second from the
-/// click position (see `pin_input::pin_seconds_at`), so on a click the destination is known at the
-/// press and equals the release's, and a drag re-aims it as the hand moves. That is what makes a
-/// cover reachable at all: measured on glass, a press-to-release on a real gesture is **106-157 ms**,
-/// which no cold decode of a 1080p frame lands inside — the last build grabbed the frame on screen
-/// and lost all four seeks, painting nothing (see the seek road table in `ARCHITECTURE.md`) — while
-/// the player the release begins takes **~520 ms** to draw its first frame. **The deadline is that
-/// frame, not the release**, and a grab that lands in 150-500 ms wins.
-///
-/// **It is a decode of the file, not a capture of the window.** The source wears `WS_EX_LAYERED` at
-/// alpha 1/255 (`RHP_THUMBNAIL_INVISIBLE`), and such a window answers `PrintWindow` with black (see
-/// `surfaces`), which is what made the capture road structurally dead for a pin; FFmpeg reading its
-/// own frames is the one road to a lit still of an FFmpeg film, and it is the grab a hover bubble
-/// already uses (`pin_bubble::grab_a_frame`) at the box's own shape — **the box, not the film**, so
-/// the payload is the pin rather than a 1920x1080 frame (8.3 MB).
-///
-/// **The frame is the one FFmpeg's player will actually open on**, which is the keyframe at or before
-/// the aim. Measured on this machine's ffplay 9.0.2: `-ss 7.2` on a 5 s-GOP file opens on the frame
-/// at 5.0 and plays the pre-roll forward, so the player's first frame is up to a GOP earlier than the
-/// second it was given. The grab therefore seeks to that keyframe, so the still and the handover are
-/// the same frame, and the offset is written down (`seek keyframe offset <N>ms`) so the error in the
-/// app's own clock over the launch second is visible (see `the_keyframe_at_or_before`).
-///
-/// **Latest wins, and nothing waits for it.** A press, and every change of the aim, re-aims one grab:
-/// at most one decode is in flight and the newest aim is the one queued behind it, so a frame for a
-/// second nobody is going to is dropped rather than painted. The release does not wait for the grab —
-/// it begins the replacement exactly as it always did — and the grab lands afterwards, while the
-/// outgoing player is still drawing: then it paints the cover, flushes, lets the registration go and
-/// ends that player at once (see `stand_the_still`). A grab that arrives after the replacement has
-/// drawn loses the race and paints nothing (see `the_picture_changed_hands`).
-///
-/// **mpv is not on this road at all**: its seek is a command down the pipe and it never relaunches,
-/// so there is no wait for a still to cover (see `pin_playback::seek_pinned_playback`).
-pub(super) fn begin_the_seek_still() {
-    if pin_playback::freeze_road() != pin_playback::FreezeRoad::Still {
-        return;
-    }
-    if current_media_type() != Some(MediaType::Video) {
-        return;
-    }
-    let Some((path, _, transport, _)) = pin_playback::pinned_playback_state() else {
-        return;
-    };
-    if video_route(&path) == VideoRoute::Mpv {
-        return;
-    }
-    let Some(host) = pin_film_host::film_host() else {
-        return;
-    };
-    // Safety: the host is this app's own window, and the question is about the box the still fills.
-    let Some(size) = (unsafe { client_size(host) })
-        .filter(|(width, height)| *width > 0 && *height > 0)
-        .map(|(width, height)| (width as u32, height as u32))
-    else {
-        return;
-    };
-    // **The aim, not the frame on screen**: the second a release will begin the replacement at, which
-    // the hand has already chosen (see `pin_input::pinned_transport_press`).
-    let Some(at) = transport
-        .seeking
-        .or_else(|| pin_playback::pin_playhead(&transport))
-    else {
-        return;
-    };
-    let generation = PRESSED_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    // **One decode in flight, the newest aim queued behind it**: a worker already running is given
-    // this aim by what it finds here when its own grab answers (see `land_the_still`).
-    let start = {
-        let Ok(mut held) = PRESSED_STILL.lock() else {
-            return;
-        };
-        // A still the hand has moved off is a grab whose frame is nobody's picture: it reaches its end
-        // here rather than vanishing with the record (see `the_grab_ended`).
-        if let Some(older) = held.as_mut() {
-            the_grab_ended(older, "dropped", format_args!(": superseded"));
-        }
-        let in_flight = held
-            .as_ref()
-            .is_some_and(|still| still.in_flight && still.host == host.0 as isize);
-        *held = Some(PressedStill {
-            generation,
-            aim: at,
-            host: host.0 as isize,
-            size,
-            frame: None,
-            cover_for: None,
-            in_flight,
-            begun: Instant::now(),
-            reported: false,
-        });
-        !in_flight
-    };
-    note_pin_trace!(
-        "still grabbed at the press for {} at {at:.3} {}x{}",
-        path_name(&path),
-        size.0,
-        size.1,
-    );
-    note_pin_trace!(
-        "still grab begun pid {} at {at:.3} generation {generation}",
-        VIDEO_PID.load(Ordering::SeqCst),
-    );
-    arm_the_grab(start, (generation, at, size), path);
-}
-
-/// Begin the decode for this aim unless one is already in flight — that worker reads the newest aim
-/// up itself when it answers (see `land_the_still`).
-///
-/// **The suite starts no process at all**, and a grab is a process: what a test build answers is the
-/// ask, and a frame lands through `a_grab_landed` (see `pin_bubble::grab_bubble_frame`).
-fn arm_the_grab(in_flight: bool, asked: (u64, f64, (u32, u32)), path: PathBuf) {
-    let _ = in_flight;
-    #[cfg(test)]
-    {
-        let (_, at, size) = asked;
-        if let Ok(mut noted) = NOTED_STILL_GRABS.lock() {
-            noted.push((path, at, size.0, size.1));
-        }
-        return;
-    }
-    #[cfg(not(test))]
-    if !in_flight {
-        std::thread::spawn(move || the_still_worker(asked, path));
-    }
-}
-
-/// The decode, one aim at a time: a grab that is superseded hands back the aim that is waiting and
-/// this worker decodes that next, so the road is one process at a time however fast the hand moves.
-#[cfg(not(test))]
-fn the_still_worker(mut asked: (u64, f64, (u32, u32)), path: PathBuf) {
-    loop {
-        let (_, aim, size) = asked;
-        let frame = grab_the_still(&path, aim, size);
-        match land_the_still(asked, frame) {
-            Some(newer) => asked = newer,
-            None => return,
-        }
-    }
-}
-
-/// One aim's decode: the frame FFmpeg's player opens on for `-ss <aim>`, at the box's own shape.
-#[cfg(not(test))]
-fn grab_the_still(path: &Path, aim: f64, size: (u32, u32)) -> Option<((u32, u32), Vec<u8>)> {
-    // **The two steps are timed apart and to their own beginnings**, so a decode that never lands says
-    // which half it never left rather than only that it was slow (see `the_still_worker`).
-    let probed = Instant::now();
-    let keyframe = the_keyframe_at_or_before(path, aim);
-    match keyframe {
-        Some(at) => note_pin_trace!(
-            "still probe of the keyframe answered after {}ms: {at:.3}",
-            probed.elapsed().as_millis(),
-        ),
-        None => note_pin_trace!(
-            "still probe of the keyframe failed after {}ms: the container answered no packet",
-            probed.elapsed().as_millis(),
-        ),
-    }
-    // A failed probe leaves the grab at the aim, and the grab is then not a drop: the decode is asked
-    // for the second the hand chose and lands or does not on its own (see `the_keyframe_at_or_before`).
-    let at = keyframe.unwrap_or(aim);
-    note_pin_trace!(
-        "seek keyframe offset {}ms at {at:.3} for {}",
-        ((aim - at).max(0.0) * 1000.0).round() as i64,
-        path_name(path),
-    );
-    let begun = Instant::now();
-    let frame = pin_bubble::grab_a_frame(path, at, size, Duration::from_millis(STILL_GRAB_BOUND_MS))?;
-    note_pin_trace!(
-        "still frame answered after {}ms: {}x{}",
-        begun.elapsed().as_millis(),
-        size.0,
-        size.1,
-    );
-    Some((size, frame))
-}
-
-/// **The keyframe at or before `at`: the frame FFmpeg's player actually opens on**, read out of the
-/// container's own index.
-///
-/// Measured on this machine's ffplay 9.0.2 rather than taken on anybody's word: a seek to a second
-/// inside a GOP lands on the keyframe before it and plays the pre-roll forward at ordinary speed, so
-/// `-ss 7.2` on a file whose keyframes are five seconds apart opens on the frame at 5.0, and the
-/// player's first drawn frame is up to a GOP *earlier* than the second it was given. The app's own
-/// clock is begun at the second it asked for, so it is wrong by exactly that offset until the film
-/// ends — which is what the grab's trace line makes visible.
-///
-/// `-read_intervals <at>%+#1` is the demuxer's own seek and its first packet, which is that keyframe.
-/// A probe that answers nothing, or a packet that is not a keyframe, leaves the accurate grab at the
-/// aim as the answer rather than guessing.
-#[cfg(not(test))]
-fn the_keyframe_at_or_before(path: &Path, at: f64) -> Option<f64> {
-    let child = engine_processes::hidden_command("ffprobe")
-        .args(["-v", "error", "-select_streams", "v:0"])
-        .args(["-show_entries", "packet=pts_time,flags", "-of", "csv=p=0"])
-        .arg("-read_intervals")
-        .arg(format!("{at:.3}%+#1"))
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let _ = engine_processes::adopt(child.id());
-    let output = video_probe::wait_bounded(child, Duration::from_millis(STILL_PROBE_BOUND_MS))?;
-    let line = String::from_utf8_lossy(&output.stdout);
-    let (time, flags) = line.lines().next()?.split_once(',')?;
-    if !flags.trim().contains('K') {
-        return None;
-    }
-    let keyframe = time.trim().parse::<f64>().ok()?;
-    // A packet the probe puts after the aim is not the one the player opens on.
-    (keyframe <= at + STILL_AIM_SECONDS).then_some(keyframe)
-}
-
-/// How long one aim's decode is given before it is a process killed rather than a still: **a bound on
-/// the process, not a deadline on the road**. A grab that lands slower than the player draws paints
-/// nothing (see `the_picture_changed_hands`), and this is what stops a decode that never finishes
-/// from living beside the pin.
-#[cfg(not(test))]
-const STILL_GRAB_BOUND_MS: u64 = 2_000;
-
-/// How long the container's index is given to answer with its keyframe: a probe of one packet, which
-/// is at or under the cost of the header read every hover pays for.
-#[cfg(not(test))]
-const STILL_PROBE_BOUND_MS: u64 = 1_000;
-
-/// How close two seconds have to be to be the same second of a film: a thousandth, which is the
-/// precision the seeks are written in.
-const STILL_AIM_SECONDS: f64 = 0.001;
-
-/// A still a press asked for: the aim it is for, the box it fills, and the frame once FFmpeg has
-/// answered (see `begin_the_seek_still`).
-struct PressedStill {
-    /// Which grab this is: a frame only lands where its own aim is still the one waiting (see
-    /// `land_the_still`).
-    #[cfg_attr(test, allow(dead_code))]
-    generation: u64,
-    /// The second of the file this still is for — the seek's own destination.
-    aim: f64,
-    /// The host whose whole client the still will fill, as a handle number: a static that holds a
-    /// window of this app's holds it the way `Thumbnail` does.
-    host: isize,
-    /// The size FFmpeg was asked for, which is the box's own shape.
-    size: (u32, u32),
-    /// The decoded frame, BGRA, with the size it came back at — or nothing while the grab is in
-    /// flight, or once the frame has been painted.
-    frame: Option<((u32, u32), Vec<u8>)>,
-    /// The relaunch that is waiting on this still, and the player it replaces: set at the release,
-    /// and what the landing paints **and ends** (see `stand_the_pressed_still`).
-    cover_for: Option<u32>,
-    /// Whether a worker is decoding for this still, so a newer aim is queued rather than stacked.
-    in_flight: bool,
-    /// When this aim was asked for, which is what every `still grab … after <N>ms` is counted from.
-    begun: Instant,
-    /// Whether this grab has reached its one end, so a run never shows a grab with two ends — or, if
-    /// this were ever false where a grab is gone, one with none (see `the_grab_ended`).
-    reported: bool,
-}
-
-/// **The one end a grab owes, and one only**: it lands, it is dropped, or it loses to the swap — and
-/// every road that lets go of a still comes through here, so a grab that reached none of them is a
-/// line missing from the run rather than a silence nobody notices (see `PressedStill::reported`).
-///
-/// `end` names the end and `detail` is what came of it, written after the milliseconds the end took:
-/// `still grab landed after <N>ms: <W>x<H> painting=<yes|no>`, `still grab dropped after <N>ms:
-/// <reason>`, `still grab lost to the swap after <N>ms`.
-fn the_grab_ended(still: &mut PressedStill, end: &str, detail: std::fmt::Arguments<'_>) {
-    if still.reported {
-        return;
-    }
-    still.reported = true;
-    note_pin_trace!(
-        "still grab {end} after {}ms{detail}",
-        still.begun.elapsed().as_millis()
-    );
-}
-
-/// The still the last press asked for, or nothing between presses: one at a time, because a pin has
-/// one film on screen and a second press is a newer still rather than a second one.
-static PRESSED_STILL: Mutex<Option<PressedStill>> = Mutex::new(None);
-
-/// The press a grab belongs to, so a worker whose press has been superseded drops its frame instead
-/// of painting it into another press's gap (see `PressedStill::generation`).
-static PRESSED_GENERATION: AtomicU64 = AtomicU64::new(0);
-
-/// Give up the still a press decoded: the pin is going, so what was in hand is nobody's picture.
-fn forget_the_pressed_still() {
-    PRESSED_GENERATION.fetch_add(1, Ordering::SeqCst);
-    if let Ok(mut held) = PRESSED_STILL.lock() {
-        if let Some(still) = held.as_mut() {
-            the_grab_ended(still, "dropped", format_args!(": pin gone"));
-        }
-        *held = None;
-    }
-}
-
-/// **Paint the still the press decoded into the host as its cover, let the registration go, and end
-/// the player it was decoded beside** — the cover `RHP_FREEZE=still` is (see
-/// `pin_playback::FreezeRoad`).
-///
-/// `false` is `off` for that one relaunch: nothing painted and nothing ended, so the outgoing player
-/// goes on playing until its replacement draws. **It never blocks the release**: the frame is either
-/// in hand, and this is the paint, or the release takes `false` and this same paint happens when the
-/// grab lands, if it gets there before the player draws (see `begin_the_seek_still`).
-pub(super) fn stand_the_pressed_still(pid: u32, seconds: f64) -> bool {
-    let mut painting = None;
-    let generation;
-    {
-        let Ok(mut held) = PRESSED_STILL.lock() else {
-            return false;
-        };
-        let Some(still) = held.as_mut() else {
-            drop(held);
-            note_pin_trace!("placeholder unavailable pid {pid}: no still was asked for");
-            return false;
-        };
-        if (still.aim - seconds).abs() > STILL_AIM_SECONDS {
-            // A relaunch the hand did not aim this still at: nothing of it is this picture.
-            the_grab_ended(still, "dropped", format_args!(": superseded"));
-            *held = None;
-            drop(held);
-            note_pin_trace!("placeholder unavailable pid {pid}: the still is for another second");
-            return false;
-        }
-        generation = still.generation;
-        match still.frame.take() {
-            Some((size, pixels)) => {
-                painting = Some((still.host, size, pixels, still.aim));
-            }
-            None => {
-                // **Nothing waits for the grab**: the replacement is begun now, and the frame paints
-                // this cover the moment it lands (see `land_the_still`).
-                still.cover_for = Some(pid);
-            }
-        }
-    }
-    // The measurement begins where the wait does, on the release rather than on a paint that may
-    // never come (see `still_probe`).
-    super::still_probe::start(pid, generation);
-    match painting {
-        Some((host, size, pixels, at)) => stand_the_still(host, pid, generation, size, pixels, at),
-        None => {
-            note_pin_trace!("still owed to pid {pid} at {seconds:.3}: the grab has not landed");
-            false
-        }
-    }
-}
-
-/// **Paint a landed frame as the pin's cover, then let the registration go and end the player it was
-/// drawn from — in that order, which is the correctness of the whole road.**
+/// **Paint a captured frame as the pin's cover, then let the registration go and end the player it was
+/// taken from — in that order, which is the correctness of the whole road.**
 ///
 /// A DWM thumbnail composes *above* the host's own content, so a paint under a standing registration
 /// shows nothing at all; and an unregister before the paint has committed shows the host's black
@@ -2806,20 +2139,19 @@ pub(super) fn stand_the_pressed_still(pid: u32, seconds: f64) -> bool {
 fn stand_the_still(
     host: isize,
     pid: u32,
-    generation: u64,
     (width, height): (u32, u32),
     pixels: Vec<u8>,
     at: f64,
 ) -> bool {
     let expected = width as usize * height as usize * 4;
-    // **A frame that is not the size it says it is is not painted**: what arrives here came from a
-    // child process, and a still cut from a short frame is a smear rather than a picture.
+    // **A frame that is not the size it says it is is not painted**: a still cut from a short frame is
+    // a smear rather than a picture.
     if width == 0 || height == 0 || pixels.len() < expected {
-        note_pin_trace!("placeholder unavailable pid {pid}: the grab came back short");
+        note_pin_trace!("placeholder unavailable pid {pid}: the frame came back short");
         return false;
     }
     let host = HWND(host as *mut _);
-    // Safety: the handle is the host this still was decoded for, a window of this app's.
+    // Safety: the handle is the host this still was captured for, a window of this app's.
     if (unsafe { client_size(host) }).is_none_or(|(width, height)| width <= 0 || height <= 0) {
         note_pin_trace!("placeholder unavailable pid {pid}: the pin has no box to fill");
         return false;
@@ -2848,7 +2180,7 @@ fn stand_the_still(
     STILL_PID.store(pid, Ordering::SeqCst);
     STILL_HOST.store(host.0 as isize, Ordering::SeqCst);
     note_pin_trace!("thumbnail let go for a still pid {pid}");
-    super::still_probe::note_painted(generation);
+    super::still_probe::note_painted();
     // **The player is ended at once**, now that nothing of the screen is drawn from it: the file, the
     // sound device and the GPU device are free before the replacement needs them. A player this road
     // had already parked for the loop goes with it rather than being ended twice.
@@ -2858,162 +2190,6 @@ fn stand_the_still(
         note_pin_trace!("outgoing player ended at once pid {pid}");
     }
     true
-}
-
-/// Land one grab's frame where its own aim is still the one waiting, and answer the newer aim the
-/// worker should decode next — **latest wins**, so a hand that moved on is never covered by a frame
-/// for the second it left, and a superseded frame paints nothing and ends nothing.
-///
-/// A landing that arrives while a relaunch waits on this still paints the cover and ends that
-/// player at once (see `stand_the_still`); one that arrives after the replacement has drawn never
-/// gets here, because the swap gave the still up (see `the_picture_changed_hands`).
-fn land_the_still(
-    (generation, aim, _): (u64, f64, (u32, u32)),
-    answered: Option<((u32, u32), Vec<u8>)>,
-) -> Option<(u64, f64, (u32, u32))> {
-    let mut painting = None;
-    let mut unanswered = None;
-    let next = {
-        let Ok(mut held) = PRESSED_STILL.lock() else {
-            return None;
-        };
-        let Some(still) = held.as_mut() else {
-            return None;
-        };
-        still.in_flight = false;
-        if still.generation != generation || (still.aim - aim).abs() > STILL_AIM_SECONDS {
-            // Superseded while the decode ran: this frame is nobody's picture, and the aim that is
-            // waiting now is the one the worker takes up next. **The end this frame belongs to is the
-            // aim it was asked for**, which was written as dropped when the newer one replaced it —
-            // the record here is still waiting and owes nothing yet.
-            Some((still.generation, still.aim, still.size))
-        } else {
-            match answered {
-                Some((size, pixels))
-                    if pixels.len() >= size.0 as usize * size.1 as usize * 4 =>
-                {
-                    // **A cover owed is painted now**; one that is not waits in hand for the release
-                    // that will ask for it.
-                    let owed = still.cover_for.take();
-                    the_grab_ended(
-                        still,
-                        "landed",
-                        format_args!(
-                            ": {}x{} painting={}",
-                            size.0,
-                            size.1,
-                            if owed.is_some() { "yes" } else { "no" },
-                        ),
-                    );
-                    match owed {
-                        Some(pid) => {
-                            painting =
-                                Some((still.host, pid, still.aim, size, pixels, still.generation));
-                        }
-                        None => still.frame = Some((size, pixels)),
-                    }
-                }
-                _ => {
-                    the_grab_ended(still, "dropped", format_args!(": decode failed"));
-                    unanswered = still.cover_for.take();
-                }
-            }
-            None
-        }
-    };
-    if let Some((host, pid, at, size, pixels, generation)) = painting {
-        stand_the_still(host, pid, generation, size, pixels, at);
-    }
-    if let Some(pid) = unanswered {
-        note_pin_trace!("placeholder unavailable pid {pid}: the grab answered nothing");
-    }
-    next
-}
-
-/// **The replacement has taken the picture over**, so the still a relaunch was waiting on is given
-/// up: a cover that never landed lost the race to the player's own first frame, which is the whole
-/// of what the cover was racing (see `begin_the_seek_still`). A frame still in flight is dropped by
-/// the same step, so nothing paints over a picture that has already changed hands.
-fn the_picture_changed_hands() {
-    let owed = {
-        let Ok(mut held) = PRESSED_STILL.lock() else {
-            return;
-        };
-        if let Some(still) = held.as_mut() {
-            the_grab_ended(still, "lost to the swap", format_args!(""));
-        }
-        let owed = held.as_ref().and_then(|still| still.cover_for);
-        *held = None;
-        owed
-    };
-    // The registration that took the box draws over the pin now, so the host's own cover is given up
-    // rather than left to be painted again by the next erase or resize (see `put_the_cover_away`).
-    pin_film_host::put_the_cover_away();
-    if let Some(pid) = owed {
-        note_pin_trace!("still lost the race to the player pid {pid}: the swap needed no cover");
-    }
-}
-
-/// The films a still has been asked for, with the second and the box it was asked at, for a test
-/// build (see `begin_the_seek_still`).
-#[cfg(test)]
-static NOTED_STILL_GRABS: Mutex<Vec<(PathBuf, f64, u32, u32)>> = Mutex::new(Vec::new());
-
-/// The presses that asked for a still since a test last read them (see `NOTED_STILL_GRABS`).
-#[cfg(test)]
-pub(super) fn take_the_still_grabs() -> Vec<(PathBuf, f64, u32, u32)> {
-    NOTED_STILL_GRABS
-        .lock()
-        .map(|mut noted| std::mem::take(&mut *noted))
-        .unwrap_or_default()
-}
-
-/// Land a lit frame in the still the press is waiting on, as the worker does when FFmpeg answers: a
-/// test has no process to ask, so this is what stands in for it. The size is the one the answer came
-/// back at, which is what a still cut by the box's shape is read against (see `begin_the_seek_still`).
-#[cfg(test)]
-pub(super) fn a_grab_landed(width: u32, height: u32) -> bool {
-    let Some((generation, aim, size)) = PRESSED_STILL.lock().ok().and_then(|held| {
-        held.as_ref()
-            .map(|still| (still.generation, still.aim, still.size))
-    }) else {
-        return false;
-    };
-    // A frame of the size asked for, lit, so a paint of it is a lit still.
-    land_the_still(
-        (generation, aim, size),
-        Some(((width, height), vec![0x80u8; width as usize * height as usize * 4])),
-    );
-    true
-}
-
-/// Land a frame tagged with a generation that is no longer the one waiting, as a worker whose press
-/// has been superseded does: **nothing is painted and nothing is ended** (see `land_the_still`).
-#[cfg(test)]
-pub(super) fn a_superseded_grab_landed(generation: u64, width: u32, height: u32) -> bool {
-    let Some((aim, size)) = PRESSED_STILL
-        .lock()
-        .ok()
-        .and_then(|held| held.as_ref().map(|still| (still.aim, still.size)))
-    else {
-        return false;
-    };
-    land_the_still(
-        (generation, aim, size),
-        Some(((width, height), vec![0x80u8; width as usize * height as usize * 4])),
-    );
-    true
-}
-
-/// The generation of the still a press last asked for: what a test lands a frame against, so a
-/// superseded one can be landed as the worker would (see `a_superseded_grab_landed`).
-#[cfg(test)]
-pub(super) fn the_pressed_generation() -> u64 {
-    PRESSED_STILL
-        .lock()
-        .ok()
-        .and_then(|held| held.as_ref().map(|still| still.generation))
-        .unwrap_or(0)
 }
 
 /// The rectangle a picture of `aspect` is drawn in inside a `box_`: fitted to the box's own shape and
@@ -3137,7 +2313,8 @@ impl ThumbnailBox {
 /// **The crop a host's client is filled by a picture in a source's own client**: the picture fitted
 /// inside that client and then cut to the client's shape — the one rectangle the registration samples
 /// and the one a captured still is painted with, so a relaunch's cover is the frame it replaced rather
-/// than a second guess at its shape (see `the_thumbnail_box` and `stand_the_outgoing_picture_as_a_still`).
+/// than a second guess at its shape (see `the_thumbnail_box` and
+/// `stand_the_outgoing_picture_from_its_dc`).
 pub(super) fn the_pictures_crop(
     client: (i32, i32),
     box_: (i32, i32),
@@ -4672,7 +3849,7 @@ mod tests {
     /// **A still a relaunch paints is cut by the box's own shape, exactly as the registration's crop is**:
     /// the film fitted into the source's client and then the rectangle of it that has the host's shape, so
     /// the cover the user sees is the frame that was just on screen and not a second guess at its shape
-    /// (see `the_pictures_crop` and `stand_the_outgoing_picture_as_a_still`).
+    /// (see `the_pictures_crop`).
     #[test]
     fn a_captured_still_is_cropped_by_the_boxs_shape() {
         let wide = Some(16.0 / 9.0);

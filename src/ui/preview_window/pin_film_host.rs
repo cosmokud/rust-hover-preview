@@ -283,7 +283,7 @@ static FILM_HOST_CLASS_REGISTERED: Once = Once::new();
 
 /// How many erases this run has painted into a film host: the seam that says **nothing paints over a
 /// still a relaunch left standing** (see `paint_the_host_behind_the_film` and
-/// `pin_film_thumbnail::stand_the_outgoing_picture_as_a_still`).
+/// `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`).
 #[cfg(test)]
 static HOST_ERASES: AtomicU32 = AtomicU32::new(0);
 
@@ -566,7 +566,7 @@ fn the_drawing_trace_is_due(
 /// it (see `pin_film_thumbnail::adopt_the_source`). **A still this app painted is the one picture a host
 /// can have with no registration in it**, and it is not this question's: the host stands where it is and
 /// the tick's show has nothing to add to it (see
-/// `pin_film_thumbnail::stand_the_outgoing_picture_as_a_still`).
+/// `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`).
 pub(super) fn the_host_is_drawing() -> bool {
     let Some(host) = film_host() else {
         trace_the_hosted_drawing(0, None, false);

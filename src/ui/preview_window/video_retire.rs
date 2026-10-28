@@ -36,14 +36,14 @@ use crate::formats::routing::NavCategory;
 /// good.
 ///
 /// **So the player on screen is covered before its replacement is begun.** The road that ships takes
-/// a still of the frame it is drawing, paints it where the registration was drawing, and ends that
-/// player at once (see `pin_playback::relaunch_pinned_player` and
-/// `pin_film_thumbnail::stand_the_outgoing_picture_as_a_still`) — so what overlaps the replacement is
+/// the frame out of the player's own window, paints it into the host as a cover, and ends that player
+/// at once (see `pin_playback::relaunch_pinned_player` and
+/// `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`) — so what overlaps the replacement is
 /// a picture of this app's own and **no player at all**: the file lock, the sound device and the GPU
-/// device are free for the replacement to start on. The dead freeze roads cover it with the player's
-/// own frame and keep it running instead (see `pin_playback::freeze_the_outgoing_picture`), which is
-/// the wait this record's own road bounds: either way what the user sees is one still frame and not
-/// the walk-and-jump, and the second audio stream that went with it is gone.
+/// device are free for the replacement to start on. A take-up from a hover holds its player instead
+/// (see `pin_playback::freeze_the_outgoing_picture`), which is the wait this record's own road
+/// bounds: either way what the user sees is one still frame and not the walk-and-jump, and the second
+/// audio stream that went with it is gone.
 #[derive(Clone, Copy)]
 pub(super) struct VideoRetirement {
     /// The player being replaced, verified still to be `ffplay.exe` before it is ended however
