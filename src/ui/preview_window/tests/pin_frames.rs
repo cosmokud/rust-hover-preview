@@ -1685,12 +1685,12 @@ fn the_children_are_put_back_down_by_the_row_a_resize_paints_the_picture_down() 
     stand_pin(previous_pin);
 }
 
-/// Every road that installs a file in a pin — a first pin, the same file pinned again, a step to
-/// the next or previous one — brings the chrome up hidden: a stable below shows without chrome,
-/// no arrival is armed, and the pointer asks the strips back afterwards (see
+/// A first pin, and a re-pin of the same file, bring the chrome up hidden: a stable below shows
+/// without chrome, no arrival is armed, and the pointer asks the strips back afterwards. A step
+/// onto another file of the same kind is not that: it carries the chrome the pointer asked for (see
 /// `take_up_pinned_window`).
 #[test]
-fn every_spawn_hides_the_pins_chrome_until_the_pointer_asks_for_it() {
+fn every_spawn_hides_the_pins_chrome_and_a_step_carries_the_pointers() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -1716,8 +1716,8 @@ fn every_spawn_hides_the_pins_chrome_until_the_pointer_asks_for_it() {
         arrived.chrome.until
     );
 
-    // Pinning the file that is already up carries no chrome either, for the same reason a step
-    // does not: it is an install, and an install brings the chrome up hidden.
+    // Pinning the file that is already up arrives as the chrome the pin it replaces is showing —
+    // which here is none, because nothing has asked for a strip yet.
     stand_pin(Some(arrived));
     stand_media(MediaType::StaticImage);
     let again = take_up_pinned_window(&PathBuf::from("first-picture.png"), (100, 80, 420, 320));
@@ -1729,22 +1729,20 @@ fn every_spawn_hides_the_pins_chrome_until_the_pointer_asks_for_it() {
         again.chrome.until
     );
 
-    // And a step onto another picture carries none of that over: the cover the swap stands shows
-    // without chrome, and the arrival window is not armed again.
+    // A step onto another picture carries the chrome as the pointer left it — a hand resting on
+    // the caption of the picture just left is resting on the caption of the one that replaced it.
+    // Here the pointer is nowhere near, so what it carries is no chrome.
     stand_pin(Some(again));
     stand_media(MediaType::StaticImage);
     let mut stepped =
         take_up_pinned_window(&PathBuf::from("second-picture.png"), (100, 80, 420, 320));
     assert!(
-        !stepped.chrome.caption && !stepped.chrome.bar && stepped.chrome.until.is_none(),
-        "a step hides the chrome outright: caption {}, bar {}, arrival {:?}",
-        stepped.chrome.caption,
-        stepped.chrome.bar,
-        stepped.chrome.until
+        !stepped.chrome.caption && !stepped.chrome.bar,
+        "a step carries the chrome the pointer left, which here is none"
     );
 
-    // The pointer asks it back: near the caption after the arrival would have closed, the strip
-    // comes out, and away from the window it stays in.
+    // And the pointer asks a strip back after a step from the chrome being down, exactly as it
+    // does after any other install.
     let window = stepped.window_box();
     let after_arrival = Instant::now() + Duration::from_secs(2);
     let changed = refresh_pin_chrome(&mut stepped, after_arrival, Some((window.0 + 5, window.1)));
@@ -1758,14 +1756,31 @@ fn every_spawn_hides_the_pins_chrome_until_the_pointer_asks_for_it() {
         "while away from the window the stepped-on chrome stays hidden"
     );
 
-    // And a step across kinds arms no arrival either: a pin of a bands kind carries an always-on
-    // caption, and the film stepped onto comes up hidden all the same.
+    // A step from a pin the pointer has asked a strip of carries that strip, and carries no
+    // arrival window with it: an arrival belongs to the file the window arrived on.
     stand_pin(Some(stepped));
+    with_pin(|pin| {
+        pin.chrome.caption = true;
+        pin.chrome.until = Some(Instant::now() + Duration::from_secs(5));
+    });
+    stand_media(MediaType::StaticImage);
+    let carried = take_up_pinned_window(&PathBuf::from("third-picture.png"), (100, 80, 420, 320));
+    assert!(
+        carried.chrome.caption && !carried.chrome.bar && carried.chrome.until.is_none(),
+        "the caption the pointer asked for stays up over the file that replaced the picture:          caption {}, bar {}, arrival {:?}",
+        carried.chrome.caption,
+        carried.chrome.bar,
+        carried.chrome.until
+    );
+
+    // And a step across kinds carries nothing: a pin of a bands kind keeps an always-on caption,
+    // and the film stepped onto comes up hidden all the same.
+    stand_pin(Some(carried));
     stand_media(MediaType::Text);
     let bands = take_up_pinned_window(&PathBuf::from("note.txt"), (100, 80, 420, 320));
     assert!(
         !bands.hides_chrome,
-        "a text pin keeps its chrome in bands, which is the carry this step breaks"
+        "a text pin keeps its chrome in bands, which is the carry a step onto it leaves alone"
     );
     stand_pin(Some(bands));
     stand_media(MediaType::Video);
