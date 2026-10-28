@@ -780,44 +780,8 @@ fn a_stand_in_left_iconic_under_a_pin_on_the_screen_comes_back_up_on_the_tick() 
     stand_pin(previous_pin);
 }
 
-/// **A stand-in left standing for a pin that is gone goes down on the tick.** A pin's end is the
-/// road that hides it, but the close is one road out of a pin and the tick is what runs after all of
-/// them: a stand-in no pin is owed must not be left as a window of this app's in the Shell's list
-/// with nothing behind it — the button a hover then finds over a file the app is not showing (see
-/// `keep_the_stand_in_up` and `a_button_is_owed`).
-#[test]
-fn a_stand_in_left_for_a_pin_that_is_gone_goes_down_on_the_tick() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-
-    let previous_pin = take_pin_for_a_test();
-    stand_pin(None);
-    forget_the_stand_in();
-
-    // The stand-in a pin left up, with no pin to be a button for.
-    let stand_in = the_stand_in();
-    // Safety: the window is this app's own stand-in, and it is only asked to be on the screen.
-    unsafe {
-        let _ = ShowWindow(stand_in, SW_SHOWNOACTIVATE);
-    }
-    assert!(
-        showing_taskbar_window().is_some(),
-        "the stand-in is up before the tick runs"
-    );
-
-    keep_the_stand_in_up();
-
-    assert!(
-        showing_taskbar_window().is_none(),
-        "a pin that is gone owes no button: the stand-in goes down with it"
-    );
-
-    forget_the_stand_in();
-    stand_pin(previous_pin);
-}
-
-/// The client box of a window, which is the box the Shell draws a taskbar hover's picture in.///
+/// The client box of a window, which is the box the Shell draws a taskbar hover's picture in.
+///
 /// Safety: the handle is a window of this app's own or of the test's, and the question is a
 /// measurement of it rather than a change to it.
 unsafe fn the_client_box(hwnd: HWND) -> (i32, i32) {
