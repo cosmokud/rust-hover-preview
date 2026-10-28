@@ -14,8 +14,8 @@ use super::*;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
-    GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetShellWindow,
+    GetWindow, GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
     GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
     SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_ERASEBKGND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED,
     WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
@@ -7582,4 +7582,56 @@ fn a_step_leaves_the_chrome_that_the_pointer_is_resting_on_up() {
     );
 
     stand_window_at_point_in(None);
+}
+
+/// **A pin's adopt still hands the foreground back from its player itself, exactly once.** The hover
+/// road leaves that ask to its tick, and the pin's is unchanged: its player was begun for the *pin's*
+/// host — not the hover's — so the hover's gate is false here and this is the call it always made, in
+/// the place it always made it. A window of this app's was in front a moment before the player opened,
+/// so the ask is one Windows grants, and one is all it makes.
+///
+/// The foreground cannot be rearranged on a desktop a test may not take, so the player is recorded as
+/// the window in front and the ask is recorded rather than made (see
+/// `pin_lifecycle::record_the_foreground_in_front`).
+#[test]
+fn a_pin_adopt_still_takes_the_foreground_back_from_its_player_once() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    assert!(pinned(), "the adopt this test is about is the pin's");
+
+    let pid = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(pid);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    assert!(
+        !hover_film_host::the_hover_player_was_begun_in_the_host(pid),
+        "a pin's player is begun for the pin's host, which is the fact the hover's gate reads"
+    );
+    mpv_ipc::answer_a_read(
+        pid,
+        "video-params",
+        Some(r#"{"w":320,"h":180,"dw":320,"dh":180}"#),
+    );
+    let source = unsafe { a_players_own_window() };
+    let shell = unsafe { GetShellWindow() };
+    pin_lifecycle::record_the_window_the_launch_found_in_front(shell.0 as isize);
+    pin_lifecycle::record_the_foreground_in_front(source.0 as isize, true);
+
+    unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
+
+    let asked = pin_lifecycle::the_foreground_asked_for();
+    let asked_again = pin_lifecycle::the_foreground_asked_for();
+    pin_lifecycle::forget_the_recorded_foreground();
+    unsafe {
+        let _ = DestroyWindow(source);
+    }
+
+    assert_eq!(
+        (asked, asked_again),
+        (shell.0 as isize, 0),
+        "the listing the player took the foreground from is asked for it back by the pin's own \
+         adopt, once"
+    );
 }

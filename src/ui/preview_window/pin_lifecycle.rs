@@ -3,6 +3,7 @@
 
 use super::pin_trace::note_pin_trace;
 use super::*;
+use windows::Win32::Foundation::GetLastError;
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 
 /// A pin was asked to come down, by the Explorer hook (previews were turned off, or the</path>
@@ -71,10 +72,16 @@ pub(super) unsafe fn take_the_hover_down(
     // and, where that ask was refused, once more after the kill has left the desktop in front. Only
     // this road asks: a pin owns its own foreground question, and a hover under a pin holds none
     // (see `a_pin_owns_the_window_a_hide_would_take_down`).
-    let refused = if pinned() {
-        false
-    } else {
+    //
+    // **The road is read here, while the hover still holds it**: the marker these asks are gated on
+    // goes down with the host below, and the residue pass asks after that (see
+    // `a_hover_player_was_begun_in_the_host`). `pinned()` is false for the length of a pin's
+    // take-up and step, so it is the marker and not the pin that keeps this road out of a step.
+    let the_road_is_the_hovers = a_hover_player_was_begun_in_the_host();
+    let refused = if the_road_is_the_hovers {
         unsafe { give_the_foreground_back_from_a_hover_player() }
+    } else {
+        false
     };
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -89,7 +96,7 @@ pub(super) unsafe fn take_the_hover_down(
 
     unsafe { hover_film_host::take_down_the_hover_film_host() };
 
-    if refused {
+    if refused && the_road_is_the_hovers {
         unsafe { give_the_foreground_back_from_the_desktop() };
     }
 }
@@ -2363,14 +2370,36 @@ fn a_foreground_to_give_back(recorded: isize, player: isize) -> isize {
 /// Safety: `player` is a window this app began, and the window handed the foreground is read from
 /// the desktop rather than held by the caller.
 pub(super) unsafe fn give_the_foreground_back_from(player: HWND) {
-    let front = GetForegroundWindow();
+    let front = the_foreground_in_front();
     if let Some(behind) = a_players_foreground_goes_to(front, player) {
         // The one line a run needs to say which window a player had taken the foreground from, and
         // where it went: written only where one really was taken, so a run that reads the trace for
         // the `Space` that toggled a pin out of the listing has the window that let it happen.
         note_pin_trace!("foreground given back {:?} -> {:?}", player, behind);
+        // A test process cannot make a window of its own the foreground, so a recorded one stands
+        // in and the ask is recorded rather than made (see `record_the_foreground_in_front`).
+        #[cfg(test)]
+        if a_recorded_foreground_is_standing() {
+            THE_FOREGROUND_ASKED_FOR.store(behind.0 as isize, Ordering::SeqCst);
+            return;
+        }
         let _ = SetForegroundWindow(behind);
     }
+}
+
+/// Whether the foreground a player took is the *hover* road's to give back: the player this app is
+/// holding was begun into the hover's host, and no pin stands.
+///
+/// **The player's host is the gate, and `pinned()` on its own is not.** `pinned()` is transiently
+/// false through a pin's take-up and every step of it, so a gate that read it alone admits the
+/// hover's ask in the middle of a pin step: the window in front is then the pin's own new player,
+/// the window behind resolves to Explorer, and Explorer is raised over the pin the user has just
+/// clicked open. A player a pin begins is begun for the *pin's* host, so this marker is false for
+/// every frame of a pin's life and the pin road can never enter a hover's ask, whatever `pinned()`
+/// says at that moment.
+fn a_hover_player_was_begun_in_the_host() -> bool {
+    !pinned()
+        && hover_film_host::the_hover_player_was_begun_in_the_host(VIDEO_PID.load(Ordering::SeqCst))
 }
 
 /// Whether `window` is a player this app began — the one kind of window a hover has to take the
@@ -2405,11 +2434,17 @@ fn a_player_this_app_began(window: HWND) -> bool {
     pid != 0 && film != 0 && (pid == film || crate::app::engine_processes::holds_a_player(pid))
 }
 
-/// The window a hover owes the foreground to, where `front` is a player this app began: the window
-/// the launch found in front — the listing the user was working in — and, where that one has gone
-/// or is itself one of ours, the ordinary window behind the player (see `the_window_behind`, which
-/// refuses a window of ours as a target, and `a_players_foreground_goes_to`, which is the pin's own
-/// ask of the same question).
+/// The window a hover owes the foreground to, where `front` is a player this app began: **the
+/// window the launch found in front and nothing else**, where it is still there and is not one of
+/// ours (see `a_window_of_ours`, and `a_players_foreground_goes_to`, which is the pin's own ask of
+/// the same question).
+///
+/// **Nothing is found by fallback here.** A hover that took the foreground recorded a real listing
+/// before its player began, so a recorded window that has gone or is one of ours is a question with
+/// no answer and no ask. The ordinary window behind (`the_window_behind`) is read through the
+/// foreground's own fallback, and what that answers for a window of ours is Explorer — which is
+/// exactly the window a pin step must never be answered with. A missing target asking nothing is
+/// what keeps a road that slipped past the player's gate from raising Explorer over anything.
 ///
 /// `front_is_a_player` is handed in rather than read here, so the rule can be answered on a machine
 /// with no player begun on it — the discipline `explorer_state_from_counts` keeps for the same
@@ -2423,8 +2458,9 @@ pub(super) fn a_hovers_foreground_goes_to(
         return None;
     }
 
-    let behind = HWND(the_window_behind(recorded, front.0 as isize) as *mut _);
-    (!behind.is_invalid() && behind != front).then_some(behind)
+    let behind = HWND(recorded as *mut _);
+    let live = !behind.is_invalid() && unsafe { IsWindow(behind) }.as_bool();
+    (live && behind != front && !a_window_of_ours(behind)).then_some(behind)
 }
 
 /// Put `behind` in front, asking it the way a program that is not the foreground can.
@@ -2456,17 +2492,61 @@ unsafe fn put_the_foreground_in_front(behind: HWND) -> bool {
     } else {
         unsafe { GetWindowThreadProcessId(front, None) }
     };
+    let joined = front_thread != 0 && front_thread != our_thread;
 
-    if front_thread == 0 || front_thread == our_thread {
-        return unsafe { SetForegroundWindow(behind) }.as_bool();
+    let mut attached = false;
+    let asked = if joined {
+        attached = unsafe { AttachThreadInput(our_thread, front_thread, true) }.as_bool();
+        attached && unsafe { SetForegroundWindow(behind) }.as_bool()
+    } else {
+        unsafe { SetForegroundWindow(behind) }.as_bool()
+    };
+    // Read before the join is left again, which is a call of its own and would answer for itself.
+    let error = if asked {
+        0
+    } else {
+        unsafe { GetLastError() }.0
+    };
+    if attached {
+        let _ = unsafe { AttachThreadInput(our_thread, front_thread, false) };
     }
 
-    if !unsafe { AttachThreadInput(our_thread, front_thread, true) }.as_bool() {
-        return false;
+    // **What the desktop says, not what the call answered**: a `TRUE` that left the player in front
+    // is a refusal and a `FALSE` whose window came up is the hand-back all the same, so this line is
+    // what a run reads to tell the two apart. What the call answered is still what is returned,
+    // because that is what the refusal wait is fed (see `note_a_refused_hand_back`).
+    let after = unsafe { GetForegroundWindow() };
+    let landed = after == behind;
+    note_pin_trace!(
+        "hover foreground: behind {:?} pid {} class {} attach attempted {} ok {} setforeground {} err {} front after {:?} pid {} landed {}",
+        behind,
+        the_owner_of(behind),
+        the_class_of(behind),
+        joined as u8,
+        attached as u8,
+        asked as u8,
+        error,
+        after,
+        the_owner_of(after),
+        landed as u8,
+    );
+    asked
+}
+
+/// The process a window belongs to, for a trace line that names it.
+fn the_owner_of(window: HWND) -> u32 {
+    let mut pid = 0u32;
+    if !window.is_invalid() {
+        unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
     }
-    let landed = unsafe { SetForegroundWindow(behind) }.as_bool();
-    let _ = unsafe { AttachThreadInput(our_thread, front_thread, false) };
-    landed
+    pid
+}
+
+/// The class a window was made of, for a trace line that names it.
+fn the_class_of(window: HWND) -> String {
+    let mut name = [0u16; 64];
+    let len = unsafe { GetClassNameW(window, &mut name) }.max(0) as usize;
+    String::from_utf16_lossy(&name[..len.min(name.len())])
 }
 
 /// The window a hover's last ask for the foreground was refused from, and when it was refused: what
@@ -2535,7 +2615,16 @@ fn forget_a_refused_hand_back() {
 /// `ffplay_window::apply_noactivate_to_hwnd`, which is answered by the host). So for as long as the
 /// player holds it, Explorer is not the window the user is working in, and asking for it back is
 /// refused unless the ask is made this app's own first (see `put_the_foreground_in_front`).
+///
+/// It is asked only on the hover's own road, and the marker of the player's host is the gate rather
+/// than `pinned()`: a pin's step runs with `pinned()` false and its player in front, and the hover's
+/// ask there finds Explorer behind the player and raises it over the pin (see
+/// `a_hover_player_was_begun_in_the_host`).
 pub(super) unsafe fn give_the_foreground_back_from_a_hover_player() -> bool {
+    if !a_hover_player_was_begun_in_the_host() {
+        return false;
+    }
+
     let front = the_foreground_in_front();
     let Some(behind) = a_hovers_foreground_goes_to(
         front,
@@ -2586,6 +2675,10 @@ pub(super) unsafe fn give_the_foreground_back_from_a_hover_player_on_the_tick() 
 /// kill hands the foreground to is a window that hides every listing on it (see
 /// `foreground_cover_rect`). It is asked after the kill and only where the hand-back before it was
 /// refused, so a desktop the user put in front themselves is not answered by this app.
+///
+/// Only a hover's take-down asks it, and only where that take-down read itself as the hover's road
+/// (see `a_hover_player_was_begun_in_the_host`): the player it is asking about has been killed, so
+/// the marker of its host is gone by now and the take-down's own read is what gates this pass.
 pub(super) unsafe fn give_the_foreground_back_from_the_desktop() {
     let front = the_foreground_in_front();
     if front.is_invalid() || !unsafe { foreground_is_the_desktop(front) } {
@@ -2609,7 +2702,8 @@ pub(super) unsafe fn give_the_foreground_back_from_the_desktop() {
     );
 }
 
-/// The window in front, as a hover's hand-backs read it.
+/// The window in front, as this app's hand-backs read it (see `record_the_foreground_in_front`,
+/// which stands one in for a test).
 fn the_foreground_in_front() -> HWND {
     #[cfg(test)]
     if a_recorded_foreground_is_standing() {
