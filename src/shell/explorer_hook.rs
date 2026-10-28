@@ -111,9 +111,9 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
-    GetWindowRect, GetWindowThreadProcessId, IsChild, IsIconic, IsWindow, IsWindowVisible,
-    SystemParametersInfoW, WindowFromPoint, GA_ROOT, GA_ROOTOWNER, SPI_GETICONTITLELOGFONT,
-    SW_SHOWMAXIMIZED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
+    GetWindowRect, IsChild, IsIconic, IsWindow, IsWindowVisible, SystemParametersInfoW,
+    WindowFromPoint, GA_ROOT, GA_ROOTOWNER, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
 };
 
 // What the rest of the crate asks for by name.

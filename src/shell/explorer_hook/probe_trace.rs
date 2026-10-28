@@ -184,29 +184,6 @@ pub(super) fn window_class_of(window: HWND) -> String {
     String::from_utf16_lossy(&buffer[..written as usize])
 }
 
-/// One line per state Explorer's windows are answered from, written where that state changes.
-///
-/// **A hover that never appears says which state the run was answering from**, which is the one
-/// fact the state ladder never wrote down: `HiddenByForeground` is the only answer that takes the
-/// preview down and then sleeps without ever asking where the cursor is, so a run that showed no
-/// hover after something was left in front of the listing reads here as that state — with the
-/// window in front named beside it, by class and by whether it is one of this app's own — rather
-/// than as the absence of a line (see `ExplorerState` and `foreground_cover_rect`).
-///
-/// Written on the change and not per read: the state is read at the pace of its own ladder, and
-/// the trace is there to be read afterwards rather than to be written on every tick of one.
-pub(super) fn note_explorer_state(state: ExplorerState) {
-    let foreground = unsafe { GetForegroundWindow() };
-
-    note_pin_click!(
-        "state {:?}  fg {} ({})  ours {}",
-        state,
-        window_class_of(foreground),
-        foreground.0 as isize,
-        a_window_of_ours_is_at(foreground) as u8,
-    );
-}
-
 /// The one line a tick of a click in hand is written as, out of the facts the loop has
 /// already read for its own reasons. `clicked` is zero on every tick of the retry, and on
 /// every tick of a run in which the press was never read at all — the one reading that says
