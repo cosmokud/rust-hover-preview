@@ -2395,9 +2395,14 @@ fn a_player_this_app_began(window: HWND) -> bool {
 
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
-    pid != 0
-        && (pid == VIDEO_PID.load(Ordering::SeqCst)
-            || crate::app::engine_processes::holds_a_player(pid))
+    // **The film's own id is answered first, and the process record only while a film is begun.**
+    // The id is one atomic read; `holds_a_player` takes that record's lock, scans every engine and
+    // player this app has written down, and asks Windows whether the one it found is still alive,
+    // which is not a question a tick may ask sixty times a second with no player on screen at all
+    // (see `holds_a_player`). A window of ours in front is always a running film or the one it
+    // replaced, so a run with no film up answers this without touching the record.
+    let film = VIDEO_PID.load(Ordering::SeqCst);
+    pid != 0 && film != 0 && (pid == film || crate::app::engine_processes::holds_a_player(pid))
 }
 
 /// The window a hover owes the foreground to, where `front` is a player this app began: the window
@@ -2464,6 +2469,63 @@ unsafe fn put_the_foreground_in_front(behind: HWND) -> bool {
     landed
 }
 
+/// The window a hover's last ask for the foreground was refused from, and when it was refused: what
+/// a refusal leaves behind so that the next tick does not make the same ask again (see
+/// `a_refused_hand_back_is_asked_again_only_after_a_while`).
+static A_REFUSED_HAND_BACK: Mutex<Option<(isize, Instant)>> = Mutex::new(None);
+
+/// How long a refused ask for a hover's foreground is left alone before the same window is asked
+/// again.
+///
+/// **A refused ask is not free: it flashes the target's taskbar button**, which is the flash this
+/// hand-back exists to take away — so asking again on the very next frame is that flash turned into
+/// a strobe, at the tick's own fifteen-millisecond cadence. Three quarters of a second is long
+/// enough for the foreground to have moved of its own accord — a click, a window closing, the ask
+/// becoming this app's to make — and short enough that a player still holding the keyboard is
+/// answered while the hand that opened it is on the pointer.
+pub(super) const A_REFUSED_HAND_BACK_WAITS: Duration = Duration::from_millis(750);
+
+/// Whether a hand-back that was refused from `front` is worth asking again at `now`: at once where
+/// the window in front is not the one that refused — another window asks a question of its own —
+/// and otherwise only once the wait above has passed.
+///
+/// The refusal is handed in rather than read here, so the rule can be answered on a machine whose
+/// foreground cannot be rearranged (the discipline `a_hovers_foreground_goes_to` keeps for the same
+/// reason).
+pub(super) fn a_refused_hand_back_is_asked_again_only_after_a_while(
+    front: HWND,
+    last_front: HWND,
+    last_refused_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    match last_refused_at {
+        Some(at) => {
+            front != last_front || now.saturating_duration_since(at) >= A_REFUSED_HAND_BACK_WAITS
+        }
+        None => true,
+    }
+}
+
+/// The refusal a hover's last ask left behind, as the predicate above reads it.
+fn a_refused_hand_back() -> (HWND, Option<Instant>) {
+    match A_REFUSED_HAND_BACK.lock().ok().and_then(|held| *held) {
+        Some((front, at)) => (HWND(front as *mut _), Some(at)),
+        None => (HWND::default(), None),
+    }
+}
+
+fn note_a_refused_hand_back(front: HWND, at: Instant) {
+    if let Ok(mut held) = A_REFUSED_HAND_BACK.lock() {
+        *held = Some((front.0 as isize, at));
+    }
+}
+
+fn forget_a_refused_hand_back() {
+    if let Ok(mut held) = A_REFUSED_HAND_BACK.lock() {
+        *held = None;
+    }
+}
+
 /// Give the foreground back where a *hover's* player has taken it, answering whether a hand-back
 /// was asked for and refused — the one answer the end of a hover needs (see `take_the_hover_down`).
 ///
@@ -2484,6 +2546,11 @@ pub(super) unsafe fn give_the_foreground_back_from_a_hover_player() -> bool {
     };
 
     let landed = unsafe { put_the_foreground_in_front(behind) };
+    if landed {
+        forget_a_refused_hand_back();
+    } else {
+        note_a_refused_hand_back(front, Instant::now());
+    }
     note_pin_trace!(
         "hover foreground: player {:?} behind {:?} landed {}",
         front,
@@ -2491,6 +2558,27 @@ pub(super) unsafe fn give_the_foreground_back_from_a_hover_player() -> bool {
         landed as u8
     );
     !landed
+}
+
+/// The tick's ask of the same hand-back, held off while the last refusal still stands (see
+/// `a_refused_hand_back_is_asked_again_only_after_a_while`).
+///
+/// The tick is the one caller that asks again every frame, so it is the one that would make a
+/// refusal flash until the window in front changes: it asks once per wait, not once per frame. The
+/// end of a hover asks plainly — a player is about to be killed and the answer it needs is
+/// whether the listing already has the foreground back.
+pub(super) unsafe fn give_the_foreground_back_from_a_hover_player_on_the_tick() -> bool {
+    let (last_front, last_refused_at) = a_refused_hand_back();
+    if !a_refused_hand_back_is_asked_again_only_after_a_while(
+        the_foreground_in_front(),
+        last_front,
+        last_refused_at,
+        Instant::now(),
+    ) {
+        return false;
+    }
+
+    unsafe { give_the_foreground_back_from_a_hover_player() }
 }
 
 /// Give the foreground back where a *hover's* own windows have left it on the desktop, which is
@@ -2567,6 +2655,14 @@ pub(super) fn forget_the_recorded_foreground() {
     THE_FOREGROUND_ASKED_FOR.store(0, Ordering::SeqCst);
     A_RECORDED_PLAYER_IN_FRONT.store(false, Ordering::SeqCst);
     A_RECORDED_FOREGROUND.store(0, Ordering::SeqCst);
+    forget_a_refused_hand_back();
+}
+
+/// Stand a refused ask behind the tick's hand-back, for a test that cannot make one refuse (see
+/// `A_REFUSED_HAND_BACK`).
+#[cfg(test)]
+pub(super) fn record_a_refused_hand_back(front: isize, at: Instant) {
+    note_a_refused_hand_back(HWND(front as *mut _), at);
 }
 
 /// Record the window a launch found in front, for a test that cannot make its own window the
