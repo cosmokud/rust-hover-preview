@@ -158,9 +158,11 @@ fn loadfile_asks_for_the_file_and_the_hover_volume() {
     );
 }
 
-/// **A hover that cannot be served is the launch this app always had.** A player that never says the
-/// file is open is ended and forgotten rather than left standing, the failure is written down, and a
-/// cold player is begun for the hover.
+/// **A hover that cannot be served is the launch this app always had, and it costs the resident
+/// nothing.** A player that never says the file is open is stopped and left standing by rather than
+/// ended, the failure is written down, a cold player is begun for the hover — and the TTL can still
+/// let that resident go, which is what keeps a resident that never serves anything from standing
+/// for the rest of the run.
 #[test]
 fn a_hover_that_cannot_be_served_falls_back_to_a_cold_player() {
     let _one = one_at_a_time();
@@ -176,19 +178,129 @@ fn a_hover_that_cannot_be_served_falls_back_to_a_cold_player() {
     assert_ne!(cold.id(), pid, "a player begun for the hover, not the resident");
     assert_eq!(
         mpv_resident::the_resident_pid(),
-        None,
-        "and the resident that could not serve it is let go"
+        Some(pid),
+        "and the resident that could not serve it is kept rather than killed for it"
     );
     assert!(
         take_last_spawned_command().is_some(),
         "the cold player is the launch the hover road had before the resident"
     );
+    let traced = pin_trace::noted_lines();
+    assert!(
+        traced
+            .iter()
+            .any(|line| line.contains("hover loadfile failed")),
+        "and the run says the file was not taken: {traced:?}"
+    );
+    assert!(
+        traced
+            .iter()
+            .any(|line| line.contains("hover resident left warming")),
+        "and that the resident was left standing by rather than let go: {traced:?}"
+    );
+    assert!(
+        mpv_ipc::noted_lines()
+            .iter()
+            .any(|line| line.contains(r#""command":["stop"]"#)),
+        "with its film stopped, so it stands by idle rather than holding a file it never took: {:?}",
+        mpv_ipc::noted_lines()
+    );
+
+    // **And the TTL still has it**, which is what keeps a resident that can never serve from
+    // standing for the rest of the run: standing by is the state a resident is reaped from.
+    let previous_idle = CONFIG
+        .lock()
+        .map(|config| config.video_engine_idle)
+        .unwrap_or(EngineIdle::Away);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.video_engine_idle = EngineIdle::Seconds(0);
+    }
+    mpv_resident::tick();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.video_engine_idle = previous_idle;
+    }
+
+    assert_eq!(
+        mpv_resident::the_resident_pid(),
+        None,
+        "a TTL of nothing lets the resident it left standing by go at once"
+    );
     assert!(
         pin_trace::noted_lines()
             .iter()
-            .any(|line| line.contains("hover loadfile failed")),
-        "and the run says the file was not taken: {:?}",
+            .any(|line| line.contains("mpv resident let go (ttl)")),
+        "and the run says which half of the TTL let it go: {:?}",
         pin_trace::noted_lines()
+    );
+}
+
+/// **A resident whose first hover it could not serve is the one that serves the second.** The
+/// failure used to end the resident, so every hover began a player, found its pipe not yet there,
+/// killed that player and began another — the warm road that never once ran outside the suite. A
+/// resident left standing by is still the resident, and the hover after it is loaded on it.
+#[test]
+fn a_resident_whose_first_load_failed_serves_the_next_hover() {
+    let _one = one_at_a_time();
+    let _stand = ResidentStand::new(true);
+
+    let pid = a_resident(true);
+    mpv_ipc::clear_noted();
+    pin_trace::clear_noted();
+    let _ = take_last_spawned_command();
+
+    // The first hover: nothing ever answers for the file, so the resident cannot say it is open.
+    let first = a_hover(&a_film(), 55).expect("a player of the hover's own");
+    assert_ne!(first.id(), pid, "the resident could not serve this hover");
+    assert_eq!(
+        mpv_resident::the_resident_pid(),
+        Some(pid),
+        "and is kept rather than ended for it"
+    );
+    let _ = take_last_spawned_command();
+
+    // The next hover, on a resident whose pipe is by now long open: it is the one that serves it.
+    mpv_ipc::clear_noted();
+    mpv_ipc::answer_a_read(pid, "video-params", Some("{}"));
+    let served = a_hover(&a_film(), 55).expect("the resident, serving this hover");
+
+    assert_eq!(
+        served.id(),
+        pid,
+        "the resident the failed hover left warming is the one that serves the next hover"
+    );
+    assert!(
+        take_last_spawned_command().is_none(),
+        "so no second player is begun for it"
+    );
+    assert!(
+        mpv_ipc::noted_lines()
+            .iter()
+            .any(|line| line.contains(r#""command":["loadfile""#)),
+        "and the file is loaded down its pipe: {:?}",
+        mpv_ipc::noted_lines()
+    );
+}
+
+/// **Only a resident that this hover itself began is waited on for its pipe.** A resident that was
+/// already standing has a pipe that is long open, and waiting on it would be the wait kept for a
+/// pipe that may not exist, paid by every hover for nothing.
+///
+/// Which of the two asks `serve` made is not something a test build can see: the pipe under both is
+/// the one seam a test run never touches — `mpv_ipc` notes the line and writes nothing, before
+/// either function opens anything — and the line is the same bytes either way (see
+/// `mpv_ipc::load_file_line`). So it is the rule that is asserted, and `serve` reads the rule from
+/// here rather than keeping its own copy of it.
+#[test]
+fn only_a_just_begun_resident_is_waited_on_for_its_pipe() {
+    assert_eq!(
+        mpv_resident::the_wait_for_the_pipe(true),
+        Some(mpv_resident::PIPE_UP_WAIT),
+        "a resident begun for this hover may not have its pipe yet, so its file is waited on"
+    );
+    assert_eq!(
+        mpv_resident::the_wait_for_the_pipe(false),
+        None,
+        "a resident that was already standing is offered its line at once, with no wait at all"
     );
 }
 

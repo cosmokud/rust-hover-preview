@@ -6,6 +6,13 @@
 //! the *resident* — begun with a hover's own argv and no file, and every hover after it is a file
 //! loaded down the pipe this app already talks to mpv on (see `mpv_ipc`).
 //!
+//! **A resident is a process a good while before it is a pipe.** mpv makes its end of the JSON IPC
+//! while it starts — measured here, 40–211 ms after the spawn — so the first hover a resident is
+//! begun for has nowhere to write its `loadfile` yet. That hover waits `PIPE_UP_WAIT` for the pipe
+//! and is served the moment it is there; where it is not there in time, the resident is left
+//! standing by rather than ended, so the next hover finds a pipe that is long open and is served
+//! down it (see `serve`).
+//!
 //! **Only the hover road.** A pin's player is begun by `pin_playback` and `pin_install` exactly as
 //! it always was, and FFmpeg's player and the media engine are untouched: what a hover is saved is
 //! the wait a hover was paying.
@@ -40,11 +47,24 @@ use crate::config::config::EngineIdle;
 const PARKED_AT: (i32, i32) = (-32000, -32000);
 const PARKED_SIZE: i32 = 1;
 
+/// How long a resident that has just been begun is waited on for its pipe to be there.
+///
+/// **The process is not the pipe.** On this machine with mpv 0.41.0 the pipe appears 40 ms after
+/// the spawn with the file cache warm and 211 ms after it on a first run, and a `loadfile` offered
+/// before that is answered `ERROR_FILE_NOT_FOUND` at once — which was every first hover of every
+/// resident, since a resident is begun idle and the first line it is ever sent is a file. So the
+/// first hover of a resident waits this long for somewhere to write: long enough to catch a
+/// warm-cache start several times over, and short enough that it is well under the cold launch a
+/// hover falls back to, so even a miss costs less than the player it then takes (see `serve` and
+/// `mpv_ipc::deliver_within`).
+pub(super) const PIPE_UP_WAIT: Duration = Duration::from_millis(120);
+
 /// How long the resident is given to say the file it was handed is open, and how often it is asked.
 ///
 /// The answer arrives in 21–32 ms when it comes at all, and a player that has not said it inside
-/// half a second is one this app stops waiting for: the hover takes a cold player instead, which
-/// costs the wait the resident exists to save and nothing else (see `serve`).
+/// half a second is one this app stops waiting for: the hover takes a cold player instead, and the
+/// resident is left standing by with its film stopped, so the next hover is served by it rather
+/// than by a player begun for that one too (see `serve`).
 const FILE_LOADED_WAIT: Duration = Duration::from_millis(500);
 const FILE_LOADED_POLL: Duration = Duration::from_millis(2);
 
@@ -171,6 +191,19 @@ pub(super) fn the_resident_is_owed_a_re_warm(
     a_resident_is_held: bool,
 ) -> bool {
     owed && !a_pin_stands && !a_resident_is_held
+}
+
+/// How long the file a hover asks for is waited on: some of `PIPE_UP_WAIT` for a resident this
+/// hover is the one that began, and nothing at all for a resident that was already standing.
+///
+/// **A standing resident's pipe is long open**, so a line offered to it is a line mpv hears at once
+/// and waiting on it would be the wait `deliver_within` keeps for a pipe that may not exist, paid
+/// by every hover for nothing. It is a rule of its own rather than an `if` beside the call so that
+/// it can be asked directly: the line either road offers is the same bytes (see
+/// `mpv_ipc::load_file_line`), and a test build notes that line instead of writing it, so which of
+/// the two functions ran is not a thing the suite could tell from the lines alone.
+pub(super) fn the_wait_for_the_pipe(begun_now: bool) -> Option<Duration> {
+    begun_now.then_some(PIPE_UP_WAIT)
 }
 
 /// The word a reaped resident's line says: which half of `MPV TTL` let it go.
@@ -305,8 +338,10 @@ pub(super) fn begin_a_resident_for_a_test(behind_the_host: bool) -> Option<u32> 
 ///
 /// `None` is every way a hover is not served, and every one of them leaves the caller to begin a
 /// player of its own: no resident could be begun at all, a pin stood, the file was not accepted, or
-/// the player did not say the file was open inside `FILE_LOADED_WAIT` — in which case the resident
-/// is ended and forgotten rather than left behind as a player this app cannot talk to.
+/// the player did not say the file was open inside `FILE_LOADED_WAIT`. **None of them ends the
+/// resident.** A resident whose pipe had not opened yet, or which never drew a frame, is one the
+/// next hover can be served by: it is stopped and left standing *by* — not serving, its TTL
+/// running — rather than killed for a failure this hover is already paying for.
 pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<Served> {
     if !keeping_a_resident() || !the_resident_may_serve(pinned()) {
         return None;
@@ -314,6 +349,9 @@ pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<S
 
     let signature = LaunchSignature::of_the_machine(behind_the_host)?;
     let audio_off = video_launch::mpv_launched_without_audio(volume);
+    // Whether this hover is the one the resident was begun for, which is the whole of the
+    // difference between a pipe that is there and one that may not be yet (see `PIPE_UP_WAIT`).
+    let begun_now;
     let (pid, pipe) = {
         let mut slot = RESIDENT.lock().ok()?;
 
@@ -336,7 +374,8 @@ pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<S
                 }
             }
         }
-        if slot.is_none() {
+        begun_now = slot.is_none();
+        if begun_now {
             *slot = begun(signature, volume, audio_off);
         }
 
@@ -346,15 +385,20 @@ pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<S
         (resident.player.id(), resident.pipe.clone())
     };
 
-    // **The level is asked again per file**, because the command line's per-file options are given
-    // to every file the player loads — `--aid=no` among them — so the pipe is remembered again with
-    // what the launch said of its audio before the level is moved (see `mpv_ipc::set_volume`).
+    // **The pipe is named again before the file is offered, and the level is asked again per file**
+    // because the command line's per-file options are given to every file the player loads —
+    // `--aid=no` among them (see `mpv_ipc::set_volume`). The naming is not only for the level: the
+    // pipe this app holds is remembered against one player at a time, so a resident that stood by
+    // while a cold player was begun for the hover before it is one whose name the record no longer
+    // holds — and without naming it here a resident left warming would never be reached again (see
+    // `mpv_ipc::remember_pipe`).
     let started = Instant::now();
-    let asked =
-        mpv_ipc::load_file(pid, path) && {
-            mpv_ipc::remember_pipe(pid, &pipe, audio_off);
-            mpv_ipc::set_volume(pid, volume)
-        };
+    mpv_ipc::remember_pipe(pid, &pipe, audio_off);
+    let offered = match the_wait_for_the_pipe(begun_now) {
+        Some(within) => mpv_ipc::load_file_within(pid, path, within),
+        None => mpv_ipc::load_file(pid, path),
+    };
+    let asked = offered && mpv_ipc::set_volume(pid, volume);
     // A file is not held where the last one was left: a hover shows its film playing, from its
     // beginning, which is what `loadfile ... replace` and this one ask say together.
     let asked = asked && mpv_ipc::set_paused(pid, false);
@@ -374,12 +418,21 @@ pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<S
         "hover loadfile failed ({}), began a cold player",
         if asked { "no frame" } else { "the pipe" }
     );
+    note_pin_trace!(
+        "hover resident left warming ({})",
+        if asked { "no frame" } else { "the pipe" }
+    );
+
+    // **It stands by rather than being ended.** A pipe that had not opened yet, or a frame that had
+    // not landed inside `FILE_LOADED_WAIT`, is not a player this app has lost: it is one the next
+    // hover can be served by. So the film is stopped on it and the clock its TTL runs on is started
+    // — which is what lets `tick` reap it where it is genuinely of no use, and what leaves it
+    // holding no hover while it waits for the one that can use it.
     if let Ok(mut slot) = RESIDENT.lock() {
-        let failed = slot.as_ref().is_some_and(|resident| resident.player.id() == pid);
-        if failed {
-            if let Some(resident) = slot.take() {
-                end(resident);
-            }
+        if let Some(resident) = slot.as_mut().filter(|resident| resident.player.id() == pid) {
+            let _ = mpv_ipc::stop_playing(pid);
+            resident.serving = false;
+            resident.idle_since = Some(Instant::now());
         }
     }
 

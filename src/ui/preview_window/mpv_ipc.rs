@@ -142,6 +142,16 @@ fn write(pid: u32, line: String) -> bool {
     deliver(&held.pipe, line)
 }
 
+/// Where a line that is worth waiting for goes: the same pipe, offered until `within` has passed
+/// (see `deliver_within`). A pid this app holds no pipe for is still nobody's player, so nothing is
+/// waited on for it.
+fn write_within(pid: u32, line: String, within: std::time::Duration) -> bool {
+    let Some(held) = held_player(pid) else {
+        return false;
+    };
+    deliver_within(&held.pipe, line, within)
+}
+
 /// How many times a line is offered to the pipe, and how long the wait between two offers is.
 ///
 /// mpv serves one client at a time and frees the next instance of its pipe a moment after the
@@ -157,6 +167,15 @@ const PIPE_OFFER_WAIT: std::time::Duration = std::time::Duration::from_millis(2)
 /// Windows' own `ERROR_PIPE_BUSY`, which is what an open that finds every instance of the pipe
 /// taken answers — the one failure worth waiting for rather than reporting.
 const ERROR_PIPE_BUSY: i32 = 231;
+
+/// Windows' own `ERROR_FILE_NOT_FOUND`, which is what an open answers before the player has made
+/// the pipe it was told to listen on: mpv creates its end of it while it starts, and a line offered
+/// before it is there has nowhere to go (see `deliver_within`).
+const ERROR_FILE_NOT_FOUND: i32 = 2;
+
+/// Windows' own `ERROR_PIPE_NOT_CONNECTED`, which is the pipe a player has made but is not yet
+/// listening on — the moment between the name existing and mpv taking the one client it serves.
+const ERROR_PIPE_NOT_CONNECTED: i32 = 233;
 
 /// Write one command line down the pipe and close it. MPV holds the other end; a pipe that cannot
 /// be opened is a player that is not there, and a command for one is not an error.
@@ -189,6 +208,56 @@ fn deliver(name: &str, line: String) -> bool {
         match std::fs::OpenOptions::new().write(true).open(&path) {
             Ok(mut pipe) => return pipe.write_all(line.as_bytes()).is_ok(),
             Err(error) if offers > 0 && error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                std::thread::sleep(PIPE_OFFER_WAIT);
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Whether an open that failed is one worth offering the line again for: every instance of the pipe
+/// is taken, or the pipe is not there yet, or it is there with nobody listening on it yet (see
+/// `deliver_within`).
+fn worth_offering_again(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(ERROR_PIPE_BUSY | ERROR_FILE_NOT_FOUND | ERROR_PIPE_NOT_CONNECTED)
+    )
+}
+
+/// Write one command line down the pipe and close it, offering it again until `within` has passed
+/// or the pipe takes it: `deliver`'s write, with the patience a player that has only just been begun
+/// needs.
+///
+/// **A player is a process before a pipe is a player's.** mpv makes its end of the JSON IPC while
+/// it starts, and measured on this machine with mpv 0.41.0 the pipe appears 40 ms after the spawn
+/// with the file cache warm and 211 ms after it on a first run: a line offered before that is
+/// answered `ERROR_FILE_NOT_FOUND`, which `deliver` reports at once. Every other command wants that
+/// immediate answer — a line for a player that is not there is not a line worth half a second of
+/// anybody's hover — so the waiting is this second function, and its one caller is the first
+/// `loadfile` of a resident that has just been begun (see `mpv_resident::serve`).
+///
+/// **A probe connection would not do the job it looks like it does.** The obvious way to wait for a
+/// pipe is to open one and count that as the player being ready — but mpv serves a single client at
+/// a time, so the probe's own instance is the one the file would then be waiting behind, and the
+/// write would be late by exactly as much as the probe was early. Offering the line itself costs
+/// the same opens and lands it the moment there is somewhere to put it.
+fn deliver_within(name: &str, line: String, within: std::time::Duration) -> bool {
+    #[cfg(test)]
+    if !WRITE_TO_A_REAL_PIPE.load(Ordering::Acquire) {
+        if let Ok(mut noted) = NOTED.lock() {
+            noted.push(line);
+        }
+        return true;
+    }
+
+    use std::io::Write;
+    let path = format!(r"\\.\pipe\{name}");
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        match std::fs::OpenOptions::new().write(true).open(&path) {
+            Ok(mut pipe) => return pipe.write_all(line.as_bytes()).is_ok(),
+            Err(error) if worth_offering_again(&error) && std::time::Instant::now() < deadline => {
                 std::thread::sleep(PIPE_OFFER_WAIT);
             }
             Err(_) => return false,
@@ -279,13 +348,32 @@ pub(super) fn seek_absolute(pid: u32, seconds: f64) -> bool {
 /// the first, which is what makes a served hover the launch a hover would have had (see
 /// `video_launch::mpv_args`).
 pub(super) fn load_file(pid: u32, file: &std::path::Path) -> bool {
-    write(
-        pid,
-        format!(
-            r#"{{"command":["loadfile",{},"replace"],"async":true}}"#,
-            a_json_string(&file.to_string_lossy()),
-        ) + "\n",
-    )
+    write(pid, load_file_line(file))
+}
+
+/// The same line for a player whose pipe may not be there yet, offered until `within` has passed:
+/// the first `loadfile` of a resident that has just been begun, which is the one line in this
+/// module written to a player that is still starting (see `deliver_within` and
+/// `mpv_resident::PIPE_UP_WAIT`).
+pub(super) fn load_file_within(
+    pid: u32,
+    file: &std::path::Path,
+    within: std::time::Duration,
+) -> bool {
+    write_within(pid, load_file_line(file), within)
+}
+
+/// The line a file is loaded with: the command, the file, `replace` and the newline the JSON IPC
+/// reads a message up to (see `deliver`).
+///
+/// It is one function because the resident offers this very line by two roads — at once to a player
+/// that is standing, and patiently to one that has just been begun — and a line built at each call
+/// site is a line one of the two can get wrong (see `load_file` and `load_file_within`).
+fn load_file_line(file: &std::path::Path) -> String {
+    format!(
+        r#"{{"command":["loadfile",{},"replace"],"async":true}}"#,
+        a_json_string(&file.to_string_lossy()),
+    ) + "\n"
 }
 
 /// Drop the file a player holds and leave it idle rather than ended: what a hover ending leaves the
