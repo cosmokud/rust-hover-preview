@@ -126,7 +126,7 @@ fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() 
             "a film mpv plays, with Pin Mode on, is the route the host is for"
         );
 
-        let process = start_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None, None)
+        let process = start_hover_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted player");
         let pid = process.id();
         assert!(
@@ -202,7 +202,7 @@ fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() 
             !hover_film_host::the_hover_film_is_kept_in_a_host(&path),
             "with Pin Mode off the hover is begun the way it always was"
         );
-        let process = start_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None, None)
+        let process = start_hover_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted player");
         assert!(
             hover_film_host::hover_film_host().is_none(),
@@ -397,7 +397,7 @@ fn the_hover_host_goes_down_only_with_the_player_it_holds() {
     let _stand = HoverHostStand::new(true);
     let path = a_film();
 
-    let first = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+    let first = start_hover_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
         .expect("a noted player");
     let first_pid = first.id();
     let host = hover_film_host::hover_film_host().expect("the hover's host");
@@ -413,7 +413,7 @@ fn the_hover_host_goes_down_only_with_the_player_it_holds() {
     );
 
     // The next hover player is begun into the same host, which now belongs to it.
-    let second = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+    let second = start_hover_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
         .expect("a noted player");
     assert_eq!(
         hover_film_host::hover_film_host(),
@@ -458,7 +458,7 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
             hover_film_host::the_hover_film_is_kept_in_a_host(&path),
             "an FFmpeg film with Pin Mode on is kept where a pin can take it up"
         );
-        let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+        let process = start_hover_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted ffplay");
         assert!(
             hover_film_host::the_hover_player_was_begun_in_the_host(process.id()),
@@ -478,7 +478,7 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
             !hover_film_host::the_hover_film_is_kept_in_a_host(&path),
             "with Pin Mode off an FFmpeg hover keeps its own window of the desktop's"
         );
-        let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+        let process = start_hover_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted ffplay");
         assert!(
             hover_film_host::hover_film_host().is_none(),
@@ -525,7 +525,7 @@ fn every_hover_ffplay_launch_asks_for_the_composed_renderer_and_vsync_off() {
         let _stand = HoverHostStand::new(true);
         stand_ffplay_in(Some(true));
         stand_mpv_in(Some(false));
-        let _ = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+        let _ = start_hover_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted ffplay");
         let launched = take_last_spawned_command().expect("the hosted hover launch");
         assert!(
@@ -552,7 +552,7 @@ fn every_hover_ffplay_launch_asks_for_the_composed_renderer_and_vsync_off() {
         let _stand = HoverHostStand::new(false);
         stand_ffplay_in(Some(true));
         stand_mpv_in(Some(false));
-        let _ = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+        let _ = start_hover_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
             .expect("a noted ffplay");
         let hovered = take_last_spawned_command().expect("the top-level hover launch");
         assert!(
@@ -588,7 +588,7 @@ fn hover_end_takes_the_ffplay_host_down() {
     stand_mpv_in(Some(false));
     let path = a_film();
 
-    let process = start_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
+    let process = start_hover_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
         .expect("a noted ffplay");
     let host = hover_film_host::hover_film_host().expect("the hover's host");
 
@@ -603,6 +603,32 @@ fn hover_end_takes_the_ffplay_host_down() {
     assert!(
         !unsafe { IsWindow(host) }.as_bool(),
         "and its window is destroyed rather than left as a black rectangle"
+    );
+}
+
+/// **A hover's FFmpeg player is shown without being activated**, which is the whole of what keeps a
+/// hovered film from taking the foreground off the listing it was begun from. It is asked through
+/// the child's own environment because that is the one ask this player honours: a launch at
+/// `SW_SHOWNOACTIVATE` still comes up activated (measured, `GetWindowPlacement().showCmd` 1), while
+/// this hint leaves the foreground where it was (see `start_hover_video_playback`).
+#[test]
+fn a_hover_ffplay_launch_is_shown_without_activation() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let _stand = HoverHostStand::new(true);
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+
+    let _ = start_hover_video_playback(&a_film(), 0, 0, 320, 180, 0.0, false, 0, None, None)
+        .expect("a noted ffplay");
+    let launched = take_last_spawned_command().expect("the hover's launch");
+    assert!(
+        launched.env.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN")
+                && value.as_deref() == Some("1")
+        }),
+        "a hover's window is shown unactivated, so nothing of Explorer's is taken from it"
     );
 }
 

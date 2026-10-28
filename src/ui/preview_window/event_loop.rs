@@ -4230,7 +4230,7 @@ pub fn run_preview_window() {
                                 // before a new one takes the screen.
                                 kill_stray_video_process();
 
-                                let video_process = start_video_playback(
+                                let video_process = start_hover_video_playback(
                                     &path,
                                     pos_x,
                                     pos_y,
