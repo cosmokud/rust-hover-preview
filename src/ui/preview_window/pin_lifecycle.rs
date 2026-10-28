@@ -844,6 +844,15 @@ pub(super) fn end_pin_beside_the_state() {
         *request = None;
     }
 
+    // And the two band holds: a band taken for a pick's press, and one taken for a step between two
+    // films, are placements of a pin that is gone — and a pin that is gone owes neither. Cleared
+    // here rather than on the loop's tick, because the tick's own road for them asks a pin that has
+    // already been taken down, and a hold left standing is the next window of this app's placed in a
+    // band nobody asked for (see `PIN_BAND_HELD` and `PIN_STEP_BAND_HELD`).
+    PIN_BAND_HELD.store(false, Ordering::SeqCst);
+    PIN_STEP_BAND_HELD.store(false, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+
     // And the window a pinned mpv film was drawn in — the host, a child of the pin's on the child
     // road and a window of the desktop's that owns the pin's chrome on the default one — with the
     // player it held: it is a window of this app's own, and one left standing for a pin that has gone
@@ -883,6 +892,14 @@ pub(super) fn end_pin_beside_the_state() {
     // and was closed left a whole player of its own running, and the window it draws in standing,
     // over the listing the next hover was made in.
     settle_the_retirement_for_a_pin_that_is_going();
+
+    // And the same for the wait a take-up on a hover's film began: a pin closed while its own player
+    // was still opening the file has no picture to hand over and no window for one to be shown in,
+    // so the wait is disarmed and the hover it froze is ended with it (see
+    // `settle_the_handover_for_a_pin_that_is_going`).
+    unsafe {
+        pin_film_host::settle_the_handover_for_a_pin_that_is_going();
+    }
 }
 
 /// Whether the thing a pin is a window onto is still there.
@@ -2247,8 +2264,9 @@ pub(super) unsafe fn foreground_is_ours(window: HWND) -> bool {
 /// pin going out of the band with the picture left over it, and a press that picked a file went the
 /// same way whenever the new film's window came up before the raise could land (see
 /// `foreground_is_ours`, which is the two questions this answers for the watch and for the window a
-/// demotion goes behind).
-pub(super) fn pid_is_the_previews(pid: u32) -> bool {
+/// demotion goes behind, and the Explorer hook's `a_window_of_ours_is_at`, which asks it of the
+/// window in front of the listing for the same reason).
+pub(crate) fn pid_is_the_previews(pid: u32) -> bool {
     pid != 0 && (pid == unsafe { GetCurrentProcessId() } || pid == VIDEO_PID.load(Ordering::SeqCst))
 }
 
