@@ -329,65 +329,78 @@ fn a_pinned_ffplay_film_stands_in_the_pins_own_window() {
     }
 }
 
-/// **A pin that has just appeared is asked for the foreground, and nothing else is.** The debt is
-/// the arriving pin's own, and it is spent by the show that brings the window up: a pin standing in
-/// the preview's window is asked for nothing — that window never takes the focus — and a pin already
-/// on the screen is one the user put where it is, so a step, a box change and the tick's own re-show
-/// are owed nothing (see `PIN_ARRIVAL_OWES_THE_FRONT`).
+/// **A pin that arrives is never asked for the foreground.** The take-up and the show behind it are
+/// the whole of the road a pin arrives by, and nothing on that road asks Windows for the front.
+///
+/// **What puts a pin in front is the band, and which band is the setting's to say.** A pin that is
+/// `Always On Top` is placed in the topmost band by the show every pin gets; a pin that is not has the
+/// topmost band taken and given straight back for the moment it appears, so the next click on another
+/// window puts it behind exactly as any window behaves (see `band_place`,
+/// `showing_takes_the_band_to_appear` and `take_the_band_and_give_it_back`). Nothing of the pin's
+/// arrival is a request for the keyboard, and nothing of this road may become one.
+///
+/// It is read off the road's own recorder rather than off the desktop: a take-up that asked for the
+/// front wrote that down, and the show's own line is what says this is the road that was read.
 #[test]
-fn only_a_pin_that_has_just_appeared_is_asked_for_the_foreground() {
+fn a_pin_that_arrives_is_never_asked_for_the_foreground() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    let listing = HWND(0x2000 as *mut _);
-    let somewhere_else = HWND(0x3000 as *mut _);
+    let film = super::pin_film_host_window::StandingFilm::new();
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
 
-    // Nothing of an earlier test is owed here: the debt is a fact about the pin that is arriving.
-    take_the_arrival_foreground(true, true, listing);
-    assert!(
-        !the_pin_arrival_is_owed(),
-        "a test begins with no pin on its way up"
-    );
+    // A pin that arrives comes up with no pin standing behind it, which is the take-up whose state is
+    // written whole from the file the key asked for (see `take_up_pinned_window`).
+    stand_pin(None);
+    pin_trace::clear_noted();
 
-    arm_the_pin_arrival();
-    assert!(
-        !take_the_arrival_foreground(false, false, listing),
-        "a pin standing in the preview's window is asked for nothing: a tool window never takes \
-         the focus, so the ask is one Windows refuses for it"
-    );
-    assert!(
-        !the_pin_arrival_is_owed(),
-        "and the arrival is spent all the same — the pin appeared, and the show after it is not it"
-    );
+    install(take_up_pinned_window(
+        Path::new("a-pin-that-arrives.mkv"),
+        film.box_,
+    ));
+    // Safety: the window is the stand's own, and every global written here is put back when it is
+    // dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
 
-    arm_the_pin_arrival();
     assert!(
-        !take_the_arrival_foreground(true, true, listing),
-        "a pin already on the screen is one the user has put where it is, so a step, a box change \
-         and the tick's re-show ask nothing"
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "the pin is shown: a take-up that asks nothing of the front is still a pin on the screen"
     );
     assert!(
-        !the_pin_arrival_is_owed(),
-        "and the show that found it standing spends the debt the take-up armed"
+        !unsafe { window_holds_the_topmost_band(film.pin_hwnd) },
+        "and the band it appears in is given straight back, because `Always On Top` is off"
     );
 
-    // **The user has worked somewhere else since the key was pressed**: the front is not the window
-    // the request was made in, so the pin must not take it — that is the ask landing on top of a
-    // click the user has already made (see `a_front_request_is_still_wanted`).
-    arm_the_pin_arrival_from(listing);
+    let trace = pin_trace::noted_lines();
     assert!(
-        !take_the_arrival_foreground(true, false, somewhere_else),
-        "a request whose window is not the one in front is a request the user has answered"
+        trace.iter().any(|line| line.starts_with("show hwnd")),
+        "this is the take-up/show road that was read: {trace:?}"
+    );
+    assert!(
+        !trace.iter().any(|line| line.contains("front")),
+        "and no part of it asks for the foreground: a pin arrives without its window ever being put \
+         in front by a request, which is the band's work (see `band_place`): {trace:?}"
     );
 
-    arm_the_pin_arrival_from(listing);
+    // **And the ask was never what put a pin in front.** With `Always On Top` on, the same show
+    // places the same window in the topmost band: the setting is the mechanism, and it is the only
+    // one.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    // Safety: the window is the stand's own, as above.
+    unsafe { show_pinned_window(film.pin_hwnd) };
     assert!(
-        take_the_arrival_foreground(true, false, listing),
-        "while a pin that has just appeared in a window of its own is asked for the front"
+        unsafe { window_holds_the_topmost_band(film.pin_hwnd) },
+        "with `Always On Top` on the pin is in the band above everything, which is the placement's \
+         doing and not a request for the foreground"
     );
-    assert!(
-        !take_the_arrival_foreground(true, false, listing),
-        "once: the next show of that window is a show of a pin the user already has"
-    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
 }

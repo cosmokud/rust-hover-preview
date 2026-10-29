@@ -1012,24 +1012,19 @@ fn a_players_foreground_goes_only_where_the_player_took_it() {
     );
 }
 
-/// **A request for the foreground that nothing is coming for is abandoned**, and a request still of
-/// the launch that made it is not.
+/// **A hand-back for a front nothing is coming for is abandoned**, and one that is still the
+/// launch's own is not.
 ///
-/// Both asks this app makes for a front are a request rather than a standing permission. A player's
-/// window is styled for as long as its film plays, so the hand-back's road runs long after the launch
-/// that armed it, and a front *that* window took an hour later is not the activation the request was
-/// about: handing it back is the app undoing whatever the user has done since — the reported
-/// "Chrome cannot be activated while the pointer is over the pin", which is a click answered by a
-/// window asked for on a launch of ten minutes before. The arrival's ask is the same debt on a
-/// shorter clock (see `take_the_arrival_foreground`).
-///
-/// The two halves of one question: an ask is young enough to be the thing that asked for it, and —
-/// where the request has a window of its own — that window is still the one in front.
+/// A player's hand-back is a request rather than a standing permission. A player's window is styled
+/// for as long as its film plays, so the hand-back's road runs long after the launch that armed it,
+/// and a front *that* window took an hour later is not the activation the request was about: handing
+/// it back is the app undoing whatever the user has done since — the reported "Chrome cannot be
+/// activated while the pointer is over the pin", which is a click answered by a window asked for on a
+/// launch of ten minutes before (see `a_front_request_is_young_enough`).
 #[test]
-fn a_front_request_that_nothing_is_coming_for_is_abandoned() {
+fn a_hand_back_that_nothing_is_coming_for_is_abandoned() {
     let asked = std::time::Instant::now();
     let window = HWND(0x2000 as *mut _);
-    let elsewhere = HWND(0x3000 as *mut _);
 
     assert!(
         pin_lifecycle::a_front_request_is_young_enough(asked, asked),
@@ -1047,26 +1042,9 @@ fn a_front_request_that_nothing_is_coming_for_is_abandoned() {
         "a request older than that wait is a request nothing is coming for"
     );
 
-    assert!(
-        pin_lifecycle::a_front_request_is_still_wanted(window, window, asked, asked),
-        "the window the request was made from is in front, so the ask is the user's to give"
-    );
-    assert!(
-        !pin_lifecycle::a_front_request_is_still_wanted(elsewhere, window, asked, asked),
-        "a user who has activated something else has answered the ask themselves"
-    );
-    assert!(
-        !pin_lifecycle::a_front_request_is_still_wanted(window, window, asked, asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR),
-        "and a request that has run out is abandoned however the desktop looks"
-    );
-    assert!(
-        !pin_lifecycle::a_front_request_is_still_wanted(HWND::default(), window, asked, asked),
-        "a desktop with no window in front has nothing to say the ask is still wanted by"
-    );
-
-    // **And the band decides whether the age is asked at all.** A pin's ask is the one that has to be
-    // young; a hover keeps the hand-back it has always had, because a hover is not the window the user
-    // is working in (see `the_hand_back_is_still_wanted`).
+    // **And the band decides whether the age is asked at all.** A pin's hand-back is the one that has
+    // to be young; a hover keeps the hand-back it has always had, because a hover is not the window
+    // the user is working in (see `the_hand_back_is_still_wanted`).
     let before = (window.0 as isize, asked);
     let later = asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR;
     assert!(

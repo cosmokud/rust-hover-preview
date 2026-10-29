@@ -68,7 +68,7 @@ unsafe fn window_rect(hwnd: HWND) -> ScreenRegion {
 /// It is shared with the tests of the taskbar button, because those are about what a button of a pin put
 /// away holds and the host is the window a film's button belongs to (see `pin_taskbar_window`).
 pub(super) struct StandingFilm {
-    box_: ScreenRegion,
+    pub(super) box_: ScreenRegion,
     pub(super) pin_hwnd: HWND,
     previous_pin: Option<PinnedPreview>,
     previous_own: bool,
