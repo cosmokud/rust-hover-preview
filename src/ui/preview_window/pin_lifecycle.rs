@@ -2507,16 +2507,30 @@ pub(super) fn a_players_foreground_goes_to(
     front: HWND,
     player: HWND,
     before: (isize, Instant),
-    now: Instant,
 ) -> Option<HWND> {
-    let (recorded, asked) = before;
-    if player.is_invalid() || front != player || !a_front_request_is_young_enough(asked, now) {
+    if player.is_invalid() || front != player {
         return None;
     }
 
-    let behind = a_foreground_to_give_back(recorded, player.0 as isize);
+    let behind = a_foreground_to_give_back(before.0, player.0 as isize);
     let behind = HWND(behind as *mut _);
     (!behind.is_invalid() && behind != player).then_some(behind)
+}
+
+/// Whether a hand-back is still the launch's to make, **for the band the player belongs to**.
+///
+/// **The bound is the pin's, and a hover keeps the road it has always had.** A pin is the window the
+/// user is working in, so a front asked for it long after the launch that would have put it there is
+/// the ask undoing a click the user has made since (see `a_front_request_is_young_enough`). A hover is
+/// not: it is put up under the pointer and taken down by it, nothing of the user's is in front of it,
+/// and the front its player takes is given back however long the player took to appear — which is what
+/// this road did before the pin's own staleness was asked about here.
+pub(super) fn the_hand_back_is_still_wanted(
+    pinned: bool,
+    before: (isize, Instant),
+    now: Instant,
+) -> bool {
+    !pinned || a_front_request_is_young_enough(before.1, now)
 }
 
 /// The window the last player was begun in front of, and when — or nothing where no player has been
@@ -2582,7 +2596,7 @@ pub(super) unsafe fn give_the_foreground_back_from(player: HWND) {
     let Some(before) = the_foreground_before_a_player() else {
         return;
     };
-    if front == player && !a_front_request_is_young_enough(before.1, Instant::now()) {
+    if front == player && !the_hand_back_is_still_wanted(pinned(), before, Instant::now()) {
         note_pin_trace!(
             "foreground left where it is: the launch that asked for it is {}ms old",
             before.1.elapsed().as_millis(),
@@ -2590,7 +2604,7 @@ pub(super) unsafe fn give_the_foreground_back_from(player: HWND) {
         return;
     }
 
-    if let Some(taken_from) = a_players_foreground_goes_to(front, player, before, Instant::now()) {
+    if let Some(taken_from) = a_players_foreground_goes_to(front, player, before) {
         let owed = a_hand_back_goes_to(taken_from, a_pin_that_stands());
         let mut behind = owed;
         let mut granted = unsafe { SetForegroundWindow(behind) }.as_bool();

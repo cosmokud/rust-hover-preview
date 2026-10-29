@@ -988,22 +988,17 @@ fn a_players_foreground_goes_only_where_the_player_took_it() {
     let before = (shell.0 as isize, std::time::Instant::now());
 
     assert_eq!(
-        pin_lifecycle::a_players_foreground_goes_to(shell, player, before, std::time::Instant::now()),
+        pin_lifecycle::a_players_foreground_goes_to(shell, player, before),
         None,
         "a player that is not the window in front took no keyboard, so it gives none back"
     );
     assert_eq!(
-        pin_lifecycle::a_players_foreground_goes_to(
-            HWND::default(),
-            player,
-            before,
-            std::time::Instant::now()
-        ),
+        pin_lifecycle::a_players_foreground_goes_to(HWND::default(), player, before),
         None,
         "and no window in front at all is not a player that took one"
     );
 
-    let given = pin_lifecycle::a_players_foreground_goes_to(player, player, before, std::time::Instant::now());
+    let given = pin_lifecycle::a_players_foreground_goes_to(player, player, before);
     assert!(
         given.is_none_or(|target| {
             let mut pid = 0u32;
@@ -1067,6 +1062,24 @@ fn a_front_request_that_nothing_is_coming_for_is_abandoned() {
     assert!(
         !pin_lifecycle::a_front_request_is_still_wanted(HWND::default(), window, asked, asked),
         "a desktop with no window in front has nothing to say the ask is still wanted by"
+    );
+
+    // **And the band decides whether the age is asked at all.** A pin's ask is the one that has to be
+    // young; a hover keeps the hand-back it has always had, because a hover is not the window the user
+    // is working in (see `the_hand_back_is_still_wanted`).
+    let before = (window.0 as isize, asked);
+    let later = asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR;
+    assert!(
+        !pin_lifecycle::the_hand_back_is_still_wanted(true, before, later),
+        "a pin's front asked for on a launch older than the wait gives nothing back"
+    );
+    assert!(
+        pin_lifecycle::the_hand_back_is_still_wanted(false, before, later),
+        "a hover's player keeps the hand-back it has always had, however long it took to appear"
+    );
+    assert!(
+        pin_lifecycle::the_hand_back_is_still_wanted(true, before, asked),
+        "and a pin's own launch is its own ask while it is young"
     );
 }
 
