@@ -2474,15 +2474,6 @@ pub fn run_preview_window() {
                         // the pin is already behind (see `PinFrontOwed` and
                         // `pin_press_was_not_a_pick`).
                         arm_pin_to_the_front();
-                        // **The raise a press makes is asked for whatever the row about updates says.**
-                        // `Pin Mode → Update Preview → Move To Top` is a rule about an *update* — a file
-                        // the pin follows of its own accord — and a press on a file is the user's own
-                        // hand: with the row off the pin was left behind the listing by a click nothing
-                        // raised it for, which is the same fault on the setting that reads "do not move
-                        // for updates". The band is taken and given straight back, so nothing of it is
-                        // held by this road; the hold the press takes is the one below (see
-                        // `take_the_pair_over_the_listing`).
-                        take_the_pair_over_the_listing(pinned_window());
                         raise_pinned_preview(pinned_window(), true);
                         // The two clocks the press begins, from the one moment it was read: how long the
                         // pick is answered for, and how long the band it took is held for. Only the first
@@ -3401,16 +3392,6 @@ pub fn run_preview_window() {
                 Instant::now(),
                 GetForegroundWindow(),
             );
-
-            // **A safety net, and it is marked as one.** The road that lowered a pin behind the
-            // listing on a mouse click is answered where it happened (see
-            // `pin_watch::the_press_named_no_file` and `where_the_band_goes_back`); this is asked of
-            // the desktop afterwards, because the desktop is the only thing that knows where the pin
-            // really stands. It fires only for a pin that is up under `Always On Top` off, with the
-            // user in the pair or in a listing, and a listing actually above the pin — and it does
-            // nothing at all for a foreground that is another program, where the pin belongs behind
-            // it (see `a_listing_over_the_pin_puts_it_back`).
-            let _ = a_listing_over_the_pin_puts_it_back(GetForegroundWindow());
 
             // A pin that owes the front owes it while the window it follows is the one the user is
             // in. Another program in front is the user working elsewhere, so the band goes back to
