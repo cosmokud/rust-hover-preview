@@ -139,8 +139,15 @@ fn note_the_retirement(end: RetireEnd, pid: u32) {
 /// written down here for the same reason: the front would be left on a window the app has just made
 /// invisible — no visible window active, no `WM_ACTIVATE` for the listing or the browser behind it, and
 /// a UI that does not paint again until it is clicked (see
-/// `pin_lifecycle::give_the_foreground_back_from`). `pid` is the player being ended, and the window in
-/// front is asked of the desktop rather than passed in: every road that ends one comes through here.
+/// `pin_lifecycle::give_the_foreground_back_from`). `pid` is the player being ended.
+///
+/// **The window in front is compared with the window this app records as that player's own**, and not
+/// with any window of a process whose number happens to be `pid` (see `ffplay_window::video_window_for`):
+/// a process id is a number, and a window of it is not this player's — a test stands its player in with a
+/// number it shares with the windows the test itself puts up, so the old comparison answered for a window
+/// the player never made. What the app has made invisible is the source it adopted for this player, and
+/// that is the window recorded here; a run whose record names no window of `pid` has none of this player's
+/// in front to be left there.
 pub(super) fn note_an_end_while_standing(pid: u32) {
     if pid == 0 {
         return;
@@ -150,13 +157,8 @@ pub(super) fn note_an_end_while_standing(pid: u32) {
     }
     // Safety: the question is about a window of the desktop's, read rather than changed.
     let front = unsafe { GetForegroundWindow() };
-    if !front.is_invalid() {
-        let mut owner = 0u32;
-        // Safety: as above — the call reports the process a window belongs to and changes nothing.
-        unsafe { GetWindowThreadProcessId(front, Some(&mut owner)) };
-        if owner == pid {
-            note_pin_trace!("player ended while standing pid {pid}: it held the foreground");
-        }
+    if !front.is_invalid() && ffplay_window::video_window_for(pid) == Some(front) {
+        note_pin_trace!("player ended while standing pid {pid}: it held the foreground");
     }
 }
 
