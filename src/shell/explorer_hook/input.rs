@@ -34,6 +34,13 @@ pub(super) struct MouseButtons {
     left_pressed: bool,
 }
 
+/// The left button as the previous pass found it: nothing read yet, up, or down.
+const NOT_READ: u8 = 0;
+const UP: u8 = 1;
+const DOWN: u8 = 2;
+
+static LEFT_BUTTON: AtomicU8 = AtomicU8::new(NOT_READ);
+
 /// Read the buttons, and keep the left one apart as above. The index rather than the key is
 /// what tells the left button from the other two, which is why `mouse_press_buttons` leads
 /// with it and why that order is part of this function's contract.
@@ -51,8 +58,19 @@ pub(super) fn mouse_buttons() -> MouseButtons {
             state.pressed = true;
         }
         if index == 0 {
-            state.left_down = is_key_down_state(raw);
-            state.left_pressed = pressed;
+            let down = is_key_down_state(raw);
+            // The press the system's own bit did not keep: that bit is not there on every press —
+            // the tick after a click made in Explorer, the listing a pin follows, has been seen
+            // without it — and the first press after the pin was clicked is exactly the one a
+            // demote waits on. The button's down state is there on every tick, so a press is also
+            // the tick the button comes up on.
+            let before = LEFT_BUTTON.swap(if down { DOWN } else { UP }, Ordering::Relaxed);
+            let came_up = down && before == UP;
+            if came_up {
+                state.pressed = true;
+            }
+            state.left_down = down;
+            state.left_pressed = pressed || came_up;
         }
     }
 

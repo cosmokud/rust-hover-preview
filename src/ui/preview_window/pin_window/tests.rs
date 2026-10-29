@@ -1,5 +1,12 @@
 use super::*;
 
+use windows::core::w;
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DestroyWindow, GetShellWindow, GetWindowThreadProcessId, IsWindow,
+    WS_EX_TOOLWINDOW, WS_POPUP,
+};
+
 /// Every reason there is, which is what a road out of a pin is asked for.
 const EVERY_REASON: [Reason; 5] = [
     Reason::Closed,
@@ -19,6 +26,29 @@ fn a_pin_holding_the_keyboard(behind: isize) {
     install(a_pin());
     take_keyboard(behind, true);
     ask_pin(PinCommand::Next);
+}
+
+/// A window of this process's own: the smallest one a run may open for itself, and a window of
+/// "ours" by the only fact that makes one so — its process.
+fn a_window_of_this_processs_own() -> HWND {
+    // Safety: a window of this test's own, of a class Windows already has, standing nowhere.
+    unsafe {
+        CreateWindowExW(
+            WS_EX_TOOLWINDOW,
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            10,
+            10,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window of this process's own")
+    }
 }
 
 /// The keyboard the pin is holding, and where it came from, or nothing while it holds none.
@@ -243,6 +273,10 @@ impl PinWindow for LookingWindow {
         self.inner.hwnd()
     }
 
+    fn foreground(&self) -> isize {
+        self.inner.foreground()
+    }
+
     fn pointer(&self) -> Option<(i32, i32)> {
         self.inner.pointer()
     }
@@ -285,10 +319,6 @@ impl PinWindow for LookingWindow {
 
     fn repaint(&self) {
         self.inner.repaint();
-    }
-
-    fn unpark_player_window(&self, band: Option<ScreenRegion>) {
-        self.inner.unpark_player_window(band);
     }
 
     fn post(&self, hwnd: isize, message: u32) {
@@ -732,6 +762,303 @@ fn every_reason_reaches_the_same_teardown() {
              reason handed to a teardown is for"
         );
     }
+}
+
+/// The keyboard goes back to a window that is still there and is not one of this app's own.
+///
+/// **A keyboard handed to a window that cannot take it is a keyboard nobody has.** The pin records
+/// where its keyboard came from when it takes it, and a step begins the next film's player between
+/// the press and the close: recorded as the window behind, the hand-back asks for a window the pin
+/// is about to kill, Windows refuses, and the foreground stays on a window of this app's — a window
+/// that publishes no pin, answers no pointer and hovers nothing until the user clicks the listing to
+/// make it the foreground again. Which is the whole of what "nothing at all, until I click Explorer"
+/// was, and why a `Space` pressed in the listing toggled the standing pin: the window a low-level
+/// keyboard hook compares against the pin's handles was the player's (see `key_input::pin_owns_caret`
+/// and `the_window_behind`).
+#[test]
+fn the_keyboard_is_never_handed_to_a_window_that_is_gone_or_one_of_ours() {
+    let _one = PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // A handle that is not a window: the player the pin recorded while it was in front, gone by
+    // the time the pin ends.
+    install(a_pin());
+    take_keyboard(0x2000, true);
+    let window = RecordedPinWindow::new(0x1000);
+    end_pin(Reason::Closed, &window);
+    assert!(
+        !window.handed_the_keyboard_to().contains(&0x2000),
+        "a window that is not a window is not where the keyboard goes: {:#x?}",
+        window.handed_the_keyboard_to()
+    );
+
+    // And a window of this app's own is not either, however live it is. A `STATIC` popup of this
+    // process is the smallest such window there is, and it is one a run may open for itself.
+    let ours = a_window_of_this_processs_own();
+
+    install(a_pin());
+    take_keyboard(ours.0 as isize, true);
+    let window = RecordedPinWindow::new(0x1000);
+    end_pin(Reason::Closed, &window);
+    let handed = window.handed_the_keyboard_to();
+    assert!(
+        !handed.contains(&(ours.0 as isize)),
+        "a window of this app's own is not where the keyboard goes: {handed:#x?}"
+    );
+    assert!(
+        handed.iter().all(|target| {
+            let target = HWND(*target as *mut _);
+            (unsafe { IsWindow(target).as_bool() }) && !pin_lifecycle::a_window_of_ours(target)
+        }),
+        "and what it is handed to is a window that can still take it and is nobody's of ours: \
+         {handed:#x?}"
+    );
+
+    // Safety: the window is this test's own, and it is not a window the app holds a handle on.
+    unsafe { DestroyWindow(ours) }.expect("the window goes");
+}
+
+/// A window that is still there and is not ours is handed the keyboard exactly as it was recorded.
+///
+/// The half above says what the keyboard never goes to; this says the ordinary road is untouched:
+/// the listing the pin was taken from is the window the close gives it back to, and the look-through
+/// and the fallback behind it are for the two cases where that window cannot take it.
+#[test]
+fn the_keyboard_goes_back_to_the_listing_it_came_from() {
+    let _one = PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // The Shell's own window: a window of somebody else's that is always there, so the one road a
+    // close takes with a live window behind it is asked without a player of this app's being begun.
+    let shell = unsafe { GetShellWindow() };
+    assert!(
+        unsafe { IsWindow(shell) }.as_bool(),
+        "the desktop's own window"
+    );
+    assert!(
+        !pin_lifecycle::a_window_of_ours(shell),
+        "which is not a window of this app's"
+    );
+
+    install(a_pin());
+    take_keyboard(shell.0 as isize, true);
+    let window = RecordedPinWindow::new(0x1000);
+    end_pin(Reason::Closed, &window);
+
+    assert_eq!(
+        window.handed_the_keyboard_to(),
+        vec![shell.0 as isize],
+        "the window the pin took the keyboard from is the window it gives it back to"
+    );
+}
+
+/// The window a keyboard belongs to is never one of this app's own, and never one that is gone.
+///
+/// The three cases are the whole of what a look-through is for: nothing recorded, a window of ours
+/// recorded (a step's player, which is the window in front while the player that replaces it starts),
+/// and a handle that is not a window any more (the player, killed by the close that is asking).
+/// The window that is kept is the fourth case and the ordinary one.
+#[test]
+fn a_keyboard_belongs_to_a_window_that_is_there_and_is_not_ours() {
+    let _one = PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let ours = a_window_of_this_processs_own();
+    let shell = unsafe { GetShellWindow() };
+    let answers = [
+        pin_lifecycle::the_window_behind(0, ours.0 as isize),
+        pin_lifecycle::the_window_behind(ours.0 as isize, 0),
+        pin_lifecycle::the_window_behind(0x2000, 0),
+    ];
+
+    assert_ne!(
+        answers[1], ours.0 as isize,
+        "a window of this app's own is looked through rather than given the keyboard"
+    );
+    assert_ne!(
+        answers[2], 0x2000,
+        "a handle that is not a window is not a window the keyboard goes to"
+    );
+    for answer in answers {
+        if answer != 0 {
+            let answer = HWND(answer as *mut _);
+            assert!(
+                unsafe { IsWindow(answer).as_bool() },
+                "what the keyboard is given is a window that is there: {answer:?}"
+            );
+            assert!(
+                !pin_lifecycle::a_window_of_ours(answer),
+                "and one that is nobody's of ours: {answer:?}"
+            );
+        }
+    }
+
+    assert_eq!(
+        pin_lifecycle::the_window_behind(shell.0 as isize, 0),
+        shell.0 as isize,
+        "a window of somebody else's that is still there is kept exactly as it was"
+    );
+
+    // Safety: the window is this test's own.
+    unsafe { DestroyWindow(ours) }.expect("the window goes");
+}
+
+/// **A close holds the foreground out of our own windows even where it holds no claim.**
+///
+/// A step is the case a claim cannot describe: the player's window is created activated, so the pin
+/// is deactivated and its claim dropped, and the give-back that follows puts the foreground on the
+/// pin's own window (see `give_back_a_foreground_that_is_ours`). The close then holds no keyboard to
+/// hand back and has a window of ours in front — which is why a pin closed after a step, and only
+/// after a step, left a desktop that hovers nothing until the user clicks Explorer.
+///
+/// The window behind is the desktop's to answer, so the road is asserted against the answer the same
+/// resolver gives; and where the machine has no ordinary window to give it to — `front_ordinary_window`
+/// looks through the desktop's own on purpose — what is asserted is that the close asks for none of
+/// ours rather than for one, which is the half that never depends on the desk.
+#[test]
+fn a_close_with_no_claim_hands_back_a_foreground_that_is_one_of_ours() {
+    let _one = PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // A window of this process's own is the window a step's give-back leaves in front, and it is one
+    // of ours by the only fact that makes one so. Nothing is pressed into the pin after the step, so
+    // there is no claim on the keyboard: the close is the one that holds none.
+    let ours = a_window_of_this_processs_own();
+    let behind = pin_lifecycle::the_window_behind(ours.0 as isize, 0x1000);
+
+    install(a_pin());
+    let window = RecordedPinWindow::new(0x1000).with_the_window_in_front(ours.0 as isize);
+    end_pin(Reason::Closed, &window);
+
+    assert_eq!(
+        window.handed_the_keyboard_to(),
+        if behind == 0 {
+            Vec::new()
+        } else {
+            vec![behind]
+        },
+        "a close holding no claim still gives back a foreground that is one of ours, to the \
+         window a hand-back would give it to"
+    );
+    assert!(
+        window
+            .handed_the_keyboard_to()
+            .iter()
+            .all(|handed| !pin_lifecycle::a_window_of_ours(HWND(*handed as *mut _))),
+        "and never to a window of ours, which is the one it is taking down"
+    );
+
+    // A window of somebody else's in front is the user's — their own click put it there — so the
+    // close asks for nothing and leaves it alone.
+    let shell = unsafe { GetShellWindow() };
+    install(a_pin());
+    let window = RecordedPinWindow::new(0x1000).with_the_window_in_front(shell.0 as isize);
+    end_pin(Reason::Closed, &window);
+    assert_eq!(
+        window.handed_the_keyboard_to(),
+        Vec::<isize>::new(),
+        "a foreign window in front is left exactly where the user put it"
+    );
+
+    // Safety: the window is this test's own, and it is not a window the app holds a handle on.
+    unsafe { DestroyWindow(ours) }.expect("the window goes");
+}
+
+/// A player's window gives the foreground back, and only where it was the one that took it.
+///
+/// This is the half of the fault a test cannot stage end to end — a player of this app's warming its
+/// window into the foreground — so it is asked of the decision: a player that is not the window in
+/// front took nothing and is given nothing back, and a player that is the window in front hands it to
+/// a window that is not this app's own (see `a_players_foreground_goes_to`).
+#[test]
+fn a_players_foreground_goes_only_where_the_player_took_it() {
+    let _one = PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let player = HWND(0x1234 as *mut _);
+    let shell = unsafe { GetShellWindow() };
+
+    // The record a launch leaves: the window in front then, and when. Stood in rather than read off
+    // the desktop, which a test may not rearrange (see `FOREGROUND_BEFORE_A_PLAYER`).
+    let before = (shell.0 as isize, std::time::Instant::now());
+
+    assert_eq!(
+        pin_lifecycle::a_players_foreground_goes_to(shell, player, before),
+        None,
+        "a player that is not the window in front took no keyboard, so it gives none back"
+    );
+    assert_eq!(
+        pin_lifecycle::a_players_foreground_goes_to(HWND::default(), player, before),
+        None,
+        "and no window in front at all is not a player that took one"
+    );
+
+    let given = pin_lifecycle::a_players_foreground_goes_to(player, player, before);
+    assert!(
+        given.is_none_or(|target| {
+            let mut pid = 0u32;
+            unsafe { GetWindowThreadProcessId(target, Some(&mut pid)) };
+            target != player
+                && !crate::app::engine_processes::holds_a_player(pid)
+                && unsafe { IsWindow(target).as_bool() }
+        }),
+        "a player's window hands the foreground to a window that is not it, is still there, and \
+         is not another player: {given:?}"
+    );
+}
+
+/// **A hand-back for a front nothing is coming for is abandoned**, and one that is still the
+/// launch's own is not.
+///
+/// A player's hand-back is a request rather than a standing permission. A player's window is styled
+/// for as long as its film plays, so the hand-back's road runs long after the launch that armed it,
+/// and a front *that* window took an hour later is not the activation the request was about: handing
+/// it back is the app undoing whatever the user has done since — the reported "Chrome cannot be
+/// activated while the pointer is over the pin", which is a click answered by a window asked for on a
+/// launch of ten minutes before (see `a_front_request_is_young_enough`).
+#[test]
+fn a_hand_back_that_nothing_is_coming_for_is_abandoned() {
+    let asked = std::time::Instant::now();
+    let window = HWND(0x2000 as *mut _);
+
+    assert!(
+        pin_lifecycle::a_front_request_is_young_enough(asked, asked),
+        "a request asked for this moment is the one asking"
+    );
+    assert!(
+        pin_lifecycle::a_front_request_is_young_enough(
+            asked,
+            asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR - std::time::Duration::from_millis(1)
+        ),
+        "and one inside the wait this app gives a player is still its own"
+    );
+    assert!(
+        !pin_lifecycle::a_front_request_is_young_enough(asked, asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR),
+        "a request older than that wait is a request nothing is coming for"
+    );
+
+    // **And the band decides whether the age is asked at all.** A pin's hand-back is the one that has
+    // to be young; a hover keeps the hand-back it has always had, because a hover is not the window
+    // the user is working in (see `the_hand_back_is_still_wanted`).
+    let before = (window.0 as isize, asked);
+    let later = asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR;
+    assert!(
+        !pin_lifecycle::the_hand_back_is_still_wanted(true, before, later),
+        "a pin's front asked for on a launch older than the wait gives nothing back"
+    );
+    assert!(
+        pin_lifecycle::the_hand_back_is_still_wanted(false, before, later),
+        "a hover's player keeps the hand-back it has always had, however long it took to appear"
+    );
+    assert!(
+        pin_lifecycle::the_hand_back_is_still_wanted(true, before, asked),
+        "and a pin's own launch is its own ask while it is young"
+    );
 }
 
 /// A collapsed pin is still a pin, and still goes down the same way.

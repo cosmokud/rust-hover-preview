@@ -11,18 +11,19 @@
 //! handlers a click reaches are in `commands`.
 
 use super::ids::{
-    EngineIdleIds, BACKGROUND_CHOICES, DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB,
+    BACKGROUND_CHOICES, DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB,
     DISK_CACHE_SIZE_CHOICES_MB, FONT_SIZE_CHOICES, HTML_BACKGROUND_CHOICES,
     ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE,
     ID_TRAY_AUDIO_SHUFFLE, ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE, ID_TRAY_CHECK_UPDATES,
     ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE,
     ID_TRAY_DESIGN_BACKGROUND_BASE, ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE,
     ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE,
-    ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_ENGINE_PERSISTENT_BASE, ID_TRAY_EXIT,
+    ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_EXIT,
     ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE,
     ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE,
     ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE,
-    ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_NORMALIZE_VIDEO_VOLUME,
+    ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_IDLE_BASE,
+    ID_TRAY_NORMALIZE_VIDEO_VOLUME,
     ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
     ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
@@ -48,9 +49,9 @@ use super::submenus::{
     append_engine_idle_menu, append_labeled_item, append_loop_item, append_office_engine_menu,
     append_pin_mode_menu, append_pin_nav_menu, append_pin_seek_menu_renamed,
     append_seek_menu_renamed, append_shuffle_item, append_tick_menu, append_video_engine_menu,
-    cache_size_label, decode_budget_label, default_label, pin_minimize_label, pin_update_label,
-    remember_volume_label, system_menu_label, timing_delay_menu, update_available_label,
-    MF_RADIOCHECK,
+    cache_size_label, decode_budget_label, default_label, enable_preview_label, pin_key_label,
+    pin_minimize_label, pin_update_label, remember_volume_label, system_menu_label,
+    timing_delay_menu, update_available_label, MF_RADIOCHECK,
 };
 
 use crate::app::updates;
@@ -63,8 +64,8 @@ use crate::config::config::{
     DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
     DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS,
-    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+    DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB,
+    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME,
     DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
@@ -75,7 +76,7 @@ use crate::config::config::{
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE,
     DEFAULT_TICK_MS, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND,
     DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_LOOP,
-    DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME,
     DEFAULT_ZOOM_BACKGROUND, VOLUME_CHOICES,
 };
 use crate::config::theme_files;
@@ -108,19 +109,23 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // `System → Check for Updates` row is the switch (see `check_for_updates`).
     updates::request_check();
 
-    // Add "Enable Preview" with checkmark
-    let preview_enabled = CONFIG.lock().map(|c| c.preview_enabled).unwrap_or(true);
+    // Add "Enable Preview" with checkmark, naming the key that throws the same switch from
+    // Explorer so the shortcut is visible where the setting is.
+    let (preview_enabled, toggle_key) = CONFIG
+        .lock()
+        .map(|c| (c.preview_enabled, c.toggle_key.clone()))
+        .unwrap_or((true, crate::config::config::DEFAULT_TOGGLE_KEY.to_string()));
     let enable_flags = MF_STRING
         | if preview_enabled {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
-    let _ = AppendMenuW(
+    append_labeled_item(
         menu,
         enable_flags,
-        ID_TRAY_ENABLE as usize,
-        w!("Enable Preview"),
+        ID_TRAY_ENABLE,
+        &enable_preview_label(&toggle_key),
     );
 
     // And the "Pin Mode" submenu below it, which is the pin's own business: whether the key is
@@ -159,7 +164,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .unwrap_or((
             true,
             DEFAULT_PIN_ALWAYS_ON_TOP,
-            "space".to_string(),
+            "mouse3,space".to_string(),
             DEFAULT_PIN_MINIMIZE_TO,
             DEFAULT_PIN_UPDATE_ENABLED,
             DEFAULT_PIN_UPDATE_ON_HOVER,
@@ -168,11 +173,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_PIN_NAV_AUDIO,
             DEFAULT_PIN_NAV_OTHERS,
         ));
-    let mut pin_key_chars = pin_key.chars();
-    let pin_key_display = match pin_key_chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + pin_key_chars.as_str(),
-        None => pin_key,
-    };
+    let pin_key_display = pin_key_label(&pin_key);
     let pin_label = format!("Enable ({pin_key_display})");
     let pin_label_wide: Vec<u16> = pin_label.encode_utf16().chain(std::iter::once(0)).collect();
     let pin_menu = CreatePopupMenu().unwrap();
@@ -200,15 +201,15 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     // The `Update Preview` submenu: whether a pin that is up is shown the file the user picks
-    // next — the one the pointer clicks, or the one the keyboard selects — whether the
-    // pointer's own hover is one of the ways it is told about one, and whether being told brings it
-    // in front of what it was behind. A pin is a window to read or to watch, so all three are off
-    // the pin's own row rather than part of it.
+    // next — the one the pointer clicks, or the one the keyboard selects — whether being told
+    // brings it in front of what it was behind, and whether the pointer's own hover is one of the
+    // ways it is told about one. A pin is a window to read or to watch, so all three are off the
+    // pin's own row rather than part of it.
     //
     // The two rows below the first are greyed while it is off, because they say nothing then: a
-    // pin that follows nothing does not follow a hover either, and one that follows nothing has no
-    // update to come forward for. A row that could be ticked without effect would be a setting a
-    // user cannot tell from one that does nothing.
+    // pin that follows nothing has no update to come forward for, and one that follows nothing
+    // does not follow a hover either. A row that could be ticked without effect would be a setting
+    // a user cannot tell from one that does nothing.
     let update_menu = CreatePopupMenu().unwrap();
     append_labeled_item(
         update_menu,
@@ -216,27 +217,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_PIN_UPDATE,
         pin_update_label(),
     );
-    let mut hover_flags = MF_STRING
-        | if pin_update_on_hover {
-            MF_CHECKED
-        } else {
-            MF_UNCHECKED
-        };
-    if !pin_update {
-        hover_flags |= MF_GRAYED;
-    }
-    // A separator between the two, because they are not the same kind of row: the first says
-    // whether the pin follows the selection at all, the second only whether a hover is one of
-    // the ways that selection is made.
-    let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(
-        update_menu,
-        hover_flags,
-        ID_TRAY_PIN_UPDATE_HOVER as usize,
-        w!("On Hover"),
-    );
-    // And the raise, parted from the pair above by a separator of its own: how the file is chosen
-    // is settled by the two above, and this is what the window does once one is chosen.
+    // The raise sits right below the follow, because the two are one row read in two parts: the
+    // first says the pin is shown the file picked next, the second what it does about standing
+    // behind the listing it was picked in — and the user who turns the second off is asking about
+    // the very update the two of them describe.
     let mut move_to_top_flags = MF_STRING
         | if pin_update_move_to_top {
             MF_CHECKED
@@ -246,12 +230,29 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     if !pin_update {
         move_to_top_flags |= MF_GRAYED;
     }
-    let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(
         update_menu,
         move_to_top_flags,
         ID_TRAY_PIN_UPDATE_TOP as usize,
         w!("Move To Top"),
+    );
+    // Then a separator, because the row below is not the same kind of row: the pair above is what
+    // an update is, and this is a second way the file that update names is chosen.
+    let _ = AppendMenuW(update_menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let mut hover_flags = MF_STRING
+        | if pin_update_on_hover {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    if !pin_update {
+        hover_flags |= MF_GRAYED;
+    }
+    let _ = AppendMenuW(
+        update_menu,
+        hover_flags,
+        ID_TRAY_PIN_UPDATE_HOVER as usize,
+        w!("On Hover"),
     );
     let _ = AppendMenuW(
         pin_menu,
@@ -1609,10 +1610,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // block below `Performance`, which is about what those engines cost while they are up.
     let engine_menu = CreatePopupMenu().unwrap();
 
-    // How long Explorer has to be out of reach before an engine that is not marked
-    // `Persistent` is let go. It is the first row here because it is what the three TTL
-    // submenus below are answered against: the times those offer are what a persistent
-    // engine is kept by, and this is what bounds one that is not (see `app::afk`).
+    // How long Explorer has to be out of reach before an engine set to `Away` is let go. It is
+    // the first row here because it is what the `Away` item of the four TTL submenus below is
+    // answered against: a time those offer is what an engine given one is kept by, and this is
+    // what bounds the engines that are not (see `app::afk`).
     append_afk_timer_menu(engine_menu);
 
     // Add the "Video Engine" and "Office Engine" submenus: which
@@ -1626,36 +1627,39 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     append_video_engine_menu(engine_menu);
     append_office_engine_menu(engine_menu);
 
+    // MPV TTL: how long the mpv a film is played by is kept between films. Nothing keeps one
+    // warm yet — this is the setting and its menu, and what reads it comes with the engine
+    // that is held — so what is listed is an engine's TTL and nothing more. It is greyed out
+    // on a machine with no `mpv.exe`, since there is nothing there to keep.
+    let mpv_idle = CONFIG
+        .lock()
+        .map(|c| c.video_engine_idle)
+        .unwrap_or(EngineIdle::Away);
+
+    append_engine_idle_menu(
+        engine_menu,
+        w!("MPV TTL"),
+        ID_TRAY_MPV_IDLE_BASE,
+        mpv_idle,
+        codecs::mpv_available(),
+    );
+
     // Microsoft Office TTL: how long the Office engine a family started is kept after
     // that family's last page. Nothing is asked of an engine while it is being kept
     // — it is a process that has already been paid for, and the document it drew a
     // page of is closed — so what the setting buys is the next document of that
     // family not paying for an Office start, and what it costs is an Office
-    // application in the process list. It is listed longest first, with the engine
-    // that is never let go at the top.
-    //
-    // The times are what an engine marked `Persistent` is kept by. One that is not is let
-    // go by the `Away Timer` above instead, and its time is not consulted — which is what a
-    // user who wants the old behaviour back switches on.
+    // application in the process list.
     let office_idle = CONFIG
         .lock()
         .map(|c| c.office_engine_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS));
-    let office_persistent = CONFIG
-        .lock()
-        .map(|c| c.office_engine_persistent)
-        .unwrap_or(false);
+        .unwrap_or(EngineIdle::Away);
 
     append_engine_idle_menu(
         engine_menu,
         w!("Microsoft Office TTL"),
-        EngineIdleIds {
-            times: ID_TRAY_ENGINE_IDLE_BASE,
-            persistent: ID_TRAY_ENGINE_PERSISTENT_BASE,
-        },
+        ID_TRAY_ENGINE_IDLE_BASE,
         office_idle,
-        office_persistent,
-        DEFAULT_OFFICE_ENGINE_IDLE_SECS,
         true,
     );
 
@@ -1668,22 +1672,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let libreoffice_idle = CONFIG
         .lock()
         .map(|c| c.libreoffice_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS));
-    let libreoffice_persistent = CONFIG
-        .lock()
-        .map(|c| c.libreoffice_persistent)
-        .unwrap_or(false);
+        .unwrap_or(EngineIdle::Away);
 
     append_engine_idle_menu(
         engine_menu,
         w!("LibreOffice TTL"),
-        EngineIdleIds {
-            times: ID_TRAY_LIBREOFFICE_IDLE_BASE,
-            persistent: ID_TRAY_ENGINE_PERSISTENT_BASE + 1,
-        },
+        ID_TRAY_LIBREOFFICE_IDLE_BASE,
         libreoffice_idle,
-        libreoffice_persistent,
-        DEFAULT_LIBREOFFICE_IDLE_SECS,
         libreoffice_render::available(),
     );
 
@@ -1717,19 +1712,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let webview_idle = CONFIG
         .lock()
         .map(|c| c.webview_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS));
-    let webview_persistent = CONFIG.lock().map(|c| c.webview_persistent).unwrap_or(false);
+        .unwrap_or(EngineIdle::Away);
 
     append_engine_idle_menu(
         engine_menu,
         w!("WebView2 TTL"),
-        EngineIdleIds {
-            times: ID_TRAY_WEBVIEW_IDLE_BASE,
-            persistent: ID_TRAY_ENGINE_PERSISTENT_BASE + 2,
-        },
+        ID_TRAY_WEBVIEW_IDLE_BASE,
         webview_idle,
-        webview_persistent,
-        DEFAULT_WEBVIEW_IDLE_SECS,
         webview_preview::is_available(),
     );
 

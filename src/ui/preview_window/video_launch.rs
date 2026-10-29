@@ -45,7 +45,11 @@
 
 use super::media_types::DerivedSubtitles;
 use super::subtitles_wanted;
+use super::{codecs, video_hw};
+use crate::CONFIG;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 /// The one binding an mpv video is given, which is the key this app already pauses a film with.
 ///
@@ -100,11 +104,14 @@ pub(super) fn mpv_launched_without_audio(volume: u32) -> bool {
     volume == 0
 }
 
-/// The arguments an mpv video is begun with, which is the command line the spec settles on
-/// (`--vo` and `--focus-on` deliberately not among them: mpv's default video output is the
-/// wanted answer on every build this decade, and a `--focus-on` is a hard start failure on a
-/// build old enough not to have it, while the app applies `WS_EX_NOACTIVATE` by pid straight
-/// after the launch anyway).
+/// The arguments an mpv video is begun with, which is the command line the spec settles on. A video
+/// output is named, which it was not for years — why is on the flag itself (see below).
+///
+/// **No `--focus-on*` is among them**, which is not an omission: this list is the launch every road
+/// gets, and a `--focus-on` is a hard start failure on a build old enough not to have it. What a
+/// *hover* is told about the foreground is asked of the installed build once and appended after this
+/// list, where nothing of a pin's launch can see it (see `hover_focus_switch` and
+/// `the_focus_on_support`).
 ///
 /// The switches are passed in rather than read here, because reading one at a hover's beginning
 /// reads it for the *next* hover: a film already playing was launched with the answer that stood
@@ -124,12 +131,15 @@ pub(super) fn mpv_args(
     width: i32,
     height: i32,
     start: f64,
+    hold: bool,
     volume: u32,
     gain: Option<f64>,
     hw_accel: bool,
     subtitles: bool,
     input_conf: Option<&Path>,
     ipc: &str,
+    flip: bool,
+    ontop: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         // Read before the configuration and before any file the user has: the app's own command
@@ -164,16 +174,65 @@ pub(super) fn mpv_args(
     // asked for on every tick and on every monitor pass (see `place_player_window`): what makes
     // the two halves two rather than one is that this side holds the window up before this app has
     // ever found its handle, which is what the first frames of a pinned film are drawn under.
-    args.push("--ontop".to_string());
+    //
+    // **The order the player is held up in, where it is to hold one.** A top-level film is a
+    // window of the desktop's that has to stay over whatever the pin stands in front of; a film
+    // the pin shows through a DWM thumbnail is one that has to stay *behind* the window it is
+    // seen in, so its launch asks for no band at all (see `pin_film_thumbnail`).
+    if ontop {
+        args.push("--ontop".to_string());
+    }
     // The size and the position, always both, and always written `+x+y` whether x and y are
     // negative or not: a box on a monitor left of or above the primary one has a negative
-    // coordinate, and `+-2160` is how that coordinate is spelled for a geometry whose offsets are
-    // introduced by a sign — a bare `-2160` is a distance from the far edge instead, so the film
-    // would be put somewhere other than the box. Measured on mpv 0.41.0, on a primary display
-    // 3440x1440 with a second one at (3440,-2160), preview box (3540,-2060): `+3540+-2060` puts
-    // the window on the second display, and the size alone centres it on the primary at (1520,570).
+    // coordinate, and `+-2160` is how that coordinate is spelled for a geometry whose offsets
+    // are introduced by a sign — a bare `-2160` is a distance from the far edge instead, so the
+    // film would be put somewhere other than the box. Measured on mpv 0.41.0, on a primary
+    // display 3440x1440 with a second one at (3440,-2160), preview box (3540,-2060):
+    // `+3540+-2060` puts the window on the second display, and the size alone centres it on the
+    // primary at (1520,570).
     args.push(format!("--geometry={width}x{height}+{x}+{y}"));
+    // **`--vo=gpu-next` is being measured here, not chosen.** It is libplacebo's renderer rather than
+    // `vo=gpu`'s, with its own swapchain and its own present path, and what it is being tried for is
+    // the two things the bitblt swapchain below has not settled: a band that goes black while a grown
+    // host waits for the player to redraw its child at the new size, and a picture that judders inside
+    // a box that is otherwise standing still. `--gpu-api=d3d11` and `--d3d11-flip=no` apply to it as
+    // they did to `vo=gpu`. One flag, reverted by deleting it; what
+    // a run of it wants looked at is the resize, the colours and the scale against `vo=gpu`, HDR files,
+    // and `--hwdec=auto`.
+    args.push("--vo=gpu-next".to_string());
     args.push("--gpu-api=d3d11".to_string());
+    // **And the swapchain is the bitblt model rather than the flip one**: a flip-model swapchain
+    // re-derives its buffers for a new size — a `ResizeBuffers` and a drain of the present queue,
+    // at a cost proportional to the buffer's size — and a pin is resized on every pointer move, so
+    // that re-derivation is a hitch on every step in a child window this app does not own (see
+    // `pin_film_host`). The bitblt model presents by copying at the window's current size and has
+    // no such queue to drain, which is the classic cure for resize shimmer in an embedded child
+    // window. What it gives up is the independent flip the compositor hands straight to the
+    // display: a film here costs a copy per frame and can sit a step behind a moving pin.
+    //
+    // **Except on the thumbnail road, where `flip` asks for the other model as an experiment.**
+    // There the player makes a top-level window of its own and the pin shows it through a DWM
+    // thumbnail, and a flip-model swapchain has a property the bitblt one does not: the compositor
+    // scales the buffer to the window's client area, so the picture fills the window *by
+    // construction* rather than because mpv caught a `WM_SIZE` and resized its buffer. With the
+    // bitblt model a buffer that is a size behind the window is presented 1:1 — cropped where it is
+    // larger, a small picture in black where it is smaller (see `pin_film_thumbnail`). It is asked
+    // for by the knob and never by default. No other flag conflicts: `--gpu-api=d3d11` is the
+    // context the flag names,
+    // `--vo=gpu-next` presents through the same DXGI swapchain, and `--hwdec=auto`'s d3d11va
+    // interop is what a flip model is designed for.
+    //
+    // **And never on a window made invisible either**: a layered window cannot have a flip-model
+    // swapchain, so `flip` is `false` there by the caller's own decision and the launch says the knob
+    // was overruled rather than dropping it (see `the_thumbnail_swapchain_flip`).
+    args.push(
+        if flip {
+            "--d3d11-flip=yes"
+        } else {
+            "--d3d11-flip=no"
+        }
+        .to_string(),
+    );
 
     // mpv decodes on the card by its own safe list with its own software fallback, so the switch
     // is the whole of the answer here: there is no device for this side to measure and none to
@@ -217,6 +276,18 @@ pub(super) fn mpv_args(
         args.push(format!("--start={start:.3}"));
     }
 
+    // **A player begun on a frame another player is showing is begun standing on it.** A pin taken
+    // up from a hover begins its own player at the exact second the hover was frozen on, and the
+    // hover's frame is the picture on screen until that player can show the same one — so the seek
+    // is exact rather than to the keyframe before the second, and the player is paused, because a
+    // player begun playing would have advanced off the frame by the time the handover asks for it
+    // (see `pin_film_host::settle_pin_handover`). Both are per-file options, which is why they are
+    // written beside `--start` and not at the top of this list.
+    if hold {
+        args.push("--hr-seek=yes".to_string());
+        args.push("--pause".to_string());
+    }
+
     if mpv_launched_without_audio(volume) {
         args.push("--aid=no".to_string());
     } else {
@@ -240,6 +311,161 @@ pub(super) fn mpv_args(
     args.push(format!(r#"--input-ipc-server=\\.\pipe\{ipc}"#));
 
     args
+}
+
+/// **A prototype's knob, and not a setting: `RHP_THUMBNAIL_FLIP=1`.**
+///
+/// The thumbnail road asks mpv for a flip-model swapchain instead of the bitblt one (see `mpv_args`),
+/// which makes the picture fill its window by construction rather than by catching a `WM_SIZE`: the
+/// compositor scales the buffer to the client area. The value is exactly `1`, because this is an A/B
+/// of two runs and anything else must be the default road — a run that spells it otherwise is a run
+/// whose flags did not change, which is a wasted measurement and not a surprise to be discovered
+/// later.
+const THUMBNAIL_FLIP_VARIABLE: &str = "RHP_THUMBNAIL_FLIP";
+
+/// Whether the machine asked for the flip-model swapchain on the thumbnail road (see
+/// [`THUMBNAIL_FLIP_VARIABLE`]). Read once per launch, which is the moment the answer is true for:
+/// a player already begun keeps the model it was begun with.
+pub(super) fn the_thumbnail_flip_knob() -> bool {
+    thumbnail_flip_from(std::env::var_os(THUMBNAIL_FLIP_VARIABLE).as_deref())
+}
+
+/// The knob's answer for one value: `1` is on and every other value — including none — is off.
+fn thumbnail_flip_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == std::ffi::OsStr::new("1"))
+}
+
+/// **The swapchain a thumbnail road's player is really asked for**, which is the knob *unless* the source
+/// is made invisible.
+///
+/// A flip-model swapchain is not a thing a layered window can have: DXGI creates a flip-model swapchain
+/// for the window and the compositor hands it straight to the display, which is the arrangement
+/// `WS_EX_LAYERED`'s own blending is the opposite of. So where the invisible road is on
+/// (`RHP_THUMBNAIL_INVISIBLE`, see `pin_film_thumbnail`) the bitblt swapchain is asked for whatever
+/// `RHP_THUMBNAIL_FLIP` says, and the launch traces that the knob was read and overruled rather than
+/// dropping it on the floor (see `video_playback::start_mpv_video_playback`).
+pub(super) fn the_thumbnail_swapchain_flip(asked: bool, invisible: bool) -> bool {
+    asked && !invisible
+}
+
+/// Which of the two spells for "do not take the foreground" the installed mpv recognises.
+///
+/// **It is a measurement of the build on this machine rather than of any documented option set.**
+/// `--focus-on` is the current spelling (its `never` is one of its choices), and `--focus-on-open`
+/// is the older one mpv now lists as removed — a build may still reject it, and this machine's does
+/// (see `the_builds_focus_on_answer`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FocusOnSupport {
+    /// The installed mpv accepted `--focus-on=never`.
+    Never,
+    /// It refused that and accepted the old `--focus-on-open=no`.
+    OpenOnly,
+    /// It refused both: a hover's launch asks for nothing.
+    Neither,
+}
+
+/// The one switch a hover's mpv launch names for the foreground, or nothing where this build
+/// recognises neither spelling (see `FocusOnSupport`).
+///
+/// Hover-only, and a pure answer about the build so that what the launch appends is a value a test
+/// can hold: a pin's launch is the command line every road had before this existed
+/// (see `video_playback::start_mpv_video_playback`).
+pub(super) fn hover_focus_switch(support: FocusOnSupport) -> Option<&'static str> {
+    match support {
+        FocusOnSupport::Never => Some("--focus-on=never"),
+        FocusOnSupport::OpenOnly => Some("--focus-on-open=no"),
+        FocusOnSupport::Neither => None,
+    }
+}
+
+/// What the installed build answered when it was asked once, or nothing while it is being asked (see
+/// `probe_focus_on_once`).
+static FOCUS_ON_SUPPORT: Mutex<Option<FocusOnSupport>> = Mutex::new(None);
+
+/// Whether the one question has been asked, so a launch can never start a second probe.
+static FOCUS_ON_ASKED: AtomicBool = AtomicBool::new(false);
+
+/// Ask the installed mpv, once, which `--focus-on*` switch it recognises, and keep the answer.
+///
+/// **It is asked off every hover's road** — the answer is the same for the whole run, and a preview
+/// has no time to spend on a question about the player it is about to begin. It is asked at the
+/// preview window's start, and it finds the player on a thread of its own there, so that by the time
+/// a hand is over a film the answer is standing (see `event_loop::run_preview_window`); a launch that
+/// finds no answer yet adds nothing, which is the command line this app always had.
+///
+/// shortcut: the answer is kept for the run whatever build it was measured on, so a machine that
+/// swaps `mpv.exe` mid-run keeps the old build's answer; re-probe when the setting can change while
+/// the app runs.
+pub(super) fn probe_focus_on_once() {
+    if FOCUS_ON_ASKED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    std::thread::spawn(|| {
+        let chosen = CONFIG
+            .lock()
+            .map(|config| config.mpv_path.clone())
+            .unwrap_or_default();
+        let Some(program) = video_hw::mpv_program(&chosen, &codecs::mpv_installs()) else {
+            return;
+        };
+        let support = the_builds_focus_on_answer(&program);
+        if let Ok(mut held) = FOCUS_ON_SUPPORT.lock() {
+            *held = Some(support);
+        }
+    });
+}
+
+/// The answer the installed build gave, or `Neither` while it is still being asked (see
+/// `probe_focus_on_once`).
+pub(super) fn the_focus_on_support() -> FocusOnSupport {
+    FOCUS_ON_SUPPORT
+        .lock()
+        .ok()
+        .and_then(|held| *held)
+        .unwrap_or(FocusOnSupport::Neither)
+}
+
+/// Stand the cached answer where a test needs it, without beginning a player (see
+/// `the_focus_on_support`).
+#[cfg(test)]
+pub(super) fn pretend_the_build_answers(support: FocusOnSupport) {
+    FOCUS_ON_ASKED.store(true, Ordering::Release);
+    if let Ok(mut held) = FOCUS_ON_SUPPORT.lock() {
+        *held = Some(support);
+    }
+}
+
+/// The build's own answer, asked with the switch on a command line it has to parse.
+///
+/// **`--version` is no use as the probe**: measured on this machine's mpv 0.41.0, `--version`
+/// short-circuits before the option parser, so `mpv --no-config --version --focus-on=never` and the
+/// same line with a `--focus-on-open=no` this build does not have both exit 0. `--input-test` parses
+/// the options and then ends, which is the run that answers the question: measured here, that line
+/// with `--focus-on=never` exits 0, and with `--focus-on-open=no` — and with any option this build
+/// does not know — exits 1. It is a start of the player and nothing else, so it costs about a tenth
+/// of a second and decodes nothing.
+fn the_builds_focus_on_answer(program: &Path) -> FocusOnSupport {
+    if mpv_accepts_the_switch(program, "--focus-on=never") {
+        FocusOnSupport::Never
+    } else if mpv_accepts_the_switch(program, "--focus-on-open=no") {
+        FocusOnSupport::OpenOnly
+    } else {
+        FocusOnSupport::Neither
+    }
+}
+
+/// Whether the player at `program` parsed `switch` rather than refusing it: the run ends cleanly when
+/// the option exists and fails when it does not (see `the_builds_focus_on_answer`).
+fn mpv_accepts_the_switch(program: &Path, switch: &str) -> bool {
+    super::engine_processes::hidden_command(program)
+        .args(["--no-config", "--no-terminal", "--input-test", switch])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 /// The size a film's box is asked for, so that the window the film is drawn in is that box.
@@ -1270,6 +1496,30 @@ mod tests {
     /// The whole command line an mpv video is begun with, asserted in one piece: an edit to any
     /// flag in it is then a failing test rather than a surprise in a preview nobody on this
     /// machine can run (there is no mpv here — see the report on this ticket).
+    ///
+    /// **And no `--focus-on*` is among them**: the switch a hover is asked for the foreground with is
+    /// appended by the hover's launch alone, so that a pin's command line is the one every road had
+    /// (see `hover_focus_switch` and `video_playback::start_mpv_video_playback`).
+    #[test]
+    fn a_hover_asks_for_the_focus_switch_the_build_parses_and_nothing_where_it_parses_neither() {
+        assert_eq!(
+            hover_focus_switch(FocusOnSupport::Never),
+            Some("--focus-on=never"),
+            "the current spelling, where the installed build parses it"
+        );
+        assert_eq!(
+            hover_focus_switch(FocusOnSupport::OpenOnly),
+            Some("--focus-on-open=no"),
+            "and the older one where that is the one it knows"
+        );
+        assert_eq!(
+            hover_focus_switch(FocusOnSupport::Neither),
+            None,
+            "a build that parses neither is asked for nothing, rather than for a flag it would \
+             refuse and refuse the whole launch with"
+        );
+    }
+
     #[test]
     fn the_mpv_route_is_launched_with_the_command_line_the_spec_settles_on() {
         assert_eq!(
@@ -1280,12 +1530,15 @@ mod tests {
                 640,
                 360,
                 0.0,
+                false,
                 80,
                 None,
                 true,
                 true,
                 Some(Path::new("scratch/mpv-input.conf")),
                 IPC,
+            false,
+            true
             ),
             [
                 "films/episode.mkv",
@@ -1297,7 +1550,9 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=640x360+10+20",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1306,8 +1561,72 @@ mod tests {
                 IPC_ARG,
             ],
             "the film, then the configuration off, the mouse off, the chrome off, the order it is\
-             held up in, the box, the two Direct3D options and the level — `--vo` is deliberately\
-             not passed and no `--start` is asked for at the beginning of a file (see `mpv_args`)"
+             held up in, the box, the video output being measured, the three Direct3D options \
+             and the level — the output is named at all only as a measurement, and no \
+             `--start` is asked for at the beginning of a file (see `mpv_args`)"
+        );
+    }
+
+    /// **The flip-model swapchain is the thumbnail road's, and the knob is the only thing that asks
+    /// for it.** A pinned mpv whose window is a window of the desktop's is the one place a flip-model
+    /// swapchain fixes what the bitblt model gets wrong: the compositor scales the buffer to the
+    /// window's client area, so the picture fills the window by construction rather than by mpv
+    /// catching a `WM_SIZE` (see `mpv_args` and `pin_film_thumbnail`).
+    #[test]
+    fn the_flip_model_swapchain_is_asked_for_only_on_the_thumbnail_road() {
+        let with_flip = mpv_args(
+            Path::new("a.mkv"),
+            0,
+            0,
+            640,
+            360,
+            0.0,
+            false,
+            80,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+            true,
+            false);
+        assert!(
+            with_flip.iter().any(|arg| arg == "--d3d11-flip=yes"),
+            "a player that makes a window of its own on the thumbnail road is asked for the flip \
+             model when the knob is on: {with_flip:?}"
+        );
+
+    }
+
+    /// The flip knob is exactly `1`: the A/B is two runs, and a value that is not the one named must
+    /// be the default road rather than a third one nobody wrote down (see
+    /// `RHP_THUMBNAIL_FLIP`).
+    #[test]
+    fn the_flip_knob_is_on_for_one_and_off_for_everything_else() {
+        assert_eq!(THUMBNAIL_FLIP_VARIABLE, "RHP_THUMBNAIL_FLIP");
+        assert!(!thumbnail_flip_from(None));
+        assert!(thumbnail_flip_from(Some(std::ffi::OsStr::new("1"))));
+        assert!(!thumbnail_flip_from(Some(std::ffi::OsStr::new("0"))));
+        assert!(!thumbnail_flip_from(Some(std::ffi::OsStr::new("yes"))));
+        assert!(!thumbnail_flip_from(Some(std::ffi::OsStr::new(""))));
+    }
+
+    /// **A flip-model swapchain is not a thing a layered window can have**, so the invisible road asks
+    /// for the bitblt one whatever the knob says — and the knob is overruled out loud, in the launch's
+    /// own trace, rather than dropped on the floor (see `the_thumbnail_swapchain_flip`). A knob nobody
+    /// can read back is a run nobody can compare, and this is the one case where the run's flag is not
+    /// the one asked for.
+    #[test]
+    fn a_layered_source_is_never_asked_for_the_flip_model_whatever_the_knob_says() {
+        assert!(!the_thumbnail_swapchain_flip(false, true));
+        assert!(!the_thumbnail_swapchain_flip(false, false));
+        assert!(
+            the_thumbnail_swapchain_flip(true, false),
+            "a visible source with the knob on is the run the knob is for"
+        );
+        assert!(
+            !the_thumbnail_swapchain_flip(true, true),
+            "and an invisible one cannot have the model at all"
         );
     }
 
@@ -1332,12 +1651,15 @@ mod tests {
             8,
             8,
             0.0,
+            false,
             100,
             None,
             true,
             true,
             None,
             IPC,
+        false,
+        true
         );
         assert!(
             args.iter().any(|arg| arg == "--window-dragging=no"),
@@ -1361,12 +1683,15 @@ mod tests {
                 8,
                 8,
                 0.0,
+                false,
                 100,
                 None,
                 true,
                 false,
                 None,
                 IPC,
+            false,
+            true
             ),
             [
                 "a.mkv",
@@ -1376,7 +1701,9 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sid=no",
                 "--sub-auto=no",
@@ -1403,12 +1730,15 @@ mod tests {
                 8,
                 8,
                 0.0,
+                false,
                 50,
                 None,
                 false,
                 true,
                 None,
                 IPC,
+            false,
+            true
             ),
             [
                 "a.mkv",
@@ -1418,7 +1748,9 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=no",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1444,12 +1776,15 @@ mod tests {
                 8,
                 8,
                 0.0,
+                false,
                 0,
                 Some(2.5),
                 true,
                 true,
                 None,
                 IPC,
+            false,
+            true
             ),
             [
                 "a.mkv",
@@ -1459,7 +1794,9 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1494,12 +1831,15 @@ mod tests {
                 8,
                 8,
                 0.0,
+                false,
                 100,
                 Some(2.5),
                 true,
                 true,
                 None,
                 IPC,
+            false,
+            true
             ),
             [
                 "a.mkv",
@@ -1509,7 +1849,9 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1534,12 +1876,15 @@ mod tests {
                 8,
                 8,
                 12.5,
+                false,
                 100,
                 None,
                 true,
                 true,
                 None,
                 IPC,
+            false,
+            true
             ),
             [
                 "a.mkv",
@@ -1549,7 +1894,9 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1560,6 +1907,70 @@ mod tests {
             ],
             "the second a pinned bar was dragged to is what the relaunch asks mpv for, at the same \
              precision the ffplay route writes it in"
+        );
+    }
+
+    /// **A player begun on a frame another player is showing is begun standing on it**: the seek is
+    /// exact rather than to the keyframe before the second, and the player is paused so that the frame
+    /// it presents is that one and stays that one until the handover lets it go (see
+    /// `pin_film_host::settle_pin_handover`). A player begun any other way is given neither flag, and
+    /// an ordinary launch is unchanged by this.
+    #[test]
+    fn a_player_begun_on_a_frozen_frame_is_held_there_and_seeks_to_it_exactly() {
+        let held = mpv_args(
+            Path::new("a.mkv"),
+            0,
+            0,
+            8,
+            8,
+            12.5,
+            true,
+            100,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+            false,
+            true
+        );
+        assert!(
+            held.contains(&"--start=12.500".to_string()),
+            "the frame to stand on is named: {held:?}"
+        );
+        assert!(
+            held.contains(&"--hr-seek=yes".to_string()),
+            "and the seek is exact rather than to the keyframe before it, or the pin opens on a \
+             frame the hover was never showing: {held:?}"
+        );
+        assert!(
+            held.contains(&"--pause".to_string()),
+            "and the player stands there rather than playing off the frame the hover froze on \
+             before the handover can ask for it: {held:?}"
+        );
+
+        let playing = mpv_args(
+            Path::new("a.mkv"),
+            0,
+            0,
+            8,
+            8,
+            12.5,
+            false,
+            100,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+            false,
+            true
+        );
+        assert!(
+            !playing
+                .iter()
+                .any(|arg| arg == "--hr-seek=yes" || arg == "--pause"),
+            "and a player begun to play from a second is given neither: {playing:?}"
         );
     }
 
@@ -1586,12 +1997,15 @@ mod tests {
                     640,
                     360,
                     0.0,
+                    false,
                     100,
                     None,
                     true,
                     true,
                     None,
                     IPC,
+                false,
+                true
                 ),
                 [
                     "a.mkv",
@@ -1601,7 +2015,9 @@ mod tests {
                     "--window-dragging=no",
                     "--ontop",
                     &geometry,
+                    "--vo=gpu-next",
                     "--gpu-api=d3d11",
+                    "--d3d11-flip=no",
                     "--hwdec=auto",
                     "--sub-auto=fuzzy",
                     "--keep-open=yes",
@@ -1623,12 +2039,15 @@ mod tests {
                 640,
                 360,
                 0.0,
+                false,
                 100,
                 None,
                 true,
                 true,
                 None,
                 IPC,
+            false,
+            true
             )
             .contains(&"--geometry=640x360+0+0".to_string()),
             "a box at the primary display's own origin is passed as it stands"
@@ -1670,12 +2089,15 @@ mod tests {
                 asked_w,
                 asked_h,
                 0.0,
+                false,
                 100,
                 None,
                 true,
                 true,
                 None,
                 IPC,
+            false,
+            true
             ),
             [
                 "a.mkv",
@@ -1685,7 +2107,9 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=1432x806+4416+-2160",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
@@ -1733,12 +2157,15 @@ mod tests {
                 8,
                 8,
                 0.0,
+                false,
                 100,
                 None,
                 true,
                 true,
                 None,
                 IPC,
+            false,
+            true
             ),
             [
                 "a.mkv",
@@ -1748,7 +2175,9 @@ mod tests {
                 "--window-dragging=no",
                 "--ontop",
                 "--geometry=8x8+0+0",
+                "--vo=gpu-next",
                 "--gpu-api=d3d11",
+                "--d3d11-flip=no",
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",

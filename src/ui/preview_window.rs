@@ -29,8 +29,12 @@
 //! - `pin_model` - what a pin is.
 //! - `pin_playback` - what the pin plays.
 //! - `pin_chrome_layout` - the pin's chrome, and the level it is at.
+//! - `pin_chrome_strips` - the windows a hosted film's chrome is carried over it in.
 //! - `pin_geometry` - the box of a pinned window.
 //! - `pin_lifecycle` - a pin's own lifetime, and the window it stands in.
+//! - `pin_resize_probe` - the temporary diagnostics a resize step's film and timings are read by.
+//! - `pin_film_thumbnail` - the prototype road a pinned film is drawn on by the Shell's own thumbnail
+//!   of a window of mpv's, rather than by a child of the pin's host.
 //! - `pin_swap` - what a pin should show next, and what is waited for.
 //! - `pin_install` - putting a loaded media into a pin.
 //! - `pin_walk` - the walk a pin takes through a folder.
@@ -43,6 +47,7 @@
 //! - `ffplay_window` - the window and the process FFmpeg draws a film into.
 //! - `video_playback` - starting and stopping a film.
 //! - `mpv_ipc` - telling a running mpv what to do, over its own JSON IPC.
+//! - `mpv_resident` - the one mpv a hover's film is loaded into, kept warm between hovers.
 //! - `video_retire` - handing one film over to the next.
 //! - `video_hw` - what a film is decoded on, and how it loops.
 //! - `audio_engine` - a sound, its loudness, its player and its clock.
@@ -66,6 +71,7 @@ mod engine_render;
 mod event_loop;
 mod ffplay_window;
 mod hover_facts;
+mod hover_film_host;
 mod image_cache;
 mod layout;
 mod load;
@@ -75,10 +81,14 @@ mod media_data;
 mod media_types;
 mod message_utils;
 mod mpv_ipc;
+mod mpv_resident;
 mod paint;
 mod pin_bubble;
 mod pin_chrome_layout;
+mod pin_chrome_strips;
 mod pin_drag;
+mod pin_film_host;
+mod pin_film_thumbnail;
 mod pin_geometry;
 mod pin_input;
 mod pin_install;
@@ -87,10 +97,13 @@ mod pin_menu;
 mod pin_menu_window;
 mod pin_model;
 mod pin_playback;
+mod pin_real_window;
+mod pin_resize_probe;
 mod pin_swap;
 mod pin_taskbar;
 mod pin_taskbar_buttons;
 mod pin_taskbar_mirror;
+mod pin_trace;
 mod pin_walk;
 mod pin_window;
 mod pin_zoom;
@@ -98,6 +111,7 @@ mod pixels;
 mod pointer;
 mod preview_scale;
 mod requests;
+mod still_probe;
 mod subtitle_files;
 mod surfaces;
 mod text_selection;
@@ -187,7 +201,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Output, Stdio};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
@@ -199,9 +213,9 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EndPaint, GdiFlush, MonitorFromWindow, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
+    EndPaint, GdiFlush, MonitorFromWindow, SelectObject, AC_SRC_ALPHA,
+    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC,
+    HGDIOBJ, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -210,8 +224,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Threading::{
-    CreateEventW, OpenProcess, QueryFullProcessImageNameW, ResetEvent, SetEvent, TerminateProcess,
-    WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    CreateEventW, GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, ResetEvent,
+    SetEvent, TerminateProcess, WaitForSingleObject, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, GetDoubleClickTime, GetFocus, ReleaseCapture, SetCapture,
@@ -224,23 +239,24 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    EnumWindows, FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics,
-    GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
-    IsWindowVisible, LoadCursorW, MoveWindow, MsgWaitForMultipleObjectsEx, PeekMessageW,
+    EnumWindows, FindWindowExW, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow,
+    GetSystemMetrics, GetTopWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsIconic, GA_ROOT,
+    IsWindow, IsWindowVisible, LoadCursorW, MoveWindow, MsgWaitForMultipleObjectsEx, PeekMessageW,
     PostMessageW, RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowPos, ShowWindow, ShowWindowAsync, TrackPopupMenu, TranslateMessage,
-    UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_HWNDPREV, GW_OWNER,
+    UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER,
     HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
     IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
     PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT,
-    SET_WINDOW_POS_FLAGS, SM_CXDOUBLECLK, SM_CYDOUBLECLK, SM_XVIRTUALSCREEN, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
-    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
-    ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE,
-    WM_POWERBROADCAST, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    SC_CLOSE, SET_WINDOW_POS_FLAGS, SIZE_RESTORED, SM_CXDOUBLECLK, SM_CYDOUBLECLK,
+    SM_XVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY,
+    TPM_RETURNCMD, TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+    WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 #[cfg(test)]
@@ -265,10 +281,14 @@ pub(crate) use hover_facts::cursor_preview_hover;
 pub(crate) use hover_facts::PreviewCursorHover;
 pub(crate) use image_cache::trim_image_cache;
 pub(crate) use media_types::PreviewMessage;
+pub(crate) use mpv_resident::shut_down_the_resident;
 pub(crate) use pin_bubble::PIN_BUBBLE_HWND;
 pub(crate) use pin_drag::publish_pin_media_press;
+pub(crate) use pin_lifecycle::band_place;
 pub(crate) use pin_lifecycle::pin_always_on_top;
+pub(crate) use pin_lifecycle::pin_holds_the_front;
 pub(crate) use pin_lifecycle::PinCommand;
+pub(crate) use pin_menu_window::PIN_MENU_HWND;
 pub(crate) use pin_model::pin_is_focused;
 pub(crate) use pin_model::pin_zoom_keep_alive_try;
 pub(crate) use pin_walk::PinPlanned;
@@ -286,12 +306,32 @@ pub(crate) use pointer::text_scroll_keep_alive_try;
 pub(crate) use pointer::text_size_keep_alive_try;
 pub(crate) use pointer::AvoidRegion;
 pub(crate) use requests::hide_preview;
+
+/// Whether `RHP_PIN_TRACE` asks for the preview's road to be written out — asked by the one module
+/// outside this one that writes a line of that log, so that a run without the variable builds no
+/// line at all (see `pin_trace`).
+pub(crate) fn pin_trace_asked() -> bool {
+    pin_trace::asked()
+}
+
+/// Write one line of that log from outside this module: the Explorer hook's own gate, whose answer
+/// is the one that stops every preview with the pointer over a listing.
+pub(crate) fn note_a_trace_line(line: &str) {
+    if pin_trace::asked() {
+        pin_trace::write(line);
+    }
+    #[cfg(test)]
+    pin_trace::note_a_line_for_a_test(line.to_string());
+}
 pub(crate) use requests::is_preview_window;
 pub(crate) use requests::notify_magick_ready;
 pub(crate) use requests::notify_office_render;
 pub(crate) use requests::notify_peazip_ready;
+pub(crate) use requests::pin_file_in_flight;
+pub(crate) use requests::pin_press_was_not_a_pick;
 pub(crate) use requests::pinned;
 pub(crate) use requests::pinned_path;
+pub(crate) use requests::press_pinned_preview;
 pub(crate) use requests::preview_screen_rect;
 pub(crate) use requests::preview_window_rect;
 pub(crate) use requests::publish_text_font_size;
@@ -309,7 +349,7 @@ pub(crate) use requests::update_pinned_preview;
 pub(crate) use subtitle_files::keep_extraction_for;
 pub(crate) use subtitle_files::trim_now as trim_subtitle_cache;
 pub(crate) use tick::preview_stall_ms;
-pub(crate) use tick::wake_for_a_wheel_notch;
+pub(crate) use tick::wake_preview_loop;
 pub(crate) use tick::PREVIEW_SENDER;
 // What the tray's `Engine -> Select Engine -> Video` submenu reads: what the choice moving costs
 // the probe cache (see `set_video_engine`). Which engines this machine has is

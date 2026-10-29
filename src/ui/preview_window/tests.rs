@@ -344,6 +344,7 @@ fn with_pin_zoom(pin: PinnedPreview, scale: f32) -> PinnedPreview {
         zoom: Some(PinZoom::still(
             (width as f32 * scale, height as f32 * scale),
             (0.0, 0.0),
+            centred_on(pin.content),
         )),
         ..pin
     }
@@ -421,8 +422,10 @@ mod audio_bands;
 mod cache;
 mod engine_probes;
 mod hover;
+mod hover_film_host_window;
 mod layout;
 mod media_scales;
+mod resident;
 mod pin_audio_facts;
 mod pin_audio_pause;
 mod pin_audio_seek;
@@ -430,7 +433,9 @@ mod pin_bubble_art;
 mod pin_bubble_space;
 mod pin_cards;
 mod pin_edges;
+mod pin_film_host_window;
 mod pin_frames;
+mod pin_gesture_no_restart;
 mod pin_input;
 mod pin_keys;
 mod pin_menu;
@@ -441,6 +446,7 @@ mod pin_swap_ffplay_jigsaw;
 mod pin_swap_ffplay_native;
 mod pin_taskbar_window;
 mod pin_volume;
+mod pin_window_kind;
 mod pin_zoom;
 mod placement;
 mod probes;
@@ -451,7 +457,6 @@ mod video_transport;
 mod walk;
 mod ws_g_seek_hold;
 mod ws_h_supersede;
-mod ws_j_always_kill;
 mod ws_k_chrome_nav;
-mod ws_l_cover_owner;
+mod ws_l_take_up;
 mod ws_m_frame_truth;

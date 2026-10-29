@@ -156,6 +156,9 @@ pub const DEFAULT_RENDER_HTML: bool = false;
 /// a newer release is offered. Off, nothing is asked at any moment — neither at startup
 /// nor when the menu is opened — and the row never appears (see `request_check`).
 pub const DEFAULT_CHECK_FOR_UPDATES: bool = true;
+/// The key that turns previews on or off while File Explorer is in front. F7 by default,
+/// so the switch has a shortcut without taking a key another program may be using.
+pub const DEFAULT_TOGGLE_KEY: &str = "f7";
 pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 125;
 pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
@@ -369,26 +372,11 @@ pub const DEFAULT_VIDEO_SUBTITLES: bool = false;
 /// here. It is total pixels and not an axis, because what it stands for is how much there is to
 /// draw rather than how wide the picture is (see `video_hw::resolve_video_engine`).
 pub const VIDEO_FFMPEG_ABOVE_PIXELS: u64 = 3_200_000;
-/// How long the Office engine a family started is kept after that family's last
-/// page. Producing a page costs an Office start, and an engine still warm is what
-/// makes the next document of that family cheap, so one is kept for a while by
-/// default.
-pub const DEFAULT_OFFICE_ENGINE_IDLE_SECS: u64 = 600;
-/// How long the WebView2 engine is kept warm by default: ten minutes, the same as the
-/// Office engine, because both are a process this app would rather not start twice. The
-/// browser is what draws every SVG document this app previews, so what this buys is
-/// every hover after the first one in a while.
-pub const DEFAULT_WEBVIEW_IDLE_SECS: u64 = 600;
-/// How long the LibreOffice engine is kept after the last page it drew, by default: ten
-/// minutes, the same as the other two engines this app keeps, because the start is the whole
-/// of what keeping it saves. What it costs is the application itself — a few hundred
-/// megabytes while it is held — which is what the setting is for.
-pub const DEFAULT_LIBREOFFICE_IDLE_SECS: u64 = 600;
 /// The ceiling a hand-edited number of seconds is reduced to. Past a day there is
 /// nothing a number says that `indefinitely` does not say better.
 pub const MAX_OFFICE_ENGINE_IDLE_SECS: u64 = 86_400;
-/// How long Explorer has to be out of reach before an engine that is not marked
-/// `Persistent` is let go, by default: one minute. What an engine costs is a process left
+/// How long Explorer has to be out of reach before an engine set to `Away` is let go, by
+/// default: one minute. What an engine costs is a process left
 /// running, and a minute is long enough that stepping into another application and
 /// straight back out of it is not a start paid for the visit.
 pub const DEFAULT_AFK_TIMER_SECS: u64 = 60;

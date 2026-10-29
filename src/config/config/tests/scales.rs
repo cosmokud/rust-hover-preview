@@ -34,8 +34,14 @@ fn a_fresh_configuration_avoids_the_name_alone() {
 #[test]
 fn office_engine_idle_reads_back_what_it_writes() {
     for idle in [
+        EngineIdle::Away,
         EngineIdle::Seconds(0),
+        EngineIdle::Seconds(30),
+        EngineIdle::Seconds(60),
+        EngineIdle::Seconds(300),
         EngineIdle::Seconds(600),
+        EngineIdle::Seconds(1800),
+        EngineIdle::Seconds(3600),
         EngineIdle::Seconds(MAX_OFFICE_ENGINE_IDLE_SECS),
         EngineIdle::Indefinite,
     ] {
@@ -46,6 +52,8 @@ fn office_engine_idle_reads_back_what_it_writes() {
             "`{written}` read back"
         );
     }
+
+    assert_eq!(EngineIdle::Away.as_str(), "away");
 }
 
 #[test]
@@ -54,6 +62,14 @@ fn office_engine_idle_takes_the_words_a_person_would_write() {
         assert_eq!(
             EngineIdle::from_str(written),
             Some(EngineIdle::Indefinite),
+            "`{written}`"
+        );
+    }
+
+    for written in ["away", "Away", "until away", "UNTIL_AWAY", " afk "] {
+        assert_eq!(
+            EngineIdle::from_str(written),
+            Some(EngineIdle::Away),
             "`{written}`"
         );
     }
@@ -89,6 +105,35 @@ fn office_engine_idle_expires_on_its_own_clock() {
         !EngineIdle::Indefinite.has_expired(Duration::from_secs(365 * 24 * 60 * 60)),
         "an engine kept for the life of the app never goes idle"
     );
+}
+
+/// `Away` is the one value the engine's own clock does not answer: what bounds it is the away
+/// timer, so it is idle the moment Explorer has been out of reach for that long and not a
+/// moment before — however long the engine itself has been sitting there.
+#[test]
+fn away_expires_on_the_away_timer_and_not_on_the_engines_clock() {
+    use crate::app::afk;
+    use crate::CONFIG;
+
+    let year = Duration::from_secs(365 * 24 * 60 * 60);
+
+    // A user who is here is a user whose engines are kept for hovers they may yet make.
+    afk::note_explorer_reachable(true);
+    assert!(!EngineIdle::Away.has_expired(year));
+
+    let timer = CONFIG.lock().map(|config| config.afk_timer_seconds).unwrap();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.afk_timer_seconds = 0;
+    }
+
+    // Away, with the timer at nothing: out of reach is already long enough.
+    afk::note_explorer_reachable(false);
+    assert!(EngineIdle::Away.has_expired(Duration::ZERO));
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.afk_timer_seconds = timer;
+    }
+    afk::note_explorer_reachable(true);
 }
 
 #[test]

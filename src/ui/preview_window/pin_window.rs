@@ -44,21 +44,18 @@
 //! share one list, and that the list can be read back on a machine with no display and no pin
 //! in it.
 //!
-//! It grew by five for a reason worth recording, because the five are not lifecycle operations
+//! It grew by four for a reason worth recording, because the four are not lifecycle operations
 //! at all: they are *a drag*, which is the other thing this window is asked of a pin and the
-//! only one that had no test surface. `pointer`, `window_box`, `capture`, `repaint` and
-//! `unpark_player_window` are the whole of what "a press becomes a carried drag, and the drag is
-//! let go of" costs the machine. They are here rather than in a second trait over the same window
-//! for the reason the two ends of the capture are here: they are two halves of one handoff, and a
-//! handoff whose halves are asked of two different objects is a handoff that can disagree with
-//! itself — which is what a window left holding the pointer for the whole desktop was (see
-//! `begin_pin_drag`).
+//! only one that had no test surface. `pointer`, `window_box`, `capture` and `repaint` are the
+//! whole of what "a press becomes a carried drag, and the drag is let go of" costs the machine.
+//! They are here rather than in a second trait over the same window for the reason the two ends of
+//! the capture are here: they are two halves of one handoff, and a handoff whose halves are asked
+//! of two different objects is a handoff that can disagree with itself — which is what a window
+//! left holding the pointer for the whole desktop was (see `begin_pin_drag`).
 //!
-//! The last of the five is a window of *another* process, and it earns its place the same way the
-//! others do: the defect it covers is a film on screen at a box nobody put it at, and a test can
-//! only see that by being shown the call. Every other way of undoing a drag's park was invisible
-//! from here — the flag came down and nothing was recorded, so an unpark that showed the window
-//! without placing it read exactly like one that placed it (see `unpark_pinned_player`).
+//! Nothing of the player is asked through this seam, and that is the film road's own rule: a drag
+//! moves this app's window and one rectangle, and the film is a thumbnail of a source window no
+//! gesture moves (see `pin_film_thumbnail`).
 //!
 //! What is deliberately still *not* here is the rest of a drag: `apply_pin_drag` moves the
 //! window and resizes it, and that is a `SetWindowPos` and an `UpdateLayeredWindow` on
@@ -71,7 +68,10 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use super::{subtitle_files, PinCommand, PinStep, PinnedPreview, ScreenRegion};
+use windows::Win32::Foundation::HWND;
+
+use super::pin_trace::note_pin_trace;
+use super::{pin_lifecycle, subtitle_files, PinCommand, PinStep, PinnedPreview, ScreenRegion};
 
 mod window;
 
@@ -583,6 +583,15 @@ pub(super) enum PinHide {
 pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
     let hwnd = window.hwnd();
     let exit = reason.exit();
+    note_pin_trace!(
+        "pin end {:?} own {} path {}",
+        reason,
+        super::pin_lifecycle::pin_is_its_own_window() as u8,
+        super::pinned_path()
+            .as_deref()
+            .map(super::pin_trace::path_name)
+            .unwrap_or_else(|| "-".to_string()),
+    );
 
     // The pointer goes before the state does, and only where this thread is the one holding
     // it: `ReleaseCapture` delivers `WM_CAPTURECHANGED` back into this thread's own window
@@ -609,7 +618,13 @@ pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
             // not asked for first here because there is no focus of ours to give up: the claim is
             // written on the answer Windows gave rather than on the asking (see `take_keyboard`),
             // so a pin holding none is not the window the keyboard is in.
-            None => make_the_window_unfocusable_again(hwnd, window),
+            None => {
+                make_the_window_unfocusable_again(hwnd, window);
+                // And the foreground, where one of ours still has it: a claim is not the question
+                // of who is in front, and a step is what separates the two (see
+                // `give_back_a_foreground_that_is_ours`).
+                give_back_a_foreground_that_is_ours(hwnd, window);
+            }
         }
     }
     // A road that finds the pin already over is told nothing about the window: the road that ended
@@ -678,8 +693,13 @@ pub(super) fn give_the_keyboard_back(window: &dyn PinWindow) {
 ///
 /// The focus is given up before the style is changed, because a window that has been made
 /// non-activating while it still holds the focus holds it in a state Windows does not expect.
-/// The window behind is one that may since have gone, and the call is refused by Windows in
-/// that case rather than acted on.
+///
+/// **The window it goes to has to be one that can still take it, and one that is not ours.** A
+/// window behind that has since gone — the player a step began, which is the window in front while
+/// the player that followed it was started — is a `SetForegroundWindow` Windows refuses, and a
+/// refused hand-back leaves the foreground on a window of this app's rather than on the listing: a
+/// window that publishes no pin, answers no pointer and hovers nothing until the user clicks
+/// Explorer to make it the foreground again (see `pin_lifecycle::the_window_behind`).
 ///
 /// This is the only place the style goes back on, which used to leave the pin nobody pressed
 /// focusable after it came down — see [`make_the_window_unfocusable_again`] for what that costs
@@ -693,7 +713,10 @@ fn hand_keyboard_back(keyboard: &PinKeyboard, hwnd: isize, window: &dyn PinWindo
     window.set_focusable(hwnd, false);
 
     if keyboard.behind != 0 {
-        window.set_foreground(keyboard.behind);
+        let behind = pin_lifecycle::the_window_behind(keyboard.behind, hwnd);
+        if behind != 0 {
+            window.set_foreground(behind);
+        }
     }
 }
 
@@ -724,6 +747,44 @@ fn make_the_window_unfocusable_again(hwnd: isize, window: &dyn PinWindow) {
     }
 
     window.set_focusable(hwnd, false);
+}
+
+/// Hand the foreground back from a close that is holding no claim to hand it back with, where the
+/// window in front is one of ours.
+///
+/// **The claim is not the question of who is in front.** A step begins the next film's player and
+/// Windows creates its window activated, which deactivates the pin and drops the claim
+/// (`WM_ACTIVATE` → `pin_release_focus` → `release_keyboard`); the player's window then gives the
+/// foreground back to the window the launch found in front of it, which is the pin's own (see
+/// `a_foreground_to_give_back`). So a pin closed after a step reaches its close holding no keyboard
+/// and with a window of ours still in front — the step's player where that pass has not run yet,
+/// and the pin's own window after it — and the claim-shaped hand-back says nothing about it. The pin
+/// comes down, the window that was left in front goes with it, and nothing hovers and no pin is
+/// published until the user clicks the listing to make it the foreground again.
+///
+/// So the two are asked separately: where the window in front is one of ours it is given back to the
+/// window a keyboard hand-back would give it to (`the_window_behind`, which is the same resolver
+/// `hand_keyboard_back` uses), and where it is somebody else's it is left alone — the user took it
+/// with their own click, and asking for it again is what brings a window up over them.
+fn give_back_a_foreground_that_is_ours(hwnd: isize, window: &dyn PinWindow) {
+    let front = window.foreground();
+    if !pin_lifecycle::a_window_of_ours(HWND(front as *mut _)) {
+        return;
+    }
+
+    let behind = pin_lifecycle::the_window_behind(front, hwnd);
+    // The one line a run needs where the report comes back: which window of ours was in front when
+    // the pin closed, and where it was handed. A `-> 0x0` is the fault still there — the desktop had
+    // no ordinary window behind the pin to give it to.
+    note_pin_trace!(
+        "pin end gives the foreground back {:?} -> {:?}",
+        front,
+        behind
+    );
+
+    if behind != 0 && behind != front {
+        window.set_foreground(behind);
+    }
 }
 
 /// Whether the pin holds a claim on the keyboard, which is this app's own record of a press that
@@ -770,6 +831,9 @@ pub(super) fn take_pin_for_a_test() -> Option<PinnedPreview> {
 /// what this module is for.
 #[cfg(test)]
 pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
+    // The front a pin owes is part of what is stood here: a test that arms it is a test that has to
+    // give it back, and every one that does not begins without it (see `arm_pin_to_the_front`).
+    super::PIN_FRONT_OWED.store(false, Ordering::SeqCst);
     match pin {
         Some(pin) => install(pin),
         None => {
@@ -819,6 +883,24 @@ pub(super) fn stand_pin_walk(walk: Option<PinStep>) {
 /// early return, and reports no hover at all rather than a wrong one. Reading is the half that
 /// is easy to leave out, and it fails the same way writing does.
 ///
+/// **The other half of what these tests share is the machine's windows and the player records
+/// that name them.** Neither is this app's own: a window is found by its process and by its
+/// class, and a window a test made is in every other test's view.
+/// `ffplay_window::style_the_window_before_the_show` and `unlist_the_awaited_window` answer with
+/// the *first* window of the process wearing the film's class — `A_FILMS_WINDOW_CLASS`, which
+/// `a_film_window_of_the_tests_own` makes with the player's own — so two tests holding a window
+/// each are two tests styling each other's: the window each one awaited goes unstyled, and a
+/// window neither meant to touch is changed behind its back, which is a red in both and a race
+/// neither test can see from where it stands. The records a player is published and waited for
+/// under are the same shape of problem (`VIDEO_PID` and `VIDEO_HWND`,
+/// `PLAYER_BEFORE_THE_SHOW`, `A_WINDOW_TO_UNLIST`, `SUSPENDED_PLAYERS`): one slot for the whole
+/// binary, so two tests writing one are each asserting about the other's player.
+///
+/// So the rule below is not only about the pin's own state. A test that makes a window of this
+/// process, calls a pass that enumerates windows by process or class, or writes one of those
+/// records takes this lock too — and it is still this lock, not a second one, because those
+/// tests share the machine with every test here in the same way the pin's tests share the slot.
+///
 /// There is one lock for this state, not one per module, and it is here because this module owns
 /// the state: the slot is the one declared above, and the tests that stand a pin up stand it from
 /// both sides of the module wall. A second lock over the same slot is not a second line of
@@ -834,8 +916,10 @@ pub(super) fn stand_pin_walk(walk: Option<PinStep>) {
 /// is the order, so the order is taken back.
 ///
 /// The rule for a test that reaches this state, then: does it stand a pin up, take one down,
-/// write the media, or ask any of the above? Take this lock on the first line of the body, before
-/// anything touches that state. A test that touches none of it takes nothing — most of both
+/// write the media, ask any of the above, make a window of this process, call a pass that
+/// enumerates the desktop's windows by process or class, or write one of the player records the
+/// monitor waits on? Take this lock on the first line of the body, before anything touches that
+/// state. A test that touches none of it takes nothing — most of both
 /// modules is arithmetic over values handed to it — so the suite is not serialised, only the part
 /// of it that shares a machine. A lock over some other process-wide thing, like the pointer's own
 /// stand-in in `preview_window`, is a different lock and neither stands in for this one.

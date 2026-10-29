@@ -9,6 +9,9 @@
 //! frames of the film *moving* are read beside that player (see `bubble_stream`).
 
 use super::*;
+// The one call a window's own minimize is asked for with: a pin put away into the taskbar is the pin's
+// window minimized, rather than a window hidden (see `collapse_pin_to`).
+use windows::Win32::UI::WindowsAndMessaging::SW_MINIMIZE;
 
 /// The class the round bubble a collapsed pin leaves is created from.
 pub(super) const PIN_BUBBLE_CLASS: PCWSTR = w!("RustHoverPreviewPinBubble");
@@ -636,6 +639,68 @@ pub(super) unsafe fn bubble_menu_hover(hwnd: HWND) -> bool {
     changed
 }
 
+/// Whether this app is asking its own pin's window down right now.
+///
+/// A collapse into the taskbar minimizes the window the pin stands in, and the one message that says a
+/// window has *come back* — `WM_SIZE` with `SIZE_RESTORED` — is a message the same call can send on its
+/// way to the minimized state, since a window that was hidden is shown before it is put down. What tells
+/// the two apart is who asked, and this is the only thing that says so (see `window_proc`'s `WM_SIZE` and
+/// `ask_the_pin_down`).
+static ASKING_THE_PIN_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Ask the pin's own window down, saying that anything arriving during the ask is this app's own.
+///
+/// The collapse and the bubble's `To Taskbar` row both put a pin in the taskbar by minimizing the window
+/// it stands in, which is the one form of it that keeps the window's own taskbar button (see
+/// `collapse_pin_to`).
+unsafe fn ask_the_pin_down(hwnd: HWND) {
+    ASKING_THE_PIN_DOWN.store(true, Ordering::SeqCst);
+    let _ = ShowWindow(hwnd, SW_MINIMIZE);
+    ASKING_THE_PIN_DOWN.store(false, Ordering::SeqCst);
+}
+
+/// Whether the pin's window was put down by this app rather than restored by the Shell.
+pub(super) fn the_pin_is_being_put_down() -> bool {
+    ASKING_THE_PIN_DOWN.load(Ordering::SeqCst)
+}
+
+/// Put a pin that stands in a window of its own away into the taskbar: the window the pin stands in is
+/// minimized, and what stands in it goes down with it.
+///
+/// It is the one door both roads into a taskbar take for such a pin — the minimize button and the bubble's
+/// `To Taskbar` row — because a window that wears its own taskbar button is put away by being minimized,
+/// and a window that is hidden has no button at all. Hiding it is what took the button with it: this pin is
+/// refused the stand-in that would wear one, so the pin left the screen and the taskbar together (see
+/// `hide_pinned_siblings` and `a_button_is_owed`).
+///
+/// Nothing is taken for a stand-in either: no stand-in wears this pin's button, so a picture of the pin
+/// taken for one is a picture of nothing. What *is* taken is the picture of the window that wears the
+/// button — the film host, where the pin has one — because the hover of a button that is down is a still
+/// of the window and a host's own rows are the black behind its film (see
+/// `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
+unsafe fn put_the_pins_window_in_the_taskbar() {
+    // **The picture the button is to hold is taken before the pin leaves the screen**, and of the host
+    // itself: a picture of a window that has been taken off the screen is a picture of nothing, and the
+    // film in a host is composed over it rather than in its rows (see
+    // `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
+    if let Some(host) = pin_film_host::film_host() {
+        unsafe { pin_film_host::keep_the_pins_picture_for_the_taskbar(host) };
+    }
+
+    hide_pinned_siblings();
+    // **A pin whose chrome is owned by its film host is put away by the host.** The host is the
+    // window the Shell's button belongs to on this road, and minimizing it hides the pin with it —
+    // the owned window goes down with its owner — while a minimized pin over a host on the screen
+    // would be a chrome gone and a film left standing on the desktop (see
+    // `pin_film_host::own_the_pin_window`).
+    let window = if pin_film_host::the_pins_chrome_is_owned() {
+        pin_film_host::film_host().unwrap_or_else(pinned_window)
+    } else {
+        pinned_window()
+    };
+    ask_the_pin_down(window);
+}
+
 /// Put the pin away into the taskbar rather than the bubble: the bubble goes, the stand-in comes
 /// up, and the pin stays collapsed until it is brought back (see `show_pin_taskbar`).
 ///
@@ -644,11 +709,24 @@ pub(super) unsafe fn bubble_menu_hover(hwnd: HWND) -> bool {
 /// picture of itself, and a frame taken after it would be a frame of nothing (see
 /// `keep_the_pin_for_the_taskbar` and `pin_taskbar_mirror::mirror_source`).
 pub(super) fn bubble_to_taskbar() {
-    unsafe {
-        keep_the_pin_for_the_taskbar();
+    // A pin that stands in a window of its own takes the same door: the row asks for the taskbar, and
+    // what wears a taskbar button for such a pin is the window it stands in, minimized — not a picture of
+    // the pin taken for a stand-in that is refused it (see `collapse_pin_to` and `a_button_is_owed`).
+    let its_own = pin_is_its_own_window();
+    if !its_own {
+        unsafe {
+            keep_the_pin_for_the_taskbar();
+        }
     }
     hide_pin_bubble();
     unsafe {
+        if its_own {
+            // The window is behind the bubble rather than on the screen — a bubble stands where a window
+            // would be in the way — so minimizing it is also what puts it back: a window that is down
+            // wears no button, and the button is the whole of what this row asks for.
+            put_the_pins_window_in_the_taskbar();
+            return;
+        }
         show_pin_taskbar();
     }
 }
@@ -717,11 +795,29 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
     // stand-in leaves the app in the taskbar instead with the pin off the screen. Everything
     // above is the same either way — which is why only the last step of a collapse differs.
     unsafe {
+        // **A pin that stands in a window of its own is put away into the taskbar the way a window is put
+        // away**, which is one door both of the pin's own roads into a taskbar take (see
+        // `put_the_pins_window_in_the_taskbar`). What is past this point is the stand-in's business: the
+        // round bubble on the desktop, or the app's own window in the taskbar for a kind that has none.
+        if pin_is_its_own_window() && target == PinMinimizeTo::Taskbar {
+            put_the_pins_window_in_the_taskbar();
+            return;
+        }
+
         if target == PinMinimizeTo::Taskbar {
             // The button's hover keeps the pin's own picture, and a picture of a window that has been
             // taken off the screen is a picture of nothing: what the hover is to hold is taken while
             // the windows it is made of are still up (see `keep_the_pin_for_the_taskbar`).
             keep_the_pin_for_the_taskbar();
+        }
+
+        // **And the film host's own picture is taken on every collapse, because this is the last moment
+        // it is on the screen.** A pin put away into the bubble wears no button of the host's, and one
+        // the bubble's own row moves on to the taskbar does: its hover is a still of a window that has
+        // been off the screen since, so the frame composed here — the last one the user saw — is what
+        // that button is handed (see `pin_film_host::take_the_pins_picture`).
+        if let Some(host) = pin_film_host::film_host() {
+            pin_film_host::take_the_pins_picture(host);
         }
 
         hide_pinned_windows();
@@ -844,26 +940,32 @@ pub(super) fn take_noted_grabs() -> Vec<(PathBuf, f64, u32)> {
 }
 
 /// One frame of a film a player of somebody else's is drawing, taken for the bubble the pin
-/// collapses into.
+/// collapses into: `grab_a_frame` cut to a `side × side` square — the same shape, and from the same
+/// corner, that every other bubble's picture is cut to (see `bubble_thumbnail`).
+pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8>> {
+    grab_a_frame(path, at, (side, side), Duration::from_secs(3))
+}
+
+/// One frame of a film at a second, scaled to cover `width × height` and cropped to the middle of
+/// that shape, as raw BGRA on stdout.
 ///
 /// The frame is *read* rather than copied, and that is the whole of the difference between this and
 /// every other kind's picture: what a bubble shows of a film the media engine plays is the frame
 /// already in memory, where this engine's picture is on the screen and nowhere else. So the file is
-/// opened at the second the bar is showing, one frame is decoded, and it comes back scaled to cover
-/// a `side × side` square and cropped to the middle of it — the same shape, and from the same
-/// corner, that every other bubble's picture is cut to (see `bubble_thumbnail`).
+/// opened at the second named, one frame is decoded, and it comes back the shape asked for — which
+/// is a bubble's square.
 ///
-/// The output is raw BGRA on stdout, which is what the preview's own frame is in: a picture is not
+/// The output is raw BGRA, which is what the preview's own frame is in: a picture is not
 /// encoded and decoded again for a process boundary when the bytes are what is wanted either side
 /// of it. `-pix_fmt bgra` is asked for by name rather than left to the file, because what the file
 /// holds is a codec's own arrangement of the colour and this side wants the one the compositor
 /// reads.
 ///
-/// It is bounded at three seconds and it is a *bound* on the wait rather than a budget for it
+/// It is bounded by the caller and it is a *bound* on the wait rather than a budget for it
 /// (`video_probe::wait_bounded`): a grab that outlasts it is a process killed rather than a thread
 /// held, and the answer is the same `None` a file FFmpeg cannot open gives — the bubble keeps the
-/// face it was painted with. The child is hidden and adopted like every other process this app
-/// starts, so a machine closed mid-grab leaves no `ffmpeg` behind.
+/// face it was painted with. The child is hidden and adopted like
+/// every other process this app starts, so a machine closed mid-grab leaves no `ffmpeg` behind.
 ///
 /// **The frame is drained on a thread of its own, and the bound is what that thread is for.** A
 /// child has to write the whole of its frame before it can leave, and a pipe that nobody is
@@ -871,9 +973,14 @@ pub(super) fn take_noted_grabs() -> Vec<(PathBuf, f64, u32)> {
 /// scale is a few tens of kilobytes, which is at or past the buffer — blocks `ffmpeg` in the middle
 /// of its write, so the wait below would expire on a grab that was never given the chance to
 /// finish. Reading as the child writes is what lets it reach the end of its one frame and exit; the
-/// answer is the first `side × side × 4` bytes of what was read.
-pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8>> {
-    let expected = side as usize * side as usize * 4;
+/// answer is the first `width × height × 4` bytes of what was read.
+pub(super) fn grab_a_frame(
+    path: &Path,
+    at: f64,
+    (width, height): (u32, u32),
+    bound: Duration,
+) -> Option<Vec<u8>> {
+    let expected = width as usize * height as usize * 4;
     if expected == 0 {
         return None;
     }
@@ -891,7 +998,7 @@ pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8
         .arg("1")
         .arg("-vf")
         .arg(format!(
-            "scale={side}:{side}:force_original_aspect_ratio=increase,crop={side}:{side}"
+            "scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
         ))
         .arg("-f")
         .arg("rawvideo")
@@ -917,7 +1024,7 @@ pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8
         bytes
     });
 
-    let landed = video_probe::wait_bounded(child, Duration::from_secs(3));
+    let landed = video_probe::wait_bounded(child, bound);
     let bytes = reader.join().unwrap_or_default();
 
     // A grab that ran past its bound answered nothing, whatever the reader had taken by the time
@@ -998,6 +1105,18 @@ pub(super) enum PinRestore {
     /// listing, and the key picks the file rather than moving the keyboard out of it (see
     /// `pin_bubble_pick`).
     Key,
+    /// An update named a file, and `Pin Mode → Update Preview → Move To Top` has the pin come forward
+    /// for it: a pin that is away has no window in any band to come forward, so the file the update
+    /// names is the file it comes back up on. The user is picking in the listing, so the keyboard stays
+    /// there rather than following the window up; the front is asked for after the restore, by the
+    /// update's own raise (see `bring_a_put_away_pin_back`).
+    Update,
+    /// Windows brought the pin's window back, and nothing of this app's was pressed for it: a pin put
+    /// away as a window is the window minimized, and the button that restores it is the Shell's own. What
+    /// is owed is the pin's own state and what the collapse parked — never the front, which the Shell has
+    /// already decided, and never the keyboard, since the pin may not even be the window it gave it to
+    /// (see `collapse_pin_to`).
+    TheShell,
 }
 
 /// Put a collapsed pin back up: the bubble goes, the window comes back where it was, whatever
@@ -1027,7 +1146,7 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
         pin.collapsed = false;
         // The playback goes back to being the switches' rather than the hand's: a pin up again is
         // a window a park would be written for, and a claim carried up out of the bubble would be
-        // one the next collapse is answered with (see `PinTransport::drag_held`).
+        // one the next collapse is answered with (see `pin_bubble_pause`).
         pin.bubble_run = false;
 
         // The window goes back up where it went down while the bubble is the one the collapse
@@ -1040,6 +1159,13 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
             if let Some(window) = placed_pin_box(pin, &DESKTOPS) {
                 pin.content =
                     content_box_of(window, pin.dpi, pin.transport_bar, pin.overlay, pin.caption);
+                // The box has been placed beside a bubble the hand carried rather than chosen by the
+                // wheel, so the middle a notch on it would grow about is the middle of the box it has
+                // just been given: the box the pin went down in is not the box it came back to (see
+                // `PinZoom::reseat`).
+                if let Some(zoom) = pin.zoom.as_mut() {
+                    zoom.reseat(pin.content);
+                }
             }
         }
     }
@@ -1049,6 +1175,11 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
     unsafe {
         let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
         if !hwnd.is_invalid() {
+            // A pin the hand asked for owes no band for it: this restore takes the focus below, and
+            // the window the hand is in is the window Windows activates — an activated window is
+            // already the one in front, and one that also held the topmost band would be a pin with
+            // `Always On Top` off standing over the user's work (see `band_place` and
+            // `PIN_FRONT_OWED`).
             show_pinned_window(hwnd);
             // A window the hand pressed its stand-in for is a window the hand is in, so it is the one
             // in front and the one holding the keyboard — and with `Pin Mode → Always On Top` off
@@ -1090,6 +1221,12 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
             place_pinned_siblings();
         }
     }
+
+    // **The film comes back with the pin.** A pin whose chrome is owned by its film host was put away
+    // by hiding that host, so a restore that only placed the windows left the band black: the host and
+    // the source the Shell draws through it are shown here, with the still the button was holding given
+    // up for the live picture a pin that is up owes its button (see `pin_film_host::bring_the_film_back`).
+    unsafe { pin_film_host::bring_the_film_back() };
 }
 
 /// What the bubble a collapsed pin left has parked, if anything (see `BubblePause`).
@@ -1359,16 +1496,43 @@ pub(super) unsafe fn hide_pinned_windows() {
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
 
+    // A pin standing in a window of its own goes down with the preview's: it is the pin's other
+    // window, and one left on the screen is a picture of a pin that has been put away.
+    pin_real_window::hide_real_pin_window();
+
+    hide_pinned_siblings();
+}
+
+/// Hide what stands *in* a pin's band — the player's own window over a film, the browser's over a page —
+/// and leave the windows the pin itself stands in alone.
+///
+/// It is the whole of what a pin put away **as a window** owes: the window it stands in is the one
+/// Windows minimizes, and a hidden window is a window whose taskbar button has gone, so the pin would
+/// be gone from the screen and the taskbar together (see `collapse_pin_to`).
+pub(super) unsafe fn hide_pinned_siblings() {
     let video = VIDEO_HWND.load(Ordering::SeqCst);
     if video != 0 {
         let _ = ShowWindow(HWND(video as *mut _), SW_HIDE);
     }
 
+    // **The film host goes down with the pin it belongs to.** Nothing else takes it down: it is a
+    // window of the desktop's that owns the chrome, so it has no parent to go with (see
+    // `pin_film_host`).
+    if pin_film_host::the_pins_chrome_is_owned() {
+        unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
+    }
+
     // The cached handle alone is not the player: it is stale where the window was recreated and
     // zero where it was never found, and mpv may hold more than one window — so every visible
     // window of the player's process goes too, or a collapse leaves a chrome-less film on screen.
+    //
+    // **A film the Shell is drawing through a thumbnail is not one of those.** Its window is a
+    // window of the desktop's, so this enumeration would hide it with a synchronous `ShowWindow` on
+    // mpv's thread from this one — and it has already gone with the host, which was taken off the
+    // screen above and takes the picture with it (see `pin_film_thumbnail`).
     let pid = VIDEO_PID.load(Ordering::SeqCst);
-    if pid != 0 {
+    let drawn_by_the_shell = pin_film_host::the_pinned_player_was_begun_in_the_host();
+    if pid != 0 && !drawn_by_the_shell {
         let _ = EnumWindows(Some(hide_player_windows_callback), LPARAM(pid as isize));
     }
 

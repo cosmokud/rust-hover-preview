@@ -22,8 +22,9 @@
 //! child in — the same shape as the video path, where the player's own window is the
 //! preview.
 //!
-//! One engine is kept warm between documents and let go after `webview_idle`, ten
-//! minutes by default: beginning one costs a browser start, and pointing a warm one at
+//! One engine is kept warm between documents and let go after `webview_idle`, which is the
+//! AFK timer until the user gives it a time of its own: beginning one costs a browser start,
+//! and pointing a warm one at
 //! another file costs a few milliseconds, so what a hover pays for a second document is
 //! nothing worth measuring — and what a hover pays for the *first* one is a browser
 //! start, which is what the waiting spinner is shown for. What is let go of is the
@@ -48,8 +49,8 @@ mod host;
 mod pages;
 
 pub(crate) use api::{
-    can_draw, draws, is_available, is_behind, is_showing, page_runs, screen_rect, showing_hwnd,
-    showing_path, take_failure_notice, Area,
+    browser_pid, can_draw, draws, is_available, is_behind, is_showing, page_runs, screen_rect,
+    showing_hwnd, showing_path, take_failure_notice, Area,
 };
 pub(crate) use environment::{clear_stale_profiles, stale_profile_pids};
 pub(crate) use pages::{hide, hide_html_preview, place, raise, show, shutdown, wanted_here};

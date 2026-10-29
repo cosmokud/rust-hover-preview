@@ -32,11 +32,12 @@ impl Drop for LayeredSurface {
 
 thread_local! {
     /// The surfaces this thread paints layered windows on, one per window and kept between
-    /// repaints. The windows at most are three, and all of them are painted by the preview
+    /// repaints. The windows at most are six, and all of them are painted by the preview
     /// thread: the preview — which is the pinned window while a pin is up — the round bubble a
-    /// collapsed pin leaves, and the window of the card's own over the screen. A surface
-    /// rebuilt per repaint would be a display's worth of
-    /// pixels allocated for every frame of a video.
+    /// collapsed pin leaves, the window of the card's own over the screen, and the three strips a
+    /// hosted film's pin carries over its film — the caption's, the transport's, and the volume
+    /// popup's while it is open (see `pin_chrome_strips`). A surface rebuilt per repaint would be
+    /// a display's worth of pixels allocated for every frame of a video.
     pub(super) static LAYERED_SURFACES: RefCell<Vec<(isize, LayeredSurface)>> = const { RefCell::new(Vec::new()) };
     /// Mutable box for the corner spinner: the small piece of a frame the arc is drawn into
     /// and then composed back over the frame's own pixels, so that drawing the spinner costs
@@ -53,6 +54,11 @@ thread_local! {
     /// caption's is: a pinned video repaints while it plays, and the two strips are painted one
     /// after the other — so they cannot share one surface without one of them being rebuilt.
     pub(super) static TRANSPORT_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+    /// The membrane a pinned window's volume popup is painted on, for the reason the caption's and
+    /// the transport's are: it is carried by a strip of its own over a hosted film, and it is only
+    /// the popup's footprint rather than the whole window. It is cleared before each use, because
+    /// what is carried off it is the popup on a transparency the strip shows through.
+    pub(super) static VOLUME_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
     /// The membrane a caption's tooltip is written on. It is the size of the whole window rather
     /// than of a strip, because a name is measured and drawn through GDI and needs a device
     /// context of its own, and it is kept between paints for the reason the surfaces above are:
@@ -78,205 +84,15 @@ thread_local! {
     pub(super) static MENU_WINDOW_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
 }
 
-/// The last frame a pinned film's player had on screen, held as a frame of its own rather than
-/// as the window it was drawn into.
-///
-/// A drag puts the player's window away for the whole of its own length, so what is left of the
-/// pin's band is this: the picture that was on screen a pointer message ago, scaled to the box the
-/// window is being dragged to. It is a copy of what was on screen rather than a decode of the
-/// file, because the file can only be decoded by the player that was decoding it, and a drag is
-/// not a moment a decode fits into (see `compose_parked_band`).
-pub(super) struct HeldVideoFrame {
-    pub(super) pixels: Vec<u8>,
-    pub(super) width: u32,
-    pub(super) height: u32,
-}
-
-/// The one held frame, behind a lock rather than a thread-local because the two ends of it are
-/// not the same thread by construction: it is written on the pointer message that begins a drag
-/// and read by every repaint of that drag, which is a message per move and a repaint per resize
-/// box, and only one of those is the pinned window's own procedure.
-///
-/// It is held for the length of a park and given up when the park is over, so a pin that is not
-/// being dragged pays nothing for it (see `settle_pinned_park`).
-pub(super) static HELD_VIDEO_FRAME: Lazy<Mutex<Option<HeldVideoFrame>>> =
-    Lazy::new(|| Mutex::new(None));
-
-/// The held frame, behind its lock, so that a paint scaling a picture the size of a display does
-/// not copy one out from under itself (see [`HELD_VIDEO_FRAME`]).
-pub(super) fn held_video_frame() -> MutexGuard<'static, Option<HeldVideoFrame>> {
-    HELD_VIDEO_FRAME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner())
-}
-
-/// Stand a held frame in, for a test about what the band's picture is rather than about how it was
-/// taken off the desktop — which needs a player of this app's, and this machine has none.
-#[cfg(test)]
-pub(super) fn stand_video_frame_for_a_test(pixels: Vec<u8>, width: u32, height: u32) {
-    if let Ok(mut held) = HELD_VIDEO_FRAME.lock() {
-        *held = Some(HeldVideoFrame {
-            pixels,
-            width,
-            height,
-        });
-    }
-}
-
-/// The frame a park has *asked* for while it lasts: the file's own picture at the second the film
-/// will go on from, rendered off the drag's own time (see `spawn_video_resume_frame`).
-///
-/// It is a slot of its own rather than the held frame's because the two answer different questions
-/// and arrive in the wrong order for each other: the stale frame is what the band is painted from
-/// on the pointer message that begins the drag, and this one lands later and *upgrades* it. Writing
-/// it into the held frame's place from the thread that rendered it would put a display's worth of
-/// pixels into the surface a paint is reading, at whatever moment the render finished — which is
-/// the one thing a drag's own repaints cannot be asked to wait for (see `install_resume_frame`).
-pub(super) static RESUME_VIDEO_FRAME: Lazy<Mutex<Option<HeldVideoFrame>>> =
-    Lazy::new(|| Mutex::new(None));
-
-/// Whether a prepared frame may be put in place of the stale one, and the whole of why.
-///
-/// Two facts and both are refusals. **A park that has ended has a player of its own in the band**,
-/// so the prepared frame is a decode nothing is waiting for and is dropped rather than kept for the
-/// next drag — which would show the second a *previous* drag let go at. And **a park that took no
-/// frame at all has nothing to upgrade**: the flat fill the band falls back to is opaque and is
-/// what is standing in for the picture, and putting a frame under nothing would leave the band
-/// reading a frame it is no longer painting from.
-///
-/// Every other answer is the upgrade: the background landed inside the drag, the stale frame is
-/// still the one being scaled, and the band gets the picture at the second the film resumes from.
-pub(super) fn resume_frame_upgrades(prepared: bool, park_standing: bool, held: bool) -> bool {
-    prepared && park_standing && held
-}
-
-/// Put the frame the background prepared in place of the stale one, answering whether the band was
-/// upgraded.
-///
-/// It is asked of the loop rather than answered by the thread that rendered the frame, because
-/// installing one is a paint's decision: the stale frame is read by every repaint of the drag, and
-/// swapping it under a paint is a display's worth of pixels changed while a paint is compositing
-/// them (see `held_video_frame`). The park is read here rather than taken on trust from the caller,
-/// because this is the one place the slot is emptied and a frame left in it is a frame the *next*
-/// drag's band would open with (see `resume_frame_upgrades`).
-pub(super) fn install_resume_frame() -> bool {
-    let Ok(mut prepared) = RESUME_VIDEO_FRAME.lock() else {
-        return false;
-    };
-    let Some(frame) = prepared.take() else {
-        return false;
-    };
-
-    let Ok(mut held) = HELD_VIDEO_FRAME.lock() else {
-        return false;
-    };
-    if !resume_frame_upgrades(true, pin_player_is_parked(), held.is_some()) {
-        return false;
-    }
-
-    *held = Some(frame);
-    true
-}
-
-/// Give up a frame that was being prepared for a park, and ask for the process preparing it to stop.
-///
-/// It is the park's other end: a park that has been given back has a player in the band and no use
-/// for a decode, and the process doing that decode is this app's own child rather than one Windows
-/// ends for us — so it is ended here rather than left reading a file for a drag that is over (see
-/// `spawn_video_resume_frame`).
-///
-/// The refusal is the park itself rather than a flag of its own, because a render is up to
-/// `RESUME_FRAME_WAIT` from answering and a second park begun inside that window must not be told
-/// the first render is still the one it is waiting for (see `abandon_resume_frame`).
-pub(super) fn forget_resume_frame() {
-    if let Ok(mut prepared) = RESUME_VIDEO_FRAME.lock() {
-        *prepared = None;
-    }
-    abandon_resume_frame();
-}
-
-/// Stand a prepared frame in, for a test about what a park does with one that landed rather than
-/// about the render that produced it — which is a whole FFmpeg pass, and a slow one.
-#[cfg(test)]
-pub(super) fn stand_resume_frame_for_a_test(pixels: Vec<u8>, width: u32, height: u32) {
-    if let Ok(mut prepared) = RESUME_VIDEO_FRAME.lock() {
-        *prepared = Some(HeldVideoFrame {
-            pixels,
-            width,
-            height,
-        });
-    }
-}
-
-/// Give the held frame up: the player's own window is on screen again, so the band's picture is
-/// that window's rather than anything kept here.
-pub(super) fn forget_video_frame() {
-    if let Ok(mut held) = HELD_VIDEO_FRAME.lock() {
-        *held = None;
-    }
-}
-
-/// Copy the player's window into the frame a drag paints from, answering whether there was a
-/// picture to take.
-///
-/// It is read off the desktop with `BitBlt` rather than asked of the window with `PrintWindow`,
-/// and the reason is what is being taken: this is the frame the user is looking at, so it is read
-/// where the frame is. A window that draws through D3D — which FFmpeg's player does whenever the
-/// decoder is hardware-accelerated — answers `PrintWindow` with a black rectangle or with nothing,
-/// which is the one thing this cannot be.
-///
-/// A failure answers false rather than a blank frame: a black band painted over a player's window
-/// that is still there would be worse than the frame, and the park below knows the difference
-/// between a picture and no picture (see `compose_parked_band`).
-pub(super) fn hold_video_window_frame() -> bool {
-    let Some(hwnd) = video_window_for(VIDEO_PID.load(Ordering::SeqCst)) else {
-        return false;
-    };
-
-    let mut rect = RECT::default();
-    // SAFETY: `hwnd` came out of `video_window_for`, which settles `IsWindow` on the handle it
-    // publishes, and `RECT` is this frame's own. `GetWindowRect` reports rather than faults for
-    // a window that is on its way out, which is what a player ending under a drag is.
-    unsafe {
-        if GetWindowRect(hwnd, &mut rect).is_err() {
-            return false;
-        }
-    }
-
-    // A player begun with `-noborder` has no frame of its own around the picture, so the window's
-    // rect is the picture's — and the band is that rect, which is what makes this the frame of the
-    // band rather than of something near it.
-    let Some((mut pixels, width, height)) = screen_pixels(rect) else {
-        return false;
-    };
-
-    // GDI writes colour and not alpha, and a layered window is composited from premultiplied
-    // coverage: this frame is opaque everywhere because a player's window has nothing behind
-    // it to be transparent over.
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        pixel[3] = 255;
-    }
-
-    if let Ok(mut held) = HELD_VIDEO_FRAME.lock() {
-        *held = Some(HeldVideoFrame {
-            pixels,
-            width,
-            height,
-        });
-    }
-
-    true
-}
-
 /// The pixels the desktop is showing in a screen rectangle, or nothing where there is no picture to
 /// take.
 ///
-/// It is read off the desktop with `BitBlt` rather than asked of a window with `PrintWindow`, and the
-/// reason is what is being taken: a picture the user is looking at is read where it is. A window that
-/// draws through D3D — which FFmpeg's player does whenever the decoder is hardware-accelerated, which
-/// a page's own window does, and which a layered window like a preview does whatever it holds —
-/// answers `PrintWindow` with a black rectangle or with nothing, and that is the one thing a picture
-/// of a pin cannot be (see `hold_video_window_frame`, `take_the_pin_picture`).
+/// It is read off the desktop with `BitBlt` rather than asked of a window for the frame it last
+/// presented, and the reason is what is being taken: a picture the user is looking at is read where it
+/// is. A window that draws through D3D — which FFmpeg's player does whenever the decoder is
+/// hardware-accelerated, which a page's own window does, and which a layered window like a preview does
+/// whatever it holds — answers an ask for that frame with a black rectangle or with nothing, and that is
+/// the one thing a picture of a pin cannot be (see `take_the_pin_picture`).
 ///
 /// GDI writes colour and not alpha, since the desktop has nothing behind it to be transparent over: a
 /// caller that composites these pixels premultiplied has to fill it in.
@@ -321,8 +137,8 @@ pub(super) fn screen_pixels(area: RECT) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 /// How many windows keep a surface of their own: the preview — pinned or not — the bubble,
-/// and the card's menu.
-pub(super) const LAYERED_SURFACE_WINDOWS: usize = 3;
+/// the card's menu, and the three strips a hosted film's pin carries over it.
+pub(super) const LAYERED_SURFACE_WINDOWS: usize = 6;
 
 /// DIB bits for a `width` x `height` frame in one window's own surface, reusing what
 /// that window already has when the size is unchanged. `None` means the surface could

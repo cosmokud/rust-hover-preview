@@ -25,21 +25,35 @@
 //! over Explorer does not steal the arrows from Explorer.
 
 use crate::CONFIG;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, HC_ACTION, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WM_KEYDOWN,
     WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-/// The virtual key the pin is bound to, or `0` when nothing is watched.
-static PIN_VK: AtomicI32 = AtomicI32::new(0);
+/// The chords the pin key is bound to, packed as `key_binding` packs them, or zero
+/// when nothing is watched. Read by the hook instead of a lock, which it may not take.
+static PIN_CHORDS: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
+    [const { AtomicU64::new(0) }; crate::shell::key_binding::MAX_ALTERNATIVES];
+
+/// The chord the preview shortcut is bound to, packed the same way and read by the hook
+/// for the same reason.
+static TOGGLE_CHORDS: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
+    [const { AtomicU64::new(0) }; crate::shell::key_binding::MAX_ALTERNATIVES];
 
 /// Pin-key presses seen since startup, swapped to zero by the preview loop.
 static PIN_PRESSES: AtomicU32 = AtomicU32::new(0);
 
-/// Whether the watched key is held, which is what tells a press from a repeat.
-static PIN_DOWN: AtomicBool = AtomicBool::new(false);
+/// Preview-toggle presses seen in Explorer since this was last drained.
+static TOGGLE_PRESSES: AtomicU32 = AtomicU32::new(0);
+
+/// Whether each chord's main key is held, as a bit per `PIN_CHORDS` slot, which is what
+/// tells a press from a repeat.
+static PIN_MAIN_DOWN: AtomicU32 = AtomicU32::new(0);
+
+/// The same bits for the preview shortcut's own chords.
+static TOGGLE_MAIN_DOWN: AtomicU32 = AtomicU32::new(0);
 
 /// The two window handles a standing pin answers keys for, as raw pointers, or zero.
 ///
@@ -314,7 +328,16 @@ static KEY_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 /// left one for the trigger.
 pub(crate) fn key_to_vk(key: &str) -> Option<i32> {
     let key = key.trim().to_ascii_lowercase();
-    let vk = match key.as_str() {
+    // An underscore is the same name spelled two ways: `page_down` beside `pagedown`.
+    spelled_key_to_vk(&key).or_else(|| {
+        key.contains('_')
+            .then(|| spelled_key_to_vk(&key.replace('_', "")))
+            .flatten()
+    })
+}
+
+fn spelled_key_to_vk(key: &str) -> Option<i32> {
+    let vk = match key {
         "alt" | "menu" => 0x12,
         "shift" => 0x10,
         "ctrl" | "control" => 0x11,
@@ -371,25 +394,147 @@ pub(crate) fn key_to_vk(key: &str) -> Option<i32> {
 /// by the tray's own toggle — a low-level hook may not take a lock, so what it
 /// reads is this number rather than the configuration itself.
 pub(crate) fn refresh() {
-    let wanted = CONFIG
+    let (wanted, toggle_wanted) = CONFIG
         .lock()
-        .ok()
-        .filter(|config| config.pin_enabled)
-        .and_then(|config| key_to_vk(&config.pin_key))
-        .unwrap_or(0);
+        .map(|config| {
+            let pin = if config.pin_enabled {
+                let binding = crate::shell::key_binding::parse_or_default(
+                    &config.pin_key,
+                    crate::shell::key_binding::DEFAULT_PIN_KEY,
+                );
+                crate::shell::key_binding::packed_binding(&binding)
+            } else {
+                [0; crate::shell::key_binding::MAX_ALTERNATIVES]
+            };
+            let toggle = crate::shell::key_binding::parse_or_default(
+                &config.toggle_key,
+                crate::config::config::DEFAULT_TOGGLE_KEY,
+            );
+            (pin, crate::shell::key_binding::packed_binding(&toggle))
+        })
+        .unwrap_or((
+            [0; crate::shell::key_binding::MAX_ALTERNATIVES],
+            [0; crate::shell::key_binding::MAX_ALTERNATIVES],
+        ));
 
-    // A key that was changed under a held key is not still held: the release of
-    // the old one is never seen once the watch has moved, and a press counted for
-    // it would be a press the preview loop acts on with no finger behind it.
-    if PIN_VK.swap(wanted, Ordering::AcqRel) != wanted {
-        PIN_DOWN.store(false, Ordering::Release);
+    install_chords(&PIN_CHORDS, &PIN_MAIN_DOWN, wanted);
+    install_chords(&TOGGLE_CHORDS, &TOGGLE_MAIN_DOWN, toggle_wanted);
+}
+
+/// Put a packed binding into the table the hook reads, clearing the down bits when a key
+/// changed under a held key: the release of the old one is never seen once the watch has
+/// moved, and a press counted for it would be a press with no finger behind it.
+fn install_chords(
+    chords: &[AtomicU64],
+    main_down: &AtomicU32,
+    wanted: [u64; crate::shell::key_binding::MAX_ALTERNATIVES],
+) {
+    let mut changed = false;
+    for (slot, packed) in chords.iter().zip(wanted) {
+        if slot.swap(packed, Ordering::AcqRel) != packed {
+            changed = true;
+        }
+    }
+    if changed {
+        main_down.store(0, Ordering::Release);
     }
 }
 
 /// Pin-key presses since this was last called. The preview loop polls it once a
 /// tick, the way the Explorer hook polls the wheel's own counter.
+///
+/// Both low-level hooks count the main key: the keyboard hook for keys, and the mouse
+/// hook for `mouse3` through `mouse5`, which never reach it (see `wheel_input`).
 pub(crate) fn take_presses() -> u32 {
     PIN_PRESSES.swap(0, Ordering::AcqRel)
+}
+
+/// Preview-toggle presses seen in Explorer since this was last called, one per key-down.
+pub(crate) fn take_preview_toggle_presses() -> u32 {
+    TOGGLE_PRESSES.swap(0, Ordering::AcqRel)
+}
+
+/// Count a mouse pin button's edge the way the keyboard hook counts a key's.
+///
+/// Called from the mouse hook, so it touches atomics only: no lock, no desktop call.
+pub(crate) fn note_mouse_button(vk: i32, down: bool) {
+    if note_key_edge(&PIN_CHORDS, &PIN_MAIN_DOWN, &PIN_PRESSES, vk, down, || true) {
+        crate::ui::preview_window::wake_preview_loop();
+    }
+}
+
+/// Record a main key's down or up edge against a chord table, answering whether it is a
+/// press that was counted.
+///
+/// The count is gated by the caller rather than after the fact: the preview shortcut is
+/// answered only while Explorer is in front, and a press made in another program must
+/// still mark its key down so that holding it there cannot become a press when Explorer
+/// comes forward.
+fn note_key_edge(
+    chords: &[AtomicU64],
+    main_down: &AtomicU32,
+    presses: &AtomicU32,
+    vk: i32,
+    down: bool,
+    count_press: impl FnOnce() -> bool,
+) -> bool {
+    let slots = chords.iter().enumerate().fold(0, |slots, (index, slot)| {
+        let packed = slot.load(Ordering::Acquire);
+        if packed != 0 && crate::shell::key_binding::packed_main(packed) == vk {
+            slots | (1u32 << index)
+        } else {
+            slots
+        }
+    });
+    if slots == 0 {
+        return false;
+    }
+
+    if !down {
+        main_down.fetch_and(!slots, Ordering::AcqRel);
+        return false;
+    }
+
+    // Marked down even when the companions are not held, so an out-of-order press cannot
+    // turn a later repeat into a press (see `key_hook_proc`).
+    let first = main_down.fetch_or(slots, Ordering::AcqRel) & slots == 0;
+    let matched = chords.iter().enumerate().any(|(index, slot)| {
+        slots & (1u32 << index) != 0
+            && crate::shell::key_binding::packed_press_matches(slot.load(Ordering::Acquire), vk)
+    });
+    if first && matched && count_press() {
+        presses.fetch_add(1, Ordering::AcqRel);
+        return true;
+    }
+    false
+}
+
+/// The `PIN_CHORDS` slots whose main key is `vk`, as one bit each.
+fn pin_main_slots(vk: i32) -> u32 {
+    PIN_CHORDS
+        .iter()
+        .enumerate()
+        .fold(0, |slots, (index, slot)| {
+            let packed = slot.load(Ordering::Acquire);
+            if packed != 0 && crate::shell::key_binding::packed_main(packed) == vk {
+                slots | (1u32 << index)
+            } else {
+                slots
+            }
+        })
+}
+
+/// Mark these chords' main keys down and answer whether none of them already was.
+fn pin_first_press(slots: u32) -> bool {
+    PIN_MAIN_DOWN.fetch_or(slots, Ordering::AcqRel) & slots == 0
+}
+
+/// Whether any of these chords has `vk` as its main key with its companions held.
+fn pin_chord_matches(vk: i32, slots: u32) -> bool {
+    PIN_CHORDS.iter().enumerate().any(|(index, slot)| {
+        slots & (1u32 << index) != 0
+            && crate::shell::key_binding::packed_press_matches(slot.load(Ordering::Acquire), vk)
+    })
 }
 
 /// Starts the hook thread; `main` joins the returned handle after `request_stop`.
@@ -420,15 +565,40 @@ unsafe extern "system" fn key_hook_proc(code: i32, wparam: WPARAM, lparam: LPARA
     let vk = event.vkCode as i32;
     let message = wparam.0 as u32;
 
-    let watched = PIN_VK.load(Ordering::Acquire);
-    if watched != 0 && vk == watched {
+    // The preview shortcut, answered only while Explorer is in front. The key is still passed
+    // on whatever happens: another program's F7 is that program's, and one pressed in Explorer
+    // goes on to Explorer as well. A repeat is not a press, and a key held in another program is
+    // marked down so it cannot become one when Explorer comes forward.
+    if matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP) {
+        let down = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
+        if note_key_edge(
+            &TOGGLE_CHORDS,
+            &TOGGLE_MAIN_DOWN,
+            &TOGGLE_PRESSES,
+            vk,
+            down,
+            crate::shell::explorer_hook::is_foreground_explorer_without_cache,
+        ) {
+            crate::ui::preview_window::wake_preview_loop();
+        }
+    }
+
+    let main_slots = pin_main_slots(vk);
+    if main_slots != 0 {
         match message {
             // A held key repeats, and every repeat arrives as another key-down: what
-            // makes one a press is that the key was not already down (see `PIN_DOWN`).
-            WM_KEYDOWN | WM_SYSKEYDOWN if !PIN_DOWN.swap(true, Ordering::AcqRel) => {
-                PIN_PRESSES.fetch_add(1, Ordering::AcqRel);
+            // makes one a press is that its main key was not already down (see
+            // `PIN_MAIN_DOWN`). It is marked down even when its companions are not
+            // held, so that a later repeat cannot turn a chord pressed in the wrong
+            // order into a press.
+            WM_KEYDOWN | WM_SYSKEYDOWN if pin_first_press(main_slots) => {
+                if pin_chord_matches(vk, main_slots) {
+                    PIN_PRESSES.fetch_add(1, Ordering::AcqRel);
+                }
             }
-            WM_KEYUP | WM_SYSKEYUP => PIN_DOWN.store(false, Ordering::Release),
+            WM_KEYUP | WM_SYSKEYUP => {
+                PIN_MAIN_DOWN.fetch_and(!main_slots, Ordering::AcqRel);
+            }
             _ => {}
         }
 
@@ -747,5 +917,75 @@ mod tests {
             !pin_owns_caret(0, video, video),
             "a player that outlived its pin by a tick does not own the caret either"
         );
+    }
+
+    /// A mouse pin button is counted where the mouse hook sees it rather than on a later tick:
+    /// the edge rule is the keyboard hook's own, one press per physical press and a release that
+    /// clears it.
+    #[test]
+    fn a_mouse_button_press_is_counted_once_per_edge() {
+        let binding = crate::shell::key_binding::parse_binding("mouse3,mouse3").expect("two slots");
+        let packed = crate::shell::key_binding::packed_binding(&binding);
+        let chords: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
+            std::array::from_fn(|index| AtomicU64::new(packed[index]));
+        let down = AtomicU32::new(0);
+        let presses = AtomicU32::new(0);
+        let note = |vk, is_down| note_key_edge(&chords, &down, &presses, vk, is_down, || true);
+
+        assert!(
+            !note(0x05, true),
+            "a button the binding does not name is not a press"
+        );
+        assert!(note(0x04, true), "the middle button is the binding");
+        assert_eq!(presses.load(Ordering::Acquire), 1);
+        assert_eq!(
+            down.load(Ordering::Acquire),
+            0b11,
+            "every slot for that main key is marked down, not just the one that counted"
+        );
+
+        assert!(
+            !note(0x04, true),
+            "a second down with no release in between is not a press"
+        );
+        assert_eq!(presses.load(Ordering::Acquire), 1);
+
+        assert!(!note(0x04, false), "a release counts nothing of its own");
+        assert_eq!(down.load(Ordering::Acquire), 0);
+
+        assert!(
+            note(0x04, true),
+            "and the next press after it is a press again"
+        );
+        assert_eq!(presses.load(Ordering::Acquire), 2);
+    }
+
+    /// The preview shortcut is edge-triggered like the pin key, and a press it is not allowed to
+    /// answer is still marked down: a key held in another program must not become a press when
+    /// Explorer comes forward, and a press it is allowed to answer is one toggle.
+    #[test]
+    fn the_preview_shortcut_toggles_once_and_only_where_it_is_allowed() {
+        let binding = crate::shell::key_binding::parse_binding("f7").expect("a key");
+        let packed = crate::shell::key_binding::packed_binding(&binding);
+        let chords: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
+            std::array::from_fn(|index| AtomicU64::new(packed[index]));
+        let down = AtomicU32::new(0);
+        let presses = AtomicU32::new(0);
+        let note = |is_down, in_explorer| {
+            note_key_edge(&chords, &down, &presses, 0x76, is_down, || in_explorer)
+        };
+
+        assert!(!note(true, false), "a press in another program is ignored");
+        assert_eq!(presses.load(Ordering::Acquire), 0);
+        assert!(!note(true, true), "and its repeat is not a press either");
+        assert_eq!(
+            down.load(Ordering::Acquire),
+            1,
+            "the key was still marked down where it was pressed"
+        );
+        assert!(!note(false, true), "a release counts nothing");
+        assert!(note(true, true), "a fresh press in Explorer toggles once");
+        assert!(!note(true, true), "and holding it does not toggle again");
+        assert_eq!(presses.load(Ordering::Acquire), 1);
     }
 }

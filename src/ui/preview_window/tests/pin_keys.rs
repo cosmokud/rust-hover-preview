@@ -108,20 +108,10 @@ fn a_press_that_cannot_be_measured_takes_nothing_at_all() {
 /// halves — a `SetCapture` on the way in and a `release_pin_capture` on the way out — and
 /// nothing said they had to agree about which window.
 ///
-/// The player's window is **not** on this list any more, and the reason is the second of the two
-/// flashes a drag used to have. A move has no relaunch behind it, so the release used to put the
-/// picture back itself — the flag down, the band transparent, and the compositor's first look at a
-/// window that has been hidden for the length of a drag still filling in. The band is now filled
-/// with the frame the drag was holding until there is a player to see through it, and that is the
-/// settle's question on the loop's tick rather than a window procedure's (see
-/// `settle_pinned_park`). What this asserts is the negative of it: the release puts the pointer
-/// back and repaints, and touches nothing of somebody else's.
-///
-/// The band is moved by the hand while the drag runs, which is what a move *is*, and the player's
-/// window has not followed it: the park is a hide and nothing else, so the rect the window is
-/// still standing at is the one the drag started from. The swap puts it back at the band as it
-/// stands rather than the box the drag began at, which is the same place it did before — a tick
-/// later.
+/// The player's window is **not** on this list, and the reason is what a drag is: a gesture moves
+/// this app's window and one rectangle, and the film is a thumbnail of a source window nothing of
+/// the gesture touches (see `pin_film_thumbnail`). What this asserts is the negative of it: the
+/// release puts the pointer back and repaints, and touches nothing of somebody else's.
 #[test]
 fn a_drag_lets_go_of_the_pointer_it_took() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -777,6 +767,62 @@ fn the_pin_key_only_brings_a_bubble_back_and_never_hides_a_window() {
     // did nothing at all, which is the answer a Space now always gets.
     assert!(!pin_key_restores_bubble(false, true));
     assert!(!pin_key_restores_bubble(false, false));
+}
+
+/// **The file the pin key asked for is the pin arriving, and a pin that is not up yet is exactly
+/// what the take-up needs.**
+///
+/// The pin key's request is a file installed with no pin standing — that is what arriving is — and
+/// the loop reads that request with a guard meant for the other install: a file stepping onto a pin
+/// that is up. The guard asked `pinned()`, so every take-up out of a hover was dropped as "a pin
+/// that has ended is not given a file", and the key did nothing at all: no window, no caption, no
+/// pin, forever, however long the hand waited. Hovering was untouched, which is what made it look
+/// like a dead key rather than a dead pin.
+#[test]
+fn the_file_the_pin_key_asks_for_is_taken_up_with_no_pin_standing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+
+    let arrival = PreviewMessage::Pin {
+        path: PathBuf::from("a-film-the-key-was-pressed-on.mkv"),
+        rect: (100, 80, 420, 320),
+        arriving: true,
+    };
+    let stepping = PreviewMessage::Pin {
+        path: PathBuf::from("a-file-stepped-onto-a-pin.mkv"),
+        rect: (100, 80, 420, 320),
+        arriving: false,
+    };
+    let arrival_is_taken_up = |request: &PreviewMessage| match request {
+        PreviewMessage::Pin { arriving, .. } => the_pin_takes_the_file_up(*arriving),
+        _ => panic!("the key's request is a take-up"),
+    };
+
+    // No pin standing: the state the key's own request is read in, and the one it used to be
+    // refused in.
+    stand_pin(None);
+    assert!(!pinned(), "nothing is up before the key is answered");
+    assert!(
+        arrival_is_taken_up(&arrival),
+        "the file the key asked for is the pin arriving, and the take-up is what puts the pin up"
+    );
+    assert!(
+        !arrival_is_taken_up(&stepping),
+        "while a file stepping onto a pin that has gone is still refused: the watchdog ends a \
+         hung pin from its own thread, and the take-up writes the pin's state whole"
+    );
+
+    // A pin that is up takes a file stepping onto it, which is the half of the guard that was
+    // always right.
+    stand_pin(Some(PinnedPreview::for_test()));
+    assert!(pinned(), "a pin stands");
+    assert!(
+        arrival_is_taken_up(&stepping),
+        "a file stepping onto a pin that is up is the window showing another file"
+    );
+
+    stand_pin(None);
 }
 
 /// The pin's own `End of File`, put where the tests below ask it and put back when the guard is

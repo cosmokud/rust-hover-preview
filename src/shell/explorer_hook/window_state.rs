@@ -24,6 +24,20 @@ pub(crate) fn is_foreground_explorer() -> bool {
     }
 }
 
+/// The same question asked without the window cache, for the low-level keyboard hook: that
+/// callback may not take a lock, and the cache behind `is_foreground_explorer` is one. It is
+/// the foreground window and one class lookup, which is all a `WH_KEYBOARD_LL` callback can
+/// afford to ask about a key it is about to let through anyway.
+pub(crate) fn is_foreground_explorer_without_cache() -> bool {
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.is_invalid() {
+            return false;
+        }
+        explorer_browser_class_matches(foreground)
+    }
+}
+
 /// Whether the engine's window — the window a page of HTML is drawn in — owns the keyboard
 /// right now, which is what a click into a page that runs makes it do. Nothing else the
 /// engine draws can be asked the question: a document and a specimen refuse activation, so
@@ -114,7 +128,7 @@ pub(super) fn is_window_fullscreen(hwnd: HWND) -> bool {
 /// The region the window in front hides what is behind, where that window is one
 /// that hides anything at all: a maximized or fullscreen window that is not
 /// Explorer's. `None` is a foreground window nothing is hidden behind — an ordinary
-/// one, Explorer itself, or no window at all.
+/// one, Explorer itself, the desktop, or no window at all.
 ///
 /// What it is for is asking whether an Explorer window is behind it. Taking the
 /// foreground window alone for the answer — a maximized window, so Explorer must be
@@ -132,6 +146,15 @@ pub(super) fn foreground_cover_rect() -> Option<RECT> {
             return None;
         }
 
+        // And the class before the rectangle: a window of the desktop's in front covers nothing,
+        // whatever its own box says (see `a_foreground_of_this_class_covers_what_is_behind`).
+        let mut name = [0u16; 32];
+        let len = GetClassNameW(foreground, &mut name).max(0) as usize;
+        let class = String::from_utf16_lossy(&name[..len.min(name.len())]);
+        if !a_foreground_of_this_class_covers_what_is_behind(&class) {
+            return None;
+        }
+
         // Only a maximized or fullscreen window covers anything whole.
         if !(is_window_maximized(foreground) || is_window_fullscreen(foreground)) {
             return None;
@@ -141,6 +164,20 @@ pub(super) fn foreground_cover_rect() -> Option<RECT> {
         GetWindowRect(foreground, &mut rect).ok()?;
         Some(rect)
     }
+}
+
+/// Whether a window in front of this class may hide a listing behind it at all.
+///
+/// **The desktop never does**, whatever its rectangle says: `Progman` and `WorkerW` are drawn over
+/// the display to the pixel, so read as ordinary windows they are a fullscreen window hiding every
+/// Explorer window on it — the state that leaves the loop sleeping and the previews dead until some
+/// other window is clicked. The desktop is the bottom of the desktop's own list and hides nothing; a
+/// foreground that has been *left* on it — by a player of this app's killed in front, or by a press
+/// on the wallpaper — is not a window over the listing. The two classes are kept out of Explorer's
+/// own windows for the same reason (see `is_explorer_window`), and this is the same fact asked of a
+/// class rather than of a window, so that it can be answered without a desktop underneath it.
+pub(super) fn a_foreground_of_this_class_covers_what_is_behind(class: &str) -> bool {
+    !(class.eq_ignore_ascii_case("Progman") || class.eq_ignore_ascii_case("WorkerW"))
 }
 
 /// Whether a window is hidden behind the region the window in front covers.
@@ -191,7 +228,7 @@ pub(super) fn utf16_contains_ascii_ignore_case(haystack: &[u16], needle: &[u8]) 
     })
 }
 
-pub(super) fn explorer_browser_class_matches(hwnd: HWND) -> bool {
+pub(crate) fn explorer_browser_class_matches(hwnd: HWND) -> bool {
     unsafe {
         let mut class_name = [0u16; 256];
         let len = GetClassNameW(hwnd, &mut class_name);
@@ -317,9 +354,21 @@ pub(super) fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -
 /// Whether `window` is the bubble's: the circle a collapsed pin leaves on screen, which is
 /// the only window of the pin's own a press can land on while the pin's window is hidden (see
 /// `pin_menu_dismiss_ask`).
+///
+/// **It carries the bubble's own menu too.** The window grows down to hold the panel beneath the
+/// circle when a right-click opens it (see `open_bubble_menu`), so the window under a hand on one of
+/// its rows is the bubble whether the panel is up or — on the tick after a row was pressed — the
+/// listing the panel and the bubble were standing over (see `press_is_on_the_pins_own_menu`).
 pub(super) fn bubble_window_is_at(window: HWND) -> bool {
     let bubble = crate::ui::preview_window::PIN_BUBBLE_HWND.load(Ordering::SeqCst);
-    !window.is_invalid() && bubble != 0 && window.0 as isize == bubble
+    window_is_the_slot(window, bubble)
+}
+
+/// Whether `window` is the window `slot` holds, where a slot of nothing holds no window: how the
+/// handles this app keeps in process-wide slots are asked about, the hovers' and the pin's own (see
+/// `PIN_BUBBLE_HWND` and `PIN_MENU_HWND`).
+pub(super) fn window_is_the_slot(window: HWND, slot: isize) -> bool {
+    !window.is_invalid() && slot != 0 && window.0 as isize == slot
 }
 
 /// Whether a press read on a pinned tick is one the Explorer hook publishes so the card's
@@ -385,21 +434,97 @@ pub(super) fn press_is_a_listing(
         && !previous_was_chrome
 }
 
-/// Whether a window under the pointer is a menu or flyout rather than anything a listing can
-/// be read under: the popups Explorer puts over its own files.
+/// Whether a press is one the pin answers at all, whatever it turned out to name.
+///
+/// The pin owes the listing an answer for a press in that listing's own window — the frame, its view,
+/// its toolbar and path bar and tabs, the menus it puts over its own rows — because every one of
+/// those presses is either a file picked or a press that picked no file, and the two answers are
+/// the pin staying in front and the pin going behind. A press on this app's own window is not the
+/// listing's: that is the pin being used, and what it stands over does not change. A press that
+/// destroyed the window it landed on names no place to go behind.
+///
+/// Separate from the pick rule because the two answer different questions: that one says whether a
+/// file was picked, and this one says whether there is anything to answer. A press on the path bar
+/// is no pick and is still answered — it was the press the pin was left in front of the listing by.
+pub(super) fn press_is_answered(
+    pressed: bool,
+    over_explorer: bool,
+    over_our_own: bool,
+    aimed_at_a_gone_window: bool,
+) -> bool {
+    pressed && over_explorer && !over_our_own && !aimed_at_a_gone_window
+}
+
+/// Whether the rest a hand is making is a hover of the file under it: it is a rest at all only where
+/// the setting asks for hovers, the hand has arrived, the delay a preview is given has passed since it
+/// last moved, and this rest has not been answered already.
+///
+/// A rest is answered by the thing that read it. A pick named the file under the point, so there is
+/// nothing left to ask. A press on a row of this app's own menu was answered by that row, and it left
+/// the hand over the listing the row was covering — a file nobody chose. Asked again, either of them
+/// answers with a file the user never came to rest on, and a pin put away by that press is brought
+/// back on it by the update a hover offers (`bring_a_put_away_pin_back`). The answer holds until the
+/// hand moves, which is when there is a new rest to ask about.
+///
+/// The menus are this app's own and not Explorer's: a popup of the shell's is the listing being
+/// worked in, and what it leaves under the hand is a file the user may well mean to see.
+pub(super) fn a_rest_is_a_hover(on_hover: bool, arrived: bool, spent: bool, settled: bool) -> bool {
+    on_hover && arrived && !spent && settled
+}
+
+/// Whether the window under the pointer is a menu or flyout rather than anything a listing can
+/// be read under: the popups Explorer puts over its own files, and the one panel this app puts
+/// over them.
 ///
 /// A popup is Explorer's own as far as `is_cursor_over_explorer_full` is concerned — its owner
-/// chain reaches the frame — so a press on it reads as a press on the listing. The class name is
-/// what says otherwise. Every one of them carries a substring of its own kind: the XAML shell
-/// hosts them in `Microsoft.UI.Content.PopupWindowSiteBridge` and
+/// chain reaches the frame — so a press on it reads as a press on the listing. Two answers say
+/// otherwise, and either one is enough.
+///
+/// The class name is the first: every popup of Explorer's carries a substring of its own kind —
+/// the XAML shell hosts them in `Microsoft.UI.Content.PopupWindowSiteBridge` and
 /// `Microsoft.UI.Content.DesktopChildSiteBridge`, and a classic menu window is `#32768`. The
 /// three bare words are the older shells' naming, and none of the windows a listing is read
 /// under has one: the list is `SysListView32` under `DirectUIHWND`, the frame and the view are
 /// `ExplorerWClass` and `CabinetWClass`, and this app's own window is `RustHoverPreviewWindow`.
 ///
-/// Read per call rather than cached: two `GetClassNameW` calls on every pinned tick.
+/// The second is the window itself, for the two panels this app puts over a listing: the menu a
+/// pinned window draws in a window of its own, and the menu a collapsed pin draws in its bubble (see
+/// `press_is_on_the_pins_own_menu`). They are asked about by their handles rather than by their
+/// names, so that the pin is free to rename its own windows without quietly making a press on a row
+/// of a menu a press on the file behind the panel. That press is the pin's own while the menu is up
+/// — the window under it is the panel, which is no listing — but the press is read on whichever tick
+/// the shell spends the press bit on, and the tick after the menu closes finds the point reading as
+/// the listing the panel was covering. The tick before is asked about for exactly that, and this
+/// rule has to answer for the panel for it to be of any use.
+///
+/// Read per call rather than cached: up to two `GetClassNameW` calls on a pinned tick, and none at
+/// all where one of the app's own panels is what answered.
 pub(super) fn window_is_menu_popup_chrome(window: HWND) -> bool {
-    class_is_menu_popup_chrome(&window_class_of(window))
+    press_is_on_the_pins_own_menu(window) || class_is_menu_popup_chrome(&window_class_of(window))
+}
+
+/// Whether a press on `window` is a press on one of this app's own menus rather than on the file the
+/// panel covers: the panel a pinned window draws in a window of its own, and the panel a collapsed
+/// pin draws in its bubble (see `pin_menu_window_is_at` and `bubble_window_is_at`).
+///
+/// These are the two panels of this app that answer a press with a row rather than with the listing
+/// underneath, and answering one leaves the hand resting over the file the row covered — a file
+/// nobody chose. So the rest of that hand is spent, and is not read as a hover of that file (see
+/// `a_rest_is_a_hover`). A popup of Explorer's is deliberately not one of them: it is the listing
+/// being worked in, and what it leaves under the hand is a file the user may well mean to see.
+pub(super) fn press_is_on_the_pins_own_menu(window: HWND) -> bool {
+    pin_menu_window_is_at(window) || bubble_window_is_at(window)
+}
+
+/// Whether `window` is a standing pin's own menu: the panel a pinned window draws in a window of
+/// its own over the listing (see `pin_menu_window`).
+///
+/// A window where a press is not a press on the file behind it: the card holds the pointer while
+/// its menu is up, and a press the hook reads off the panel is a row rather than the file that row
+/// covers (see `press_is_on_the_pins_own_menu`, which the bubble's own panel answers beside it).
+pub(super) fn pin_menu_window_is_at(window: HWND) -> bool {
+    let menu = crate::ui::preview_window::PIN_MENU_HWND.load(Ordering::SeqCst);
+    window_is_the_slot(window, menu)
 }
 
 /// The matching half of `window_is_menu_popup_chrome`, on the class name rather than on the
@@ -477,8 +602,8 @@ pub(super) fn explorer_pace(state: ExplorerState, tick_ms: u64) -> (u64, u64) {
 
 /// Read the state of Explorer, and record it for the engines' away timer.
 ///
-/// Whether an Explorer window is left reachable is the whole of what an engine that is not
-/// marked `Persistent` is let go by (see `app::afk`), and the answer is one this loop already
+/// Whether an Explorer window is left reachable is the whole of what an engine set to
+/// `Until away` is let go by (see `app::afk`), and the answer is one this loop already
 /// works out for its own sleeps — so the recording is done here, on the read, rather than
 /// anywhere the state is used: a state this function did not answer is a state the clock has
 /// not been told about, and the engines keep reading the last thing it was told.

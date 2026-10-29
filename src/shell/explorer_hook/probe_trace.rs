@@ -137,7 +137,12 @@ macro_rules! note_pin_click {
         // part of the app this module is not in scope of. The line itself
         // is still built inside the guard, so a run with no trace pays
         // nothing for one.
-        if std::env::var_os("RHP_HOOK_TRACE").is_some() {
+        //
+        // **The pin road's own variable opens it as well**, because a hover
+        // that never appears is read from the same run as the pin it came
+        // after: a sequence that stops at the pin's close says nothing about
+        // the pointer unless the run was also asked for these.
+        if std::env::var_os("RHP_HOOK_TRACE").is_some() || std::env::var_os("RHP_PIN_TRACE").is_some() {
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)

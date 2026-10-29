@@ -623,7 +623,6 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         last_press: None,
         tooltip: PinTooltip::default(),
         dragging: None,
-        parked: false,
         transport: PinTransport::default(),
         volume: PinVolume::default(),
         audio_hovered: None,
@@ -776,50 +775,57 @@ fn a_left_border_and_a_right_border_stroke_each_land_the_edge_where_the_hand_put
     // by the stroke, and the opposite edge stays exactly where it was. The last one is a clamp with
     // a nameable number in it — the room's own edge, which is where a box can be pulled out to and
     // no further.
-    let cases: [(&str, PinResize, i32, i32, i32); 5] = [
+    let cases: [(&str, PinResize, i32, i32, Option<i32>); 5] = [
         (
             "left border pulled out",
             edge(true, false, false, false),
             -200,
             start.2,
-            start.0 - 200,
+            None,
         ),
         (
             "right border pulled out",
             edge(false, false, true, false),
             200,
             start.0,
-            start.2 + 200,
+            None,
         ),
         (
             "left border pulled in",
             edge(true, false, false, false),
             100,
             start.2,
-            start.0 + 100,
+            None,
         ),
         (
             "right border pulled in",
             edge(false, false, true, false),
             -100,
             start.0,
-            start.2 - 100,
+            None,
         ),
         (
             "left border past the room",
             edge(true, false, false, false),
             -10_000,
             start.2,
-            room.left,
+            Some(room.left),
         ),
     ];
 
-    for (what, edge_, dx, kept, moved) in cases {
+    for (what, edge_, dx, kept, stops_at) in cases {
         stand_a_pin_at(start);
-        let after = a_border_stroke(edge_, dx);
+        let (after, by) = a_border_stroke(edge_, dx);
+        // **Where the edge is asked to land is the travel the stroke was applied by**, read back
+        // off the drag, rather than the number the test asked for: the pointer these strokes are
+        // measured from is the machine's own, and a hand on it while the suite runs moves the point
+        // the pass reads a moment after the test read it (see `a_border_stroke`). What is asserted
+        // is unchanged — the edge under the hand lands where the hand put it, and only that edge
+        // moves — and the clamp is a number of its own, because a room's edge is not a travel.
+        let held = if edge_.left { start.0 } else { start.2 };
         assert_eq!(
             if edge_.left { after.0 } else { after.2 },
-            moved,
+            stops_at.unwrap_or(held + by),
             "{what}: the edge under the hand is not where the hand put it"
         );
         assert_eq!(
@@ -848,7 +854,7 @@ fn a_left_border_and_a_right_border_stroke_each_land_the_edge_where_the_hand_put
         ),
     ] {
         stand_a_pin_at(start);
-        let after = a_border_stroke(edge_, dx);
+        let (after, _) = a_border_stroke(edge_, dx);
         assert_eq!(
             if edge_.left { after.2 } else { after.0 },
             kept,
@@ -872,18 +878,18 @@ fn a_left_border_and_a_right_border_stroke_each_land_the_edge_where_the_hand_put
         a_border_stroke(edge(false, false, true, false), 200)
     };
     assert_eq!(
-        (left.2 - left.0, left.3 - left.1),
-        (right.2 - right.0, right.3 - right.1),
+        (left.0 .2 - left.0 .0, left.0 .3 - left.0 .1),
+        (right.0 .2 - right.0 .0, right.0 .3 - right.0 .1),
         "the same stroke on the other border grows the box to the same size"
     );
     assert_eq!(
-        start.2 - left.0,
-        start.2 - start.0 + 200,
+        start.2 - left.0 .0,
+        start.2 - start.0 - left.1,
         "the left border grew the box out to the side the hand pulled it, by the stroke"
     );
     assert_eq!(
-        right.2 - start.0,
-        start.2 - start.0 + 200,
+        right.0 .2 - start.0,
+        start.2 - start.0 + right.1,
         "and the right border grew it out by the same stroke the other way"
     );
 
@@ -918,10 +924,10 @@ fn a_stroke_that_pulls_an_edge_in_leaves_a_press_carrying_the_window_rather_than
 
     // The right border taken hold of and pulled 100 pixels in, so that the box the stroke leaves
     // is smaller than the one the step before it was drawn at.
-    let after = a_border_stroke(edge(false, false, true, false), -100);
+    let (after, by) = a_border_stroke(edge(false, false, true, false), -100);
     assert_eq!(
         after.2 - after.0,
-        start.2 - start.0 - 100,
+        start.2 - start.0 + by,
         "the stroke pulled the border it held in by the stroke"
     );
 
@@ -948,17 +954,25 @@ fn stand_a_pin_at(content: ScreenRegion) {
     stand_pin(Some(pin));
 }
 
-/// The box a border stroke leaves, on the road the press began: the drag a hand would have
-/// recorded, measured from where the pointer is now back to where the stroke began.
-fn a_border_stroke(edge_: PinResize, dx: i32) -> ScreenRegion {
+/// The box a border stroke leaves, on the road the press began, and the travel it was applied by:
+/// the drag a hand would have recorded, measured from where the pointer is now back to where the
+/// stroke began, and the pointer's own travel as the pass that applied it read it.
+///
+/// **The travel is answered rather than assumed to be the number asked for.** The pointer is the
+/// machine's, and this is the one number here that moves on its own: a hand on the mouse while the
+/// suite runs moves the point between the test's look at it and the pass's, and a stroke asserted
+/// against the test's own look is a pixel out through no fault of the box. Asked of the drag the
+/// pass recorded, the same stroke is the same box however the machine's pointer was moving.
+fn a_border_stroke(edge_: PinResize, dx: i32) -> (ScreenRegion, i32) {
     let at = cursor_screen_point().expect("the pointer is somewhere on the desktop");
     let window = pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
         .expect("a pin up");
+    let from = (at.0 - dx, at.1);
 
     with_pin(|pin| {
         pin.dragging = Some(PinDrag {
-            from: (at.0 - dx, at.1),
+            from,
             window,
             action: PinDragAction::Resize(edge_),
             delivered: true,
@@ -967,9 +981,15 @@ fn a_border_stroke(edge_: PinResize, dx: i32) -> ScreenRegion {
     });
     unsafe { apply_pin_drag(HWND(0x1000 as *mut _)) };
 
+    // The point the pass read, which is the travel it applied the stroke by (see `apply_pin_drag`).
+    let by = pin_state()
+        .and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging))
+        .map(|drag| drag.carried.0 - from.0)
+        .expect("the drag the stroke was applied through");
+
     let after = pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
         .expect("a pin up");
     with_pin(|pin| pin.dragging = None);
-    after
+    (after, by)
 }

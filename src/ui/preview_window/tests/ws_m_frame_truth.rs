@@ -93,7 +93,6 @@ fn pin_state_dump() -> BTreeMap<String, String> {
                 })
                 .unwrap_or_else(|| "none".to_string()),
         );
-        out.insert("pin.parked".into(), pin.parked.to_string());
         out.insert("pin.tooltip.app".into(), pin.tooltip.default_app.clone());
         out.insert(
             "pin.tooltip.button".into(),
@@ -137,10 +136,6 @@ fn pin_state_dump() -> BTreeMap<String, String> {
             pin.transport.pending_hold.to_string(),
         );
         out.insert(
-            "pin.transport.drag_held".into(),
-            pin.transport.drag_held.to_string(),
-        );
-        out.insert(
             "pin.transport.seeking".into(),
             rounded(pin.transport.seeking),
         );
@@ -159,10 +154,6 @@ fn pin_state_dump() -> BTreeMap<String, String> {
     }
 
     out.insert(
-        "static.PIN_PARK_SWAP".into(),
-        format!("{:?}", park_record_owner()),
-    );
-    out.insert(
         "static.PIN_PENDING_RELAUNCH".into(),
         format!(
             "{:?}",
@@ -174,14 +165,6 @@ fn pin_state_dump() -> BTreeMap<String, String> {
         current_pinned_generation().to_string(),
     );
     out.insert(
-        "static.GESTURE_SNAPSHOT".into(),
-        gesture_snapshot_active().to_string(),
-    );
-    out.insert(
-        "static.VIDEO_DRAG_HOLDING".into(),
-        video_drag_holding().to_string(),
-    );
-    out.insert(
         "static.VIDEO_PID".into(),
         VIDEO_PID.load(Ordering::SeqCst).to_string(),
     );
@@ -189,10 +172,6 @@ fn pin_state_dump() -> BTreeMap<String, String> {
         "static.VIDEO_HWND".into(),
         VIDEO_HWND.load(Ordering::SeqCst).to_string(),
     );
-    out.insert("static.HELD_VIDEO_FRAME".into(), {
-        let held = held_video_frame();
-        held.is_some().to_string()
-    });
     out.insert(
         "static.PIN_ARC".into(),
         PIN_ARC.load(Ordering::SeqCst).to_string(),
@@ -245,16 +224,9 @@ fn stand_a_kind(width: u32, height: u32, kind: MediaType) -> Option<MediaData> {
 /// Every piece of a road's bookkeeping put back to nothing, so one test's
 /// reads are not the next test's.
 fn clean_slate() {
-    take_gesture_snapshot();
-    forget_pin_park_swap();
-    forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
-    clear_park_swap_arm();
     clear_restart_count();
-    clear_park_trace();
     stand_pin(None);
-    video_drag_hold_set(false);
     pin_arc_set(None);
     VIDEO_PID.store(0, Ordering::SeqCst);
     let _ = take_pin_command();
@@ -292,16 +264,11 @@ fn step_the_pin_to_another_file() -> PathBuf {
     // spawn one, and every question here is about the state a swap leaves
     // rather than about the process it leaves behind.
     VIDEO_PID.store(101, Ordering::SeqCst);
-    forget_video_frame();
-    assert!(
-        cover_step_swap_for_video(true),
-        "a step onto a film covers the outgoing frame"
-    );
     // The incoming player, published by name rather than begun: a test must not
     // spawn one, and every question here is about the state a swap leaves
     // rather than about the process it leaves behind.
     VIDEO_PID.store(102, Ordering::SeqCst);
-    reconcile_swap_take_up(true);
+    reconcile_swap_take_up();
 
     let mut video = create_loading_media(1280, 720);
     video.media_type = MediaType::Video;
@@ -434,10 +401,13 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
     let previous_media = stand_a_video(640, 360);
     clean_slate();
 
-    // 1 — a pin up on a video, and a caption that answers.
+    // 1 — a pin up on a video, and a caption that answers once the hand asks for it: the
+    // chrome comes up hidden, and the move into the caption is what asks the strip out (see
+    // `PinChrome::hidden`).
     take_up_a_video_pin();
     let window = CapturingWindow::around(a_window_at(the_window_box()));
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
     assert!(
         unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
         "a button on a pin that has just come up is a button"
@@ -457,10 +427,15 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
         "which walks the listing along"
     );
 
-    // 2 — the next file, which is the swap.
+    // 2 — the next file, which is the swap. Its park settles before a hand can reach the
+    // window, which is when the chrome comes back with the file that replaced the film.
     step_the_pin_to_another_file();
     let window = CapturingWindow::around(a_window_at(the_window_box()));
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Close);
+    // The hand arrives before it presses: the step hid the chrome, and the move is what asks
+    // the strip back — a press on a strip that is not drawn is a press on the picture, which
+    // is a handle for moving the window (see `pinned_mouse_move`).
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
     assert!(
         unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
         "and a button on a pin shown another file is still a button"
@@ -508,6 +483,7 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
 
     let window = CapturingWindow::around(a_window_at(the_window_box()));
     let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
     assert!(
         unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
         "and a caption button is still a caption button"
@@ -590,9 +566,13 @@ fn a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_b
     take_up_a_video_pin();
     step_the_pin_to_another_file();
 
-    // The level, which is a button on the bar and a popup over the picture.
+    // The level, which is a button on the bar and a popup over the picture. The hand arrives
+    // first, for the same reason the caption's presses do: the step hid the bar with the rest
+    // of the chrome, and the settle of its park is what hands the strips back (see
+    // `pinned_mouse_move`).
     let window = CapturingWindow::around(a_window_at(the_window_box()));
     let (x, y) = a_transport_part_point(pin_chrome::TransportPart::Volume);
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, y) };
     assert!(
         unsafe { pinned_transport_press(HWND(0x1000 as *mut _), x, y) },
         "a press on the level is the bar's to act on after a swap"
@@ -652,10 +632,8 @@ fn a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_b
     // rather than begun, because a begun resize asks for the frame it hands the
     // band back and spawns a player to render it, which a test must not do. Its
     // end is the same arm either way (see `finish_pin_drag`) — as long as no
-    // press's dead interval is standing, or the end is a relaunch rather than
+    // cover is standing, or the end is a relaunch rather than
     // the relayout this is about.
-    take_gesture_snapshot();
-    forget_resume_frame();
     take_relayout_request();
     let window = CapturingWindow::around(a_window_at(the_window_box()));
     let (width, height) = pin_state()
@@ -741,11 +719,12 @@ fn a_swap_leaves_the_state_a_box_change_leaves() {
         Vec::<String>::new(),
         "a maximize and a restore after a swap change nothing a box change is asked to change"
     );
+    // The chrome is hidden before the swap and stays hidden across it, so the swap changes no
+    // chrome at all: only the pointer asks a strip back (see `PinChrome::hidden`).
     assert_eq!(
         difference(&a, &b),
         vec![
             format!("pin.content: {} | {}", a["pin.content"], b["pin.content"]),
-            format!("pin.parked: {} | {}", a["pin.parked"], b["pin.parked"]),
             format!("pin.path: {} | {}", a["pin.path"], b["pin.path"]),
             format!(
                 "pin.window_box: {} | {}",
@@ -756,20 +735,12 @@ fn a_swap_leaves_the_state_a_box_change_leaves() {
                 a["pin.window_size"], b["pin.window_size"]
             ),
             format!(
-                "static.PIN_PARK_SWAP: {} | {}",
-                a["static.PIN_PARK_SWAP"], b["static.PIN_PARK_SWAP"]
-            ),
-            format!(
-                "static.PIN_PLAYER_GENERATION: {} | {}",
-                a["static.PIN_PLAYER_GENERATION"], b["static.PIN_PLAYER_GENERATION"]
-            ),
-            format!(
                 "static.VIDEO_PID: {} | {}",
                 a["static.VIDEO_PID"], b["static.VIDEO_PID"]
             ),
         ],
-        "and a swap changes exactly what a swap is: the file, the box that file is laid out in, and \
-         the cover and the generation that go with a player being replaced"
+        "and a swap changes exactly what a swap is: the file, the box that file is laid out in, \
+         and the generation that goes with a player being replaced"
     );
 
     stand_pin(None);
@@ -1067,8 +1038,7 @@ fn a_walk_while_the_pin_is_a_bubble_leaves_the_window_a_bubble_on_the_next_file(
 
     // The walk's own swap of the next file, taken up at the box the bubble's window keeps: the
     // player is published by name rather than begun, as the walk's own step does (see
-    // `step_the_pin_to_another_file`), and nothing arms a cover — a collapsed pin has no band for
-    // one (see `cover_step_swap_for_video`).
+    // `step_the_pin_to_another_file`), and nothing is begun for the file the bubble is not showing.
     let box_ = pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin.content))
         .expect("a pin up");

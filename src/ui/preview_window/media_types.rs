@@ -61,9 +61,16 @@ pub enum PreviewMessage {
     /// window of its own — captioned, movable, always on top — and the hover machinery
     /// stays quiet behind it until it is closed. The rect is the box the preview is
     /// already in, so nothing about the picture moves when it is pinned.
+    ///
+    /// The same message installs the file a pin that is up is shown next, and `arriving` says
+    /// which of the two it is: the take-up out of a hover is the pin *arriving*, and it comes
+    /// with no pin standing because that is what arriving is, while a file stepping onto a pin
+    /// that is up is one the pin can have ended before the install landed — the watchdog ends a
+    /// pin from a thread of its own (see `pin_lifecycle::the_pin_takes_the_file_up`).
     Pin {
         path: PathBuf,
         rect: ScreenRegion,
+        arriving: bool,
     },
     /// The pinned window was given another box — maximized, restored, or resized by an
     /// edge — and the media in it is laid out again for that box. It is the same
@@ -75,6 +82,27 @@ pub enum PreviewMessage {
     /// Preview`). The Explorer hook sends it — for a click, for a key, and — where the setting
     /// asks for it — for the pointer settling on another file (see `update_pinned_preview`).
     PinUpdate(PathBuf),
+    /// A press landed on the listing behind the pin, before the file it picked is known: the
+    /// click activates the listing, which puts it over the pin for as long as the shell takes to
+    /// answer for the file, so the pin comes forward here rather than after that answer. `window`
+    /// is the frame of the listing the press was made in, and it travels because the activation
+    /// that lands after this loop reads the press is *that* window being put over the pin: the
+    /// answer to it is asked of the window, not of whatever is in front by then (see
+    /// `PinFrontOwed`). The answer is a [`PinUpdate`](Self::PinUpdate); a press that names no file
+    /// is put back behind the listing by [`PinNoPick`](Self::PinNoPick) (see
+    /// `press_pinned_preview`).
+    PinPress {
+        window: isize,
+    },
+    /// A press that was read as a pick named no file — a folder, a file no kind previews, the gap
+    /// between the rows, the toolbar above them — and the pin goes back behind the window the press
+    /// was made in, which is the frame `window` names: the foreground is still the window the user
+    /// came from where the click has not been dispatched yet. What the press above raised is undone
+    /// here; a pick that lands after it still raises the pin again (see
+    /// `pin_press_was_not_a_pick`).
+    PinNoPick {
+        window: isize,
+    },
     /// Whether the pin key is watched was changed in the tray, or previews themselves
     /// were turned off. A pin on screen is ended here rather than left as a window
     /// nothing would ever take down again.
@@ -136,10 +164,11 @@ pub enum PreviewMessage {
     /// moment the extraction's one pass finishes (see `subtitle_files`).
     ///
     /// Only a pinned window acts on it: a pin has its film on screen already, so what the
-    /// copy landing changes is what the frame after it should be drawn with — the player is
-    /// begun again to draw that (see `reload_pinned_subtitles`). A hover is deliberately not
-    /// begun again under the pointer, and this message is not for one (see the note on the
-    /// first hover in `video_launch::subtitle_filter`).
+    /// copy landing changes is what its *next* relaunch is drawn with — the copy is preloaded
+    /// for that rather than the picture being changed hands for a subtitle (see
+    /// `reload_pinned_subtitles`). A hover is deliberately not begun again under the pointer,
+    /// and this message is not for one (see the note on the first hover in
+    /// `video_launch::subtitle_filter`).
     VideoSubtitlesReady(PathBuf),
     /// The ImageMagick engine is done with a file: the picture it developed is in hand, or
     /// there is none — a file it cannot read is remembered as one it will not draw. The
@@ -364,13 +393,25 @@ impl MediaType {
     ///
     /// It is the question a park is asked, and the whole of it: what a drag puts away is the
     /// window behind the band, so a band this app fills itself has nothing to put away, and the
-    /// flat fill a park paints would be laid over a picture this window is drawing — a frame of
-    /// this app's own, blanked for the length of a drag and answered with a stray decode. FFmpeg's
-    /// player and the browser that draws an engine document are the two of them; the media engine's
-    /// video is drawn into this window's own surface like any other frame (see
-    /// `park_pinned_player`).
-    pub(super) fn draws_in_a_window_of_its_own(&self) -> bool {
-        matches!(self, Self::Video) || self.is_engine()
+    /// flat fill would be laid over a picture the engine is drawing — a frame of this app's own,
+    /// blanked for the length of a drag and answered with a stray decode. The browser that draws an
+    /// engine document is one of them; a film at a pin that stands in a window of its own is drawn
+    /// through the pin's host, so it never reaches the paint at all (see
+    /// `pin_film_host::the_film_is_shown_in_a_host`), and the media engine's video is drawn into
+    /// this window's own surface like any other frame.
+    ///
+    /// **A film's answer is the route of the film it is showing now**, rather than the window the
+    /// pin was taken up in: an engine row can change under a pin that is already up, and the pin is
+    /// not taken up again for it (see `video_route`). Where the pin does not stand in a window of
+    /// its own, the film is the player's window over the preview's, whatever draws it.
+    pub(super) fn draws_in_a_window_of_its_own(&self, path: &Path) -> bool {
+        match self {
+            Self::Video => {
+                !(pin_is_its_own_window()
+                    && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay))
+            }
+            _ => self.is_engine(),
+        }
     }
 
     /// Whether this is a sound, whose card is the one painted preview that changes while it is

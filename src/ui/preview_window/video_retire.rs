@@ -1,6 +1,7 @@
 //! Handing a film over: retiring the player that is up while its replacement is launched, and
 //! what the end of a pinned film means.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 use crate::formats::routing::NavCategory;
 
@@ -24,20 +25,25 @@ use crate::formats::routing::NavCategory;
 /// relaunch that arrives while another is parked ends the player in between rather than stacking
 /// a third wait on top of the first (see `retire_replaced_player`).
 ///
-/// What the overlap costs is *sound*, and it is a price paid on purpose rather than an oversight:
-/// the player on screen is a whole player, not a window, and nothing can take the sound out of it
-/// while it is there. Its own window cannot even be addressed — `video_window_for` answers out of
-/// the one published handle, which through the overlap names whichever window the monitor found
-/// last, so a key posted to the parked player would reach it only on the ticks where its own window
-/// happens to be that one, and this app could not tell whether it arrived (see
-/// `transport_playing`). The other trade is worse: a replacement begun silent cannot be un-silenced
-/// afterwards, because the level of a running player is a key this app has no way to confirm and a
-/// mute is a toggle rather than a setting, so a film begun at zero stays at zero for good.
+/// What the overlap used to cost was *sound*: the player on screen is a whole player, not a window,
+/// and nothing could take the sound out of it while it was there. Its own window cannot even be
+/// addressed — `video_window_for` answers out of the one published handle, which through the overlap
+/// names whichever window the monitor found last, so a key posted to the parked player would reach it
+/// only on the ticks where its own window happens to be that one, and this app could not tell whether
+/// it arrived (see `transport_playing`). The other trade is worse: a replacement begun silent cannot
+/// be un-silenced afterwards, because the level of a running player is a key this app has no way to
+/// confirm and a mute is a toggle rather than a setting, so a film begun at zero stays at zero for
+/// good.
 ///
-/// So two audio streams run at once for as long as the swap takes — bounded by the same
-/// `VIDEO_START_WAIT_SECS` the picture's hold is bounded by, and in practice a few hundred
-/// milliseconds, a player having to open the file, seek and put its window up — and the overlap ends
-/// the moment the wait does, whether that is the replacement arriving or the pin being gone.
+/// **So the player on screen is covered before its replacement is begun.** The road that ships takes
+/// the frame out of the player's own window, paints it into the host as a cover, and ends that player
+/// at once (see `pin_playback::relaunch_pinned_player` and
+/// `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`) — so what overlaps the replacement is
+/// a picture of this app's own and **no player at all**: the file lock, the sound device and the GPU
+/// device are free for the replacement to start on. A take-up from a hover holds its player instead
+/// (see `pin_playback::freeze_the_outgoing_picture`), which is the wait this record's own road
+/// bounds: either way what the user sees is one still frame and not the walk-and-jump, and the second
+/// audio stream that went with it is gone.
 #[derive(Clone, Copy)]
 pub(super) struct VideoRetirement {
     /// The player being replaced, verified still to be `ffplay.exe` before it is ended however
@@ -84,16 +90,76 @@ pub(super) fn retire_replaced_player(retiring: u32, replacement: u32) {
         *held,
         retiring,
         replacement,
-        video_window_for(retiring).is_some(),
+        // **A player covers the one before it when it is the picture**, which a film drawn through a
+        // host answers with the source the registration draws rather than with a window of its own (see
+        // `pin_film_thumbnail::the_source_is_standing`). A replacement whose window is up but which has
+        // not been handed the picture yet covers nothing: the player it displaced is still on screen.
+        video_window_for(retiring).is_some()
+            || pin_film_thumbnail::the_source_is_standing(retiring),
         Instant::now(),
     );
     if let Some(ending) = ending {
         // Ended the same way a settled retirement is ended, and for the same reason: this player
         // has left the media and `VIDEO_PID` already names its replacement, so this call is the
         // only one that will ever end it or stop holding it (see `end_retired_player`).
-        end_retired_player(ending);
+        note_the_retirement(end_retired_player(ending), ending);
     }
     *held = parked;
+}
+
+/// A player a cover ended at once is not parked any more: the wait that record stands for was a
+/// picture changing hands, and a still of this app's ended the player before that was needed (see
+/// `pin_film_thumbnail::stand_the_still`).
+pub(super) fn forget_the_retirement_of(pid: u32) {
+    if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
+        if held.is_some_and(|pending| pending.retiring == pid) {
+            *held = None;
+        }
+    }
+}
+
+/// One line when a retired player is confirmed gone: **the last step of a relaunch**, written only
+/// where the player really has gone so a run can read the swap and the ending in the order they
+/// happened.
+fn note_the_retirement(end: RetireEnd, pid: u32) {
+    if end == RetireEnd::Gone {
+        note_pin_trace!("player retired after the swap pid {pid}");
+    }
+}
+
+/// Write the line that must never appear: a player ended while its own window is the source the pin's
+/// host is drawing.
+///
+/// Nothing covers this except the registration itself: what keeps the picture on screen across a
+/// relaunch is the registration the *old* player's window is drawn through, so a player ended while
+/// its source still stands is a picture taken off the screen. The order the relaunch is built on is
+/// that no player is ended until its replacement stands (see `retire_replaced_player`).
+///
+/// **A player ended while it holds the foreground is the same fault from the other side**, and it is
+/// written down here for the same reason: the front would be left on a window the app has just made
+/// invisible — no visible window active, no `WM_ACTIVATE` for the listing or the browser behind it, and
+/// a UI that does not paint again until it is clicked (see
+/// `pin_lifecycle::give_the_foreground_back_from`). `pid` is the player being ended.
+///
+/// **The window in front is compared with the window this app records as that player's own**, and not
+/// with any window of a process whose number happens to be `pid` (see `ffplay_window::video_window_for`):
+/// a process id is a number, and a window of it is not this player's — a test stands its player in with a
+/// number it shares with the windows the test itself puts up, so the old comparison answered for a window
+/// the player never made. What the app has made invisible is the source it adopted for this player, and
+/// that is the window recorded here; a run whose record names no window of `pid` has none of this player's
+/// in front to be left there.
+pub(super) fn note_an_end_while_standing(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    if pin_film_thumbnail::the_source_is_standing(pid) {
+        note_pin_trace!("player ended while standing pid {pid}: the picture went with it");
+    }
+    // Safety: the question is about a window of the desktop's, read rather than changed.
+    let front = unsafe { GetForegroundWindow() };
+    if !front.is_invalid() && ffplay_window::video_window_for(pid) == Some(front) {
+        note_pin_trace!("player ended while standing pid {pid}: it held the foreground");
+    }
 }
 
 /// The wait that is left when one player is retired while a replacement for another may already be
@@ -168,28 +234,6 @@ pub(super) fn retirement_after_relaunch(
         }),
         Some(retiring),
     )
-}
-
-/// Whether the player standing in the band is a different process from the one a park captured its
-/// frame for — which is the whole of what "the replacement has not put a frame up yet" can be asked
-/// of anything this app knows.
-///
-/// **It is asked of the pids and not of the window, because a window says nothing about whether the
-/// process behind it has decoded anything.** A player that has just been begun has a window of its
-/// own within a few milliseconds — SDL makes it before it opens the file — and that window is
-/// visible, correctly sized and empty: which is exactly the state a park that hands the band back
-/// on visibility alone leaves the desktop behind for as long as the decode takes (see
-/// `park_swap_arm`). A pid is the one fact that tells a player carrying the picture the park
-/// captured from a player that has not opened the file yet, and it is a fact this app wrote down
-/// itself rather than read out of a process of somebody else's.
-///
-/// A pid of zero on either side is not a replacement but a player that is not there: `VIDEO_PID` is
-/// cleared by every path that ends a player, so a cleared one says the pin has nothing playing
-/// rather than that something new has taken its place — and a park whose player has gone has no
-/// replacement to wait for (see `PIN_PARK_SWAP_TIMEOUT`).
-pub(super) fn player_replaced_since(parked: u32) -> bool {
-    let now = VIDEO_PID.load(Ordering::Acquire);
-    parked != 0 && now != 0 && parked != now
 }
 
 /// Whether a player being replaced can be ended now, or is still the one on screen.
@@ -307,6 +351,10 @@ pub(super) static ORPHANED_VIDEO_KILLS: Lazy<Mutex<Vec<u32>>> =
 /// record forgotten and `VIDEO_PID` cleared where it still names it, the same
 /// bookkeeping `kill_superseded_player` does. Only a player still dying after
 /// being asked is owned by the list — never dropped, never waited on.
+///
+/// **It is also how a relaunch ends the player a capture replaced**: a still is on screen instead of
+/// that player, so nothing has to wait for it, and the road that ends a player nothing is waiting on
+/// is this one (see `pin_playback::relaunch_pinned_player`).
 pub(super) fn retire_orphaned_player(pid: u32) {
     if pid == 0 {
         return;
@@ -319,6 +367,25 @@ pub(super) fn retire_orphaned_player(pid: u32) {
         if !held.contains(&pid) {
             held.push(pid);
         }
+    }
+}
+
+/// End the player a step or a relaunch left parked, for a pin that is going.
+///
+/// **What the player was being kept on screen for is the pin's**, so the pin's own end is the other
+/// end of that wait: the picture is going with the window, there is nothing for the replacement to
+/// hand over to, and the player left parked is a whole player on the desktop with nothing left that
+/// will ever end it — the loop's settle ends it too, on the first tick that finds no pin up, but the
+/// close is where that state has to be given back rather than a tick after it (see
+/// `settle_video_retirement`). A kill not confirmed on the spot goes to the orphan reaper, which is
+/// the same road a pin's own unconfirmed kills take (see `retire_orphaned_player`).
+pub(super) fn settle_the_retirement_for_a_pin_that_is_going() {
+    let parked = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    if let Some(parked) = parked {
+        retire_orphaned_player(parked.retiring);
     }
 }
 
@@ -393,11 +460,29 @@ pub(super) fn settle_video_retirement() {
         return;
     };
 
-    // The handle the arriving player published is what says it has arrived, and it has to be the
-    // handle that belongs to *that* player rather than to any window on screen: the two overlap,
-    // the old window is on screen throughout, and `VIDEO_HWND` names whichever of them the
-    // monitor found last (see `video_window_for`).
-    let arrival = video_window_for(pending.replacement).is_some();
+    // The window the arriving player has is what says it has arrived, and it has to be that
+    // player's rather than any window on screen: the two overlap, the old window is on screen
+    // throughout, and `VIDEO_HWND` names whichever of them the monitor found last. A hosted
+    // player has no top-level window to find there at all, so the question is asked of the host
+    // as well (see `video_window_for` and `pin_film_host::the_players_window_is_up`).
+    let arrival = pin_film_host::the_players_window_is_up(pending.replacement);
+
+    // **A replacement that has not taken the picture over yet is waiting, not late.** The player it
+    // replaced is still what the pin's host is drawing (see
+    // `pin_film_thumbnail::a_handover_is_pending_for`), and ending it on the start timeout is the
+    // black frame the handover exists to keep out — the bound of that wait is the handover's own, which
+    // hands the picture over at the same timeout and lets the pass after this one end this player.
+    let handing_over = pin_film_thumbnail::a_handover_is_pending_for(pending.replacement);
+    let ended = if handing_over {
+        // A replacement that died has no swap left to wait for and nothing holding the picture up.
+        !is_player_pid_alive(pending.replacement)
+    } else {
+        retire_ready(
+            arrival,
+            is_player_pid_alive(pending.replacement),
+            pending.started.elapsed(),
+        )
+    };
 
     // A pin that is no longer up is the other end of the wait, and it ends it at once. What this
     // player is being kept on screen *for* is a window that has gone — a pin closed, a walk that
@@ -405,17 +490,12 @@ pub(super) fn settle_video_retirement() {
     // any more is one whose arrival will never be answered by a window of this pin's, so waiting
     // the full `VIDEO_START_WAIT_SECS` for it would leave a stray window on the desktop for ten
     // seconds after the pin it belonged to had closed.
-    if !pinned()
-        || retire_ready(
-            arrival,
-            is_player_pid_alive(pending.replacement),
-            pending.started.elapsed(),
-        )
-    {
+    if !pinned() || ended {
         // A player whose end was not confirmed keeps its place in the record and is asked again on
         // the next tick, because nothing else here would ask it: the wait is over either way, and
         // what is left of it is only the pid (see `end_retired_player`).
         if end_retired_player(pending.retiring) == RetireEnd::Gone {
+            note_the_retirement(RetireEnd::Gone, pending.retiring);
             *held = None;
         }
     }
@@ -436,13 +516,6 @@ pub(super) fn settle_video_retirement() {
 /// press starts it from there — but the button stops claiming there is something playing to pause.
 pub(super) fn settle_pinned_transport() {
     if current_media_type() != Some(MediaType::Video) || !pinned() {
-        return;
-    }
-
-    // A gesture that killed owns the dead interval: the frozen hold, the
-    // claim and the stopped clock are the press's to write and the end's to
-    // take back, so a player nothing is behind reconciles nothing here.
-    if gesture_snapshot_active() {
         return;
     }
 
@@ -668,7 +741,13 @@ pub(super) fn loop_ended_pinned_player(
         && video_route(&path) == VideoRoute::Ffplay
         && video_launch::rewind_due(true, transport.duration, reached)
     {
-        restart_pinned_player(&path, content, video_launch::rewind_launch_seconds(), true);
+        restart_pinned_player(
+            &path,
+            content,
+            video_launch::rewind_launch_seconds(),
+            true,
+            RestartReason::End,
+        );
         return true;
     }
 
@@ -759,7 +838,7 @@ pub(super) fn loop_ended_pinned_player(
         return false;
     }
 
-    restart_pinned_player(&path, content, 0.0, false);
+    restart_pinned_player(&path, content, 0.0, false, RestartReason::End);
     true
 }
 
@@ -908,7 +987,7 @@ pub(super) fn settle_pending_hold() {
     let Some((_, _, transport, _)) = pinned_playback_state() else {
         return;
     };
-    if !pending_hold_delivers(transport.pending_hold, transport.drag_held) {
+    if !transport.pending_hold {
         return;
     }
 
@@ -919,22 +998,4 @@ pub(super) fn settle_pending_hold() {
         let at = transport_clock(&transport).unwrap_or(0.0);
         update_pin_transport(|state| state.held(at));
     }
-}
-
-/// Whether a hold a relaunch wrote down as owed is this tick's to deliver.
-///
-/// **A gesture that is still holding the film delivers it instead, and the two are the same key.**
-/// A hold is the pause key, and the pause key is a toggle: a relaunch begun under a gesture's hold
-/// — which is what a resize's settle is, and a seek taken from a hand that is still down — writes
-/// the hold down as owed because the player it has just begun has no window to post it through yet.
-/// The tick that delivers it and the tick that lets the gesture go of it are the same tick, so both
-/// post, and two toggles on one player is a film playing over a bar with a pause glyph on it — which
-/// is what a paused video did on a resize and did not do on a move, the whole difference being that
-/// a move has no relaunch behind it to owe anything.
-///
-/// The claim is the transport's own rather than a flag beside it, because it is the one fact that
-/// reconciles the two: every path that begins, holds, lets go of or loses a player takes it with
-/// them (see `video_drag_hold_claim`).
-pub(super) fn pending_hold_delivers(owed: bool, gesture_held: bool) -> bool {
-    owed && !gesture_held
 }

@@ -59,18 +59,18 @@ use crate::formats::video_formats::is_video_file;
 use crate::shell::wheel_input;
 use crate::ui::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
-    note_engine_page_drag, pinned, pinned_path, pointer_item_box, pointer_item_holds,
-    preview_pointer_hold, preview_screen_rect, preview_stall_ms, preview_window_rect,
-    publish_pin_media_press, publish_pointer_item_box, request_pin_end, request_pin_menu_dismiss,
-    show_preview, show_preview_keyboard, take_pin_resumed, update_pinned_preview,
-    PreviewCursorHover,
+    note_engine_page_drag, pin_press_was_not_a_pick, pinned, pinned_path, pointer_item_box,
+    pointer_item_holds, press_pinned_preview, preview_pointer_hold, preview_screen_rect,
+    preview_stall_ms, preview_window_rect, publish_pin_media_press, publish_pointer_item_box,
+    request_pin_end, request_pin_menu_dismiss, show_preview, show_preview_keyboard,
+    take_pin_resumed, update_pinned_preview, PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows::core::{w, IUnknown, Interface, GUID, VARIANT};
@@ -111,16 +111,18 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
-    GetWindowRect, IsChild, IsIconic, IsWindow, IsWindowVisible, SystemParametersInfoW,
-    WindowFromPoint, GA_ROOT, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
+    GetWindowRect, GetWindowThreadProcessId, IsChild, IsIconic, IsWindow, IsWindowVisible,
+    SystemParametersInfoW, WindowFromPoint, GA_ROOT, GA_ROOTOWNER, SPI_GETICONTITLELOGFONT,
+    SW_SHOWMAXIMIZED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
 };
 
 // What the rest of the crate asks for by name.
 pub use main_loop::run_explorer_hook;
 pub use view_sort::note_explorer_restart;
 pub(crate) use view_sort::{view_sort_of, SortKey, ViewSort};
-pub(crate) use window_state::is_foreground_explorer;
+pub(crate) use window_state::{
+    explorer_browser_class_matches, is_foreground_explorer, is_foreground_explorer_without_cache,
+};
 
 // The parts, in one namespace (see the note above). The macro is named rather than globbed:
 // it is written from two parts and lives with the counter it is written beside.

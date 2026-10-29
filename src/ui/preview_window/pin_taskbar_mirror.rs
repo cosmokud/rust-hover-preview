@@ -36,14 +36,21 @@
 //! the window is up, and it goes with the window's going down. The stand-in therefore *supplies* that
 //! still itself: it is made wearing `DWMWA_HAS_ICONIC_BITMAP` (see `pin_taskbar`), and when the Shell
 //! asks for the thumbnail of a button that is down, the pin's own picture is handed over — a picture
-//! taken off the desktop while the pin's windows were still on the screen (see `take_the_pin_picture`,
+//! taken off the desktop while the pin's windows were still on the screen (see `take_the_picture_of`,
 //! `answer_the_thumbnail_request`). What the Shell holds otherwise is its own default for a window
 //! with nothing of its own: the window's icon, stretched into whatever box the stand-in was sized to,
 //! which is what a put-away pin's hover showed for every kind of pin.
+//!
+//! **The other window that wears a button is a film's host**, and it is pictured by *itself*: the film in
+//! it is a thumbnail the Shell composes over its client and no part of its own rows, so the picture the
+//! button holds is taken of the host as the desktop shows it, film and chrome together (see
+//! `pin_film_host::keep_the_pins_picture_for_the_taskbar`). Which window a picture is taken of is
+//! therefore the caller's to name — the stand-in is pictured by the window the pin's picture is really
+//! in, and the host by itself.
 
 use super::*;
 
-use windows::Win32::Foundation::RECT;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmFlush, DwmInvalidateIconicBitmaps, DwmRegisterThumbnail, DwmSetIconicThumbnail,
     DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES,
@@ -223,14 +230,37 @@ static PIN_PICTURE: Mutex<Option<PinPicture>> = Mutex::new(None);
 /// display change has taken down, a window the Shell has minimized — is no picture at all, and the
 /// picture already taken is the one to hold, which is the rule the mirror itself keeps (see
 /// `sync_pin_mirror`).
-pub(super) fn take_the_pin_picture() {
+fn take_the_pin_picture() {
     let Some(source) = mirror_source(current_media_type()) else {
         return;
     };
 
-    // Safety: the window came out of `mirror_source`, which settles `IsWindow` on the handle it
-    // answers with, and what is asked of it is where its client area stands on the screen — a
-    // question about the window rather than a change to it.
+    take_the_picture_of(source);
+
+    // The Shell keeps the bitmap it was last handed, and it does not know that this one is of another
+    // file: it is told that its stills are out of date, and it asks for this one the next time a button
+    // of this window is looked at.
+    let Some(hwnd) = pin_taskbar::showing_taskbar_window() else {
+        return;
+    };
+
+    the_stills_are_out_of_date(hwnd);
+}
+
+/// Take the picture `source` is showing, to be handed to the Shell as the still of a taskbar button.
+///
+/// **The window is named by the caller, because there are two kinds of window a pin's button can be**
+/// and they are pictured of different things. The stand-in of a pin standing in the preview's window
+/// is pictured by that window or by the player's (see `mirror_source`); the **film host** that owns a
+/// pin's chrome is pictured by *itself*, because the film in it is a DWM thumbnail composed over the
+/// host's client and is no part of the host's own rows — the still the Shell would take of those rows
+/// is the black the host is erased to (see `pin_film_host::paint_the_host_behind_the_film`).
+///
+/// Safety: `source` is a window of this app's or one it is drawing, on the screen at this moment.
+pub(super) fn take_the_picture_of(source: HWND) {
+    // Safety: the window is one the caller has settled as a picture — a window this app is showing the
+    // pin in — and what is asked of it is where its client area stands on the screen: a question about
+    // the window rather than a change to it.
     let Some(area) = (unsafe { client_area_on_the_screen(source) }) else {
         return;
     };
@@ -246,17 +276,17 @@ pub(super) fn take_the_pin_picture() {
             height,
         });
     }
+}
 
-    // The Shell keeps the bitmap it was last handed, and it does not know that this one is of another
-    // file: it is told that its stills are out of date, and it asks for this one the next time a button
-    // of this window is looked at.
-    let Some(hwnd) = pin_taskbar::showing_taskbar_window() else {
-        return;
-    };
-
-    // Safety: the window is this app's own stand-in, and what is asked of it is a renewal of its own
-    // stills rather than a change to what it is showing.
-    let _ = unsafe { DwmInvalidateIconicBitmaps(hwnd) };
+/// Tell the Shell that the stills of `button` are out of date, so that it asks for the picture this app
+/// holds the next time that button is looked at.
+///
+/// Safety: `button` is a window of this app's that supplies its own stills (see
+/// `pin_taskbar::supply_the_stills_of_this_window`).
+pub(super) fn the_stills_are_out_of_date(button: HWND) {
+    // Safety: the window is this app's own, and what is asked of it is a renewal of its own stills
+    // rather than a change to what it is showing.
+    let _ = unsafe { DwmInvalidateIconicBitmaps(button) };
 }
 
 /// Give the picture up: there is no pin left whose button could hold it.
@@ -272,13 +302,15 @@ pub(super) fn forget_the_pin_picture() {
 
 /// Answer the Shell's ask for the still of a button that is down, with the pin's own picture.
 ///
-/// The Shell asks only while it is showing an *iconic* representation of the stand-in — which is every
-/// moment a pin is put away into the taskbar — and it asks because the window told it there would be a
-/// bitmap to be had (see `pin_taskbar`'s `pin_taskbar_window`). The box it asked in is `requested`: a
-/// bitmap past either side of it is refused outright, and a bitmap it is never given leaves the button
-/// with the Shell's own default, which is the window's icon (see `take_the_pin_picture`).
+/// The Shell asks only while it is showing an *iconic* representation of the window — which is every
+/// moment a pin is put away into the taskbar, and the one moment a film host that owns the pin's chrome
+/// is minimized — and it asks because the window told it there would be a bitmap to be had (see
+/// `pin_taskbar::supply_the_stills_of_this_window`). The box it asked in is `requested`: a bitmap past
+/// either side of it is refused outright, and a bitmap it is never given leaves the button with the
+/// Shell's own default, which is the window's icon (see `take_the_picture_of`).
 ///
-/// Safety: the window is this app's own stand-in, asked from its own window procedure.
+/// Safety: the window is one of this app's own that supplies its own stills, asked from its own window
+/// procedure.
 pub(super) unsafe fn answer_the_thumbnail_request(hwnd: HWND, requested: (i32, i32)) {
     let Ok(picture) = PIN_PICTURE.lock() else {
         return;
@@ -294,10 +326,42 @@ pub(super) unsafe fn answer_the_thumbnail_request(hwnd: HWND, requested: (i32, i
         return;
     };
 
-    // Safety: the bitmap is this call's own, made for this ask, and the window is the stand-in the ask
+    // Safety: the bitmap is this call's own, made for this ask, and the window is the one the ask
     // arrived at. The Shell copies what it is given, so the bitmap goes with this call's own surface
     // rather than being kept (see `DibSurface`).
-    let _ = DwmSetIconicThumbnail(hwnd, bitmap.bitmap(), 0);
+    if unsafe { DwmSetIconicThumbnail(hwnd, bitmap.bitmap(), 0) }.is_ok() {
+        #[cfg(test)]
+        THUMBNAILS_HANDED_OVER.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// How many thumbnails this run has handed to the Shell: **what it drew with them is the Shell's**, so
+/// this is the half of a still's road a test can see — was the ask answered with a picture at all (see
+/// `answer_the_thumbnail_request`).
+#[cfg(test)]
+static THUMBNAILS_HANDED_OVER: AtomicU32 = AtomicU32::new(0);
+
+/// The thumbnails this run has handed to the Shell (see `THUMBNAILS_HANDED_OVER`).
+#[cfg(test)]
+pub(super) fn thumbnails_handed_over() -> u32 {
+    THUMBNAILS_HANDED_OVER.load(Ordering::SeqCst)
+}
+
+/// The Shell's ask for the still of a button that is down, read out of the `WM_DWMSENDICONICTHUMBNAIL`
+/// it arrived in and answered with the picture this app holds.
+///
+/// It is one function rather than a line in each window procedure, because there are two windows of
+/// this app's a pin can be put away as — the stand-in and the film host that owns its chrome — and the
+/// message means the same thing to both: the high word of `lparam` is the widest thumbnail the Shell
+/// will take and the low word is the tallest (see `answer_the_thumbnail_request`).
+///
+/// Safety: `hwnd` is a window of this app's that supplies its own stills, asked from its own window
+/// procedure.
+pub(super) unsafe fn answer_a_thumbnail_ask(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    let asked = lparam.0 as u32;
+    let requested = ((asked >> 16) as i32, (asked & 0xFFFF) as i32);
+    unsafe { answer_the_thumbnail_request(hwnd, requested) };
+    LRESULT(0)
 }
 
 /// What the button holds, for a test asking which picture a put-away pin's button is showing.
@@ -393,7 +457,9 @@ fn thumbnail_bitmap(picture: &PinPicture, width: u32, height: u32) -> Option<Dib
 /// has minimized answers with no area at all, which is the answer that keeps the picture already
 /// taken — a minimized window is not drawn where it stands, so nothing read off the desk there would
 /// be the pin.
-unsafe fn client_area_on_the_screen(hwnd: HWND) -> Option<RECT> {
+/// The same area for a caller outside this module's mirror, which is the relaunch measurement that
+/// reads the pin off the desktop (see `still_probe`).
+pub(super) unsafe fn client_area_on_the_screen(hwnd: HWND) -> Option<RECT> {
     let mut area = RECT::default();
     GetClientRect(hwnd, &mut area).ok()?;
     let (width, height) = (area.right - area.left, area.bottom - area.top);
@@ -548,7 +614,9 @@ pub(super) fn mirror_source(kind: Option<MediaType>) -> Option<HWND> {
     let document = webview_preview::showing_hwnd();
     let preview = PREVIEW_HWND.load(Ordering::SeqCst);
 
-    if let Some(kind) = kind.filter(|kind| kind.draws_in_a_window_of_its_own()) {
+    if let Some(kind) = kind.filter(|kind| {
+        pinned_media_owner().is_some_and(|(path, _)| kind.draws_in_a_window_of_its_own(&path))
+    }) {
         let own = if kind.is_engine() { document } else { player };
         return on_the_screen(HWND(own as *mut _));
     }

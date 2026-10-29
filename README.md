@@ -4,14 +4,14 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in File Explorer for an instant preview, or press **Space** to open a pinned preview window. Works with keyboard navigation, and customizes easily via the tray icon or a simple `config.ini`.
+Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in File Explorer for an instant preview, or middle-click (or press `Space`) to open a pinned preview window. Works with keyboard navigation, and customizes easily via the tray icon or a simple `config.ini`.
 
 [Showcase.webm](https://github.com/user-attachments/assets/33ee1f35-d399-4226-8847-5bd50f867ebb)
 
 ## Highlights
 
 - Mouse-hover and keyboard-navigation previews in Explorer, beside the cursor or the focused item and kept on screen.
-- Press a key (SPACE by default) and a preview becomes a window of its own — captioned, movable, resizable, and there until you close it, always on top unless `Pin Mode → Always On Top` is turned off. 
+- Press the middle mouse button or `Space` (or your own `pin_key`) and a preview becomes a window of its own — captioned, movable, resizable, and there until you close it, always on top unless `Pin Mode → Always On Top` is turned off. 
 - Supports images, videos, audios, ebooks, Office documents, design documents, text/code, archives, camera raw, vector drawings, fonts, and more.
 - Granular display scaling: Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.
 - Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
@@ -257,14 +257,14 @@ Or download the official installer from [https://calibre-ebook.com/download_wind
 1. Start the app — a tray icon appears.
 2. Hover media files in Explorer to preview them.
 3. Or navigate with the keyboard — arrow keys, Tab, or a file's name typed to jump to it — to preview the focused item.
-4. Use SPACE (by default) to pin the preview.
+4. Use the middle mouse button or `Space` (by default) to pin the preview.
 5. Right-click the tray icon to configure behavior.
 
-Pin mode works like Quick Look: pressing `Space` (`pin_key`, watched while `pin_enabled`)
+Pin mode works like Quick Look: pressing the middle mouse button or `Space` (`pin_key`, watched while `pin_enabled`)
 turns the settled preview into a window of its own — always on top unless **Pin Mode → Always
 On Top** is off, in which case it is an ordinary window that also wears this app's own taskbar
 button while it is up. `Space` in a focused pin pauses and resumes a sound; a minimized pin
-sits in a draggable bubble — or in that taskbar button — that `Space` in Explorer brings back.
+sits in a draggable bubble — or in that taskbar button — that a middle click or `Space` in Explorer brings back.
 Arrow keys walk siblings, `Escape` closes. A right-click on a pinned window opens its own menu,
 and a pinned page of text takes the keyboard: the arrows and page keys scroll it, `F3` finds
 the next place the selection appears, and `Ctrl` and a wheel sizes it.
@@ -273,9 +273,9 @@ the next place the selection appears, and `Ctrl` and a wheel sizes it.
 
 A setting marked `(Default)` is what an untouched setting would be. The check or radio mark shows what is set now.
 
-- **Enable Preview** — Turn previews on or off.
+- **Enable Preview** — Turn previews on or off. The row names the shortcut that throws the same switch while File Explorer is in front — `Enable Preview (F7)` unless `toggle_key` names another key.
 - **Pin Mode** — Everything about pinning, in one place.
-  - **Enable (Space)** — Turn pinning on or off.
+  - **Enable (Mouse3, Space)** — Turn pinning on or off.
     - Pressing the key while a preview is up turns it into a window of its own: captioned, movable, resizable, always on top unless **Always On Top** is off, and still there when the pointer leaves.
     - The caption carries **Previous**, **Next**, **Open With**, and **Open With...**.
       - **Previous** / **Next** — Step the pin through the sibling files in the folder it was taken up in, in the order the listing is showing them; step over any one that will not open rather than stopping there.
@@ -445,10 +445,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - It is mpv's switch and nobody else's: FFmpeg's player is given no decode device, and the bubble's own frame reader decodes on a core.
     - A machine with no `mpv.exe` has no player for the switch to act on, so the row is greyed and unchecked there and a `config.ini` that says on is read as off.
 - **Engine**
-  - **Away Timer** — How long Explorer may be unreachable before a non-**Persistent** engine is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`.
+  - **Away Timer** — How long Explorer may be unreachable before an engine set to **Until away** is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`.
     - Counts time when no Explorer window is reachable on any monitor.
     - A second Explorer window keeps engines warm.
-    - Each **`… TTL`** submenu has a **Persistent** toggle at the top.
   - **Video Engine** — Which engine plays a video.
     - **Best** (`default`) — The machine's own answer: mpv for every video where it is installed, and otherwise the media engine for a film at or under 3.2 megapixels and FFmpeg's player for a larger one or one it could not measure.
     - **MPV** — mpv alone.
@@ -462,15 +461,16 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **Microsoft Office** (`default`) — Uses the format's own app and falls back to LibreOffice.
     - **LibreOffice** — Draws every Office document.
     - LibreOffice is greyed out if not installed.
-  - **Microsoft Office TTL** — With **Persistent** on: how long a family's Office app stays warm: Indefinitely, `1 hour`, `30 minutes`, `10 minutes` (`default`), `5 minutes`, `1 minute`, `0 seconds`.
-    - Off: kept while Explorer is reachable, then let go by **Away Timer**.
+  - **MPV TTL** — How long the player is kept between films: **Until away** (`default`), `30 seconds`, `1 minute`, `5 minutes`, `10 minutes`, `30 minutes`, `1 hour`, `Indefinitely`, `Never (0 seconds)`.
+    - The setting is stored and marked today; keeping a player warm between films is not wired to it yet.
+    - Greyed out where `mpv` is not installed.
+  - **Microsoft Office TTL** — How long a family's Office app stays warm: **Until away** (`default`), `30 seconds`, `1 minute`, `5 minutes`, `10 minutes`, `30 minutes`, `1 hour`, `Indefinitely`, `Never (0 seconds)`.
+    - **Until away** is kept while Explorer is reachable, then let go by **Away Timer**; a time is that long after the family's last page.
   - **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats.
     - A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB.
-    - `0 seconds` means one engine per document.
-    - Both TTLs apply to **Persistent** engines; non-persistent ones use **Away Timer**.
+    - `Never (0 seconds)` means one engine per document.
     - Greyed out if LibreOffice is not installed.
-  - **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm.
-    - Off: let go by **Away Timer**.
+  - **WebView2 TTL** — How long the SVG browser stays warm: the same nine answers, **Until away** at the top.
     - Greyed out if WebView2 is missing.
   - No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
 - **Codecs** — What this machine has: Videos, Audio, Images, Engines.
@@ -504,7 +504,7 @@ pin_always_on_top=true
 pin_double_click_center=true
 pin_double_click_reset_size=true
 pin_enabled=true
-pin_key=space
+pin_key=mouse3,space
 pin_nav_audio=category
 pin_nav_others=all
 pin_nav_video=category
@@ -513,6 +513,7 @@ pin_update_on_hover=false
 preview_enabled=true
 run_at_startup=true
 theme=light
+toggle_key=f7
 
 ; Minimize
 pin_minimize_to=bubble
@@ -691,8 +692,17 @@ spinner_delay_ms=250
 ### Trigger and position
 
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
+- `toggle_key`: the key that turns previews on or off while File Explorer is the foreground window. Default `f7`; it takes the same spellings and alternatives as `pin_key` (`ctrl+f7`, `f7,f8`, …).
+  - The key is not a global hotkey: it is only acted on when Explorer is in front, and it is never swallowed, so it still reaches Explorer and other programs as usual.
+  - Holding it down is one toggle, not one per keyboard repeat. The tray's **Enable Preview** row names the configured key.
 - `trigger_key_affect_pin_mode`: whether the trigger key reaches a pinned preview. Default `false` — the key is not read while a preview is pinned, up or collapsed into its bubble, since a pin is a window you put there rather than a hover for the key to hold back. `true` lets holding the key bring the pin down with the previews it stops. It speaks for `disable`; the `enable` mode is left as it is.
-- `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. See **Pin Mode** above for what a pin does.
+- `pin_key` / `pin_enabled`: the key that pins the preview on screen (`mouse3,space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. See **Pin Mode** above for what a pin does.
+  - A binding may name alternatives and chords: `,` separates alternatives (either one matches) and `+` joins keys that must all be held. The last key of a chord is the one whose press counts.
+    - `pin_key=space,page_down` — either key pins.
+    - `pin_key=ctrl+space` — Space pins while Ctrl is held; `ctrl+alt+space` needs both.
+    - `pin_key=space,mouse3` — a mouse button can pin too (`mouse3`, `mouse4`, `mouse5`; `mouse1` and `mouse2` are not allowed).
+  - The same syntax applies to `trigger_key`, where an alternative counts as held only while all of its keys are.
+  - Names are case-insensitive, spaces around `,` and `+` are ignored, and underscore spellings such as `page_down`, `page_up` and `caps_lock` work.
 - `pin_always_on_top`: whether a pin stays above every other window. `true` (default) keeps it topmost; `false` makes it an ordinary window that other programs can cover and that wears this app's own taskbar button while it is up. The caption's own mark toggles the same setting, a film mpv plays is put in the same band, and the wheel over such a pin is the pin's only while the pin is the window you are in.
 - `pin_double_click_center` / `pin_double_click_reset_size`: what a double-click on a pinned window does. Both default `true`: the window is put back to the size its kind's scaling setting asks for, and in the middle of the screen it stands on. Off, either half is left out — with the size reset off, a hand's own size stands and the double-click is the move alone.
 - `pin_update_enabled`: whether a pin that is up is shown the file picked next, by click or by keyboard, without moving the window. Default `true`.
@@ -767,7 +777,7 @@ The release binary is written to `target/release/rust-hover-preview.exe`. A rele
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, and GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, and runs HTML pages where Render HTML is switched on, camera raw and the pictures beside it are developed by ImageMagick, and video is played by mpv where installed, and otherwise by Windows' own media engine for small films and FFmpeg's player for large ones. Pressing Space pins the preview into a captioned window of its own — always on top unless you turn that off, in which case it wears a taskbar button of its own.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, and GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, and runs HTML pages where Render HTML is switched on, camera raw and the pictures beside it are developed by ImageMagick, and video is played by mpv where installed, and otherwise by Windows' own media engine for small films and FFmpeg's player for large ones. A middle click or `Space` pins the preview into a captioned window of its own — always on top unless you turn that off, in which case it wears a taskbar button of its own.
 
 ## TODO
 

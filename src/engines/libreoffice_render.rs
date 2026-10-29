@@ -78,7 +78,7 @@
 //! launch taken without a conversion: what the first hover of a session pays is the start, and
 //! what a warm does is begin it while the pointer is still settling on the file.
 
-use crate::config::config::{AppConfig, EngineIdle, OfficeEngine, DEFAULT_LIBREOFFICE_IDLE_SECS};
+use crate::config::config::{AppConfig, EngineIdle, OfficeEngine};
 use crate::engines::document_cache::{self, Page, PageKind};
 use crate::engines::supervisor::{self, Adapter, Worker};
 use crate::CONFIG;
@@ -357,32 +357,18 @@ fn lock_file(document: &Path) -> PathBuf {
 }
 
 /// How long past its last page the engine is kept, or `None` for a setting that keeps none
-/// at all — the `0 seconds` of the tray's `LibreOffice TTL`, which is an engine per
+/// at all — the `Never (0 seconds)` of the tray's `LibreOffice TTL`, which is an engine per
 /// document, exactly as every document was drawn before there was a setting.
 ///
-/// It is the setting an engine marked `Persistent` is kept by and nothing else: one that is
-/// not persistent is let go by the AFK timer instead, and this is not asked about it
-/// (see `let_go_if_expired`).
+/// Every other value is the setting the engine is kept by, and which clock decides it is the
+/// value's own answer: `Away` is the AFK timer (see `EngineIdle`, `let_go_if_expired`).
 fn kept_idle() -> Option<EngineIdle> {
     let idle = CONFIG
         .lock()
         .map(|config| config.libreoffice_idle)
-        .unwrap_or(EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS));
+        .unwrap_or(EngineIdle::Away);
 
     (idle != EngineIdle::Seconds(0)).then_some(idle)
-}
-
-/// Whether the engine is kept whatever the user is doing, which is the `Persistent` toggle
-/// at the top of the same submenu.
-///
-/// Read rather than captured, for the reason the idle time is: the engine thread asks it
-/// once a second while it waits for documents, so a click applies to an engine that is
-/// already up.
-fn engine_persistent() -> bool {
-    CONFIG
-        .lock()
-        .map(|config| config.libreoffice_persistent)
-        .unwrap_or(false)
 }
 
 /// The process holding the engine being kept, where there is one and it is still running.
@@ -606,21 +592,12 @@ fn track_engine_child(launcher: u32) {
 /// else runs between hovers, and an engine that is never let go of is a process left on the
 /// machine for a setting that said otherwise.
 ///
-/// Which question is asked is the `Persistent` toggle at the top of the same submenu. Not
-/// persistent — the way this starts — the engine is let go once no Explorer window has been
-/// reachable for the AFK timer, and the idle time is not consulted at all: what is being
-/// bounded is the few hundred megabytes an engine holds while the user is somewhere else.
-/// Marked persistent it is the idle time that is asked, exactly as it was before the toggle
-/// existed, and a setting of `0 seconds` — the switch the tray offers as the bottom of the
-/// list — lets go of an engine that is already running the moment it is looked at.
+/// Which question is asked is the TTL setting. `Away` — the way this starts — is the AFK
+/// timer, and the idle time is not consulted at all: what is being bounded is the few hundred
+/// megabytes an engine holds while the user is somewhere else. A time is how long the engine
+/// is kept after its last page, and `Never (0 seconds)` — the bottom of the list — lets go of
+/// an engine that is already running the moment it is looked at.
 fn let_go_if_expired() {
-    if !engine_persistent() {
-        if crate::app::afk::expired() {
-            let_go();
-        }
-        return;
-    }
-
     let Some(idle) = kept_idle() else {
         let_go();
         return;

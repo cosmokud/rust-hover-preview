@@ -107,10 +107,8 @@ fn visible_windows_for_pid(pid: u32) -> Vec<SeenWindow> {
 fn log_switch(tag: &str, pid_a: u32, hold_out: bool) {
     let pid_b = VIDEO_PID.load(Ordering::SeqCst);
     let hwnd = VIDEO_HWND.load(Ordering::SeqCst);
-    let mut line = format!(
-        "jigsaw {tag}: parked={} hold_out={hold_out} VIDEO_PID={pid_b} VIDEO_HWND={hwnd:#x}",
-        pin_player_is_parked(),
-    );
+    let mut line =
+        format!("jigsaw {tag}: hold_out={hold_out} VIDEO_PID={pid_b} VIDEO_HWND={hwnd:#x}");
     for (name, pid) in [("A", pid_a), ("B", pid_b)] {
         for seen in visible_windows_for_pid(pid) {
             let (l, t, r, b) = seen.rect;
@@ -281,7 +279,18 @@ fn a_portrait_to_landscape_pick_on_ffplay() {
     stand_pin(Some(overlay_pin((ax, ay, ar, ab), PinChrome::always())));
     let mut standing = create_loading_media(360, 480);
     standing.media_type = MediaType::Video;
-    let process_a = start_video_playback(&portrait, ax, ay, ar - ax, ab - ay, 0.0, 0, None);
+    let process_a = start_video_playback(
+        &portrait,
+        ax,
+        ay,
+        ar - ax,
+        ab - ay,
+        0.0,
+        false,
+        0,
+        None,
+        None,
+    );
     let pid_a = process_a.as_ref().map(PlayerProcess::id).unwrap_or(0);
     eprintln!("jigsaw: portrait ffplay pid={pid_a}");
     if process_a.is_none() {
@@ -344,10 +353,9 @@ fn a_portrait_to_landscape_pick_on_ffplay() {
         log_switch("after_pick", pid_a, true);
         shoot("after_pick");
 
-        // The ticks the switch lives through: the monitor's pass, the
-        // park's own settle, and the hold's, with the desktop read after
-        // every one — until the file is installed or the switch runs out
-        // of reasons to go on.
+        // The ticks the switch lives through: the monitor's pass and the
+        // hold's, with the desktop read after every one — until the file is
+        // installed or the switch runs out of reasons to go on.
         let mut load = None;
         let settled = Instant::now();
         let mut shot = 0;
@@ -361,7 +369,6 @@ fn a_portrait_to_landscape_pick_on_ffplay() {
             if installed {
                 ensure_pinned_sibling_box(LANDSCAPE_BOX);
             }
-            settle_pinned_park();
             match settle_pin_swap(&mut hold, &mut load) {
                 Some(PinSwap::Ready(_)) => {
                     installed = true;
@@ -389,9 +396,6 @@ fn a_portrait_to_landscape_pick_on_ffplay() {
                             pin.content = LANDSCAPE_BOX;
                         }
                     }
-                    // And the park is settled again now the file is in, the way the tick asks
-                    // it again after the install: this is the handover that puts the window up.
-                    settle_pinned_park();
                 }
                 if after_install >= 5 {
                     break;
@@ -416,11 +420,6 @@ fn a_portrait_to_landscape_pick_on_ffplay() {
             terminate_player_pid(pid);
         }
     }
-    give_up_pinned_park();
-    take_gesture_snapshot();
-    forget_pin_park_swap();
-    forget_video_frame();
-    forget_resume_frame();
     clear_pending_pinned_relaunch();
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);

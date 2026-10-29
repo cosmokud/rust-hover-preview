@@ -210,6 +210,15 @@ static SHOWN: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 /// the window it is drawn in.
 pub(super) static HOST_HWND: AtomicIsize = AtomicIsize::new(0);
 
+/// The process the engine's pages are drawn by, while it is running: the browser the host
+/// started, which is the one process that owns every window a document is drawn in.
+///
+/// A hit test needs it because the window it finds under the pointer is not the host's: a page
+/// is drawn by the browser's windows, which are the browser's to create however the host is
+/// placed. `IsChild` answers for a window that is still the host's in the tree; the process
+/// answers for one that is not, and a pid the host wrote down is only ever this app's engine.
+pub(super) static BROWSER_PID: AtomicU32 = AtomicU32::new(0);
+
 /// The document the loop wants drawn, as the engine's thread takes it up: the want and the
 /// generation it was made under, or nothing when nothing is wanted.
 #[derive(Clone)]
@@ -299,6 +308,12 @@ pub(crate) fn showing_path() -> Option<PathBuf> {
 /// The window the engine draws in, when it has one: the handle a hit test compares against
 /// the window under the pointer, so that a document the engine draws is touched the way
 /// this app's own preview is — the window is the engine's, and the preview is this app's.
+/// The process the engine's pages are drawn by, or zero while the engine has none: what a hit
+/// test asks about a window the host's tree does not answer for (see `BROWSER_PID`).
+pub(crate) fn browser_pid() -> u32 {
+    BROWSER_PID.load(Ordering::Acquire)
+}
+
 pub(crate) fn showing_hwnd() -> isize {
     HOST_HWND.load(Ordering::Acquire)
 }

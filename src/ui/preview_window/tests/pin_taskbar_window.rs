@@ -8,16 +8,19 @@
 //! that the picture of a pin put away into the bubble is the bubble.
 
 use super::*;
+use std::time::Duration;
 use windows::core::w;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::DwmFlush;
-use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GetDC, ReleaseDC};
+use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GdiFlush, GetDC, ReleaseDC};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowRect, IsIconic, IsWindow,
-    IsWindowVisible, RegisterClassExW, SendMessageW, ShowWindow, GW_HWNDPREV, SC_RESTORE,
-    SW_MINIMIZE, SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SYSCOMMAND,
-    WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    IsIconic, IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, SetWindowPos, ShowWindow,
+    GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, SC_RESTORE, SWP_NOACTIVATE, SW_MINIMIZE, SW_RESTORE,
+    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SETFOCUS, WM_SIZE,
+    WM_SYSCOMMAND, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// Register the class the stand-in is made from, once for the run.
@@ -586,6 +589,176 @@ unsafe fn stands_over(above: HWND, below: HWND) -> bool {
     false
 }
 
+/// **A host's taskbar button hands the keyboard to the pin.** With `Pin Mode → Always On Top` off the
+/// pair's button belongs to the film host — the window the Shell lists for a pin whose chrome the host
+/// owns — and the host is disabled so that a press on the band reaches the pin. What a click on that
+/// button delivers is therefore an activation of a window no key can be typed into, and it is answered
+/// for the pin: the host's procedure asks `pin_take_focus` for the pin's window, exactly as a press on
+/// the pin does.
+///
+/// **The entry point is the host's own procedure and not a restore.** A disabled top-level window is
+/// still a window the Shell can activate — the activation delivers `WM_ACTIVATE` and `WM_SETFOCUS` to
+/// it, which is what makes the window's own answer the whole of the fix — and a pin that is up and not
+/// minimized is a window with nothing to restore. The `WM_SETFOCUS` half is answered too, as the belt
+/// to that brace: a focus that lands on the host after the activation is a keyboard the pin has not got.
+///
+/// The ask itself is read back through the seam a press is asked through, so the test does not make it
+/// on the user's desktop; the entry point is then the real host, disabled as the app makes it, and the
+/// keyboard is measured where Windows puts it — in the pin's own window of this test's.
+#[test]
+fn a_host_activation_hands_the_keyboard_to_the_pin() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back when
+    // the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let app_window = WS_EX_APPWINDOW.0 as isize;
+
+    // With the setting off the host is the window that wears the button, and it is the disabled window
+    // the band's picture has to be (see the module note).
+    assert_ne!(
+        unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) } & app_window,
+        0,
+        "the host is the window the Shell lists for the pair, so the taskbar button is its own"
+    );
+    assert!(
+        !unsafe { IsWindowEnabled(host).as_bool() },
+        "and it is disabled, because a press on the band has to reach the pin"
+    );
+
+    // What the host's answer asks of the pin, through the seam a press is asked through: the window
+    // made focusable, the foreground, the caret — and nothing else.
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                host,
+                WM_ACTIVATE,
+                WPARAM(WA_ACTIVE as usize),
+                &recorder,
+            )
+        }
+        .is_some(),
+        "an activation of the pin's host is answered"
+    );
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            PinWindowCall::SetFocusable { focusable: true },
+            PinWindowCall::SetForeground,
+            PinWindowCall::SetFocus,
+        ],
+        "and it is the press's own three asks, in the press's own order"
+    );
+    assert_eq!(
+        recorder.handed_the_keyboard_to(),
+        vec![film.pin_hwnd.0 as isize],
+        "the keyboard is handed to the pin's window, which is the window the button asked for"
+    );
+
+    // The `WM_SETFOCUS` brace answers the same way, and an activation that is not one asks nothing.
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                host,
+                WM_SETFOCUS,
+                WPARAM(0),
+                &recorder,
+            )
+        }
+        .is_some(),
+        "a focus that lands on the host is answered for the pin as well"
+    );
+    assert_eq!(
+        recorder.handed_the_keyboard_to(),
+        vec![film.pin_hwnd.0 as isize],
+        "so the caret does not stay on a window no key can be typed into"
+    );
+
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                host,
+                WM_ACTIVATE,
+                WPARAM(WA_INACTIVE as usize),
+                &recorder,
+            )
+        }
+        .is_none(),
+        "the host being deactivated is not a request for the pin"
+    );
+    assert!(
+        recorder.calls().is_empty(),
+        "and it asks nothing of the window it is told about"
+    );
+
+    // **Only the pin's own host.** A hover's host is made from the same class and answered by the same
+    // procedure, and it is nobody's button (see `answer_a_host`).
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                HWND(0x3000 as *mut _),
+                WM_ACTIVATE,
+                WPARAM(WA_ACTIVE as usize),
+                &recorder,
+            )
+        }
+        .is_none(),
+        "an activation of a window that is not the pin's host is the hover road's, and asks no pin"
+    );
+    assert!(recorder.calls().is_empty());
+
+    // **The real entry point**: the host's own procedure, with the host disabled as the app makes it.
+    // What the keyboard does is measured where Windows puts it, and the pin is the window it is in.
+    let _ = take_pin_command();
+    unsafe {
+        SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0));
+    }
+    assert_eq!(
+        unsafe { GetFocus() },
+        film.pin_hwnd,
+        "a click on the host's button leaves the caret in the pin, not on a disabled window"
+    );
+    assert!(
+        pin_holds_a_keyboard(),
+        "and the pin holds the claim a press gives it, so its own keys are answered"
+    );
+
+    // **With `Always On Top` on the pair has no button at all**, so no click on one can arrive: the
+    // setting takes the app-window bit off both windows a button could be worn by (see
+    // `own_the_pin_window`).
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    // Safety: the pair is this test's own, and the road only re-reads the setting on it.
+    unsafe { pin_film_host::the_button_follows_the_setting() };
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) } & app_window,
+        0,
+        "with `Always On Top` on the host wears no taskbar button"
+    );
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } & app_window,
+        0,
+        "and neither does the pin the host owns, so the pair has no button to click"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
 /// A pin the taskbar's own button brings back comes back in front of the windows that were in front
 /// of it.
 ///
@@ -775,6 +948,64 @@ fn a_stand_in_left_iconic_under_a_pin_on_the_screen_comes_back_up_on_the_tick() 
     }
     forget_the_stand_in();
     stand_pin(previous_pin);
+}
+
+/// **A stand-in a pin leaves standing with nothing behind it goes down on the tick**, and what it
+/// leaves is the nothing a pin that never wore one leaves. A pin's own close hides the stand-in with
+/// the windows it takes down, but the close is one road out of a pin and the tick is what runs after
+/// all of them: the watchdog's end, a Shell gesture on the button, and a stand-in shown for a pin
+/// that is already gone all leave a window of this app's in the Shell's list with nothing behind it —
+/// the button a hover then finds over a file the app is not showing (see `keep_the_stand_in_up` and
+/// `a_button_is_owed`).
+#[test]
+fn a_stand_in_left_for_a_pin_that_is_gone_leaves_what_a_close_without_one_leaves() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // What a close leaves, with a stand-in left behind it or without one: whether a pin is up at
+    // all, and whether the app still holds a window the Shell lists a button for.
+    fn what_a_close_leaves(a_stand_in_is_up: bool) -> (bool, bool) {
+        let previous_pin = take_pin_for_a_test();
+        forget_the_stand_in();
+        stand_pin(Some(overlay_pin((100, 80, 420, 320), PinChrome::always())));
+
+        if a_stand_in_is_up {
+            let stand_in = the_stand_in();
+            // Safety: the handle is this app's own stand-in, and it is only asked up.
+            unsafe {
+                let _ = ShowWindow(stand_in, SW_SHOWNOACTIVATE);
+            }
+            assert!(
+                showing_taskbar_window().is_some(),
+                "the stand-in is up before the pin goes"
+            );
+        }
+
+        // The end that is not the loop's own: nothing of the pin's windows is hidden with it, so
+        // whatever the Shell has standing is still standing after it (see `Reason::Hung`).
+        let _ = end_pin(Reason::Hung, &Win32PinWindow);
+
+        keep_the_stand_in_up();
+
+        let left = (pinned(), showing_taskbar_window().is_some());
+        forget_the_stand_in();
+        stand_pin(previous_pin);
+        left
+    }
+
+    let with_no_stand_in = what_a_close_leaves(false);
+    let with_a_stand_in = what_a_close_leaves(true);
+
+    assert_eq!(
+        with_a_stand_in, with_no_stand_in,
+        "a stand-in left by a pin that is gone leaves what a pin that wore none leaves"
+    );
+    assert_eq!(
+        with_a_stand_in,
+        (false, false),
+        "which is no pin up and no window of ours for the Shell to list"
+    );
 }
 
 /// The client box of a window, which is the box the Shell draws a taskbar hover's picture in.
@@ -1038,9 +1269,16 @@ fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
     let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
+    let previous_own = pin_is_its_own_window();
 
     register_the_stand_in_class();
     forget_the_stand_in();
+    // The film is FFmpeg's player's, which is the kind of film this test is about: a window of its
+    // own standing in the pin's band, so the player is the picture and the pin's window is the hole
+    // (see `mirror_source`).
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
 
     // The pin's own window, up: where a picture, a page, a card and a folder's listing are drawn.
     let pin_hwnd = unsafe {
@@ -1090,12 +1328,13 @@ fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
     let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
     pin.collapsed = false;
     stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
 
     assert_eq!(
         mirror_source(Some(MediaType::Video)),
-        None,
-        "a film is pictured by its player's window, and a player that is not on the screen is no \
-         picture of a film: the pin's own band is a hole where it stood"
+        Some(pin_hwnd),
+        "a hosted film is drawn by the pin's own window, so the pin is its picture: a stale player \
+         window that is not on the screen is no picture of a film"
     );
     assert_eq!(
         mirror_source(Some(MediaType::EngineSvg)),
@@ -1116,7 +1355,11 @@ fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
     }
     VIDEO_HWND.store(previous_video, Ordering::SeqCst);
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
     forget_the_stand_in();
+    pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
 }
 
@@ -1225,6 +1468,11 @@ const A_BOX_ON_THE_DESK: (i32, i32) = (30, 40);
 /// Fill a window's client area with a colour of its own: what a picture read off the desktop is read
 /// for, since a window that paints nothing is not a picture of anything.
 ///
+/// **The fill is committed to the window's own surface here** and not left in a batch GDI has not
+/// sent, because the read that follows is a read of the *compositor's* output rather than of this
+/// window: a batch still in hand is a frame the composition has not been given, and a picture taken
+/// then is a picture of whatever stood there before the fill (see `FRAMES_A_FILL_IS_GIVEN`).
+///
 /// Safety: the window is the caller's own, and painting it is a change to it that the caller is the
 /// one asking for.
 unsafe fn fill_the_window(hwnd: HWND, colour: COLORREF) {
@@ -1235,6 +1483,38 @@ unsafe fn fill_the_window(hwnd: HWND, colour: COLORREF) {
     FillRect(dc, &client, brush);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
     let _ = ReleaseDC(hwnd, dc);
+    // The window's redirection surface has the fill once GDI says it does, and not before.
+    let _ = GdiFlush();
+}
+
+/// How many frames a fill is given to reach the desktop before a picture of it is taken: one
+/// `DwmFlush` a pass, so this is the frames a screen composing at 60 Hz shows in about a tenth of a
+/// second, and never a wait on the clock.
+///
+/// The bound is short on purpose: the frame it waits for is the host's own fill at the host's own
+/// corner, so a black band — the rows a host erases to — or another program's window in that corner
+/// still fails the assertion, and the wait is over long before a broken picture could be taken for a
+/// slow one.
+const FRAMES_A_FILL_IS_GIVEN: usize = 8;
+
+/// The colour the desktop is showing at a point, through the road a picture of the pin is taken
+/// through (see `surfaces::screen_pixels`): the read a settle is decided on, and the same read the
+/// collapse is about to make.
+///
+/// **The colour is what says whose pixels these are.** The button's picture is a read of the desktop,
+/// so the one thing a fill can be checked against is the desktop itself; the colour asked for is this
+/// test's own and is painted into nothing else while it holds the window lock, so a desktop showing
+/// it at the host's own corner is a desktop showing this host.
+///
+/// Safety: the point is one on the screen and the rectangle read is the pixel at it.
+unsafe fn what_the_desktop_shows_at(point: POINT) -> Option<u32> {
+    let one_pixel = RECT {
+        left: point.x,
+        top: point.y,
+        right: point.x + 1,
+        bottom: point.y + 1,
+    };
+    surfaces::screen_pixels(one_pixel).map(|(pixels, width, _)| the_colour_in(&pixels, width, 0, 0))
 }
 
 /// The colour a picture is holding at a point, as the app's own `COLORREF` colour: the three bytes a
@@ -1369,6 +1649,9 @@ fn a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up() {
 
 /// A button made again holds no picture of the pin the button before it belonged to.
 ///
+/// The picture of a hosted film is the pin's own window's, because the player is a child of the
+/// pin's film host rather than a window of the desktop's (see `mirror_source`).
+///
 /// The road this is a regression test for: the Shell's own `Close` takes the stand-in's window down
 /// with the pin (see `close_pin_taskbar`, `pin_taskbar_window`), and the next pin makes another one —
 /// while the picture the button holds is this app's own and not the window's, so a picture kept past
@@ -1382,12 +1665,34 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     let previous_pin = take_pin_for_a_test();
     let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
     let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
+    let previous_own = pin_is_its_own_window();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
     register_the_stand_in_class();
     forget_the_stand_in();
 
     // The window the pin is drawn by, on the screen and painted: what a picture of it is taken of.
+    // A hosted film — mpv's or FFmpeg's, adopted into the pin's own host — is drawn by the pin's
+    // own window, so that is the picture the button holds; the stale player window beside it is a
+    // handle that is not on the screen and never the picture (see `mirror_source`).
+    let pin_window = unsafe {
+        CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            A_BOX_ON_THE_DESK.0,
+            A_BOX_ON_THE_DESK.1,
+            64,
+            48,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("the pin's own window")
+    };
+    let previous_preview = PREVIEW_HWND.swap(pin_window.0 as isize, Ordering::SeqCst);
     let player = unsafe {
         CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
@@ -1403,13 +1708,13 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
             None,
             None,
         )
-        .expect("a player's window")
+        .expect("a stale player's window")
     };
     // Safety: the window is this test's own, asked to be on the screen and painted — the two things
     // that make it the picture the button of a film pin is taken of.
     unsafe {
-        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
-        fill_the_window(player, A_COLOUR_OF_ITS_OWN);
+        let _ = ShowWindow(pin_window, SW_SHOWNOACTIVATE);
+        fill_the_window(pin_window, A_COLOUR_OF_ITS_OWN);
     }
     let _ = unsafe { DwmFlush() };
     VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
@@ -1424,14 +1729,28 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     let mut pin = overlay_pin((100, 80, 164, 128), PinChrome::always());
     pin.collapsed = true;
     stand_pin(Some(pin));
+    // **The pin stands in a window of its own**, which is where a film's host is made: the picture
+    // the button holds is the pin's window rather than the player's (see `mirror_source`).
+    pin_stands_in_its_own_window(true);
     the_stand_in();
 
     // The picture the button of this pin holds, taken the way a collapse takes it.
-    unsafe {
-        keep_the_pin_for_the_taskbar();
+    //
+    // **Asked again while it is still nothing**, because the picture is read off another window's
+    // pixels and that read is a read of what the compositor has drawn: asked once, this was a red in
+    // one run out of three with nothing changed but the moment the run started (the same read stands
+    // behind `DwmFlush` above). The wait is bounded by a few frames.
+    let mut picture = None;
+    for _ in 0..40 {
+        unsafe { keep_the_pin_for_the_taskbar() };
+        picture = the_pin_picture();
+        if picture.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        the_pin_picture().is_some(),
+        picture.is_some(),
         "the button of a pin put away holds the pin's own picture"
     );
 
@@ -1446,13 +1765,410 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     // Safety: the window is this test's own; the handles the app holds are put back as they were.
     unsafe {
         let _ = DestroyWindow(player);
+        let _ = DestroyWindow(pin_window);
     }
     VIDEO_HWND.store(previous_video, Ordering::SeqCst);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
     }
+    pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
+}
+
+/// **A film host's button holds a picture of the host itself**, and it is what the Shell is handed when
+/// it asks for the still of a button that is down.
+///
+/// The fault this is a regression test for: a pin whose film a player of its own draws is put away by
+/// minimizing the host that owns its chrome, and the Shell's still of a window that is down is taken of
+/// the window's own rows — while the film in a host is a thumbnail the Shell composes *over* those rows,
+/// which are the black the host is erased to. So the button of a put-away film pin had a blank hover.
+/// What the button holds has to be a picture of the host as the desktop shows it, taken before the
+/// collapse (see `pin_film_host::keep_the_pins_picture_for_the_taskbar`), and handed over when the Shell
+/// asks (see `answer_a_thumbnail_ask`).
+#[test]
+fn a_film_hosts_button_holds_a_picture_of_the_host_itself() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back when
+    // the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+
+    // The host on the desk and in a colour of its own: the picture is read off the desktop where the
+    // window stands, so one read anywhere else is the desk rather than the pin.
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(
+            host,
+            HWND_TOPMOST,
+            A_BOX_ON_THE_DESK.0,
+            A_BOX_ON_THE_DESK.1,
+            64,
+            48,
+            SWP_NOACTIVATE,
+        );
+        fill_the_window(host, A_COLOUR_OF_ITS_OWN);
+    }
+    let _ = unsafe { DwmFlush() };
+    // The box the picture is to be of, read before the collapse: a minimized window has no client area
+    // for anything to be measured in.
+    let host_box = unsafe { the_client_box(host) };
+
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+
+    let (pixels, width, height) = the_pin_picture()
+        .expect("a put-away pin whose film a player draws holds a picture of its host");
+    assert_eq!(
+        (width as i32, height as i32),
+        host_box,
+        "the picture is taken of the host's own client area, which is where the film and the chrome over \
+         it stand"
+    );
+    assert_eq!(
+        the_colour_in(&pixels, width, 0, 0),
+        A_COLOUR_OF_ITS_OWN.0,
+        "and it is the host's own colour rather than the black its rows are erased to"
+    );
+
+    // And the Shell's own ask for the still of the button that is down is answered with it: the high
+    // word of the message's `lparam` is the widest thumbnail it will take and the low word the tallest.
+    let handed_over = thumbnails_handed_over();
+    unsafe { answer_a_thumbnail_ask(host, LPARAM((160 << 16) | 90)) };
+    assert_eq!(
+        thumbnails_handed_over(),
+        handed_over + 1,
+        "the ask is answered with a bitmap made in the box it asked in"
+    );
+}
+
+/// **A pin moved from the bubble into the taskbar keeps the picture its bubble collapse took.**
+///
+/// The fault this is a regression test for: the bubble's own `To Taskbar` row asks the host for the
+/// picture the button is to hold when the host has been off the screen for as long as the bubble has
+/// been up, so nothing was taken and the app's still was never forced — the hover of a film pin
+/// brought back from the bubble into the taskbar was blank. **The last moment the host is on the
+/// screen is the bubble's own collapse**, and the frame composed there is the last one the user saw,
+/// which is exactly what a hover of a put-away pin is for (see taking the picture at every collapse,
+/// `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
+#[test]
+fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubble_collapse_took() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back
+    // when the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(
+            host,
+            HWND_TOPMOST,
+            A_BOX_ON_THE_DESK.0,
+            A_BOX_ON_THE_DESK.1,
+            64,
+            48,
+            SWP_NOACTIVATE,
+        );
+        fill_the_window(host, A_COLOUR_OF_ITS_OWN);
+    }
+    let _ = unsafe { DwmFlush() };
+    let host_box = unsafe { the_client_box(host) };
+
+    // **The frame the collapse takes has to be a frame the desktop is showing.** The fill above is a
+    // GDI call the host's own surface has not necessarily taken yet, and the compositor has not
+    // necessarily shown a frame since either — a picture taken then is a picture of whatever stood
+    // where the host does before it was filled: another program's window, or the black a host erases
+    // its rows to. So the desktop is asked, through the road the picture is taken through, until it
+    // is showing this host's own colour at this host's own corner, and what it was showing is named
+    // if it never does.
+    let host_corner = unsafe { pin_taskbar_mirror::client_area_on_the_screen(host) }
+        .expect("the host's client on the screen while it is still up");
+    let host_corner = POINT {
+        x: host_corner.left,
+        y: host_corner.top,
+    };
+    let mut shown = None;
+    for _ in 0..FRAMES_A_FILL_IS_GIVEN {
+        shown = unsafe { what_the_desktop_shows_at(host_corner) };
+        if shown == Some(A_COLOUR_OF_ITS_OWN.0) {
+            break;
+        }
+        // The next frame, and a fill put back for the ones the host's own erase may have taken.
+        unsafe { fill_the_window(host, A_COLOUR_OF_ITS_OWN) };
+        let _ = unsafe { DwmFlush() };
+    }
+    assert_eq!(
+        shown,
+        Some(A_COLOUR_OF_ITS_OWN.0),
+        "the desktop shows the host's own fill at the corner the picture is taken of, so that the \
+         picture is of this host rather than of what stood there before it. It kept showing {shown:x?}"
+    );
+
+    // The road the user takes: the pin goes away into the round bubble first.
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "the bubble's collapse is what takes the host off the screen"
+    );
+
+    let (pixels, width, height) = the_pin_picture().expect(
+        "the bubble's collapse takes the picture the button of a pin moved from it into the taskbar \
+         is to hold",
+    );
+    assert_eq!(
+        (width as i32, height as i32),
+        host_box,
+        "and it is taken of the host's own client area, before the collapse takes it off the screen"
+    );
+    assert_eq!(
+        the_colour_in(&pixels, width, 0, 0),
+        A_COLOUR_OF_ITS_OWN.0,
+        "and it is the host as the desktop showed it rather than the black its rows are erased to"
+    );
+
+    // The bubble's own menu row moves the pin into the taskbar, where the button is the host's.
+    let forced = stills_forced();
+    bubble_to_taskbar();
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool() && unsafe { IsIconic(host) }.as_bool(),
+        "the host is the window the Shell's button belongs to, and it is put away visibly: a hidden \
+         window wears no button at all"
+    );
+    assert_eq!(
+        stills_forced(),
+        forced + 1,
+        "and the button is told to hold the app's own still for as long as the pin is away, whether or          not this row had a window of the pin's on the screen to picture"
+    );
+    let (pixels, width, _) = the_pin_picture().expect("and the picture taken at the collapse is kept");
+    assert_eq!(
+        the_colour_in(&pixels, width, 0, 0),
+        A_COLOUR_OF_ITS_OWN.0,
+        "a row that could take no picture of a window that is not there hands over no second one"
+    );
+}
+
+/// **A film host moved from the bubble into the taskbar comes back with its film and its source.**
+///
+/// The fault this is a regression test for: the pin restored from the taskbar this way had a black
+/// band with a moving seekbar — the host and the source the Shell draws through it stayed down, or
+/// the registration between them was gone, and the seek that followed had no picture to take. The
+/// pin's own restore re-establishes the pair in the one pass it happens in (see
+/// `pin_film_host::bring_the_film_back`).
+#[test]
+fn a_film_host_moved_from_the_bubble_into_the_taskbar_comes_back_with_its_film() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back
+    // when the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let source = unsafe { super::pin_film_host_window::a_source_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(source, SW_SHOWNOACTIVATE);
+    }
+
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    bubble_to_taskbar();
+    super::pin_film_host_window::let_the_posted_shows_land();
+    assert!(
+        !unsafe { IsWindowVisible(source) }.as_bool(),
+        "the source goes down with the host it is drawn in"
+    );
+
+    // What the Shell does when the host's button is clicked: it restores the window it holds, and
+    // nothing of this app's was pressed for it (see `the_pin_came_back`).
+    unsafe {
+        let _ = ShowWindow(host, SW_RESTORE);
+    }
+    assert!(
+        matches!(take_pin_command(), Some(PinCommand::CameBack)),
+        "the pin's state comes back with the window the Shell restored"
+    );
+
+    restore_pin(&a_restored_window(), PinRestore::TheShell);
+    assert!(!pin_is_collapsed(), "the pin is up again");
+    assert!(
+        unsafe { IsWindowVisible(host) }.as_bool() && !unsafe { IsIconic(host) }.as_bool(),
+        "and the film's host is on the screen with it"
+    );
+    super::pin_film_host_window::let_the_posted_shows_land();
+    assert!(
+        unsafe { IsWindowVisible(source) }.as_bool(),
+        "and the source the Shell draws through the host is up again"
+    );
+    assert!(
+        pin_film_thumbnail::the_standing_source_process(host).is_some(),
+        "and the film's registration stands for that host again: a host with no registration in it \
+         is the black it erases to behind the picture"
+    );
+
+    // Safety: the source is this test's own window.
+    unsafe {
+        let _ = DestroyWindow(source);
+    }
+}
+
+/// **A pin restored before its film's hide has landed still brings the film back.**
+///
+/// The fault this is a regression test for: a hide of the source is `ShowWindowAsync` — a post to
+/// another process — so at the restore the window can still be up while the hide is on its way. The
+/// restore used to read the window, find it up, ask for nothing, and let the queued hide land last:
+/// the host on the screen with the source down, which is the black band with a moving seekbar and a
+/// seek that changes nothing, for as long as no later pass asks again. What the restore compares
+/// against is the last ask rather than the window (see `pin_film_thumbnail::set_the_source_visible`).
+#[test]
+fn a_film_host_restored_before_its_films_hide_has_landed_brings_the_film_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back
+    // when the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let source = unsafe { super::pin_film_host_window::a_source_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(source, SW_SHOWNOACTIVATE);
+    }
+
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    bubble_to_taskbar();
+    // **The posted hides are deliberately left where they are**: that is the state this test is
+    // about, and the drain below is what lets them land after the restore has said what it wants.
+    assert!(
+        unsafe { IsWindowVisible(source) }.as_bool(),
+        "the hide the collapse asked for is still on its way to the player"
+    );
+
+    unsafe {
+        let _ = ShowWindow(host, SW_RESTORE);
+    }
+    restore_pin(&a_restored_window(), PinRestore::TheShell);
+    super::pin_film_host_window::let_the_posted_shows_land();
+    assert!(
+        unsafe { IsWindowVisible(source) }.as_bool(),
+        "the hide that was in flight does not land last: the source is up with the pin that asked for it"
+    );
+    assert!(
+        pin_film_thumbnail::the_standing_source_process(host).is_some(),
+        "and the film's registration stands for that host"
+    );
+
+    // Safety: the source is this test's own window.
+    unsafe {
+        let _ = DestroyWindow(source);
+    }
+}
+
+/// **The size the Shell sends is the pin coming back, even while the host is still iconic.**
+///
+/// The fault this is a regression test for: the Shell restores the window it holds a message at a time,
+/// and the gate that reads the restore also asked the window whether it was iconic. A `SIZE_RESTORED`
+/// that arrived before the iconic bit had gone was refused — the pin stood on the screen with a black
+/// band, a seek that changed nothing, and the film coming back only when some later pass happened to
+/// show the window, which is the "sometimes it recovers by itself" of the user's own report. What the
+/// gate asks is whether the window is hidden: a window the Shell is bringing back is not (see
+/// `the_pin_came_back`).
+#[test]
+fn a_film_host_still_iconic_when_the_size_says_it_came_back_is_the_pins_restore() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back
+    // when the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    bubble_to_taskbar();
+    assert!(
+        unsafe { IsIconic(host) }.as_bool() && unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host is the window the Shell's button put away, and it is visibly away"
+    );
+
+    // What the window is sent as it comes back, before its iconic bit has gone: the pin asked for a
+    // restore is a pin whose state has to follow the window (see `the_pin_came_back`).
+    unsafe {
+        SendMessageW(host, WM_SIZE, WPARAM(SIZE_RESTORED as usize), LPARAM(0));
+    }
+    assert!(
+        matches!(take_pin_command(), Some(PinCommand::CameBack)),
+        "the pin comes back with the window the Shell is restoring"
+    );
+}
+
+/// **A pin whose host the Shell has not finished restoring comes up with its film anyway.**
+///
+/// The fault this is a regression test for: the window the Shell restores is the host, and the size
+/// that says it is back can arrive before its iconic bit has gone. The restore left a still-iconic
+/// host alone — the picture never came back, the band was black, and only whatever later pass
+/// happened to show the host recovered it, which is the "sometimes it plays perfectly" of the user's
+/// own report. A pin the user asked for is up with its film, so the host is asked up rather than
+/// waited for (see `pin_film_host::bring_the_film_back`).
+#[test]
+fn a_film_host_still_iconic_when_its_pin_is_restored_comes_back_up_with_its_film() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back
+    // when the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
+    let source = unsafe { super::pin_film_host_window::a_source_of_the_host(host) };
+    unsafe {
+        let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(source, SW_SHOWNOACTIVATE);
+    }
+
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    bubble_to_taskbar();
+    super::pin_film_host_window::let_the_posted_shows_land();
+    assert!(
+        unsafe { IsIconic(host) }.as_bool(),
+        "the host is the window the Shell's button put away"
+    );
+
+    // The pin's own restore, with the host left in the state the Shell's restore can be read in
+    // while it is still finishing.
+    restore_pin(&a_restored_window(), PinRestore::TheShell);
+    assert!(
+        !unsafe { IsIconic(host) }.as_bool() && unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host is up with the pin the user asked for rather than left to a later pass"
+    );
+    super::pin_film_host_window::let_the_posted_shows_land();
+    assert!(
+        unsafe { IsWindowVisible(source) }.as_bool(),
+        "and the source the Shell draws through it is up again"
+    );
+
+    // Safety: the source is this test's own window.
+    unsafe {
+        let _ = DestroyWindow(source);
+    }
 }
 
 /// A picture already taken is not taken down by a window that is not there any more.
@@ -1651,4 +2367,821 @@ fn a_button_is_not_shown_for_a_pin_put_away_into_its_bubble() {
     }
     forget_the_stand_in();
     stand_pin(previous_pin);
+}
+
+/// A pin that stands in a window of its own is minimized *as a window* when it is put away into the
+/// taskbar: the button it wears is that window's own, and hiding the window is the one thing that takes
+/// the button away with it.
+///
+/// **The fault this is a regression test for.** `Minimize → To Taskbar` took every pinned window off the
+/// screen and then stood the app's own taskbar window in its place — and a real pin is refused that
+/// stand-in, because the window it stands in brings a button of its own. So the collapse hid the only
+/// window that had a button and put nothing in its place: the pin left the screen and the taskbar
+/// together, with nothing anywhere left to bring it back (see `collapse_pin_to` and `a_button_is_owed`).
+/// A window of the Shell's is minimized by the Shell and restored by it, so the collapse asks Windows for
+/// the one thing Windows already does rather than hiding what Windows is drawing a button for.
+#[test]
+fn a_pin_that_is_a_window_keeps_its_button_when_it_is_minimized_to_the_taskbar() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+
+    /// Off every display, so that the window this test puts up is no window of the user's — and wide
+    /// enough that the pin's own chrome has room in it.
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    // The stand-in is offered a class and no window of its own, so that a stand-in the collapse asks for
+    // is one it can really make: what is asserted below is that nothing is owed it, not that it is
+    // impossible to make.
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    // On the screen, off every display: the state a pin's window is in when its button is owed.
+    // Safety: the window is this test's own.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+
+    assert!(
+        pin_is_collapsed(),
+        "the pin is put away, and what is playing behind its window is held by that"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the minimize this app asked its own window for is no restore: the window is shown on its \
+         way down to the button, and a `SIZE_RESTORED` read as the Shell's would bring the pin back in \
+         the same breath it was put away in"
+    );
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin's own window is the one Windows minimizes: a window that is minimized keeps its \
+         taskbar button, and a window that is hidden takes the button away with it"
+    );
+    assert!(
+        showing_taskbar_window().is_none(),
+        "and nothing stands in for it: one pin wears one button, and this one is the window's own"
+    );
+
+    // Safety: the window is this test's own, and every global written here is put back as it was.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    forget_the_stand_in();
+}
+
+/// A pin put away as a window comes back as one: the Shell restores the window, and the pin's own state
+/// follows it.
+///
+/// **The fault this is a regression test for.** A collapse into the taskbar is a state this app holds —
+/// held-back previews, parked playback, and a minimize that is answered by nothing because the pin
+/// believes it is away — while the window a real pin stands in is put back by a button of the Shell's
+/// that asks this app nothing. Left alone, the pin is on the screen and still away as far as the app is
+/// concerned: what it plays stays parked, and the next minimize does not land (see `collapse_pin_to`).
+#[test]
+fn a_pins_own_window_brought_back_is_the_pins_own_restore() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    // Safety: the window is this test's own.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin is put away as a window, which is the state this test is about"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the ask this app made of its own window is no restore of the Shell's"
+    );
+
+    // What the button Windows draws for that window sends when it is clicked: the Shell's own restore,
+    // which reaches the window rather than any stand-in of this app's.
+    // Safety: a message to a window of this app's own, with the numbers the Shell sends with it.
+    unsafe {
+        SendMessageW(
+            pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_RESTORE as usize),
+            LPARAM(0),
+        );
+    }
+
+    assert!(
+        !unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the Shell's own call puts the window back on the screen"
+    );
+    assert!(
+        matches!(take_pin_command(), Some(PinCommand::CameBack)),
+        "and the pin's state comes back with the window: a pin left believing it is away holds \
+         everything a collapse holds back, and answers no minimize with anything"
+    );
+
+    // And the road the answer takes, which is the restore without a window of the app's pressed for it:
+    // the pin is up again, and no window of the app's is put in front of the one the Shell chose.
+    restore_pin(&a_restored_window(), PinRestore::TheShell);
+    assert!(!pin_is_collapsed(), "the pin is up again");
+
+    // Safety: the window is this test's own, and every global written here is put back as it was.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    forget_the_stand_in();
+}
+
+/// The bubble's own `To Taskbar` row is the same door: a pin that stands in a window of its own is put
+/// in the taskbar as a window, whatever door it was asked from.
+///
+/// The fault this is a regression test for is the one above, reached from the other side: a pin inside
+/// the round bubble has its window *hidden*, and the row that moves it to the taskbar put the app's
+/// stand-in up instead of the window — which a real pin is refused — so the button the row was asked for
+/// was the one thing that did not appear (see `bubble_to_taskbar`).
+#[test]
+fn a_pin_that_is_a_window_goes_to_the_taskbar_from_its_bubble_as_a_window() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    // Safety: the window is this test's own.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    // The bubble first, which is the state the row is asked from: the pin's window goes down with it.
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    assert!(
+        pin_is_collapsed() && !unsafe { IsWindowVisible(pin_hwnd) }.as_bool(),
+        "a pin in the bubble has its window down, which is what the row has to undo"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "a pin hidden into the bubble is not one the Shell brought back: nothing of this app's asked the \
+         window down there, so nothing of it is a restore"
+    );
+
+    bubble_to_taskbar();
+
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the row's own minimize is no restore either, though the window is shown to become iconic"
+    );
+    assert!(
+        pin_is_collapsed(),
+        "the pin is still put away, only somewhere else"
+    );
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "and it is the pin's own window that is minimized: a window that is hidden wears no button, so \
+         the taskbar the row asks for is a taskbar with nothing in it"
+    );
+    assert!(
+        showing_taskbar_window().is_none(),
+        "and nothing stands in for it: one pin wears one button, and this one is the window's own"
+    );
+
+    // Safety: the window is this test's own, and every global written here is put back as it was.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    hide_pin_bubble();
+    forget_the_stand_in();
+}
+
+/// An update brings a pin that is put away into the taskbar back on top of the listing the file was
+/// picked in — and leaves it where the minimize put it where `Pin Mode → Update Preview → Move To Top`
+/// is off.
+///
+/// **The fault this is a regression test for.** `Move To Top` is the row that says an update brings the
+/// pin over the listing it follows, and a put-away pin has no window in any band to bring: the file was
+/// swapped into a window nobody could see, behind the taskbar button the minimize left, so the row
+/// answered nothing at all for a pin the user had minimized — "even the minimized pin should show on top
+/// now" (see `bring_a_put_away_pin_back`).
+///
+/// What the pin is brought back **to** is the window the Shell minimized, and the front is asked for
+/// after it is back: a window that is off the screen has no place of its own in the z-order, and the
+/// place a hidden window is shown into is behind everything opened over it since (see
+/// `show_pinned_window`).
+#[test]
+fn an_update_brings_a_pin_put_away_into_the_taskbar_back_on_top() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+    let updates = CONFIG
+        .lock()
+        .map(|config| config.pin_update_enabled)
+        .unwrap_or(true);
+
+    /// Off every display, so that the windows this test puts up are no windows of the user's — and wide
+    /// enough that the pin's own chrome has room in it.
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    // The stand-in is offered a class and no window of its own, so that a stand-in the collapse asks for
+    // is one it can really make: what is asserted below is that nothing is owed it, not that it is
+    // impossible to make.
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+
+    // The window the loop holds, which the property a restore asks about is asked of: there is always
+    // one, and here it is the pin's own — the own-window pin is drawn into that window alone.
+    PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+    // Safety: the window is this test's own.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    // And the listing the file is picked in: a window opened after the pin's, which is what puts it in
+    // front of the pin — the arrangement an update is answered from.
+    let listing = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            NO_MANS_LAND,
+            NO_MANS_LAND,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the listing")
+    };
+    // Safety: the window is this test's own, and it is asked to be on the screen — an offscreen window
+    // is still one the Shell lists, which is the whole of what the z-order below is read from.
+    unsafe {
+        let _ = ShowWindow(listing, SW_SHOWNOACTIVATE);
+    }
+    assert!(
+        unsafe { stands_over(listing, pin_hwnd) },
+        "the window this test opened after the pin's is the one in front of it"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_enabled = true;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The minimize: the pin goes away as a window, which is the state the update below is answered from.
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin is put away, and the window it stands in is the one Windows minimized"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the ask this app made of its own window is no restore of the Shell's"
+    );
+
+    // The update: the file a pick names is the file the pin comes back up on, and the window comes back
+    // with it, in front of the listing the pick was made in.
+    assert!(
+        an_update_brings_a_put_away_pin_back(),
+        "with `Move To Top` on, an update is the pin coming forward — and a pin that is away has nothing
+         to bring forward but itself"
+    );
+    // The file the pin is showing, which is the file this door answers for: an update's own pick names
+    // a file nothing has read yet, and the window is not put up until that file is on it (see
+    // `bring_a_put_away_pin_back` and `a_put_away_pin_comes_back_on_the_file_the_update_names_rather_than_before_it`).
+    let on_the_pin = pinned_path().expect("the file the pin is showing");
+    assert!(
+        bring_a_put_away_pin_back(&on_the_pin),
+        "so the pin the update names a file for is the pin that comes back up"
+    );
+
+    assert!(
+        !pin_is_collapsed(),
+        "the pin is up again, and what the collapse held back is the tick's to give back"
+    );
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool() && !unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "and it is the window Windows minimized that comes back, rather than a stand-in for it: a pin
+         put away as a window is the window minimized, and the window is what the update brings up"
+    );
+    assert!(
+        unsafe { stands_over(pin_hwnd, listing) },
+        "the pin is put in front of the window the file was picked in, which is the one thing an
+         update owes a pin it brings forward"
+    );
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(pin_hwnd, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0,
+        0,
+        "and no band is kept for it: `Pin Mode → Always On Top` is the only thing that keeps a pin over
+         other programs, and the next click on another window puts this one behind it"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the restore this road asked for is no restore of the Shell's to answer as well"
+    );
+
+    // And the row switched off: an update is a file swapped into the pin where it stands, and a pin that
+    // stands nowhere stays away until the user brings it back.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_update_move_to_top = false;
+    }
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    let _ = take_pin_command();
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin is put away again, which is the state this half is about"
+    );
+    assert!(
+        !an_update_brings_a_put_away_pin_back(),
+        "with the row off an update does not bring a put-away pin back"
+    );
+    assert!(
+        !bring_a_put_away_pin_back(&on_the_pin),
+        "and the road answers that there was nothing to bring back"
+    );
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "so the file is swapped into the pin where the minimize put it, behind the button that stands
+         for it, until the user brings it back themselves"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back as it was.
+    unsafe {
+        let _ = DestroyWindow(listing);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    forget_the_stand_in();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_enabled = updates;
+        config.pin_update_move_to_top = move_to_top;
+    }
+}
+
+/// A put-away pin comes back on the file an update names, and not a tick before that file is on its
+/// window: the window is not put up on the file it was showing for as long as the read and the decode
+/// take.
+///
+/// **The fault this is a regression test for.** The restore was answered where the pick was read, and
+/// a pick names a file nothing has read yet — so the window came up on the file before it and the new
+/// one was swapped in a tick or more later, a flash between the two images every time an update brought
+/// a put-away pin back (see `bring_a_put_away_pin_back`).
+///
+/// What the door is asked here is the pin's own state rather than the caller's word, because that is
+/// what leaves the order to the window: the install writes the file and the media in one breath (see
+/// `install_pinned_media`), so a pin naming the file is a pin showing it — and until then there is
+/// nothing for the window to come back on.
+#[test]
+fn a_put_away_pin_comes_back_on_the_file_the_update_names_rather_than_before_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+    let updates = CONFIG
+        .lock()
+        .map(|config| config.pin_update_enabled)
+        .unwrap_or(true);
+
+    /// Off every display, so that the window this test puts up is no window of the user's — and wide
+    /// enough that the pin's own chrome has room in it.
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    let showing_before = pin.path.clone();
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    // The stand-in is offered a class and no window of its own, so that a stand-in the collapse asks
+    // for is one it can really make: what is asserted below is that the pin stays away, not that no
+    // button could have stood for it.
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    // The window the loop holds, which the property a restore asks about is asked of: there is always
+    // one, and here it is the pin's own.
+    PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+    // Safety: the window is this test's own.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_enabled = true;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The minimize: the pin goes away as a window, which is the state the update below is answered
+    // from.
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin is put away, and the window it stands in is the one Windows minimized"
+    );
+
+    // The file the update names, which nothing has read yet: the pin still has the file before it, so
+    // there is nothing to come back on, and a window put up here would show that file for as long as
+    // the read and the decode take.
+    let update = PathBuf::from("picture-after-it.png");
+    assert_ne!(
+        update, showing_before,
+        "the update names another file than the one the pin is showing"
+    );
+    assert!(
+        !bring_a_put_away_pin_back(&update),
+        "a restore answered before the file is on the window is no restore: the pin is not showing the file it names"
+    );
+    assert!(
+        pin_is_collapsed() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "so the pin stays where the collapse left it rather than coming up on the file before it, \
+         which is the flash the user sees between the two images"
+    );
+
+    // The install's own write, which is where the file an update names becomes the file the pin is
+    // showing and the media behind it the window's (see `install_pinned_media`). The show that follows
+    // it paints before the window appears, so the window comes up on this file and no other.
+    if let Some(mut state) = pin_state() {
+        if let Some(pin) = state.pin_mut() {
+            pin.path = update.clone();
+        }
+    }
+
+    assert!(
+        bring_a_put_away_pin_back(&update),
+        "and the pin comes back where the file it was brought back for is the file on it"
+    );
+    assert!(!pin_is_collapsed(), "the pin is up again");
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool() && !unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "and the window Windows minimized is the one that comes back"
+    );
+
+    // Safety: the window is this test's own, and every global written here is put back as it was.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    forget_the_stand_in();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_enabled = updates;
+        config.pin_update_move_to_top = move_to_top;
+    }
+}
+
+/// **The button is the setting's, and it is asked of the window that wears it.** `Pin Mode -> Always
+/// On Top` on is a pin over everything already, which owes no taskbar button; off is an ordinary window
+/// with an ordinary window's button. The pair's button belongs to the host that owns the pin's chrome,
+/// and the pin's own window is the one that must not carry a second one.
+///
+/// The fault this is a regression test for is the intermittent one: the app-window bit was added to a
+/// host that was *already on the screen* at the promotion, with a style re-read and no show, and a
+/// button is the Shell's answer to a window being shown - so the pair wore the button it happened to
+/// be shown with. And the row that changes the setting recomputed nothing, so a pin with the setting
+/// turned on kept the button it was taken up with.
+#[test]
+fn the_pairs_taskbar_button_is_the_settings() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    let pin = pin_real_window::real_pin_window().expect("the pin's own window");
+    let previous = pin_always_on_top();
+    let wears_a_button = |hwnd: HWND| unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize != 0;
+
+    // The setting off: the host is the window the Shell lists, and the pin's own window is not.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "a host with no picture in it is not on the screen yet"
+    );
+    assert!(
+        wears_a_button(pin),
+        "so the pair's button is on the chrome from the pin's own show: it is the only window of \
+         the pair the Shell has, and a pin that is on the screen with no button at all is a pin the \
+         taskbar cannot bring back"
+    );
+
+    // The film draws, and the tick shows the host: the button goes with the window the Shell lists.
+    let pid = unsafe { GetCurrentProcessId() };
+    film.drawn_in_the_host(pid);
+    let _picture = unsafe { super::pin_film_host_window::a_source_of_the_host(host) };
+    unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+    assert!(
+        wears_a_button(host),
+        "a pin that is not Always On Top wears a taskbar button, on the host that owns its chrome"
+    );
+    assert!(
+        !wears_a_button(pin),
+        "and the pin's own window is listed with the host that owns it rather than beside it"
+    );
+
+    // **A host that goes down hands the pair's button to the chrome.** A swap hides the host for the
+    // whole wait of the next player (see `pin_film_host::take_the_film_off_the_band`), and a pair whose
+    // only window on the screen is owned by a hidden one wears no button at all: the pin could not be
+    // brought back from the taskbar for as long as that player takes to draw, or for good where it
+    // never draws.
+    unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool()
+            && unsafe { IsWindowVisible(pin) }.as_bool(),
+        "the host is down and the chrome it owns is still the window the user has"
+    );
+    assert!(
+        wears_a_button(pin),
+        "so the chrome wears the pair's button while its host is down"
+    );
+
+    // And back: the host is the window the Shell lists for the pair again, and the chrome is not
+    // listed beside it.
+    unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+    assert!(
+        wears_a_button(host) && !wears_a_button(pin),
+        "and a host that comes back takes the button back with it, once"
+    );
+
+    // The row turns `Always On Top` on with the pin standing: the button goes with it.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    unsafe { pin_film_host::the_button_follows_the_setting() };
+    assert!(
+        !wears_a_button(host) && !wears_a_button(pin),
+        "a pin that is Always On Top owes no button, and the row takes the one it had"
+    );
+
+    // **A pair over everything owes no button whether its host is up or down**: the setting is the
+    // whole of the question, so the hide that hands the button to the chrome hands it nothing.
+    unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
+    assert!(
+        !wears_a_button(host) && !wears_a_button(pin),
+        "a hidden host of a pin that is Always On Top leaves no button on the chrome either"
+    );
+    unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+    assert!(
+        !wears_a_button(host) && !wears_a_button(pin),
+        "and the show of it asks for none"
+    );
+
+    // And off again: the same button comes back, on the same window.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    unsafe { pin_film_host::the_button_follows_the_setting() };
+    assert!(
+        wears_a_button(host) && !wears_a_button(pin),
+        "and a setting turned off gives the pair its button back, once"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = previous;
+    }
+}
+
+/// **A pair promoted out of a hover asks for no button while the setting says the pin is on top**,
+/// and the bit is written before the host is shown rather than on an already-visible window's back.
+///
+/// The promotion is the road the intermittent button was reported on: it added `WS_EX_APPWINDOW` to a
+/// host that was on the screen as a hover's, re-read the style and showed nothing, and the Shell's list
+/// is a window being shown (see `pin_real_window::set_the_pin_window_appwindow`). Here the bit is
+/// written with the rest of the pin's bits, which is the style write the promotion was already making.
+#[test]
+fn a_promoted_pair_owes_no_button_with_always_on_top() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { super::pin_film_host_window::HostedHover::up(&film, &path, 3.0) };
+    let previous = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    pin_stands_in_its_own_window(true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover.host),
+        "the hover's host is the pin's host"
+    );
+    assert!(
+        unsafe { GetWindowLongPtrW(hover.host, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize == 0,
+        "a pair promoted out of a hover with Always On Top on asks for no button at all"
+    );
+
+    // And the setting off puts the button on that same host, since it is the window the Shell lists.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    unsafe { pin_film_host::the_button_follows_the_setting() };
+    assert!(
+        unsafe { GetWindowLongPtrW(hover.host, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize != 0,
+        "and a setting turned off gives the promoted pair its button"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = previous;
+    }
+    drop(hover);
+}
+
+/// **A pair promoted out of a hover asks for its button through the one road the Shell reads it on.**
+///
+/// The fault this is a regression test for: the promotion is the moment a host that was a *hover's* —
+/// a topmost, tool, non-activating window with no button and no business being listed - becomes the
+/// window the Shell lists for the pin. `WS_EX_APPWINDOW` was added to it with the rest of the pin's
+/// bits, on a window that was already on the screen, and a style write behind a visible window's back
+/// is not re-read for a button: what the Shell draws a button from is the window being shown (see
+/// `pin_real_window::set_the_pin_window_appwindow`). The pair therefore wore the button it happened to
+/// be shown with, which is the intermittency the user reported.
+///
+/// The bit here is the setting's and the show is the road's: with `Always On Top` off the host wears
+/// the button and the show that asks for it is paid for on that host, and the chrome is not listed
+/// beside it.
+#[test]
+fn a_promoted_pair_asks_for_its_button_on_the_show_that_reads_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { super::pin_film_host_window::HostedHover::up(&film, &path, 3.0) };
+    let previous = pin_always_on_top();
+    let wears_a_button = |hwnd: HWND| unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) }
+        & WS_EX_APPWINDOW.0 as isize
+        != 0;
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    pin_stands_in_its_own_window(true);
+
+    pin_real_window::forget_the_appwindow_shows();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let pin = pin_real_window::real_pin_window().expect("the pin's own window");
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover.host),
+        "the hover's host is the pin's host"
+    );
+
+    assert!(
+        wears_a_button(hover.host),
+        "a promoted pair that is not Always On Top wears its button on the host the Shell lists"
+    );
+    assert!(
+        !wears_a_button(pin),
+        "and the chrome it owns is not listed beside it"
+    );
+    assert!(
+        pin_real_window::the_appwindow_shows().contains(&(hover.host.0 as isize)),
+        "and the bit was written through the road that puts the host down and up again for it, \
+         because a promotion restyles a window that is already on the screen: {:?}",
+        pin_real_window::the_appwindow_shows()
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = previous;
+    }
+    drop(hover);
 }

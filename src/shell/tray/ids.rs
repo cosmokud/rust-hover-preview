@@ -589,45 +589,38 @@ pub(crate) const FONT_SIZE_CHOICES: [(u32, u16); 12] = [
     (80, ID_TRAY_FONT_80),
     (70, ID_TRAY_FONT_70),
 ];
-/// The `Engine → Microsoft Office TTL` submenu: one command per idle time it offers, in
-/// the order it lists them. The IDs the app used before this ended at 1082 and the
-/// `theme` folder's items start at 1100, so this range is the slack between the two.
-pub(super) const ID_TRAY_ENGINE_IDLE_BASE: u16 = 1083;
-/// The `Engine → WebView2 TTL` submenu, the same shape as the Microsoft Office one and in
-/// the range after it.
-pub(super) const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1090;
-/// The `Engine → LibreOffice TTL` submenu, the third of them. It sits in the slack the
-/// backdrop halves leave rather than in the block the other two share — 1083 to 1096 is full,
-/// one font size at 1097, and the `theme` folder's items begin at 1100 — so its range is the
-/// widest run left between the image backdrop's four ids at 1023 and the config row at 1040.
-pub(super) const ID_TRAY_LIBREOFFICE_IDLE_BASE: u16 = 1027;
-/// The idle times the three `… TTL` submenus offer, longest first — the
-/// order the menus list them in, so an engine that is never let go is the topmost
-/// item and one that is let go as soon as it has drawn a page is the bottom one. A
-/// value a hand-edited `config.ini` asks for that is not one of these is shown with
+/// The four `Engine → … TTL` submenus: one command per idle time each offers, in the order
+/// it lists them, nine apiece. They sit past every id the app used to hand out — the pin rows
+/// end at 1679 — so a click on a TTL is never read as another submenu's row, and the four
+/// ranges are handed out in the order the submenus are listed: `MPV TTL`,
+/// `Microsoft Office TTL`, `LibreOffice TTL`, `WebView2 TTL`.
+pub(super) const ID_TRAY_MPV_IDLE_BASE: u16 = 1680;
+pub(super) const ID_TRAY_ENGINE_IDLE_BASE: u16 = 1689;
+pub(super) const ID_TRAY_LIBREOFFICE_IDLE_BASE: u16 = 1698;
+pub(super) const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1707;
+/// The idle times every `… TTL` submenu offers, in the order it lists them: the `Away` one an
+/// engine that is not given a time of its own is kept by at the top, then a time each below it,
+/// then the engine that is never let go and the one let go as soon as it has drawn a page at the
+/// bottom. A value a hand-edited `config.ini` asks for that is not one of these is shown with
 /// nothing marked rather than rounded to the nearest.
-pub(super) const ENGINE_IDLE_CHOICES: [EngineIdle; 7] = [
-    EngineIdle::Indefinite,
-    EngineIdle::Seconds(3600),
-    EngineIdle::Seconds(1800),
-    EngineIdle::Seconds(600),
-    EngineIdle::Seconds(300),
+pub(super) const ENGINE_IDLE_CHOICES: [EngineIdle; 9] = [
+    EngineIdle::Away,
+    EngineIdle::Seconds(30),
     EngineIdle::Seconds(60),
+    EngineIdle::Seconds(300),
+    EngineIdle::Seconds(600),
+    EngineIdle::Seconds(1800),
+    EngineIdle::Seconds(3600),
+    EngineIdle::Indefinite,
     EngineIdle::Seconds(0),
 ];
 /// The `Engine → Away Timer` submenu: one command per away time it offers, in the order it
-/// lists them. Both it and the `Persistent` range below sit past every other range the app
-/// hands out — the `Explorer Poll` range is the last of those and ends at 1504 — so a time is
-/// never read as a poll and a toggle is never read as either.
+/// lists them. It sits past every other range the app hands out — the `Explorer Poll` range is
+/// the last of those and ends at 1504 — so a time is never read as a poll.
 pub(super) const ID_TRAY_AFK_TIMER_BASE: u16 = 1505;
-/// The `Persistent` toggle at the top of each `… TTL` submenu, one command apiece, in the
-/// order those submenus are listed: `Microsoft Office TTL`, then `LibreOffice TTL`, then
-/// `WebView2 TTL`.
-pub(super) const ID_TRAY_ENGINE_PERSISTENT_BASE: u16 = 1512;
 /// The `Performance → Hardware Acceleration` row: whether a video is decoded on the graphics
-/// card, which is a question only mpv is asked. It sits in the slack past the three `Persistent`
-/// toggles, which end at 1515, so a click on it is never read as a toggle belonging to an
-/// engine's TTL submenu.
+/// card, which is a question only mpv is asked. It sits in the slack past the `Away Timer` range,
+/// which ends at 1511, so a click on it is never read as an away time.
 pub(super) const ID_TRAY_VIDEO_HW_ACCEL: u16 = 1516;
 /// The `Audio` submenu under `Scaling`: one command per share of the display a
 /// sound's card is laid out over, in the order it lists them. It sits in
@@ -637,26 +630,17 @@ pub(super) const ID_TRAY_VIDEO_HW_ACCEL: u16 = 1516;
 /// click on a share is never read as a row of another submenu's.
 pub(super) const ID_TRAY_AUDIO_SCALE_BASE: u16 = 1529;
 /// The away times the `Away Timer` submenu offers, in the order it lists them: an hour at the
-/// top and a quarter of a minute at the bottom, with the one that bounds an engine by
+/// top and a quarter of a minute at the bottom, with the one that bounds an `Away` engine by
 /// default in the middle. There is no `Indefinitely` here — a time that never comes round is
-/// what the `Persistent` toggle beside it is for — and a value a hand-edited `config.ini`
-/// asks for that is not one of these is shown with nothing marked rather than rounded to the
-/// nearest, the way every other menu of this shape reads one. See `app::afk` for what the
-/// time is counted against.
+/// what the `Indefinitely` item of a `… TTL` submenu is for — and a value a hand-edited
+/// `config.ini` asks for that is not one of these is shown with nothing marked rather than
+/// rounded to the nearest, the way every other menu of this shape reads one. See `app::afk`
+/// for what the time is counted against.
 pub(super) const AFK_TIMER_CHOICES_SECS: [u64; 7] = [3600, 1800, 600, 300, 60, 30, 15];
 
-/// The two command ranges one `… TTL` submenu hands out: the idle times it lists, and the
-/// `Persistent` toggle above them. They are one value rather than two because they belong to
-/// the same submenu and are always handed over together — a submenu is built for one engine,
-/// and both of its ranges are that engine's.
-pub(super) struct EngineIdleIds {
-    pub(super) times: u16,
-    pub(super) persistent: u16,
-}
-
 /// Where the `theme` folder's own items start: one command ID each, in the order
-/// the submenu listed them. The IDs the app uses end at the `Office Engine TTL`
-/// range above, so these collide with nothing.
+/// the submenu listed them. The IDs the app uses end at the `… TTL` ranges above,
+/// so these collide with nothing.
 pub(super) const ID_TRAY_THEME_CUSTOM_BASE: u16 = 1100;
 /// How many files the theme submenu will list. A menu that long is unusable well
 /// before this, and the cap is what keeps a folder of thousands of files from

@@ -30,7 +30,12 @@ pub(crate) fn pin_is_focused() -> bool {
 
     // Safety: asks the keyboard for the window that holds it, and names this thread's own
     // window. Neither is a dereference and neither can fail.
-    unsafe { GetFocus() == HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _) }
+    //
+    // The window asked about is the one the pin stands in, which is the pin's own for a picture: a run
+    // that compared against the preview's window answered "the pin does not hold the keyboard" for
+    // every press on a picture, so the pin asked for the keyboard again on every press and its own
+    // window was never the one the answer was written from (see `pinned_window`).
+    unsafe { GetFocus() == pinned_window() }
 }
 
 /// Give the pin the keyboard, from a press that asked for it: a press on the window itself, or one
@@ -47,7 +52,9 @@ pub(crate) fn pin_is_focused() -> bool {
 /// rather than on the asking. Windows refuses them both under the foreground lock — the
 /// foreground goes to whichever process had the last input, and a process that did not have it is
 /// not given it for asking — and that refusal is ordinary rather than a fault: it is what a press
-/// on the pin looks like while something else owns the input, and the hand simply presses again.
+/// on the pin looks like while something else owns the input. What it leaves behind is a window that
+/// did not move, which the press answers on its own (see `put_pin_at_the_front`), and a keyboard
+/// that did not arrive, which the hand asks for again.
 /// A claim written on the asking is a pin that holds a keyboard it was never given and a note of
 /// a window the user is no longer in, and the handover that note exists for is the foreground
 /// asked back from a window the user left (see `pin_release_focus`).
@@ -65,6 +72,19 @@ pub(super) unsafe fn pin_take_focus(hwnd: HWND, window: &dyn PinWindow) {
     // has no `GW_OWNER` at all, so the window the caret was in is the one that was in front a
     // moment before the press, and the only moment it can be read is the moment the pin takes
     // over from it (see `pin_window::take_keyboard`).
+    //
+    // **What is read here is the window in front and nothing more.** Resolving that window into the
+    // ordinary window a hand-back goes to is a walk of the desktop (see
+    // `pin_lifecycle::the_window_behind`), and this is the press path: the drag the press began is
+    // already carrying the hand, and a walk over two hundred windows between the press and the moves
+    // that follow is the first press that appears to do nothing. The resolution is made where the
+    // claim is handed back, which is the only place that reads it, and where the z-order is the one
+    // the hand-over is actually happening in. **And a window of this app's own is never the answer**:
+    // a step begins the next film's player between the press and the close, and that window is created
+    // activated and only styled afterwards — recorded, it is the window the close hands the keyboard
+    // back to, a window the close is about to kill, so the hand-back is refused and the foreground
+    // stays on a window of this app's instead of the listing (see
+    // `pin_lifecycle::the_window_behind`, which answers exactly that).
     let behind = GetForegroundWindow().0 as isize;
 
     // The window is only focusable while a pin is up, so the style is asked to change
@@ -111,7 +131,18 @@ pub(super) fn pin_release_focus() {
 /// A pin is not that: the hand pressed it, and the user is in it. So the style is put on when a
 /// pin comes up and taken off when it goes, and the window itself is created the way a hover has
 /// to be created.
+///
+/// **Except a pin that stands in a window of its own.** That window is the Shell's rather than the
+/// hover's: it is made activatable on purpose, it is listed and has a button, and the whole of what
+/// it is for is the press that lands on it activating it. The style is never put on it, because the
+/// window is kept between pins rather than made again (see `hide_real_pin_window`), so a take-down
+/// that stamped it left every pin of the run after the first refusing the very press meant to raise
+/// it — a window Windows will not activate is a window no click brings to the front.
 pub(super) unsafe fn pin_set_focusable(hwnd: HWND, focusable: bool) {
+    if !focusable && pin_real_window::real_pin_window().is_some_and(|pin| pin == hwnd) {
+        return;
+    }
+
     let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     if style == 0 {
         // A style of zero is a failure, not a window with no style: this window always carries
@@ -464,7 +495,7 @@ pub(super) struct PinnedPreview {
     /// arguing with the press that answered it (see `toggle_pinned_by_key` and
     /// `settle_bubble_playback`). A press with no park standing — a film the bar had paused before
     /// the pin went down — leaves this alone, because the park a press would stand down from is
-    /// the one still written (see `PinTransport::drag_held` on claims that outlive their film).
+    /// the one still written (see `pin_bubble_pause`).
     pub(super) bubble_run: bool,
     /// The caption button the pointer is over and the one it has pressed: what the caption is
     /// painted from, and what a release acts on.
@@ -486,26 +517,6 @@ pub(super) struct PinnedPreview {
     pub(super) tooltip: PinTooltip,
     /// A drag or a resize in progress.
     pub(super) dragging: Option<PinDrag>,
-    /// Whether the player behind this pin has been put away for the length of a drag.
-    ///
-    /// A video pin's picture is not drawn by this app: the band in the middle of the window is
-    /// transparent, and FFmpeg's own window shows through it. That is what makes the picture sharp
-    /// and free, and it is also what makes the window expensive to move — every pointer move puts
-    /// the player's window to a new size and the compositor has to re-blit a 2560x1440 surface,
-    /// which on a 144 Hz screen is a stutter the hand feels rather than sees (see `park_pinned_player`).
-    ///
-    /// While this is set the player's window is hidden and the band is painted a flat
-    /// colour instead of being left for it to show through, so a drag is a rectangle of the pin's own
-    /// background following the pointer. Blank is the point: there is nothing for the picture to be
-    /// rescaled into, so there is nothing to rescale.
-    ///
-    /// **It carries nothing about the film**, and that is the whole of how the pair avoids pausing
-    /// twice. Whether the film is held, and whether it should come back, are the transport's own
-    /// facts (`PinTransport::drag_held`), written by the tick that holds it and reconciled by every
-    /// path that ends the player it was made against — so a flag here that remembered whether the
-    /// film was playing would be a second record of a thing that is recorded once (see
-    /// `park_pinned_player`).
-    pub(super) parked: bool,
     /// Where the playback of a video is, which is what the transport bar is drawn from and what
     /// a seek or a pause is measured against (see `PinTransport`).
     pub(super) transport: PinTransport,
@@ -558,7 +569,6 @@ impl PinnedPreview {
             last_press: None,
             tooltip: PinTooltip::default(),
             dragging: None,
-            parked: false,
             transport: PinTransport::default(),
             volume: PinVolume::default(),
             audio_hovered: None,
@@ -619,19 +629,6 @@ pub(super) struct PinTransport {
     /// player, which a press of the play button has to be able to take back — and the press that
     /// takes it back is the answer it changes (see `toggle_pinned_playback`).
     pub(super) pending_hold: bool,
-    /// Whether the hold in `paused_at` is a gesture's rather than a press of the pause button's.
-    ///
-    /// It is a field of this struct rather than a flag of its own beside the pin because a claim
-    /// about a player belongs to the player it was made against: every path that begins, holds,
-    /// lets go of, loses or replaces a player writes *here*, and a pin taken down or a file swapped
-    /// takes this with it. A flag beside the pin outlives all of them, and a claim that outlives
-    /// its film is a claim the next film to be dragged is answered with — and it is answered with a
-    /// pause, because the key a drag posts is a toggle (see `video_drag_hold_apply`).
-    ///
-    /// So it is reconciled by those same writes rather than asked of anything, and the one that
-    /// must *not* reconcile it is a relaunch carrying the hold: the film is still held for the
-    /// gesture that is still in flight (see `PinTransport::begun`).
-    pub(super) drag_held: bool,
     /// Where the pointer is dragging the bar, while it is: what the playhead is drawn at rather
     /// than where the file really is, since a drag that is still going is not a seek yet.
     pub(super) seeking: Option<f64>,
@@ -673,13 +670,6 @@ impl PinTransport {
         self.paused_at = holding.then_some(from);
         self.pending_hold = holding && up;
         self.seeking = None;
-        // A claim of a gesture's goes with the player it was made against, so it survives a
-        // relaunch exactly where the hold does: a seek or a resize settling underneath a hand in
-        // flight begins another player that is held for that same gesture, and dropping the claim
-        // there would leave the film frozen for good the moment the hand let go of the window. A
-        // relaunch that carries no hold is a film playing on, and no gesture is holding a film that
-        // is playing (see `drag_held`).
-        self.drag_held = self.drag_held && holding;
     }
 
     /// The player was told to hold where it is, at `at`.
@@ -720,11 +710,6 @@ impl PinTransport {
         self.paused_at = None;
         self.pending_hold = false;
         self.seeking = None;
-        // A film playing on is held by nothing, so whatever put the hold there is taken back: the
-        // gesture that was holding it has either just let go of it — which is the whole of what
-        // this write is — or a press of the pause button has, and a claim left standing here is a
-        // claim the *next* film to be dragged is answered with (see `drag_held`).
-        self.drag_held = false;
     }
 
     /// The player behind this transport is gone, and had got to `at`.
@@ -748,11 +733,6 @@ impl PinTransport {
         self.paused_at = Some(at);
         self.pending_hold = false;
         self.seeking = None;
-        // The hold is kept and the claim over it is dropped, and the asymmetry is the point: the
-        // second is the only record of where the film stopped, so nothing else holds it, but the
-        // claim is about a player and there is no player left to hold. So a drag that ends after
-        // this finds a film that nothing is holding rather than one it believes it is.
-        self.drag_held = false;
     }
 
     /// The file was taken to `to`, by a seek taken while it was held.

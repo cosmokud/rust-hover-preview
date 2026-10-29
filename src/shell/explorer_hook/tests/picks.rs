@@ -154,6 +154,36 @@ fn a_press_through_a_dismissed_popup_is_not_a_pick() {
     );
 }
 
+/// Every press in Explorer's own window is answered, whatever it named: the listing is answered for
+/// a press that picked no file as much as for one that did — a press on the path bar, a tab, the
+/// toolbar or a menu over the rows says the user is working in the listing, and the pin goes behind
+/// it. What is *not* answered is a press on this app's own window, which is the pin being used, a
+/// press in another program, which names no listing to answer for, and a press that destroyed the
+/// window it landed on, which names no place to go behind.
+#[test]
+fn a_press_in_explorer_is_answered_whatever_it_named() {
+    assert!(
+        press_is_answered(true, true, false, false),
+        "a press in Explorer's own window is answered"
+    );
+    assert!(
+        !press_is_answered(true, false, false, false),
+        "a press in another program names no listing and is left to the foreground watch"
+    );
+    assert!(
+        !press_is_answered(true, true, true, false),
+        "a press on the pin itself is the pin being used, not the listing picked"
+    );
+    assert!(
+        !press_is_answered(true, true, false, true),
+        "and a press that destroyed the window it landed on names no place to go behind"
+    );
+    assert!(
+        !press_is_answered(false, true, false, false),
+        "a tick with no press answers nothing"
+    );
+}
+
 /// A press that lands anywhere but the pin's own window is a press the pin window never
 /// sees: it is `WS_EX_NOACTIVATE` and holds no capture, so nothing its procedure is sent can
 /// answer for a hand on another app's window, the tray, or the pin's own bubble. The Explorer
@@ -241,8 +271,14 @@ impl Drop for BubbleHwndPutBack {
 /// is answered there rather than out here (see `bubble_menu_press`). The bubble's handle
 /// is a slot rather than a window on somebody's screen, so this is the one identity of
 /// the pin's own a test can put in the reading.
+///
+/// **And the bubble's menu is one of the pin's own panels for the hook's chrome rule too.** The menu
+/// has no window of its own: the bubble grows down to hold it, so a press on a row lands on the
+/// bubble while the panel is up, and on the listing the panel covered on the tick after the row was
+/// pressed. Both ticks have to read as the menu's press, or that press becomes a click on the file
+/// behind it (see `window_is_menu_popup_chrome` and `press_is_on_the_pins_own_menu`).
 #[test]
-fn a_press_on_the_bubble_is_not_published() {
+fn a_press_on_the_bubble_is_the_pins_own_and_is_not_published() {
     // Whatever the slot held before this test asked is put back when the test is done,
     // even by a failure: a handle left in it is a handle every test after it reads (see
     // `BubbleHwndPutBack`).
@@ -265,6 +301,29 @@ fn a_press_on_the_bubble_is_not_published() {
     assert!(
         pin_menu_dismiss_ask(true, Some(&elsewhere)),
         "and one on anything else is still the press that puts the menu away"
+    );
+
+    assert!(
+        window_is_menu_popup_chrome(HWND(0x2000 as *mut _)),
+        "a press on the bubble's menu is a press on the pin's own chrome"
+    );
+    assert!(
+        press_is_on_the_pins_own_menu(HWND(0x2000 as *mut _)),
+        "and it spends the rest of the hand rather than leaving it as a hover of the file"
+    );
+    assert!(
+        !window_is_menu_popup_chrome(HWND(0x3000 as *mut _)),
+        "while a window the slot does not hold is read by its class as it always was"
+    );
+    assert!(
+        !press_is_a_listing(
+            true,
+            false,
+            false,
+            false,
+            window_is_menu_popup_chrome(HWND(0x2000 as *mut _))
+        ),
+        "and the tick after the bubble's menu closed is that menu's press, not a click on the file"
     );
 }
 
@@ -1280,5 +1339,40 @@ fn a_selection_miss_in_the_watched_listing_is_not_a_pick() {
     assert_eq!(
         missed.note_selection(watched.clone(), Some(one.clone()), false),
         None
+    );
+}
+
+/// A rest a menu already answered is not a hover, and that is what keeps a press on a row from
+/// handing the pin the file that row was covering.
+///
+/// The press on a menu is answered by the row it picked, and the hand does not move: the panel that
+/// was under it is gone and the listing is there instead. Read as a hover, that rest offers the file
+/// behind the row — a file nobody chose — and an update naming a file is what brings a pin put away
+/// by that press back on it (`bring_a_put_away_pin_back`). Spent, it is a rest and nothing else until
+/// the hand moves, which is when a hover is asked about again.
+///
+/// Asserted on the rule rather than on the tick that sets it: a tick needs a real pointer and a real
+/// shell, and this is the decision that wiring only feeds.
+#[test]
+fn a_rest_a_menu_already_answered_is_not_a_hover() {
+    assert!(
+        a_rest_is_a_hover(true, true, false, true),
+        "a hand that has arrived and been still for the delay is hovering the file under it"
+    );
+    assert!(
+        !a_rest_is_a_hover(true, true, true, true),
+        "and a rest the press on a row already answered is not a hover, however long it is held"
+    );
+    assert!(
+        !a_rest_is_a_hover(false, true, false, true),
+        "a setting that asks for no hovers is asking for none"
+    );
+    assert!(
+        !a_rest_is_a_hover(true, false, false, true),
+        "and a hand that has not moved at all since the pin went up has not come to rest on a file"
+    );
+    assert!(
+        !a_rest_is_a_hover(true, true, false, false),
+        "nor has one that has not been still for the delay a preview is given"
     );
 }

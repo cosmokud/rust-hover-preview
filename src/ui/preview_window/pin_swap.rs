@@ -1,6 +1,7 @@
 //! Deciding what a pin should show next and what has to be waited for: the plan an update turns
 //! into, the room it takes, and the swap held until the new frame is in hand.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 /// What a pin that is up needs to be shown another file: the box the new file's media is given,
@@ -236,7 +237,7 @@ pub(super) fn take_pin_engine_answer(
 /// `request_pin_engine_render`).
 pub(super) fn pin_update_content(
     space: PinSwapSpace,
-    path: &PathBuf,
+    path: &Path,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<PinBox> {
@@ -257,7 +258,7 @@ pub(super) fn pin_update_content(
 /// separate step.
 fn pin_update_content_measured(
     space: PinSwapSpace,
-    path: &PathBuf,
+    path: &Path,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<PinBox> {
@@ -491,7 +492,7 @@ pub(super) fn pin_update_box(
 /// the picture is answered by whichever of the two windows is under the pointer at
 /// that row, which for a player sitting a caption's height too high is the caption.
 /// The pin's own window claims the rest of the band, and an opaque band over a
-/// video area answers every click in it (see `park_swap_arm`).
+/// video area answers every click in it.
 ///
 /// A box change has no such gap, which is why it is the oracle: `toggle_pin_maximized`
 /// clamps *first* and writes the clamped box into the pin, so the relayout behind
@@ -663,6 +664,13 @@ pub(super) fn take_down_pinned_media() {
         }
         *current = None;
     }
+
+    // **The picture's host goes off the band with the media it was showing.** A hosted film's
+    // picture is the host, so a take-down that left it up would leave a black rectangle where the
+    // incoming file is about to be painted — and it would stand there until a later show destroyed
+    // it (see `pin_film_host` and `swap_pinned_media`). A take-down of a *player* is not this road:
+    // a relaunch keeps the host and the source standing in it (see `relaunch_pinned_player`).
+    unsafe { pin_film_host::take_the_film_off_the_band() };
 }
 
 /// Take the media the pin is showing down for the file replacing it — unless the pin is a bubble.
@@ -709,14 +717,20 @@ pub(super) fn stop_pinned_player() {
     // nothing else asks while a pin is up — the stray sweep stands down for a pin's whole
     // life. So a swap onto a native video would leave the ffplay it just killed re-raised
     // over the native picture by the tick and the monitor thread until the pin came down.
-    // Sweep it here the way every ffplay start does, and park what the sweep cannot yet
-    // confirm where the tick's own settle retries it to confirmation (see
+    // Sweep it here the way every ffplay start does, and hand what the sweep cannot yet
+    // confirm to the loop's reaper, which retries it to confirmation (see
     // `kill_stray_video_process` and `retire_orphaned_player`).
     kill_stray_video_process();
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     if pid != 0 {
         retire_orphaned_player(pid);
     }
+
+    // **And the window the film was drawn in goes off the screen with it.** A hosted player's
+    // picture is the host, and a host left standing over a band whose film has gone is a black
+    // rectangle where the incoming file is about to be painted (see `pin_film_host`). A pin whose
+    // film a top-level player draws has no host here.
+    unsafe { pin_film_host::take_the_film_off_the_band() };
 }
 
 /// How the wait for a swap's first frame stands: whether the video is on screen now, whether the
@@ -788,8 +802,8 @@ pub(super) fn pin_swap_wait(
 ///
 /// Two kinds are waited for and they are waited for differently, because a film reaches the
 /// screen by one of two roads: the media engine draws into this app's own surface and hands the
-/// frame over, and a player of this app's own draws into a window of its own and the frame is on
-/// screen when that window is (see `settle`).
+/// frame over, and a player of this app's own draws into a window of its own, which the pin's host
+/// draws through a registration that changes hands once the new frame can be drawn (see `settle`).
 ///
 /// The file being installed is carried whole rather than a name to be looked up. It is the frame
 /// the engine plays into, and it is the whole of what the loop's own per-tick take must not be
@@ -811,7 +825,7 @@ pub(super) struct PinSwapHold {
     pub(super) arc: PinArc,
     /// When the wait began, which is the only bound the player route's wait has (see `settle`).
     /// It is written once, where the hold is made, rather than read off the file: the wait is for
-    /// one file's window and not for however long this app has been running.
+    /// one file's picture and not for however long this app has been running.
     pub(super) started: Instant,
 }
 
@@ -835,30 +849,75 @@ impl PinSwapHold {
             let playing = video_player::is_playing();
             let failing = video_player::failing_before_a_frame().is_some();
 
-            return pin_swap_wait(frame_in_hand, playing, failing);
+            let wait = pin_swap_wait(frame_in_hand, playing, failing);
+            if wait == Some(PinSwapWait::Abandoned) {
+                // The engine's own answer, and the other half of the line above: a session that has
+                // gone, or one that has refused the file, is a wait with nothing left in it (see
+                // `pin_swap_wait`).
+                note_pin_trace!(
+                    "swap hold given up after {}ms: frame {frame_in_hand} playing {playing} failing {failing}",
+                    self.started.elapsed().as_millis()
+                );
+            }
+
+            return wait;
         }
 
-        // A film FFmpeg's player or mpv draws exists only as another program's window, and the
-        // first frame of it is on screen when that window is and not before — which is the same
-        // answer the cover a step raises is settled on, and the same bound, asked at the swap's
-        // own box rather than a hover's (see `player_swap_wait`).
+        // A film FFmpeg's player or mpv draws reaches the screen as a window of its own, and what
+        // this waits for is not that window but the picture the pin's host is drawing: the
+        // registration the host wears changes hands once the incoming source can draw the frame it
+        // was placed for, and until it has, the frame in the host is the previous film's (see
+        // `pin_film_thumbnail::hand_the_picture_over`).
         //
-        // What the wait buys is the whole of the stretched frame this whole arrangement is for:
-        // the install is what gives the window its new box, so a swap that installed before the
-        // player's window was up resized the band the outgoing frame is being held in into the
-        // shape of a film that had not drawn anything yet (see `cover_step_swap_for_video`).
+        // **The window is not the question**, and asking it was the whole of the stretched frame
+        // this hold exists to remove: a player's window is up tens or hundreds of milliseconds
+        // before it has drawn anything, and the install that answers a window is the box taking the
+        // next film's shape over the previous film's last frame (see `the_thumbnail_box`). So what is
+        // asked is whether the picture has changed hands — `the_source_is_standing`, the one step of
+        // a handover, asked without waiting for the record because the record is held by the very pass
+        // that is handing the picture over (see `the_source_is_standing_try`) — and the box follows
+        // the picture into the window rather than the other way round.
+        //
+        // **The bound is the one the handover itself is given.** That road changes hands anyway at
+        // `VIDEO_START_WAIT_SECS` rather than leaving the picture to a player that is ending, so a film
+        // whose first frame never lights a pixel (black leader, an engine whose surface a sample cannot
+        // read) is waited for as long as the picture is: the file is then installed the way a swap with
+        // no hold at all installs one, which is the behaviour this hold refines and never replaces. A
+        // second, shorter bound would be a second answer to one wait, and every tick of it is a box
+        // that has changed before its picture has — the frame this is for. The two clocks are not quite
+        // the same one (the handover's starts at the source's adoption and this one at the swap), so
+        // where the picture is never ready the box can still change a moment before that road's own
+        // give-up: that is the degraded case, and it is the swap with no hold at all rather than a new
+        // failure.
         let alive = self
             .file
             .media
             .video_process
             .as_mut()
             .is_some_and(|player| matches!(player.try_wait(), Ok(None)));
-        let window_up = video_window_for(VIDEO_PID.load(Ordering::SeqCst)).is_some();
+        let picture =
+            pin_film_thumbnail::the_source_is_standing_try(VIDEO_PID.load(Ordering::SeqCst));
 
-        player_swap_wait(window_up, alive, self.started.elapsed()).map(|wait| match wait {
-            PlayerWait::Arrived => PinSwapWait::Arrived,
-            PlayerWait::Abandoned => PinSwapWait::Abandoned,
-        })
+        let waited = self.started.elapsed();
+        player_swap_wait(picture, alive, waited)
+            .inspect(|wait| {
+                // **A wait that ends with nothing to hand the picture to says so**, because the two
+                // ways it can happen are the degraded roads of this hold: a player that never made a
+                // window, and one that made one and did not draw in the time a start is given (see
+                // `player_swap_wait`). What the pin shows afterwards is the file that replaced it
+                // installed over the picture that was standing, which is the swap it had before the
+                // hold existed — an honest answer, and one a run should be able to find.
+                if *wait == PlayerWait::Abandoned {
+                    note_pin_trace!(
+                        "swap hold given up after {}ms: picture {picture} player_alive {alive}",
+                        waited.as_millis()
+                    );
+                }
+            })
+            .map(|wait| match wait {
+                PlayerWait::Arrived => PinSwapWait::Arrived,
+                PlayerWait::Abandoned => PinSwapWait::Abandoned,
+            })
     }
 
     /// The file to install, for a wait that has come to either of its ends.
@@ -905,16 +964,10 @@ pub(super) fn settle_pin_swap(
     let mut swap: Option<PinSwap> = None;
 
     if let Some(mut held) = hold.take() {
-        swap = if let Some(wait) = held.settle() {
-            // A wait that ended with no window in it has nothing to hand the band to, and the
-            // cover may not be left standing over the box this install is about to give the file:
-            // that is the last frame stretched into the new film's shape, which is the whole of
-            // what the hold was for. It is given up here, the way a player that would not start
-            // at all gives one up, and what is left is the hole the player's own window fills the
-            // moment it has one (see `give_up_pinned_park` and `PinSwapWait::Abandoned`).
-            if wait == PinSwapWait::Abandoned {
-                give_up_pinned_park();
-            }
+        swap = if held.settle().is_some() {
+            // A wait that ended either way is over: the file is installed, and a player that never
+            // put a window up is the failure mark the loop's own tick reads (see
+            // `pin_media_failed_before_a_frame`).
             Some(PinSwap::Ready(held.into_installable()))
         } else {
             // An engine that has not drawn anything yet. The wait goes on, and the pin keeps

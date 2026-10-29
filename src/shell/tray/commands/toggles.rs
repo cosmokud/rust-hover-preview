@@ -47,7 +47,7 @@ pub(in super::super) fn toggle_startup() {
     }
 }
 
-pub(in super::super) fn toggle_preview_enabled() {
+pub(crate) fn toggle_preview_enabled() {
     if let Ok(mut config) = CONFIG.lock() {
         config.preview_enabled = !config.preview_enabled;
         config.save();
@@ -212,29 +212,6 @@ pub(in super::super) fn toggle_preview_type(kind: PreviewType) {
     }
 
     refresh_preview_types();
-}
-
-/// Whether one of the three engines is kept whatever the user is doing, from the
-/// `Persistent` toggle at the top of its TTL submenu.
-///
-/// The toggle is which submenu it heads rather than which engine it names, because the three
-/// are listed in one order and the ids are handed out in it. Nothing is rebuilt here either:
-/// both sides of the setting are read live by the engine that decides with them, so a toggle
-/// turned on keeps the engine the next look would have let go of, and one turned off lets go
-/// of an engine that is already up as soon as the AFK timer says it may.
-pub(in super::super) fn toggle_engine_persistent(index: u16) {
-    let Ok(mut config) = CONFIG.lock() else {
-        return;
-    };
-
-    match index {
-        0 => config.office_engine_persistent = !config.office_engine_persistent,
-        1 => config.libreoffice_persistent = !config.libreoffice_persistent,
-        2 => config.webview_persistent = !config.webview_persistent,
-        _ => return,
-    }
-
-    config.save();
 }
 
 /// Whether a video is decoded on the graphics card, turned the other way round.
