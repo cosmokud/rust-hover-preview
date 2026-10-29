@@ -769,6 +769,10 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     *install.request = Some(PreviewMessage::Pin {
         path,
         rect: content,
+        // A swap's install is a file stepping onto a pin that is up, never the pin arriving: the
+        // arrival is the file the key asked for, and it is the loop's own request (see
+        // `pin_what_is_on_screen` and `the_pin_takes_the_file_up`).
+        arriving: false,
     });
 }
 

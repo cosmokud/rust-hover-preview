@@ -131,6 +131,7 @@ fn a_hover_is_not_shown_while_a_preview_is_pinned() {
             &PreviewMessage::Pin {
                 path: PathBuf::from("D:\\Pictures\\cat.png"),
                 rect: (100, 200, 300, 220),
+                arriving: true,
             },
             true
         ),
