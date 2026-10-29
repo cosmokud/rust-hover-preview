@@ -322,10 +322,21 @@ pub(super) unsafe extern "system" fn window_proc(
         WM_SIZE => {
             // **A pin put away as a window comes back as a window, and the pin's state has to follow it.**
             // The gate and the ask are one implementation shared with the film host that owns the pin's
-            // chrome on the other road a pin is put away as a window (see `the_pin_came_back`).
+            // chrome on the other road a window of the pair can be restored by (see `the_pin_came_back`).
             the_pin_came_back(hwnd, msg, wparam);
 
             DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        // **The Shell's ask for the still of the pin's own taskbar button.** A put-away pin is the pin's
+        // window minimized, so it is this window the Shell asks, and what it is handed is the picture
+        // the collapse took of the film's host — as an *app's own* still, because a window that is down
+        // has no composition of the Shell's to freeze (see `pin_film_host`'s
+        // `keep_the_pins_picture_for_the_taskbar`, `pin_taskbar_mirror`). Asked only of the pin's own
+        // window: the hover's window wears no button at all and answers nothing here.
+        WM_DWMSENDICONICTHUMBNAIL
+            if pin_real_window::real_pin_window() == Some(hwnd) =>
+        {
+            pin_taskbar_mirror::answer_a_thumbnail_ask(hwnd, lparam)
         }
         WM_CHAR => {
             // The character a key press has already been answered as. It is swallowed for the

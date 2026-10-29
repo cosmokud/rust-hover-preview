@@ -1296,12 +1296,12 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
         return false;
     }
 
-    // **A pin whose chrome is owned by its film host is put down and brought back by its owner.**
-    // Windows hides an owned window with the window that owns it and shows it again with it, so a
-    // pin the Shell has minimized by the host's own taskbar button is a pin that is down *because*
-    // the host is — and a restore here would be this app's window standing over a minimized host,
-    // with the film behind it and no button of its own. What brings the pair back is the host's
-    // button, which is the Shell's to answer (see `pin_film_host::own_the_pin_window`).
+    // **A pin whose chrome is owned by its film host is put down and brought back by its owner, and its
+    // button is its own.** Windows hides an owned window with the window that owns it and shows it again
+    // with it, so a pin the Shell's button has minimized is a pin that comes back by the same road; a
+    // restore made here would be this app's window standing over a film that is off the screen. What
+    // brings the pair back is the pin's own button, and the film with it (see
+    // `pin_film_host::own_the_pin_window` and `bring_the_film_back`).
     if pin_film_host::the_pins_chrome_is_owned() {
         return false;
     }
@@ -1566,18 +1566,14 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
             );
         }
     }
-    // **The pair's button is written before the show that makes it the pin's window the Shell
-    // lists.** A window of a film's pin is owned by the host that carries the film, and while that
-    // host is down the chrome is the only window of the pair on the screen — so the bit is asked for
-    // here, where the show that reads it is about to be made, and not on a visible window's back (see
-    // `pin_film_host::the_button_follows_the_screen`). A pin standing in the preview's window has no
-    // window of its own in this pair: its button is the stand-in's, asked for below.
+    // **The pin's own place in the Shell's lists is written before the show that makes it the window the
+    // Shell lists.** It is the setting's, and it does not depend on a film's host being up: the host is a
+    // tool window with no button of its own (see `pin_film_host::the_button_follows_the_setting`). A pin
+    // whose window keeps its bits already is owed nothing here, so this costs a take-up no flicker. A pin
+    // standing in the preview's window has no window of its own in this pair: its button is the
+    // stand-in's, asked for below.
     if pin_is_its_own_window() {
-        unsafe {
-            let host_is_up = pin_film_host::film_host()
-                .is_some_and(|host| IsWindowVisible(host).as_bool());
-            pin_film_host::the_button_follows_the_screen(host_is_up);
-        }
+        unsafe { pin_film_host::the_button_follows_the_setting() };
     }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     note_pin_trace!(

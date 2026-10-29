@@ -823,23 +823,30 @@ fn an_owned_pin_takes_a_hovered_film_up_by_promoting_its_host() {
         "and it is the one picture the promoted host draws"
     );
 
-    // The host a hover had is the host a pin has: a window of the desktop's, the Shell's to list, and
-    // not the band nothing may cover or the press that falls through it.
-    assert_eq!(
-        unsafe { GetWindowLongPtrW(hover.host, GWL_STYLE) } & WS_CHILD.0 as isize,
-        0,
-        "a window of the desktop's, not a child of the pin's window"
-    );
+    // The host a hover had is the host a pin has: a window of the desktop's, the Shell's to compose, and
+    // **a tool window that never activates and is never listed** — the pair's button is the pin's own
+    // window's now, so no show or hide of the host can take it away (see `pin_film_host::create` and
+    // `pin_film_host::the_button_follows_the_setting`).
     let ex = unsafe { GetWindowLongPtrW(hover.host, GWL_EXSTYLE) };
     assert_eq!(
         ex & WS_EX_APPWINDOW.0 as isize,
-        WS_EX_APPWINDOW.0 as isize,
-        "the window the Shell lists for the pin"
+        0,
+        "a host is no window the Shell lists a button for"
     );
     assert_eq!(
-        ex & (WS_EX_TRANSPARENT.0 | WS_EX_TOOLWINDOW.0) as isize,
+        ex & (WS_EX_TRANSPARENT.0) as isize,
         0,
-        "with the press-through it wore for a hover, and its place out of the Shell's lists, gone"
+        "with the press-through it wore for a hover gone"
+    );
+    assert_eq!(
+        ex & WS_EX_TOOLWINDOW.0 as isize,
+        WS_EX_TOOLWINDOW.0 as isize,
+        "and it is out of the Shell's lists, which is what a film's host is for"
+    );
+    assert_eq!(
+        ex & WS_EX_NOACTIVATE.0 as isize,
+        WS_EX_NOACTIVATE.0 as isize,
+        "and it never takes a keyboard, because no key is ever meant for the window a film is drawn in"
     );
     assert_eq!(
         ex & WS_EX_LAYERED.0 as isize,
@@ -4531,6 +4538,11 @@ fn a_step_into_an_ffplay_film_begins_it_in_the_pins_host_once() {
 ///
 /// **The fault this is a regression test for.** The FFmpeg arm hid the hosted picture before the
 /// minimize, so the last frame the Shell had to show was an empty band.
+///
+/// **The window minimized is the pin's own** — the pair's button is its window's, and the host is a tool
+/// window the Shell lists nothing for — while the host goes down with the picture it holds, which is
+/// taken for the button before either of them leaves the screen (see
+/// `pin_film_host::the_button_follows_the_setting` and `put_the_pins_window_in_the_taskbar`).
 fn a_pin_put_away_in_the_taskbar_leaves_its_film_standing(ffplay: bool) {
     let film = if ffplay {
         ffplay_standing_film()
@@ -4551,15 +4563,21 @@ fn a_pin_put_away_in_the_taskbar_leaves_its_film_standing(ffplay: bool) {
 
     collapse_pin_to(PinMinimizeTo::Taskbar);
 
-    // **The window the Shell lists** is the film's host, whichever engine draws it: it owns the
-    // pin's chrome and carries the button (see `pin_film_host::own_the_pin_window`).
+    // **The window the Shell lists** is the pin's own, whichever engine draws the film: the pair's button
+    // is its window's, and the host is a tool window with none (see
+    // `pin_film_host::the_button_follows_the_setting`).
     assert!(
-        unsafe { IsIconic(host) }.as_bool(),
+        unsafe { IsIconic(film.pin_hwnd) }.as_bool(),
         "the window the Shell lists is the one it minimizes"
     );
     assert!(
-        unsafe { IsWindowVisible(host) }.as_bool(),
-        "and the film is left standing for the still the Shell shows of it"
+        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
+        "and a minimized window is a window that still wears its button"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "while the film's host goes down with the picture it holds: a host left on the screen is a film \
+         standing on the desktop with no chrome around it"
     );
 }
 
@@ -4579,15 +4597,15 @@ fn an_mpv_pin_put_away_in_the_taskbar_leaves_its_film_standing_for_the_shells_st
     a_pin_put_away_in_the_taskbar_leaves_its_film_standing(false);
 }
 
-/// **The Shell's own restore of a film host's button is the pin coming back**, and the film comes back
+/// **The Shell's own restore of the pin's button is the pin coming back**, and the film comes back
 /// with it.
 ///
-/// The fault this is a regression test for: a pin whose chrome is owned by its film host is put away by
-/// minimizing *the host*, and the host answered nothing to the window coming back — so the pin stayed
-/// collapsed with its window on the screen: drag, resize, the chrome strips, playback and every row of
-/// its menu refused by a pin that believed it was away. And the band the restore placed was a black one,
-/// because the host and the source the Shell draws through it were hidden by the collapse and no road of
-/// the restore's showed either (see `the_pin_came_back`, `pin_film_host::bring_the_film_back`).
+/// The fault this is a regression test for: a pin whose chrome is owned by its film host is put away as
+/// a window, and the window answered nothing to the coming back — so the pin stayed collapsed with its
+/// window on the screen: drag, resize, the chrome strips, playback and every row of its menu refused by
+/// a pin that believed it was away. And the band the restore placed was a black one, because the host
+/// and the source the Shell draws through it were hidden by the collapse and no road of the restore's
+/// showed either (see `the_pin_came_back`, `pin_film_host::bring_the_film_back`).
 #[test]
 fn a_film_host_brought_back_is_the_pin_and_its_film_coming_back() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -4609,13 +4627,14 @@ fn a_film_host_brought_back_is_the_pin_and_its_film_coming_back() {
 
     collapse_pin_to(PinMinimizeTo::Taskbar);
     assert!(
-        pin_is_collapsed() && unsafe { IsIconic(host) }.as_bool(),
-        "the pin is put away as a window — the host is the window the Shell's button belongs to"
+        pin_is_collapsed() && unsafe { IsIconic(film.pin_hwnd) }.as_bool(),
+        "the pin is put away as a window — the pin's own window is the window the Shell's button \
+         belongs to"
     );
     assert_eq!(
         take_pin_command(),
         None,
-        "and the ask this app made of its own host is no restore of the Shell's"
+        "and the ask this app made of its own window is no restore of the Shell's"
     );
     let_the_posted_shows_land();
     assert!(
@@ -4623,17 +4642,15 @@ fn a_film_host_brought_back_is_the_pin_and_its_film_coming_back() {
         "the source goes down with the host it is drawn in"
     );
 
-    // What the button Windows draws for the host does when it is clicked: the Shell restores the window
-    // it holds, and nothing of this app's was pressed for it. It is a `ShowWindow` and not an
-    // `SC_RESTORE`, because a host is a *disabled* window — the press on the picture belongs to the pin
-    // — and the system command route restores and activates, which is nothing a disabled window is
-    // given. What arrives either way is the size the gate reads.
+    // What the button Windows draws for the pin's window does when it is clicked: the Shell restores the
+    // window it holds, and nothing of this app's was pressed for it. What arrives is the size the gate
+    // reads.
     unsafe {
-        let _ = ShowWindow(host, SW_RESTORE);
+        let _ = ShowWindow(film.pin_hwnd, SW_RESTORE);
     }
     assert!(
-        !unsafe { IsIconic(host) }.as_bool(),
-        "the Shell's own call puts the host back on the screen"
+        !unsafe { IsIconic(film.pin_hwnd) }.as_bool(),
+        "the Shell's own call puts the pin's window back on the screen"
     );
     assert!(
         matches!(take_pin_command(), Some(PinCommand::CameBack)),
@@ -4757,8 +4774,18 @@ fn an_owned_pin_gets_a_window_of_the_desktop_that_owns_its_chrome() {
     );
     assert_eq!(
         ex & WS_EX_APPWINDOW.0 as isize,
-        WS_EX_APPWINDOW.0 as isize,
-        "it is the window the Shell lists and gives a button to, where the chrome it owns is not"
+        0,
+        "it asks for no taskbar button: the pair's button is the pin's own window's"
+    );
+    assert_eq!(
+        ex & WS_EX_TOOLWINDOW.0 as isize,
+        WS_EX_TOOLWINDOW.0 as isize,
+        "and the Shell lists nothing for it at all"
+    );
+    assert_eq!(
+        ex & WS_EX_NOACTIVATE.0 as isize,
+        WS_EX_NOACTIVATE.0 as isize,
+        "nor may a key ever land in the window the film is drawn in"
     );
 
     assert_eq!(
@@ -4767,8 +4794,8 @@ fn an_owned_pin_gets_a_window_of_the_desktop_that_owns_its_chrome() {
         "the pin's chrome is the host's own window"
     );
     assert!(
-        unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize == 0,
-        "and the chrome asks for no taskbar button of its own, because a window it owns carries one"
+        unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize != 0,
+        "and the pair's taskbar button is the chrome's own, so a host hidden for a swap leaves it standing"
     );
     assert_eq!(
         unsafe { window_rect(host) },
@@ -4784,7 +4811,7 @@ fn an_owned_pin_gets_a_window_of_the_desktop_that_owns_its_chrome() {
     );
     assert!(
         unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize != 0,
-        "the pin is the Shell's window again"
+        "the pin is the Shell's window again, button and all"
     );
     assert!(
         unsafe { IsWindow(film.pin_hwnd) }.as_bool(),
