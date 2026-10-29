@@ -983,18 +983,27 @@ fn a_players_foreground_goes_only_where_the_player_took_it() {
     let player = HWND(0x1234 as *mut _);
     let shell = unsafe { GetShellWindow() };
 
+    // The record a launch leaves: the window in front then, and when. Stood in rather than read off
+    // the desktop, which a test may not rearrange (see `FOREGROUND_BEFORE_A_PLAYER`).
+    let before = (shell.0 as isize, std::time::Instant::now());
+
     assert_eq!(
-        pin_lifecycle::a_players_foreground_goes_to(shell, player),
+        pin_lifecycle::a_players_foreground_goes_to(shell, player, before, std::time::Instant::now()),
         None,
         "a player that is not the window in front took no keyboard, so it gives none back"
     );
     assert_eq!(
-        pin_lifecycle::a_players_foreground_goes_to(HWND::default(), player),
+        pin_lifecycle::a_players_foreground_goes_to(
+            HWND::default(),
+            player,
+            before,
+            std::time::Instant::now()
+        ),
         None,
         "and no window in front at all is not a player that took one"
     );
 
-    let given = pin_lifecycle::a_players_foreground_goes_to(player, player);
+    let given = pin_lifecycle::a_players_foreground_goes_to(player, player, before, std::time::Instant::now());
     assert!(
         given.is_none_or(|target| {
             let mut pid = 0u32;
@@ -1005,6 +1014,59 @@ fn a_players_foreground_goes_only_where_the_player_took_it() {
         }),
         "a player's window hands the foreground to a window that is not it, is still there, and \
          is not another player: {given:?}"
+    );
+}
+
+/// **A request for the foreground that nothing is coming for is abandoned**, and a request still of
+/// the launch that made it is not.
+///
+/// Both asks this app makes for a front are a request rather than a standing permission. A player's
+/// window is styled for as long as its film plays, so the hand-back's road runs long after the launch
+/// that armed it, and a front *that* window took an hour later is not the activation the request was
+/// about: handing it back is the app undoing whatever the user has done since — the reported
+/// "Chrome cannot be activated while the pointer is over the pin", which is a click answered by a
+/// window asked for on a launch of ten minutes before. The arrival's ask is the same debt on a
+/// shorter clock (see `take_the_arrival_foreground`).
+///
+/// The two halves of one question: an ask is young enough to be the thing that asked for it, and —
+/// where the request has a window of its own — that window is still the one in front.
+#[test]
+fn a_front_request_that_nothing_is_coming_for_is_abandoned() {
+    let asked = std::time::Instant::now();
+    let window = HWND(0x2000 as *mut _);
+    let elsewhere = HWND(0x3000 as *mut _);
+
+    assert!(
+        pin_lifecycle::a_front_request_is_young_enough(asked, asked),
+        "a request asked for this moment is the one asking"
+    );
+    assert!(
+        pin_lifecycle::a_front_request_is_young_enough(
+            asked,
+            asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR - std::time::Duration::from_millis(1)
+        ),
+        "and one inside the wait this app gives a player is still its own"
+    );
+    assert!(
+        !pin_lifecycle::a_front_request_is_young_enough(asked, asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR),
+        "a request older than that wait is a request nothing is coming for"
+    );
+
+    assert!(
+        pin_lifecycle::a_front_request_is_still_wanted(window, window, asked, asked),
+        "the window the request was made from is in front, so the ask is the user's to give"
+    );
+    assert!(
+        !pin_lifecycle::a_front_request_is_still_wanted(elsewhere, window, asked, asked),
+        "a user who has activated something else has answered the ask themselves"
+    );
+    assert!(
+        !pin_lifecycle::a_front_request_is_still_wanted(window, window, asked, asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR),
+        "and a request that has run out is abandoned however the desktop looks"
+    );
+    assert!(
+        !pin_lifecycle::a_front_request_is_still_wanted(HWND::default(), window, asked, asked),
+        "a desktop with no window in front has nothing to say the ask is still wanted by"
     );
 }
 

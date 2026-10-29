@@ -340,8 +340,11 @@ fn only_a_pin_that_has_just_appeared_is_asked_for_the_foreground() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
+    let listing = HWND(0x2000 as *mut _);
+    let somewhere_else = HWND(0x3000 as *mut _);
+
     // Nothing of an earlier test is owed here: the debt is a fact about the pin that is arriving.
-    take_the_arrival_foreground(true, true);
+    take_the_arrival_foreground(true, true, listing);
     assert!(
         !the_pin_arrival_is_owed(),
         "a test begins with no pin on its way up"
@@ -349,7 +352,7 @@ fn only_a_pin_that_has_just_appeared_is_asked_for_the_foreground() {
 
     arm_the_pin_arrival();
     assert!(
-        !take_the_arrival_foreground(false, false),
+        !take_the_arrival_foreground(false, false, listing),
         "a pin standing in the preview's window is asked for nothing: a tool window never takes \
          the focus, so the ask is one Windows refuses for it"
     );
@@ -360,7 +363,7 @@ fn only_a_pin_that_has_just_appeared_is_asked_for_the_foreground() {
 
     arm_the_pin_arrival();
     assert!(
-        !take_the_arrival_foreground(true, true),
+        !take_the_arrival_foreground(true, true, listing),
         "a pin already on the screen is one the user has put where it is, so a step, a box change \
          and the tick's re-show ask nothing"
     );
@@ -369,13 +372,22 @@ fn only_a_pin_that_has_just_appeared_is_asked_for_the_foreground() {
         "and the show that found it standing spends the debt the take-up armed"
     );
 
-    arm_the_pin_arrival();
+    // **The user has worked somewhere else since the key was pressed**: the front is not the window
+    // the request was made in, so the pin must not take it — that is the ask landing on top of a
+    // click the user has already made (see `a_front_request_is_still_wanted`).
+    arm_the_pin_arrival_from(listing);
     assert!(
-        take_the_arrival_foreground(true, false),
+        !take_the_arrival_foreground(true, false, somewhere_else),
+        "a request whose window is not the one in front is a request the user has answered"
+    );
+
+    arm_the_pin_arrival_from(listing);
+    assert!(
+        take_the_arrival_foreground(true, false, listing),
         "while a pin that has just appeared in a window of its own is asked for the front"
     );
     assert!(
-        !take_the_arrival_foreground(true, false),
+        !take_the_arrival_foreground(true, false, listing),
         "once: the next show of that window is a show of a pin the user already has"
     );
 }
