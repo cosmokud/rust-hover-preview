@@ -26,10 +26,20 @@ fn main() {
         stop_running_app();
     }
 
-    // Only run on Windows
-    #[cfg(target_os = "windows")]
-    {
+    // The resources belong to the *target*, not the host that runs this script. `cfg!(windows)`
+    // here answers for the host, and a build script compiled on Linux would then skip the icon,
+    // the version block and the manifest — silently, because nothing else about the link fails.
+    // The target is therefore asked for by name, so that a cross build from another system
+    // embeds exactly what a build on Windows does.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winres::WindowsResource::new();
+        // Away from Windows there is no SDK laid out where winres looks for one, so the
+        // directory holding an `rc.exe`-compatible compiler comes from the machine instead
+        // of the tree. It is never committed for the same reason the shared target dir is
+        // not: it names a path on the machine doing the build, not on the one reading this.
+        if let Ok(toolkit) = env::var("RHP_RC_TOOLKIT") {
+            res.set_toolkit_path(&toolkit);
+        }
         res.set_icon("assets/icon.ico");
         res.set("ProductName", "Rust Hover Preview");
         res.set("FileDescription", "Rust Hover Preview");
@@ -76,9 +86,17 @@ fn main() {
         // same file, named for the library target.
         let resource_file = std::path::Path::new(&env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
             .join("resource.lib");
+        // The file is an archive, and a linker pulls a member out of one only to satisfy a
+        // symbol it is missing — a resource object defines no symbols at all, so off Windows
+        // the member is never pulled and the icon, the version block and the manifest would be
+        // dropped with every exit code still zero. `/WHOLEARCHIVE` is what takes the member
+        // whether it is wanted or not. Windows needs no such argument: the RC compiler there
+        // writes the same archive in a form its linker takes regardless (see `tests/executable_icon`).
+        let whole_archive = if cfg!(windows) { "" } else { "/WHOLEARCHIVE:" };
         println!(
-            "cargo:rustc-link-arg-bin={}={}",
+            "cargo:rustc-link-arg-bin={}={}{}",
             env::var("CARGO_PKG_NAME").expect("cargo sets CARGO_PKG_NAME"),
+            whole_archive,
             resource_file.display()
         );
     }

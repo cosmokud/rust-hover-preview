@@ -21,6 +21,25 @@ target=$(git config --get rhp.targetDir) || exit 0
 # TOML wants forward slashes; accept a path pasted from Explorer.
 target=$(printf '%s' "$target" | tr '\\' '/')
 
+# A value belongs to the system that reads it: cargo on Windows wants a drive letter and
+# cargo anywhere else wants a path that starts at /, and the other shape is not a target
+# dir there but a relative one — cargo would quietly build into a `D:` folder inside the
+# checkout. So a value of the wrong shape for this system is left unwritten, and cargo
+# falls back to the usual per-checkout target/.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) shape=windows ;;
+  *) shape=posix ;;
+esac
+case "$shape:$target" in
+  windows:[A-Za-z]:/*) ;;
+  posix:/*) ;;
+  *)
+    echo "rhp.targetDir is '$target', which is not a path this system can build into." >&2
+    echo "Nothing written; cargo will use this checkout's own target/." >&2
+    exit 0
+    ;;
+esac
+
 root=$(git rev-parse --show-toplevel) || exit 0
 root=$(printf '%s' "$root" | tr '\\' '/')
 
