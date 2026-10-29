@@ -801,8 +801,8 @@ pub(super) fn pin_swap_wait(
 ///
 /// Two kinds are waited for and they are waited for differently, because a film reaches the
 /// screen by one of two roads: the media engine draws into this app's own surface and hands the
-/// frame over, and a player of this app's own draws into a window of its own and the frame is on
-/// screen when that window is (see `settle`).
+/// frame over, and a player of this app's own draws into a window of its own, which the pin's host
+/// draws through a registration that changes hands once the new frame can be drawn (see `settle`).
 ///
 /// The file being installed is carried whole rather than a name to be looked up. It is the frame
 /// the engine plays into, and it is the whole of what the loop's own per-tick take must not be
@@ -824,7 +824,7 @@ pub(super) struct PinSwapHold {
     pub(super) arc: PinArc,
     /// When the wait began, which is the only bound the player route's wait has (see `settle`).
     /// It is written once, where the hold is made, rather than read off the file: the wait is for
-    /// one file's window and not for however long this app has been running.
+    /// one file's picture and not for however long this app has been running.
     pub(super) started: Instant,
 }
 
@@ -851,27 +851,42 @@ impl PinSwapHold {
             return pin_swap_wait(frame_in_hand, playing, failing);
         }
 
-        // A film FFmpeg's player or mpv draws exists only as another program's window, and the
-        // first frame of it is on screen when that window is and not before — which is the same
-        // answer a first start is settled on, and the same bound, asked at the swap's own box
-        // rather than a hover's (see `player_swap_wait`).
+        // A film FFmpeg's player or mpv draws reaches the screen as a window of its own, and what
+        // this waits for is not that window but the picture the pin's host is drawing: the
+        // registration the host wears changes hands once the incoming source can draw the frame it
+        // was placed for, and until it has, the frame in the host is the previous film's (see
+        // `pin_film_thumbnail::hand_the_picture_over`).
         //
-        // What the wait buys is the whole of the stretched frame this whole arrangement is for:
-        // the install is what gives the window its new box, so a swap that installed before the
-        // player's window was up resized the band the outgoing picture is standing in into the
-        // shape of a film that had not drawn anything yet.
+        // **The window is not the question**, and asking it was the whole of the stretched frame
+        // this hold exists to remove: a player's window is up tens or hundreds of milliseconds
+        // before it has drawn anything, and the install that answers a window is the box taking the
+        // next film's shape over the previous film's last frame (see `the_thumbnail_box`). So what is
+        // asked is whether the picture has changed hands — `the_source_is_standing`, the one step of
+        // a handover, asked without waiting for the record because the record is held by the very pass
+        // that is handing the picture over (see `the_source_is_standing_try`) — and the box follows
+        // the picture into the window rather than the other way round.
+        //
+        // **The bound is the one the handover itself is given.** That road changes hands anyway at
+        // `VIDEO_START_WAIT_SECS` rather than leaving the picture to a player that is ending, so a film
+        // whose first frame never lights a pixel (black leader, an engine whose surface a sample cannot
+        // read) is waited for as long as the picture is: the file is then installed the way a swap with
+        // no hold at all installs one, which is the behaviour this hold refines and never replaces. A
+        // second, shorter bound would be a second answer to one wait, and every tick of it is a box
+        // that has changed before its picture has — the frame this is for. The two clocks are not quite
+        // the same one (the handover's starts at the source's adoption and this one at the swap), so
+        // where the picture is never ready the box can still change a moment before that road's own
+        // give-up: that is the degraded case, and it is the swap with no hold at all rather than a new
+        // failure.
         let alive = self
             .file
             .media
             .video_process
             .as_mut()
             .is_some_and(|player| matches!(player.try_wait(), Ok(None)));
-        // A hosted player has no window of the desktop's to find by pid: what its first frame
-        // arriving is for one is the child it put under the host (see
-        // `pin_film_host::the_players_window_is_up`).
-        let window_up = pin_film_host::the_players_window_is_up(VIDEO_PID.load(Ordering::SeqCst));
+        let picture =
+            pin_film_thumbnail::the_source_is_standing_try(VIDEO_PID.load(Ordering::SeqCst));
 
-        player_swap_wait(window_up, alive, self.started.elapsed()).map(|wait| match wait {
+        player_swap_wait(picture, alive, self.started.elapsed()).map(|wait| match wait {
             PlayerWait::Arrived => PinSwapWait::Arrived,
             PlayerWait::Abandoned => PinSwapWait::Abandoned,
         })

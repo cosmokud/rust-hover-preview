@@ -82,7 +82,7 @@ impl StandingFilm {
     /// The same stand with the film drawing in the host: `drawn` is the player whose child under it
     /// is the picture (see `the_hosted_player_is_drawing`), and it owns no window of the desktop's.
     pub(super) fn drawn_in_the_host(&self, drawn: u32) {
-        pin_film_host::note_hosted_player(drawn);
+        pin_film_host::note_hosted_player(drawn, None);
         VIDEO_PID.store(drawn, Ordering::SeqCst);
     }
 
@@ -90,7 +90,7 @@ impl StandingFilm {
     /// in is a window of the desktop's rather than the host's (see `the_pinned_player_was_begun_in_the_host`),
     /// with `hovered` the process that owns it.
     fn taken_up_from_a_hover(&self, hovered: u32) {
-        pin_film_host::note_hosted_player(0);
+        pin_film_host::note_hosted_player(0, None);
         VIDEO_PID.store(hovered, Ordering::SeqCst);
     }
 
@@ -116,7 +116,7 @@ impl StandingFilm {
         // The host holds this test's own process, which is the pid of any child it makes: a film is
         // drawn in the host only when the player begun into it is the one this app recorded (see
         // `the_pinned_player_was_begun_in_the_host`).
-        pin_film_host::note_hosted_player(unsafe { GetCurrentProcessId() });
+        pin_film_host::note_hosted_player(unsafe { GetCurrentProcessId() }, None);
         // **The stand's film is mpv's, so its player is one that answers a pipe** — which is how a
         // frame is proved to be drawn rather than merely made (see
         // `pin_film_host::the_hosted_frame_is_up`). A test that wants a frame answers it (see
@@ -1451,7 +1451,7 @@ fn the_film_is_drawing_when_the_players_own_window_is_the_source() {
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
     let pid = VIDEO_PID.load(Ordering::SeqCst);
-    pin_film_host::note_hosted_player(pid);
+    pin_film_host::note_hosted_player(pid, None);
 
     assert!(
         !pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
@@ -1623,11 +1623,12 @@ fn a_hosted_replacement_ends_the_retirement_it_took_over_from() {
     note_player_process(previous_pid, previous_image);
 }
 
-/// A swap onto a hosted film is answered by the source adopted into the host, not by a top-level
-/// handle a hosted player never publishes: the file is installed on the source's arrival rather than
-/// let go of at the cover's bound (see `PinSwapHold::settle`).
+/// A swap onto a hosted film is answered by the picture changing hands, and not by the player's
+/// window or by the child it puts under the host: the box is what the picture in it is cropped to,
+/// so a file installed on a window is the next film's box over the previous film's last frame (see
+/// `PinSwapHold::settle` and `pin_film_thumbnail::the_source_is_standing`).
 #[test]
-fn a_hosted_swaps_wait_is_answered_by_the_sources_arrival() {
+fn a_hosted_swaps_wait_is_answered_by_the_picture_changing_hands() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -1638,7 +1639,10 @@ fn a_hosted_swaps_wait_is_answered_by_the_sources_arrival() {
     film.drawn_in_the_host(drawn);
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
-    let _child = unsafe { a_source_of_the_host(host) };
+    // The film the pin is showing, registered in the host: the picture the step's box is cropped to
+    // and the one the incoming film has to take over before the box may change (see
+    // `pin_film_thumbnail::note_the_source`).
+    let _outgoing = unsafe { a_source_of_the_host(host) };
 
     let mut media = create_loading_media(320, 240);
     media.media_type = MediaType::Video;
@@ -1659,12 +1663,38 @@ fn a_hosted_swaps_wait_is_answered_by_the_sources_arrival() {
         started: Instant::now(),
     };
 
+    // A player that has made its window and put a child of its own under the host has drawn
+    // nothing: the frame the pin is showing is still the film it was showing.
+    assert_eq!(
+        hold.settle(),
+        None,
+        "the next film's window is up and its frame is not, so the box it would be laid out in is \
+         still the previous film's"
+    );
+
+    // The picture changes hands: the source the swap's own player made is adopted, placed at the
+    // film's own size, and — its video output configured for a frame — handed the host (see
+    // `pin_film_thumbnail::hand_the_picture_over`).
+    mpv_ipc::answer_a_read(
+        drawn,
+        "video-params",
+        Some(r#"{"w":320,"h":180,"dw":320,"dh":180}"#),
+    );
+    the_hosted_player_has_the_frame(drawn, "0.000000");
+    let next_source = unsafe { a_players_own_window() };
+    unsafe { pin_film_thumbnail::adopt_the_source(next_source, drawn, host) };
+    pin_film_thumbnail::hand_the_picture_over(host);
+
     assert_eq!(
         hold.settle(),
         Some(PinSwapWait::Arrived),
-        "the hosted player's own child is the film on screen, so the swap arrives instead of \
-         being given up on at the cover's six hundred milliseconds"
+        "the source standing in the host is the next film, so the box and the frame in it go in \
+         together rather than the box going in on its own"
     );
+
+    unsafe {
+        let _ = DestroyWindow(next_source);
+    };
 }
 /// **On the thumbnail road the pin's film is a window of the desktop's and the host only shows it**:
 /// the launch names no window of this app's, and the command line it is given carries the box the
@@ -2415,7 +2445,7 @@ fn the_chrome_waits_for_the_hosted_films_frame_not_its_window() {
     // The latch answers for this player and not the next: a new player is begun with no frame of
     // its own, and the unasked pipe read is what says so.
     mpv_ipc::answer_a_read(pid, "vo-configured", None);
-    pin_film_host::note_hosted_player(pid);
+    pin_film_host::note_hosted_player(pid, None);
     assert!(
         !pin_film_host::the_hosted_frame_is_up(pid),
         "a player just begun has not inherited the last one's frame"
@@ -3458,6 +3488,34 @@ fn a_step_onto_the_next_film_at(content: ScreenRegion) -> PinSwap {
     })
 }
 
+/// **A step onto a film from a picture goes in at once.** What the box would be the wrong shape for is
+/// a frame another film's player drew and the Shell is cropping into it; a picture is this app's own
+/// painting, laid into whatever box it is given, so there is nothing standing to hold the new film's
+/// box for and the file is installed exactly as it always was (see `swap_pinned_media` and
+/// `PinSwapHold`).
+#[test]
+fn a_step_onto_a_film_from_a_picture_goes_in_at_once() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let _parked = AStepParkedTheOldPlayer::take();
+
+    // The pin stands on a picture: no player of its own is behind what is on screen.
+    VIDEO_PID.store(0, Ordering::SeqCst);
+    let mut picture = create_loading_media(320, 240);
+    picture.media_type = MediaType::StaticImage;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(picture);
+    }
+
+    assert!(
+        matches!(a_step_onto_the_next_film(&film), PinSwap::Ready(_)),
+        "a picture is this app's own painting and is fitted to whatever box it is given, so there is          nothing standing for the new film's box to be the wrong shape for"
+    );
+}
+
 /// The retirement a step parks, put back when the test ends: the player it parks is this test's own
 /// process, and a later settle must not be the one to end it.
 struct AStepParkedTheOldPlayer(Option<VideoRetirement>);
@@ -3497,8 +3555,8 @@ fn a_step_leaves_the_pins_band_to_the_outgoing_picture_until_the_next_is_adopted
 
     let swap = a_step_onto_the_next_film(&film);
     assert!(
-        matches!(swap, PinSwap::Ready(_)),
-        "the step begins a player for the next film"
+        matches!(swap, PinSwap::Holding(_)),
+        "the step begins a player for the next film and holds the pin for its picture"
     );
 
     assert!(
@@ -3548,8 +3606,8 @@ fn a_step_holds_the_pins_band_until_the_new_source_is_adopted() {
 
     let swap = a_step_onto_the_next_film(&film);
     assert!(
-        matches!(swap, PinSwap::Ready(_)),
-        "the step begins a player for the next film"
+        matches!(swap, PinSwap::Holding(_)),
+        "the step begins a player for the next film and holds the pin for its picture"
     );
     assert!(
         pin_lifecycle::the_step_band_is_held(),
@@ -3607,8 +3665,8 @@ fn a_pin_taken_down_in_a_step_clears_the_band_it_held() {
 
     let swap = a_step_onto_the_next_film(&film);
     assert!(
-        matches!(swap, PinSwap::Ready(_)),
-        "the step begins a player for the next film"
+        matches!(swap, PinSwap::Holding(_)),
+        "the step begins a player for the next film and holds the pin for its picture"
     );
     assert!(pin_lifecycle::the_step_band_is_held());
     assert!(unsafe { window_holds_the_topmost_band(host) });
@@ -3650,8 +3708,8 @@ fn a_step_pauses_the_outgoing_mpv_player_it_keeps() {
 
     let swap = a_step_onto_the_next_film(&film);
     assert!(
-        matches!(swap, PinSwap::Ready(_)),
-        "the step begins a player for the next film"
+        matches!(swap, PinSwap::Holding(_)),
+        "the step begins a player for the next film and holds the pin for its picture"
     );
 
     let pause = format!(
@@ -3692,8 +3750,8 @@ fn a_pin_that_ends_after_a_step_leaves_what_a_pin_that_never_stepped_leaves() {
 
         if step {
             assert!(
-                matches!(a_step_onto_the_next_film(&film), PinSwap::Ready(_)),
-                "the step begins a player for the next film"
+                matches!(a_step_onto_the_next_film(&film), PinSwap::Holding(_)),
+                "the step begins a player for the next film and holds the pin for its picture"
             );
             // The player the step began is recorded the way every launch records one, so the record
             // under test is one a real run makes.
@@ -7037,8 +7095,8 @@ fn a_step_leaves_the_pin_standing_over_the_films_host() {
     // incoming one opens its file, the band is held for it, and the source it makes takes the picture
     // over.
     assert!(
-        matches!(a_step_onto_the_next_film(&film), PinSwap::Ready(_)),
-        "the step begins a player for the next film"
+        matches!(a_step_onto_the_next_film(&film), PinSwap::Holding(_)),
+        "the step begins a player for the next film and holds the pin for its picture"
     );
     the_pair("the step's wait, with its band held");
     let replacement = VIDEO_PID.load(Ordering::SeqCst);
@@ -7059,7 +7117,7 @@ fn a_step_leaves_the_pin_standing_over_the_films_host() {
         .and_then(|pinned| pinned.pin().map(|pin| pin.content))
         .expect("a pin up");
     assert!(
-        matches!(a_step_onto_the_next_film_at(standing), PinSwap::Ready(_)),
+        matches!(a_step_onto_the_next_film_at(standing), PinSwap::Holding(_)),
         "a step of the same box begins its player too"
     );
     stand_pin(Some(take_up_pinned_window(
@@ -7124,8 +7182,8 @@ fn a_steps_wait_for_its_first_frame_leaves_the_hands_chrome_up() {
     // The step: the incoming player's own window is adopted as the source the host draws, and the
     // frame it stands on is a wait of two properties away.
     assert!(
-        matches!(a_step_onto_the_next_film(&film), PinSwap::Ready(_)),
-        "the step begins a player for the next film"
+        matches!(a_step_onto_the_next_film(&film), PinSwap::Holding(_)),
+        "the step begins a player for the next film and holds the pin for its picture"
     );
     let replacement = VIDEO_PID.load(Ordering::SeqCst);
     mpv_ipc::answer_a_read(
@@ -7217,12 +7275,12 @@ fn a_steps_own_player_window_under_the_hand_is_not_a_window_over_the_pin() {
     // The player a test makes a window for is this process, which is the pid every stand in this
     // file records (see `StandingFilm`).
     assert!(
-        matches!(a_step_onto_the_next_film(&film), PinSwap::Ready(_)),
-        "the step begins a player for the next film"
+        matches!(a_step_onto_the_next_film(&film), PinSwap::Holding(_)),
+        "the step begins a player for the next film and holds the pin for its picture"
     );
     pin_film_thumbnail::forget_the_thumbnail();
     let player = unsafe { GetCurrentProcessId() };
-    pin_film_host::note_hosted_player(player);
+    pin_film_host::note_hosted_player(player, None);
     VIDEO_PID.store(player, Ordering::SeqCst);
     assert!(
         !pin_film_host::the_hosted_player_is_drawing(player),
@@ -7316,8 +7374,8 @@ fn the_window_a_step_puts_under_the_hand_is_the_films_own_at_every_tick_of_its_h
     // window under the hand is its window — this process's, which is the player every stand in this
     // file is (see `StandingFilm`).
     assert!(
-        matches!(a_step_onto_the_next_film(&film), PinSwap::Ready(_)),
-        "the step begins a player for the next film"
+        matches!(a_step_onto_the_next_film(&film), PinSwap::Holding(_)),
+        "the step begins a player for the next film and holds the pin for its picture"
     );
     pin_film_thumbnail::forget_the_thumbnail();
     let player = unsafe { GetCurrentProcessId() };
@@ -7340,7 +7398,7 @@ fn the_window_a_step_puts_under_the_hand_is_the_films_own_at_every_tick_of_its_h
         ),
         (0, "nobody, in the gap a relaunch records its player across"),
     ] {
-        pin_film_host::note_hosted_player(host_names);
+        pin_film_host::note_hosted_player(host_names, None);
         the_hand_asks();
         assert_eq!(
             pin_state()
@@ -7504,8 +7562,8 @@ fn a_step_leaves_the_hand_chrome_up_from_its_take_up_to_its_first_frame() {
     // laid out in, and the show paints that box.
     let the_step = |content: ScreenRegion| {
         assert!(
-            matches!(a_step_onto_the_next_film_at(content), PinSwap::Ready(_)),
-            "the step begins a player for the next film"
+            matches!(a_step_onto_the_next_film_at(content), PinSwap::Holding(_)),
+            "the step begins a player for the next film and holds the pin for its picture"
         );
         let mut next = create_loading_media(320, 240);
         next.media_type = MediaType::Video;

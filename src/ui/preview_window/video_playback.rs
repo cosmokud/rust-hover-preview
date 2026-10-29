@@ -773,7 +773,7 @@ fn start_video_playback_where(
         // made, because what the host is to draw is a fact of the launch and not of the order the
         // two windows happen to arrive in.
         if the_pins_film {
-            pin_film_host::note_hosted_player(player.id());
+            pin_film_host::note_hosted_player(player.id(), Some(path));
         } else if hover_host.is_some() {
             hover_film_host::note_hover_film_host_player(player.id(), path);
         }
@@ -1008,7 +1008,7 @@ fn start_mpv_video_playback(
     // not the last film's, which is what the pid beside the host is for (see `pin_film_host` and
     // `hover_film_host`).
     if the_pins_film {
-        pin_film_host::note_hosted_player(child.id());
+        pin_film_host::note_hosted_player(child.id(), Some(path));
     } else if hover_host.is_some() {
         hover_film_host::note_hover_film_host_player(child.id(), path);
     }
@@ -1236,23 +1236,27 @@ pub(super) fn player_wait(
 /// How the wait for a *swap's* player stands: the same three answers, at a swap's own bound
 /// instead of a hover's.
 ///
-/// It is `player_wait`'s question asked of the one road that already has something on screen. A
-/// hover holds back a window with a spinner behind it and nothing under the spinner that could
-/// arrive sooner, so ten seconds is a start nobody has to watch; a swap is waiting with the
-/// file the pin is leaving still up, at the box the pin is still at, and every tick of the wait
-/// is a tick of that old picture. So the bound is the one a player start is held to anywhere else
-/// — a player begun for a replacement has to open the file, seek, decode hardware and present, and
-/// a wait past that is a player this app stops watching (see `VIDEO_START_WAIT_SECS`).
+/// It is `player_wait`'s question asked of the one road that already has something on screen, and
+/// what it is asked about is the one difference between the two: a hover is waiting for a window to
+/// appear over an empty preview, and a swap is waiting for the picture the pin's host is drawing to
+/// become the next film's, so that the box and the frame in it change together (see `PinSwapHold`).
+/// A hover has nothing under its spinner that could arrive sooner, so ten seconds is a start nobody
+/// has to watch; a swap is waiting with the file the pin is leaving still up, at the box the pin is
+/// still at, and every tick of the wait is a tick of that old picture — so the bound is the one the
+/// handover is given anywhere else (`VIDEO_START_WAIT_SECS`), which is where that road changes hands
+/// anyway rather than leaving the picture to a player that is ending. The two being one number is the
+/// point: a box that changed after its bound had run out would be a box of the next film's shape over
+/// the previous film's frame, which is the frame this whole wait is for.
 ///
-/// What the wait is *for* is the same fact: the player's own window is the only sign a player of
-/// this kind gives that its film is on screen, so a window that is up has arrived, cap or no cap
-/// (see `player_wait`).
+/// A player that is gone is the end of the wait whatever else is true, because what a dead process
+/// leaves behind is a window nothing will draw into — and a picture that has changed hands has
+/// arrived, bound or no bound, exactly as a window that is up has (see `player_wait`).
 pub(super) fn player_swap_wait(
-    window_up: bool,
+    picture: bool,
     player_alive: bool,
     waited: Duration,
 ) -> Option<PlayerWait> {
-    if window_up && player_alive {
+    if picture && player_alive {
         return Some(PlayerWait::Arrived);
     }
 

@@ -43,11 +43,15 @@ pub(super) static PIN_ARC_BASE: Lazy<Instant> = Lazy::new(Instant::now);
 /// that one is started here and held, and the file the pin is already showing keeps drawing
 /// until the engine has actually drawn something (see `PinSwapHold`).
 ///
-/// **A film FFmpeg's player or mpv draws goes in at once, and the picture standing on the pin stays
-/// there while it does.** The film on screen is the Shell's thumbnail of the outgoing player's own
-/// window, so it is that registration which covers the incoming file's decode: the file is
-/// installed and placed now, the incoming player's source takes the host over once it has drawn,
-/// and the outgoing player is ended by the loop after that (see `relaunch_pinned_player` and
+/// **A film FFmpeg's player or mpv draws is held too, for the same reason and by a different
+/// question.** The picture standing on the pin is the Shell's thumbnail of the outgoing player's own
+/// window, and what the box is cropped to is that picture's shape: a box of the next film's shape
+/// over the previous film's frame is the frame cut to a keyhole where the picture is larger than the
+/// box, and — a box larger than the picture on either axis — the whole frame stretched into it, which
+/// is the previous film's last frame drawn as the next film's shape (see `the_thumbnail_box`). So a
+/// swap that keeps a picture standing is held until the incoming player's source has taken the host
+/// over, and the box and the picture go in together; a swap that took the picture down has nothing
+/// to keep and goes in at once, exactly as it always did (see `PinSwapHold` and
 /// `pin_film_thumbnail::hand_the_picture_over`).
 pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     let PinAnswer {
@@ -244,11 +248,24 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 
         file.media.video_process = Some(process);
 
-        // **The picture standing is what holds the band, and it is the source the host is drawing
-        // rather than anything kept here.** The file goes in now, at the box the pin stands at, and
-        // the registration the film was drawn through changes hands when the new player's source is
-        // ready to be drawn — a swap the host makes as one step (see
-        // `pin_film_thumbnail::hand_the_picture_over`).
+        // **The box is held with the picture, and the picture is the host's.** The film standing on
+        // the pin is drawn through a registration over the outgoing player's window, and that
+        // registration is what the box crops: resizing the box now would crop — or stretch — the
+        // frame of the film being left behind into the shape of the one that has not drawn yet. So
+        // the file waits, at the box the pin is already at, until the incoming source has taken the
+        // host over (see `PinSwapHold` and `pin_film_thumbnail::hand_the_picture_over`).
+        //
+        // **Only where a picture is standing to keep.** A swap that took the media down has emptied
+        // the band, and a file installed into an empty band is installed exactly as it always was:
+        // there is no frame of the previous file for the new box to be the wrong shape for.
+        if keeping_the_picture {
+            return PinSwap::Holding(PinSwapHold {
+                file,
+                arc,
+                started: Instant::now(),
+            });
+        }
+
         let _ = arc;
         return PinSwap::Ready(file);
     }

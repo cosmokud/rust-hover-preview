@@ -352,6 +352,9 @@ pub(super) fn host_erases() -> u32 {
 /// The host of the pin that is up, and the player this app has attached to it.
 static PIN_FILM_HOST: AtomicIsize = AtomicIsize::new(0);
 static PIN_FILM_HOST_PLAYER: AtomicU32 = AtomicU32::new(0);
+/// The hosted player and the file it was begun for: the player's own answer to what it is showing,
+/// which is not the pin's answer while a swap is waiting for its picture (see `note_hosted_player`).
+static PIN_FILM_HOST_FILE: Lazy<Mutex<Option<(u32, PathBuf)>>> = Lazy::new(|| Mutex::new(None));
 /// The hosted player whose frame this app has proved on screen, so the pipe read that proves it is
 /// asked once and not on every tick (see `the_hosted_frame_is_up`).
 static PRESENTED_PID: AtomicU32 = AtomicU32::new(0);
@@ -369,14 +372,41 @@ pub(super) fn hosted_player_pid() -> Option<u32> {
     (player != 0).then_some(player)
 }
 
-/// Record the player begun into the host: called where the player is spawned, before its window
-/// exists, so that the wait for its first frame is a wait for *its* child and not for the last
-/// film's.
-pub(super) fn note_hosted_player(pid: u32) {
+/// Record the player begun into the host, and the file it was begun for: called where the player is
+/// spawned, before its window exists, so that the wait for its first frame is a wait for *its* child
+/// and not for the last film's.
+///
+/// **The file is recorded with the player rather than read off the pin's media**, because the two are
+/// not the same fact while a swap is waiting for its picture: the pin is still showing the file it is
+/// leaving, and the placement of the incoming source asks what the *player* is showing. Answered off
+/// the pin's media it named the outgoing film, or nothing at all — and a source that cannot be placed
+/// cannot be drawn, so the box and the picture waiting for it would each be waiting for the other (see
+/// `the_hosted_players_file` and `pin_film_thumbnail::the_films_own_size`).
+///
+/// A record that names no player names no file either, which is what a take-down leaves.
+pub(super) fn note_hosted_player(pid: u32, path: Option<&Path>) {
     PIN_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
+    if let Ok(mut held) = PIN_FILM_HOST_FILE.lock() {
+        *held = path
+            .filter(|_| pid != 0)
+            .map(|path| (pid, path.to_path_buf()));
+    }
     PRESENTED_PID.store(0, Ordering::SeqCst);
     // A hosted player has no window of the desktop's to publish, and this one is the film now.
     VIDEO_HWND.store(0, Ordering::SeqCst);
+}
+
+/// The file the hosted player `pid` was begun for, where this app has that player on record.
+///
+/// It is the answer to "what is this player showing", which is a different question from "what is the
+/// pin showing" for the whole of a swap's wait: the player is begun before the file it plays is
+/// installed, and the placement of its source has to be made at that file's own size (see
+/// `note_hosted_player` and `pin_film_thumbnail::the_film_the_player_plays`).
+pub(super) fn the_hosted_players_file(pid: u32) -> Option<PathBuf> {
+    let held = PIN_FILM_HOST_FILE.lock().ok()?;
+    held.as_ref()
+        .filter(|(player, _)| *player == pid)
+        .map(|(_, path)| path.clone())
 }
 
 /// The host an FFmpeg film at this pin's band is kept for, where this is the pin's own window and
@@ -468,7 +498,7 @@ pub(super) fn adopt_a_stranded_ffplay_into_the_pin_host(pid: u32, path: &Path) -
     if pid == 0 || video_route(path) != VideoRoute::Ffplay {
         return false;
     }
-    note_hosted_player(pid);
+    note_hosted_player(pid, Some(path));
     true
 }
 
