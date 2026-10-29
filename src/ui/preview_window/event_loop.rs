@@ -915,6 +915,16 @@ pub fn run_preview_window() {
                     render_layered_preview(hwnd);
                 }
 
+                // **A picture that has changed hands in the pin's host is the band painted again**,
+                // and this is the only road that paints it: a film a player draws advances no frame
+                // of this app's, so nothing else on a pinned film's tick would ever ask for this
+                // paint — and the paint during the wait, before the picture arrived, would be the
+                // last word on it (see `pin_film_host::the_band_owes_a_repaint`).
+                if pin_film_host::take_the_band_repaint() {
+                    last_pin_repaint = Instant::now();
+                    render_layered_preview(hwnd);
+                }
+
                 // A window waiting for a file is painted again for the arc: once, when the
                 // wait has run for the delay `spinner_delay_ms` names, and then once per turn
                 // of it. A window with a transport bar would have been repainted anyway and
@@ -3026,6 +3036,10 @@ pub fn run_preview_window() {
                 // And a return owed a pin that is over is not owed to the pin that follows it: the
                 // file it was owed for belongs to the window that has gone (see `pin_return_owed`).
                 pin_return_owed = false;
+                // And the file a pin that is over was on its way to is nobody's in flight: the
+                // proof that a pick is a duplicate belongs to the window it was picked into (see
+                // `THE_FILE_IN_FLIGHT`).
+                note_the_pin_file_in_flight(None);
             }
 
             if let Some((path, walk, user_named)) = take_pin_pick(
@@ -3100,7 +3114,9 @@ pub fn run_preview_window() {
                         // loading, rather than dropped: the walk is carried with it, so a caption
                         // step held this way is still a step of the walk it was a part of.
                         pin_walk = walk;
-                        pin_held_pick = Some(path);
+                        pin_held_pick = Some(path.clone());
+                        note_the_pin_file_in_flight(Some(&path));
+                        note_the_pick(PickRoad::Walk, &path);
                     } else {
                         // The setting is the gate on a *pick in the listing* — a file the pointer
                         // or the keyboard chose behind the window — and not on a step of the pin's
@@ -3148,6 +3164,18 @@ pub fn run_preview_window() {
 
                                 if outstanding {
                                     pin_awaiting_box = Some(path.clone());
+                                    // The file the pin is waiting for a box of is the file it has
+                                    // been asked for, so a second press on it is nobody's new pick
+                                    // (see `THE_FILE_IN_FLIGHT`).
+                                    note_the_pin_file_in_flight(Some(&path));
+                                    note_the_pick(
+                                        if walk.is_some() {
+                                            PickRoad::Walk
+                                        } else {
+                                            PickRoad::Update
+                                        },
+                                        &path,
+                                    );
                                     // The walk is parked, not dropped: the box it is a step of
                                     // is still waited on, and the pick retried when the answer
                                     // lands is a step of the same playlist rather than the
@@ -3194,6 +3222,17 @@ pub fn run_preview_window() {
                             // The read and the decode are a thread's work, so a file whose load is
                             // slow is a wait the pin is painted for rather than a window frozen
                             // for as long as the disk takes (see `PinLoad`).
+                            //
+                            // The file is written down as the one the pin has been asked for
+                            // before its load starts, so a press on it while the read runs is a
+                            // duplicate rather than a second swap (see `THE_FILE_IN_FLIGHT`).
+                            let road = if walk.is_some() {
+                                PickRoad::Walk
+                            } else {
+                                PickRoad::Update
+                            };
+                            note_the_pin_file_in_flight(Some(&path));
+                            note_the_pick(road, &path);
                             pin_load = Some(PinLoad::start(&path, update, walk));
                         } else if refused {
                             // A file the pin cannot be shown is stepped over rather than stopped
@@ -3715,6 +3754,23 @@ pub fn run_preview_window() {
                     // media's box, and what is drawn over it is asked for rather than always
                     // there (see `pin_overlay_chrome`).
                     PreviewMessage::Pin { path, rect } => {
+                        // **A pin that has ended is not given a file.** The take-up below writes the
+                        // pin's state whole, so a message that arrives after the window went would
+                        // re-create the pin it belongs to — with the arrival's own debt, which is a
+                        // `SetForegroundWindow` asked for a window that no longer stands (see
+                        // `arm_the_pin_arrival` and `PIN_ARRIVAL_OWES_THE_FRONT`). The message is
+                        // queued rather than delivered when the file is installed, and a pin can end
+                        // in between: the walk it was a step of, the close button, a kind switched
+                        // off, or an end of file with nothing behind it.
+                        if !pinned() {
+                            note_pin_trace!(
+                                "pin install dropped: {} was installed with no pin standing",
+                                pin_trace::path_name(&path)
+                            );
+                            pin_awaiting_box = None;
+                            continue;
+                        }
+
                         // A window that has just been taken up is waiting for nothing: a file an
                         // earlier pin was still waiting for a box of is that pin's wait, and this
                         // window is not it (see `pin_awaiting_box`).

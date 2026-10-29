@@ -2347,10 +2347,18 @@ static FOREGROUND_BEFORE_A_PLAYER: AtomicIsize = AtomicIsize::new(0);
 /// monitor's first pass (see `apply_noactivate_to_hwnd`) — so the launch takes the keyboard from
 /// whatever had it and nothing gives it back. Read here rather than at the give-back, because by
 /// then the window that had it is behind the player's own.
+///
+/// **The window it recorded is written out**, because that window is what decides whose front the
+/// hand-back is: a window of this app's is the pin's, and a window of somebody else's is theirs (see
+/// `a_hand_back_goes_to`). A run that reads `foreground given back …` without the line before it
+/// cannot say whether the front came off the pin or off the listing.
 pub(super) fn note_the_foreground_before_a_player() {
-    FOREGROUND_BEFORE_A_PLAYER.store(
-        unsafe { GetForegroundWindow().0 as isize },
-        Ordering::SeqCst,
+    let front = unsafe { GetForegroundWindow() };
+    FOREGROUND_BEFORE_A_PLAYER.store(front.0 as isize, Ordering::SeqCst);
+    note_pin_trace!(
+        "foreground before a player {:?} ours {}",
+        front,
+        a_window_of_ours(front) as u8,
     );
 }
 
@@ -2408,40 +2416,76 @@ fn a_foreground_to_give_back(recorded: isize, player: isize) -> isize {
 /// Give the foreground back where a window this app began has taken it (see
 /// `a_players_foreground_goes_to`).
 ///
+/// **The ask is kept, and a refusal is asked again rather than left standing.** The window the front
+/// was taken from is a window of somebody else's (the listing, a browser) and this process is not in
+/// front, so the first `SetForegroundWindow` is often refused outright — and what a refusal leaves is
+/// the front on the player's window, a window this app has just made invisible, so no visible window
+/// is active at all: Explorer paints no caption and no hover, Chrome stops painting its UI, until the
+/// user clicks something. A second ask with the window the front was recorded from is the one Windows
+/// honours here, because it is the window the user's own last click made active (see
+/// `a_hand_back_goes_to`).
+///
 /// Safety: `player` is a window this app began, and the window handed the foreground is read from
 /// the desktop rather than held by the caller.
 pub(super) unsafe fn give_the_foreground_back_from(player: HWND) {
     let front = GetForegroundWindow();
     if let Some(taken_from) = a_players_foreground_goes_to(front, player) {
-        let behind = a_hand_back_goes_to(taken_from, a_pin_that_stands());
-        // The one line a run needs to say which window a player had taken the foreground from, and
-        // where it went: written only where one really was taken, so a run that reads the trace for
-        // the `Space` that toggled a pin out of the listing has the window that let it happen.
-        note_pin_trace!("foreground given back {:?} -> {:?}", player, behind);
-        let _ = SetForegroundWindow(behind);
+        let owed = a_hand_back_goes_to(taken_from, a_pin_that_stands());
+        let mut behind = owed;
+        let mut granted = unsafe { SetForegroundWindow(behind) }.as_bool();
+        if !granted && owed != taken_from {
+            // **A front this app may not take for the pin is still owed to the window it came from.**
+            // Never left on a window the app has just made invisible: a window nobody can see is a
+            // window nobody has (see the note over this function).
+            behind = taken_from;
+            granted = unsafe { SetForegroundWindow(taken_from) }.as_bool();
+        }
+        // The one line a run needs to say which window a player had taken the foreground from, where
+        // it went and whether it went: written only where one really was taken, so a run that reads
+        // the trace for the `Space` that toggled a pin out of the listing has the window that let it
+        // happen.
+        let after = unsafe { GetForegroundWindow() };
+        note_pin_trace!(
+            "foreground given back {:?} -> {:?} granted={} front_before={:?} front_after={:?}",
+            player,
+            behind,
+            granted as u8,
+            front,
+            after,
+        );
     }
 }
 
 /// The pin's own window, where a pin stands in one — the window a step's hand-back goes to.
 ///
 /// A pin drawn in the preview window, a hover and an audio pin stand in no window of their own, and
-/// there is nothing to prefer (see `pin_real_window::real_pin_window`).
+/// there is nothing to prefer (see `pin_real_window::real_pin_window`). **A pin collapsed into a
+/// bubble is no window of the user's either**: the bubble is a stand-in on the desktop, and a front
+/// handed to the window standing behind it is a front handed to a window nobody is looking at.
 pub(super) fn a_pin_that_stands() -> Option<HWND> {
-    pinned().then(pin_real_window::real_pin_window).flatten()
+    (pinned() && !pin_is_collapsed())
+        .then(pin_real_window::real_pin_window)
+        .flatten()
 }
 
-/// The window a player's hand-back goes to: **the pin's own window where a pin stands**, and
-/// otherwise `taken_from`, the window the launch found in front (see `a_players_foreground_goes_to`).
+/// The window a player's hand-back goes to, **by the window the front was taken from**.
 ///
-/// **The window recorded before a step is often the listing.** A pin that is not Always On Top does
-/// not hold the foreground between its steps, so the launch finds the listing in front and that is
-/// what the hand-back would raise — over the pin the user has just clicked a file into, which is the
-/// new window coming up behind the listing. The step's own window is the pin, and the pin is the
-/// window the keyboard belongs to, so that is where the hand-back goes.
+/// **A window of this app's keeps the front it had.** A step is made in the pin, the pin is the window
+/// the keyboard belongs to, and the launch that steps it records the pin as the window the front came
+/// from — so the hand-back goes there rather than to the player's own window, and an arrow walking the
+/// pin's folder keeps working.
 ///
-/// The preference lives here and not in `a_players_foreground_goes_to`: the pin's own hand-backs
-/// (`the_window_behind`) ask the same question and need the recorded window, ours included.
+/// **A window of somebody else's gets its own front back.** A click in the listing is made in the
+/// listing, and the player a click begins takes the front off it. Handing that front to the pin is how
+/// the front was left on a window this app had just made invisible, bottom of the z-order and
+/// unclickable, with the topmost pin over it — no visible window active, no `WM_ACTIVATE` for Explorer
+/// or Chrome, and a browser that does not paint its UI until it is clicked again (see
+/// `give_the_foreground_back_from`).
 pub(super) fn a_hand_back_goes_to(taken_from: HWND, the_pin: Option<HWND>) -> HWND {
+    if !taken_from.is_invalid() && !a_window_of_ours(taken_from) {
+        return taken_from;
+    }
+
     the_pin.unwrap_or(taken_from)
 }
 

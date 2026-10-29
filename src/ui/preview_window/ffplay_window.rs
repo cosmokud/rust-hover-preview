@@ -428,22 +428,26 @@ pub(super) fn ensure_noactivate_monitor() {
             // on the window the moment it exists — before anybody has shown it — is the one that
             // keeps the foreground where it was.
             let eager = (pid != 0)
-                .then(|| the_hover_awaiting_its_show(Instant::now()))
+                .then(|| the_player_awaiting_its_show(Instant::now()))
                 .flatten();
 
             if pid != 0 {
-                if eager == Some(pid) {
+                if eager.is_some_and(|(awaited, _)| awaited == pid) {
+                    let road = match eager {
+                        Some((_, true)) => "hover",
+                        _ => "pin",
+                    };
                     match unsafe { style_the_window_before_the_show(pid) } {
                         BeforeTheShow::NotYet => {}
                         BeforeTheShow::Styled => {
-                            note_pin_trace!("hover no-activate pid {pid} styled before the show");
-                            forget_the_hover_awaiting_its_show();
+                            note_pin_trace!("{road} no-activate pid {pid} styled before the show");
+                            forget_the_player_awaiting_its_show();
                         }
                         BeforeTheShow::ShownFirst => {
                             note_pin_trace!(
-                                "hover no-activate pid {pid} lost the race (visible already)"
+                                "{road} no-activate pid {pid} lost the race (visible already)"
                             );
-                            forget_the_hover_awaiting_its_show();
+                            forget_the_player_awaiting_its_show();
                         }
                     }
                 }
@@ -494,61 +498,68 @@ pub(super) fn the_monitor_wait(elapsed: Duration, launching: bool) -> u64 {
     }
 }
 
-/// The hover's player whose window is to be styled **before** it is shown: the id it was begun under,
-/// and the moment it was begun.
+/// The player whose window is to be styled **before** it is shown: the id it was begun under, the
+/// moment it was begun, and whether the road that began it was a hover's.
 ///
 /// **A window is activated by the show, not by anything this app does after it.** mpv makes a window
 /// of its own and shows it as soon as it has opened the file, so the ordinary passes find a window
 /// that has already taken the foreground and give it back a frame too late (see
-/// `apply_noactivate_to_hwnd`). A hover's launch says here that it has begun a player, and the
-/// monitor's first passes put `WS_EX_NOACTIVATE` alone on that player's window the instant it
-/// exists: a window carrying it cannot be activated when it is shown, whatever the player asks for
-/// (see `video_playback::start_hover_video_playback`).
+/// `apply_noactivate_to_hwnd`). A launch that must not take the foreground says here that it has
+/// begun a player, and the monitor's first passes put `WS_EX_NOACTIVATE` alone on that player's
+/// window the instant it exists: a window carrying it cannot be activated when it is shown, whatever
+/// the player asks for (see `video_playback::start_hover_video_playback`).
+///
+/// **Both roads write it, and the road is carried rather than assumed**: a pin's player is the film
+/// under the pin's own window, and a launch that activated itself would take the front off the listing
+/// the click was made in and give it to a window the pin makes invisible (see
+/// `pin_lifecycle::a_hand_back_goes_to`). The word is only what the trace names the road by.
 ///
 /// The marker is cleared once the film's window is on screen — whether the pass caught it in time or
-/// lost the race — and it runs out on its own after `HOVER_BEFORE_THE_SHOW_WAIT` either way, so a
-/// hover whose player never makes a window leaves the monitor on the cadence it already keeps (see
-/// `a_hover_awaits_its_show` and `BeforeTheShow`).
-static HOVER_BEFORE_THE_SHOW: Mutex<Option<(u32, Instant)>> = Mutex::new(None);
+/// lost the race — and it runs out on its own after `PLAYER_BEFORE_THE_SHOW_WAIT` either way, so a
+/// launch whose player never makes a window leaves the monitor on the cadence it already keeps (see
+/// `a_player_awaits_its_show` and `BeforeTheShow`).
+static PLAYER_BEFORE_THE_SHOW: Mutex<Option<(u32, Instant, bool)>> = Mutex::new(None);
 
-/// How long a hover's window is waited for, counted from the launch: a player that has made no window
-/// in this long is one whose show the eager pass has missed anyway (see `HOVER_BEFORE_THE_SHOW`).
-pub(super) const HOVER_BEFORE_THE_SHOW_WAIT: Duration = Duration::from_millis(2000);
+/// How long a player's window is waited for, counted from the launch: a player that has made no window
+/// in this long is one whose show the eager pass has missed anyway (see `PLAYER_BEFORE_THE_SHOW`).
+pub(super) const PLAYER_BEFORE_THE_SHOW_WAIT: Duration = Duration::from_millis(2000);
 
-/// Write down a hover's player as one whose window is to be styled before it is shown.
-pub(super) fn note_a_hover_about_to_show(pid: u32) {
-    if let Ok(mut held) = HOVER_BEFORE_THE_SHOW.lock() {
-        *held = Some((pid, Instant::now()));
+/// Write down a player as one whose window is to be styled before it is shown, with the road that
+/// began it (see `PLAYER_BEFORE_THE_SHOW`).
+pub(super) fn note_a_player_about_to_show(pid: u32, for_a_hover: bool) {
+    if let Ok(mut held) = PLAYER_BEFORE_THE_SHOW.lock() {
+        *held = Some((pid, Instant::now(), for_a_hover));
     }
 }
 
-/// The hover still waiting for its window, as the id it was begun under — the marker's own answer,
-/// asked at `now` rather than at the moment it was written.
-///
-/// **Only a hover writes the marker, so this is the whole of where the eager style is asked for**: a
-/// pin's launch never notes one, so a pin's player is never styled by it (see
-/// `note_a_hover_about_to_show`).
-pub(super) fn a_hover_awaits_its_show(held: Option<(u32, Instant)>, now: Instant) -> Option<u32> {
-    held.filter(|(_, begun)| now.saturating_duration_since(*begun) < HOVER_BEFORE_THE_SHOW_WAIT)
-        .map(|(pid, _)| pid)
+/// The player still waiting for its window, as the id it was begun under and the road that began it —
+/// the marker's own answer, asked at `now` rather than at the moment it was written.
+pub(super) fn a_player_awaits_its_show(
+    held: Option<(u32, Instant, bool)>,
+    now: Instant,
+) -> Option<(u32, bool)> {
+    held.filter(|(_, begun, _)| {
+        now.saturating_duration_since(*begun) < PLAYER_BEFORE_THE_SHOW_WAIT
+    })
+    .map(|(pid, _, for_a_hover)| (pid, for_a_hover))
 }
 
 /// The marker as it stands, or nothing where it has run out — and one that has run out is dropped
 /// here, so nothing goes on being asked about it.
-pub(super) fn the_hover_awaiting_its_show(now: Instant) -> Option<u32> {
-    let held = HOVER_BEFORE_THE_SHOW.lock().ok().and_then(|held| *held);
-    let pid = a_hover_awaits_its_show(held, now);
-    if pid.is_none() {
-        if let Ok(mut held) = HOVER_BEFORE_THE_SHOW.lock() {
+pub(super) fn the_player_awaiting_its_show(now: Instant) -> Option<(u32, bool)> {
+    let held = PLAYER_BEFORE_THE_SHOW.lock().ok().and_then(|held| *held);
+    let player = a_player_awaits_its_show(held, now);
+    if player.is_none() {
+        if let Ok(mut held) = PLAYER_BEFORE_THE_SHOW.lock() {
             *held = None;
         }
     }
-    pid
+    player
 }
 
-/// Forget the hover whose window has been found, whether the pass caught it before the show or not.
-pub(super) fn forget_the_hover_awaiting_its_show() {
-    if let Ok(mut held) = HOVER_BEFORE_THE_SHOW.lock() {
+/// Forget the player whose window has been found, whether the pass caught it before the show or not.
+pub(super) fn forget_the_player_awaiting_its_show() {
+    if let Ok(mut held) = PLAYER_BEFORE_THE_SHOW.lock() {
         *held = None;
     }
 }
@@ -1294,27 +1305,33 @@ mod tests {
         );
     }
 
-    /// **Only a hover asks for the eager style, and only while its window is still to come.** The
-    /// marker is what a hover's launch writes and a pin's never does (see
-    /// `note_a_hover_about_to_show`), so this is the whole of the question the monitor asks before it
-    /// styles anything early (see `a_hover_awaits_its_show`).
+    /// **Every launch that must not take the foreground asks for the eager style, and only while its
+    /// window is still to come.** The marker is what such a launch writes — a hover's and a pin's
+    /// alike — and the road travels with it, so this is the whole of the question the monitor asks
+    /// before it styles anything early (see `note_a_player_about_to_show` and
+    /// `a_player_awaits_its_show`).
     #[test]
-    fn the_eager_style_is_asked_for_a_hover_spawn_and_never_for_a_pin_spawn() {
+    fn the_eager_style_is_asked_for_both_roads_and_only_until_the_window_arrives() {
         let begun = Instant::now();
         assert_eq!(
-            a_hover_awaits_its_show(Some((42, begun)), begun),
-            Some(42),
+            a_player_awaits_its_show(Some((42, begun, true)), begun),
+            Some((42, true)),
             "a hover that has just begun its player is the one the pass runs for"
         );
         assert_eq!(
-            a_hover_awaits_its_show(None, begun),
-            None,
-            "a pin's launch notes nothing, so no pin's player is ever styled before its show"
+            a_player_awaits_its_show(Some((42, begun, false)), begun),
+            Some((42, false)),
+            "and so is a pin's, which is the window a launch must not activate either"
         );
         assert_eq!(
-            a_hover_awaits_its_show(Some((42, begun)), begun + HOVER_BEFORE_THE_SHOW_WAIT),
+            a_player_awaits_its_show(None, begun),
             None,
-            "and a hover whose window never came is not looked for past its wait"
+            "a launch that noted nothing has no player to style before its show"
+        );
+        assert_eq!(
+            a_player_awaits_its_show(Some((42, begun, true)), begun + PLAYER_BEFORE_THE_SHOW_WAIT),
+            None,
+            "and a player whose window never came is not looked for past its wait"
         );
     }
 

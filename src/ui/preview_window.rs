@@ -326,6 +326,7 @@ pub(crate) use requests::is_preview_window;
 pub(crate) use requests::notify_magick_ready;
 pub(crate) use requests::notify_office_render;
 pub(crate) use requests::notify_peazip_ready;
+pub(crate) use requests::pin_file_in_flight;
 pub(crate) use requests::pin_press_was_not_a_pick;
 pub(crate) use requests::pinned;
 pub(crate) use requests::pinned_path;

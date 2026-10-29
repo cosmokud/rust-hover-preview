@@ -398,15 +398,16 @@ pub(super) fn start_video_playback(
     kind: Option<MediaType>,
 ) -> Option<PlayerProcess> {
     start_video_playback_where(
-        path, x, y, width, height, start, hold, volume, subtitle, kind, true, false,
+        path, x, y, width, height, start, hold, volume, subtitle, kind, true, false, true,
     )
 }
 
 /// Begin the same film for a hover — the launch Explorer's pointer causes, and the one road where a
-/// player must not take the foreground from the listing.
+/// player must take nothing of the listing's.
 ///
-/// **That refusal is asked of the player's own environment rather than of `STARTUPINFO`, and the
-/// answer is a measurement.** ffplay's SDL window ignores `STARTUPINFO.wShowWindow` — begun at
+/// **What it must not take is the foreground, and that is asked of the player's own environment
+/// rather than of `STARTUPINFO`, and the answer is a measurement.** ffplay's SDL window ignores
+/// `STARTUPINFO.wShowWindow` — begun at
 /// `SW_SHOWNOACTIVATE` it still came up activated, `GetWindowPlacement().showCmd` reading 1, as it
 /// did from a plain shell launch — while SDL's own hint is honoured: with
 /// `SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN` in the child's environment the window is shown unactivated
@@ -415,14 +416,17 @@ pub(super) fn start_video_playback(
 /// mpv is given two asks instead, and they are two because neither is enough alone: it ignores the
 /// same show style, so the window its own `ShowWindow` puts up is an activation whatever the command
 /// line says — and `--focus-on=never` on its own was measured to activate it all the same, for
-/// exactly that reason. So a hover's mpv is told not to focus where this build can be told (see
+/// exactly that reason. So an mpv film is told not to focus where this build can be told (see
 /// `video_launch::the_focus_on_support`, asked once), *and* its window is handed to the monitor to
 /// be given `WS_EX_NOACTIVATE` the moment it exists and before it is shown (see
-/// `ffplay_window::note_a_hover_about_to_show`).
+/// `ffplay_window::note_a_player_about_to_show`).
 ///
-/// A pin's launch is left exactly as it was, environment and command line alike (see
-/// `start_video_playback`): the pin's own window is the one that takes the foreground, and a player
-/// begun under it has nothing to take.
+/// **A pin's player is given the same three asks as a hover's** (see `start_video_playback`): a film
+/// begun for a pin is a window under the pin's own, so a launch that activates itself takes the front
+/// off the listing or the browser the user is in and gives it to a window the pin then makes
+/// invisible, bottom of the z-order and unclickable. What the pin relies on is its *own* window taking
+/// the front on a press (see `pin_take_focus` and `arm_the_pin_arrival`) — never its player's, which
+/// carries `WS_EX_NOACTIVATE` from the moment it has a window.
 #[allow(clippy::too_many_arguments)] // The launch's facts, passed through unchanged.
 pub(super) fn start_hover_video_playback(
     path: &PathBuf,
@@ -437,7 +441,7 @@ pub(super) fn start_hover_video_playback(
     kind: Option<MediaType>,
 ) -> Option<PlayerProcess> {
     start_video_playback_where(
-        path, x, y, width, height, start, hold, volume, subtitle, kind, true, true,
+        path, x, y, width, height, start, hold, volume, subtitle, kind, true, true, true,
     )
 }
 
@@ -456,7 +460,7 @@ pub(super) fn restart_hover_video_without_a_host(
     subtitle: Option<usize>,
 ) -> Option<PlayerProcess> {
     start_video_playback_where(
-        path, x, y, width, height, start, hold, volume, subtitle, None, false, true,
+        path, x, y, width, height, start, hold, volume, subtitle, None, false, true, true,
     )
 }
 
@@ -474,6 +478,7 @@ fn start_video_playback_where(
     kind: Option<MediaType>,
     allow_the_hover_host: bool,
     for_a_hover: bool,
+    must_not_activate: bool,
 ) -> Option<PlayerProcess> {
     let volume = volume.min(100);
 
@@ -519,6 +524,7 @@ fn start_video_playback_where(
             allow_the_hover_host,
             kind,
             for_a_hover,
+            must_not_activate,
         );
     }
 
@@ -558,14 +564,15 @@ fn start_video_playback_where(
     // `the_renderer_a_film_is_begun_with`). Unchanged from what every previous launch was given.
     cmd.env("SDL_RENDER_VSYNC", "0");
 
-    // **And a hover's player is shown without being activated** — the one ask that keeps the hover's
-    // preview from taking the foreground off the listing it was begun from. Which of the two ways of
-    // asking works is measured rather than assumed, and it is this one: a `STARTUPINFO.wShowWindow`
-    // of `SW_SHOWNOACTIVATE` is ignored by ffplay's SDL window (`showCmd` 1, still activated), while
-    // this hint is honoured and leaves the foreground where it was (see
-    // `start_hover_video_playback`). Only a hover is given it: a pin's player is the film under the
-    // pin's own window, which is the window that takes the foreground.
-    if for_a_hover {
+    // **And a player that must not take the foreground is shown without being activated** — the one
+    // ask that keeps a preview from taking the foreground off the listing (or the browser) it was
+    // begun from, and what a pin's own player is given for the same reason: a pin has no front to
+    // give, and the window a launch activates is made invisible and unclickable a moment later (see
+    // `start_hover_video_playback` and `pin_lifecycle::give_the_foreground_back_from`). Which of the
+    // two ways of asking works is measured rather than assumed, and it is this one: a
+    // `STARTUPINFO.wShowWindow` of `SW_SHOWNOACTIVATE` is ignored by ffplay's SDL window (`showCmd`
+    // 1, still activated), while this hint is honoured and leaves the foreground where it was.
+    if must_not_activate {
         cmd.env("SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN", "1");
     }
 
@@ -764,8 +771,12 @@ fn start_video_playback_where(
     // name is what its id is verified as, and its loop — where the loop is this app's to give — is
     // clocked from here (see `note_player_started`).
     if let Some(ref player) = child {
-        if for_a_hover {
-            note_pin_trace!("hover spawn no-activate ffplay pid {}", player.id());
+        if must_not_activate {
+            note_pin_trace!(
+                "spawn no-activate ffplay pid {} road {}",
+                player.id(),
+                if for_a_hover { "hover" } else { "pin" },
+            );
         }
         // The host holds this player and no older one, recorded before the player has a window of
         // its own to adopt: the monitor's wait for that window is a wait for *this* player's (see
@@ -814,6 +825,7 @@ fn start_mpv_video_playback(
     allow_the_hover_host: bool,
     kind: Option<MediaType>,
     for_a_hover: bool,
+    must_not_activate: bool,
 ) -> Option<PlayerProcess> {
     // The switches are read here, at the launch, for the reason the ffplay route reads its own
     // here: a film already playing was started with the answer that stood then and is kept
@@ -931,13 +943,14 @@ fn start_mpv_video_playback(
         }
     }
 
-    // **A hover's player is asked not to take the foreground, where this build can be asked at
+    // **A player that must not take the foreground is asked not to, where this build can be asked at
     // all**, and that is a measurement rather than an assumption: `--focus-on=never` is the current
     // spelling and `--focus-on-open=no` the older one, and whether the installed mpv parses either is
     // the one question the app asks it once, off this road (see `video_launch::the_focus_on_support`
-    // and `hover_focus_switch`, which is the whole of what the launch reads). Appended here rather
-    // than pushed by `mpv_args`, because a pin's launch is the command line every road had before
-    // this existed and no `--focus-on*` belongs in it.
+    // and `hover_focus_switch`, which is the whole of what the launch reads). **A pin's player is
+    // asked the same thing**: the front a pin asks for is its own window's, on a press, and a player
+    // that activates itself takes the front off the listing the click was made in (see
+    // `pin_lifecycle::a_hand_back_goes_to`).
     let mut args = video_launch::mpv_args(
         path,
         launch_x,
@@ -955,7 +968,7 @@ fn start_mpv_video_playback(
         thumbnail_flip,
         !behind_the_host,
     );
-    if for_a_hover {
+    if must_not_activate {
         if let Some(switch) =
             video_launch::hover_focus_switch(video_launch::the_focus_on_support())
         {
@@ -994,13 +1007,13 @@ fn start_mpv_video_playback(
             return None;
         }
     };
-    // **And a hover's window is handed to the monitor to style before it is shown**, which is the
-    // other half of the same ask: `--focus-on=never` stops mpv *choosing* to focus, and the show
+    // **And the player's window is handed to the monitor to be styled before it is shown**, which is
+    // the other half of the same ask: `--focus-on=never` stops mpv *choosing* to focus, and the show
     // itself is still an activation of a window that does not carry `WS_EX_NOACTIVATE` yet (see
-    // `ffplay_window::note_a_hover_about_to_show`). A pin's launch notes nothing, so a pin's window
-    // is styled exactly as it always was — once it is up.
-    if for_a_hover {
-        ffplay_window::note_a_hover_about_to_show(child.id());
+    // `ffplay_window::note_a_player_about_to_show`). A pin's player is noted for it too — the window
+    // that must not take the front is the same window whichever road began it.
+    if must_not_activate {
+        ffplay_window::note_a_player_about_to_show(child.id(), for_a_hover);
     }
 
     // **The host holds this player and no older one**, recorded before the player has a window of

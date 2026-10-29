@@ -3,6 +3,7 @@
 //! sends back.
 
 use super::*;
+use super::pin_trace::note_pin_trace;
 
 /// Whether a preview is pinned — a window of its own with a caption, which stays until it
 /// is closed. The Explorer hook asks this every tick: while it is true nothing is spawned
@@ -80,6 +81,12 @@ pub fn pinned_path() -> Option<PathBuf> {
 /// next tick, by the path the tray's own rows take. A pin that is not up is not a window to
 /// show anything in, and a file the pin is already showing is not another file: both are
 /// dropped here rather than sent, since the hook has no other answer to give them.
+///
+/// **A file the pin is already *on its way to* is not another file either**, and dropping it is the
+/// whole of what keeps one click from restarting another's swap: the pin's own `path` does not move
+/// until the incoming file is installed, so a press on the file being loaded or held used to be
+/// read as a new pick — the load dropped, the hold abandoned, its player killed — and the picture
+/// that was being kept went with them (see `pin_install::THE_FILE_IN_FLIGHT`).
 pub fn update_pinned_preview(path: &Path) {
     if !pinned() || !pin_update_enabled() {
         return;
@@ -89,7 +96,22 @@ pub fn update_pinned_preview(path: &Path) {
         return;
     }
 
+    if pin_install::pin_file_in_flight().as_deref() == Some(path) {
+        note_pin_trace!(
+            "pick dropped: {} is already the file in flight",
+            pin_trace::path_name(path)
+        );
+        return;
+    }
+
     send_preview(PreviewMessage::PinUpdate(path.to_path_buf()));
+}
+
+/// The file a pin is being shown next while it is still in flight — a load that has not answered, a
+/// box nothing has measured yet, a swap held for its picture — if there is one (see
+/// `update_pinned_preview`).
+pub fn pin_file_in_flight() -> Option<PathBuf> {
+    pin_install::pin_file_in_flight()
 }
 
 /// Note that the hand pressed the listing behind the pin, before the file the press picked is
