@@ -16,9 +16,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
     GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
-    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_ERASEBKGND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED,
-    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE,
+    SWP_NOZORDER, SW_RESTORE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_ERASEBKGND, WS_CHILD,
+    WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -8034,4 +8034,124 @@ fn a_steps_hand_back_goes_by_the_window_the_foreground_was_taken_from() {
         no_pin_at_all, listing,
         "and with no pin up the recorded window is the answer it always was"
     );
+}
+
+/// **`Always On Top` is the pin's own band, and not only its host's.**
+///
+/// A pin whose chrome a film's host owns is banded through the host, and the pin's own window was
+/// never asked: the promotion wrote `HWND_NOTOPMOST` on it and no road after that named it again, so
+/// the pair stood on the desktop's own rule for an owned window - which is not a bit this app sets.
+/// The user's report is the pin appearing behind Explorer with the setting on.
+///
+/// So the band is asked of both windows of the pair, on every road that places it, and asked over both
+/// engines' hosts: this is the placement itself, over a created host and over a hover's promoted one,
+/// with the setting's two answers.
+#[test]
+fn always_on_top_is_the_pins_own_band_and_not_only_the_hosts() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+
+    // Both engines are on the one host road (see `pin_film_host`), so both are asked: the picture is
+    // the same window either way, and what is under test is the pair's band.
+    for ffplay in [false, true] {
+        let film = if ffplay {
+            ffplay_standing_film()
+        } else {
+            StandingFilm::new()
+        };
+        let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+        let host = pin_film_host::film_host().expect("the film's host");
+        let pin = pin_real_window::real_pin_window().expect("the pin's own window");
+        assert_eq!(
+            pin_film_host::the_pin_window_that_holds_the_band(pin),
+            host,
+            "a film's host is the window that holds the pair's band"
+        );
+
+        // **The state the promotion leaves the pair in**: the host in the topmost band, and the pin's
+        // own window put out of it - which is what `own_the_pin_window` wrote on the chrome. A window
+        // the app has said is *not* topmost is a window the desktop can leave in the ordinary band
+        // while its owner is in the topmost one, which is the pin behind the listing with the setting
+        // on: an owned window follows its owner into a band it is not standing in.
+        unsafe { pin_film_host::place_the_pin_in_the_band(pin, HWND_TOPMOST) };
+        unsafe { SetWindowPos(pin, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) }
+            .expect("the band a promotion wrote on the chrome");
+        assert!(
+            !unsafe { window_holds_the_topmost_band(pin) },
+            "a chrome put out of its owner's band is not in it, however the host stands"
+        );
+
+        // The setting on: the band is the topmost one, and it is asked of both windows.
+        unsafe { pin_film_host::place_the_pin_in_the_band(pin, HWND_TOPMOST) };
+        assert!(
+            unsafe { window_holds_the_topmost_band(host) },
+            "the host that holds the pair's band is in it"
+        );
+        assert!(
+            unsafe { window_holds_the_topmost_band(pin) },
+            "and the pin's own window with it, which is the one the user sees and clicks              (engine {})",
+            if ffplay { "ffplay" } else { "mpv" }
+        );
+
+        // The setting off: an ordinary window on both sides, which the next click puts behind.
+        unsafe { pin_film_host::place_the_pin_in_the_band(pin, HWND_NOTOPMOST) };
+        assert!(
+            !unsafe { window_holds_the_topmost_band(host) }
+                && !unsafe { window_holds_the_topmost_band(pin) },
+            "a pin that is not Always On Top is an ordinary window, host and chrome alike"
+        );
+    }
+
+    // **And the row that changes the setting is a placement of the pin that is on the screen.** This
+    // is the road the user's report names: a hover's host promoted as the pin's with the setting off,
+    // and the setting then turned on. It banded this app's *preview* window, which a pin standing in a
+    // window of its own has put down, so the pair stayed ordinary and the pin stood behind the listing
+    // it was asked for from however the setting read.
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 3.0) };
+    let pin = pin_real_window::real_pin_window().expect("the pin's own window");
+    let standing = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    pin_stands_in_its_own_window(true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover.host),
+        "the hover's host is the pin's host"
+    );
+    assert!(
+        !unsafe { window_holds_the_topmost_band(pin) },
+        "a pin taken up with the setting off is an ordinary window"
+    );
+
+    // The user turns `Always On Top` on with the pin standing.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    unsafe { place_the_pin_where_the_setting_names() };
+    assert!(
+        unsafe { window_holds_the_topmost_band(hover.host) }
+            && unsafe { window_holds_the_topmost_band(pin) },
+        "the row puts the pin that is on the screen in the band it names, both windows of it"
+    );
+
+    // And off again: the pair leaves the band rather than one half of it.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    unsafe { place_the_pin_where_the_setting_names() };
+    assert!(
+        !unsafe { window_holds_the_topmost_band(hover.host) }
+            && !unsafe { window_holds_the_topmost_band(pin) },
+        "and a setting turned off takes both out of the topmost band"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = standing;
+    }
+    drop(hover);
 }
