@@ -14,13 +14,13 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GetDC, ReleaseDC};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW, GetWindowRect,
     IsIconic, IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, SetWindowPos, ShowWindow,
     GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, SC_RESTORE, SWP_NOACTIVATE, SW_MINIMIZE, SW_RESTORE,
-    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SIZE, WM_SYSCOMMAND,
-    WNDCLASSEXW,
-    WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SETFOCUS, WM_SIZE,
+    WM_SYSCOMMAND, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// Register the class the stand-in is made from, once for the run.
@@ -587,6 +587,176 @@ unsafe fn stands_over(above: HWND, below: HWND) -> bool {
     }
 
     false
+}
+
+/// **A host's taskbar button hands the keyboard to the pin.** With `Pin Mode → Always On Top` off the
+/// pair's button belongs to the film host — the window the Shell lists for a pin whose chrome the host
+/// owns — and the host is disabled so that a press on the band reaches the pin. What a click on that
+/// button delivers is therefore an activation of a window no key can be typed into, and it is answered
+/// for the pin: the host's procedure asks `pin_take_focus` for the pin's window, exactly as a press on
+/// the pin does.
+///
+/// **The entry point is the host's own procedure and not a restore.** A disabled top-level window is
+/// still a window the Shell can activate — the activation delivers `WM_ACTIVATE` and `WM_SETFOCUS` to
+/// it, which is what makes the window's own answer the whole of the fix — and a pin that is up and not
+/// minimized is a window with nothing to restore. The `WM_SETFOCUS` half is answered too, as the belt
+/// to that brace: a focus that lands on the host after the activation is a keyboard the pin has not got.
+///
+/// The ask itself is read back through the seam a press is asked through, so the test does not make it
+/// on the user's desktop; the entry point is then the real host, disabled as the app makes it, and the
+/// keyboard is measured where Windows puts it — in the pin's own window of this test's.
+#[test]
+fn a_host_activation_hands_the_keyboard_to_the_pin() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back when
+    // the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let app_window = WS_EX_APPWINDOW.0 as isize;
+
+    // With the setting off the host is the window that wears the button, and it is the disabled window
+    // the band's picture has to be (see the module note).
+    assert_ne!(
+        unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) } & app_window,
+        0,
+        "the host is the window the Shell lists for the pair, so the taskbar button is its own"
+    );
+    assert!(
+        !unsafe { IsWindowEnabled(host).as_bool() },
+        "and it is disabled, because a press on the band has to reach the pin"
+    );
+
+    // What the host's answer asks of the pin, through the seam a press is asked through: the window
+    // made focusable, the foreground, the caret — and nothing else.
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                host,
+                WM_ACTIVATE,
+                WPARAM(WA_ACTIVE as usize),
+                &recorder,
+            )
+        }
+        .is_some(),
+        "an activation of the pin's host is answered"
+    );
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            PinWindowCall::SetFocusable { focusable: true },
+            PinWindowCall::SetForeground,
+            PinWindowCall::SetFocus,
+        ],
+        "and it is the press's own three asks, in the press's own order"
+    );
+    assert_eq!(
+        recorder.handed_the_keyboard_to(),
+        vec![film.pin_hwnd.0 as isize],
+        "the keyboard is handed to the pin's window, which is the window the button asked for"
+    );
+
+    // The `WM_SETFOCUS` brace answers the same way, and an activation that is not one asks nothing.
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                host,
+                WM_SETFOCUS,
+                WPARAM(0),
+                &recorder,
+            )
+        }
+        .is_some(),
+        "a focus that lands on the host is answered for the pin as well"
+    );
+    assert_eq!(
+        recorder.handed_the_keyboard_to(),
+        vec![film.pin_hwnd.0 as isize],
+        "so the caret does not stay on a window no key can be typed into"
+    );
+
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                host,
+                WM_ACTIVATE,
+                WPARAM(WA_INACTIVE as usize),
+                &recorder,
+            )
+        }
+        .is_none(),
+        "the host being deactivated is not a request for the pin"
+    );
+    assert!(
+        recorder.calls().is_empty(),
+        "and it asks nothing of the window it is told about"
+    );
+
+    // **Only the pin's own host.** A hover's host is made from the same class and answered by the same
+    // procedure, and it is nobody's button (see `answer_a_host`).
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                HWND(0x3000 as *mut _),
+                WM_ACTIVATE,
+                WPARAM(WA_ACTIVE as usize),
+                &recorder,
+            )
+        }
+        .is_none(),
+        "an activation of a window that is not the pin's host is the hover road's, and asks no pin"
+    );
+    assert!(recorder.calls().is_empty());
+
+    // **The real entry point**: the host's own procedure, with the host disabled as the app makes it.
+    // What the keyboard does is measured where Windows puts it, and the pin is the window it is in.
+    let _ = take_pin_command();
+    unsafe {
+        SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0));
+    }
+    assert_eq!(
+        unsafe { GetFocus() },
+        film.pin_hwnd,
+        "a click on the host's button leaves the caret in the pin, not on a disabled window"
+    );
+    assert!(
+        pin_holds_a_keyboard(),
+        "and the pin holds the claim a press gives it, so its own keys are answered"
+    );
+
+    // **With `Always On Top` on the pair has no button at all**, so no click on one can arrive: the
+    // setting takes the app-window bit off both windows a button could be worn by (see
+    // `own_the_pin_window`).
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    // Safety: the pair is this test's own, and the road only re-reads the setting on it.
+    unsafe { pin_film_host::the_button_follows_the_setting() };
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) } & app_window,
+        0,
+        "with `Always On Top` on the host wears no taskbar button"
+    );
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } & app_window,
+        0,
+        "and neither does the pin the host owns, so the pair has no button to click"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
 }
 
 /// A pin the taskbar's own button brings back comes back in front of the windows that were in front
