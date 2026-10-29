@@ -8155,3 +8155,193 @@ fn always_on_top_is_the_pins_own_band_and_not_only_the_hosts() {
     }
     drop(hover);
 }
+
+/// One placement as `place_the_pin_in_the_band` records it: the band it asked for and the window it
+/// asked it of (see `the_band_is_asked_of_the_pair_after_its_host_appears`).
+fn a_band_write(window: HWND, band: HWND) -> String {
+    format!("band {band:?} asked of {window:?}")
+}
+
+/// The index of the one line that is `line`, with the whole recorded run named where it is missing.
+fn the_line(lines: &[String], line: String) -> usize {
+    lines
+        .iter()
+        .position(|noted| *noted == line)
+        .unwrap_or_else(|| panic!("`{line}` is not one of the lines this run wrote: {lines:?}"))
+}
+
+/// **The pair is put in its band after the host that carries the film is on the screen, and only on
+/// the appearance.**
+///
+/// The fault this is a regression test for: every band write of a solo pin and of a file step landed
+/// while the host was still hidden — a fresh host until its player draws, and the host a step hides
+/// for the wait of the next player — and both a band asked of a hidden window and a band asked of a
+/// window that is already ordinary are no raise at all (measured). The pin therefore came up behind
+/// whatever was in front of the listing or the arrow was pressed in, and the next pick "fixed" it only
+/// because by then the host was on the screen and the same call landed on live windows.
+///
+/// What is held here is the order the pair was asked in: the show of the host, and after it the raise
+/// that puts both windows of the pair where the setting names. A show of a host that is already up is
+/// no appearance, and the recorded run says so by writing nothing.
+#[test]
+fn the_band_is_asked_of_the_pair_after_its_host_appears() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+
+    let standing = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    // Both engines are on the one host road, so both are asked: mpv's film and FFmpeg's are drawn
+    // into the same window by the same passes (see `pin_film_host`).
+    for ffplay in [false, true] {
+        let engine = if ffplay { "ffplay" } else { "mpv" };
+        let film = if ffplay {
+            ffplay_standing_film()
+        } else {
+            StandingFilm::new()
+        };
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        let host = pin_film_host::film_host().expect("the film's host");
+        let pin = pin_real_window::real_pin_window().expect("the pin's own window");
+        assert!(
+            !unsafe { IsWindowVisible(host) }.as_bool(),
+            "a host with no picture in it is not on the screen yet ({engine})"
+        );
+        assert!(
+            unsafe { IsWindowVisible(pin) }.as_bool(),
+            "and the pin's own window is, which is the arrival whose band was asked while the host \
+             was still hidden ({engine})"
+        );
+
+        // The player draws, and the tick is the road that shows the host the picture is in.
+        let pid = unsafe { GetCurrentProcessId() };
+        film.drawn_in_the_host(pid);
+        let _picture = unsafe { a_source_of_the_host(host) };
+        pin_trace::clear_noted();
+        assert!(
+            pin_film_host::the_video_window_is_owed_the_front(None),
+            "the pin's own hosted film is the tick's to show ({engine})"
+        );
+        video_playback::bring_the_video_window_to_the_front(film.box_);
+        assert!(
+            unsafe { IsWindowVisible(host) }.as_bool(),
+            "the host comes up with the picture in it ({engine})"
+        );
+
+        let lines = pin_trace::noted_lines();
+        let shown = the_line(&lines, format!("host visible 1 {host:?}"));
+        let asked_of_the_host = the_line(&lines, a_band_write(host, HWND_NOTOPMOST));
+        let asked_of_the_pin = the_line(&lines, a_band_write(pin, HWND_NOTOPMOST));
+        assert!(
+            shown < asked_of_the_host && shown < asked_of_the_pin,
+            "the pair is put in its band after the show and not before it, which is the whole of \
+             the fault: {lines:?} ({engine})"
+        );
+        assert!(
+            !unsafe { window_holds_the_topmost_band(host) }
+                && !unsafe { window_holds_the_topmost_band(pin) },
+            "and the band that is left is the setting's, both windows of the pair out of the \
+             topmost one ({engine})"
+        );
+
+        // A show of a host already on the screen is no appearance: nothing is asked of the band.
+        pin_trace::clear_noted();
+        unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+        assert!(
+            !pin_trace::noted_lines()
+                .iter()
+                .any(|line| line.starts_with("band ")),
+            "a host already up is not placed again, so the tick's every-pass show asks the band \
+             nothing: {:?} ({engine})",
+            pin_trace::noted_lines()
+        );
+
+        drop(film);
+    }
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = standing;
+    }
+}
+
+/// **A pin whose host appears later is put over the ordinary window that was opened over it.**
+///
+/// The user's report, with `Pin Mode → Always On Top` off: the pin comes up behind Explorer from its
+/// first frame — after the solo pin, because the host that carries the film is only shown once its
+/// player draws, and after a file change, because the swap hides the host for the wait of the next
+/// player and the re-show is the tick's. The band is the setting's and the pin is an ordinary window,
+/// so what is owed is the place at the front of the ordinary band, taken at the appearance.
+///
+/// The window that stands for Explorer here is a window of the test's own, made after every window of
+/// the pin's, which is what puts it in front of them.
+#[test]
+fn a_pin_whose_host_appears_over_an_ordinary_window_is_put_in_front_of_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+
+    let standing = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    for ffplay in [false, true] {
+        let engine = if ffplay { "ffplay" } else { "mpv" };
+        let film = if ffplay {
+            ffplay_standing_film()
+        } else {
+            StandingFilm::new()
+        };
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        let host = pin_film_host::film_host().expect("the film's host");
+        let pin = pin_real_window::real_pin_window().expect("the pin's own window");
+
+        // The window opened over the pin after it, which is the listing the user picked in.
+        let listing = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP | WS_VISIBLE,
+                NOWHERE,
+                NOWHERE,
+                200,
+                120,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .expect("a window of the test's own standing over the pin");
+        assert!(
+            unsafe { stands_over(listing, host) },
+            "the window opened after the pin's is the one in front of the film it is hiding ({engine})"
+        );
+
+        // The picture arrives in the host, and the tick shows it.
+        let pid = unsafe { GetCurrentProcessId() };
+        film.drawn_in_the_host(pid);
+        let _picture = unsafe { a_source_of_the_host(host) };
+        video_playback::bring_the_video_window_to_the_front(film.box_);
+
+        assert!(
+            unsafe { stands_over(host, listing) },
+            "the film's host comes up over the window that was in front of it, with `Always On Top` \
+             off and no second pick: {:?} ({engine})",
+            pin_trace::noted_lines()
+        );
+        assert!(
+            unsafe { stands_over(pin, listing) },
+            "and the pin's own window with it, because the pair is banded as one ({engine})"
+        );
+
+        unsafe {
+            let _ = DestroyWindow(listing);
+        }
+        drop(film);
+    }
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = standing;
+    }
+}
