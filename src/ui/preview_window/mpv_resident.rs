@@ -298,7 +298,17 @@ fn begun(signature: LaunchSignature, volume: u32, audio_off: bool) -> Option<Res
     // **The window is a hover's window before mpv shows it**: the eager pass gives it
     // `WS_EX_NOACTIVATE` first, which is the discipline every hover player's window is begun under
     // (see `ffplay_window::note_a_player_about_to_show`).
+    //
+    // **And it is taken out of the Shell's lists before mpv shows it, because it has no file in it.**
+    // The resident is begun with `--force-window=yes` so that a hover has a window to draw into, and
+    // that window is a real top-level window of the user's until it is told otherwise: the eager pass
+    // above is written for a window that is not on the screen yet, and a resident's window is shown no
+    // matter how quickly the monitor looks. So the pid is named for the one road that writes the bits
+    // on a window that may already be listed — the Shell reads them again on the show it pays for
+    // there — and the pause between this line and that pass is a button titled `No file` at worst (see
+    // `ffplay_window::note_a_window_to_unlist` and `eager_ex_style`).
     ffplay_window::note_a_player_about_to_show(pid, true);
+    ffplay_window::note_a_window_to_unlist(pid);
     mpv_ipc::remember_pipe(pid, &ipc, audio_off);
     note_pin_trace!("mpv resident begun pid {pid}");
 

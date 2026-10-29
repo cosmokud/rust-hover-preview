@@ -414,6 +414,11 @@ pub(super) fn ensure_noactivate_monitor() {
 
         while RUNNING.load(Ordering::Acquire) {
             let pid = VIDEO_PID.load(Ordering::Acquire);
+            // **A window that must never wear a taskbar button is taken out of the Shell's lists from
+            // its first appearance**, whether or not this app is showing it as a film: the warm resident
+            // is a real top-level window with no file in it, and a button titled `No file` is not one the
+            // user asked for (see `unlist_the_awaited_window` and `mpv_resident`).
+            let a_window_waits_to_be_unlisted = unsafe { unlist_the_awaited_window() };
 
             if pid != monitored_pid {
                 monitored_pid = pid;
@@ -467,9 +472,17 @@ pub(super) fn ensure_noactivate_monitor() {
                     && pinned()
                     && !pin_is_collapsed()
                     && pin_playback::a_relaunch_is_in_flight();
-                // And a hover waiting to be caught before its show is looked for at the start's
+                // And a player waiting to be caught before its show is looked for at the start's
                 // cadence too, whatever age the player it belongs to is.
-                wait_for_noactivate_wake(the_monitor_wait(elapsed, launching || eager.is_some()));
+                wait_for_noactivate_wake(the_monitor_wait(
+                    elapsed,
+                    launching || eager.is_some() || a_window_waits_to_be_unlisted,
+                ));
+            } else if a_window_waits_to_be_unlisted {
+                // A window this app is waiting for is looked for at the start's cadence: it is a player's
+                // first quarter of a second, and the bit has to be on the window before the player shows
+                // it (see `A_WINDOW_COMING_MS`).
+                wait_for_noactivate_wake(A_WINDOW_COMING_MS);
             } else {
                 // Nothing is playing: the wait is the player's own start, which is what
                 // signals this thread rather than a clock.
@@ -490,7 +503,7 @@ pub(super) const NOACTIVATE_IDLE_WAIT_MS: u64 = 500;
 /// nothing is pending (see `ensure_noactivate_monitor`).
 pub(super) fn the_monitor_wait(elapsed: Duration, launching: bool) -> u64 {
     if elapsed < Duration::from_millis(250) || launching {
-        5
+        A_WINDOW_COMING_MS
     } else if elapsed < Duration::from_secs(2) {
         20
     } else {
@@ -562,14 +575,152 @@ pub(super) fn forget_the_player_awaiting_its_show() {
     }
 }
 
-/// The style the eager pass writes: `WS_EX_NOACTIVATE` and **nothing else**.
+/// The style the eager pass writes: the two bits a player's window must not be shown without.
 ///
-/// The rest of the style a player's window wears — the toolwindow bit, the topmost band, the
-/// press-through — is the ordinary passes' to write a moment later (see `player_ex_style_for`), and
-/// writing it here would be a second answer to a question those passes decide again. The one bit the
-/// show itself reads is this one.
+/// `WS_EX_NOACTIVATE` is the bit the show itself reads, and it is the whole of what this pass was once
+/// for: a window carrying it cannot take the foreground when the player shows it (see
+/// `PLAYER_BEFORE_THE_SHOW`).
+///
+/// **`WS_EX_TOOLWINDOW` is the other half, and it is the one a window with no film in it needs.** A
+/// player opened idle with a window to draw into makes a real top-level window and shows it before any
+/// file is loaded — the warm resident is exactly that (see `mpv_resident`) — and every window of a
+/// player's own that this app shows is out of the Shell's taskbar and out of Alt+Tab in its end state
+/// too: `player_ex_style_for` and `pin_film_thumbnail::source_ex_style` both put this bit on, and
+/// neither ever takes it off. Written here it is on the window from the first frame the Shell can list
+/// it, which is the difference between a warm player and a button titled `No file`.
+///
+/// What is *not* written here is everything the ordinary passes decide: the topmost band, the
+/// press-through and the invisibility of a source (see `player_ex_style_for`). Those are answers of the
+/// road the window is being put on, and a second answer written here would be one the passes then have
+/// to disagree with.
 pub(super) fn eager_ex_style(current: isize) -> isize {
-    current | WS_EX_NOACTIVATE.0 as isize
+    current | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize
+}
+
+/// The window this app has been told must never wear a taskbar button, with the moment the player that
+/// makes it was begun: the warm resident's, and no other player's (see `note_a_window_to_unlist`).
+///
+/// **Why the resident needs a road of its own.** A player begun for a hover is caught by the eager
+/// pass before its show or is the film the user is looking at a moment later, so a bit written after it
+/// is on the screen is not worth a hide and a show there: that is a frame of film blanked. The resident
+/// is the other way round — a real top-level window at a corner of no display, one pixel square, with
+/// nothing in it and nobody looking at it (see `mpv_resident::PARKED_AT`) — so the bit can be written
+/// and the show that makes the Shell read it can be paid at any moment, and the earliest one is the
+/// window's first appearance.
+static A_WINDOW_TO_UNLIST: Mutex<Option<(u32, Instant)>> = Mutex::new(None);
+
+/// Ask for a player's film window to be taken out of the Shell's lists from its first appearance.
+///
+/// The monitor is started and woken rather than left to its own clock: between players it waits on that
+/// event, and the window this is for appears a quarter of a second after the player is begun. A resident
+/// is the one player that can be begun with no film behind it, so the thread that would otherwise be
+/// started by a launch is started here as well (see `ensure_noactivate_monitor`).
+pub(super) fn note_a_window_to_unlist(pid: u32) {
+    if let Ok(mut held) = A_WINDOW_TO_UNLIST.lock() {
+        *held = Some((pid, Instant::now()));
+    }
+    ensure_noactivate_monitor();
+    wake_noactivate_monitor();
+}
+
+/// The process whose window is still to be taken out of the Shell's lists (see `A_WINDOW_TO_UNLIST`).
+#[cfg(test)]
+pub(super) fn the_window_to_unlist() -> Option<u32> {
+    A_WINDOW_TO_UNLIST
+        .lock()
+        .ok()
+        .and_then(|held| held.map(|(pid, _)| pid))
+}
+
+/// Forget the window this run was waiting to take out of the Shell's lists (see
+/// `A_WINDOW_TO_UNLIST`).
+#[cfg(test)]
+pub(super) fn forget_the_window_to_unlist() {
+    if let Ok(mut held) = A_WINDOW_TO_UNLIST.lock() {
+        *held = None;
+    }
+}
+
+/// How long the monitor waits between looks while a window it has been told about has not appeared yet:
+/// the start's own cadence, because the window is a player's first frame of existence and the bit has to
+/// be on it before the player shows it (see `the_monitor_wait` and `unlist_the_awaited_window`).
+const A_WINDOW_COMING_MS: u64 = 5;
+
+/// Take the awaited player's film window out of the Shell's lists, and answer whether one is still being
+/// waited for (see `A_WINDOW_TO_UNLIST`).
+///
+/// The marker runs out the way a player's own wait for its window does: a process that made no window in
+/// that time is one this pass has missed anyway, and a monitor that kept looking would keep its start
+/// cadence for the rest of the run (see `PLAYER_BEFORE_THE_SHOW_WAIT`).
+///
+/// Safety: the window this asks about is a player's own window of another process, and the style and
+/// show calls are the one road this app styles a player's window on (see `try_apply_noactivate_style`
+/// and `mpv_resident`).
+unsafe fn unlist_the_awaited_window() -> bool {
+    let Some((pid, begun)) = A_WINDOW_TO_UNLIST.lock().ok().and_then(|held| *held) else {
+        return false;
+    };
+    if begun.elapsed() >= PLAYER_BEFORE_THE_SHOW_WAIT {
+        if let Ok(mut held) = A_WINDOW_TO_UNLIST.lock() {
+            *held = None;
+        }
+        return false;
+    }
+
+    !unsafe { give_a_players_window_no_button(pid) }
+}
+
+/// Put the bits that keep a player's window out of the user's lists on it, wherever it is in its life:
+/// answering whether it was there to be styled yet (see `unlist_the_awaited_window`).
+unsafe fn give_a_players_window_no_button(pid: u32) -> bool {
+    let mut data = TheFilmsWindowSearch {
+        target_pid: pid,
+        found: HWND::default(),
+    };
+    let _ = unsafe {
+        EnumWindows(
+            Some(the_films_window_callback),
+            LPARAM(&mut data as *mut TheFilmsWindowSearch as isize),
+        )
+    };
+    if data.found.is_invalid() {
+        return false;
+    }
+
+    if let Ok(mut held) = A_WINDOW_TO_UNLIST.lock() {
+        *held = None;
+    }
+
+    let window = data.found;
+    let current = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
+    let wanted = eager_ex_style(current);
+    if wanted != current {
+        let _ = unsafe { SetWindowLongPtrW(window, GWL_EXSTYLE, wanted) };
+        // A style written behind a window's back is not one it presents with until it is asked to read
+        // it (see `pin_real_window::set_the_pin_window_appwindow`, which is the same fact for a pin).
+        let _ = unsafe {
+            SetWindowPos(
+                window,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+        };
+        // **And the Shell lists a window as it is shown**, so a window it has already listed wears the
+        // button it was listed with however the bit is re-read. This window is the resident's: parked
+        // at a corner of no display, one pixel square, with no film loaded and nobody looking at it, so
+        // the show is paid for here rather than left to the first hover — which would leave a button
+        // titled `No file` standing until the resident was picked up, or for ever.
+        if unsafe { IsWindowVisible(window) }.as_bool() {
+            let _ = unsafe { ShowWindow(window, SW_HIDE) };
+            let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+        }
+        note_pin_trace!("player window {:?} taken out of the Shell's lists", window);
+    }
+    true
 }
 
 /// What the eager pass found of a hover's player's film window.
@@ -1333,24 +1484,70 @@ mod tests {
         );
     }
 
-    /// **The eager pass writes `WS_EX_NOACTIVATE` and nothing else**: the toolwindow bit, the topmost
-    /// band and the press-through are the ordinary passes' to decide again a moment later, and the one
-    /// bit a show reads is this one (see `eager_ex_style`).
+    /// **The eager style takes the player's window out of the taskbar as well as off the focus**, and it
+    /// adds nothing the passes that follow would have to disagree with.
+    ///
+    /// `WS_EX_TOOLWINDOW` is what keeps a window out of the Shell's taskbar and out of Alt+Tab, and a
+    /// player's window wears it in every end state this app has for one: `player_ex_style_for` puts it on
+    /// a hover's or a pin's window and `pin_film_thumbnail::source_ex_style` puts it on a source (see
+    /// `eager_ex_style`).
     #[test]
-    fn the_eager_style_sets_only_the_no_activate_bit() {
+    fn the_eager_style_takes_the_window_out_of_the_taskbar_and_off_the_focus() {
         let noactivate = WS_EX_NOACTIVATE.0 as isize;
         let toolwindow = WS_EX_TOOLWINDOW.0 as isize;
+        let inert = WS_EX_TOPMOST.0 as isize | WS_EX_TRANSPARENT.0 as isize;
 
         assert_eq!(
             eager_ex_style(0),
-            noactivate,
-            "a bare window is given `WS_EX_NOACTIVATE` and nothing besides it"
+            noactivate | toolwindow,
+            "a bare window is given the two bits a player's window must not be shown without"
         );
         assert_eq!(
             eager_ex_style(toolwindow),
             toolwindow | noactivate,
             "and a bit the player already wears is left exactly as it was"
         );
+        assert_eq!(
+            eager_ex_style(inert),
+            inert | noactivate | toolwindow,
+            "while the band, the press-through and the invisibility of a source stay the passes' own"
+        );
+    }
+
+    /// **And the end state every pass leaves a player's window in is the one the eager style names.**
+    ///
+    /// The eager pass is shared with hover players, so the only way its losing a button is not a change
+    /// of behaviour is that both ordinary style roads already ask for the same bit: a hover's film and a
+    /// pin's are styled by `player_ex_style_for`, and the source the Shell draws through a host by
+    /// `pin_film_thumbnail::source_ex_style` (whose own test holds that bit and the two beside it in
+    /// `the_invisible_knob_is_on_unless_it_says_zero_and_is_the_layered_bit`). Nothing either of them
+    /// decides is taken away by the eager pass, and neither ever takes the toolwindow bit off.
+    #[test]
+    fn a_players_end_style_still_has_the_bit_the_eager_pass_writes() {
+        let toolwindow = WS_EX_TOOLWINDOW.0 as isize;
+        let noactivate = WS_EX_NOACTIVATE.0 as isize;
+
+        // A player's window as a launch opens it, and one that already wears the bit: the two ends the
+        // ordinary passes are asked about.
+        let app_window = windows::Win32::UI::WindowsAndMessaging::WS_EX_APPWINDOW.0 as isize;
+        for current in [app_window, app_window | toolwindow] {
+            let styled = player_ex_style_for(current);
+            assert_ne!(
+                styled & toolwindow,
+                0,
+                "a player's window is out of the taskbar when the passes are done with it"
+            );
+            assert_ne!(
+                styled & noactivate,
+                0,
+                "and it never takes the keyboard"
+            );
+            assert_eq!(
+                eager_ex_style(styled),
+                styled,
+                "so the eager pass asks for nothing the end state does not already have: {styled:x}"
+            );
+        }
     }
 
     /// A pid with no window of its own is a engine that has not made one yet, which is the answer the
@@ -1366,16 +1563,16 @@ mod tests {
         );
     }
 
-    /// **The eager pass styles the film's own window as soon as it exists and before it is shown.** A
-    /// window of this process is made with the class a film's window has and left unshown the way a
-    /// player leaves it for the few milliseconds it takes to configure it — and the pass finds it, gives
-    /// it `WS_EX_NOACTIVATE` alone, and then says the show it later saw was the one it had styled (see
-    /// `style_the_window_before_the_show` and `A_FILMS_WINDOW_CLASS`).
-    #[test]
-    fn the_eager_pass_styles_a_film_window_that_is_not_shown_yet() {
+    /// A window of the class a film's window has, made by this process and left where no display is:
+    /// what the passes that style a player before its show are asked about, and what the caller
+    /// destroys. `shown` is the other half of the question — a player shows its own window the moment
+    /// it has configured it, so a pass either catches the window before that or finds it already
+    /// listed.
+    ///
+    /// Safety: the window is the caller's to destroy.
+    unsafe fn a_film_window_of_the_tests_own(shown: bool) -> HWND {
         use windows::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, WINDOW_EX_STYLE,
-            WNDCLASSW, WS_POPUP,
+            CreateWindowExW, DefWindowProcW, RegisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_POPUP,
         };
 
         unsafe extern "system" fn an_empty_window(
@@ -1413,8 +1610,28 @@ mod tests {
                 instance,
                 None,
             )
-            .expect("a film's window, off the desktop and unshown");
+            .expect("a film's window, off the desktop");
+            if shown {
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            }
+            hwnd
+        }
+    }
+
+    /// **The eager pass styles the film's own window as soon as it exists and before it is shown.** A
+    /// window of this process is made with the class a film's window has and left unshown the way a
+    /// player leaves it for the few milliseconds it takes to configure it — and the pass finds it, gives
+    /// it the two bits a player's window must not be shown without, and then says the show it later saw
+    /// was the one the bits were already on the window for (see `style_the_window_before_the_show` and
+    /// `A_FILMS_WINDOW_CLASS`).
+    #[test]
+    fn the_eager_pass_styles_a_film_window_that_is_not_shown_yet() {
+        use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+        unsafe {
+            let hwnd = a_film_window_of_the_tests_own(false);
             let noactivate = WS_EX_NOACTIVATE.0 as isize;
+            let toolwindow = WS_EX_TOOLWINDOW.0 as isize;
 
             assert!(
                 matches!(
@@ -1423,10 +1640,12 @@ mod tests {
                 ),
                 "a window nobody has shown is styled and the pass goes on looking"
             );
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            assert_ne!(ex & noactivate, 0, "and it is given `WS_EX_NOACTIVATE`");
             assert_ne!(
-                GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & noactivate,
+                ex & toolwindow,
                 0,
-                "and what it was given is `WS_EX_NOACTIVATE`"
+                "with the bit that keeps it out of the Shell's taskbar from its first appearance"
             );
 
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -1435,11 +1654,76 @@ mod tests {
                     style_the_window_before_the_show(GetCurrentProcessId()),
                     BeforeTheShow::Styled
                 ),
-                "and the show it is now in is one the bit was already on the window for"
+                "and the show it is now in is one the bits were already on the window for"
             );
 
             let _ = DestroyWindow(hwnd);
         }
+    }
+
+    /// **A player's window is taken out of the Shell's lists from its first appearance**, which is the
+    /// road a warm resident's window gets: the resident is begun idle with a window to draw into and no
+    /// file to draw, so its window is a real top-level window of the user's from the moment mpv makes it
+    /// — a taskbar button titled `No file` (see `note_a_window_to_unlist` and `mpv_resident`).
+    ///
+    /// Both lives of that window are held here, because the Shell reads a taskbar bit as a window is
+    /// *shown*: one caught before its show wears the bits from the start, and one the pass finds already
+    /// listed is styled and put down and up again for it — which costs nothing, because the window is at
+    /// a corner of no display with nothing in it, and is the whole reason this road is the resident's
+    /// rather than a hover player's.
+    #[test]
+    fn a_players_window_is_taken_out_of_the_shells_lists_from_its_first_appearance() {
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+        use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+        let pid = unsafe { GetCurrentProcessId() };
+        let the_bits = |hwnd: HWND| {
+            let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+            (
+                ex & (WS_EX_TOOLWINDOW.0 as isize) != 0,
+                ex & (WS_EX_NOACTIVATE.0 as isize) != 0,
+            )
+        };
+
+        for shown_first in [false, true] {
+            forget_the_window_to_unlist();
+            let window = unsafe { a_film_window_of_the_tests_own(shown_first) };
+            let was_up = unsafe { IsWindowVisible(window) }.as_bool();
+            assert_eq!(
+                the_bits(window),
+                (false, false),
+                "a window as a player opens it is listed and may be activated"
+            );
+
+            note_a_window_to_unlist(pid);
+            // **The pass is asked directly rather than waited for.** The thread that runs it is the
+            // app's, and a test holds the road rather than the clock — which is also why the answer
+            // here is only that nothing is left waiting: the monitor may have spent the marker first.
+            assert!(
+                !unsafe { unlist_the_awaited_window() },
+                "the window is there to be taken out of the lists, so nothing is left waiting for it"
+            );
+            assert_eq!(
+                the_bits(window),
+                (true, true),
+                "so it wears the bits that keep it out of the taskbar and off the focus ({shown_first})"
+            );
+            assert_eq!(
+                unsafe { IsWindowVisible(window) }.as_bool(),
+                was_up,
+                "and a window that was on the screen is left on the screen by the show the Shell                  read the bits with, where one caught before its show is left for the player to show"
+            );
+            assert_eq!(
+                the_window_to_unlist(),
+                None,
+                "the marker is spent, so the monitor goes back to its own cadence"
+            );
+
+            let _ = unsafe { DestroyWindow(window) };
+        }
+        forget_the_window_to_unlist();
     }
 
     /// A process begun for a test to suspend: it makes no window and plays nothing, and its own thirty
