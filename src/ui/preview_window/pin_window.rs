@@ -832,8 +832,11 @@ pub(super) fn take_pin_for_a_test() -> Option<PinnedPreview> {
 #[cfg(test)]
 pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
     // The front a pin owes is part of what is stood here: a test that arms it is a test that has to
-    // give it back, and every one that does not begins without it (see `arm_pin_to_the_front`).
+    // give it back, and every one that does not begins without it (see `arm_pin_to_the_front`). The
+    // same is true of the foreground a pin that is arriving is owed, which the show that brings it up
+    // spends (see `PIN_ARRIVAL_OWES_THE_FRONT`).
     super::PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    super::PIN_ARRIVAL_OWES_THE_FRONT.store(false, Ordering::SeqCst);
     match pin {
         Some(pin) => install(pin),
         None => {

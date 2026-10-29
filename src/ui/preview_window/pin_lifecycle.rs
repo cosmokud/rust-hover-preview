@@ -431,6 +431,51 @@ pub(super) static PIN_FRONT_OWED: AtomicBool = AtomicBool::new(false);
 /// the arrows, which walk the same files without a press to hold anything (see `band_place`).
 pub(super) static PIN_BAND_HELD: AtomicBool = AtomicBool::new(false);
 
+/// Whether the pin that is on its way up still owes the foreground when it appears.
+///
+/// **A pin that has just appeared is a window like any other, and a window like any other arrives
+/// as the window the user is in.** Every window the Shell puts on the screen is activated on the
+/// way up, and the pin is a window of its own besides — `WS_POPUP`, layered, and listed in the
+/// Shell's own lists (see `pin_real_window`). A pin that appears without that activation is a
+/// window no hand has ever been in, and it answers nothing that is asked of the window the user is
+/// in: measured on the real screen, the first key pressed on a pin that had just been taken up —
+/// `Escape`, the close — reached the listing it had been pinned from and left the pin standing,
+/// and only the press that activated the window made the pin the user's.
+///
+/// **It is armed where a pin is taken up and spent by the show that brings it up**, so the roads a
+/// pin already standing takes — a step to another file, a box change, a resize, the tick's own
+/// re-show after the desktop gives the screen back — are owed nothing. Neither is a pin brought
+/// back from the bubble or the taskbar: those show a window the user is already in, or one the
+/// Shell has just put back, and both answer for the keyboard themselves (see `PinRestore`).
+pub(super) static PIN_ARRIVAL_OWES_THE_FRONT: AtomicBool = AtomicBool::new(false);
+
+/// Arm the foreground a pin that has just been taken up is owed when it appears: a file installed
+/// with no pin standing is the pin arriving, and one installed into a pin that is up is a file
+/// stepping onto a window the user already has (see `install_pinned_media`).
+pub(super) fn arm_the_pin_arrival() {
+    PIN_ARRIVAL_OWES_THE_FRONT.store(true, Ordering::SeqCst);
+}
+
+/// Whether this show owes the arrival its foreground, spending the debt where it does.
+///
+/// **The window has to be the pin's own.** A pin standing in the preview's window is a tool window
+/// that never takes the focus, and the ask is one Windows refuses for it; the road has no
+/// activation to give (see `pin_real_window` and `pin_is_its_own_window`). **And it has to be a
+/// window appearing**: a pin already on the screen is one the user has put where it is, and a show
+/// that puts nothing new up owes nobody the front. Both are asked of the caller because a test can
+/// stage them and a window cannot be asked them without a desktop.
+pub(super) fn take_the_arrival_foreground(its_own_window: bool, on_the_screen: bool) -> bool {
+    let armed = PIN_ARRIVAL_OWES_THE_FRONT.swap(false, Ordering::SeqCst);
+    armed && its_own_window && !on_the_screen
+}
+
+/// Whether the arrival is still owed the foreground, for the test that holds a take-up to arming it
+/// and a step to leaving it alone (see `PIN_ARRIVAL_OWES_THE_FRONT`).
+#[cfg(test)]
+pub(super) fn the_pin_arrival_is_owed() -> bool {
+    PIN_ARRIVAL_OWES_THE_FRONT.load(Ordering::SeqCst)
+}
+
 /// The topmost band is being held for a step between two films: taken where the next film is begun
 /// over a picture the pin is still showing, and given back once the source that replaces it has
 /// taken the picture (see `hold_the_band_for_the_step` and `give_the_step_band_back`).
@@ -849,6 +894,11 @@ pub(super) fn end_pin_beside_the_state() {
     if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
         *request = None;
     }
+
+    // And the foreground a take-up armed for it, which a pin that ends before it appears never
+    // spent: the debt is the arriving pin's own, and the window that takes the next one up is
+    // another arrival with a debt of its own (see `PIN_ARRIVAL_OWES_THE_FRONT`).
+    PIN_ARRIVAL_OWES_THE_FRONT.store(false, Ordering::SeqCst);
 
     // And the window a pinned mpv film was drawn in — the host, a child of the pin's on the child
     // road and a window of the desktop's that owns the pin's chrome on the default one — with the
@@ -1516,6 +1566,22 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         unsafe { IsWindowVisible(hwnd).as_bool() } as u8,
         window,
     );
+
+    // **And a pin that has just appeared asks for the foreground.** The press that took it up was
+    // the user's, and the window it asked for is theirs: every other window the Shell puts on the
+    // screen arrives already activated, and a pin that arrives without it is a window no hand has
+    // ever been in — one whose first key is answered by the listing behind it, and whose first
+    // press is spent on the activation every other window was given before it was asked anything
+    // (see `PIN_ARRIVAL_OWES_THE_FRONT`, which is where the debt is armed and what it is not owed
+    // for).
+    //
+    // The ask is made after the show, because a window that is not on the screen has no activation
+    // to be given, and it is made of the window itself rather than of the film's host: the host is
+    // the pair's band and a disabled window besides, and what the user is in is the pin.
+    if take_the_arrival_foreground(pin_is_its_own_window(), on_the_screen) {
+        let _ = SetForegroundWindow(hwnd);
+        note_pin_trace!("arrival asked for the front {:?}", hwnd);
+    }
 
     // The pin is painted and on the screen over the hover's still-top-level host, and only now is
     // that host made the pin's: the promotion is the visible handover, and the picture never sits
