@@ -14,11 +14,12 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GdiFlush, GetDC, ReleaseDC};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW, GetWindowRect,
     IsIconic, IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, SetWindowPos, ShowWindow,
     GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, SC_RESTORE, SWP_NOACTIVATE, SW_MINIMIZE, SW_RESTORE,
-    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SIZE,
+    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SETFOCUS, WM_SIZE,
     WM_SYSCOMMAND, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -586,6 +587,176 @@ unsafe fn stands_over(above: HWND, below: HWND) -> bool {
     }
 
     false
+}
+
+/// **A host's taskbar button hands the keyboard to the pin.** With `Pin Mode → Always On Top` off the
+/// pair's button belongs to the film host — the window the Shell lists for a pin whose chrome the host
+/// owns — and the host is disabled so that a press on the band reaches the pin. What a click on that
+/// button delivers is therefore an activation of a window no key can be typed into, and it is answered
+/// for the pin: the host's procedure asks `pin_take_focus` for the pin's window, exactly as a press on
+/// the pin does.
+///
+/// **The entry point is the host's own procedure and not a restore.** A disabled top-level window is
+/// still a window the Shell can activate — the activation delivers `WM_ACTIVATE` and `WM_SETFOCUS` to
+/// it, which is what makes the window's own answer the whole of the fix — and a pin that is up and not
+/// minimized is a window with nothing to restore. The `WM_SETFOCUS` half is answered too, as the belt
+/// to that brace: a focus that lands on the host after the activation is a keyboard the pin has not got.
+///
+/// The ask itself is read back through the seam a press is asked through, so the test does not make it
+/// on the user's desktop; the entry point is then the real host, disabled as the app makes it, and the
+/// keyboard is measured where Windows puts it — in the pin's own window of this test's.
+#[test]
+fn a_host_activation_hands_the_keyboard_to_the_pin() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back when
+    // the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let app_window = WS_EX_APPWINDOW.0 as isize;
+
+    // With the setting off the host is the window that wears the button, and it is the disabled window
+    // the band's picture has to be (see the module note).
+    assert_ne!(
+        unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) } & app_window,
+        0,
+        "the host is the window the Shell lists for the pair, so the taskbar button is its own"
+    );
+    assert!(
+        !unsafe { IsWindowEnabled(host).as_bool() },
+        "and it is disabled, because a press on the band has to reach the pin"
+    );
+
+    // What the host's answer asks of the pin, through the seam a press is asked through: the window
+    // made focusable, the foreground, the caret — and nothing else.
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                host,
+                WM_ACTIVATE,
+                WPARAM(WA_ACTIVE as usize),
+                &recorder,
+            )
+        }
+        .is_some(),
+        "an activation of the pin's host is answered"
+    );
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            PinWindowCall::SetFocusable { focusable: true },
+            PinWindowCall::SetForeground,
+            PinWindowCall::SetFocus,
+        ],
+        "and it is the press's own three asks, in the press's own order"
+    );
+    assert_eq!(
+        recorder.handed_the_keyboard_to(),
+        vec![film.pin_hwnd.0 as isize],
+        "the keyboard is handed to the pin's window, which is the window the button asked for"
+    );
+
+    // The `WM_SETFOCUS` brace answers the same way, and an activation that is not one asks nothing.
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                host,
+                WM_SETFOCUS,
+                WPARAM(0),
+                &recorder,
+            )
+        }
+        .is_some(),
+        "a focus that lands on the host is answered for the pin as well"
+    );
+    assert_eq!(
+        recorder.handed_the_keyboard_to(),
+        vec![film.pin_hwnd.0 as isize],
+        "so the caret does not stay on a window no key can be typed into"
+    );
+
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                host,
+                WM_ACTIVATE,
+                WPARAM(WA_INACTIVE as usize),
+                &recorder,
+            )
+        }
+        .is_none(),
+        "the host being deactivated is not a request for the pin"
+    );
+    assert!(
+        recorder.calls().is_empty(),
+        "and it asks nothing of the window it is told about"
+    );
+
+    // **Only the pin's own host.** A hover's host is made from the same class and answered by the same
+    // procedure, and it is nobody's button (see `answer_a_host`).
+    let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
+    assert!(
+        unsafe {
+            pin_film_host::answer_an_activation_of_the_host(
+                HWND(0x3000 as *mut _),
+                WM_ACTIVATE,
+                WPARAM(WA_ACTIVE as usize),
+                &recorder,
+            )
+        }
+        .is_none(),
+        "an activation of a window that is not the pin's host is the hover road's, and asks no pin"
+    );
+    assert!(recorder.calls().is_empty());
+
+    // **The real entry point**: the host's own procedure, with the host disabled as the app makes it.
+    // What the keyboard does is measured where Windows puts it, and the pin is the window it is in.
+    let _ = take_pin_command();
+    unsafe {
+        SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0));
+    }
+    assert_eq!(
+        unsafe { GetFocus() },
+        film.pin_hwnd,
+        "a click on the host's button leaves the caret in the pin, not on a disabled window"
+    );
+    assert!(
+        pin_holds_a_keyboard(),
+        "and the pin holds the claim a press gives it, so its own keys are answered"
+    );
+
+    // **With `Always On Top` on the pair has no button at all**, so no click on one can arrive: the
+    // setting takes the app-window bit off both windows a button could be worn by (see
+    // `own_the_pin_window`).
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    // Safety: the pair is this test's own, and the road only re-reads the setting on it.
+    unsafe { pin_film_host::the_button_follows_the_setting() };
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) } & app_window,
+        0,
+        "with `Always On Top` on the host wears no taskbar button"
+    );
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } & app_window,
+        0,
+        "and neither does the pin the host owns, so the pair has no button to click"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
 }
 
 /// A pin the taskbar's own button brings back comes back in front of the windows that were in front
@@ -1606,18 +1777,18 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     stand_pin(previous_pin);
 }
 
-/// **A film pin's button holds a picture of the film's host**, and it is what the Shell is handed when
-/// it asks the pin's own window for the still of a button that is down.
+/// **A film host's button holds a picture of the host itself**, and it is what the Shell is handed when
+/// it asks for the still of a button that is down.
 ///
-/// The fault this is a regression test for: a pin whose film a player of its own draws is put away as a
-/// window, and the Shell's still of a window that is down is taken of the window's own rows — while the film in a host is a thumbnail the Shell composes *over* those rows,
+/// The fault this is a regression test for: a pin whose film a player of its own draws is put away by
+/// minimizing the host that owns its chrome, and the Shell's still of a window that is down is taken of
+/// the window's own rows — while the film in a host is a thumbnail the Shell composes *over* those rows,
 /// which are the black the host is erased to. So the button of a put-away film pin had a blank hover.
 /// What the button holds has to be a picture of the host as the desktop shows it, taken before the
 /// collapse (see `pin_film_host::keep_the_pins_picture_for_the_taskbar`), and handed over when the Shell
-/// asks (see `answer_a_thumbnail_ask`) — and the window asked is the **pin's own**, which is the window
-/// that wears the button and the one the app answers the ask from (see `window_proc`).
+/// asks (see `answer_a_thumbnail_ask`).
 #[test]
-fn a_film_pins_button_holds_a_picture_of_the_host_itself() {
+fn a_film_hosts_button_holds_a_picture_of_the_host_itself() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -1665,141 +1836,15 @@ fn a_film_pins_button_holds_a_picture_of_the_host_itself() {
         "and it is the host's own colour rather than the black its rows are erased to"
     );
 
-    // And the Shell's own ask for the still of the button that is down is answered with it, **by the
-    // window that wears the button**: the high word of the message's `lparam` is the widest thumbnail it
-    // will take and the low word the tallest.
+    // And the Shell's own ask for the still of the button that is down is answered with it: the high
+    // word of the message's `lparam` is the widest thumbnail it will take and the low word the tallest.
     let handed_over = thumbnails_handed_over();
-    unsafe { answer_a_thumbnail_ask(film.pin_hwnd, LPARAM((160 << 16) | 90)) };
+    unsafe { answer_a_thumbnail_ask(host, LPARAM((160 << 16) | 90)) };
     assert_eq!(
         thumbnails_handed_over(),
         handed_over + 1,
         "the ask is answered with a bitmap made in the box it asked in"
     );
-
-    // The pin is the window the Shell asks, because it is the window the button is on: a host is a tool
-    // window and the Shell has no button of it to draw a still for.
-    assert!(
-        unsafe { GetWindowLongPtrW(film.pin_hwnd, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize != 0,
-        "the pin's own window is the one the Shell lists"
-    );
-}
-
-/// **The ask for a taskbar button's still is answered by the pin's own window, and by no other.**
-///
-/// The Shell asks the window whose button it is drawing, and only the pin's own window is that window
-/// now (see `pin_real_window::real_pin_style` and `pin_film_host::the_button_follows_the_setting`). The
-/// answer is a line in one window procedure shared by every window of this app's — the hover's preview
-/// and the pin's own are both made from it — so this is the test that the sharing did not put a pin's
-/// picture behind a hover's button: a hover is nobody's button, and its window is left to the default
-/// answer.
-#[test]
-fn the_still_of_a_taskbar_button_is_the_pins_own_and_never_a_hovers() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-
-    let previous_window = pin_real_window::real_pin_window();
-    // A picture of this app's, taken of a window nobody has a button for: the *count* of pictures
-    // handed over is what this test reads, and it does not care which window was pictured.
-    pin_taskbar_mirror::forget_the_pin_picture();
-    let pictured = unsafe {
-        let pictured = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            w!(""),
-            WS_POPUP,
-            A_BOX_ON_THE_DESK.0,
-            A_BOX_ON_THE_DESK.1,
-            64,
-            48,
-            None,
-            None,
-            None,
-            None,
-        )
-        .expect("a window of the test's own");
-        let _ = ShowWindow(pictured, SW_SHOWNOACTIVATE);
-        fill_the_window(pictured, A_COLOUR_OF_ITS_OWN);
-        let _ = DwmFlush();
-        pictured
-    };
-    pin_taskbar_mirror::take_the_picture_of(pictured);
-    assert!(
-        the_pin_picture().is_some(),
-        "a picture stands for the ask below to be answered with"
-    );
-
-    let (the_hover, the_pin) = unsafe {
-        let the_hover = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            w!(""),
-            WS_POPUP,
-            A_BOX_ON_THE_DESK.0,
-            A_BOX_ON_THE_DESK.1,
-            64,
-            48,
-            None,
-            None,
-            None,
-            None,
-        )
-        .expect("the hover's window of the test's own");
-        let the_pin = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            w!(""),
-            WS_POPUP,
-            A_BOX_ON_THE_DESK.0,
-            A_BOX_ON_THE_DESK.1,
-            64,
-            48,
-            None,
-            None,
-            None,
-            None,
-        )
-        .expect("the pin's window of the test's own");
-        // Both on the screen, because the Shell's ask is answered only where there is a window to hand
-        // a still of: a hidden window is refused by the call that hands one over.
-        let _ = ShowWindow(the_hover, SW_SHOWNOACTIVATE);
-        let _ = ShowWindow(the_pin, SW_SHOWNOACTIVATE);
-        // The pin's own window is the window that supplies its own still, which is what makes the
-        // Shell's ask answerable at all: a window that has not said so is refused by the call that
-        // hands a thumbnail over (see `supply_the_stills_of_this_window`, which the pin's window is
-        // made with).
-        pin_taskbar::supply_the_stills_of_this_window(the_pin);
-        (the_hover, the_pin)
-    };
-    pin_real_window::stand_real_pin_window_for_a_test(Some(the_pin));
-
-    // The Shell's ask, in the shape it arrives: the high word of the `lparam` is the widest thumbnail
-    // it will take and the low word the tallest.
-    let asked = LPARAM((160 << 16) | 90);
-    let handed_over = thumbnails_handed_over();
-    unsafe { window_proc(the_hover, WM_DWMSENDICONICTHUMBNAIL, WPARAM(0), asked) };
-    assert_eq!(
-        thumbnails_handed_over(),
-        handed_over,
-        "a hover's window answers no ask for a button's still: it wears no button, and the pin's \
-         picture is not the hover's to hand over"
-    );
-
-    unsafe { window_proc(the_pin, WM_DWMSENDICONICTHUMBNAIL, WPARAM(0), asked) };
-    assert_eq!(
-        thumbnails_handed_over(),
-        handed_over + 1,
-        "while the pin's own window is the window the button is on, and it answers with the picture"
-    );
-
-    // Safety: the windows are this test's own, and the handle the app holds is put back as it was.
-    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
-    pin_taskbar_mirror::forget_the_pin_picture();
-    unsafe {
-        let _ = DestroyWindow(the_pin);
-        let _ = DestroyWindow(the_hover);
-        let _ = DestroyWindow(pictured);
-    }
 }
 
 /// **A pin moved from the bubble into the taskbar keeps the picture its bubble collapse took.**
@@ -1891,18 +1936,13 @@ fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubb
         "and it is the host as the desktop showed it rather than the black its rows are erased to"
     );
 
-    // The bubble's own menu row moves the pin into the taskbar, where the button is the pin's own.
+    // The bubble's own menu row moves the pin into the taskbar, where the button is the host's.
     let forced = stills_forced();
     bubble_to_taskbar();
     assert!(
-        unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool()
-            && unsafe { IsIconic(film.pin_hwnd) }.as_bool(),
-        "the pin's own window is the window the Shell's button belongs to, and it is put away \
-         visibly: a hidden window wears no button at all"
-    );
-    assert!(
-        !unsafe { IsWindowVisible(host) }.as_bool(),
-        "while the host goes down with the picture it holds, which was taken for the button above"
+        unsafe { IsWindowVisible(host) }.as_bool() && unsafe { IsIconic(host) }.as_bool(),
+        "the host is the window the Shell's button belongs to, and it is put away visibly: a hidden \
+         window wears no button at all"
     );
     assert_eq!(
         stills_forced(),
@@ -1950,10 +1990,10 @@ fn a_film_host_moved_from_the_bubble_into_the_taskbar_comes_back_with_its_film()
         "the source goes down with the host it is drawn in"
     );
 
-    // What the Shell does when the pin's button is clicked: it restores the window it holds, and
+    // What the Shell does when the host's button is clicked: it restores the window it holds, and
     // nothing of this app's was pressed for it (see `the_pin_came_back`).
     unsafe {
-        let _ = ShowWindow(film.pin_hwnd, SW_RESTORE);
+        let _ = ShowWindow(host, SW_RESTORE);
     }
     assert!(
         matches!(take_pin_command(), Some(PinCommand::CameBack)),
@@ -2057,21 +2097,20 @@ fn a_film_host_still_iconic_when_the_size_says_it_came_back_is_the_pins_restore(
     // Safety: the pin and its host are this test's own, and every global written here is put back
     // when the stand is dropped.
     unsafe { show_pinned_window(film.pin_hwnd) };
-    let _host = pin_film_host::film_host().expect("the film's host");
+    let host = pin_film_host::film_host().expect("the film's host");
     film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
 
     collapse_pin_to(PinMinimizeTo::Bubble);
     bubble_to_taskbar();
     assert!(
-        unsafe { IsIconic(film.pin_hwnd) }.as_bool()
-            && unsafe { IsWindowVisible(film.pin_hwnd) }.as_bool(),
-        "the pin's own window is the window the Shell's button put away, and it is visibly away"
+        unsafe { IsIconic(host) }.as_bool() && unsafe { IsWindowVisible(host) }.as_bool(),
+        "the host is the window the Shell's button put away, and it is visibly away"
     );
 
     // What the window is sent as it comes back, before its iconic bit has gone: the pin asked for a
     // restore is a pin whose state has to follow the window (see `the_pin_came_back`).
     unsafe {
-        SendMessageW(film.pin_hwnd, WM_SIZE, WPARAM(SIZE_RESTORED as usize), LPARAM(0));
+        SendMessageW(host, WM_SIZE, WPARAM(SIZE_RESTORED as usize), LPARAM(0));
     }
     assert!(
         matches!(take_pin_command(), Some(PinCommand::CameBack)),
@@ -2109,8 +2148,8 @@ fn a_film_host_still_iconic_when_its_pin_is_restored_comes_back_up_with_its_film
     bubble_to_taskbar();
     super::pin_film_host_window::let_the_posted_shows_land();
     assert!(
-        unsafe { IsIconic(film.pin_hwnd) }.as_bool(),
-        "the pin's own window is the window the Shell's button put away"
+        unsafe { IsIconic(host) }.as_bool(),
+        "the host is the window the Shell's button put away"
     );
 
     // The pin's own restore, with the host left in the state the Shell's restore can be read in
@@ -2924,18 +2963,16 @@ fn a_put_away_pin_comes_back_on_the_file_the_update_names_rather_than_before_it(
     }
 }
 
-/// **The button is the setting's, and it is the pin's own window that wears it.** `Pin Mode -> Always
+/// **The button is the setting's, and it is asked of the window that wears it.** `Pin Mode -> Always
 /// On Top` on is a pin over everything already, which owes no taskbar button; off is an ordinary window
-/// with an ordinary window's button. The film's host is a tool window on both roads: the Shell lists no
-/// button for it, and no show or hide of it can take the pin's button away.
+/// with an ordinary window's button. The pair's button belongs to the host that owns the pin's chrome,
+/// and the pin's own window is the one that must not carry a second one.
 ///
-/// The fault this is a regression test for is the intermittent one: the pair used to hand the app-window
-/// bit between the host and the chrome, on a window that was already on the screen, with a style re-read
-/// and no show — and a button is the Shell's answer to a window being shown. A film swap hides the host
-/// for the whole wait of the next player, so the hand-off also took the pin's button away for as long as
-/// that player took to draw, and the pin was hidden and shown again on every swap to get it back. And
-/// the row that changes the setting recomputed nothing, so a pin with the setting turned on kept the
-/// button it was taken up with.
+/// The fault this is a regression test for is the intermittent one: the app-window bit was added to a
+/// host that was *already on the screen* at the promotion, with a style re-read and no show, and a
+/// button is the Shell's answer to a window being shown - so the pair wore the button it happened to
+/// be shown with. And the row that changes the setting recomputed nothing, so a pin with the setting
+/// turned on kept the button it was taken up with.
 #[test]
 fn the_pairs_taskbar_button_is_the_settings() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -2946,11 +2983,8 @@ fn the_pairs_taskbar_button_is_the_settings() {
     let pin = pin_real_window::real_pin_window().expect("the pin's own window");
     let previous = pin_always_on_top();
     let wears_a_button = |hwnd: HWND| unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize != 0;
-    let stays_out_of_the_lists = |hwnd: HWND| unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) }
-        & WS_EX_TOOLWINDOW.0 as isize
-        != 0;
 
-    // The setting off: the pin's own window is the window the Shell lists.
+    // The setting off: the host is the window the Shell lists, and the pin's own window is not.
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
     }
@@ -2962,95 +2996,80 @@ fn the_pairs_taskbar_button_is_the_settings() {
     );
     assert!(
         wears_a_button(pin),
-        "so the pair's button is the chrome's own, from the pin's show on"
-    );
-    assert!(
-        !stays_out_of_the_lists(pin),
-        "and a window that owes a button is no tool window"
-    );
-    assert!(
-        !wears_a_button(host) && stays_out_of_the_lists(host),
-        "while the film's host is a tool window that asks for no button at all"
+        "so the pair's button is on the chrome from the pin's own show: it is the only window of \
+         the pair the Shell has, and a pin that is on the screen with no button at all is a pin the \
+         taskbar cannot bring back"
     );
 
-    // The film draws, and the tick shows the host: **the button does not move with it**.
+    // The film draws, and the tick shows the host: the button goes with the window the Shell lists.
     let pid = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(pid);
     let _picture = unsafe { super::pin_film_host_window::a_source_of_the_host(host) };
-    pin_real_window::forget_the_appwindow_shows();
     unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
     assert!(
-        wears_a_button(pin) && !wears_a_button(host),
-        "a pin that is not Always On Top wears its button on its own window, host up or down"
+        wears_a_button(host),
+        "a pin that is not Always On Top wears a taskbar button, on the host that owns its chrome"
     );
     assert!(
-        pin_real_window::the_appwindow_shows().is_empty(),
-        "and an appearance of the host asks the pin for no show at all: {:?}",
-        pin_real_window::the_appwindow_shows()
+        !wears_a_button(pin),
+        "and the pin's own window is listed with the host that owns it rather than beside it"
     );
 
-    // **A host that goes down for a swap takes nothing of the pin's with it.** It is hidden for the
-    // whole wait of the next player (see `pin_film_host::take_the_film_off_the_band`), and a button
-    // worn by a window that goes down for a second is a button that vanishes for that second.
+    // **A host that goes down hands the pair's button to the chrome.** A swap hides the host for the
+    // whole wait of the next player (see `pin_film_host::take_the_film_off_the_band`), and a pair whose
+    // only window on the screen is owned by a hidden one wears no button at all: the pin could not be
+    // brought back from the taskbar for as long as that player takes to draw, or for good where it
+    // never draws.
     unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
     assert!(
-        !unsafe { IsWindowVisible(host) }.as_bool() && unsafe { IsWindowVisible(pin) }.as_bool(),
+        !unsafe { IsWindowVisible(host) }.as_bool()
+            && unsafe { IsWindowVisible(pin) }.as_bool(),
         "the host is down and the chrome it owns is still the window the user has"
     );
     assert!(
         wears_a_button(pin),
-        "so the pin is never hidden during a film swap, and its button is never handed anywhere"
-    );
-    assert!(
-        pin_real_window::the_appwindow_shows().is_empty(),
-        "and the swap paid no show of the pin for a bit that did not move: {:?}",
-        pin_real_window::the_appwindow_shows()
+        "so the chrome wears the pair's button while its host is down"
     );
 
-    // The row turns `Always On Top` on with the pin standing: the button goes with it, and the pin pays
-    // one hide and one show for the place the Shell reads.
+    // And back: the host is the window the Shell lists for the pair again, and the chrome is not
+    // listed beside it.
+    unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+    assert!(
+        wears_a_button(host) && !wears_a_button(pin),
+        "and a host that comes back takes the button back with it, once"
+    );
+
+    // The row turns `Always On Top` on with the pin standing: the button goes with it.
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = true;
     }
-    pin_real_window::forget_the_appwindow_shows();
     unsafe { pin_film_host::the_button_follows_the_setting() };
     assert!(
-        !wears_a_button(pin) && stays_out_of_the_lists(pin),
+        !wears_a_button(host) && !wears_a_button(pin),
         "a pin that is Always On Top owes no button, and the row takes the one it had"
     );
-    assert_eq!(
-        pin_real_window::the_appwindow_shows(),
-        vec![pin.0 as isize],
-        "and it is paid for with exactly one hide and one show of the pin"
-    );
-    assert!(
-        !wears_a_button(host) && stays_out_of_the_lists(host),
-        "while the host, which never had a button, is not restyled at all"
-    );
 
-    // And the host's own show and hide ask for nothing of the pin's place: a pair over everything owes
-    // no button whether its host is up or down.
+    // **A pair over everything owes no button whether its host is up or down**: the setting is the
+    // whole of the question, so the hide that hands the button to the chrome hands it nothing.
     unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
+    assert!(
+        !wears_a_button(host) && !wears_a_button(pin),
+        "a hidden host of a pin that is Always On Top leaves no button on the chrome either"
+    );
     unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
     assert!(
-        !wears_a_button(pin) && stays_out_of_the_lists(pin),
-        "a show of the host of a pin that is Always On Top leaves it out of the Shell's lists"
+        !wears_a_button(host) && !wears_a_button(pin),
+        "and the show of it asks for none"
     );
 
     // And off again: the same button comes back, on the same window.
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
     }
-    pin_real_window::forget_the_appwindow_shows();
     unsafe { pin_film_host::the_button_follows_the_setting() };
     assert!(
-        wears_a_button(pin) && !stays_out_of_the_lists(pin),
-        "and a setting turned off gives the pin its button back, once"
-    );
-    assert_eq!(
-        pin_real_window::the_appwindow_shows(),
-        vec![pin.0 as isize],
-        "again with one hide and one show, and never two"
+        wears_a_button(host) && !wears_a_button(pin),
+        "and a setting turned off gives the pair its button back, once"
     );
 
     if let Ok(mut config) = CONFIG.lock() {
@@ -3058,17 +3077,69 @@ fn the_pairs_taskbar_button_is_the_settings() {
     }
 }
 
-/// **A pair promoted out of a hover wears the button on the pin, whatever the setting says**, and the
-/// host it was promoted from keeps the place it had as a hover's: a tool window, out of the Shell's
-/// lists, that never activates.
+/// **A pair promoted out of a hover asks for no button while the setting says the pin is on top**,
+/// and the bit is written before the host is shown rather than on an already-visible window's back.
 ///
-/// The promotion is the road the intermittent button was reported on: it used to add `WS_EX_APPWINDOW`
-/// to a host that was on the screen as a hover's, re-read the style and show nothing — and a button is
-/// the Shell's answer to a window being shown. The pin's own place is the pin's, written by its own
-/// show, so nothing about the promotion can make the pair's button come and go (see
-/// `pin_real_window::set_the_pin_window_listed`).
+/// The promotion is the road the intermittent button was reported on: it added `WS_EX_APPWINDOW` to a
+/// host that was on the screen as a hover's, re-read the style and showed nothing, and the Shell's list
+/// is a window being shown (see `pin_real_window::set_the_pin_window_appwindow`). Here the bit is
+/// written with the rest of the pin's bits, which is the style write the promotion was already making.
 #[test]
-fn a_promoted_pair_wears_its_button_on_the_pin_and_no_host_is_ever_listed() {
+fn a_promoted_pair_owes_no_button_with_always_on_top() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { super::pin_film_host_window::HostedHover::up(&film, &path, 3.0) };
+    let previous = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    pin_stands_in_its_own_window(true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover.host),
+        "the hover's host is the pin's host"
+    );
+    assert!(
+        unsafe { GetWindowLongPtrW(hover.host, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize == 0,
+        "a pair promoted out of a hover with Always On Top on asks for no button at all"
+    );
+
+    // And the setting off puts the button on that same host, since it is the window the Shell lists.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    unsafe { pin_film_host::the_button_follows_the_setting() };
+    assert!(
+        unsafe { GetWindowLongPtrW(hover.host, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize != 0,
+        "and a setting turned off gives the promoted pair its button"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = previous;
+    }
+    drop(hover);
+}
+
+/// **A pair promoted out of a hover asks for its button through the one road the Shell reads it on.**
+///
+/// The fault this is a regression test for: the promotion is the moment a host that was a *hover's* —
+/// a topmost, tool, non-activating window with no button and no business being listed - becomes the
+/// window the Shell lists for the pin. `WS_EX_APPWINDOW` was added to it with the rest of the pin's
+/// bits, on a window that was already on the screen, and a style write behind a visible window's back
+/// is not re-read for a button: what the Shell draws a button from is the window being shown (see
+/// `pin_real_window::set_the_pin_window_appwindow`). The pair therefore wore the button it happened to
+/// be shown with, which is the intermittency the user reported.
+///
+/// The bit here is the setting's and the show is the road's: with `Always On Top` off the host wears
+/// the button and the show that asks for it is paid for on that host, and the chrome is not listed
+/// beside it.
+#[test]
+fn a_promoted_pair_asks_for_its_button_on_the_show_that_reads_it() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -3080,49 +3151,34 @@ fn a_promoted_pair_wears_its_button_on_the_pin_and_no_host_is_ever_listed() {
     let wears_a_button = |hwnd: HWND| unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) }
         & WS_EX_APPWINDOW.0 as isize
         != 0;
-    let stays_out_of_the_lists = |hwnd: HWND| unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) }
-        & WS_EX_TOOLWINDOW.0 as isize
-        != 0;
-
-    for on_top in [true, false] {
-        if let Ok(mut config) = CONFIG.lock() {
-            config.pin_always_on_top = on_top;
-        }
-        pin_stands_in_its_own_window(true);
-
-        pin_real_window::forget_the_appwindow_shows();
-        unsafe { show_pinned_window(film.pin_hwnd) };
-        let pin = pin_real_window::real_pin_window().expect("the pin's own window");
-        assert_eq!(
-            pin_film_host::film_host(),
-            Some(hover.host),
-            "the hover's host is the pin's host"
-        );
-
-        assert!(
-            !wears_a_button(hover.host),
-            "a promoted host is a tool window and the Shell never lists a button for it"
-        );
-        assert!(
-            stays_out_of_the_lists(hover.host),
-            "and it is out of Alt+Tab with the rest of the film road's windows"
-        );
-        assert_eq!(
-            wears_a_button(pin),
-            !on_top,
-            "the button is the pin's own, and the setting is the whole of whether it has one"
-        );
-        assert_eq!(
-            stays_out_of_the_lists(pin),
-            on_top,
-            "a pin over everything is out of the Shell's lists entirely"
-        );
-        assert!(
-            !pin_real_window::the_appwindow_shows()
-                .contains(&(hover.host.0 as isize)),
-            "and the promotion never asks the host for a show: a host is not a window the Shell lists"
-        );
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
     }
+    pin_stands_in_its_own_window(true);
+
+    pin_real_window::forget_the_appwindow_shows();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let pin = pin_real_window::real_pin_window().expect("the pin's own window");
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover.host),
+        "the hover's host is the pin's host"
+    );
+
+    assert!(
+        wears_a_button(hover.host),
+        "a promoted pair that is not Always On Top wears its button on the host the Shell lists"
+    );
+    assert!(
+        !wears_a_button(pin),
+        "and the chrome it owns is not listed beside it"
+    );
+    assert!(
+        pin_real_window::the_appwindow_shows().contains(&(hover.host.0 as isize)),
+        "and the bit was written through the road that puts the host down and up again for it, \
+         because a promotion restyles a window that is already on the screen: {:?}",
+        pin_real_window::the_appwindow_shows()
+    );
 
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = previous;
