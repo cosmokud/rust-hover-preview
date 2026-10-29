@@ -1386,12 +1386,41 @@ fn retire_the_frozen_hover(frozen: Option<FrozenHover>) {
 /// Asked by the roads that must leave a waiting pin alone: the tick's restore, which would put a
 /// hidden-on-purpose window back up, and the chrome refresh, which would spend the arrival over
 /// nothing (see `the_pin_owes_a_show` and `refresh_pin_chrome`).
+///
+/// **An arm cannot outlive the handover it was taken for, and that is a property of this answer
+/// rather than of every road that ends one.** The wait is a pin that is not on the screen yet: the
+/// moment the pin's own window is up — the handover, a box change that showed it, any road at all —
+/// there is nothing left to wait for, whatever the arm's own bookkeeping says. And a player that has
+/// not drawn by the start's own bound is a wait that is over the other way, which the tick settles
+/// (see `settle_pin_handover`): an arm read here past that bound is a wait nothing is going to end,
+/// and a strip held down by it is a caption the pointer can never ask back.
+///
+/// It is one predicate because it is one fact, and every reader asks it here: a road that forgot to
+/// disarm cannot leave the chrome held down, the film paused, or the pin unshown for longer than the
+/// event that ends the handover itself.
 pub(super) fn pin_handover_armed() -> bool {
-    PIN_HANDOVER_SINCE
-        .lock()
-        .ok()
-        .and_then(|since| *since)
-        .is_some()
+    let Some(since) = PIN_HANDOVER_SINCE.lock().ok().and_then(|since| *since) else {
+        return false;
+    };
+
+    !the_handover_has_run_out(since) && !the_pins_own_window_is_on_the_screen()
+}
+
+/// Whether the wait a take-up began has run out: a player that has not drawn inside the start's own
+/// bound is one that will not (see `VIDEO_START_WAIT_SECS`).
+fn the_handover_has_run_out(since: Instant) -> bool {
+    since.elapsed() >= Duration::from_secs(VIDEO_START_WAIT_SECS)
+}
+
+/// Whether the pin the handover is being waited for is on the screen, **which is the event that ends
+/// a handover**: the pin's own window is what the wait exists to show (see `show_pinned_window`).
+///
+/// A pin standing in the preview's window is no window of its own at all, and a film is only ever
+/// taken up in one of its own (see `pin_should_stand_in_its_own_window`), so there is nothing to ask
+/// about there and the wait is the arm's alone.
+fn the_pins_own_window_is_on_the_screen() -> bool {
+    pin_real_window::real_pin_window()
+        .is_some_and(|pin| unsafe { IsWindowVisible(pin) }.as_bool())
 }
 
 /// Arm the handover a take-up on a hover's film waits on, from the moment the hosted player is
@@ -1561,19 +1590,33 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     // The film's own frame on screen is the handover: the wait is over, and what is on screen from
     // here is the pin over that picture rather than the hover as its placeholder. A frame this app
     // cannot prove is a frame it waits for — the read failing is not an error, it is not-yet.
+    //
+    // **And a pin whose own window is already on the screen is a handover that has been overtaken**,
+    // which is the same wait ending one step early: whatever road showed it — a box change, a
+    // restore, the Shell — has put the pin up before its film's first frame was proved, and what is
+    // left to do is the hover's own ending rather than a show. The arm's readers answer this case
+    // already (see `pin_handover_armed`); this is the wait behind them, so that the hover the take-up
+    // froze is let go of here rather than a start's bound later.
     let pid = VIDEO_PID.load(Ordering::SeqCst);
-    if the_hosted_player_is_drawing(pid)
-        && frozen.is_some_and(|frozen| the_hosted_frame_is_presented(pid, frozen.seconds))
+    let overtaken = the_pins_own_window_is_on_the_screen();
+    if overtaken
+        || (the_hosted_player_is_drawing(pid)
+            && frozen.is_some_and(|frozen| the_hosted_frame_is_presented(pid, frozen.seconds)))
     {
         note_pin_trace!(
-            "handover handed over after {}ms",
-            since.elapsed().as_millis()
+            "handover handed over after {}ms{}",
+            since.elapsed().as_millis(),
+            if overtaken { " (the pin was already up)" } else { "" },
         );
         disarm_pin_handover();
-        // The handover is the pin's first frame, not an arrival: the chrome stays hidden over it
-        // until the pointer asks for a strip (see `refresh_pin_chrome`).
-        with_pin(|pin| pin.chrome = PinChrome::hidden());
-        unsafe { show_pinned_window(pinned_window()) };
+        if !overtaken {
+            // The handover is the pin's first frame, not an arrival: the chrome stays hidden over it
+            // until the pointer asks for a strip (see `refresh_pin_chrome`). A pin that is already on
+            // the screen keeps the chrome it has: the strips are the pointer's answer, and this wait
+            // is not a road that may take one out from under a hand.
+            with_pin(|pin| pin.chrome = PinChrome::hidden());
+            unsafe { show_pinned_window(pinned_window()) };
+        }
 
         // **And the film's own window is not asked for anything here**: it was placed once, at the
         // film's own size, when it was adopted, and a box the pin has now is a destination rectangle

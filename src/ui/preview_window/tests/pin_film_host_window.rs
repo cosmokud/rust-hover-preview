@@ -2457,6 +2457,84 @@ fn the_chrome_waits_for_the_hosted_films_frame_not_its_window() {
     drop(film);
 }
 
+/// **An arm that is over is not an arm**: a pin whose own window is on the screen is a handover
+/// that has already happened, and the chrome the pointer asks for comes back on the very next
+/// question regardless of what the arm's bookkeeping still says.
+///
+/// The wait a take-up arms exists for one thing — the pin's own window is not on the screen yet
+/// (see `pin_film_host::pin_handover_armed`). A road that showed the pin without disarming it (a box
+/// change, a restore, a show of its own) used to leave the strips held down by an arm that nothing
+/// but a click could discharge, which is the user's "hovering the caption reveals nothing until I
+/// click once": the pointer's own answer is the whole of what asks for a strip, and it was being
+/// refused by a wait that was over.
+#[test]
+fn a_handover_that_is_over_does_not_hold_the_chrome_down() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| {
+        pin.chrome = PinChrome::hidden();
+        pin.transport_bar = true;
+    });
+    stand_window_at_point_in(Some(film.pin_hwnd.0 as isize));
+
+    // The arm a take-up leaves behind, and the pin's own window up: the handover has been overtaken,
+    // and every reader of the arm has to answer as if it were never armed.
+    pin_film_host::arm_pin_handover();
+    unsafe {
+        let _ = ShowWindow(film.pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+    assert!(
+        !pin_film_host::pin_handover_armed(),
+        "a pin that is on the screen is not a pin still waiting on its film's first frame"
+    );
+    assert!(
+        !pin_chrome_is_held_down(),
+        "and no wait holds the chrome down over a window that is already showing"
+    );
+
+    // The pointer's own question, asked of the pin that is up: the caption comes back with no click
+    // in front of it.
+    let (left, top, ..) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .expect("a pin up");
+    let revealed = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(
+            pin,
+            Instant::now(),
+            Some((left + 5, top + 1)),
+        ))
+    });
+    assert_eq!(
+        revealed,
+        Some(true),
+        "a pointer on the caption asks a strip back without a press first"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar))),
+        Some((true, false)),
+        "and the strip it asked for is the caption, with the bar left to its own end"
+    );
+
+    // And the other half of the same answer: a wait that has run out is not a wait either, whatever
+    // the window is doing. The arm is read against the start's own bound rather than only against a
+    // road that remembers to clear it.
+    unsafe { let _ = ShowWindow(film.pin_hwnd, SW_HIDE); }
+    pin_film_host::stand_pin_handover_armed_at(Some(
+        Instant::now() - Duration::from_secs(VIDEO_START_WAIT_SECS + 1),
+    ));
+    assert!(
+        !pin_film_host::pin_handover_armed(),
+        "an arm older than the wait ever takes is an arm nothing is going to end"
+    );
+
+    pin_film_host::disarm_pin_handover();
+    stand_window_at_point_in(None);
+    drop(film);
+}
+
 /// A pin taken up on a hover's film waits for the hosted player's first frame before it
 /// appears: the take-up relaunches the adopted film into the host in the background, the hover
 /// stays up and playing as the placeholder meanwhile, and the pin's window and its strips stay
@@ -3952,9 +4030,12 @@ fn a_pin_that_ends_during_a_take_ups_handover_leaves_what_a_pin_that_never_waite
         let _host = unsafe { a_pin_showing_a_registered_film(&film) };
 
         if waited {
-            // The state the take-up leaves behind: the hover's player frozen on a second and the
-            // wait armed for the pin's player to report that same frame. The id is no process of
-            // this run's, so the end it asks for is the bookkeeping rather than a kill.
+            // The state the take-up leaves behind: **the pin's own window is down**, because the wait
+            // is a pin that is not on the screen yet and the arm is the question of whether it still
+            // is not (see `pin_film_host::pin_handover_armed`) — with the hover's player frozen on a
+            // second and the wait armed for the pin's player to report that same frame. The id is no
+            // process of this run's, so the end it asks for is the bookkeeping rather than a kill.
+            unsafe { let _ = ShowWindow(film.pin_hwnd, SW_HIDE); }
             pin_film_host::hold_the_hover_for_the_handover(0x7FFF_FFFB, 12.0);
             pin_film_host::arm_pin_handover();
             assert!(
