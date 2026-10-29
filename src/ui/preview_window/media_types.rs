@@ -61,9 +61,16 @@ pub enum PreviewMessage {
     /// window of its own — captioned, movable, always on top — and the hover machinery
     /// stays quiet behind it until it is closed. The rect is the box the preview is
     /// already in, so nothing about the picture moves when it is pinned.
+    ///
+    /// The same message installs the file a pin that is up is shown next, and `arriving` says
+    /// which of the two it is: the take-up out of a hover is the pin *arriving*, and it comes
+    /// with no pin standing because that is what arriving is, while a file stepping onto a pin
+    /// that is up is one the pin can have ended before the install landed — the watchdog ends a
+    /// pin from a thread of its own (see `pin_lifecycle::the_pin_takes_the_file_up`).
     Pin {
         path: PathBuf,
         rect: ScreenRegion,
+        arriving: bool,
     },
     /// The pinned window was given another box — maximized, restored, or resized by an
     /// edge — and the media in it is laid out again for that box. It is the same

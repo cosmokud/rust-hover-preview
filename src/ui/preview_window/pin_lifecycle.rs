@@ -687,7 +687,29 @@ pub(super) fn pin_what_is_on_screen(
     }
 
     let rect = preview_screen_rect()?;
-    Some(PreviewMessage::Pin { path, rect })
+    Some(PreviewMessage::Pin {
+        path,
+        rect,
+        // The pin key's own request is the pin arriving: no pin is up yet, because this file is
+        // the one it comes up on (see `the_pin_takes_the_file_up`).
+        arriving: true,
+    })
+}
+
+/// Whether a file an install was asked for is one this window still takes up.
+///
+/// **A file the pin key asked for is the pin arriving**, and it arrives with no pin standing
+/// because that is what arriving is: the hover's file is the first file the window is shown, and
+/// the take-up is what puts the pin up at all. Reading "no pin standing" as "a pin that has
+/// ended" refused it — the pin key then did nothing at all, however long the hand waited.
+///
+/// Every other install is a file stepping onto a pin that is up, and that pin can end between the
+/// pick and the install: the watchdog ends a hung one from its own thread (see `tick` and
+/// `Reason::Hung`). A file whose window has gone is not one to write the pin's state for — the
+/// take-up writes that state whole, so it would re-create the pin it belongs to, with the
+/// arrival's own debt (see `arm_the_pin_arrival` and `PIN_ARRIVAL_OWES_THE_FRONT`).
+pub(super) fn the_pin_takes_the_file_up(arriving: bool) -> bool {
+    arriving || pinned()
 }
 
 /// Whether what is on screen is a preview rather than a promise: either a frame this app has

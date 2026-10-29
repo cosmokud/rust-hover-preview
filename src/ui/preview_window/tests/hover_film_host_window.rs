@@ -378,9 +378,19 @@ fn a_visible_hover_host_is_the_rect_a_pin_takes_up() {
 
     let show = PreviewMessage::Show(path.clone(), 0, 0, None);
     match pin_what_is_on_screen(&Some(show), None) {
-        Some(PreviewMessage::Pin { path: pinned, rect }) => {
+        Some(PreviewMessage::Pin {
+            path: pinned,
+            rect,
+            arriving,
+        }) => {
             assert_eq!(pinned, path, "the pin takes up the file that is on screen");
             assert_eq!(rect, host_rect, "and the box the hover's host is in");
+            assert!(
+                arriving,
+                "and it is the pin arriving rather than a file stepping onto one: no pin is up \
+                 yet, which is what the loop reads the request in (see \
+                 `the_pin_takes_the_file_up`)"
+            );
         }
         _ => panic!("the pin key takes the hover's box up rather than finding nothing"),
     }

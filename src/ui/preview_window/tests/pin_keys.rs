@@ -769,6 +769,62 @@ fn the_pin_key_only_brings_a_bubble_back_and_never_hides_a_window() {
     assert!(!pin_key_restores_bubble(false, false));
 }
 
+/// **The file the pin key asked for is the pin arriving, and a pin that is not up yet is exactly
+/// what the take-up needs.**
+///
+/// The pin key's request is a file installed with no pin standing — that is what arriving is — and
+/// the loop reads that request with a guard meant for the other install: a file stepping onto a pin
+/// that is up. The guard asked `pinned()`, so every take-up out of a hover was dropped as "a pin
+/// that has ended is not given a file", and the key did nothing at all: no window, no caption, no
+/// pin, forever, however long the hand waited. Hovering was untouched, which is what made it look
+/// like a dead key rather than a dead pin.
+#[test]
+fn the_file_the_pin_key_asks_for_is_taken_up_with_no_pin_standing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+
+    let arrival = PreviewMessage::Pin {
+        path: PathBuf::from("a-film-the-key-was-pressed-on.mkv"),
+        rect: (100, 80, 420, 320),
+        arriving: true,
+    };
+    let stepping = PreviewMessage::Pin {
+        path: PathBuf::from("a-file-stepped-onto-a-pin.mkv"),
+        rect: (100, 80, 420, 320),
+        arriving: false,
+    };
+    let arrival_is_taken_up = |request: &PreviewMessage| match request {
+        PreviewMessage::Pin { arriving, .. } => the_pin_takes_the_file_up(*arriving),
+        _ => panic!("the key's request is a take-up"),
+    };
+
+    // No pin standing: the state the key's own request is read in, and the one it used to be
+    // refused in.
+    stand_pin(None);
+    assert!(!pinned(), "nothing is up before the key is answered");
+    assert!(
+        arrival_is_taken_up(&arrival),
+        "the file the key asked for is the pin arriving, and the take-up is what puts the pin up"
+    );
+    assert!(
+        !arrival_is_taken_up(&stepping),
+        "while a file stepping onto a pin that has gone is still refused: the watchdog ends a \
+         hung pin from its own thread, and the take-up writes the pin's state whole"
+    );
+
+    // A pin that is up takes a file stepping onto it, which is the half of the guard that was
+    // always right.
+    stand_pin(Some(PinnedPreview::for_test()));
+    assert!(pinned(), "a pin stands");
+    assert!(
+        arrival_is_taken_up(&stepping),
+        "a file stepping onto a pin that is up is the window showing another file"
+    );
+
+    stand_pin(None);
+}
+
 /// The pin's own `End of File`, put where the tests below ask it and put back when the guard is
 /// dropped, the way the sound's loop switch is (`LoopSwitch`) and the two `Audio Seek` settings
 /// are (see `pin_audio_seek::SeekSettings`).
