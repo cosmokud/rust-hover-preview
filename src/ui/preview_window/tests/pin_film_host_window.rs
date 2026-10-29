@@ -6758,6 +6758,11 @@ fn a_relaunch_on_the_off_road_freezes_nothing() {
 /// than assumed. What a test cannot reach is the player's own reading of the key.
 #[test]
 fn a_posted_pause_key_reaches_a_window_wearing_the_sources_own_style() {
+    // A window of this process's own, and one the passes that look at this process's windows are
+    // answered with: it takes the suite's lock (see `PIN_TESTS_ONE_AT_A_TIME`).
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let window = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),

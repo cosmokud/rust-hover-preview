@@ -1110,6 +1110,11 @@ fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
 /// picked a file blinking under the listing while the new film's window was being raised.
 #[test]
 fn a_window_of_the_player_is_a_window_of_the_preview() {
+    // The published player is one slot for the process, so this takes the suite's lock (see
+    // `PIN_TESTS_ONE_AT_A_TIME`).
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
 
     // No window's process is "nobody's": a pid of nothing is what a failed ask leaves, and it must

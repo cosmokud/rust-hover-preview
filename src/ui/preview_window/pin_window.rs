@@ -883,6 +883,24 @@ pub(super) fn stand_pin_walk(walk: Option<PinStep>) {
 /// early return, and reports no hover at all rather than a wrong one. Reading is the half that
 /// is easy to leave out, and it fails the same way writing does.
 ///
+/// **The other half of what these tests share is the machine's windows and the player records
+/// that name them.** Neither is this app's own: a window is found by its process and by its
+/// class, and a window a test made is in every other test's view.
+/// `ffplay_window::style_the_window_before_the_show` and `unlist_the_awaited_window` answer with
+/// the *first* window of the process wearing the film's class — `A_FILMS_WINDOW_CLASS`, which
+/// `a_film_window_of_the_tests_own` makes with the player's own — so two tests holding a window
+/// each are two tests styling each other's: the window each one awaited goes unstyled, and a
+/// window neither meant to touch is changed behind its back, which is a red in both and a race
+/// neither test can see from where it stands. The records a player is published and waited for
+/// under are the same shape of problem (`VIDEO_PID` and `VIDEO_HWND`,
+/// `PLAYER_BEFORE_THE_SHOW`, `A_WINDOW_TO_UNLIST`, `SUSPENDED_PLAYERS`): one slot for the whole
+/// binary, so two tests writing one are each asserting about the other's player.
+///
+/// So the rule below is not only about the pin's own state. A test that makes a window of this
+/// process, calls a pass that enumerates windows by process or class, or writes one of those
+/// records takes this lock too — and it is still this lock, not a second one, because those
+/// tests share the machine with every test here in the same way the pin's tests share the slot.
+///
 /// There is one lock for this state, not one per module, and it is here because this module owns
 /// the state: the slot is the one declared above, and the tests that stand a pin up stand it from
 /// both sides of the module wall. A second lock over the same slot is not a second line of
@@ -898,8 +916,10 @@ pub(super) fn stand_pin_walk(walk: Option<PinStep>) {
 /// is the order, so the order is taken back.
 ///
 /// The rule for a test that reaches this state, then: does it stand a pin up, take one down,
-/// write the media, or ask any of the above? Take this lock on the first line of the body, before
-/// anything touches that state. A test that touches none of it takes nothing — most of both
+/// write the media, ask any of the above, make a window of this process, call a pass that
+/// enumerates the desktop's windows by process or class, or write one of the player records the
+/// monitor waits on? Take this lock on the first line of the body, before anything touches that
+/// state. A test that touches none of it takes nothing — most of both
 /// modules is arithmetic over values handed to it — so the suite is not serialised, only the part
 /// of it that shares a machine. A lock over some other process-wide thing, like the pointer's own
 /// stand-in in `preview_window`, is a different lock and neither stands in for this one.

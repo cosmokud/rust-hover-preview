@@ -1554,6 +1554,11 @@ mod tests {
     /// monitor keeps looking on rather than a race it has lost (see `style_the_window_before_the_show`).
     #[test]
     fn a_hover_with_no_window_yet_is_awaited_rather_than_styled() {
+        // A test that runs the desktop's enumeration takes the suite's lock, however hopeless the
+        // process it asks about (see `PIN_TESTS_ONE_AT_A_TIME`).
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
         assert!(
             matches!(
                 unsafe { style_the_window_before_the_show(u32::MAX - 7) },
@@ -1626,6 +1631,12 @@ mod tests {
     /// `A_FILMS_WINDOW_CLASS`).
     #[test]
     fn the_eager_pass_styles_a_film_window_that_is_not_shown_yet() {
+        // **This is a window of this process's own, wearing the player's class**, so it is one the
+        // other pass that enumerates by process and class would answer with — and that pass's
+        // window is one this one would answer with. One at a time (see `PIN_TESTS_ONE_AT_A_TIME`).
+        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
         use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
         unsafe {
