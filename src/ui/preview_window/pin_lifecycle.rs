@@ -2134,7 +2134,7 @@ pub(super) unsafe fn keep_pin_at_the_front(
     // `give_the_band_back`).
     if now >= until {
         *owed = None;
-        give_the_band_back(hwnd, where_the_band_goes_back(foreground, listing));
+        give_the_band_back(hwnd, where_the_band_goes_back(hwnd, foreground, listing));
         return;
     }
 
@@ -2146,7 +2146,7 @@ pub(super) unsafe fn keep_pin_at_the_front(
     // one thing `Always On Top` off must never do (see `PinFrontOwed`).
     if !IsWindow(listing).as_bool() {
         *owed = None;
-        give_the_band_back(hwnd, where_the_band_goes_back(foreground, listing));
+        give_the_band_back(hwnd, where_the_band_goes_back(hwnd, foreground, listing));
         return;
     }
 
@@ -2176,7 +2176,7 @@ pub(super) unsafe fn keep_pin_at_the_front(
     // answer's own clock and reaches this branch again a tick later.
     if pin_is_its_own_window() && now >= band_until {
         let band_was_the_desktops = window_holds_the_topmost_band(hwnd);
-        give_the_band_back(hwnd, where_the_band_goes_back(foreground, listing));
+        give_the_band_back(hwnd, where_the_band_goes_back(hwnd, foreground, listing));
         if band_was_the_desktops || pin_stands_over(hwnd, listing) {
             *owed = None;
             return;
@@ -2188,8 +2188,8 @@ pub(super) unsafe fn keep_pin_at_the_front(
     }
 }
 
-/// Where the band a pick's press held goes back to: the pin's own front when the user is in the listing the
-/// click was made in, and behind the window they moved to when they are anywhere else.
+/// Where the band a pick's press held goes back to: the pin's own front when the window in front is the
+/// one the click was made in, and behind the window the user moved to when they are somewhere else.
 ///
 /// **The two are one answer, not two roads.** The front of the band is where `HWND_NOTOPMOST` leaves a window
 /// anyway, and it is the answer for the listing because the pin is meant to stand over the file the user picked
@@ -2197,8 +2197,29 @@ pub(super) unsafe fn keep_pin_at_the_front(
 /// going behind what it followed, it is the pin staying exactly where it was. Anywhere else the front of the
 /// band is the pin over a program the user chose, which is the one thing the setting forbids (see
 /// `give_the_band_back` and `lower_pinned_preview`).
-fn where_the_band_goes_back(foreground: HWND, listing: HWND) -> HWND {
-    if foreground == listing {
+///
+/// **A listing the recording cannot name is no window to go behind.** The press carries the frame it was
+/// made in, and a shell that could not describe that frame leaves it at nothing — and `listing` is also
+/// read after the window it names has gone. Read as "somebody else", that nothing was the foreground
+/// window put in front of the pin: the release lowered the pin behind the listing on the very press that
+/// picked the file, which is the click that left a pin behind Explorer. So a debt with no listing to
+/// name gives the band back where it is and the pin stays over the listing the user is working in.
+///
+/// **And a window of the listing's own kind is not a window to go behind either.** The user clicking in
+/// Explorer is clicking in the listing this pin follows, and the frame the press was recorded in is not
+/// always the window Windows hands back as the foreground (a click that lands in a child of the frame, a
+/// frame whose owner the shell describes rather than the frame itself): a pin put behind it is the pin
+/// put behind its own listing, one window handle along. What the setting forbids is a pin standing over
+/// *another program*, and an Explorer window is the one program this pin is for.
+fn where_the_band_goes_back(hwnd: HWND, foreground: HWND, listing: HWND) -> HWND {
+    if listing.is_invalid() || !unsafe { IsWindow(listing) }.as_bool() {
+        return HWND::default();
+    }
+
+    if foreground == listing
+        || foreground == hwnd
+        || crate::shell::explorer_hook::explorer_browser_class_matches(foreground)
+    {
         HWND::default()
     } else {
         foreground
@@ -2237,8 +2258,7 @@ fn where_the_band_goes_back(foreground: HWND, listing: HWND) -> HWND {
 /// `behind` is the window the pin is to go below, or no window where the front of the band is the answer. It
 /// is handed in rather than read here for the same reason the grace is handed the window the user is in: a test
 /// process cannot make a window of its own the foreground, and the question is only ever which window that is.
-unsafe fn give_the_band_back(hwnd: HWND, behind: HWND) {
-    // Said first, whatever the window's band turns out to be: a hold that is over is over, and a
+unsafe fn give_the_band_back(hwnd: HWND, behind: HWND) {    // Said first, whatever the window's band turns out to be: a hold that is over is over, and a
     // placement after it asks the setting again (see `PIN_BAND_HELD`).
     PIN_BAND_HELD.store(false, Ordering::SeqCst);
 
@@ -2257,6 +2277,118 @@ unsafe fn give_the_band_back(hwnd: HWND, behind: HWND) {
     }
 
     lower_pinned_preview(hwnd, behind);
+}
+
+/// Put the pair over the listing it follows, and leave it at the front of the band the setting names.
+///
+/// **`HWND_TOP` cannot do this and a held band must not be given back**: the pick arrives while the user
+/// is clicking in the listing, so the listing is the foreground window and the place asked for is
+/// refused to a process that is not in the foreground — while the topmost band is not. So the pair is
+/// taken into the topmost band and taken straight out of it again, which is the front of the ordinary
+/// band, reached in a way the foreground window cannot refuse (see `take_the_band_and_give_it_back`).
+///
+/// **Both windows of the pair, in one order**: the host that draws the film first and the chrome that
+/// owns it second, out of the band in the same order — the order Windows keeps an owner and its owned
+/// window in — and never a `SWP_NOOWNERZORDER`, which would be a placement that left the pair split
+/// across two windows' worth of band (see `pin_film_host::place_the_pin_in_the_band`).
+///
+/// The band the pair is left in is `band_place`'s, so a hold taken for a press or for a step is not given
+/// back by this road: where one stands, the place asked for is the topmost band and the bounce is one
+/// band asked for twice.
+pub(super) unsafe fn take_the_pair_over_the_listing(pin: HWND) {
+    if pin.is_invalid() || pin_always_on_top() {
+        // A pin that is Always On Top is in the band this would take and give back, and a pin with no
+        // window has no band at all.
+        return;
+    }
+
+    unsafe {
+        pin_film_host::place_the_pin_in_the_band(pin, HWND_TOPMOST);
+        pin_film_host::place_the_pin_in_the_band(pin, band_place());
+    }
+}
+
+/// How far up the z-order the walk for a listing over the pin may go before it gives up.
+///
+/// It is a bound rather than a count of the desktop: the walk stops at the first listing it meets, and a
+/// pin is never under more than a handful of windows, so this is the answer to a desk the walk cannot
+/// read rather than a length anything normal reaches (see `a_listing_over_the_pin_puts_it_back`).
+const A_WALK_OVER_THE_Z_ORDER: usize = 32;
+
+/// **A safety net, and nothing more.** The cause of a pin left behind its listing on a mouse click is
+/// answered where it happens — a press that picked a file is never given the answer of "no pick", and
+/// a press's debt whose listing cannot be named keeps the pin at the front of its band rather than
+/// putting it behind whatever the foreground happens to be (see `the_press_named_no_file` and
+/// `where_the_band_goes_back`). This is what is left for the shapes those two cannot see: a pin that is
+/// standing, under `Pin Mode → Always On Top` off, with the user working in the listing it follows and
+/// that listing still *above* it in the z-order.
+///
+/// **It is asked of the desktop rather than of what this app last asked for**, which is the whole of why
+/// it is worth having: the desktop is the only thing that knows where the pin really stands, and every
+/// road that lowers it — this app's own, the Shell's, another program's — leaves the same mark, a
+/// listing window in front of the pin.
+///
+/// **The user has to be in the pin or in a listing, and nowhere else.** With the foreground another
+/// program the pin is exactly where the setting puts it — behind the program the user chose — and a
+/// raise over it would be a pin over somebody else's window, which is the one thing `Always On Top` off
+/// means. So the answer is no for every foreground that is neither the pair nor a listing, and no for a
+/// listing that is not above the pin.
+///
+/// Safety: every window asked is one the desktop holds, and nothing but the pair's band is written.
+pub(super) unsafe fn a_listing_over_the_pin_puts_it_back(foreground: HWND) -> bool {
+    if !pinned() || pin_always_on_top() || pin_is_collapsed() || !pin_is_its_own_window() {
+        return false;
+    }
+
+    let pin = pinned_window();
+    if pin.is_invalid() || pin_film_host::pin_handover_armed() {
+        return false;
+    }
+
+    // **The pair or a listing, and nothing else.** A foreground of this app's own is the pin the user
+    // is in; the host is the film under it, and a press that reached it is a press that reached the pin.
+    let the_user_is_in_the_pair =
+        foreground == pin || pin_film_host::film_host() == Some(foreground);
+    if !the_user_is_in_the_pair
+        && !crate::shell::explorer_hook::explorer_browser_class_matches(foreground)
+    {
+        return false;
+    }
+
+    let Some(listing) = (unsafe { the_listing_over_the_pin(pin) }) else {
+        return false;
+    };
+
+    note_pin_trace!(
+        "listing over the pin {:?} {:?}: the pair is put back",
+        listing,
+        pin
+    );
+    unsafe { take_the_pair_over_the_listing(pin) };
+    true
+}
+
+/// The first Explorer listing above `pin` in the z-order, or nothing where there is none.
+///
+/// The walk is bounded and stops at the first match, and it costs one `GetWindow` and one class read per
+/// window it passes — no allocation, and nothing held across either (see
+/// `crate::shell::explorer_hook::explorer_browser_class_matches`).
+unsafe fn the_listing_over_the_pin(pin: HWND) -> Option<HWND> {
+    let mut window = unsafe { GetWindow(pin, GW_HWNDPREV) }.ok()?;
+    for _ in 0..A_WALK_OVER_THE_Z_ORDER {
+        if window.is_invalid() {
+            return None;
+        }
+        if window != pin
+            && crate::shell::explorer_hook::explorer_browser_class_matches(window)
+        {
+            return Some(window);
+        }
+
+        window = unsafe { GetWindow(window, GW_HWNDPREV) }.ok()?;
+    }
+
+    None
 }
 
 /// Whether the pin stands over `window` in the z-order right now: whether walking up from that

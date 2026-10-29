@@ -45,6 +45,21 @@ fn press_frame(pointer: &PointerTick) -> isize {
     (if owner.is_invalid() { root } else { owner }).0 as isize
 }
 
+/// Whether a press that has been read owes the pin's answer of "no pick": put behind the window the
+/// press was made in.
+///
+/// **A press that picked a file is never answered this way**, whichever of the two lookups named it:
+/// the pin is in front of the listing for the file the user chose, and a lowering that lands after the
+/// pick's raise is the pin it took behind that listing — the fault a mouse click reported and the
+/// keyboard never did, because a key walked to a file has no press to be answered at all (see
+/// `PreviewMessage::PinPress` and `PreviewMessage::PinNoPick`).
+///
+/// `named_nothing` is the row lookup finding no row, or a row that is no file this app previews, and
+/// `picked_a_file` is either lookup having named the file the press picked.
+pub(super) fn the_press_named_no_file(named_nothing: bool, picked_a_file: bool) -> bool {
+    named_nothing && !picked_a_file
+}
+
 /// What the hook watches while a preview is pinned, so that the tray's `Pin Mode … Update Preview`
 /// can show the pin the file the user picks next.
 ///
@@ -375,6 +390,15 @@ impl PinUpdateWatch {
         //
         // A press on this app's own window is left out: it is the pin being used rather than the
         // listing under it being picked, and what the pin stands over is not changed by it.
+        //
+        // **The answer is decided once, and both lookups have a say in it.** A row that the shell does
+        // not name yet reads here as `None`, which is the commonest mouse pick there is — the shell is
+        // still catching up with a click, and the file is then named by the second lookup below. An
+        // answer of "no pick" made on this lookup alone is an answer for a press that picked nothing,
+        // and it puts the pin behind the listing: made before the pick was known, it lowered the pin
+        // for the very press that picked the file (see `the_press_named_no_file`).
+        let mut the_press_named_nothing = false;
+        let mut the_press_picked_a_file = false;
         if press_is_answered(
             clicked,
             over_explorer,
@@ -388,11 +412,15 @@ impl PinUpdateWatch {
                 Some(Some(path)) if !path.is_dir() && is_media_file(path) => {
                     if pick {
                         press_pinned_preview(press_frame(&pointer));
+                        the_press_picked_a_file = true;
                     }
                     pick
                 }
+                // **A row the shell has named and this app cannot show, and no row at all**: the press's
+                // answer is carried to the end of the tick, where the second lookup has answered (see
+                // `the_press_named_no_file`).
                 Some(Some(_)) | None => {
-                    pin_press_was_not_a_pick(press_frame(&pointer));
+                    the_press_named_nothing = true;
                     false
                 }
                 Some(None) => false,
@@ -414,6 +442,15 @@ impl PinUpdateWatch {
             self.probed = true;
 
             if let Some(path) = get_file_under_cursor(resolver, &pointer) {
+                // **A press the row lookup could not name, and that this lookup has answered with a
+                // file, is the press that picked it.** The pin is owed the raise and the grace a named
+                // row gets — so the press is noted *before* the file is offered — and the answer of
+                // "no pick" below is never given for it (see `the_press_named_no_file`).
+                if pick && the_press_named_nothing && !path.is_dir() && is_media_file(&path) {
+                    press_pinned_preview(press_frame(&pointer));
+                    the_press_picked_a_file = true;
+                }
+
                 // What was resolved is answered whatever it turned out to be — a file nothing can
                 // be shown for is one of them — so there is nothing here left to ask about again.
                 let offered = self.offer(&path, &showing);
@@ -449,6 +486,16 @@ impl PinUpdateWatch {
                     Some(Duration::ZERO),
                 );
             }
+        }
+
+        // **A press that named no file anywhere puts the pin behind the window it was made in, and a
+        // press that picked one is never answered this way.** Both lookups have had their say by now: a
+        // row the shell had not named yet reads as nothing above, and the file it picked is answered
+        // here — so the pin belongs in front of the listing the click was made in, and this answer is
+        // the one that used to take it behind that listing on every click the shell was a moment
+        // behind (see `PreviewMessage::PinNoPick` and `the_press_named_no_file`).
+        if the_press_named_no_file(the_press_named_nothing, the_press_picked_a_file) {
+            pin_press_was_not_a_pick(press_frame(&pointer));
         }
 
         // The click above, asked again now that the shell may have caught up. It runs only where

@@ -120,7 +120,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub use main_loop::run_explorer_hook;
 pub use view_sort::note_explorer_restart;
 pub(crate) use view_sort::{view_sort_of, SortKey, ViewSort};
-pub(crate) use window_state::{is_foreground_explorer, is_foreground_explorer_without_cache};
+pub(crate) use window_state::{
+    explorer_browser_class_matches, is_foreground_explorer, is_foreground_explorer_without_cache,
+};
 
 // The parts, in one namespace (see the note above). The macro is named rather than globbed:
 // it is written from two parts and lives with the counter it is written beside.
