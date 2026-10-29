@@ -2383,6 +2383,11 @@ pub fn run_preview_window() {
                                 // told it was Always On Top, still ordinary and so behind the listing
                                 // it was asked for from (see `place_the_pin_where_the_setting_names`).
                                 place_the_pin_where_the_setting_names();
+                                // **And the button goes with it.** A pair whose button is the host's
+                                // is not the stand-in below, and a row that only answered the stand-in
+                                // left a pin with `Always On Top` on wearing the button it had
+                                // (see `the_button_follows_the_setting`).
+                                pin_film_host::the_button_follows_the_setting();
                                 if pin_always_on_top() {
                                     if !pin_is_collapsed() {
                                         hide_pin_taskbar();

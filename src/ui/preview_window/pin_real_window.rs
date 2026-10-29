@@ -30,10 +30,11 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetWindowLongPtrW, MoveWindow, RegisterClassExW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, GWL_EXSTYLE, SW_HIDE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    CreateWindowExW, GetWindowLongPtrW, IsWindowVisible, MoveWindow, RegisterClassExW,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOWNOACTIVATE,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX,
+    WS_POPUP, WS_SYSMENU,
 };
 
 use super::window_proc;
@@ -76,13 +77,25 @@ fn real_pin_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
     )
 }
 
-/// Ask for or give back the pin's own taskbar button and Alt+Tab entry: what a pin whose chrome is
-/// owned by its film host gives up, and what it takes back where no host owns it (see
+/// Ask for or give back a window's taskbar button and Alt+Tab entry: what a pin whose chrome is owned
+/// by its film host gives up, and what the host it is owned by takes on (see
 /// `pin_film_host::own_the_pin_window`). A window's place in the Shell's lists is asked of the window
 /// rather than of the asker, so it is written with the road and not with the setting.
+///
+/// **A button is the Shell's answer to a window being *shown*, and a bit written behind a visible
+/// window's back is not re-read for it.** Measured: a window that stays up wears the button it was
+/// shown with, however the bit is re-read — which is why the pair's button was intermittent. So a
+/// window that is on the screen when its bit changes is put down and up again, which is the show the
+/// Shell reads. A window that is down is left alone: the show it is owed is the one that brings it
+/// (see `pin_film_host::create` and `promote_the_hover_film_host`, which write the bit before any
+/// show rather than paying for one here).
 pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) {
     if unsafe { set_an_ex_style(hwnd, WS_EX_APPWINDOW, app_window) } {
         unsafe { ask_the_window_to_re_read_its_style(hwnd) };
+        if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+            let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+        }
     }
 }
 

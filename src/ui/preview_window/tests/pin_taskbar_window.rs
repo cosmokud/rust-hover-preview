@@ -2725,3 +2725,112 @@ fn a_put_away_pin_comes_back_on_the_file_the_update_names_rather_than_before_it(
         config.pin_update_move_to_top = move_to_top;
     }
 }
+
+/// **The button is the setting's, and it is asked of the window that wears it.** `Pin Mode -> Always
+/// On Top` on is a pin over everything already, which owes no taskbar button; off is an ordinary window
+/// with an ordinary window's button. The pair's button belongs to the host that owns the pin's chrome,
+/// and the pin's own window is the one that must not carry a second one.
+///
+/// The fault this is a regression test for is the intermittent one: the app-window bit was added to a
+/// host that was *already on the screen* at the promotion, with a style re-read and no show, and a
+/// button is the Shell's answer to a window being shown - so the pair wore the button it happened to
+/// be shown with. And the row that changes the setting recomputed nothing, so a pin with the setting
+/// turned on kept the button it was taken up with.
+#[test]
+fn the_pairs_taskbar_button_is_the_settings() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    let pin = pin_real_window::real_pin_window().expect("the pin's own window");
+    let previous = pin_always_on_top();
+    let wears_a_button = |hwnd: HWND| unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize != 0;
+
+    // The setting off: the host is the window the Shell lists, and the pin's own window is not.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    assert!(
+        wears_a_button(host),
+        "a pin that is not Always On Top wears a taskbar button, on the host that owns its chrome"
+    );
+    assert!(
+        !wears_a_button(pin),
+        "and the pin's own window is listed with the host that owns it rather than beside it"
+    );
+
+    // The row turns `Always On Top` on with the pin standing: the button goes with it.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    unsafe { pin_film_host::the_button_follows_the_setting() };
+    assert!(
+        !wears_a_button(host) && !wears_a_button(pin),
+        "a pin that is Always On Top owes no button, and the row takes the one it had"
+    );
+
+    // And off again: the same button comes back, on the same window.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    unsafe { pin_film_host::the_button_follows_the_setting() };
+    assert!(
+        wears_a_button(host) && !wears_a_button(pin),
+        "and a setting turned off gives the pair its button back, once"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = previous;
+    }
+}
+
+/// **A pair promoted out of a hover asks for no button while the setting says the pin is on top**,
+/// and the bit is written before the host is shown rather than on an already-visible window's back.
+///
+/// The promotion is the road the intermittent button was reported on: it added `WS_EX_APPWINDOW` to a
+/// host that was on the screen as a hover's, re-read the style and showed nothing, and the Shell's list
+/// is a window being shown (see `pin_real_window::set_the_pin_window_appwindow`). Here the bit is
+/// written with the rest of the pin's bits, which is the style write the promotion was already making.
+#[test]
+fn a_promoted_pair_owes_no_button_with_always_on_top() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let film = super::pin_film_host_window::StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { super::pin_film_host_window::HostedHover::up(&film, &path, 3.0) };
+    let previous = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    pin_stands_in_its_own_window(true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover.host),
+        "the hover's host is the pin's host"
+    );
+    assert!(
+        unsafe { GetWindowLongPtrW(hover.host, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize == 0,
+        "a pair promoted out of a hover with Always On Top on asks for no button at all"
+    );
+
+    // And the setting off puts the button on that same host, since it is the window the Shell lists.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    unsafe { pin_film_host::the_button_follows_the_setting() };
+    assert!(
+        unsafe { GetWindowLongPtrW(hover.host, GWL_EXSTYLE) } & WS_EX_APPWINDOW.0 as isize != 0,
+        "and a setting turned off gives the promoted pair its button"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = previous;
+    }
+    drop(hover);
+}
