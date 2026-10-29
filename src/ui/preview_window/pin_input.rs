@@ -855,11 +855,9 @@ unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool, window: &dyn Pin
 /// reaches for on a window it wants wider. What the caption keeps is everything outside the band,
 /// which is where its buttons are: a corner's share of a button is a resize, and the rest of it is
 /// the button, exactly as it is on a window whose frame the system draws.
-/// The same press, on this app's own window: what a road that answers a press as the pin's calls
-/// (see `press_the_pin`).
 ///
-/// The window is a parameter rather than a fact of the module because the two things a press asks of
-/// one — where the pointer is, and the capture the drag takes — are the half a test stands a
+/// **The window is a parameter rather than a fact of the module**, because the two things a press asks
+/// of one — where the pointer is, and the capture the drag takes — are the half a test stands a
 /// recorder in front of (see `PinWindow`). Nothing else about the press is the window's: what a point
 /// means is the pin's.
 pub(super) unsafe fn pinned_press_on(
