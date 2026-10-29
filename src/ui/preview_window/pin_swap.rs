@@ -1,6 +1,7 @@
 //! Deciding what a pin should show next and what has to be waited for: the plan an update turns
 //! into, the room it takes, and the swap held until the new frame is in hand.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 /// What a pin that is up needs to be shown another file: the box the new file's media is given,
@@ -848,7 +849,18 @@ impl PinSwapHold {
             let playing = video_player::is_playing();
             let failing = video_player::failing_before_a_frame().is_some();
 
-            return pin_swap_wait(frame_in_hand, playing, failing);
+            let wait = pin_swap_wait(frame_in_hand, playing, failing);
+            if wait == Some(PinSwapWait::Abandoned) {
+                // The engine's own answer, and the other half of the line above: a session that has
+                // gone, or one that has refused the file, is a wait with nothing left in it (see
+                // `pin_swap_wait`).
+                note_pin_trace!(
+                    "swap hold given up after {}ms: frame {frame_in_hand} playing {playing} failing {failing}",
+                    self.started.elapsed().as_millis()
+                );
+            }
+
+            return wait;
         }
 
         // A film FFmpeg's player or mpv draws reaches the screen as a window of its own, and what
@@ -886,10 +898,26 @@ impl PinSwapHold {
         let picture =
             pin_film_thumbnail::the_source_is_standing_try(VIDEO_PID.load(Ordering::SeqCst));
 
-        player_swap_wait(picture, alive, self.started.elapsed()).map(|wait| match wait {
-            PlayerWait::Arrived => PinSwapWait::Arrived,
-            PlayerWait::Abandoned => PinSwapWait::Abandoned,
-        })
+        let waited = self.started.elapsed();
+        player_swap_wait(picture, alive, waited)
+            .inspect(|wait| {
+                // **A wait that ends with nothing to hand the picture to says so**, because the two
+                // ways it can happen are the degraded roads of this hold: a player that never made a
+                // window, and one that made one and did not draw in the time a start is given (see
+                // `player_swap_wait`). What the pin shows afterwards is the file that replaced it
+                // installed over the picture that was standing, which is the swap it had before the
+                // hold existed — an honest answer, and one a run should be able to find.
+                if *wait == PlayerWait::Abandoned {
+                    note_pin_trace!(
+                        "swap hold given up after {}ms: picture {picture} player_alive {alive}",
+                        waited.as_millis()
+                    );
+                }
+            })
+            .map(|wait| match wait {
+                PlayerWait::Arrived => PinSwapWait::Arrived,
+                PlayerWait::Abandoned => PinSwapWait::Abandoned,
+            })
     }
 
     /// The file to install, for a wait that has come to either of its ends.
