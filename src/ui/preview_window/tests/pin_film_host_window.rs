@@ -3584,6 +3584,142 @@ fn a_step_leaves_the_pins_band_to_the_outgoing_picture_until_the_next_is_adopted
     );
 }
 
+/// **A click's swap keeps the picture on the band exactly as a caption's does.** The two roads differ
+/// in who asked and in nothing else: they are one `swap_pinned_media`, and what it is held for is the
+/// picture the *standing registration* draws — not the newest pid, which for the whole of an earlier
+/// step's wait is a player that has drawn nothing at all (see `swap_pinned_media` and
+/// `pin_film_host::the_picture_stands_to_keep`).
+///
+/// **The fault this is a regression test for.** Read off `hosted_player_pid() == VIDEO_PID`, a swap
+/// begun while a hover's player was the host's source answered "the picture is the newest player's",
+/// took the media down with the band — the registration forgotten, the host hidden — and the band's
+/// own paint over a host with nothing in it was the opaque black rectangle that stood where the
+/// picture had been, sometimes for the rest of the run (see
+/// `pin_film_host::take_the_film_off_the_band` and `paint`'s host arm).
+#[test]
+fn a_click_road_swap_keeps_the_picture_standing_until_the_next_film_can_draw() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let _parked = AStepParkedTheOldPlayer::take();
+
+    // **The player the picture belongs to is not the one the host records as its own**, which is the
+    // state a hover's film is taken up in: the registration draws a window of the hover's player, and
+    // the hosted record names nothing yet (see `taken_up_from_a_hover`).
+    let hovered = unsafe { GetCurrentProcessId() };
+    film.taken_up_from_a_hover(hovered);
+    assert!(
+        pin_film_host::the_host_is_drawing(),
+        "the picture on the band is the registration's"
+    );
+    assert!(
+        !pin_film_host::the_pinned_player_was_begun_in_the_host(),
+        "and the hosted record does not name it, which is the reading this test replaces"
+    );
+
+    let hides = pin_film_host::host_hides_asked();
+    pin_film_thumbnail::clear_the_unregistrations();
+
+    let swap = a_step_onto_the_next_film(&film);
+    assert!(
+        matches!(swap, PinSwap::Holding(_)),
+        "the swap begins a player for the next film and is held for its picture"
+    );
+    assert!(
+        pin_film_host::the_host_is_drawing(),
+        "the outgoing film is still the host's picture, so the band is still a hole for it"
+    );
+    assert_eq!(
+        pin_film_host::host_hides_asked(),
+        hides,
+        "and the host was never taken off the screen for the wait"
+    );
+    assert_eq!(
+        pin_film_thumbnail::the_unregistrations(),
+        0,
+        "and the registration standing was never let go for it"
+    );
+
+    let (band, top, rows) = the_band_one_paint_left(&film);
+    assert!(rows > 0, "the pin has a band to assert");
+    assert!(
+        band.iter().all(|pixel| *pixel == [1, 1, 1, 1]),
+        "rows {top}..{} of the pin's bitmap are a hole for the picture standing rather than the \
+         opaque black an empty host owes the screen",
+        top + rows
+    );
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(host),
+        "and the band was read over the host that picture is drawn in"
+    );
+}
+
+/// **A second press on the file the pin is already on its way to is dropped, not asked for again.**
+///
+/// The pin's own `path` is the file it is *showing* and does not move until the incoming file is
+/// installed, so a press on the file being loaded or held used to read as a new pick: the load was
+/// dropped, the hold abandoned and the player behind it killed — a picture taken off the band and a
+/// film opened twice for one press (see `update_pinned_preview` and
+/// `pin_install::pin_file_in_flight`). The door is asked here, because it is the one door every road
+/// that offers a file goes through.
+#[test]
+fn a_second_pick_for_the_file_in_flight_is_dropped() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    stand_pin(Some(PinnedPreview {
+        path: PathBuf::from("the-file-on-the-window.mkv"),
+        ..PinnedPreview::for_test()
+    }));
+    assert!(pinned(), "the pick this test is about is a standing pin's");
+    assert!(pin_update_enabled(), "and a pin that follows picks");
+
+    // A channel of the preview's own, stood in the slot the door sends on, so that what it sends is
+    // what this test reads and a later test's channel is not read here.
+    let (sender, answers) = channel();
+    let previous_sender = PREVIEW_SENDER.lock().ok().and_then(|mut held| held.replace(sender));
+    pin_trace::clear_noted();
+
+    let in_flight = PathBuf::from("the-file-being-loaded.mkv");
+    note_the_pin_file_in_flight(Some(&in_flight));
+    update_pinned_preview(&in_flight);
+
+    let dropped = answers.try_recv();
+    let noted = pin_trace::noted_lines();
+
+    // A file that is not the one in flight is asked for, whatever the record says.
+    let another = PathBuf::from("another-file.mkv");
+    update_pinned_preview(&another);
+    let asked = answers.try_recv();
+
+    note_the_pin_file_in_flight(None);
+    if let Ok(mut held) = PREVIEW_SENDER.lock() {
+        *held = previous_sender;
+    }
+    stand_pin(previous_pin);
+    pin_trace::clear_noted();
+
+    assert!(
+        dropped.is_err(),
+        "the press named the file the pin is already being shown, so there is nothing to send"
+    );
+    assert!(
+        noted
+            .iter()
+            .any(|line| line.starts_with("pick dropped:") && line.contains("being-loaded")),
+        "and the run says which file was dropped as in flight: {noted:?}"
+    );
+    assert!(
+        matches!(asked, Ok(PreviewMessage::PinUpdate(ref path)) if *path == another),
+        "a file the pin is not on its way to is a pick like any other"
+    );
+}
+
 /// **The band a step takes is the topmost one, and it is given back when the new source has the
 /// picture**: the outgoing film must not be covered by the program the user stepped from while the
 /// incoming player opens its file, and the pin must be an ordinary window again once it is drawn
@@ -7570,9 +7706,14 @@ fn a_step_leaves_the_hand_chrome_up_from_its_take_up_to_its_first_frame() {
         });
         unsafe { pin_chrome_strips::sync_the_chrome_strips() };
     };
+    // The windows a step adopts as the film's source. **They outlive every step the test makes**: what
+    // the host's registration draws is one of them, and a source destroyed under a standing
+    // registration is a pin that has no picture for the next step to keep (see
+    // `pin_film_host::the_picture_stands_to_keep`).
+    let mut sources: Vec<HWND> = Vec::new();
     // A step of the walk's kind: the step is begun, the file it is for is taken up in the box it was
     // laid out in, and the show paints that box.
-    let the_step = |content: ScreenRegion| {
+    let the_step = |content: ScreenRegion, sources: &mut Vec<HWND>| {
         assert!(
             matches!(a_step_onto_the_next_film_at(content), PinSwap::Holding(_)),
             "the step begins a player for the next film and holds the pin for its picture"
@@ -7602,6 +7743,7 @@ fn a_step_leaves_the_hand_chrome_up_from_its_take_up_to_its_first_frame() {
         );
         let source = unsafe { a_players_own_window() };
         unsafe { pin_film_thumbnail::adopt_the_source(source, replacement, host) };
+        sources.push(source);
         the_hand_asks();
         assert!(
             shows(caption) && !shows(transport),
@@ -7613,9 +7755,6 @@ fn a_step_leaves_the_hand_chrome_up_from_its_take_up_to_its_first_frame() {
             shows(caption) && !shows(transport),
             "and the frame it lands on leaves the hand's strip what it was"
         );
-        unsafe {
-            let _ = DestroyWindow(source);
-        }
     };
 
     // The film the pin is showing has proved its frame, and the hand finds the caption.
@@ -7627,14 +7766,19 @@ fn a_step_leaves_the_hand_chrome_up_from_its_take_up_to_its_first_frame() {
     );
 
     // A walk's step, which lays the incoming film out in a box of its own.
-    the_step(film.box_);
+    the_step(film.box_, &mut sources);
     // And a step whose box does not change: every file of a maximized pin is fitted to the room the
     // window already fills.
     let standing = pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin.content))
         .expect("a pin up");
-    the_step(standing);
+    the_step(standing, &mut sources);
 
+    for source in sources {
+        unsafe {
+            let _ = DestroyWindow(source);
+        }
+    }
     stand_window_at_point_in(None);
     mpv_ipc::clear_reads();
     mpv_ipc::clear_noted();
@@ -7722,51 +7866,82 @@ fn a_step_leaves_the_chrome_that_the_pointer_is_resting_on_up() {
     stand_window_at_point_in(None);
 }
 
-/// **A step gives the foreground back to the pin that stands, not to the listing behind it.** A pin
-/// that is not Always On Top does not hold the foreground between its steps, so the window the
-/// launch records is often the listing: before this rule the step's hand-back raised that listing
-/// over the pin, and the window the step opened came up behind it. Where no pin window is up — a pin
-/// drawn in the preview window, a hover, an audio pin — the window the launch found in front is the
-/// answer it always was.
+/// **A step hands the foreground back by the window it was taken from.** A window of this app's — the
+/// pin's own, the page's, the player's the step replaced — gets the pin, because the pin is the window
+/// the user is working in. A window of somebody else's gets its own front back, because the user was in
+/// the listing (or in a browser) and a press there was what began the player.
 ///
-/// The foreground cannot be rearranged on a desktop a test may not take, so the hand-back's two
-/// answers are asked of the choice itself: the listing handed in as what the player took the
-/// foreground from, and the pin's own window read off the seams that stand it.
+/// **The fault this is a regression test for.** A standing pin was preferred whatever the front had been
+/// taken from, so a click that began a pin's player in the listing handed the front to the pin — from a
+/// process that was not in front, which is a `SetForegroundWindow` Windows usually refuses. What that
+/// left was the front on the player's window, which adoption had just made invisible, layered at 1/255
+/// and sent to the bottom of the z-order, with a topmost pin over it: no visible window active at all,
+/// so Explorer painted no caption and a browser stopped painting its UI until it was clicked again (see
+/// `pin_lifecycle::a_hand_back_goes_to` and `give_the_foreground_back_from`).
+///
+/// A collapsed pin is no window of the user's either: the window it would raise is a bubble on the
+/// desktop, so the recorded window is the only answer there is.
+///
+/// The foreground cannot be rearranged on a desktop a test may not take, so the hand-back's answers are
+/// asked of the choice itself. **The globals go back before anything is asserted**, so a failure here
+/// cannot leave a pin, or a window, standing in for the tests that follow.
 #[test]
-fn a_steps_hand_back_goes_to_the_pin_that_stands() {
+fn a_steps_hand_back_goes_by_the_window_the_foreground_was_taken_from() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     let previous_pin = take_pin_for_a_test();
     let previous_window = pin_real_window::real_pin_window();
 
-    // The pin's own window, and the listing the pin's last launch found in front.
+    // The pin's own window, the listing the pin's last launch found in front, and a window of this
+    // app's own — which is the window a step made in the pin was recorded from.
     let pin = HWND(0x2A00 as *mut _);
     let listing = HWND(0x2B00 as *mut _);
+    let ours = unsafe { a_players_own_window() };
     pin_real_window::stand_real_pin_window_for_a_test(Some(pin));
     stand_pin(Some(overlay_pin(
         (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
         PinChrome::always(),
     )));
-    assert!(pinned(), "the step this test is about is a standing pin's");
+    let a_pin_stands = pinned();
 
-    assert_eq!(
-        pin_lifecycle::a_hand_back_goes_to(listing, pin_lifecycle::a_pin_that_stands()),
-        pin,
-        "the window the keyboard belongs to between steps is the pin, so that is where the hand-back \
-         goes rather than to the listing behind the player"
-    );
+    let from_ours = pin_lifecycle::a_hand_back_goes_to(ours, pin_lifecycle::a_pin_that_stands());
+    let from_a_listing =
+        pin_lifecycle::a_hand_back_goes_to(listing, pin_lifecycle::a_pin_that_stands());
 
-    // Taken down, there is no window of the pin's own to prefer, and the recorded window answers.
+    // The same pin collapsed into its bubble: no window of the pin's own is standing for the front to
+    // be given to, and the recorded window is all there is.
+    with_pin(|pin| pin.collapsed = true);
+    let from_ours_to_a_bubble =
+        pin_lifecycle::a_hand_back_goes_to(ours, pin_lifecycle::a_pin_that_stands());
+
+    // Taken down altogether, there is nothing of the pin's to prefer either.
     stand_pin(None);
     pin_real_window::stand_real_pin_window_for_a_test(None);
-    assert!(!pinned(), "no pin stands here");
-    assert_eq!(
-        pin_lifecycle::a_hand_back_goes_to(listing, pin_lifecycle::a_pin_that_stands()),
-        listing,
-        "a pin drawn in a window that is not its own leaves the hand-back where it always was"
-    );
+    let no_pin_at_all =
+        pin_lifecycle::a_hand_back_goes_to(listing, pin_lifecycle::a_pin_that_stands());
 
     stand_pin(previous_pin);
     pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe { DestroyWindow(ours) }.expect("the window this test made goes");
+
+    assert!(a_pin_stands, "the steps this test is about are a standing pin's");
+    assert_eq!(
+        from_ours, pin,
+        "a front taken from a window of ours goes back to the pin: a step made in the pin is the case, \
+         and an arrow walking the pin's folder depends on it"
+    );
+    assert_eq!(
+        from_a_listing, listing,
+        "a front taken from the listing goes back to the listing, rather than to a pin the user was \
+         not working in"
+    );
+    assert_eq!(
+        from_ours_to_a_bubble, ours,
+        "and a collapsed pin is no window to be raised at all, so the recorded window answers"
+    );
+    assert_eq!(
+        no_pin_at_all, listing,
+        "and with no pin up the recorded window is the answer it always was"
+    );
 }
