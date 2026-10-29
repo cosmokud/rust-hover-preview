@@ -31,3 +31,5 @@ MEMORY.md
 
 # Machine-local cargo config holding the shared absolute target dir (never commit)
 /.cargo/target-dir.local.toml
+# Machine-local cargo config for a build hosted off Windows (never commit)
+/.cargo/xwin.local.toml
