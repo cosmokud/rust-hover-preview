@@ -134,9 +134,29 @@ fn note_the_retirement(end: RetireEnd, pid: u32) {
 /// relaunch is the registration the *old* player's window is drawn through, so a player ended while
 /// its source still stands is a picture taken off the screen. The order the relaunch is built on is
 /// that no player is ended until its replacement stands (see `retire_replaced_player`).
+///
+/// **A player ended while it holds the foreground is the same fault from the other side**, and it is
+/// written down here for the same reason: the front would be left on a window the app has just made
+/// invisible — no visible window active, no `WM_ACTIVATE` for the listing or the browser behind it, and
+/// a UI that does not paint again until it is clicked (see
+/// `pin_lifecycle::give_the_foreground_back_from`). `pid` is the player being ended, and the window in
+/// front is asked of the desktop rather than passed in: every road that ends one comes through here.
 pub(super) fn note_an_end_while_standing(pid: u32) {
-    if pid != 0 && pin_film_thumbnail::the_source_is_standing(pid) {
+    if pid == 0 {
+        return;
+    }
+    if pin_film_thumbnail::the_source_is_standing(pid) {
         note_pin_trace!("player ended while standing pid {pid}: the picture went with it");
+    }
+    // Safety: the question is about a window of the desktop's, read rather than changed.
+    let front = unsafe { GetForegroundWindow() };
+    if !front.is_invalid() {
+        let mut owner = 0u32;
+        // Safety: as above — the call reports the process a window belongs to and changes nothing.
+        unsafe { GetWindowThreadProcessId(front, Some(&mut owner)) };
+        if owner == pid {
+            note_pin_trace!("player ended while standing pid {pid}: it held the foreground");
+        }
     }
 }
 

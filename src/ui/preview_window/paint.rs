@@ -3,6 +3,7 @@
 //! by.
 
 use super::*;
+use super::pin_trace::note_pin_trace;
 
 pub(super) unsafe fn render_layered_preview(hwnd: HWND) {
     // **A pin is painted into the window the pin stands in**, and the handle a road carries is only
@@ -396,10 +397,20 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     // Only where the host stands: a pin never shown has no host yet, and its
                     // bitmap keeps the pin's claim the way the strips' own test reads it (see
                     // `the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows`).
-                    let hosted_needs_cover = pin_film_host::film_host().is_some()
-                        && !pin_film_host::the_cover_stands()
-                        && !pin_film_host::the_host_is_drawing();
-                    if hosted_needs_cover {
+                    //
+                    // **And only where a host with nothing in it really does stand there**, which is
+                    // the answer `the_band_is_a_standing_host` carries rather than three separate
+                    // questions: a film taken off the band has left a host that is hidden and a
+                    // registration that is gone, and a band still claiming that pixel would be the
+                    // black rectangle that stands where the film was for the whole rest of the run
+                    // (see `pin_film_host::take_the_film_off_the_band`).
+                    if pin_film_host::the_band_is_a_standing_host() {
+                        if let Some(host) = pin_film_host::film_host() {
+                            note_pin_trace!(
+                                "pin band filled black: host {:?} drawing 0 cover 0",
+                                host,
+                            );
+                        }
                         fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
                     } else {
                         fill_band_hit_testable(

@@ -952,6 +952,20 @@ impl PinUpdateWatch {
             return false;
         }
 
+        // **A file the pin is already on its way to is answered, not asked for again.** The pin's own
+        // path is the file it is *showing* and does not move until the incoming one is installed, so a
+        // press on the file being loaded or held reads as a new pick here — and a pick during a hold
+        // restarts the swap, which drops the film the pin was keeping across it (see
+        // `update_pinned_preview` and `pin_install::THE_FILE_IN_FLIGHT`). The answer is `true` rather
+        // than `false`: this press named a file, and the pin is already going to it.
+        if crate::ui::preview_window::pin_file_in_flight()
+            .as_deref()
+            .is_some_and(|in_flight| same_path(path, in_flight))
+        {
+            note_pin_click!("PICK dropped: already in flight");
+            return true;
+        }
+
         if !is_media_file(path) {
             return true;
         }

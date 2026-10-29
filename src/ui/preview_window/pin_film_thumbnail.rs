@@ -1464,6 +1464,12 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     // draws the replacement over that box, and a cover left standing would be painted again by the
     // next erase or resize (see `pin_film_host::put_the_cover_away`).
     pin_film_host::put_the_cover_away();
+    // **The band is painted for the picture it now stands over, and this is the one moment that
+    // owes it**: no frame of this app's moves behind a film a player draws, so a band painted for
+    // the wait before this step would keep that paint until some other kind of redraw happened to
+    // come along — which for a film is never (see `pin_film_host::the_band_owes_a_repaint`).
+    pin_film_host::note_the_band_has_a_picture();
+    pin_film_host::the_band_owes_a_repaint();
     // **And the still probe's measurement closes on the same step**: one thing happened, so the swap
     // and the answer to what the pin showed waiting for it are adjacent lines (see `still_probe`).
     super::still_probe::note_swapped();
@@ -1954,7 +1960,12 @@ static THE_SOURCE_SHOW: Mutex<Option<(isize, bool)>> = Mutex::new(None);
 
 /// Take the registration down: the host it was drawn in is going, and a registration left behind a
 /// window that is gone is a leak of the Shell's own resources.
-pub(super) fn forget_the_thumbnail() {
+///
+/// `reason` is the road that took it, written out because **the band's pixels are a function of
+/// whether this registration stands**: a road that lets it go and does not paint what it left is
+/// the black rectangle that stays where the film was (see `pin_film_host::the_band_owes_a_repaint`).
+pub(super) fn forget_the_thumbnail_because(reason: &str) {
+    note_pin_trace!("forget thumbnail (reason={reason})");
     let_the_picture_go();
     STILL_HOST.store(0, Ordering::SeqCst);
     STILL_PID.store(0, Ordering::SeqCst);
@@ -1964,6 +1975,18 @@ pub(super) fn forget_the_thumbnail() {
         // The pin that counted these is gone, so the next one opens its own first second.
         *held = HeldFrames::default();
     }
+    // **A registration standing is a picture, and letting it go is a band that has changed**: the
+    // fill that follows this is the pin's own claim, and it must be painted rather than left over
+    // whatever the last paint wrote (see `pin_film_host::the_band_owes_a_repaint`).
+    pin_film_host::the_band_owes_a_repaint();
+}
+
+/// The same, named for the pin's own take-down — **and the name the suite knows**, which is why it is
+/// a test-only door: every road of the app's has to say which one it is (see
+/// `forget_the_thumbnail_because`).
+#[cfg(test)]
+pub(super) fn forget_the_thumbnail() {
+    forget_the_thumbnail_because("the caller let the picture go");
 }
 
 /// **Let one picture off the screen where the pin is not going**: the registration and the record of
@@ -2020,7 +2043,7 @@ fn let_the_registration_go_for_a_still() {
 pub(super) fn forget_the_thumbnail_of(host: HWND) {
     let drawn_in = REGISTERED_HOST.load(Ordering::SeqCst) == host.0 as isize;
     if drawn_in {
-        forget_the_thumbnail();
+        forget_the_thumbnail_because("the host it was drawn in has gone");
     }
 }
 
@@ -2647,6 +2670,11 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
         return;
     }
     held.shown = Some(shown);
+    // **A host the pin is standing over with a registration in it is the band's picture**, whatever
+    // the band was painted for the wait before it (see `pin_film_host::the_band_is_a_standing_host`).
+    if pin_film_host::film_host() == Some(host) && held.registered != 0 {
+        pin_film_host::note_the_band_has_a_picture();
+    }
     // **The host is asked to erase its whole client behind the picture**, which is the other half of
     // the invariant above: the Shell composes the thumbnail over this app's content, so a client the
     // host never erased is a pixel nobody drew — and one of those is the desktop seen through the pin.

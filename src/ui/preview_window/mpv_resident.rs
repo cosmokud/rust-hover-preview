@@ -21,7 +21,7 @@
 //! `-32000,-32000,1x1` — off every display — with the launch's `--focus-on*` switch where this
 //! build has one, and it is noted as a hover about to show before mpv puts the window up, so the
 //! monitor's eager pass gives it `WS_EX_NOACTIVATE` first (see
-//! `ffplay_window::note_a_hover_about_to_show`). Its size is not what the film is drawn at: every
+//! `ffplay_window::note_a_player_about_to_show`). Its size is not what the film is drawn at: every
 //! hover that shows it places or thumbnails it at the box it belongs in, which is a window resize
 //! mpv answers like any other.
 //!
@@ -297,8 +297,8 @@ fn begun(signature: LaunchSignature, volume: u32, audio_off: bool) -> Option<Res
 
     // **The window is a hover's window before mpv shows it**: the eager pass gives it
     // `WS_EX_NOACTIVATE` first, which is the discipline every hover player's window is begun under
-    // (see `ffplay_window::note_a_hover_about_to_show`).
-    ffplay_window::note_a_hover_about_to_show(pid);
+    // (see `ffplay_window::note_a_player_about_to_show`).
+    ffplay_window::note_a_player_about_to_show(pid, true);
     mpv_ipc::remember_pipe(pid, &ipc, audio_off);
     note_pin_trace!("mpv resident begun pid {pid}");
 

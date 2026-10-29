@@ -3228,13 +3228,14 @@ fn every_ffplay_launch_asks_for_the_composed_renderer_and_a_borderless_window() 
         "and asks for the composed renderer, the one no display's adaptive sync can follow"
     );
     assert!(
-        !launched
-            .env
-            .iter()
-            .any(|(key, _)| key.eq_ignore_ascii_case("SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN")),
-        "and nothing else: a pin's player is the film under the pin's own window, which is the \
-         window that takes the foreground, so its launch is the one it always was (see \
-         `start_hover_video_playback` for the ask a hover's launch makes)"
+        launched.env.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN")
+                && value.as_deref() == Some("1")
+        }),
+        "and the same ask a hover's launch makes: a pin's player must not take the foreground \
+         either, because the window it would take it from is the listing the click was made in and \
+         the window it gives it to is one the pin makes invisible a moment later (see \
+         `start_hover_video_playback` and `pin_lifecycle::a_hand_back_goes_to`)"
     );
 
     // The same film with no pin and Pin Mode off is an unhosted hover: the same renderer, and the
@@ -4153,12 +4154,20 @@ fn a_pinned_ffplay_film_is_revealed_without_a_hover_path() {
 
     drop(film);
 }
-/// **A pin's mpv launch is the command line every road had**: whatever the build probe answered, no
-/// `--focus-on*` of any kind reaches it, and no window of it is handed to the eager pass either. The
-/// probe is stood at "this build parses it" here, so a pin that read the same answer would fail this
-/// (see `video_playback::start_mpv_video_playback` and `video_launch::hover_focus_switch`).
+/// **A pin's mpv launch is asked not to take the foreground, exactly as a hover's is**: the same
+/// `--focus-on*` switch where this build parses one, and the same eager style handed to the monitor
+/// before the player's window is shown. The probe is stood at "this build parses it" here, so a pin
+/// that read its own answer instead would fail this (see
+/// `video_playback::start_mpv_video_playback` and `video_launch::hover_focus_switch`).
+///
+/// **The fault this is a regression test for.** A pin's launch was the one road given neither ask, on
+/// the reasoning that the pin's own window is the one that takes the foreground. It is not: a player's
+/// window is created activatable and shown by the player, so it took the front off the listing the
+/// click was made in — and adoption then stamped it `WS_EX_NOACTIVATE`, layered at 1/255 and bottom of
+/// the z-order, leaving no visible window active at all (see
+/// `pin_lifecycle::give_the_foreground_back_from`).
 #[test]
-fn a_pin_mpv_launch_asks_for_no_focus_switch_and_no_eager_style() {
+fn a_pin_mpv_launch_asks_for_the_same_no_focus_switch_and_eager_style_as_a_hover() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -4168,12 +4177,12 @@ fn a_pin_mpv_launch_asks_for_no_focus_switch_and_no_eager_style() {
     stand_ffplay_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     let _ = take_last_spawned_command();
-    ffplay_window::forget_the_hover_awaiting_its_show();
+    ffplay_window::forget_the_player_awaiting_its_show();
 
     video_launch::pretend_the_build_answers(video_launch::FocusOnSupport::Never);
 
     let path = PathBuf::from("a-pinned-film.mkv");
-    let _ = start_video_playback(
+    let launched = start_video_playback(
         &path,
         film.box_.0,
         film.box_.1,
@@ -4188,27 +4197,30 @@ fn a_pin_mpv_launch_asks_for_no_focus_switch_and_no_eager_style() {
     .expect("a noted mpv player");
 
     {
-        let launched = take_last_spawned_command().expect("the pin's launch");
+        let launched_command = take_last_spawned_command().expect("the pin's launch");
         assert!(
-            launched.program.to_ascii_lowercase().contains("mpv"),
+            launched_command.program.to_ascii_lowercase().contains("mpv"),
             "the pin is on the mpv road: {}",
-            launched.program
+            launched_command.program
         );
-        assert!(
-            !launched
+        assert_eq!(
+            launched_command
                 .args
                 .iter()
-                .any(|arg| arg.starts_with("--focus-on")),
-            "a pin's launch names no focus switch: {:?}",
-            launched.args
+                .filter(|arg| arg.as_str() == "--focus-on=never")
+                .count(),
+            1,
+            "a pin's launch names the focus switch once, like a hover's: {:?}",
+            launched_command.args
         );
     }
     assert_eq!(
-        ffplay_window::the_hover_awaiting_its_show(Instant::now()),
-        None,
-        "and nothing of a pin's player is styled before it is shown"
+        ffplay_window::the_player_awaiting_its_show(Instant::now()),
+        Some((launched.id(), false)),
+        "and its window is handed to the monitor to be styled before it is shown, as a pin's road"
     );
 
+    ffplay_window::forget_the_player_awaiting_its_show();
     video_launch::pretend_the_build_answers(video_launch::FocusOnSupport::Neither);
 }
 

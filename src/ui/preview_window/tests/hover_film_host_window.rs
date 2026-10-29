@@ -609,13 +609,13 @@ fn a_hover_mpv_launch_asks_for_the_focus_switch_the_build_parses() {
         launched.args
     );
     assert_eq!(
-        ffplay_window::the_hover_awaiting_its_show(Instant::now()),
+        ffplay_window::the_player_awaiting_its_show(Instant::now()).map(|(pid, _)| pid),
         Some(process.id()),
         "and its window is handed to the monitor to be styled before it is shown"
     );
 
     video_launch::pretend_the_build_answers(video_launch::FocusOnSupport::Neither);
-    ffplay_window::forget_the_hover_awaiting_its_show();
+    ffplay_window::forget_the_player_awaiting_its_show();
     let _ = start_hover_video_playback(&path, 0, 0, 320, 180, 0.0, false, 0, None, None)
         .expect("a noted mpv");
     let launched = take_last_spawned_command().expect("the hover's launch");
@@ -627,7 +627,7 @@ fn a_hover_mpv_launch_asks_for_the_focus_switch_the_build_parses() {
         "a build that parses neither spelling gets the command line this app always had: {:?}",
         launched.args
     );
-    ffplay_window::forget_the_hover_awaiting_its_show();
+    ffplay_window::forget_the_player_awaiting_its_show();
 }
 
 /// A hover that ends without a pin takes the FFmpeg host and its player down with it, and only the

@@ -2,6 +2,7 @@
 //! for, and the install that gives it the window.
 
 use super::*;
+use super::pin_trace::note_pin_trace;
 
 /// The wait a pinned window is in, in the form a repaint can draw: the millisecond its arc
 /// began turning at, counted from [`PIN_ARC_BASE`], and `0` for a window that is waiting for
@@ -17,6 +18,80 @@ pub(super) static PIN_ARC: AtomicU64 = AtomicU64::new(0);
 /// What [`PIN_ARC`] counts from: this module's own first moment, so that a moment of a wait
 /// fits in the `u64` an atomic can hold rather than in an `Instant` it cannot.
 pub(super) static PIN_ARC_BASE: Lazy<Instant> = Lazy::new(Instant::now);
+
+/// **The file the pin is being shown next**, while that question is still in flight: a load that has
+/// not answered, a box nothing has measured yet, or a swap held for the incoming film's picture.
+///
+/// `pinned_path()` is what the pin is showing *now* and does not move until the install writes it,
+/// so it is not the whole of "the file the user has already asked for". A second click on the file
+/// the pin is on its way to is not another file: it used to restart the swap — dropping the load,
+/// abandoning the hold and its player — which is a picture taken off the band and a film opened
+/// twice for one press (see `update_pinned_preview` and `PinUpdateWatch::offer`).
+static THE_FILE_IN_FLIGHT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Note the file the pin is now on its way to, or `None` where nothing is in flight any more (see
+/// `THE_FILE_IN_FLIGHT`).
+pub(super) fn note_the_pin_file_in_flight(path: Option<&Path>) {
+    if let Ok(mut held) = THE_FILE_IN_FLIGHT.lock() {
+        *held = path.map(Path::to_path_buf);
+    }
+}
+
+/// The file the pin has already been asked for and is not showing yet, if there is one (see
+/// `THE_FILE_IN_FLIGHT`).
+pub(super) fn pin_file_in_flight() -> Option<PathBuf> {
+    THE_FILE_IN_FLIGHT.lock().ok().and_then(|held| held.clone())
+}
+
+/// Which road asked the pin for the file it is being shown: a pick in the listing behind it
+/// (`PickUpdate`), or a step of the pin's own walk — a caption button, an arrow key, a film's end of
+/// file, a shuffle's next (`PickWalk`).
+///
+/// It is written where a pick is taken up and read where the file is swapped in and installed, so
+/// that a run can tell the two apart: the click road is the one the pin's picture had to be kept
+/// across, and every line of a swap carries the number of the press it belongs to (see
+/// `note_the_pick` and `install_pinned_media`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum PickRoad {
+    Update,
+    Walk,
+}
+
+impl PickRoad {
+    /// The road, as a trace names it.
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            PickRoad::Update => "PickUpdate",
+            PickRoad::Walk => "PickWalk",
+        }
+    }
+}
+
+/// The number of picks this run has seen: one per file the pin was asked for, so that a swap's own
+/// lines can be read against the press that caused them (see `note_the_pick`).
+static PICK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The pick the pin is being shown a file for: its number and the road it came by (see `PickRoad`).
+static THE_PICK: Mutex<(u64, PickRoad)> = Mutex::new((0, PickRoad::Update));
+
+/// Note the pick the pin is being shown a file for, and answer its number.
+pub(super) fn note_the_pick(road: PickRoad, path: &Path) -> u64 {
+    let number = PICK_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Ok(mut held) = THE_PICK.lock() {
+        *held = (number, road);
+    }
+    note_pin_trace!(
+        "pick {number} by {}: {} in flight",
+        road.as_str(),
+        pin_trace::path_name(path)
+    );
+    number
+}
+
+/// The pick the pin is being shown a file for, as the last one taken up noted it.
+pub(super) fn the_pick() -> (u64, PickRoad) {
+    THE_PICK.lock().map(|held| *held).unwrap_or((0, PickRoad::Update))
+}
 
 /// Show a pinned window another file: what is on screen is taken down — the frame this app holds,
 /// the player it started, the browser another engine draws in — and the file that replaces it is
@@ -67,6 +142,16 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     let width = (content.2 - content.0).max(1);
     let height = (content.3 - content.1).max(1);
 
+    // **Every line this swap writes carries the press it belongs to**: the pick's number and the
+    // road it came by, so that a run can be read against the click or the key that caused it (see
+    // `PickRoad` and `note_the_pick`).
+    let (pick, road) = the_pick();
+    note_pin_trace!(
+        "swap {pick} by {} for {}",
+        road.as_str(),
+        pin_trace::path_name(&path)
+    );
+
     // A file nothing could read — not there, still in the cloud, a decode that came back with
     // nothing at all — is a file the walk steps over, and there is no frame of it for any of
     // what follows to be asked about (see `refuse_pinned_media`).
@@ -106,15 +191,24 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     // paints itself the moment this returns, and a player that would still be running behind it is
     // a player playing over the file that replaced it.
     let player_coming = pinned_player_is_coming(file.media.media_type, &file.path);
-    let replaced = VIDEO_PID.load(Ordering::SeqCst);
-    let keeping_the_picture =
-        player_coming && replaced != 0 && pin_film_host::the_pinned_player_was_begun_in_the_host();
-    if keeping_the_picture {
+    // **The picture the pin keeps is the one the standing registration draws**, which is a question
+    // about the band rather than about `VIDEO_PID`: during a step's own wait the newest pid is the
+    // player that has not drawn anything yet, and the frame the user is looking at belongs to the
+    // one before it (see `pin_film_host::the_picture_stands_to_keep`). Asked of the newest pid — and
+    // recorded beside the host as the launched player — a second pick made while a step is still
+    // waiting read the step's own player as the picture, took nothing down, and left the film that
+    // was really on screen to be ended by nothing at all.
+    let keeping_the_picture = player_coming && pin_film_host::the_picture_stands_to_keep();
+    // And the player that *is* that picture, which is what is held where it stands and retired once
+    // the incoming film has taken the band over (see `pin_film_host::the_player_on_the_band`). `0`
+    // is a still this app painted for a relaunch whose player it has already ended.
+    let on_the_band = pin_film_host::the_player_on_the_band();
+    if keeping_the_picture && on_the_band != 0 {
         // **The picture the pin keeps is held where it is**, rather than left playing on under the
         // incoming file's wait: mpv would draw the frames that follow the one the user stepped away
         // from, and the last of them is not the frame the pin is meant to keep. The hold is mpv's
         // own word, and a player with no pipe is not told anything (see `mpv_ipc::set_paused`).
-        mpv_ipc::set_paused(replaced, true);
+        mpv_ipc::set_paused(on_the_band, true);
     }
     if file.media.media_type.is_native_video() {
         stop_pinned_player();
@@ -229,8 +323,8 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             // screen: the film standing on the pin is still its own, and the walk steps over this
             // file (see `refuse_pinned_media`). A film this call paused goes on playing, and the
             // band a step held goes back to the setting with nothing coming to take it.
-            if keeping_the_picture {
-                mpv_ipc::set_paused(replaced, false);
+            if keeping_the_picture && on_the_band != 0 {
+                mpv_ipc::set_paused(on_the_band, false);
             }
             unsafe { pin_lifecycle::give_the_step_band_back() };
             return PinSwap::Refused {
@@ -241,9 +335,11 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 
         // **The player the pin was showing is retired rather than ended**, so the picture it draws
         // stays on the pin until the source that replaces it has taken the host over (see
-        // `retire_replaced_player` and `pin_film_thumbnail::hand_the_picture_over`).
-        if keeping_the_picture {
-            retire_replaced_player(replaced, process.id());
+        // `retire_replaced_player` and `pin_film_thumbnail::hand_the_picture_over`). It is the one
+        // on the band: a step that has not handed the picture over yet leaves `VIDEO_PID` naming a
+        // player that is not the picture at all.
+        if keeping_the_picture && on_the_band != 0 {
+            retire_replaced_player(on_the_band, process.id());
         }
 
         file.media.video_process = Some(process);
@@ -570,6 +666,16 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     // box request the outgoing file made is dropped (see `reconcile_swap_take_up`).
     reconcile_swap_take_up();
 
+    // **The file the pin was on its way to is the file it is showing now**, so nothing is in flight
+    // any more: a pick after this one is a pick for another file (see `THE_FILE_IN_FLIGHT`).
+    let (pick, road) = the_pick();
+    note_pin_trace!(
+        "install {pick} by {}: {}",
+        road.as_str(),
+        pin_trace::path_name(&path)
+    );
+    note_the_pin_file_in_flight(None);
+
     // The pin is not waiting for a file any more, whatever the file it was waiting for turned
     // out to be: an arc left up over a window showing a video is a spinner for a question nobody
     // is asking, and one of them is on screen for as long as it is left there (see `pin_arc_set`).
@@ -681,6 +787,11 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
 /// was for (see `show_pin_failure`).
 pub(super) fn refuse_pinned_media(install: PinInstall<'_>, path: PathBuf, walk: Option<PinStep>) {
     pin_arc_set(None);
+
+    // Nothing is in flight for this file any more: the pin keeps what it has, and a pick of the
+    // same file again is a new press rather than a duplicate of one that never landed (see
+    // `THE_FILE_IN_FLIGHT`).
+    note_the_pin_file_in_flight(None);
 
     pin_step_off(walk, install.walk);
 
