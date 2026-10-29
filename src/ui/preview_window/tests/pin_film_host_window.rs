@@ -662,14 +662,14 @@ fn the_film_host_follows_the_pins_band() {
 /// A hover's film drawn in the app-owned top-level host, with the player's own window adopted as the
 /// source the Shell draws into it: the state a take-up can promote into the pin rather than begin
 /// again.
-struct HostedHover {
-    host: HWND,
-    source: HWND,
-    pid: u32,
+pub(super) struct HostedHover {
+    pub(super) host: HWND,
+    pub(super) source: HWND,
+    pub(super) pid: u32,
 }
 
 impl HostedHover {
-    unsafe fn up(film: &StandingFilm, path: &Path, at: f64) -> HostedHover {
+    pub(super) unsafe fn up(film: &StandingFilm, path: &Path, at: f64) -> HostedHover {
         let pid = unsafe { GetCurrentProcessId() };
         let host = unsafe { hover_film_host::take_up_the_hover_film_host(film.box_) }
             .expect("the hover's own host");

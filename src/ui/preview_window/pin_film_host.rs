@@ -48,6 +48,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HWND_NOTOPMOST, HWND_TOPMOST, SC_CLOSE, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WM_CLOSE, WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND,
     WM_PAINT, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_POPUP,
+    WINDOW_EX_STYLE,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -595,6 +596,32 @@ pub(super) unsafe fn place_the_pin_in_the_band(pin: HWND, after: HWND) {
     }
 }
 
+/// Ask for the pair's taskbar button, or give it up, as the setting now reads.
+///
+/// **`Pin Mode → Always On Top` is the row that decides whether a pin has a button at all**: a pin
+/// over everything is one the user finds without one, and a pin that is not is an ordinary window with
+/// an ordinary window's button (see `own_the_pin_window` and `pin_taskbar::a_button_is_owed`, which is
+/// the same rule for the stand-in of a pin standing in this app's own window).
+///
+/// The bit is the Shell's to read, and it reads it as a window is shown (see
+/// `pin_real_window::set_the_pin_window_appwindow`), so this is the call a row that changes the setting
+/// makes: a pin already on the screen is the one the user is looking at, and it is the one that has to
+/// gain or lose the button.
+pub(super) unsafe fn the_button_follows_the_setting() {
+    let Some(pin) = pin_real_window::real_pin_window() else {
+        return;
+    };
+
+    let app_window = !pin_lifecycle::pin_always_on_top();
+    match film_host() {
+        Some(host) => {
+            unsafe { pin_real_window::set_the_pin_window_appwindow(pin, false) };
+            unsafe { pin_real_window::set_the_pin_window_appwindow(host, app_window) };
+        }
+        None => unsafe { pin_real_window::set_the_pin_window_appwindow(pin, app_window) },
+    }
+}
+
 /// Whether the pin's host holds an FFmpeg player whose window has not been found yet: the take-up
 /// notes the player it is keeping so that the monitor adopts its window as the source the moment it
 /// exists (see `host_for_a_hosted_player`).
@@ -649,7 +676,17 @@ unsafe fn own_the_pin_window(owned: bool) {
     if unsafe { GetWindowLongPtrW(pin, GWLP_HWNDPARENT) } != owner {
         unsafe { SetWindowLongPtrW(pin, GWLP_HWNDPARENT, owner) };
     }
-    unsafe { pin_real_window::set_the_pin_window_appwindow(pin, !owned) };
+
+    // **The button is the setting's, and the ownership only decides which window of the pair wears
+    // it.** A window the Shell is to list is one that is not owned, so it is the host when a host owns
+    // the chrome and the pin's own window otherwise — and a pair owes no button at all while
+    // `Pin Mode → Always On Top` says the pin is over everything already (see `a_button_is_owed`,
+    // which is the same rule for the stand-in a pin in this app's own window wears).
+    let app_window = !pin_lifecycle::pin_always_on_top();
+    unsafe { pin_real_window::set_the_pin_window_appwindow(pin, !owned && app_window) };
+    if let Some(host) = film_host() {
+        unsafe { pin_real_window::set_the_pin_window_appwindow(host, owned && app_window) };
+    }
 
     // **The chrome is put in the band the setting names, worn or not.** A window given an owner or
     // given back keeps whatever band it wore before (measured): a bit left on it by the pin before this
@@ -939,13 +976,25 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
     // **The hover's band and the press that falls through it go, and the pin's bits come on**: a host
     // the Shell lists wears neither `WS_EX_TOOLWINDOW` nor `WS_EX_NOACTIVATE`, and the app-window bit
     // is what gives the pair its button (see `create` and `own_the_pin_window`).
+    //
+    // **And the button is the setting's, written here rather than on a visible window's back.**
+    // `WS_EX_APPWINDOW` is what asks the Shell for a button, and the Shell reads it as a window is
+    // shown: written on the already-visible host with a re-read, it was the intermittent button the
+    // user reported (see `pin_real_window::set_the_pin_window_appwindow`, which is the one place that
+    // knows the difference). What is different here is that the promotion is already *restyling* the
+    // window — the band, the press-through and the no-activate bits all go at once — so the bit is
+    // written with them and no second show is owed for it.
     let ex = unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) };
-    let ex = (ex
+    let mut ex = ex
         & !(WS_EX_TOPMOST.0 as isize)
         & !(WS_EX_TRANSPARENT.0 as isize)
         & !(WS_EX_TOOLWINDOW.0 as isize)
-        & !(WS_EX_NOACTIVATE.0 as isize))
-        | WS_EX_APPWINDOW.0 as isize;
+        & !(WS_EX_NOACTIVATE.0 as isize);
+    if !pin_lifecycle::pin_always_on_top() {
+        ex |= WS_EX_APPWINDOW.0 as isize;
+    } else {
+        ex &= !(WS_EX_APPWINDOW.0 as isize);
+    }
     let _ = unsafe { SetWindowLongPtrW(host, GWL_EXSTYLE, ex) };
     // A style written behind a window's back is not one it presents with until it is asked to read it,
     // and the band it was in goes with the same call.
@@ -1304,8 +1353,16 @@ unsafe fn create() -> Option<HWND> {
     //
     // **`WS_CLIPCHILDREN`** so that the host's own erase is clipped to the area outside the chrome
     // strips when a pin's window is not the one painting (see `pin_real_window::real_pin_style`).
+    // **A pin that is Always On Top owes no taskbar button, and the host is where a pair's button
+    // lives** — so the bit is asked of the setting here rather than always added (see
+    // `own_the_pin_window`, which is the road that keeps it in step afterwards).
+    let ex_style = if pin_lifecycle::pin_always_on_top() {
+        WINDOW_EX_STYLE(0)
+    } else {
+        WS_EX_APPWINDOW
+    };
     let host = CreateWindowExW(
-        WS_EX_APPWINDOW,
+        ex_style,
         FILM_HOST_CLASS,
         w!("film host"),
         WS_POPUP | WS_CLIPCHILDREN,

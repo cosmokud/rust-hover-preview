@@ -297,7 +297,12 @@ pub(super) fn showing_taskbar_window() -> Option<HWND> {
 /// was.
 pub(super) fn hide_minimized_pin() {
     hide_pin_bubble();
-    if pin_always_on_top() {
+    // **The stand-in goes where no button is owed**, which is the rule every other road into and out
+    // of it asks (see `a_button_is_owed` and `show_pin_taskbar`). It used to be hidden exactly where
+    // the setting said a button *was* owed and left standing where it said none was, which is the
+    // button the user saw sometimes and not others — a stand-in under a pin with `Always On Top` on,
+    // and no button at all for a pin that should have had one.
+    if !a_button_is_owed() {
         unsafe { hide_pin_taskbar() };
     }
 }
@@ -494,8 +499,13 @@ unsafe fn handle_taskbar_restore() {
     if pin_is_collapsed() {
         ask_pin(PinCommand::Restore);
     } else {
-        let preview_hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
-        if !preview_hwnd.is_invalid() {
+        // **The window asked for is the pin's own**, whichever window the Shell's button belongs to:
+        // a film's host carries the button and owns the pin's chrome, and what a press on it asks for
+        // is the pin rather than the window that draws the film. Asked of `PREVIEW_HWND` it was the
+        // hover's window that came forward, which is put down for the whole life of a pin that stands
+        // in one of its own (see `pinned_window`).
+        let pin_hwnd = pinned_window();
+        if !pin_hwnd.is_invalid() {
             // A press on the pin's stand-in is the user asking for the pin, and it owes no band for
             // it: the window the hand is in is the window Windows activates, and an activated window
             // is already the one in front (see `band_place`). What it is owed is itself — a pin the
@@ -503,8 +513,8 @@ unsafe fn handle_taskbar_restore() {
             // window that is not on the screen is put up by its paint and not by a raise: what a
             // layered window shows between two paints is the surface it already holds, stretched
             // into whatever box it is given (see `show_pinned_window`).
-            show_pinned_window(preview_hwnd);
-            let _ = SetForegroundWindow(preview_hwnd);
+            show_pinned_window(pin_hwnd);
+            let _ = SetForegroundWindow(pin_hwnd);
             place_pinned_siblings();
         }
     }
