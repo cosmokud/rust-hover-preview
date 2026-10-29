@@ -184,6 +184,37 @@ fn a_press_in_explorer_is_answered_whatever_it_named() {
     );
 }
 
+/// **A press that picked a file is never answered with "no pick", whichever lookup named the file.**
+///
+/// The fault this is a regression test for is the click that left a pin behind Explorer. A press is
+/// answered out of two lookups: the row under the point, which the shell may not have caught up with
+/// yet, and the file at the point, which answers a moment later. The answer of "no pick" — the one that
+/// puts the pin behind the window the press was made in — used to be made on the first lookup alone, so
+/// the commonest mouse pick there is (a click the shell is a moment behind) got it: the lowering landed
+/// on the same press that picked the file, after the pick's own raise, and nothing raised the pin again.
+/// The arrow keys never carried a press at all, which is why they were the one road that stayed on top.
+#[test]
+fn a_press_that_picked_a_file_is_never_answered_with_no_pick() {
+    assert!(
+        the_press_named_no_file(true, false),
+        "a press on a folder, a file no kind previews, or the gap between the rows puts the pin behind \\
+         the listing"
+    );
+    assert!(
+        !the_press_named_no_file(true, true),
+        "a press whose file the second lookup named is the press that picked it, so the pin stays in \\
+         front of the listing for it"
+    );
+    assert!(
+        !the_press_named_no_file(false, false),
+        "a press the row lookup named a file for is the pick's own raise, and no lowering follows it"
+    );
+    assert!(
+        !the_press_named_no_file(false, true),
+        "and one that named a file and picked it is answered once"
+    );
+}
+
 /// A press that lands anywhere but the pin's own window is a press the pin window never
 /// sees: it is `WS_EX_NOACTIVATE` and holds no capture, so nothing its procedure is sent can
 /// answer for a hand on another app's window, the tray, or the pin's own bubble. The Explorer

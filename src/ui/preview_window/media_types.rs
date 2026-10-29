@@ -94,12 +94,17 @@ pub enum PreviewMessage {
     PinPress {
         window: isize,
     },
-    /// A press that was read as a pick named no file — a folder, a file no kind previews, the gap
-    /// between the rows, the toolbar above them — and the pin goes back behind the window the press
-    /// was made in, which is the frame `window` names: the foreground is still the window the user
-    /// came from where the click has not been dispatched yet. What the press above raised is undone
-    /// here; a pick that lands after it still raises the pin again (see
-    /// `pin_press_was_not_a_pick`).
+    /// A press named no file anywhere — a folder, a file no kind previews, the gap between the rows,
+    /// the toolbar above them — and the pin goes back behind the window the press was made in, which
+    /// is the frame `window` names: the foreground is still the window the user came from where the
+    /// click has not been dispatched yet. What the press above raised is undone here.
+    ///
+    /// **It is never sent for a press that picked a file**, because that press *is* the pick's raise:
+    /// the file may be named by either of the two lookups a press is answered out of, and the answer
+    /// is carried until both have had their say (see `pin_watch::the_press_named_no_file` and
+    /// `pin_press_was_not_a_pick`). Sent on the first lookup alone, this was the lowering that landed
+    /// after a mouse pick's raise and left the pin behind the listing — the click the user reported,
+    /// and one the arrow keys never made because a key carries no press at all.
     PinNoPick {
         window: isize,
     },

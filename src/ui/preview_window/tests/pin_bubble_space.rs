@@ -2590,3 +2590,429 @@ fn a_pin_that_is_a_window_of_its_own_takes_the_band_to_appear_and_gives_it_back(
     }
     stand_pin(previous_pin);
 }
+
+/// The default answer for a window of the listing class below: a window of the test's own that draws
+/// nothing and answers nothing of its own, made only so that a question about a *class name* has a
+/// window to ask.
+unsafe extern "system" fn a_listing_answers(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// A window of the class Explorer's own listing window is of, so that a road which asks the desktop
+/// whether a window *is* a listing can be answered without a real Explorer anywhere near this desk.
+///
+/// The class is registered by this process under the name the Shell's own browser window carries, and
+/// nothing of Explorer's is asked: the question read of a window is its class name and nothing else (see
+/// `explorer_browser_class_matches` and `a_listing_over_the_pin_puts_it_back`).
+///
+/// Safety: the window is the caller's to destroy.
+unsafe fn a_listing_of_the_tests_own() -> HWND {
+    static THE_LISTINGS_CLASS: std::sync::Once = std::sync::Once::new();
+    THE_LISTINGS_CLASS.call_once(|| {
+        let hinstance = GetModuleHandleW(None).expect("the module's own handle");
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(a_listing_answers),
+            hInstance: hinstance.into(),
+            lpszClassName: w!("CabinetWClass"),
+            ..Default::default()
+        };
+        RegisterClassExW(&class);
+    });
+
+    CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("CabinetWClass"),
+        w!("a listing"),
+        WS_POPUP,
+        NOWHERE,
+        NOWHERE,
+        320,
+        240,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("a listing of the test's own")
+}
+
+/// A pin that stands in a window of its own with a window of the test's over it, and the band a pick's
+/// press holds — the arrangement a grace is read in, with `Pin Mode -> Always On Top` off.
+///
+/// The caller holds the pin tests' lock and puts back every global written here: the handle the pin is
+/// drawn by, the one the preview is drawn by, the two holds a press takes, the setting, and the pin
+/// itself.
+///
+/// Safety: both windows are the caller's to destroy.
+unsafe fn a_pin_with_a_listing_over_it() -> (HWND, HWND) {
+    let (pin_hwnd, listing) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        let listing = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(listing.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(listing, SW_SHOWNOACTIVATE);
+        (pin_hwnd, listing)
+    };
+    pin_real_window::stand_real_pin_window_for_a_test(Some(pin_hwnd));
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    pin_stands_in_its_own_window(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // A pick raises the pin and holds the band for it, and the click that made the pick is the listing
+    // over it again: that is what the grace answers, and the band is what it gives back (see
+    // `raise_pinned_preview` and `keep_pin_at_the_front`).
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pin_hwnd, true) };
+    unsafe { settle_z_order() };
+
+    (pin_hwnd, listing)
+}
+
+/// Put `below` at the back of the two: the window named second is the window in front, which is the
+/// order Windows is asked for with `SetWindowPos`'s `hWndInsertAfter` (see `place_the_pin_in_the_band`).
+unsafe fn put_the_second_in_front(behind: HWND, in_front: HWND) {
+    unsafe {
+        let _ = SetWindowPos(
+            behind,
+            in_front,
+            NOWHERE,
+            NOWHERE,
+            320,
+            240,
+            SWP_NOACTIVATE,
+        );
+    }
+    unsafe { settle_z_order() };
+}
+
+/// **A pick's grace whose listing cannot be named leaves the pin over the listing the user is in.**
+///
+/// The fault this is a regression test for is the mouse-click one: the press carries the frame it was
+/// made in, and a shell that could not describe that frame left the recording at nothing — and the
+/// release read that nothing as "somebody else", put the foreground window in front of the pin and gave
+/// the band back behind it. The click that picked the file was the click that lowered the pin behind the
+/// listing it picked in, and nothing of the app's raised it again: the arrow keys, which carry no press
+/// at all, were the one road that stayed on top (see `where_the_band_goes_back`).
+#[test]
+fn a_grace_with_no_listing_to_name_keeps_the_pin_over_the_listing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_band = PIN_BAND_HELD.load(Ordering::SeqCst);
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    let (pin_hwnd, listing) = unsafe { a_pin_with_a_listing_over_it() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, listing) },
+        "the pin stands over the window the pick was made in, with the band its press holds"
+    );
+
+    // The debt a press whose frame the shell could not describe leaves: a window named at nothing, and
+    // the clock the band is given back on already run out.
+    let mut owed = Some(PinFrontOwed {
+        until: Instant::now() + PIN_RAISE_GRACE,
+        band_until: Instant::now(),
+        listing: HWND::default(),
+    });
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), listing) };
+    unsafe { settle_z_order() };
+
+    assert!(owed.is_none(), "the debt is over: there is no window to chase");
+    assert!(
+        !pin_holds_the_front(),
+        "and the band it held is given back, because nothing of it may outlive the click"
+    );
+    assert!(
+        unsafe { stands_over(pin_hwnd, listing) },
+        "a grace that cannot name the window the press was made in leaves the pin over the listing the \
+         user is working in, rather than putting it behind it"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(listing);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
+/// **A foreground that is a listing is not a window the pin goes behind**, even where the press was
+/// recorded in another window of the same kind: the user is in a folder the pin follows, and the pin
+/// belongs over it — while a foreground that is *another program* is exactly what the pin goes behind,
+/// which is the half of this that must keep working.
+#[test]
+fn a_grace_gives_the_band_back_behind_another_program_and_never_behind_a_listing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_band = PIN_BAND_HELD.load(Ordering::SeqCst);
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    let (pin_hwnd, recorded) = unsafe { a_pin_with_a_listing_over_it() };
+    // The window the user is really in: a whole listing of its own, and not the window the press was
+    // recorded in. It is made while the press's band is held, so it is an ordinary window below the pin
+    // — the band is what the release gives back, and where it leaves the pin is the whole of the
+    // question.
+    let the_listing_in_front = unsafe { a_listing_of_the_tests_own() };
+    assert!(
+        crate::shell::explorer_hook::explorer_browser_class_matches(the_listing_in_front),
+        "the window the test made is a listing as far as the desk is concerned"
+    );
+    unsafe {
+        let _ = ShowWindow(the_listing_in_front, SW_SHOWNOACTIVATE);
+    }
+    unsafe { settle_z_order() };
+
+    let mut owed = Some(PinFrontOwed {
+        until: Instant::now() + PIN_RAISE_GRACE,
+        band_until: Instant::now(),
+        listing: recorded,
+    });
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), the_listing_in_front) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, the_listing_in_front) },
+        "a listing in front of the pin is not a window the pin goes behind: the user is in a folder \
+         the pin follows"
+    );
+
+    // And another program in front is the window the pin *does* go behind: the setting says so, and a
+    // safety net is no licence to stand over somebody else's work.
+    let another_program = unsafe { a_window_of_the_tests_own() };
+    unsafe {
+        let _ = ShowWindow(another_program, SW_SHOWNOACTIVATE);
+    }
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pin_hwnd, true) };
+    unsafe { settle_z_order() };
+
+    let mut owed = Some(PinFrontOwed {
+        until: Instant::now() + PIN_RAISE_GRACE,
+        band_until: Instant::now(),
+        listing: recorded,
+    });
+    unsafe { keep_pin_at_the_front(pin_hwnd, &mut owed, Instant::now(), another_program) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(another_program, pin_hwnd) },
+        "another program in front is the window the pin is put behind, with `Always On Top` off"
+    );
+
+    // Safety: the windows are this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(another_program);
+        let _ = DestroyWindow(the_listing_in_front);
+        let _ = DestroyWindow(recorded);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
+/// **The safety net raises the pair only where a listing stands over it and the user is in that listing
+/// or in the pin**, and does nothing at all anywhere else.
+///
+/// The fault it is a net for is the click that left a pin behind Explorer: with the setting off, a pin
+/// that stands under a listing which is in front of it is a pin the user cannot see and did not ask to
+/// hide. What it must never do is raise a pin over a program the user went to — behind Chrome is where a
+/// pin with `Always On Top` off belongs — or move a pin with `Always On Top` on, which is over everything
+/// already (see `a_listing_over_the_pin_puts_it_back`).
+#[test]
+fn the_safety_net_raises_only_for_a_listing_in_front_and_never_over_another_program() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_band = PIN_BAND_HELD.load(Ordering::SeqCst);
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    let (pin_hwnd, another_program) = unsafe {
+        let pin_hwnd = a_window_of_the_tests_own();
+        let another_program = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(another_program.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(another_program, SW_SHOWNOACTIVATE);
+        (pin_hwnd, another_program)
+    };
+    pin_real_window::stand_real_pin_window_for_a_test(Some(pin_hwnd));
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    pin_stands_in_its_own_window(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // A listing over the pin, which is the state the net is for.
+    let listing = unsafe { a_listing_of_the_tests_own() };
+    unsafe {
+        let _ = ShowWindow(listing, SW_SHOWNOACTIVATE);
+        put_the_second_in_front(pin_hwnd, listing);
+    }
+    assert!(
+        unsafe { stands_over(listing, pin_hwnd) },
+        "the listing stands over the pin"
+    );
+
+    // **Nothing for a foreground that is neither the pair nor a listing**: the user is in another
+    // program, and the pin belongs behind it.
+    assert!(
+        !unsafe { a_listing_over_the_pin_puts_it_back(another_program) },
+        "a foreground that is another program asks for nothing at all"
+    );
+    assert!(
+        unsafe { stands_over(listing, pin_hwnd) },
+        "and nothing of the pair's band is written for it"
+    );
+
+    // A user in the listing the pin follows gets the pin back over it.
+    assert!(
+        unsafe { a_listing_over_the_pin_puts_it_back(listing) },
+        "a user in the listing the pin follows gets the pin back over it"
+    );
+    assert!(
+        unsafe { stands_over(pin_hwnd, listing) },
+        "and the pair is at the front of the band the setting names again"
+    );
+
+    // And the same for a user in the pin's own window, which is where a click on the pin leaves them.
+    unsafe { put_the_second_in_front(pin_hwnd, listing) };
+    assert!(
+        unsafe { stands_over(listing, pin_hwnd) },
+        "the listing is over the pin again"
+    );
+    assert!(
+        unsafe { a_listing_over_the_pin_puts_it_back(pin_hwnd) },
+        "a user in the pin itself gets it back over the listing as well"
+    );
+    assert!(
+        unsafe { stands_over(pin_hwnd, listing) },
+        "and the pin is over the listing again"
+    );
+
+    // A pin that is over every listing there is has nothing for the walk to find, and is left alone.
+    unsafe {
+        let _ = SetWindowPos(
+            pin_hwnd,
+            HWND_TOPMOST,
+            NOWHERE,
+            NOWHERE,
+            320,
+            240,
+            SWP_NOACTIVATE,
+        );
+    }
+    unsafe { settle_z_order() };
+    assert!(
+        !unsafe { a_listing_over_the_pin_puts_it_back(listing) },
+        "a pin with nothing of Explorer's over it is left exactly where it stands"
+    );
+
+    // Nor is a pin that is Always On Top moved: it is over everything already, and a net that demoted it
+    // would be the setting taken away.
+    unsafe {
+        let _ = SetWindowPos(
+            pin_hwnd,
+            HWND_NOTOPMOST,
+            NOWHERE,
+            NOWHERE,
+            320,
+            240,
+            SWP_NOACTIVATE,
+        );
+        put_the_second_in_front(pin_hwnd, listing);
+    }
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    assert!(
+        unsafe { stands_over(listing, pin_hwnd) },
+        "the listing is over the pin, and the setting says the pin is over everything"
+    );
+    assert!(
+        !unsafe { a_listing_over_the_pin_puts_it_back(listing) },
+        "a pin over everything asks for nothing"
+    );
+    assert!(
+        unsafe { stands_over(listing, pin_hwnd) },
+        "and it is not moved for it"
+    );
+
+    // Safety: the windows are this test's own, and every global written here is put back.
+    unsafe {
+        let _ = DestroyWindow(listing);
+        let _ = DestroyWindow(another_program);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
