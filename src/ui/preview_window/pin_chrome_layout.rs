@@ -684,15 +684,34 @@ fn pin_chrome_occluded(cursor: Option<(i32, i32)>) -> bool {
     occluded
 }
 
-/// Whether a window under the pointer belongs to the pin rather than to somebody else: the film's host
-/// — a window of this app's standing at the band the pin is in — a window of any player this app began
-/// for a film, and a window of this app's own process at all (see `pin_chrome_occluded`).
+/// Whether a window under the pointer belongs to the pin rather than to somebody else: the pin's own
+/// window and its children, the film's host — a window of this app's standing at the band the pin is in
+/// — a window of any player this app began for a film, and a window of this app's own process at all
+/// (see `pin_chrome_occluded`). No window at all under the point is nobody's, which is the same answer
+/// as the pin's: nothing stands over a pin in open space.
 ///
 /// The player is asked for by its process, which is the same question the hover's own probe asks of
 /// a film's window — and of the app's record of the players it began rather than of the host, because
 /// the host names one player and the handover has two (see `pin_chrome_occluded`). A window of any
 /// other process is somebody else's however close it stands.
 fn a_window_of_the_pins_own(under: isize) -> bool {
+    // **Nothing at all under the point is nothing standing over the pin.** `WindowFromPoint` answers
+    // no window where no window is there — a hand past every window the desktop has — and a rule that
+    // read that as somebody else's would take a strip away from a pointer that is near the pin in
+    // open space.
+    if under == 0 {
+        return true;
+    }
+
+    // **The pin's own children are the pin.** The chrome strips are children of its window, and a
+    // strip that `WindowFromPoint` does answer (a platform or a setting that lets it) is the chrome
+    // the pointer is asking for rather than a window over it.
+    if pin_real_window::real_pin_window()
+        .is_some_and(|pin| unsafe { GetAncestor(HWND(under as *mut _), GA_ROOT) == pin })
+    {
+        return true;
+    }
+
     if pin_film_host::film_host().is_some_and(|host| host.0 as isize == under) {
         return true;
     }
