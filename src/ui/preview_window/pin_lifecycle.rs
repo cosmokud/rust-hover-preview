@@ -449,11 +449,48 @@ pub(super) static PIN_BAND_HELD: AtomicBool = AtomicBool::new(false);
 /// Shell has just put back, and both answer for the keyboard themselves (see `PinRestore`).
 pub(super) static PIN_ARRIVAL_OWES_THE_FRONT: AtomicBool = AtomicBool::new(false);
 
+/// The window the arrival was asked on behalf of, and when.
+///
+/// The ask is made for the window the user pressed the pin key in, and it is only theirs to give while
+/// they are still in it: the take-up can be followed by a wait for a hover's film's first frame (see
+/// `pin_film_host::settle_pin_handover`), and a user who has worked somewhere else in that time has
+/// answered the ask themselves. Asking anyway is the pin taking the front back from whatever they
+/// moved to (see `take_the_arrival_foreground`).
+static PIN_ARRIVAL_ASKED_FROM: Mutex<Option<(isize, Instant)>> = Mutex::new(None);
+
+/// How long a request for the foreground is still this app's to make.
+///
+/// Both asks are a launch's or an arrival's own debt and not a standing permission: a window that
+/// comes to the front long after the thing that was going to put it there is the desktop's business,
+/// and taking *that* front back is what undoes a click the user has made since. The bound is the wait
+/// this app gives a player at all, which is the longest either ask can legitimately be deferred by —
+/// a take-up on a hover's film waits for the pin's own player inside it (see `VIDEO_START_WAIT_SECS`
+/// and `pin_film_host::settle_pin_handover`).
+pub(super) const A_FRONT_REQUEST_IS_WANTED_FOR: Duration =
+    Duration::from_secs(VIDEO_START_WAIT_SECS);
+
 /// Arm the foreground a pin that has just been taken up is owed when it appears: a file installed
 /// with no pin standing is the pin arriving, and one installed into a pin that is up is a file
 /// stepping onto a window the user already has (see `install_pinned_media`).
+///
+/// The window in front is recorded with it, because that is the window the request is made for (see
+/// `PIN_ARRIVAL_ASKED_FROM`).
 pub(super) fn arm_the_pin_arrival() {
     PIN_ARRIVAL_OWES_THE_FRONT.store(true, Ordering::SeqCst);
+    if let Ok(mut asked) = PIN_ARRIVAL_ASKED_FROM.lock() {
+        *asked = Some((unsafe { GetForegroundWindow() }.0 as isize, Instant::now()));
+    }
+}
+
+/// Arm the same request with the window it was made from stood in, for the tests that cannot press a
+/// key in a window of their own: a test process has no window to be in front, so what the arming reads
+/// off the desktop is nothing it means (see `arm_the_pin_arrival`).
+#[cfg(test)]
+pub(super) fn arm_the_pin_arrival_from(window: HWND) {
+    PIN_ARRIVAL_OWES_THE_FRONT.store(true, Ordering::SeqCst);
+    if let Ok(mut asked) = PIN_ARRIVAL_ASKED_FROM.lock() {
+        *asked = Some((window.0 as isize, Instant::now()));
+    }
 }
 
 /// Whether this show owes the arrival its foreground, spending the debt where it does.
@@ -464,9 +501,55 @@ pub(super) fn arm_the_pin_arrival() {
 /// window appearing**: a pin already on the screen is one the user has put where it is, and a show
 /// that puts nothing new up owes nobody the front. Both are asked of the caller because a test can
 /// stage them and a window cannot be asked them without a desktop.
-pub(super) fn take_the_arrival_foreground(its_own_window: bool, on_the_screen: bool) -> bool {
+///
+/// **And it has to be the user's still to give**: the window the request was made in must be the one
+/// in front now, and the request must not have run out (see `a_front_request_is_still_wanted`).
+/// `in_front` is the window in front at this moment, read by the caller where the show is.
+pub(super) fn take_the_arrival_foreground(
+    its_own_window: bool,
+    on_the_screen: bool,
+    in_front: HWND,
+) -> bool {
     let armed = PIN_ARRIVAL_OWES_THE_FRONT.swap(false, Ordering::SeqCst);
-    armed && its_own_window && !on_the_screen
+    let asked = PIN_ARRIVAL_ASKED_FROM
+        .lock()
+        .ok()
+        .and_then(|mut asked| asked.take());
+
+    armed
+        && its_own_window
+        && !on_the_screen
+        && asked.is_some_and(|(from, at)| {
+            a_front_request_is_still_wanted(in_front, HWND(from as *mut _), at, Instant::now())
+        })
+}
+
+/// Whether a request for the foreground is still the user's to give, asked where the ask is about to
+/// be made: **the window the request was made from has to be the window in front**, and the request
+/// has to be young enough to be the thing that asked for it.
+///
+/// A window in front that is not the one the request was made from is a user working somewhere else —
+/// they clicked, they typed, they activated a browser — and a window this app puts in front of that is
+/// the app undoing the click. It is one predicate because the two halves answer one question, and both
+/// asks that reach for the front read it: the arrival (see `take_the_arrival_foreground`) and a
+/// player's own hand-back (see `give_the_foreground_back_from`, which has no window to compare against
+/// and asks the age alone through `a_front_request_is_young_enough`).
+pub(super) fn a_front_request_is_still_wanted(
+    in_front: HWND,
+    asked_from: HWND,
+    asked: Instant,
+    now: Instant,
+) -> bool {
+    !asked_from.is_invalid() && in_front == asked_from && a_front_request_is_young_enough(asked, now)
+}
+
+/// The half of the question above that a request with no window of its own can still be asked: a
+/// request whose wait has run out is a request nothing is coming for.
+///
+/// The bound is asked the way every wait in this app is — *inside* the bound, not at it: a wait that
+/// has reached the time it is given has ended (see `settle_pin_handover` and `VIDEO_START_WAIT_SECS`).
+pub(super) fn a_front_request_is_young_enough(asked: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(asked) < A_FRONT_REQUEST_IS_WANTED_FOR
 }
 
 /// Whether the arrival is still owed the foreground, for the test that holds a take-up to arming it
@@ -1600,7 +1683,11 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // The ask is made after the show, because a window that is not on the screen has no activation
     // to be given, and it is made of the window itself rather than of the film's host: the host is
     // the pair's band and a disabled window besides, and what the user is in is the pin.
-    if take_the_arrival_foreground(pin_is_its_own_window(), on_the_screen) {
+    if take_the_arrival_foreground(
+        pin_is_its_own_window(),
+        on_the_screen,
+        GetForegroundWindow(),
+    ) {
         let _ = SetForegroundWindow(hwnd);
         note_pin_trace!("arrival asked for the front {:?}", hwnd);
     }
@@ -2358,9 +2445,15 @@ pub(super) fn a_window_of_ours(window: HWND) -> bool {
     pid_is_the_previews(pid) || crate::app::engine_processes::holds_a_player(pid)
 }
 
-/// The window in front when the last player was begun: where that player's own window gives the
-/// foreground back to when it has taken it (see `give_the_foreground_back_from`).
-static FOREGROUND_BEFORE_A_PLAYER: AtomicIsize = AtomicIsize::new(0);
+/// The window in front when the last player was begun, and when that was: where that player's own
+/// window gives the foreground back to when it has taken it (see `give_the_foreground_back_from`).
+///
+/// **The moment is recorded with the window** because the window alone cannot say whether the ask is
+/// still a launch's own: a film plays for as long as it plays, and the monitor keeps asking the
+/// player's window to be styled for all of it — a front *that* window took an hour after the launch is
+/// not the activation this record is for, and handing it back is the app undoing whatever the user has
+/// done since (see `a_front_request_is_young_enough`).
+static FOREGROUND_BEFORE_A_PLAYER: Mutex<Option<(isize, Instant)>> = Mutex::new(None);
 
 /// Remember the window in front before a player is begun, because a window this app begins is never
 /// the window the user is in.
@@ -2376,7 +2469,9 @@ static FOREGROUND_BEFORE_A_PLAYER: AtomicIsize = AtomicIsize::new(0);
 /// cannot say whether the front came off the pin or off the listing.
 pub(super) fn note_the_foreground_before_a_player() {
     let front = unsafe { GetForegroundWindow() };
-    FOREGROUND_BEFORE_A_PLAYER.store(front.0 as isize, Ordering::SeqCst);
+    if let Ok(mut before) = FOREGROUND_BEFORE_A_PLAYER.lock() {
+        *before = Some((front.0 as isize, Instant::now()));
+    }
     note_pin_trace!(
         "foreground before a player {:?} ours {}",
         front,
@@ -2392,17 +2487,29 @@ pub(super) fn note_the_foreground_before_a_player() {
 /// (`key_input::pin_owns_caret`), so for as long as it holds it a standing pin answers **every**
 /// `Space` on the machine — the one pressed in the listing to pin a file, the one typed at a name —
 /// and a pin that is not Always On Top claims a keyboard nobody offered it.
-pub(super) fn a_players_foreground_goes_to(front: HWND, player: HWND) -> Option<HWND> {
-    if player.is_invalid() || front != player {
+pub(super) fn a_players_foreground_goes_to(
+    front: HWND,
+    player: HWND,
+    before: (isize, Instant),
+    now: Instant,
+) -> Option<HWND> {
+    let (recorded, asked) = before;
+    if player.is_invalid() || front != player || !a_front_request_is_young_enough(asked, now) {
         return None;
     }
 
-    let behind = a_foreground_to_give_back(
-        FOREGROUND_BEFORE_A_PLAYER.load(Ordering::SeqCst),
-        player.0 as isize,
-    );
+    let behind = a_foreground_to_give_back(recorded, player.0 as isize);
     let behind = HWND(behind as *mut _);
     (!behind.is_invalid() && behind != player).then_some(behind)
+}
+
+/// The window the last player was begun in front of, and when — or nothing where no player has been
+/// begun yet (see `FOREGROUND_BEFORE_A_PLAYER`).
+fn the_foreground_before_a_player() -> Option<(isize, Instant)> {
+    FOREGROUND_BEFORE_A_PLAYER
+        .lock()
+        .ok()
+        .and_then(|before| *before)
 }
 
 /// The window a player's window gives the foreground back to: the window the launch found in front,
@@ -2451,7 +2558,23 @@ fn a_foreground_to_give_back(recorded: isize, player: isize) -> isize {
 /// the desktop rather than held by the caller.
 pub(super) unsafe fn give_the_foreground_back_from(player: HWND) {
     let front = GetForegroundWindow();
-    if let Some(taken_from) = a_players_foreground_goes_to(front, player) {
+
+    // **A request that has run out is a request nothing is coming for**, and the front it would give
+    // back is one the user has made since: a player's window is styled for as long as its film plays,
+    // so this road runs long after the launch that armed it, and the window that activation took the
+    // front from is not the window that is in front now (see `a_players_foreground_goes_to`).
+    let Some(before) = the_foreground_before_a_player() else {
+        return;
+    };
+    if front == player && !a_front_request_is_young_enough(before.1, Instant::now()) {
+        note_pin_trace!(
+            "foreground left where it is: the launch that asked for it is {}ms old",
+            before.1.elapsed().as_millis(),
+        );
+        return;
+    }
+
+    if let Some(taken_from) = a_players_foreground_goes_to(front, player, before, Instant::now()) {
         let owed = a_hand_back_goes_to(taken_from, a_pin_that_stands());
         let mut behind = owed;
         let mut granted = unsafe { SetForegroundWindow(behind) }.as_bool();
