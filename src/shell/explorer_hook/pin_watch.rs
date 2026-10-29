@@ -381,9 +381,17 @@ impl PinUpdateWatch {
             over_our_own,
             window_is_gone(previous_window),
         ) {
-            let row = uia_item_from_point(resolver, pointer.point, false)
-                .is_some()
-                .then(|| get_file_under_cursor(resolver, &pointer));
+            // **The row the shell names can be a tick or ten behind the click**, so the file under the
+            // point is read for every press rather than only for the presses the row answered: a click
+            // the shell had not named yet is still the file the press picked, and answering it with "no
+            // pick" put the pin behind the listing it picked in and cleared the front it was owed (see
+            // `where_the_band_goes_back`). A gap between the rows still reads as no file either way, and
+            // so does a folder.
+            let under_the_point = get_file_under_cursor(resolver, &pointer);
+            let row = match uia_item_from_point(resolver, pointer.point, false) {
+                Some(_) => Some(under_the_point),
+                None => under_the_point.map(Some),
+            };
             let picked = match &row {
                 Some(Some(path)) if !path.is_dir() && is_media_file(path) => {
                     if pick {

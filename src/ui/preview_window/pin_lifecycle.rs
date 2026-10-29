@@ -2202,7 +2202,20 @@ pub(super) unsafe fn keep_pin_at_the_front(
 /// band is the pin over a program the user chose, which is the one thing the setting forbids (see
 /// `give_the_band_back` and `lower_pinned_preview`).
 fn where_the_band_goes_back(foreground: HWND, listing: HWND) -> HWND {
-    if foreground == listing {
+    // **A listing is not somewhere else to go.** The press recorded the frame it was made in, and
+    // that recording can be missing for a click the shell was a moment behind: `0`, or a window of
+    // the listing's own that is not the frame. Reading "not the listing" as "the user moved on"
+    // then named the foreground — the listing itself — as the window to go behind, which lowered the
+    // pin behind the very window it was picked in and cleared the front it was owed. The keyboard
+    // road has no press at all and so never lowered the pin; the mouse road must land in the same
+    // place, which is the front of the band, wherever the user is still in a listing or in the pin
+    // (see `keep_pin_at_the_front`).
+    let nowhere_else_to_go = listing.is_invalid()
+        || foreground == listing
+        || foreground == pinned_window()
+        || crate::shell::explorer_hook::explorer_browser_class_matches(foreground);
+
+    if nowhere_else_to_go {
         HWND::default()
     } else {
         foreground
