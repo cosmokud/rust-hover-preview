@@ -18,7 +18,9 @@
 //! **Why it is disabled.** A press on the picture is a press on the pin: the pin is dragged by its
 //! film, and the band's alpha-1 claim is already hit-testable (see `fill_band_hit_testable`). A
 //! disabled window is skipped by `WindowFromPoint`, so the press arrives at the pin rather than at
-//! the host.
+//! the host. **And a disabled window cannot hold a keyboard anybody can type into**, while it is
+//! still the window a click on the pair's taskbar button activates — so the host answers that
+//! activation with the pin's own window (see `answer_an_activation_of_the_host`).
 //!
 //! **And it is the window a put-away pin's taskbar button belongs to.** An owned window carries no
 //! button of its own, so a pin put away into the taskbar is *the host minimized*, brought back by the
@@ -46,9 +48,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
     RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE,
     HWND_NOTOPMOST, HWND_TOPMOST, SC_CLOSE, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WM_CLOSE, WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND,
-    WM_PAINT, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_POPUP,
-    WINDOW_EX_STYLE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CLOSE,
+    WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_PAINT, WM_SETFOCUS, WM_SYSCOMMAND, WNDCLASSEXW,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_POPUP, WINDOW_EX_STYLE,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -113,6 +115,16 @@ pub(super) unsafe fn answer_a_host(
         return Some(answer);
     }
 
+    // **An activation of the host is a request for the pin.** A pair that is not Always On Top wears its
+    // taskbar button on the host, and the host is disabled so that a press reaches the pin — so the
+    // activation a click on that button delivers has to be answered for the pin, whose window is the
+    // one the user asked the button for (see `answer_an_activation_of_the_host`).
+    if let Some(answer) =
+        unsafe { answer_an_activation_of_the_host(hwnd, msg, wparam, &Win32PinWindow) }
+    {
+        return Some(answer);
+    }
+
     // **A host the Shell brings back from the taskbar is the pin coming back.** The host is the window
     // the Shell's button belongs to on this road, and a pin left believing it is away refuses
     // everything a pin is for (see `the_pin_came_back`, `own_the_pin_window`).
@@ -143,6 +155,54 @@ fn answer_the_hosts_close(msg: u32, wparam: WPARAM) -> Option<LRESULT> {
     if pinned() {
         request_pin_end();
     }
+    Some(LRESULT(0))
+}
+
+/// What an activation of the pin's host asks for: **the pin's window, and the keyboard in it**.
+///
+/// With `Pin Mode → Always On Top` off the pair's taskbar button belongs to the film host — the host
+/// owns the pin's chrome, so it is the window the Shell lists for the pair (see `own_the_pin_window`).
+/// That window is disabled on purpose: a press on the band has to reach the pin, and `WindowFromPoint`
+/// skips a disabled window (see the module note). A disabled window is still a window the Shell can
+/// activate — a click's activation delivers `WM_ACTIVATE` and `WM_SETFOCUS` to it — and what it cannot
+/// do is hold a keyboard anybody can type into. So the activation is answered for the pin: the window
+/// the user asked the button for is the pin's, and the pin takes the keyboard the way a press on it
+/// does (see `pin_take_focus`).
+///
+/// **Only the pin's own host, and only while a pin stands.** A hover's host is made from the same class
+/// and answered by the same procedure, and a hover is nobody's button and no pin's window (see
+/// `answer_a_host`); a pin that has ended has nothing to hand a keyboard to. **And only once per
+/// activation**: a caret already in the pin is where the user asked the button for it, and asking again
+/// is a second `SetForegroundWindow` for a question Windows has answered.
+///
+/// `window` is the seam the ask is made through, so a test can read the ask back rather than make it on
+/// the user's desktop.
+pub(super) unsafe fn answer_an_activation_of_the_host(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    window: &dyn PinWindow,
+) -> Option<LRESULT> {
+    let activated = match msg {
+        // The low word is the activation state; the high word says whether the window is minimized,
+        // and a minimized window coming back is the same request (see the message's own layout).
+        WM_ACTIVATE => matches!(
+            (wparam.0 & 0xFFFF) as u32,
+            WA_ACTIVE | WA_CLICKACTIVE
+        ),
+        WM_SETFOCUS => true,
+        _ => false,
+    };
+    if !activated
+        || film_host() != Some(hwnd)
+        || !pinned()
+        || !pin_is_its_own_window()
+        || pin_is_focused()
+    {
+        return None;
+    }
+
+    unsafe { pin_take_focus(pinned_window(), window) };
     Some(LRESULT(0))
 }
 
