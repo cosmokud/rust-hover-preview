@@ -141,14 +141,8 @@ pub fn press_pinned_preview(window: isize) {
 /// folder, a file no kind previews, or a gap owes, and what undoes the raise the press began. The
 /// frame rather than the foreground, because the click that made the press activates the listing
 /// after this loop reads it: the foreground is still the window the user came from, and that is a
-/// window the pin is already behind (see `PinUpdateWatch::press_frame`).
-///
-/// **A press that picked a file is never noted this way**, and that is the whole of what a mouse click
-/// taught this road: the file may be named by either of the two lookups a press is answered out of
-/// (see `the_press_named_no_file`), and a lowering sent for the first lookup alone landed *after* the
-/// pick's own raise — the pin went behind the listing on the very click that picked the file, and
-/// nothing raised it again. So the answer is carried to the end of the tick, where both lookups have
-/// spoken.
+/// window the pin is already behind (see `PinUpdateWatch::press_frame`). A pick that lands after
+/// this one still raises the pin again.
 pub fn pin_press_was_not_a_pick(window: isize) {
     if !pinned() {
         return;
