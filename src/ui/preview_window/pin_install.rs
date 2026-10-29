@@ -1164,15 +1164,6 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         })
     });
 
-    // **A file installed with no pin standing is the pin arriving**, and a pin that arrives is owed
-    // the foreground every other window of the Shell's is given as it appears: a file installed into
-    // a pin that is up is the opposite — a file stepping onto a window the user already has, which
-    // is one they are in and one nothing has to be asked for. The same look tells the two apart for
-    // the chrome below, and the debt is the arrival's alone (see `PIN_ARRIVAL_OWES_THE_FRONT`).
-    if carried.is_none() {
-        arm_the_pin_arrival();
-    }
-
     // A pin collapsed into its bubble is collapsed whatever file is installed in it: the bubble is
     // a fact about the *window* rather than about the file, and the walk this take-up serves is the
     // one road that reaches here with one up (see `pin_update_plan` and `show_pinned_window`).

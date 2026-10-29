@@ -3768,14 +3768,11 @@ pub fn run_preview_window() {
                         // **A pin that has ended is not given a file, and a pin that is arriving is
                         // not one that has ended.** The take-up below writes the pin's state whole,
                         // so a file that lands after the window went would re-create the pin it
-                        // belongs to — with the arrival's own debt, which is a `SetForegroundWindow`
-                        // asked for a window that no longer stands (see `arm_the_pin_arrival` and
-                        // `PIN_ARRIVAL_OWES_THE_FRONT`) — and a pin can end between the pick and the
-                        // install, because the watchdog ends a hung one from a thread of its own. The
-                        // arrival is the other way round: it is the file the pin key asked for, and
-                        // it comes with no pin standing because there is nothing to stand in yet, so
-                        // refusing it there was the pin key doing nothing at all (see
-                        // `the_pin_takes_the_file_up`).
+                        // belongs to — and a pin can end between the pick and the install, because
+                        // the watchdog ends a hung one from a thread of its own. The arrival is the
+                        // other way round: it is the file the pin key asked for, and it comes with no
+                        // pin standing because there is nothing to stand in yet, so refusing it there
+                        // was the pin key doing nothing at all (see `the_pin_takes_the_file_up`).
                         if !the_pin_takes_the_file_up(arriving) {
                             note_pin_trace!(
                                 "pin install dropped: {} was installed with no pin standing",

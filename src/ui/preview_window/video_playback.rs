@@ -425,8 +425,8 @@ pub(super) fn start_video_playback(
 /// begun for a pin is a window under the pin's own, so a launch that activates itself takes the front
 /// off the listing or the browser the user is in and gives it to a window the pin then makes
 /// invisible, bottom of the z-order and unclickable. What the pin relies on is its *own* window taking
-/// the front on a press (see `pin_take_focus` and `arm_the_pin_arrival`) — never its player's, which
-/// carries `WS_EX_NOACTIVATE` from the moment it has a window.
+/// the front on a press (see `pin_take_focus`) — never its player's, which carries `WS_EX_NOACTIVATE`
+/// from the moment it has a window.
 #[allow(clippy::too_many_arguments)] // The launch's facts, passed through unchanged.
 pub(super) fn start_hover_video_playback(
     path: &PathBuf,
