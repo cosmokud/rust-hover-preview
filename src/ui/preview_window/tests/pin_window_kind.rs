@@ -328,3 +328,54 @@ fn a_pinned_ffplay_film_stands_in_the_pins_own_window() {
         *current = previous_media;
     }
 }
+
+/// **A pin that has just appeared is asked for the foreground, and nothing else is.** The debt is
+/// the arriving pin's own, and it is spent by the show that brings the window up: a pin standing in
+/// the preview's window is asked for nothing — that window never takes the focus — and a pin already
+/// on the screen is one the user put where it is, so a step, a box change and the tick's own re-show
+/// are owed nothing (see `PIN_ARRIVAL_OWES_THE_FRONT`).
+#[test]
+fn only_a_pin_that_has_just_appeared_is_asked_for_the_foreground() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    // Nothing of an earlier test is owed here: the debt is a fact about the pin that is arriving.
+    take_the_arrival_foreground(true, true);
+    assert!(
+        !the_pin_arrival_is_owed(),
+        "a test begins with no pin on its way up"
+    );
+
+    arm_the_pin_arrival();
+    assert!(
+        !take_the_arrival_foreground(false, false),
+        "a pin standing in the preview's window is asked for nothing: a tool window never takes \
+         the focus, so the ask is one Windows refuses for it"
+    );
+    assert!(
+        !the_pin_arrival_is_owed(),
+        "and the arrival is spent all the same — the pin appeared, and the show after it is not it"
+    );
+
+    arm_the_pin_arrival();
+    assert!(
+        !take_the_arrival_foreground(true, true),
+        "a pin already on the screen is one the user has put where it is, so a step, a box change \
+         and the tick's re-show ask nothing"
+    );
+    assert!(
+        !the_pin_arrival_is_owed(),
+        "and the show that found it standing spends the debt the take-up armed"
+    );
+
+    arm_the_pin_arrival();
+    assert!(
+        take_the_arrival_foreground(true, false),
+        "while a pin that has just appeared in a window of its own is asked for the front"
+    );
+    assert!(
+        !take_the_arrival_foreground(true, false),
+        "once: the next show of that window is a show of a pin the user already has"
+    );
+}
