@@ -2,8 +2,8 @@
 //! pinned window is divided into, and the compose, stretch, resample and blend each is filled
 //! by.
 
-use super::*;
 use super::pin_trace::note_pin_trace;
+use super::*;
 
 pub(super) unsafe fn render_layered_preview(hwnd: HWND) {
     // **A pin is painted into the window the pin stands in**, and the handle a road carries is only
