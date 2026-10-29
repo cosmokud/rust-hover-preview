@@ -10,9 +10,9 @@
 use super::*;
 use std::time::Duration;
 use windows::core::w;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::DwmFlush;
-use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GetDC, ReleaseDC};
+use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GdiFlush, GetDC, ReleaseDC};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -1468,6 +1468,11 @@ const A_BOX_ON_THE_DESK: (i32, i32) = (30, 40);
 /// Fill a window's client area with a colour of its own: what a picture read off the desktop is read
 /// for, since a window that paints nothing is not a picture of anything.
 ///
+/// **The fill is committed to the window's own surface here** and not left in a batch GDI has not
+/// sent, because the read that follows is a read of the *compositor's* output rather than of this
+/// window: a batch still in hand is a frame the composition has not been given, and a picture taken
+/// then is a picture of whatever stood there before the fill (see `FRAMES_A_FILL_IS_GIVEN`).
+///
 /// Safety: the window is the caller's own, and painting it is a change to it that the caller is the
 /// one asking for.
 unsafe fn fill_the_window(hwnd: HWND, colour: COLORREF) {
@@ -1478,6 +1483,38 @@ unsafe fn fill_the_window(hwnd: HWND, colour: COLORREF) {
     FillRect(dc, &client, brush);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
     let _ = ReleaseDC(hwnd, dc);
+    // The window's redirection surface has the fill once GDI says it does, and not before.
+    let _ = GdiFlush();
+}
+
+/// How many frames a fill is given to reach the desktop before a picture of it is taken: one
+/// `DwmFlush` a pass, so this is the frames a screen composing at 60 Hz shows in about a tenth of a
+/// second, and never a wait on the clock.
+///
+/// The bound is short on purpose: the frame it waits for is the host's own fill at the host's own
+/// corner, so a black band — the rows a host erases to — or another program's window in that corner
+/// still fails the assertion, and the wait is over long before a broken picture could be taken for a
+/// slow one.
+const FRAMES_A_FILL_IS_GIVEN: usize = 8;
+
+/// The colour the desktop is showing at a point, through the road a picture of the pin is taken
+/// through (see `surfaces::screen_pixels`): the read a settle is decided on, and the same read the
+/// collapse is about to make.
+///
+/// **The colour is what says whose pixels these are.** The button's picture is a read of the desktop,
+/// so the one thing a fill can be checked against is the desktop itself; the colour asked for is this
+/// test's own and is painted into nothing else while it holds the window lock, so a desktop showing
+/// it at the host's own corner is a desktop showing this host.
+///
+/// Safety: the point is one on the screen and the rectangle read is the pixel at it.
+unsafe fn what_the_desktop_shows_at(point: POINT) -> Option<u32> {
+    let one_pixel = RECT {
+        left: point.x,
+        top: point.y,
+        right: point.x + 1,
+        bottom: point.y + 1,
+    };
+    surfaces::screen_pixels(one_pixel).map(|(pixels, width, _)| the_colour_in(&pixels, width, 0, 0))
 }
 
 /// The colour a picture is holding at a point, as the app's own `COLORREF` colour: the three bytes a
@@ -1846,6 +1883,36 @@ fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubb
     }
     let _ = unsafe { DwmFlush() };
     let host_box = unsafe { the_client_box(host) };
+
+    // **The frame the collapse takes has to be a frame the desktop is showing.** The fill above is a
+    // GDI call the host's own surface has not necessarily taken yet, and the compositor has not
+    // necessarily shown a frame since either — a picture taken then is a picture of whatever stood
+    // where the host does before it was filled: another program's window, or the black a host erases
+    // its rows to. So the desktop is asked, through the road the picture is taken through, until it
+    // is showing this host's own colour at this host's own corner, and what it was showing is named
+    // if it never does.
+    let host_corner = unsafe { pin_taskbar_mirror::client_area_on_the_screen(host) }
+        .expect("the host's client on the screen while it is still up");
+    let host_corner = POINT {
+        x: host_corner.left,
+        y: host_corner.top,
+    };
+    let mut shown = None;
+    for _ in 0..FRAMES_A_FILL_IS_GIVEN {
+        shown = unsafe { what_the_desktop_shows_at(host_corner) };
+        if shown == Some(A_COLOUR_OF_ITS_OWN.0) {
+            break;
+        }
+        // The next frame, and a fill put back for the ones the host's own erase may have taken.
+        unsafe { fill_the_window(host, A_COLOUR_OF_ITS_OWN) };
+        let _ = unsafe { DwmFlush() };
+    }
+    assert_eq!(
+        shown,
+        Some(A_COLOUR_OF_ITS_OWN.0),
+        "the desktop shows the host's own fill at the corner the picture is taken of, so that the \
+         picture is of this host rather than of what stood there before it. It kept showing {shown:x?}"
+    );
 
     // The road the user takes: the pin goes away into the round bubble first.
     collapse_pin_to(PinMinimizeTo::Bubble);
