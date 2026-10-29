@@ -25,7 +25,7 @@ pub(super) fn decode_image_with_header_check(path: &PathBuf) -> Option<image::Dy
 /// rather than a file that is not a picture, so the codec Windows has is asked before
 /// the answer is no: what a hover onto a `.heic`, or onto a still `.webp`, is measured
 /// from is its own frame; see `wic_image`.
-pub(super) fn image_dimensions_with_header_check(path: &PathBuf) -> Option<(u32, u32)> {
+pub(super) fn image_dimensions_with_header_check(path: &Path) -> Option<(u32, u32)> {
     image::ImageReader::open(path)
         .ok()?
         .with_guessed_format()

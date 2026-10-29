@@ -2,6 +2,7 @@
 //! with: the calls that put a preview up, take it down and refresh it, and the notices a render
 //! sends back.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 /// Whether a preview is pinned — a window of its own with a caption, which stays until it
@@ -80,6 +81,12 @@ pub fn pinned_path() -> Option<PathBuf> {
 /// next tick, by the path the tray's own rows take. A pin that is not up is not a window to
 /// show anything in, and a file the pin is already showing is not another file: both are
 /// dropped here rather than sent, since the hook has no other answer to give them.
+///
+/// **A file the pin is already *on its way to* is not another file either**, and dropping it is the
+/// whole of what keeps one click from restarting another's swap: the pin's own `path` does not move
+/// until the incoming file is installed, so a press on the file being loaded or held used to be
+/// read as a new pick — the load dropped, the hold abandoned, its player killed — and the picture
+/// that was being kept went with them (see `pin_install::THE_FILE_IN_FLIGHT`).
 pub fn update_pinned_preview(path: &Path) {
     if !pinned() || !pin_update_enabled() {
         return;
@@ -89,7 +96,59 @@ pub fn update_pinned_preview(path: &Path) {
         return;
     }
 
+    if pin_install::pin_file_in_flight().as_deref() == Some(path) {
+        note_pin_trace!(
+            "pick dropped: {} is already the file in flight",
+            pin_trace::path_name(path)
+        );
+        return;
+    }
+
     send_preview(PreviewMessage::PinUpdate(path.to_path_buf()));
+}
+
+/// The file a pin is being shown next while it is still in flight — a load that has not answered, a
+/// box nothing has measured yet, a swap held for its picture — if there is one (see
+/// `update_pinned_preview`).
+pub fn pin_file_in_flight() -> Option<PathBuf> {
+    pin_install::pin_file_in_flight()
+}
+
+/// Note that the hand pressed the listing behind the pin, before the file the press picked is
+/// known.
+///
+/// The click activates the listing, which is that window being put over the pin, and the shell's
+/// answer for the file can be a tick or ten away — so the pin is put back in front of the listing
+/// here, where the press is, rather than after the answer (see `Pin Mode → Update Preview → Move
+/// To Top`). `window` is the frame the press was made in, carried for the reason
+/// [`pin_press_was_not_a_pick`] carries it: the activation is still to land when this loop reads
+/// the press, so the window the pin is to be answered against is the one the click landed in and
+/// not the foreground — which is the window the user came from at that moment, and may be another
+/// program or another listing by the time the raise is asked for (see `PinFrontOwed`). A press that
+/// names no file this app previews — a folder, a file no kind previews, a gap between the rows — is
+/// put back behind the listing by [`pin_press_was_not_a_pick`] instead, and a pick that lands
+/// raises the pin again.
+pub fn press_pinned_preview(window: isize) {
+    if !pinned() {
+        return;
+    }
+
+    send_preview(PreviewMessage::PinPress { window });
+}
+
+/// Note that the press above named no file, and put the pin back behind the window the press was
+/// made in — `window`, the frame of the one under the point — which is what a press that picked a
+/// folder, a file no kind previews, or a gap owes, and what undoes the raise the press began. The
+/// frame rather than the foreground, because the click that made the press activates the listing
+/// after this loop reads it: the foreground is still the window the user came from, and that is a
+/// window the pin is already behind (see `PinUpdateWatch::press_frame`). A pick that lands after
+/// this one still raises the pin again.
+pub fn pin_press_was_not_a_pick(window: isize) {
+    if !pinned() {
+        return;
+    }
+
+    send_preview(PreviewMessage::PinNoPick { window });
 }
 
 /// Show a preview of the file the pointer hovers, opened from the cursor it was hovered
@@ -222,6 +281,11 @@ pub fn hide_preview() {
         kill_stray_video_process();
     }
 
+    // A hover's film host goes down with it. This thread may not own that window — the loop's
+    // `Hide` below takes it down there — so a take-down here is only ever the same thread's case,
+    // and the `Hide` covers every other (see `hover_film_host`).
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+
     send_preview(PreviewMessage::Hide);
 }
 
@@ -279,10 +343,10 @@ pub(super) fn notify_video_probed(path: &Path, generation: u64) {
 
 /// The small subtitle files a film's own tracks were copied into are in the cache. Sent from
 /// the extraction thread through the same channel every other answer arrives on, because the
-/// one thing waiting on it is a pinned window: a pin showing that film is begun again so the
-/// frame it draws next is drawn with the copy, and beginning a player belongs to the preview
-/// loop (see `reload_pinned_subtitles`). A hover is told nothing — it was answered without
-/// subtitles by the user's own choice, and the hover after it reads what this wrote (see
+/// one thing waiting on it is a pinned window: a pin showing that film takes the copy as a
+/// preload for its next relaunch, and what a player is handed belongs to the preview loop (see
+/// `reload_pinned_subtitles`). A hover is told nothing — it was answered without subtitles by
+/// the user's own choice, and the hover after it reads what this wrote (see
 /// `video_launch::subtitle_filter`).
 pub(super) fn notify_video_subtitles_ready(path: &Path) {
     send_preview(PreviewMessage::VideoSubtitlesReady(path.to_path_buf()));
@@ -350,201 +414,6 @@ pub(super) fn spawn_video_probe(path: PathBuf, generation: u64) {
     });
 }
 
-/// Which park the frame being rendered is for, counted rather than flagged.
-///
-/// It is the one thing the thread rendering that frame cannot be told by the loop, because the loop
-/// is what answers the park — so the answer is written down here and the render reads it between
-/// its reads, which is the only moment it can be read at without holding a pipe open past the end
-/// (see `spawn_video_resume_frame`).
-///
-/// **It is a count of parks and not a flag, because a park is not the only one that can be in
-/// flight.** A flag says whether *some* park has been given back, and a render is up to
-/// `RESUME_FRAME_WAIT` of FFmpeg away from answering: a second park begun inside that window took
-/// the flag back down, so the first render read a park that had ended as a park that had not, and
-/// installed a frame taken at the second the *previous* drag let go at into a band the new park
-/// was holding for a picture of its own. A render is therefore given the park it was opened for
-/// and asked whether that is still the one this app is waiting for, which two overlapping parks
-/// can never both be (see `resume_frame_asked_for`).
-pub(super) static RESUME_FRAME_PARK: AtomicU64 = AtomicU64::new(0);
-
-/// Open a park's frame, answering the park it is for: a render begun here is wanted only while
-/// that park is the current one.
-pub(super) fn begin_resume_frame() -> u64 {
-    RESUME_FRAME_PARK
-        .fetch_add(1, Ordering::SeqCst)
-        .wrapping_add(1)
-}
-
-/// Close every park's frame — a park that has been given back has a player in the band and no use
-/// for a decode, and a render still inside its bound is left to find out for itself (see
-/// [`RESUME_FRAME_PARK`]).
-pub(super) fn abandon_resume_frame() {
-    RESUME_FRAME_PARK.fetch_add(1, Ordering::SeqCst);
-}
-
-/// Whether the render opened for the park named `park` is still the one this app is waiting for.
-///
-/// It is the render's own refusal, asked twice: once between its reads, so a park that ended while
-/// it was still working is not waited out to the bound, and once with the frame in hand, so a
-/// render the loop has stopped wanting cannot put its pixels in a slot a later park will install
-/// from.
-pub(super) fn resume_frame_asked_for(park: u64) -> bool {
-    RESUME_FRAME_PARK.load(Ordering::Acquire) == park
-}
-
-/// How long a resume frame may take before it is not worth the drag it is for.
-///
-/// A drag is over in about a second, and this is a whole extra FFmpeg pass over a file — open, seek,
-/// decode one frame — so a render slower than the drag it is preparing for has nothing to prepare.
-/// The bound is what makes the wait safe to leave on a thread of its own: a render that overruns is
-/// killed and reaped rather than left reading a file for a park that ended long ago.
-pub(super) const RESUME_FRAME_WAIT: Duration = Duration::from_millis(1200);
-
-/// Render the frame a resize's park will give back, on a thread of its own.
-///
-/// **It is spawned at the park rather than asked for at the release, because the release is the one
-/// moment there is no time.** A drag holds the pointer's own thread for its whole length, and the
-/// work is two external processes — open the file, seek to the second the film will go on from,
-/// decode one frame — which is the hundred-millisecond class on any file a preview can be played
-/// for. Spawned at the park it overlaps the drag the hand is already spending; asked for at the
-/// release it would be the release that waits, which is the frame the hand let go on being replaced
-/// by nothing at all for a tenth of a second.
-///
-/// It is asked for on a **resize** and not on a move, which is the whole of what makes it worth
-/// doing at all: a move has no relaunch behind it, so the player standing in the band when the drag
-/// ends is the player that was playing all along and has a decoded frame of its own to show (see
-/// `park_swap_arm`). A resize ends in a relaunch, and the placeholder is standing in for a window
-/// that has decoded nothing — which is the whole of the case this frame is for.
-///
-/// Nothing is waited for and nothing is asked of the loop: the answer is left in its own slot and
-/// taken up by the next settle (see `install_resume_frame`), so an overrun is a park that keeps its
-/// stale frame rather than a band that goes blank. And the process is ended on every path out of
-/// here — the park's end, the bound, or a panic — because it is this app's own child and Windows
-/// does not end it for us.
-///
-/// **It is opened for a named park and asked again on the way out, so a render that outlives its
-/// park cannot answer a later one.** A park's end closes it, and a later park opens the next — so
-/// the second is told apart from the first even while the first is still decoding, which is what a
-/// single flag could not do (see `RESUME_FRAME_PARK`).
-pub(super) fn spawn_video_resume_frame(path: PathBuf, at: f64, width: u32, height: u32) {
-    // FFmpeg's chroma planes want even dimensions, and a band of one pixel is not a frame anyway.
-    let (width, height) = (width & !1, height & !1);
-    if width < 2 || height < 2 || !at.is_finite() || at < 0.0 {
-        return;
-    }
-
-    let park = begin_resume_frame();
-
-    std::thread::spawn(move || {
-        // A panic in here would take the thread down before it can see it is no longer wanted and
-        // leave the child running, and this is a thread nobody is waiting on: the same reason the
-        // probe above catches its own unwind (see `spawn_video_probe`).
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render_video_resume_frame(&path, at, width, height, park);
-        }));
-    });
-}
-
-/// The render itself: one frame of the file at one second, into the slot the settle takes it from.
-///
-/// The child is polled rather than waited on because the pipe it writes to is this thread's to
-/// drain, and a `wait_with_output` has no moment in it at which a park that has ended can be
-/// noticed — so the drain is a thread of its own and the wait is this loop, which is where the
-/// park and the bound are both read. `park` is the one it was opened for, and a render that is no
-/// longer that park's stops where it stands rather than to the bound (see `resume_frame_asked_for`).
-fn render_video_resume_frame(path: &Path, at: f64, width: u32, height: u32, park: u64) {
-    use std::io::Read;
-
-    let seconds = format!("{at:.3}");
-    let size = format!("{width}x{height}");
-
-    let Ok(mut child) = engine_processes::hidden_command("ffmpeg")
-        .args(["-v", "error", "-nostdin", "-ss"])
-        .arg(&seconds)
-        .arg("-i")
-        .arg(path)
-        .args([
-            "-frames:v",
-            "1",
-            "-s",
-            &size,
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "bgra",
-            "-",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return;
-    };
-    let pid = child.id();
-    engine_processes::adopt(pid);
-
-    let wanted = width as usize * height as usize * 4;
-    let Some(pipe) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        engine_processes::forget(pid);
-        return;
-    };
-
-    let collected: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&collected);
-    let drain = std::thread::spawn(move || {
-        let mut all = Vec::new();
-        let mut pipe = pipe;
-        let _ = pipe.read_to_end(&mut all);
-        if let Ok(mut sink) = sink.lock() {
-            *sink = all;
-        }
-    });
-
-    let deadline = Instant::now() + RESUME_FRAME_WAIT;
-    while !drain.is_finished() {
-        if !resume_frame_asked_for(park) || Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(8));
-    }
-
-    // Reaped on every path out, and bounded even on the path where nothing went wrong: the same
-    // helper the probes use, for the same reason — a child still writing into a pipe nobody is
-    // draining is a child that never finishes, and a child that is killed is waited for rather
-    // than left for the next drag to find (see `wait_bounded`).
-    let _ = wait_bounded(child, Duration::from_millis(250));
-    let _ = drain.join();
-    engine_processes::forget(pid);
-
-    if !resume_frame_asked_for(park) {
-        return;
-    }
-
-    // A short read is a frame that was not written whole, which is answered with nothing rather
-    // than with the part of it that was: a band filled from half a frame is a band of garbage.
-    let mut pixels = match collected.lock() {
-        Ok(all) if all.len() == wanted => all.clone(),
-        _ => return,
-    };
-    // GDI is not what wrote this, but a layered window is composited from premultiplied coverage,
-    // and this frame is opaque everywhere for the same reason the captured one is (see
-    // `hold_video_window_frame`).
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        pixel[3] = 255;
-    }
-
-    if let Ok(mut prepared) = RESUME_VIDEO_FRAME.lock() {
-        *prepared = Some(HeldVideoFrame {
-            pixels,
-            width,
-            height,
-        });
-    }
-}
-
 /// Screen-space box of the preview surface that is on screen right now, if any.
 /// The Explorer hook uses it to decide whether a keyboard preview was placed
 /// over the parked pointer, so a pointer sitting under the preview cannot drive
@@ -559,7 +428,19 @@ fn render_video_resume_frame(path: &Path, at: f64, width: u32, height: u32, park
 /// listing that window is standing on, rather than being taken as a click on something that
 /// is not a listing at all (see `click_is_over_a_listing`).
 pub fn is_preview_window(handle: isize) -> bool {
-    handle != 0 && handle == PREVIEW_HWND.load(Ordering::Acquire)
+    if handle == 0 {
+        return false;
+    }
+
+    // A picture pin stands in a window of its own, and a press on it is a press on the pin: the hook
+    // asks this to tell a click on something that is not a listing from a click on this app's own
+    // preview (see `click_is_over_a_listing`), and a window of the app's own that it did not know
+    // would be read as the desktop behind it.
+    if handle == PREVIEW_HWND.load(Ordering::Acquire) {
+        return true;
+    }
+
+    pin_real_window::real_pin_window().is_some_and(|hwnd| hwnd.0 as isize == handle)
 }
 
 pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
@@ -569,6 +450,15 @@ pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
 
     unsafe {
         let candidates = [
+            pin_real_window::real_pin_window()
+                .map(|hwnd| hwnd.0 as isize)
+                .unwrap_or(0),
+            // A hosted hover's picture is the hover's own host: `PREVIEW_HWND` is hidden behind it
+            // and a hosted player has no window of the desktop's at all, yet the host is the visible
+            // preview surface, in the hover's box and where a pin takes it up (see `hover_film_host`).
+            hover_film_host::hover_film_host()
+                .map(|hwnd| hwnd.0 as isize)
+                .unwrap_or(0),
             PREVIEW_HWND.load(Ordering::SeqCst),
             VIDEO_HWND.load(Ordering::SeqCst),
         ];
@@ -605,11 +495,23 @@ pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
 /// moved (see `PinUpdateWatch::note_pin_box`). The window is read whether or not it is visible,
 /// because a pin that has collapsed into its bubble has hidden its window rather than moved it.
 pub fn preview_window_rect() -> Option<(i32, i32, i32, i32)> {
+    // A picture pin stands in a window of its own, and that is the window whose box the hook watches
+    // for a pin moving under a hand that has not moved.
+    if let Some(hwnd) = pin_real_window::real_pin_window() {
+        if pin_is_its_own_window() {
+            return window_rect_of(hwnd.0 as isize);
+        }
+    }
+
     let value = PREVIEW_HWND.load(Ordering::SeqCst);
     if value == 0 {
         return None;
     }
+    window_rect_of(value)
+}
 
+/// The box of a window of this app's own, or nothing where it has no area.
+fn window_rect_of(value: isize) -> Option<(i32, i32, i32, i32)> {
     unsafe {
         let mut rect = RECT::default();
         if GetWindowRect(HWND(value as *mut _), &mut rect).is_ok()

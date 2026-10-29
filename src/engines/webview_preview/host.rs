@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::api::{
     drop_placement, is_wanted, note_document_failed, page_runs, publish, publish_rect, wanted_area,
-    Area, Placement, Wanted, HOST_HWND, LAST_TIMINGS, RUNNING_DOCUMENT,
+    Area, Placement, Wanted, BROWSER_PID, HOST_HWND, LAST_TIMINGS, RUNNING_DOCUMENT,
 };
 use super::engine::trace;
 use super::environment::{
@@ -193,6 +193,7 @@ impl Host {
         // hook: it is the window a document is drawn in, so it is the one the pointer
         // touches when it is taken onto a document's preview.
         HOST_HWND.store(hwnd.0 as isize, Ordering::Release);
+        BROWSER_PID.store(browser_pid, Ordering::Release);
 
         Some(host)
     }
@@ -350,14 +351,24 @@ impl Host {
         publish(Some((path.clone(), area)));
     }
 
-    /// Put the window in `area`, topmost, and without ever activating it.
+    /// Put the window in `area`, in the band the preview holds, and without ever activating it.
     ///
     /// The placement never activates, whatever the document is: a hover is not a click, and a
     /// preview that appeared over a window being named would put the caret somewhere else
-    /// than where it was.
+    /// than where it was. The band is the pin's when a pin is showing the page, and the topmost one
+    /// everywhere else (see `pin_holds_the_front`).
+    ///
+    /// **A page is put in front of the pin, not behind it — the one thing it does not share with a
+    /// film.** A film behind the pin is a picture the band's hole is seen through, and a pass of the
+    /// compositor over a video surface costs nothing a hand can feel. A browser's surface is not
+    /// that: standing behind a layered window it is blended through the band's transparent pixels
+    /// on every frame the window is presented, which is a resize that goes black and stutters where
+    /// the same page in front of the pin resizes smoothly. So the page holds the band the pin is
+    /// in and the pin stands under it, and what the pin loses by it is the presses that land on the
+    /// page — which are the pin's own and raise it anyway (see `settle_pinned_press`).
     pub(super) fn put_window(&self, area: Area) {
         let insert_after = if crate::ui::preview_window::pinned()
-            && !crate::ui::preview_window::pin_always_on_top()
+            && !crate::ui::preview_window::pin_holds_the_front()
         {
             HWND_NOTOPMOST
         } else {
@@ -628,6 +639,7 @@ impl Host {
         // The window is gone, so nothing under the pointer is this engine's any more: a
         // hit test that still held the handle would be reading a window that was destroyed.
         HOST_HWND.store(0, Ordering::Release);
+        BROWSER_PID.store(0, Ordering::Release);
 
         // The environment goes with the host when it is dropped, and the browser
         // process it owns goes with the last controller over it.
@@ -859,6 +871,7 @@ impl Drop for Host {
     fn drop(&mut self) {
         publish(None);
         HOST_HWND.store(0, Ordering::Release);
+        BROWSER_PID.store(0, Ordering::Release);
 
         // Closing the engine drops the environment, and the browser goes with the
         // last controller over it — usually. A browser that does not is the leftover

@@ -28,6 +28,7 @@ mod menus;
 mod submenus;
 
 pub(crate) use commands::toggle_pin_always_on_top;
+pub(crate) use commands::toggle_preview_enabled;
 // The sizes the tray's `Text → Font Size` submenu offers, which is also what a `Ctrl` and a wheel over
 // a pinned page step through: one list of sizes for the whole app rather than a copy per door (see
 // `text_size_after_notches`).
@@ -43,7 +44,7 @@ use crate::config::config::{
     DEFAULT_AUDIO_VOLUME, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
     DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_NAV_AUDIO,
     DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PREVIEW_SCALE, DEFAULT_RENDER_HTML,
     DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
@@ -65,12 +66,13 @@ use ids::{
     ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
     ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
     ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
-    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_ENGINE_PERSISTENT_BASE,
+    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS,
     ID_TRAY_EXIT, ID_TRAY_FONT_100, ID_TRAY_FONT_110, ID_TRAY_FONT_BACKGROUND_BASE,
     ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE,
     ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
     ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
-    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME,
+    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE,
+    ID_TRAY_NORMALIZE_VIDEO_VOLUME,
     ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_MINIMIZE_BUBBLE,
     ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_PIN_NAV_AUDIO_ALL,
     ID_TRAY_PIN_NAV_AUDIO_CATEGORY, ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY,
@@ -96,11 +98,11 @@ use ids::{
 use submenus::{
     audio_scale_at, audio_seek_label, avoid_label, background_at, background_label,
     bitmap_scale_label, cache_size_label, dds_background_at, document_scale_at,
-    document_scale_label, end_of_file_label, engine_idle_at, engine_idle_label, html_background_at,
-    is_mpv_row, mpv_menu_items, mpv_row_label, pin_minimize_label, pin_mode_audio_seek_label,
-    pin_nav_label, pin_update_label, remember_volume_label, system_menu_label, timing_delay_menu,
-    update_available_label, video_engine_label, zoom_background_at, MF_RADIOCHECK,
-    MPV_LABEL_BUDGET,
+    document_scale_label, enable_preview_label, end_of_file_label, engine_idle_at,
+    engine_idle_label, html_background_at, is_mpv_row, mpv_menu_items, mpv_row_label,
+    pin_key_label, pin_minimize_label, pin_mode_audio_seek_label, pin_nav_label, pin_update_label,
+    remember_volume_label, system_menu_label, timing_delay_menu, update_available_label,
+    video_engine_label, zoom_background_at, MF_RADIOCHECK, MPV_LABEL_BUDGET,
 };
 
 #[cfg(test)]

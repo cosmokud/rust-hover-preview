@@ -1,6 +1,8 @@
-//! What the pin plays: where the playhead is, seeking it, toggling it, stepping a subtitle,
-//! and parking the player's window while a drag is in flight.
+//! What the pin plays: where the playhead is, seeking it, toggling it, stepping a subtitle, and
+//! handing the picture from a player to its replacement without taking it off the screen. A
+//! gesture asks nothing of a player (see `RestartReason`).
 
+use super::pin_trace::{note_pin_trace, path_name};
 use super::*;
 
 /// Where a pinned preview's playhead is, in seconds: the engine's own answer where the media
@@ -129,6 +131,79 @@ pub(super) fn restart_count() -> u64 {
 #[cfg(test)]
 pub(super) fn clear_restart_count() {
     RESTART_COUNT.store(0, Ordering::SeqCst);
+    LAST_RESTART_REASON.store(0, Ordering::SeqCst);
+}
+
+/// The reason the last player was begun again, as the code of the line the trace wrote.
+///
+/// The same one question the trace answers — a pid that changed with no reason said out loud is the
+/// fault this field is read for (see `relaunch_pinned_player`) — and the question a handover's own
+/// line is read against, so a seek's picture is written where a seek is what began the player (see
+/// `pin_film_thumbnail::note_the_seek_picture`).
+pub(super) static LAST_RESTART_REASON: AtomicU64 = AtomicU64::new(0);
+
+/// The reason the last player was begun again, if one was (see `LAST_RESTART_REASON`).
+#[cfg(test)]
+pub(super) fn last_restart_reason() -> Option<RestartReason> {
+    RestartReason::of_code(LAST_RESTART_REASON.load(Ordering::Acquire))
+}
+
+/// The reason the last player was begun again, **taken**: what a handover reads once to say whether a
+/// seek began the source it is about to draw, so one reason is never read as a second seek's (see
+/// `pin_film_thumbnail::hand_the_picture_over`).
+pub(super) fn take_the_last_restart_reason() -> Option<RestartReason> {
+    RestartReason::of_code(LAST_RESTART_REASON.swap(0, Ordering::AcqRel))
+}
+
+/// Why a player is begun again, which is the one thing every relaunch says out loud.
+///
+/// The set is exactly the user actions that need a new player on a route with no IPC: a seek, a
+/// level, a subtitle track, the end of a file, and the engine that cannot take an instruction any
+/// other way. **There is no gesture reason and no resize reason, and that is the rule rather than
+/// an omission**: a press, a move, a drag and a resize leave the player running, because the film
+/// is a thumbnail of a source window the gesture does not move (see `pin_film_thumbnail`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum RestartReason {
+    Seek,
+    Volume,
+    Subtitle,
+    End,
+    Engine,
+}
+
+impl RestartReason {
+    /// The word the trace line and the test seam are written with.
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            RestartReason::Seek => "seek",
+            RestartReason::Volume => "volume",
+            RestartReason::Subtitle => "subtitle",
+            RestartReason::End => "end",
+            RestartReason::Engine => "engine",
+        }
+    }
+
+    /// The code this reason is written down as (see `LAST_RESTART_REASON`).
+    fn code(self) -> u64 {
+        match self {
+            RestartReason::Seek => 1,
+            RestartReason::Volume => 2,
+            RestartReason::Subtitle => 3,
+            RestartReason::End => 4,
+            RestartReason::Engine => 5,
+        }
+    }
+
+    fn of_code(code: u64) -> Option<RestartReason> {
+        match code {
+            1 => Some(RestartReason::Seek),
+            2 => Some(RestartReason::Volume),
+            3 => Some(RestartReason::Subtitle),
+            4 => Some(RestartReason::End),
+            5 => Some(RestartReason::Engine),
+            _ => None,
+        }
+    }
 }
 
 /// End the player a pinned video is playing in and begin another one at a second of the file.
@@ -142,18 +217,16 @@ pub(super) fn clear_restart_count() {
 /// itself (see `PinTransport::subtitle`).
 ///
 /// The order of the two is the whole of what the user sees, and it is the reason the player being
-/// replaced is *taken out of the media* rather than ended here. It is parked — still running, still
-/// drawing — until the player begun in its place has a window of its own, which the loop ends it
-/// for (see `retire_replaced_player`). Ending it first would leave the pin's band showing the
-/// desktop for as long as the new player takes to open the file, seek, and put a window up, which
-/// on a 1440p file is long enough to read as a flash, and which is why nothing here goes through
-/// `stop_video_playback`: that call is for a player that has ended, and this one has not.
+/// replaced is *taken out of the media* rather than ended here. It is left running and drawing —
+/// its window is the source the pin's host draws — until the source of the player begun in its
+/// place has taken the picture over, which the loop ends it for (see `retire_replaced_player`).
+/// Ending it first would leave the pin's band showing the desktop for as long as the new player
+/// takes to open the file, seek, and put a window up, which on a 1440p file is long enough to read
+/// as a flash, and which is why nothing here goes through `stop_video_playback`: that call is for
+/// a player that has ended, and this one has not.
 ///
 /// What *is* stopped is the media's own background work, which belongs to the player being
 /// replaced and has nothing to do with whether that player is still there.
-/// What is *not* done here is a wait for the new player's window, and the reason is the order of
-/// the two players: the one being replaced is parked rather than ended, so that its window is on
-/// screen until the one replacing it has a window of its own (see `retire_replaced_player`).
 ///
 /// `holding` is a decision this function does not make for itself, because it is not the function's
 /// business. A seek, a resize settling and a change of track are all relaunches of a file that is
@@ -165,9 +238,47 @@ pub(super) fn restart_pinned_player(
     content: ScreenRegion,
     seconds: f64,
     holding: bool,
+    reason: RestartReason,
+) {
+    relaunch_pinned_player(path, content, seconds, holding, false, reason);
+}
+
+/// Begin the pin's player on the very frame the hover is showing, and hold that hover there until
+/// the pin can show the same one.
+///
+/// It is the relaunch above with the one difference a take-up from a hover has: the player being
+/// replaced is the hover's, and it is the picture on screen until the pin's own player has drawn
+/// that frame. So it is **frozen** where it stands rather than retired for the loop to end (see
+/// `pin_film_host::FrozenHover`), the second it froze at is **read back off the player** rather than
+/// estimated from this app's clock, and the player begun in its place is begun standing on that
+/// second rather than playing from it (see `video_launch::mpv_args` and
+/// `pin_film_host::settle_pin_handover`).
+pub(super) fn begin_the_pinned_film_at_the_hovers_frame(
+    path: &PathBuf,
+    content: ScreenRegion,
+    seconds: f64,
+    holding: bool,
+) {
+    relaunch_pinned_player(path, content, seconds, holding, true, RestartReason::Engine);
+}
+
+/// The relaunch both roads above are, where `handover` says the player being replaced is a hover's.
+fn relaunch_pinned_player(
+    path: &PathBuf,
+    content: ScreenRegion,
+    seconds: f64,
+    holding: bool,
+    handover: bool,
+    reason: RestartReason,
 ) {
     #[cfg(test)]
-    RESTART_COUNT.fetch_add(1, Ordering::AcqRel);
+    {
+        RESTART_COUNT.fetch_add(1, Ordering::AcqRel);
+    }
+    LAST_RESTART_REASON.store(reason.code(), Ordering::SeqCst);
+    // **Every relaunch says why it happened, in one line**, so a pid that changed can be read
+    // against the user action that asked for it. A player that changes with no line here is a
+    // bug, and the words are exactly the actions that need one (see `RestartReason`).
 
     let width = (content.2 - content.0).max(1);
     let height = (content.3 - content.1).max(1);
@@ -187,18 +298,53 @@ pub(super) fn restart_pinned_player(
     // being confirmed does, so it still names the process that was there a moment ago.
     let replaced = VIDEO_PID.load(Ordering::SeqCst);
 
-    // A relaunch begun while another is still in flight behind the cover supersedes it — and the
-    // unpublished one is killed BEFORE the replacement is spawned rather than after it. A spawn
-    // first leaves a start-to-kill window in which the stale player can still publish: its window
-    // arrives, the monitor finds it, and something shows it at a stale box beside its replacement.
-    // Killed first, it is dying before its replacement exists. Only a confirmed kill clears the
-    // record; a kill not yet taken stays pending and the settle keeps the cover standing while it
-    // asks again (see `reap_superseded_relaunch`).
+    // **The picture on screen is covered before anything is begun over it**, and which cover it is
+    // is the run's own setting (see `FreezeRoad`). `dc` takes the frame out of the source window's
+    // own device context at this release — about a millisecond — paints it into the host's retained
+    // cover, flushes, lets the registration go and ends the player at once, so its file, sound device
+    // and GPU device are free before the replacement exists. A frame too dark to be a picture paints
+    // nothing and leaves the player playing, which is `off` for that relaunch (see
+    // `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`).
+    //
+    // **A take-up from a hover is not this road**: the hover's player is the picture the pin's own
+    // player stands on and must live until it does, so it is held rather than replaced by a still
+    // (see `begin_the_pinned_film_at_the_hovers_frame`).
+    let still_stands = match (freeze_road(), handover) {
+        (FreezeRoad::Dc, false) => {
+            pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc(replaced, seconds)
+        }
+        // **A hover is held, whatever the run's cover road is**: its player is the frame the pin's is
+        // begun on and is read back before it is let go of, so it is never replaced by a still of this
+        // app's (see `begin_the_pinned_film_at_the_hovers_frame`).
+        (_, true) => {
+            freeze_the_outgoing_picture(replaced);
+            false
+        }
+        (FreezeRoad::Off, false) => false,
+    };
+    if still_stands {
+        // **The player the still was taken of is ended before its replacement is begun**, and the
+        // still is what keeps the band from being the host's black: nothing of the player is on
+        // screen any more, so the retirement road's order — nothing ended until its replacement
+        // stands — has nothing left to protect here (see `video_retire::retire_orphaned_player`).
+        retire_orphaned_player(replaced);
+        if replaced != 0 {
+            note_pin_trace!("outgoing player ended at once pid {replaced}");
+        }
+    }
+
+    // **A relaunch is a new generation**, so a replacement an earlier one began can never publish
+    // under this one, and the unpublished one is killed BEFORE this replacement is spawned rather
+    // than after it. A spawn first leaves a start-to-kill window in which the stale player can
+    // still publish: its window arrives, the monitor finds it, and something shows it at a stale
+    // box beside its replacement. Killed first, it is dying before its replacement exists. Only a
+    // confirmed kill clears the record; a kill not yet taken stays pending and the next launch asks
+    // again (see `reap_superseded_relaunch`).
+    PIN_PLAYER_GENERATION.fetch_add(1, Ordering::AcqRel);
     let killed = reap_superseded_relaunch();
 
-    // The handle is taken and the process left alone, which is the whole of what "parked" means for
-    // the media: nothing else in here can reach the player, so the only thing that can end it is
-    // the loop that was told about it.
+    // The handle is taken and the process left alone: nothing else in here can reach the player, so
+    // the only thing that can end it is the loop that was told about it.
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(media) = current.as_mut() {
             media.cancel_background_work();
@@ -206,15 +352,44 @@ pub(super) fn restart_pinned_player(
         }
     }
 
-    // The player being parked keeps nothing back: the pipe a command would go down is the
-    // replacement's once one is named, and the parked player's name is not reusable (see
-    // `mpv_ipc`).
+    // **A hover's second is read off the player rather than counted by this app**, and the read is
+    // asked after the freeze above and before the pipe is dropped: the frame the user is looking at
+    // is mpv's own last one, and the clock this app keeps is an estimate of where that frame is —
+    // good enough to begin a film on and not good enough to *stand* one on, which is what the
+    // handover asks (see `pin_film_host::the_hosted_frame_is_presented`). A read that does not
+    // answer leaves the estimate as the second to begin on, which is the launch this road had before
+    // the hover was frozen at all.
+    let frozen = if handover {
+        freeze_the_hover(replaced)
+    } else {
+        None
+    };
+    let seconds = frozen.unwrap_or(seconds);
+
+    // The player being replaced keeps nothing back: the pipe a command would go down is the
+    // replacement's once one is named, and the replaced player's name is not reusable (see
+    // `mpv_ipc`). The frozen hover's last line is the one above — what is left for it is a kill,
+    // not a command (see `pin_film_host::retire_the_frozen_hover`).
     mpv_ipc::forget_pipe(replaced);
 
     let process = start_video_playback(
-        path, content.0, content.1, width, height, seconds, volume, subtitle,
+        path, content.0, content.1, width, height, seconds, handover, volume, subtitle, None,
     );
     let pid = process.as_ref().map(|player| player.id()).unwrap_or(0);
+    note_pin_trace!(
+        "player restarted for {} from {replaced} to {pid}",
+        reason.as_str()
+    );
+
+    // **A copy the film was waiting on rides this relaunch.** The launch names the film's copy in its
+    // filter chain out of the film's own geometry, so this one line is the whole of what the preload
+    // costs the relaunch it waited for (see `preload_the_subtitles_for_the_next_relaunch`).
+    if take_the_pending_subtitles(path) {
+        note_pin_trace!(
+            "subtitle carried into a relaunch pid {pid} file {}",
+            path_name(path)
+        );
+    }
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(media) = current.as_mut() {
@@ -222,15 +397,32 @@ pub(super) fn restart_pinned_player(
         }
     }
 
-    // The player being replaced is parked once the replacement exists, and it is parked *and
-    // running* — a relaunch that ended it instead would leave the band empty for the whole of the
-    // wait below, and the wait is as long as a player takes to open the file.
+    // **The player being replaced is retired once the replacement exists**, and it is retired *and still
+    // standing* — a relaunch that ended it instead would leave the band empty for the whole of the
+    // wait, and the wait is as long as a player takes to open the file. A player a still was taken of
+    // has already been ended and has nothing left to wait on (see `still_stands`); a freeze is a frame
+    // it holds there, not a film still playing (see `freeze_the_outgoing_picture`).
     if pid != 0 {
         // ...unless it is the superseded one just killed: nothing waits on its arrival and
         // nothing will ever show it.
         if killed != Some(replaced) {
-            retire_replaced_player(replaced, pid);
+            if handover {
+                // **The hover stays the picture until the pin has drawn it.** What retires it is the
+                // handover, once the pin's window is up over the same frame; ending it here would
+                // leave the band the desktop for as long as the pin's player takes to open the file
+                // and decode, which is the flash the whole wait exists to keep out (see
+                // `pin_film_host::settle_pin_handover`).
+                pin_film_host::hold_the_hover_for_the_handover(replaced, seconds);
+            } else if !still_stands {
+                retire_replaced_player(replaced, pid);
+            }
         }
+    } else if handover {
+        // A pin's player that did not come up leaves no swap to make, so the hover it froze is ended
+        // here rather than left frozen for a handover that is never going to happen — the same road
+        // an unconfirmed kill goes down, and the only one that can end a player this app has stopped
+        // holding (see `retire_orphaned_player`).
+        retire_orphaned_player(replaced);
     } else {
         // A replacement that did not come up leaves nothing to arrive, so the player on screen is
         // ended here instead of waiting for an arrival that is never going to happen — which is the
@@ -240,35 +432,149 @@ pub(super) fn restart_pinned_player(
 
     // The window the new player puts up is placed by the tick, which re-asserts it every two
     // hundred milliseconds; a seek is one window gone and another arriving, so it is asked for
-    // now rather than at the next of those.
+    // now rather than at the next of those. **It is a place and not a show for a film drawn in the
+    // pin's host**: the host is up already and the registration standing in it is the picture, so
+    // this cannot put a window that has decoded nothing in front of one that is still drawing (see
+    // `show_current_replacement`).
     //
-    // **But not while a park stands, and that is the second flash this WS is about.** The call is a
-    // show as well as a place (see `ensure_video_window_topmost`), and a replacement that has not
-    // opened its file yet has a window within milliseconds of being begun — so a relaunch behind a
-    // resize's park put an empty window in front of the placeholder for the whole of the decode,
-    // and the band was opaque for every one of those milliseconds and did not matter. The settle
-    // is what puts a replacement up, in the same tick it takes the flag down (see
-    // `settle_pinned_park`), so nothing is left on screen but the frame the drag was holding.
-    //
-    // **And not a superseded generation either** (see `show_current_replacement`): a newer
-    // gesture's bump kills the in-flight relaunch, and a bump landing between the tag below and
-    // this show is re-checked after it — the condemned window hidden again rather than left
-    // published — with the residual stated honestly where the helper is.
+    // **And not a superseded generation either** (see `show_current_replacement`): a newer step's
+    // bump kills the in-flight relaunch, and a bump landing between the tag below and this show is
+    // re-checked after it — the condemned window hidden again rather than left published — with the
+    // residual stated honestly where the helper is.
     note_pinned_relaunch(pid);
-    if !pin_player_is_parked() {
-        show_current_replacement(pid, content);
-    }
+    show_current_replacement(pid, content);
 
     update_pin_transport(|transport| transport.begun(seconds, pid != 0, holding));
     with_pin(|pin| pin.volume.playing_at = volume);
+}
 
-    // A relaunch is also how a drag's parking is undone, and it is undone by the same question as
-    // everywhere else: a player's window has to be there for the band to be a hole again, and the
-    // player just begun is running and has no window yet. So this is the settle rather than a write
-    // — which is what keeps the band this app's to fill, holding the last frame scaled to the box
-    // the drag settled on, for as long as the replacement takes to put a window up
-    // (see `settle_pinned_park`).
-    settle_pinned_park();
+/// Hold the hover where it stands and read back the second its picture is at.
+///
+/// **The freeze is the hold the relaunch already made** (see `freeze_the_outgoing_picture`), and what
+/// is left here is the read: mpv leaves the frame it was showing on screen when it is told to hold (and
+/// a suspended player is not told anything at all), so the hover window the user is looking at keeps
+/// that frame for as long as the take-up takes — nothing is captured, nothing is painted over it, and
+/// nothing hides it (see `begin_the_pinned_film_at_the_hovers_frame`).
+///
+/// `None` where the player did not answer with its position, which leaves the caller's own clock as
+/// the second to begin the pin on: a frozen picture this app cannot read is still a frozen picture,
+/// and the launch is the one it would have been before the read existed (see
+/// `mpv_ipc::get_property`).
+fn freeze_the_hover(pid: u32) -> Option<f64> {
+    mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse().ok())
+}
+
+/// **Hold the player being replaced where it stands** — the cover a take-up from a hover asks for,
+/// and nothing else: no capture, no scaling, no painting over the band and no hide. The registration
+/// the host wears goes on drawing that window (see `pin_film_thumbnail::the_source_is_standing`), and
+/// a player that is held keeps the frame it was showing. The player is never resumed: it is ended
+/// once its replacement has taken the picture over (see `settle_video_retirement`).
+///
+/// **Only a take-up from a hover comes here**, because the hover's own player is the frame the pin's
+/// player is begun on and cannot be ended before it is read (see
+/// `begin_the_pinned_film_at_the_hovers_frame`). A pin's own relaunch paints a still of its own and
+/// ends the player at once (see `FreezeRoad`).
+///
+/// **The two engines are held differently, and the difference is what each can be told.** mpv takes
+/// `set_property pause true` down the pipe it listens on and holds its last frame. FFmpeg's player has
+/// no command channel, so it is **suspended** where it stands instead: it stops drawing without being
+/// given anything to redraw (see `ffplay_window::suspend_player_threads`).
+///
+/// **And whether the frame survived is sampled on the spot**, of the player's own client, so a run
+/// says whether the picture DWM goes on drawing is really there (see
+/// `pin_film_thumbnail::the_sources_picture_is_lit`).
+///
+/// Answers whether a player on screen was frozen, which is nothing on screen where the player had no
+/// window of its own to be told through: that wait is the walk-and-jump it always was rather than a
+/// failure.
+pub(super) fn freeze_the_outgoing_picture(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    if mpv_ipc::set_paused(pid, true) {
+        note_pin_trace!("outgoing picture frozen pid {pid} by the pipe");
+        return true;
+    }
+
+    // **An engine with no command channel is suspended rather than told**: the handful of calls that
+    // stop it drawing is the whole of the hold, and the frame it last put up is left exactly where it
+    // is.
+    let threads = suspend_player_threads(pid);
+    if threads == 0 {
+        return false;
+    }
+
+    let sample = match pin_film_thumbnail::the_sources_picture_is_lit(pid) {
+        Some(true) => "ok",
+        Some(false) => "black",
+        None => "none",
+    };
+    note_pin_trace!("outgoing picture frozen pid {pid} suspended threads {threads} sample {sample}");
+    true
+}
+
+/// The road a relaunch covers its outgoing player by, from `RHP_FREEZE`, read once per run.
+///
+/// **`dc` is the road that ships, and it is what an unset or unknown value means.** The still is
+/// taken out of the source window's own device context at the release — one `BitBlt`, about a
+/// millisecond, from the surface the player itself draws into — painted into the host's retained
+/// cover, flushed, the registration let go and the outgoing player ended, in that order (see
+/// `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`). A frame whose sampled grid is not
+/// lit enough to be a picture is never painted: that relaunch is `off`, with nothing unregistered and
+/// nothing ended, so this road can lose a cover but cannot paint the black band it exists to prevent.
+///
+/// **`off` covers nothing**, which is the road before there was a cover at all: the film walks on
+/// under the registration and jumps back to the second the relaunch asked for when the new source
+/// draws. It is the only other arm, and it is also what a rejected capture falls back to for that one
+/// relaunch.
+///
+/// The roads this build used to carry — `capture`, `still`, `suspend`, `key` and `hide` — are gone
+/// with the measurement that killed each, and the seek road table in `ARCHITECTURE.md` keeps them so
+/// nobody rebuilds one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FreezeRoad {
+    Off,
+    Dc,
+}
+
+/// `RHP_FREEZE` as a cover road: `off` is the only named arm, and anything else — including nothing
+/// at all, and any value this build does not know — is `dc` (see `FreezeRoad`), because a value the
+/// build cannot read must not silently turn the cover off.
+pub(super) fn freeze_road_from(setting: Option<&str>) -> FreezeRoad {
+    match setting.map(str::trim) {
+        Some("off") => FreezeRoad::Off,
+        _ => FreezeRoad::Dc,
+    }
+}
+
+/// The freeze road this run was begun on: a question about the run rather than about a relaunch, so
+/// it is read once and every relaunch of the run agrees on it (see `FreezeRoad`).
+static FREEZE_ROAD: Lazy<FreezeRoad> =
+    Lazy::new(|| freeze_road_from(std::env::var("RHP_FREEZE").ok().as_deref()));
+
+/// The freeze road of this relaunch: the run's own, or the answer a test stood in (see
+/// `stand_the_freeze_road_in`).
+pub(super) fn freeze_road() -> FreezeRoad {
+    #[cfg(test)]
+    if let Some(road) = FREEZE_ROAD_STAND_IN.lock().ok().and_then(|held| *held) {
+        return road;
+    }
+    *FREEZE_ROAD
+}
+
+/// The road a test is answered with in place of the run's own, which `RHP_FREEZE` names and a suite
+/// does not set (see `freeze_road`).
+#[cfg(test)]
+static FREEZE_ROAD_STAND_IN: Mutex<Option<FreezeRoad>> = Mutex::new(None);
+
+/// Stand a freeze road in place of the run's own, or give the run's own answer back with `None`, so
+/// each test puts the slot back rather than leaving it to the test the runner reaches next.
+#[cfg(test)]
+pub(super) fn stand_the_freeze_road_in(road: Option<FreezeRoad>) {
+    if let Ok(mut held) = FREEZE_ROAD_STAND_IN.lock() {
+        *held = road;
+    }
 }
 
 /// Whether the pinned window is showing a held file, for a relaunch that has no transport of its
@@ -279,183 +585,6 @@ pub(super) fn pinned_is_held() -> bool {
     pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin.transport.paused_at.is_some()))
         .unwrap_or(false)
-}
-
-/// What a gesture's press writes down before it kills the player: everything
-/// the end's one relaunch is made of, and the clock frozen at the second it
-/// resumes from.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct GestureSnapshot {
-    /// The playhead second the press read: the relaunch's `-ss`, and what the
-    /// band is drawn at until the swap (see `pin_playhead`).
-    pub(super) seconds: f64,
-    /// The level the press found: kept for the record, while the relaunch
-    /// reads the latest — rapid steps are owed to the end, not the press.
-    pub(super) level: u32,
-    /// The subtitle track the press found: gestures never move it, so the
-    /// relaunch names what is still standing.
-    pub(super) subtitle: Option<usize>,
-    /// The content box the press found: the end relaunches at the final one,
-    /// this is what a press that never moves ends at.
-    pub(super) content: ScreenRegion,
-    /// The film was playing when the hand landed: the gesture's claim, and
-    /// what the swap releases without a key.
-    pub(super) was_playing: bool,
-    /// The film was already held when the hand landed: the end relaunch
-    /// carries it, and the loop delivers it through the new window.
-    pub(super) was_held: bool,
-}
-
-/// The press's snapshot, while a gesture owns the dead interval: set by
-/// `gesture_press_freeze`, taken once by the gesture's end.
-static GESTURE_SNAPSHOT: Lazy<Mutex<Option<GestureSnapshot>>> = Lazy::new(|| Mutex::new(None));
-
-/// Whether a gesture owns the dead interval: the press killed and the end has
-/// not relaunched yet. Every tick-side reconcile that would unfreeze the
-/// clock, take back the claim or move the aim answers out of the hand while
-/// this stands.
-pub(super) fn gesture_snapshot_active() -> bool {
-    GESTURE_SNAPSHOT
-        .lock()
-        .ok()
-        .and_then(|held| *held)
-        .is_some()
-}
-
-/// Take the press's snapshot, disarming the dead interval: the end's one
-/// relaunch owns what this answers, and a second end finds nothing.
-pub(super) fn take_gesture_snapshot() -> Option<GestureSnapshot> {
-    GESTURE_SNAPSHOT
-        .lock()
-        .ok()
-        .and_then(|mut held| held.take())
-}
-
-/// Whether the end relaunches held: only a film the hand found held.
-/// A film that was playing relaunches playing, never paused: ffplay starts
-/// playing, so no key is owed and the swap has nothing to release. A paused
-/// intermediate for a playing film flickers the bar and strands paused on a
-/// spawn failure or an abandoned cover.
-pub(super) fn gesture_end_holding(_was_playing: bool, was_held: bool) -> bool {
-    was_held
-}
-
-/// Snapshot the playhead and freeze the clock: the press of every gesture
-/// that kills.
-///
-/// The write is `paused_at = snapshot`, `started = None`, `pending_hold =
-/// false`, the gesture's claim iff the film was playing — and the aim left
-/// standing, which is what a seek's scrub moves and `held` would clear. The
-/// clock reads the snapshot for the whole dead interval, because there is no
-/// start left to count one from.
-///
-/// Idempotent: a press over a standing snapshot stays on the kill road and
-/// writes nothing. A press with no player to kill, no pin up, or no second
-/// to read refuses: the legacy road owns those.
-pub(super) fn gesture_press_freeze() -> bool {
-    if gesture_snapshot_active() {
-        return true;
-    }
-    if current_media_type() != Some(MediaType::Video) {
-        return false;
-    }
-    if VIDEO_PID.load(Ordering::Acquire) == 0 {
-        return false;
-    }
-
-    let Some((path, content, transport, volume)) = pinned_playback_state() else {
-        return false;
-    };
-
-    // mpv is told what to do while it runs, so nothing here ends its player: a volume, a seek and
-    // a resize are commands written down its pipe rather than a player killed and begun again (see
-    // `mpv_ipc`). The kill road below — a snapshot, a killed player and one relaunch at the end —
-    // is FFmpeg's player's alone, whose player reports nothing and can be told nothing.
-    if video_route(&path) == VideoRoute::Mpv {
-        return false;
-    }
-
-    let Some(seconds) = pin_playhead(&transport) else {
-        return false;
-    };
-    let was_playing = pin_is_playing(&transport);
-    let was_held = transport.paused_at.is_some();
-
-    update_pin_transport(|state| {
-        let aim = state.seeking;
-        state.started = None;
-        state.paused_at = Some(seconds);
-        state.pending_hold = false;
-        state.drag_held = was_playing;
-        state.seeking = aim;
-    });
-
-    GESTURE_SNAPSHOT
-        .lock()
-        .map(|mut held| {
-            held.replace(GestureSnapshot {
-                seconds,
-                level: volume.level,
-                subtitle: transport.subtitle,
-                content,
-                was_playing,
-                was_held,
-            })
-        })
-        .is_ok()
-}
-
-/// The end relaunch of a gesture that killed: exactly one
-/// `restart_pinned_player` at the snapshot second, the box the hand left
-/// behind, the latest level, the snapshot subtitle — carrying was-held only.
-/// A playing film relaunches playing with nothing owed; a held film carries
-/// its hold for the loop to deliver through the new window.
-///
-/// The snapshot is *taken* here, not read: letting go of the pointer
-/// re-enters `pin_capture_lost` synchronously through `WM_CAPTURECHANGED`
-/// before the end that let go of it relaunches, so a read relaunches twice
-/// — once on the way in and once on the way out. The take makes the two ends
-/// one relaunch whichever order they run in: the first takes the snapshot
-/// and relaunches, the second finds nothing and no-ops.
-///
-/// Answers whether one was made: a press that never froze, or an end that
-/// lost the take to its own re-entrant twin, ends nothing here.
-pub(super) fn relaunch_gesture_kill_at(content: ScreenRegion) -> bool {
-    relaunch_gesture_end_at(content, None)
-}
-
-/// The end relaunch with the second it carries named: a seek's release names
-/// its aim, every other end the snapshot second.
-///
-/// Whichever end runs first — the capture-lost re-entered from the release,
-/// or the release itself — takes the snapshot and relaunches once at
-/// `aim.unwrap_or(snapshot.seconds)`; the other finds the take already spent
-/// and relaunches nothing. A single relaunch at the aimed second is what
-/// makes the order irrelevant: a stale snapshot second never reaches a
-/// player while an aim is standing.
-pub(super) fn relaunch_gesture_end_at(content: ScreenRegion, aim: Option<f64>) -> bool {
-    let Some(snapshot) = take_gesture_snapshot() else {
-        return false;
-    };
-    let Some((path, _, _, _)) = pinned_playback_state() else {
-        return false;
-    };
-
-    restart_pinned_player(
-        &path,
-        content,
-        aim.unwrap_or(snapshot.seconds),
-        gesture_end_holding(snapshot.was_playing, snapshot.was_held),
-    );
-    true
-}
-
-/// Give up the press's snapshot where no relaunch is behind the cover: the
-/// player the end just asked for never came up, so no swap will take it.
-pub(super) fn disarm_gesture_if_no_relaunch() {
-    if pending_pinned_relaunch().is_none() {
-        take_gesture_snapshot();
-    }
 }
 
 /// The subtitle track a pinned window is showing, out of what the probe read of the file on
@@ -522,11 +651,6 @@ pub(super) fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, second
                 update_pin_transport(|transport| {
                     transport.sought(seconds);
                     transport.started = Some((Instant::now(), seconds));
-                    // The gesture's claim is taken back here rather than left to the swap: a press
-                    // on the bar claims nothing — it takes the aim and tells the player nothing (see
-                    // `pinned_transport_press`) — and a claim standing after a gesture is one the
-                    // *next* film to be dragged is answered with (see `PinTransport::drag_held`).
-                    transport.drag_held = false;
                 });
                 // And the clock a *pass* is measured by is moved with the bar, because a seek
                 // down this road is a command to a player that goes on running rather than a
@@ -535,17 +659,26 @@ pub(super) fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, second
                 // into the last moments of a film would be undone by the next tick, which wraps
                 // the film back to zero (see `rebase_video_loop_clock_to`).
                 video_hw::rebase_video_loop_clock_to(VIDEO_PID.load(Ordering::SeqCst), seconds);
+                // **And the one bounded read that says what the seek's frame is drawn from**: a seek
+                // in place moves the picture inside a source whose client is the one placement's, and
+                // a frame drawn smaller than the pin's box there would be a number in this line (see
+                // `pin_film_thumbnail::note_the_seek_picture`).
+                pin_film_thumbnail::note_the_seek_picture(
+                    VIDEO_PID.load(Ordering::SeqCst),
+                    seconds,
+                );
             } else {
-                // **A pipe this app could not write to is the relaunch road after all**, and a player
-                // ended with no cover over the band is a hole in the desktop shaped like a film. The
-                // cover is raised here, where the end is decided, and the settle hands the band to the
-                // player that replaces this one (see `park_pinned_player_for_seek`).
-                let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
-                let origin = window_origin(hwnd)
-                    .map(|origin| (origin.0, origin.1))
-                    .unwrap_or((content.0, content.1));
-                park_pinned_player_for_seek(hwnd, origin);
-                restart_pinned_player(path, content, seconds, pinned_is_held());
+                // **A pipe this app could not write to is the relaunch road after all**, and the
+                // player on screen is left running behind it: the registration standing in the host
+                // is the picture until the replacement's own source takes it over, and only then is
+                // the old player ended (see `relaunch_pinned_player`).
+                restart_pinned_player(
+                    path,
+                    content,
+                    seconds,
+                    pinned_is_held(),
+                    RestartReason::Seek,
+                );
             }
         }
         _ => {}
@@ -648,7 +781,7 @@ pub(super) fn toggle_pinned_playback(
                 // picture through. The pass the press asks for is therefore a new player at the top,
                 // which is the same relaunch a seek on that route is (see `restart_pinned_player`).
                 if finished && !mpv {
-                    restart_pinned_player(path, content, from, false);
+                    restart_pinned_player(path, content, from, false, RestartReason::End);
                 } else if hold_the_player(false) {
                     update_pin_transport(|state| state.released(from));
                     // And the clock a pass is measured by moves onto the second the film is played
@@ -660,7 +793,7 @@ pub(super) fn toggle_pinned_playback(
                     // A player begun to resume a file is not one to be told to hold, or the press
                     // would arrive twice over: once here, and once as a hold the relaunch owed. So
                     // the relaunch is told, at its own call site, that this is a file being let go.
-                    restart_pinned_player(path, content, from, false);
+                    restart_pinned_player(path, content, from, false, RestartReason::Engine);
                 }
             }
         }
@@ -738,7 +871,88 @@ pub(super) fn step_pinned_subtitle() {
         content,
         pinned_playhead().unwrap_or(0.0),
         transport.paused_at.is_some(),
+        RestartReason::Subtitle,
     );
+}
+
+/// Hand a film's copied subtitles to the player that is drawing it, where that player can be told.
+///
+/// **This is the whole of what a late copy costs a film mpv plays: nothing.** The copy is a whole
+/// subtitle with no streams of its own, mpv takes it down its pipe and draws it, and the player, its
+/// window and its picture never move — so there is no black frame, and no second decode of the film
+/// (see `mpv_ipc::add_subtitles`). FFmpeg's player has no pipe to be told on and answers `false` here,
+/// which is what leaves the relaunch as its answer.
+fn add_the_subtitles_to_the_player(path: &Path, pid: u32, track: Option<usize>) -> bool {
+    if video_route(path) != VideoRoute::Mpv {
+        return false;
+    }
+    let Some(copy) = video_subtitle_copy(path, track) else {
+        return false;
+    };
+    if !mpv_ipc::add_subtitles(pid, &copy) {
+        return false;
+    }
+    note_pin_trace!(
+        "subtitle added without a restart pid {pid} file {}",
+        path_name(&copy),
+    );
+    true
+}
+
+/// The film whose ready copy of its subtitles has not been drawn yet: **a preload for the next
+/// relaunch**, because the engine that cannot be told can only be given a copy by being begun again,
+/// and a player begun again for a copy alone is a second decode and a picture that changes hands for a
+/// subtitle (see `preload_the_subtitles_for_the_next_relaunch`).
+static PRELOADED_SUBTITLES: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+
+/// Write a film's ready copy down as **pending for its next relaunch**, and say so.
+///
+/// It is the whole of what a late copy costs a film FFmpeg's player draws. That player can be told
+/// nothing, so a copy can only reach the picture by the player being begun again — and a player begun
+/// again for the copy alone changes the picture's hands and decodes the file a second time for a
+/// subtitle nobody asked for at that moment. What the copy does instead is wait: a launch builds its
+/// filter chain out of the film's own geometry, which already names the copy once the extraction has
+/// written it (see `video_launch::subtitle_filter`), so the *next* relaunch for a reason of the user's
+/// — a seek, a level, a track, an engine — draws it on the way past (see `take_the_pending_subtitles`).
+///
+/// This is the "preload in the background, activate at the next seek" a copy was asked for, and it is
+/// why a film with a pending copy is never begun again on the copy's own account (see
+/// `reload_pinned_subtitles`).
+fn preload_the_subtitles_for_the_next_relaunch(path: &Path) {
+    let already = PRELOADED_SUBTITLES
+        .lock()
+        .ok()
+        .and_then(|pending| pending.clone());
+    if already.as_deref() == Some(path) {
+        return;
+    }
+    if let Ok(mut pending) = PRELOADED_SUBTITLES.lock() {
+        *pending = Some(path.to_path_buf());
+    }
+    note_pin_trace!(
+        "subtitle preloaded for the next relaunch file {}",
+        path_name(path),
+    );
+}
+
+/// Take a film's pending copy where it is this film's: the relaunch that carries it into the picture.
+fn take_the_pending_subtitles(path: &Path) -> bool {
+    let Ok(mut pending) = PRELOADED_SUBTITLES.lock() else {
+        return false;
+    };
+    if pending.as_deref() != Some(path) {
+        return false;
+    }
+    *pending = None;
+    true
+}
+
+/// Forget the film whose copy is waiting for a relaunch, so each test carries its own.
+#[cfg(test)]
+pub(super) fn clear_pending_subtitles() {
+    if let Ok(mut pending) = PRELOADED_SUBTITLES.lock() {
+        *pending = None;
+    }
 }
 
 /// Begin a pinned window's player again so a film's own subtitles, copied out of it a moment
@@ -749,22 +963,28 @@ pub(super) fn step_pinned_subtitle() {
 /// user's own choice, and the small files are what the hover *after* it draws (see
 /// `video_launch::subtitle_filter`). A pinned window is a different answer: the user has said
 /// with the pin that this film is the one being watched, so what its player was handed is worth
-/// correcting the moment it can be, and a player replaced at the second the bar is showing is
-/// the same relaunch a track change already is (see `restart_pinned_player`). What the swap
-/// costs is the blink every other relaunch costs, and the window is the pin's throughout.
+/// correcting the moment it can be — and the way it is corrected is that the copy **rides the next
+/// relaunch**: the picture is not changed hands and the film is not decoded a second time for a
+/// subtitle (see `preload_the_subtitles_for_the_next_relaunch`).
 ///
 /// Everything else is refused rather than attempted: no pin, a pin on another file, a pin whose
 /// media is not a film this app plays with FFmpeg (the engine's own videos are not this app's to
 /// reload, and no extraction runs for one), and a pin whose file has no player up are all
 /// nothing to begin again.
 ///
-/// Answers whether a player was begun again, which is what the tests read.
+/// **mpv is never begun again for this**, which is the difference the pipe makes: the copy is handed to
+/// the player that is drawing the film (see `add_the_subtitles_to_the_player`), so the line above is
+/// the relaunch road and not this one. FFmpeg's player is begun again for nothing at all: the copy is
+/// preloaded and rides the next relaunch the user asks for (see
+/// `preload_the_subtitles_for_the_next_relaunch`).
+///
+/// Answers whether the copy was answered at all, which is what the tests read.
 pub(super) fn reload_pinned_subtitles(path: &Path) -> bool {
     if current_media_type() != Some(MediaType::Video) {
         return false;
     }
 
-    let Some((pinned, content, transport, _)) = pinned_playback_state() else {
+    let Some((pinned, _, transport, _)) = pinned_playback_state() else {
         return false;
     };
 
@@ -772,12 +992,21 @@ pub(super) fn reload_pinned_subtitles(path: &Path) -> bool {
         return false;
     }
 
-    restart_pinned_player(
+    if add_the_subtitles_to_the_player(
         &pinned,
-        content,
-        pinned_playhead().unwrap_or(0.0),
-        transport.paused_at.is_some(),
-    );
+        VIDEO_PID.load(Ordering::SeqCst),
+        transport.subtitle,
+    ) {
+        return true;
+    }
+    if video_route(&pinned) == VideoRoute::Mpv {
+        // A film mpv plays is never begun again for its subtitles: the pipe is the whole of what the
+        // copy needs, and a relaunch is the black frame this road removed (see
+        // `add_the_subtitles_to_the_player`).
+        return false;
+    }
+
+    preload_the_subtitles_for_the_next_relaunch(&pinned);
 
     true
 }
@@ -796,13 +1025,14 @@ pub(super) fn reload_pinned_subtitles(path: &Path) -> bool {
 /// `player_draws_subtitles`).
 ///
 /// A film whose copy is still coming is deliberately not this: there is nothing to draw yet,
-/// and the message will find the pin when there is.
+/// and the message will find the pin when there is. And the correction is a preload rather than a
+/// relaunch (see `preload_the_subtitles_for_the_next_relaunch`).
 pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
     if current_media_type() != Some(MediaType::Video) {
         return false;
     }
 
-    let Some((pinned, content, transport, _)) = pinned_playback_state() else {
+    let Some((pinned, _, transport, _)) = pinned_playback_state() else {
         return false;
     };
 
@@ -810,18 +1040,130 @@ pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
         return false;
     }
 
-    if !video_copy_ready(path) || player_draws_subtitles(path) {
+    if !video_copy_ready(path) {
         return false;
     }
 
-    restart_pinned_player(
+    // **A player that can be told is told**, and this is the road where a copy lands on a player that
+    // predates it: mpv takes the file down its pipe with no relaunch at all (see
+    // `add_the_subtitles_to_the_player`).
+    if add_the_subtitles_to_the_player(
         &pinned,
-        content,
-        pinned_playhead().unwrap_or(0.0),
-        transport.paused_at.is_some(),
-    );
+        VIDEO_PID.load(Ordering::SeqCst),
+        transport.subtitle,
+    ) {
+        return true;
+    }
+    if video_route(&pinned) == VideoRoute::Mpv {
+        return false;
+    }
+
+    if player_draws_subtitles(path) {
+        return false;
+    }
+
+    // **A player that cannot be told preloads the copy rather than being begun again**, whether it is
+    // the player its own launch began or one a hover's host was taken up with: the film keeps the
+    // picture it has, and the copy rides the next relaunch of the user's (see
+    // `preload_the_subtitles_for_the_next_relaunch`).
+    preload_the_subtitles_for_the_next_relaunch(&pinned);
 
     true
+}
+
+/// Move the hover's already-running host into the pin, and give the film the pin's level.
+///
+/// **Nothing is begun and nothing is frozen.** The player in the host is the one that was drawing
+/// the hover: the same child — or, on the thumbnail road, the same source window, which the Shell
+/// draws into the very host that becomes the pin's — the same pid, the same playhead. What changes is
+/// the box the picture is cropped to and the level the pin plays it at; the transport was already
+/// written at the take-up from `video_loop_playhead`, so the bar continues from where the hover had
+/// reached rather than from a frozen second.
+pub(super) fn adopt_the_hovered_film_in_the_host(host: HWND) -> bool {
+    unsafe { pin_film_host::take_up_the_pin_film_host(Some(host)) };
+    if pin_film_host::film_host() != Some(host) {
+        // The window went between the take-up's own reading and this call, so there is no film in
+        // the pin for the level below to be about (see `take_up_the_pin_film_host`).
+        return false;
+    }
+
+    // This also asks `aid` back where the hover was begun muted and the pin has a level to hear.
+    let volume = pinned_volume_level();
+    mpv_ipc::set_volume(VIDEO_PID.load(Ordering::SeqCst), volume);
+    with_pin(|pin| pin.volume.playing_at = volume);
+
+    true
+}
+
+/// Begin the film a pin took up from a hover in the host it is drawn in, where the player the
+/// hover began is still a window of the desktop's.
+///
+/// **A pin does not keep a hover's player for a film it draws in a window of its own.** The host is
+/// where the picture belongs from the take-up on, and a player begun before the pin existed was
+/// given a top-level window, `--ontop` and a place of its own — none of which is what a film the
+/// pin draws is. So the take-up is a relaunch, held where the film was held and at the level the
+/// pin's own bar says, with the one thing about it that a seek and a resize do not have: the hover
+/// is **frozen** where it stands, the second its picture is at is read back off the player, and the
+/// pin's player is begun **standing on that frame** rather than playing from it (see
+/// `begin_the_pinned_film_at_the_hovers_frame`).
+///
+/// So the hover's own last frame is the placeholder, and it stays the picture until the pin's player
+/// has that same frame drawn — not a window made — and the tick's handover swaps the two in one pass
+/// (see `pin_film_host::settle_pin_handover`). Nothing covers it and nothing hides it: this app's own
+/// frame there would be a guess at one mpv is already showing.
+///
+/// The player being replaced is retired by that road and not ended here: it is the picture on screen
+/// until the hosted one has the same frame in it (see `pin_film_host::FrozenHover`).
+///
+/// Nothing is begun for a film the host already holds — every show of a hosted pin would otherwise
+/// be a player begun again — and nothing for a pin with no player up at all, which is a film that
+/// has not started rather than one to move (see `pin_film_host::host_for_the_pins_film`).
+pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
+    let Some((path, content, transport, _)) = pinned_playback_state() else {
+        return false;
+    };
+
+    if !pin_film_host::the_film_is_shown_in_a_host(&path, None)
+        || pin_film_host::film_host().is_none()
+        || pin_film_host::the_pinned_player_was_begun_in_the_host()
+        || VIDEO_PID.load(Ordering::SeqCst) == 0
+    {
+        return false;
+    }
+
+    let seconds = pin_playhead(&transport).unwrap_or(0.0);
+    let holding = transport.paused_at.is_some();
+
+    // **FFmpeg's player cannot prove a frozen frame, so its take-up adopts the player the step
+    // already began.** A player this pin launched unhosted is still the right player at the right
+    // second: taking its window into the host is the same pid and no restart at zero. A player
+    // whose window has not been published yet is noted into the host here, and the monitor adopts
+    // it as it appears (see `adopt_a_stranded_ffplay_into_the_pin_host`).
+    if video_route(&path) != VideoRoute::Mpv {
+        if the_pinned_media_holds_the_player(VIDEO_PID.load(Ordering::SeqCst)) {
+            pin_film_host::adopt_a_stranded_ffplay_into_the_pin_host(
+                VIDEO_PID.load(Ordering::SeqCst),
+                &path,
+            );
+            return false;
+        }
+        // A hover's player is not the pin's: the pin begins its own, once, in the host.
+        restart_pinned_player(&path, content, seconds, holding, RestartReason::Engine);
+        return false;
+    }
+
+    begin_the_pinned_film_at_the_hovers_frame(&path, content, seconds, holding);
+    true
+}
+
+/// Whether the pin's media holds the player `pid`: a player a step of this pin began and installed
+/// rather than a hover's, which the take-up still replaces with one of the pin's own.
+fn the_pinned_media_holds_the_player(pid: u32) -> bool {
+    CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.video_process.as_ref().map(|process| process.id()))
+    }) == Some(pid)
 }
 
 /// Write an answer about the transport back into the pin, if there is still one.
@@ -1157,174 +1499,26 @@ pub(super) fn pinned_audio_duration(path: &Path) -> Option<f64> {
     audio_clock(path, None, 0.0, None).1
 }
 
-/// How long the stale frame may stand in the band before a park that has a window behind it is
-/// taken back whatever that window has decoded.
+/// The generation of the pinned player: a newer seek or step begins a new one, and every relaunch
+/// is tagged with the one that is current when it is begun.
 ///
-/// **It is a bound on a wait, not a delay, and the difference is the whole of what makes it safe.**
-/// A park that only ever swapped on a player presenting would hold the placeholder against an
-/// empty window for ever — a replacement's window is published within a few milliseconds and stays
-/// empty until the file is open and the first frame is decoded — which on a dark scene, a player
-/// that died mid-relaunch, or a machine with no decoder is a black band that never becomes a
-/// picture. The bound ends that, and it is read from the moment the park was *asked to give the
-/// band back* rather than from the park itself, because a hand can rest on an edge for minutes
-/// (see `PinParkSwap`).
-///
-/// **It does not end a park that has no window behind it, because there is nothing there to give
-/// the band to.** A band with a player standing in it is transparent and shows that player through;
-/// the same band with nothing behind it is the desktop, which is the hole this whole arrangement
-/// exists not to leave — so the bound above ends a park that has a window and nothing else, and
-/// the `no window at all` case has a bound of its own (see `PIN_PARK_COVER_TIMEOUT`).
-///
-/// 600 ms is the width of what it covers rather than a round number: a player begun on a resize
-/// release has to open the file, seek, decode hardware and present, and on a 1440p HEVC that is
-/// the few hundred milliseconds the placeholder is held for. Holding the frame the user was already
-/// looking at for that long is not a cost — it is the same picture, and it is the alternative to a
-/// black band in front of the desktop for exactly as long.
-pub(super) const PIN_PARK_SWAP_TIMEOUT: Duration = Duration::from_millis(600);
-
-/// How long a cover may stand with no player window behind it before it is given up.
-///
-/// **This is the bound that makes the whole arrangement survivable, and it exists because a cover
-/// with nothing behind it is not merely a picture that never arrives.** An opaque band is claimed by
-/// this app's own window at the compositor's hit test, so every click in the video area is answered
-/// here rather than by the player — which is the placeholder filling the video area and the
-/// next/previous button the user found under their cursor — and no road that could end the cover
-/// is reached from a press. A cover therefore has to end on a deadline of its own, whether or not a
-/// window ever arrives behind it.
-///
-/// It is twice [`PIN_PARK_SWAP_TIMEOUT`] and it is longer for a reason: the case it covers is a kill
-/// that was asked for and a replacement that has not been begun or has died, so the wait has to outlast
-/// the kill's confirmation and the next player's start — both of which are strictly longer than one
-/// decode — while still being short enough that a band nothing will ever fill cannot own a pin. What
-/// the band shows when this bound goes by is the hole it is between films, which is a picture the
-/// player fills the moment it has one, rather than an opaque rectangle nothing will.
-pub(super) const PIN_PARK_COVER_TIMEOUT: Duration = Duration::from_millis(1200);
-
-/// Whether the relaunch a cover is holding for can still arrive, which is what decides between
-/// holding the cover and giving it up.
-///
-/// **An expectation is not a fact, and this is the question that tells them apart.**
-/// `awaiting_relaunch` says a relaunch was *supposed* to be begun by a release that has not arrived.
-/// That is true for a scrub the pointer is still down on — and equally true for the residue of one
-/// whose release came, relaunched, and got no pid at all, or whose release road refused because a
-/// volume popup was in the way of the raise. Nothing will ever satisfy the second, so a cover held
-/// on it is opaque for the life of the pin: the band belongs to this app's own window at the
-/// compositor's hit test, and no press of the user's reaches a road that could end it.
-///
-/// Three things, and every one of them is read off state rather than inferred from the record:
-///
-/// * **the press's own dead-interval arm** (`gesture_snapshot_active`), which is the release's
-///   permission to relaunch and is taken by whichever end runs first — so it stands for the whole
-///   of a gesture and is gone the moment the relaunch has been made, however it turned out;
-/// * **a scrub's aim**, which is the one cover whose end relaunches without a snapshot to say so:
-///   a press on the bar takes the legacy road when there is no player to kill, and then the aim is
-///   the only thing standing between the cover and its relaunch. **This is what keeps a ten-second
-///   scrub from being cut off** — the longest gesture a user spends, and one whose cover is holding
-///   a frame of the film at the second the hand started from;
-/// * **a relaunch genuinely in flight**, which the pending record names by pid. A relaunch that got
-///   no pid writes no record at all (`note_pinned_relaunch`), so an absent record is the honest
-///   answer here rather than a gap.
-///
-/// A pid standing in the band is deliberately *not* one of them: a player with nothing in flight is
-/// not a relaunch still coming, and the arms below are the right answer for it — a window up hands
-/// the band over at once, and a window that never arrives comes down by the cover's own bound.
-fn cover_relaunch_is_still_possible() -> bool {
-    gesture_snapshot_active()
-        || pin_state().is_some_and(|pinned| {
-            pinned
-                .pin()
-                .is_some_and(|pin| pin.transport.seeking.is_some())
-        })
-        || pending_pinned_relaunch().is_some_and(|pending| pending.pid != 0)
-}
-
-/// Which road raised a cover: the arm that owns the record, and the only one that may say
-/// anything about how the record ends.
-///
-/// **It is a field on the record rather than a fact each reader works out, because the reader that
-/// matters cannot work it out.** `awaiting_relaunch` says a relaunch is still to come; what says
-/// whether that is true is which road wrote it, and the two are not the same question — a resize's
-/// drag ends in a relaunch whether or not its press killed, and a file step ends in a replacement
-/// the swap has *already begun*, so a press arriving after it has no release of its own to wait
-/// for. A press that finds a standing record it did not write must therefore leave that record
-/// alone entirely, or it turns a step's cover into a cover waiting on a road that is not going to
-/// come — and the only two roads that end such a cover (`finish_pin_drag`, `pin_capture_lost`) are
-/// both reached from a release, so the placeholder stands for the life of the pin and every click
-/// in the video area is answered by this app's own window (see `park_swap_arm_for_the_band`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum ParkArm {
-    /// A hand carrying the window with the player left playing behind the cover: the film behind
-    /// the band is the one that was there all along and nothing replaces it.
-    Carry,
-    /// A hand on the kill road — a title-bar pull, a knob — which froze the clock and ended the
-    /// player, so this cover's end begins the relaunch behind it.
-    Gesture,
-    /// A scrub taken from the transport bar, and a change of box that is not a resize's own road:
-    /// the release raised it over the player it was about to end, and its end is the replacement's
-    /// window rather than the one it is standing over.
-    Seek,
-    /// A resize's drag, on either road. Its end is the relayout, so nothing else may run this
-    /// road's press a second time over the cover it left standing.
-    Resize,
-    /// A file step. The swap begins the replacement itself, so this cover settles on a window and
-    /// its deadline and never waits for a release.
-    Step,
-}
-
-/// What a park is holding, and since when it was asked to let it go.
-///
-/// `player` is the process the band was captured for, read once on the pointer message so that a
-/// relaunch begun afterwards is a *fact* rather than a guess (see `player_replaced_since`).
-/// `replacing` is what a resize's park already knows: a move has no relaunch behind it, so the
-/// player standing in the band when the drag ends is the player that was playing all along, while a
-/// resize ends in one that has decoded nothing yet. `awaiting_relaunch` is what a resize's cover
-/// does not know yet: no relaunch has been begun behind it — its drag's end makes it — so there is
-/// nothing to swap to and no bound to spend until one is (see `park_swap_arm_for_the_band`).
-/// `owner` is the road that wrote the record, and a road that extends a standing cover does not
-/// write it (see [`ParkArm`]). `since` is left unset until the loop first asks for the band back —
-/// armed by the park so a tick in the middle of a drag cannot start the clock, stamped by the
-/// settle so a ten-second drag does not spend the budget of a one-tick wait.
-#[derive(Clone, Copy)]
-pub(super) struct PinParkSwap {
-    pub(super) player: u32,
-    pub(super) replacing: bool,
-    pub(super) awaiting_relaunch: bool,
-    pub(super) owner: ParkArm,
-    pub(super) since: Option<Instant>,
-}
-
-/// The road that owns the standing cover, if one is standing with a record of its own.
-pub(super) fn park_record_owner() -> Option<ParkArm> {
-    PIN_PARK_SWAP
-        .lock()
-        .ok()
-        .and_then(|held| held.as_ref().map(|swap| swap.owner))
-}
-
-/// The one park's bookkeeping, behind a lock because the two ends are not the same thread: it is
-/// written on the pointer message that begins a drag and read by every tick of the loop after it.
-pub(super) static PIN_PARK_SWAP: Lazy<Mutex<Option<PinParkSwap>>> = Lazy::new(|| Mutex::new(None));
-
-/// The generation of the pinned player: every gesture's park begins a new one, and every
-/// relaunch is tagged with the one that is current when it is begun.
-///
-/// Generation covers players, not just park records. The re-entrant extend keeps the park
-/// *record* current, but the first gesture's *relaunch* still lands: its replacement arrives
-/// and something shows it — at a stale box, outside the now-current band, playing. A relaunch
-/// superseded by a newer gesture is killed when superseded — never shown, never placed — and
-/// the settle shows and places a replacement only while its generation is current.
+/// Two relaunches can be in the air at once — a seek's and the subtitle copy's that landed on it —
+/// and the earlier one still lands: its replacement arrives and something shows it at a stale box,
+/// outside the now-current band, playing. A relaunch superseded by a newer road is killed when
+/// superseded — never shown, never placed — and the show places a replacement only while its
+/// generation is current.
 pub(super) static PIN_PLAYER_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// A relaunch begun behind a standing cover that no settle has swapped yet: what the next
-/// bump kills if a newer gesture arrives first, and what the next relaunch kills if it is
-/// still unpublished when that one begins.
+/// A relaunch whose player the picture has not been handed to yet: what the next bump kills if a
+/// newer gesture arrives first, and what the next relaunch kills if it is still unpublished when
+/// that one begins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PendingPinnedRelaunch {
     pub(super) pid: u32,
     pub(super) generation: u64,
 }
 
-/// The in-flight relaunch, if one is waiting behind the cover for its swap.
+/// The in-flight relaunch, if one is waiting for its source to take the picture.
 pub(super) static PIN_PENDING_RELAUNCH: Lazy<Mutex<Option<PendingPinnedRelaunch>>> =
     Lazy::new(|| Mutex::new(None));
 
@@ -1349,7 +1543,7 @@ pub(super) fn note_pinned_relaunch(pid: u32) {
     }
 }
 
-/// The in-flight relaunch, if one is still waiting behind the cover.
+/// The in-flight relaunch, if one is still waiting for its source to take the picture.
 pub(super) fn pending_pinned_relaunch() -> Option<PendingPinnedRelaunch> {
     PIN_PENDING_RELAUNCH
         .lock()
@@ -1372,14 +1566,45 @@ pub(super) fn clear_pending_pinned_relaunch() {
 /// and a kill not yet taken stays pending for the next path to retry. Callers
 /// that own no retry — the pin's own teardown — hand what is left to the
 /// orphan reaper instead of dropping it (see `retire_orphaned_player`).
+///
+/// **A player that is the picture is never killed as superseded**, whatever the record still says:
+/// its window is the source the host is drawing, and ending it is the black band a relaunch exists to
+/// keep out. A record left naming one is what killed the picture at the next relaunch — the player went
+/// with its replacement no better off, and the band was the host's black until a decode later — so this
+/// asks the picture before it kills and leaves a standing player to the retirement that replaces it (see
+/// `retire_replaced_player`).
 pub(super) fn reap_superseded_relaunch() -> Option<u32> {
-    let killed = pending_pinned_relaunch()
-        .filter(|stale| kill_superseded_player(stale.pid))
-        .map(|stale| stale.pid);
-    if killed.is_some() {
+    let stale = pending_pinned_relaunch()?;
+    if pin_film_thumbnail::the_source_is_standing(stale.pid) {
+        // The record names the picture, so nothing is in flight and nothing is killed: it is forgotten
+        // rather than carried, and the player it names is the one its own replacement retires (see
+        // `retire_replaced_player`).
+        clear_pending_pinned_relaunch();
+        return None;
+    }
+    let killed = kill_superseded_player(stale.pid).then_some(stale.pid);
+    if let Some(pid) = killed {
+        // **A relaunch that never stood is dropped in silence, and says so here**: nothing of this
+        // player ever reached the screen, the one the host draws is untouched, and the next relaunch
+        // is already begun (see `relaunch_pinned_player`).
+        note_pin_trace!("relaunch superseded before it stood pid {pid}");
         clear_pending_pinned_relaunch();
     }
     killed
+}
+
+/// The replacement is the picture: the relaunch that began it is no longer in flight.
+///
+/// **A record that outlives its swap is the ordering bug this exists to remove.** The in-flight record
+/// is what a newer gesture kills before it can publish (see `reap_superseded_relaunch`), so a record
+/// still naming a player the host has been handed draws a later kill onto the standing source — the
+/// old player dies with its replacement no better off, and the pin shows the host's black for the
+/// length of a decode. Written where the swap is made (see `pin_film_thumbnail::hand_the_picture_over`)
+/// and where a window of the desktop's is shown (see `show_current_replacement`).
+pub(super) fn settle_the_published_relaunch(pid: u32) {
+    if pending_pinned_relaunch().is_some_and(|pending| pending.pid == pid) {
+        clear_pending_pinned_relaunch();
+    }
 }
 
 /// Whether there is no in-flight relaunch, or it is of the current generation: the settle's
@@ -1388,19 +1613,6 @@ pub(super) fn pending_relaunch_is_current() -> bool {
     pending_pinned_relaunch()
         .map(|pending| pending.generation == current_pinned_generation())
         .unwrap_or(true)
-}
-
-/// Begin a new player generation: a newer gesture supersedes whatever relaunch is still in
-/// flight behind the cover, so that player is killed before it can publish — and reaped, no
-/// orphan ffplay, no zombie audio.
-///
-/// Returns the new current generation. It fires only on an actual supersede: with no
-/// in-flight relaunch there is nothing to kill, and a single gesture's own relaunch is tagged
-/// current after this and swaps untouched — no extra waits, no latency on the ordinary road.
-pub(super) fn bump_pinned_generation() -> u64 {
-    let generation = PIN_PLAYER_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
-    let _ = reap_superseded_relaunch();
-    generation
 }
 
 /// Place-and-show a replacement iff its generation is still current.
@@ -1433,6 +1645,12 @@ pub(super) fn show_current_replacement(pid: u32, content: ScreenRegion) {
         (content.2 - content.0).max(1),
         (content.3 - content.1).max(1),
     );
+    // A window of the desktop's that is up is the picture: the relaunch is over. A film drawn through
+    // the pin's host is not shown by that call at all — its swap is the thumbnail's, and the record is
+    // cleared there (see `pin_film_thumbnail::hand_the_picture_over`).
+    if !pin_film_host::the_pinned_player_was_begun_in_the_host() {
+        settle_the_published_relaunch(pid);
+    }
     revalidate_shown_replacement(pid);
 }
 
@@ -1454,496 +1672,29 @@ pub(super) fn revalidate_shown_replacement(pid: u32) {
     let _ = reap_superseded_relaunch();
 }
 
-/// Whether the standing cover is owed a player that has not arrived yet: parked with an
-/// in-flight relaunch, or parked over a relaunch that is still to come — a resize's drag, a
-/// seek's cover. The pin stays up across the gap a supersede-kill leaves: the player is gone
-/// but its replacement is on its way, so a dead player here is not a pin that came apart.
-pub(super) fn pin_park_covers_a_relaunch() -> bool {
-    pin_player_is_parked()
-        && (pending_pinned_relaunch().is_some() || park_record_expects_a_player())
+/// Whether a relaunch has begun a player the picture has not been handed to yet: the loop's own
+/// gate on a film's end and on a failure mark, because a pin across a relaunch is up until the
+/// replacement's source takes the picture over (see `pending_relaunch_is_current`).
+pub(super) fn a_relaunch_is_in_flight() -> bool {
+    pending_pinned_relaunch().is_some()
 }
 
-/// Whether the park's own record is still waiting on a player: a relaunch behind the cover,
-/// or one still to come.
-fn park_record_expects_a_player() -> bool {
-    PIN_PARK_SWAP
-        .lock()
-        .ok()
-        .and_then(|held| *held)
-        .is_some_and(|swap| swap.replacing || swap.awaiting_relaunch)
-}
-
-/// Whether the standing cover has no player left to hand the band to: the in-flight relaunch
-/// was killed or died, and no replacement has begun. The gesture's own release relaunches
-/// instead of leaving a cover nothing ends.
-pub(super) fn park_stranded_without_a_player() -> bool {
-    pin_player_is_parked()
-        && pending_pinned_relaunch().is_none()
-        && VIDEO_PID.load(Ordering::Acquire) == 0
-}
-
-/// Relaunch the film a stranded cover is standing over, at the box and the second the pin
-/// stands at now: the recovery a release owes after its own begin killed the in-flight
-/// relaunch. Only then — a live player behind the cover is never relaunched here, and a
-/// collapsed pin has no band to put one back into.
-pub(super) fn relaunch_stranded_park() {
-    if pin_is_collapsed() || current_media_type() != Some(MediaType::Video) {
-        return;
-    }
-    if !park_stranded_without_a_player() {
-        return;
-    }
-    let Some((path, content, transport, _)) = pinned_playback_state() else {
-        return;
-    };
-    let at = pin_playhead(&transport).unwrap_or(0.0);
-    restart_pinned_player(&path, content, at, transport.paused_at.is_some());
-}
-
-/// Which of the two arms a park's end was taken on.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum ParkSwap {
-    /// The band goes to the window standing in it with nothing left to wait for: a drag holds the
-    /// player it captured rather than replacing it, so that window has the picture the band is
-    /// holding on it — and a file step's replacement is a window the swap's own wait has already
-    /// been held for (see `park_swap_arm`).
-    Presented,
-    /// The wait is up and there *is* a window to hand the band to, but it has decoded nothing — the
-    /// placeholder goes rather than an empty window standing in for a frame that may never come, and
-    /// a placeholder held against one for ever is a black band that is never a picture.
-    TimedOut,
-    /// No window has ever appeared behind the cover and the cover's own bound is gone by: there is
-    /// nothing to hand the band to and nothing left to wait for, so the cover is given up. What the
-    /// band shows is the hole it is between films — a hole the player's window fills the moment it
-    /// has one — rather than an opaque rectangle that claims every click in it for the life of the
-    /// pin (see `PIN_PARK_COVER_TIMEOUT`).
-    Abandoned,
-}
-
-/// What the band is handed back on, from the two facts that can be read of a player and the one
-/// that can only be waited for.
+/// Settle what a swap is taking up with: every piece of state that outlives the file it was made
+/// against.
 ///
-/// **The `Presented` arm is a fact about the process rather than a guess about the pixels**, and the
-/// reason is the one that made this WS necessary: a player that has just been begun publishes its
-/// window within a few milliseconds, and that window is visible, correctly sized, and *empty* — so
-/// "visible and correctly sized" is true for the whole of the decode and answers nothing. What is
-/// not true for the whole of the decode is the process behind it: a move's park is answered by the
-/// player that was playing before the pointer went down, which a drag holds at its first pointer
-/// message and which therefore has a picture of its own — the one the band is holding, and the one
-/// it will show again the instant it is shown — whereas a resize's park is answered by a player
-/// that opened the file after the drag began (see `video_drag_hold_apply`).
+/// The take-up builds the pin whole, so the old pin's own drag, aim and hold go with it and need
+/// nothing said here. Two things are beside the pin rather than in it, and neither is reconciled by
+/// a take-up:
 ///
-/// **No window at all is a third arm, and that is what this WS is for.** The band is
-/// transparent while a film is playing, so handing it back with nothing behind it is the desktop —
-/// and a replacement that has not published a window within the bound is a player whose window
-/// `ensure_pinned_sibling_box` cannot find, so the swap would take the parked flag down and show
-/// nothing: a hole in the shape of a video. But an opaque band is not a picture that is merely
-/// stale: its pixels are claimed by this app's own window, so a placeholder held over a video area
-/// answers every click there and no press reaches the road that could end it. So the `no window`
-/// case is not answered by swapping — there is nothing to swap to — but by giving the cover up once
-/// [`PIN_PARK_COVER_TIMEOUT`] has gone by, which leaves a band the player fills as soon as it has a
-/// window rather than one this app's window holds for ever. The wait is extended rather than
-/// restarted either side of the bound, so a window that turns up late is handed the band on the
-/// first tick that finds it (see `park_swap_arm_for_the_band`).
-///
-/// **And a file step's cover is the one that is answered by its window and by nothing else.** The
-/// step's own wait is the same wait: the swap a step raises its cover for is held until the
-/// replacement player's window is up, which is the fact this arm is read from (see `PinSwapHold`
-/// and `player_swap_wait`). Waiting out the bound on top of that would hold the outgoing frame
-/// over a band that has already been given the incoming file's box — the last film stretched into
-/// the new one's shape, which is the whole of what the step's wait was for.
-///
-/// **The pixel sample the timeout is paired with is not in here, and cannot be.** It has to be read
-/// off the screen inside the player's rect, and the placeholder is what stands there — a layered
-/// window's own pixels are what the band is, and the player behind them is not on the screen to be
-/// read until the band goes transparent. Reading the player's own DC instead does not work either:
-/// FFmpeg's window draws through D3D, whose contents are not in the window's DC at all, which is
-/// the same reason `hold_video_window_frame` reads the desktop with `BitBlt` rather than asking the
-/// window with `PrintWindow`. So the honest form of "presented or wait" is "the player that was
-/// playing is back, or the wait is up and there is a window to show" — and the wait is what
-/// bounds a replacement, which is the only case there was ever anything to wait for.
-pub(super) fn park_swap_arm(
-    owner: ParkArm,
-    window_up: bool,
-    replaced: bool,
-    waited: Duration,
-) -> Option<ParkSwap> {
-    // Asked first, because it is a fact about there being anything to show at all: everything
-    // below is an argument about *when* to show it, and every one of them ends with the flag down
-    // and a window up. What this one answers instead is the cover's own bound — nothing behind the
-    // band, nothing on its way, and a placeholder that has been asked to go and has not.
-    if !window_up {
-        return (waited >= PIN_PARK_COVER_TIMEOUT).then_some(ParkSwap::Abandoned);
-    }
-
-    // A step's cover, and a move's, are handed the band the moment there is a window to hand it to.
-    if !replaced || owner == ParkArm::Step {
-        return Some(ParkSwap::Presented);
-    }
-
-    (waited >= PIN_PARK_SWAP_TIMEOUT).then_some(ParkSwap::TimedOut)
-}
-
-/// The arm a park's end was taken on, and how long it was waited for.
-///
-/// It is written down rather than printed because this app has no log: it is a tray application
-/// built as `windows_subsystem`, so a `println!` goes nowhere and `OutputDebugStringW` would want a
-/// `Win32_System_Diagnostics_Debug` feature this crate does not enable. What the arm is for is the
-/// next person to tune `PIN_PARK_SWAP_TIMEOUT` on a machine with a real film on screen, and this is
-/// where they read it from — a test drives a settle through [`settle_pinned_park_where`] and reads
-/// it back through [`park_swap_last_arm`], and on a machine with a player it is read in a debugger.
-pub(super) static PIN_PARK_LAST_ARM: Lazy<Mutex<Option<(ParkSwap, Duration)>>> =
-    Lazy::new(|| Mutex::new(None));
-
-/// Write the arm down (see [`PIN_PARK_LAST_ARM`]).
-fn note_park_swap(arm: ParkSwap, waited: Duration) {
-    PIN_PARK_LAST_ARM
-        .lock()
-        .unwrap_or_else(|slot| slot.into_inner())
-        .replace((arm, waited));
-}
-
-/// The last park's arm and how long it was waited for, for a test that drove the settle itself.
-#[cfg(test)]
-pub(super) fn park_swap_last_arm() -> Option<(ParkSwap, Duration)> {
-    PIN_PARK_LAST_ARM.lock().ok().and_then(|arm| *arm)
-}
-
-/// Forget the arm a previous test's swap wrote down.
-///
-/// It is one slot for the whole process, so a test that asserts *no* arm was taken can be answered
-/// by a swap that ran before it, and the assertion is then about the order the runner happened to
-/// use. Cleared by the tests that read it rather than left to a race.
-#[cfg(test)]
-pub(super) fn clear_park_swap_arm() {
-    if let Ok(mut arm) = PIN_PARK_LAST_ARM.lock() {
-        *arm = None;
-    }
-}
-
-/// What a park did, in the order it did it.
-///
-/// It exists because the order is the whole of what this WS fixes and nothing else about a park is
-/// observable on a machine with no player of this app's: `hide_pinned_player_window` and the paint
-/// before it are both calls out of the preview thread with nothing to stand in for them, so a test
-/// that wants to know which came first has to be told (see `park_pinned_player`).
-#[cfg(test)]
-pub(super) static PARK_TRACE: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
-
-/// Record one step of a park, in the order it happened.
-#[cfg(test)]
-pub(super) fn trace_park_step(step: &'static str) {
-    if let Ok(mut trace) = PARK_TRACE.lock() {
-        trace.push(step);
-    }
-}
-
-/// The same call, and nothing to do: the trace is a test's seam and this build has no tests in it.
-#[cfg(not(test))]
-pub(super) fn trace_park_step(_step: &'static str) {}
-
-/// What the last park did, in order.
-#[cfg(test)]
-pub(super) fn park_trace() -> Vec<&'static str> {
-    PARK_TRACE
-        .lock()
-        .map(|trace| trace.clone())
-        .unwrap_or_default()
-}
-
-/// Forget the last park's steps, so a park is read from its own first message.
-#[cfg(test)]
-pub(super) fn clear_park_trace() {
-    if let Ok(mut trace) = PARK_TRACE.lock() {
-        trace.clear();
-    }
-}
-
-/// Put a pinned video's player away for as long as a drag lasts.
-///
-/// The reason is a measurement rather than a guess. A video pin's picture is FFmpeg's own window
-/// standing behind a transparent band, and every pointer move of a resize puts that window to a new
-/// size and position (`place_pinned_siblings` -> `ensure_video_window_topmost`). The compositor
-/// then has to re-blit a 2560x1440 surface at the pointer's pace, on a 144 Hz screen, while the
-/// player is still decoding at whatever rate the machine can manage — which arrives at the hand as
-/// a drag that stutters, and arrives at the eye as a picture that is soft and laggy for as long as
-/// the hand is on the edge.
-///
-/// So two things are done about it, by two different callers at two different times, and this is
-/// one of them. The window is hidden here, on the drag's own first pointer message, and the film is
-/// held by the tick (see `video_drag_hold_apply`), which is the only thing that may pause it: a
-/// pause posted from here as well would be a second toggle onto the same film, so a drag begun over
-/// a playing film would leave it playing (and its window hidden) and a drag begun over a held one
-/// would start it. The split is also the faster of the two orders — the window is hidden on the
-/// message the hand sent, not on the tick after it — and the two halves cannot disagree about
-/// whether a drag is in flight, because both are asked of `pin.dragging`.
-///
-/// **The hide is the last of three steps here, and the order is the point rather than the tidiness.**
-/// The band is painted flat while the picture is away rather than left transparent, so the desktop
-/// does not show through a window that has been hidden — but a layered window is only changed by an
-/// `UpdateLayeredWindow`, so a hide that came before that paint spent the gap between the two with
-/// the band's *last painted* pixels on screen, and for a film playing those are transparent ones. The
-/// three are therefore capture, paint, hide, all on the message that begins the drag: the capture is
-/// a read of what is on screen and there is nothing to read once the window has gone, the paint is
-/// what the compositor is handed next, and only then is the window behind it taken away. The same
-/// three answer for a resize, which enters through the same call (see `begin_pin_drag`), which is why
-/// the flash at the start of a resize needed no mechanism of its own.
-pub(super) fn park_pinned_player(hwnd: HWND, at: (i32, i32), resizing: bool) -> bool {
-    park_pinned_player_inner(
-        hwnd,
-        at,
-        resizing,
-        resizing,
-        false,
-        if resizing {
-            ParkArm::Resize
-        } else {
-            ParkArm::Carry
-        },
-    )
-}
-
-/// Put a pinned video's player away for a press on the kill road: the caption, the volume knob.
-///
-/// The same cover with one fact the hold road above does not have — the press ended the player, so
-/// the cover's own end is a relaunch that has not been begun yet, and the settle must wait for it
-/// rather than hand the band to whatever window happens to exist. **It is a separate call rather
-/// than a flag on the one above, because that fact belongs to the road and the road owns the
-/// record**: a press that arrives over a cover some other road wrote extends that record and
-/// leaves it alone, which is the whole of what this function's second write used to break (see
-/// [`ParkArm`]).
-pub(super) fn park_pinned_player_for_gesture(hwnd: HWND, at: (i32, i32), resizing: bool) -> bool {
-    park_pinned_player_inner(
-        hwnd,
-        at,
-        true,
-        resizing,
-        true,
-        if resizing {
-            ParkArm::Resize
-        } else {
-            ParkArm::Gesture
-        },
-    )
-}
-
-/// Put a pinned video's player away for a seek taken from the transport bar.
-///
-/// The same cover a file step is given, raised at the same moment in a seek's life: the player that
-/// has been playing under the hand is ended here — where the second the hand chose is known and
-/// there is nothing left to aim — and the player taking its place has no window and no decoded
-/// frame for the length of a file open and a seek. No resume frame, because the playhead is moving
-/// and a frame rendered at the second the hand started from is a frame of the wrong second. The
-/// relaunch begins on the next line, which is why the record waits for no release to make one, and
-/// the settle hands the band to the player replacing this one (see `settle_pinned_park` and
-/// `park_swap_arm`).
-pub(super) fn park_pinned_player_for_seek(hwnd: HWND, at: (i32, i32)) -> bool {
-    park_pinned_player_inner(hwnd, at, true, false, false, ParkArm::Seek)
-}
-
-/// Put a pinned video's player away for a file step.
-///
-/// The same cover a seek is given and for the same reason — the take-down that
-/// follows kills the player, and a band with no player behind it is a hole in
-/// the desktop shaped like a film — with two differences, both of them about
-/// what the step is rather than about the kill. There is no gesture behind it,
-/// so there is no resume: the file that replaces this one starts at zero
-/// whatever the film on screen had got to, and nothing is owed a second. And
-/// the relaunch is not waiting for a release to begin it — the swap begins the
-/// next player a few lines later — so the record is not held back for one.
-///
-/// `replacing` rather than `awaiting` is what makes the settle wait for that
-/// player's window rather than hand the band to whatever window happens to
-/// exist, which for a replacement is the one the bound was written for (see
-/// `park_swap_arm`).
-pub(super) fn park_pinned_player_for_step(hwnd: HWND, at: (i32, i32)) -> bool {
-    park_pinned_player_inner(hwnd, at, true, false, false, ParkArm::Step)
-}
-
-/// The press half of a box change: freeze the clock, park the cover over the
-/// outgoing frame and kill the player it covers.
-///
-/// WS-J's press road at the box the window now stands at rather than at a
-/// gesture's, and for the same reason a drag and a seek take it: the relaunch
-/// this box change is about to make is a player ending and another beginning,
-/// and a replacement's window is on screen within milliseconds of being begun
-/// and empty until the file is open and the first frame is decoded. Without the
-/// cover the band is transparent for all of that — the old window is raised
-/// away by the park, the new one arrives behind a band nothing is painting, and
-/// what shows through is the desktop.
-///
-/// **The cover is read out of the pin rather than passed in, and that is what
-/// makes it the new box.** A maximize writes the new box into the pin before it
-/// asks for the relayout, so the cover is painted where the band now is; a cover
-/// painted at the box the press found is a pre-maximize-sized frame stretched
-/// across a maximized band, which reads as a second defect rather than as none.
-///
-/// Two refusals, and both of them are roads that already have their cover. A
-/// cover already standing means this relayout's press has been run — a resize's
-/// drag parked it and killed for it, and the release is what relaunches (see
-/// `finish_pin_drag`) — and running it twice would kill the replacement the
-/// first one is waiting for. A press with no player to kill, no second to read
-/// or no pin up is the legacy road, which relaunches under whatever cover or
-/// transparency it finds (see `gesture_press_freeze`).
-///
-/// **And the refusal is the road's own, not the standing cover's.** A cover no road owns is a
-/// file step's: the swap raised it for the player it was about to begin and the swap's reconcile
-/// carried it onto this pin, and nothing else has a hold on it. So this press runs *under* it —
-/// snapshot, kill, bump — and answers true, because the cover that is standing is now this
-/// press's cover and the relayout's end is the relaunch. Refusing there instead is what left
-/// `relayout_pinned_media` with a bare `restart_pinned_player`: a player ended and another begun
-/// with a cover still hiding the hole and no frame asked for, which is a hole in the shape of a
-/// video rather than a placeholder.
-pub(super) unsafe fn begin_covered_box_change() -> bool {
-    // A cover some road already owns has had its press run: a resize's drag parked it and its
-    // release is the relaunch, a scrub's release is its own, and a hand's park with the player
-    // left playing behind it is ended by the settle. A cover nobody owns is a file step's, and
-    // this press runs under it rather than refusing.
-    let unowned = matches!(park_record_owner(), Some(ParkArm::Step));
-    if pin_player_is_parked() && !unowned {
-        return false;
-    }
-
-    if !gesture_press_freeze() {
-        return false;
-    }
-
-    if !pin_player_is_parked() {
-        if let Some(content) = pinned_content() {
-            park_pinned_player_for_seek(pinned_window(), (content.0, content.1));
-        }
-    }
-
-    kill_pinned_player_async();
-    bump_pinned_generation();
-    true
-}
-
-/// Cover the band for a file step, and kill the player the cover stands over.
-///
-/// One call rather than three at the swap's one road, because the order is the
-/// whole of it: the frame is read and painted before the window is hidden and
-/// before the kill, which is the cover's own order (see `park_pinned_player`),
-/// and every road that ends a player owes that order or owes a hole.
-///
-/// **No gesture snapshot and no resume second**, which is the whole difference
-/// from a press: the file arriving starts at zero whatever this one had got to,
-/// so there is nothing for a snapshot to carry and nothing for a hold to be
-/// owed. What there is instead is the gap this covers — the take-down kills the
-/// player and the new one has no window for the length of a decode — and the
-/// record is armed so the settle hands the band to the window that replaces it
-/// rather than to whatever merely exists.
-///
-/// **And a file no player of this app's is coming for is given the band back at once.** There is
-/// nothing here to hand this cover to: a picture, a page or a document's own window fills the band
-/// itself a tick or two from now, and a frozen frame of a film left standing over it is a worse
-/// answer than the momentary hole the cover would have hidden — so the cover is not raised at all
-/// rather than raised and taken down. A film on a machine FFmpeg is not on is the same case, and is
-/// asked through the same flag rather than through the kind alone (see `pinned_player_is_coming`).
-pub(super) fn cover_step_swap_for_video(player_coming: bool) -> bool {
-    if !player_coming
-        || current_media_type() != Some(MediaType::Video)
-        || VIDEO_PID.load(Ordering::Acquire) == 0
-    {
-        return false;
-    }
-
-    let Some(content) = pinned_content() else {
-        return false;
-    };
-    if !park_pinned_player_for_step(pinned_window(), (content.0, content.1)) {
-        return false;
-    }
-
-    kill_pinned_player_async();
-    bump_pinned_generation();
-    true
-}
-
-/// Whether the standing cover is owed to a file on its way in, and so is to be
-/// carried onto the pin that file is taken up in.
-///
-/// Asked at the take-up, which builds the pin whole and would otherwise write
-/// "no cover" over a cover that is standing for the player it is about to
-/// publish. The record and the flag are one fact (see `park_pinned_player`), so
-/// both halves are asked: a cover over a file nothing is replacing has no
-/// replacement to wait for, and that one is given up rather than carried (see
-/// `give_up_pinned_park`).
-pub(super) fn pin_park_carried_forward() -> bool {
-    pin_player_is_parked() && park_record_expects_a_player()
-}
-
-/// Give a standing cover up where nothing is going to be handed this band.
-///
-/// The flag and the record are written together under the pin's lock wherever a
-/// park is begun, so they are given up together here and through the same writer
-/// that takes the flag down (see `settle_pinned_park_onto`). The frame goes with
-/// them: it is the band's picture only for as long as the band has no window in
-/// it, and the file that replaces this one paints the band itself.
-pub(super) fn give_up_pinned_park() -> bool {
-    if !take_the_park_down() {
-        return false;
-    }
-    forget_pin_park_swap();
-    true
-}
-
-/// Take the flag down and forget the frame the cover was holding, whoever is
-/// behind the band.
-///
-/// The one writer of the flag, asked for with a player standing in the band
-/// (`settle_pinned_park_onto`) or with nothing coming to stand there
-/// (`give_up_pinned_park`) — both of which are the same write, because a park
-/// that is over is one fact with one writer however it came to be over.
-fn take_the_park_down() -> bool {
-    let down = pin_state().is_some_and(|mut pinned| {
-        pinned
-            .pin_mut()
-            .is_some_and(|pin| std::mem::replace(&mut pin.parked, false))
-    });
-
-    if down {
-        forget_video_frame();
-    }
-
-    down
-}
-
-/// Settle what a swap is taking up with: every piece of WS-J state that outlives
-/// the file it was made against.
-///
-/// The take-up builds the pin whole, so the old pin's own drag, aim and hold go
-/// with it and need nothing said here. These four are beside the pin rather than
-/// in it, and a swap reconciles none of them — which is what left a file step with
-/// a gesture still standing against the film before it:
-///
-/// * the snapshot, which nothing would ever take. Left standing it answers
-///   `video_drag_hold_apply` false for the rest of the run, and the take-up's own
-///   `release_pin_capture` re-enters `pin_capture_lost`, whose `gesture_snapshot_active`
-///   arm then relaunches — the file the pin had *left* at the second and the box it
-///   had left behind, over the player the swap had just begun for the file that
-///   replaced it (see `pin_capture_lost` and `restart_pinned_player`);
-/// * the in-flight relaunch, whose player is left behind a cover nothing will hand
-///   the band to, and is reaped rather than left for the next run's sweep;
-/// * the claim on the film the gesture was holding, which the next film to be
-///   dragged would be answered with;
-/// * and the cover itself, which is carried onto the incoming pin where a player is
-///   coming to be handed this band and given up where one is not.
-///
-/// **The snapshot is given up first, before the pointer is.** It is what
-/// `pin_capture_lost` reads to decide whether a gesture is owed a relaunch, and
-/// letting go of a capture answers that window procedure synchronously — so a
-/// snapshot still standing here would relaunch the outgoing film during the
-/// reconcile, from inside it (see `release_the_pointer`).
-///
-/// **And the box request goes with them, because a box request belongs to the file that made it.**
-/// A resize's end writes the rect the hand settled on and the loop drains it on its next turn,
-/// which is a turn away from here — so a step that lands in between found a request standing and
-/// replayed it as a `PinBox`, laying the incoming file out at the outgoing one's rect. Nothing
-/// else drains it: the loop takes it (see `event_loop`) and there is no other reader, so a request
-/// nothing drained before a swap outlived its own file.
-pub(super) fn reconcile_swap_take_up(player_coming: bool) {
-    take_gesture_snapshot();
+/// * the in-flight relaunch, whose player is left behind a launch nothing will carry on, and is
+///   reaped rather than left for the next run's sweep;
+/// * and the box request, because a box request belongs to the file that made it. A resize's end
+///   writes the rect the hand settled on and the loop drains it on its next turn, which is a turn
+///   away from here — so a step that lands in between found a request standing and replayed it as a
+///   `PinBox`, laying the incoming file out at the outgoing one's rect. Nothing else drains it: the
+///   loop takes it (see `event_loop`) and there is no other reader, so a request nothing drained
+///   before a swap outlived its own file.
+pub(super) fn reconcile_swap_take_up() {
     drain_pin_box_request();
 
     if pending_pinned_relaunch().is_some() {
@@ -1952,15 +1703,6 @@ pub(super) fn reconcile_swap_take_up(player_coming: bool) {
             retire_orphaned_player(still.pid);
             clear_pending_pinned_relaunch();
         }
-    }
-
-    // The claim rather than the hold's own end: the film behind it is being
-    // killed, so there is no player to post a key to and nothing is owed one (see
-    // `video_drag_hold_apply`).
-    video_drag_hold_set(false);
-
-    if !player_coming {
-        give_up_pinned_park();
     }
 }
 
@@ -1982,495 +1724,4 @@ pub(super) fn drain_pin_box_request() {
 /// aim in it to answer (see `pinned_transport_press`).
 pub(super) fn seek_press_arms(seeking: Option<f64>) -> bool {
     seeking.is_some()
-}
-
-/// What a park begins: a fresh park over a live window, or an extend over a standing one.
-///
-/// `replacing` is whether a relaunch is behind the cover, and `prepare` whether a frame for
-/// that relaunch is wanted off the gesture's own time: a resize's is, a seek's is not, and a
-/// move has no relaunch at all. `awaiting` is whether that relaunch is still to come: a press on
-/// the kill road ends the player and relaunches at its release, so until one is begun there is
-/// nothing to swap to and no bound to spend (see `park_swap_arm_for_the_band`). `owner` is the
-/// road, and it is written only where the record is written: **an extend leaves it exactly as it
-/// found it**, which is the whole of what a press must not do to a cover it did not begin (see
-/// [`ParkArm`]).
-fn park_pinned_player_inner(
-    hwnd: HWND,
-    at: (i32, i32),
-    replacing: bool,
-    prepare: bool,
-    awaiting: bool,
-    owner: ParkArm,
-) -> bool {
-    let begin = pin_state().and_then(|mut pinned| {
-        let pin = pinned.pin_mut()?;
-
-        // A begin over a standing park extends it rather than refusing it: a second gesture
-        // arriving before the first one's settle — a release-then-instant-regrab, or a second
-        // click on the bar — is the same cover held longer, not a second park. Refusing it leaves
-        // the in-flight settle's record superseded with nobody owning the swap, which is the
-        // frozen placeholder standing over a live player until the next release. So the record is
-        // kept current on the same generation chain, while the capture is kept from the first
-        // begin, which read the screen while the window was fully visible.
-        //
-        // **And the record's arm is left alone, because the road that wrote it is still the road
-        // that will end it.** A file step's cover survives a press the moment after the step, and
-        // that press began no relaunch of its own — writing `awaiting_relaunch` here is what
-        // turned the settle off its `TimedOut` arm and onto the seek arm, which only a release
-        // reaches, so the placeholder stood over a player that was already there for the rest of
-        // the pin's life. The frame the extend shows is the first begin's, which is the frame the
-        // outgoing player had; that is a separate question and it is the picture under the cover.
-        if std::mem::replace(&mut pin.parked, true) {
-            if let Ok(mut swap) = PIN_PARK_SWAP.lock() {
-                match swap.as_mut() {
-                    Some(record) => {
-                        record.player = VIDEO_PID.load(Ordering::SeqCst);
-                        record.replacing = record.replacing || replacing;
-                    }
-                    None => {
-                        *swap = Some(PinParkSwap {
-                            player: VIDEO_PID.load(Ordering::SeqCst),
-                            replacing,
-                            awaiting_relaunch: awaiting,
-                            owner,
-                            since: None,
-                        });
-                    }
-                }
-            }
-            return Some(true);
-        }
-
-        // **Written with the pin held, which is the whole of what keeps a park from being stranded.**
-        // The flag and this record are one fact about one park, and they are read on two threads:
-        // the flag by every paint and every raise, this record by the tick that ends the park. Two
-        // locks and two writes leave a gap, and a park begun in it has its record taken away under
-        // it — a band this app paints flat over a paused film, with nothing left that will ever
-        // write that record again. An extend over a standing park refreshes the record rather than
-        // replacing it, so the write a second begin would have made is still made (see
-        // `park_swap_arm_for_the_band`).
-        PIN_PARK_SWAP
-            .lock()
-            .unwrap_or_else(|swap| swap.into_inner())
-            .replace(PinParkSwap {
-                player: VIDEO_PID.load(Ordering::SeqCst),
-                replacing,
-                awaiting_relaunch: awaiting,
-                owner,
-                since: None,
-            });
-
-        Some(false)
-    });
-
-    let Some(extended) = begin else {
-        return false;
-    };
-
-    // An extend keeps the first begin's capture, paint and hide: the window was fully visible
-    // then and there is nothing to read once it has gone. Only the generation the settle drains
-    // is refreshed, above — and a resize arriving over a move still asks for the frame the
-    // replacement upgrades the band with, after giving up the one the first begin asked for.
-    if extended {
-        trace_park_step("extend");
-        if prepare {
-            forget_resume_frame();
-            prepare_resume_frame();
-        }
-    } else {
-        forget_resume_frame();
-
-        // Taken before the window is hidden, and only when this really is a park: it is a read of
-        // what is on screen, so there is nothing to read once the window has gone (see
-        // `hold_video_window_frame`).
-        trace_park_step("capture");
-        hold_video_window_frame();
-
-        // Asked for here rather than at the end of the drag, because the drag is the only time
-        // there is: the release has to hand the band back this tick (see `settle_pinned_park`), and
-        // a render begun there is a tenth of a second of the frame the hand let go on being
-        // replaced by nothing. Only a relaunch asks, because only a relaunch ends in a player that
-        // has decoded nothing (see `spawn_video_resume_frame`).
-        if prepare {
-            prepare_resume_frame();
-        }
-
-        // **Painted before the window is hidden, and this is the whole of the first flash.** A
-        // layered window is drawn from its own surface and that surface is only replaced by an
-        // `UpdateLayeredWindow`, so a park that hid the player and left the paint to the next
-        // repaint spent the gap between the two with the band's last painted pixels still on
-        // screen — which, for a film playing, are transparent ones. A transparent band with nothing
-        // behind it is the desktop: the window the user was dragging out of is what they see, for
-        // as long as the compositor takes to get to the next repaint, and a move answers none of
-        // them at all until the transport bar's own (see `compose_parked_band`).
-        trace_park_step("paint");
-        // SAFETY: the handle is the pin's own window, from the same call the pointer message that
-        // began this drag arrived on, and the paint is a layered-window blit out of a surface this
-        // thread drew for exactly this window. `GdiFlush` is in the same block because what it is
-        // waiting on is the same surface.
-        unsafe {
-            render_pinned_preview_at(hwnd, at.0, at.1);
-            // GDI batches, and what reads the surface next is not a GDI call: the compositor has to
-            // have the pixels before the window behind them is taken away, or the band that was
-            // opaque a frame ago is transparent again.
-            let _ = GdiFlush();
-        }
-
-        trace_park_step("hide");
-        hide_pinned_player_window();
-    }
-
-    true
-}
-
-/// Ask for the frame this park gives back, on the drag's own time.
-///
-/// It is asked of the pin rather than of the media because the media's own background work belongs
-/// to the player being parked and was stopped when the park began (see `restart_pinned_player`).
-fn prepare_resume_frame() {
-    let Some((path, content, transport, _)) = pinned_playback_state() else {
-        return;
-    };
-    let Some(at) = pin_playhead(&transport) else {
-        return;
-    };
-
-    spawn_video_resume_frame(
-        path,
-        at,
-        (content.2 - content.0).max(0) as u32,
-        (content.3 - content.1).max(0) as u32,
-    );
-}
-
-/// Take a park back, answering whether there was one to take.
-///
-/// **The park ends when there is a picture to see through the band again, and not one moment
-/// before.** The band is transparent while a film is playing because FFmpeg's window stands in it,
-/// so a park that ends while that window is not there is a hole in the desktop in every band a
-/// player of this app's stands in — which is what a relaunch used to leave for the whole of the
-/// wait for its replacement, because the flag was written down the moment the replacement was
-/// begun rather than the moment it had a window of its own (see `restart_pinned_player`).
-///
-/// **And it does not end one moment after either, which is the other half of the flash this settle
-/// used to leave.** Being visible is not having presented: a replacement's window is on screen and
-/// correctly sized within a few milliseconds of being begun, and empty until the file is open, the
-/// seek is done and the first frame is decoded — which on a 1440p HEVC is long enough to read as a
-/// black band over the desktop at the exact moment the hand let go. So the flag stays down while
-/// there is nothing behind it, and what it is waiting for is the process rather than the window
-/// (see `park_swap_arm`).
-///
-/// **And it does not end when the bound goes by with no window standing in it either**, which is
-/// the same hole from the other side: the swap is the flag down *and* a window up, and a
-/// replacement that has not published one is answered out of the hand by every place that could put
-/// it up (see below), so an expiry with nothing behind it takes the flag down and shows nothing.
-/// So the bound above is a bound on a wait for a window that has arrived, and a park with no window
-/// keeps the placeholder it is holding — which is opaque, and is the picture the hand let go of —
-/// until the cover's own bound goes by, at which point it is given up (see `PIN_PARK_COVER_TIMEOUT`).
-///
-/// **Nothing here goes looking for a window, and the reason is worth stating because it looks like
-/// a missing step.** A window of this app's player is published by a monitor thread that walks the
-/// desktop and *skips every window it cannot see* (see `enum_windows_callback`), and it refuses to
-/// raise at all while a park stands (see `apply_noactivate_to_hwnd`). So a replacement that is
-/// being kept off the screen is a window nothing will ever find — which is the point: it is found
-/// and shown by the swap below, in the tick the flag comes down, and every tick before that the
-/// band is the frame the drag took rather than a window that has decoded nothing.
-///
-/// The window is put in the band before the flag goes down rather than after it, which is why this
-/// is not `ensure_pinned_sibling_box` on its own: that call is answered out of the hand for as long
-/// as the park stands, and the tick's own raise is answered out of the hand for the same reason,
-/// so the tick that takes the park back is the one that has to place the window.
-pub(super) fn settle_pinned_park() -> bool {
-    settle_pinned_park_where(
-        &Win32PinWindow,
-        video_window_for(VIDEO_PID.load(Ordering::SeqCst)).is_some(),
-    )
-}
-
-/// The settle with the two facts a machine with no player of this app's in it cannot supply given
-/// to it: the window the swap acts on, and whether the player's window is standing in the band.
-///
-/// It is a second function and not two more parameters because those two are the whole of what the
-/// loop's own version reaches outside this app for — `video_window_for` walks the desktop and
-/// `Win32PinWindow` is a handle to a window this app created — and a settle tested only through the
-/// loop's own version is a settle not tested at all. Everything else it reads is this app's own
-/// state, which a test stands (see `stand_pin`).
-/// Refuse a swap for a superseded generation: retry its kill, upgrade the parked
-/// band, and hold the cover.
-///
-/// Answers whether the cover held — the settle's shape for every stale check,
-/// at the gate and immediately before the show alike, so a bump landing
-/// between the two still diverts to the kill path rather than placing a
-/// condemned player (see `settle_pinned_park_where` and `unpark_pinned_player`).
-fn stale_generation_holds_the_cover(window: &dyn PinWindow) -> bool {
-    if pending_relaunch_is_current() {
-        return false;
-    }
-    let _ = reap_superseded_relaunch();
-    upgrade_the_parked_band(window);
-    true
-}
-
-pub(super) fn settle_pinned_park_where(window: &dyn PinWindow, window_up: bool) -> bool {
-    if !pin_player_is_parked() {
-        forget_the_park_that_is_not();
-        return false;
-    }
-
-    // A drag in flight is a park doing its job, not a park waiting to be ended: the clock below is
-    // stamped by the first tick that finds the drag gone, and a hand resting on an edge for ten
-    // seconds must not spend the budget of a one-tick wait.
-    if pin_is_dragging() {
-        return false;
-    }
-
-    // Only the current generation is ever shown or placed: a superseded relaunch dies
-    // unpublished, and the cover holds while its kill is confirmed. A kill not yet taken is
-    // asked again here rather than waited out — termination is a request, and the next tick
-    // finds it gone — and the band is upgraded rather than left to go stale in the meantime.
-    if stale_generation_holds_the_cover(window) {
-        return false;
-    }
-
-    let Some((arm, waited)) = park_swap_arm_for_the_band(window_up) else {
-        // Still waiting for a window, so the placeholder stays standing — but a frame a background
-        // rendered for this park can have landed in the meantime, and a frame nothing repaints is
-        // a frame the band is not showing (see `upgrade_the_parked_band`).
-        upgrade_the_parked_band(window);
-        return false;
-    };
-
-    // Re-checked immediately before the show below: a bump on the window thread may have
-    // superseded between the gate above and this swap — the arm above is computed with no lock
-    // held — and a condemned player must not be placed nor shown. The unpark re-checks at the
-    // show site itself; this one diverts before any of that work begins.
-    if stale_generation_holds_the_cover(window) {
-        return false;
-    }
-
-    // The cover is given up rather than handed to a window that has not arrived: the flag and the
-    // record go down together, the frame goes with them because it is the band's picture only while
-    // the band has no window in it, and the band is painted again as the hole it is between films.
-    // No seek hold is settled and no snapshot taken, because nothing was swapped and nothing was
-    // relaunched — there was no window to hand the band to.
-    if arm == ParkSwap::Abandoned {
-        take_the_park_down();
-        forget_pin_park_swap();
-        window.repaint();
-        note_park_swap(arm, waited);
-        return true;
-    }
-
-    // The swap itself: the flag goes down and the window goes up in the same tick, and the band is
-    // painted through the window in that same tick and not before — so the band is never a moment of
-    // nothing with a player behind it, and never a frame of the drag's own picture still composited
-    // over one (see `unpark_pinned_player`).
-    if !unpark_pinned_player(window) {
-        return false;
-    }
-
-    // A seek's hold ends with the swap rather than with a key: the replacement
-    // has been playing since the release relaunched it, so posting one would
-    // pause the film the swap just uncovered. The owed hold is taken back and
-    // the gesture's claim dropped with it, and a playing film is playing after
-    // (see `settle_seek_hold_after_swap`). A drag's hold never reaches here —
-    // its own release lets go of it before any relaunch — so a claim standing
-    // at a swap is a seek's.
-    settle_seek_hold_after_swap();
-
-    // Given up through the same helper the other end uses, and for the same reason: a park begun in
-    // the gap between the flag going down and this write has written a record of its own, and this
-    // must not take it away.
-    forget_the_park_that_is_not();
-    // The dead interval ends with the band: a gesture that killed armed its
-    // end relaunch with the press's snapshot, and the swap just settled it —
-    // so the tick-side settles answer again from here on.
-    take_gesture_snapshot();
-    note_park_swap(arm, waited);
-    true
-}
-
-/// End a seek's hold on the tick its swap uncovered, without posting a key.
-///
-/// The press held the old player with one key, the release carried that hold
-/// onto the replacement as owed, and the wait deferred it while the gesture
-/// held the claim (see `pending_hold_delivers`) — so the player behind the
-/// band has been playing since the relaunch, silently behind the cover, and
-/// the only thing left is the bookkeeping: the hold taken back at the second
-/// the player has actually reached, which is what `released` writes. No key
-/// is posted because there is nothing to toggle: one more would pause the
-/// film the swap just uncovered.
-///
-/// A paused film has no claim — its press held nothing — so it keeps its hold
-/// and its owed flag for the loop to deliver through the new window, and
-/// stays paused (see `settle_pending_hold`).
-pub(super) fn settle_seek_hold_after_swap() {
-    let ours = pin_state()
-        .and_then(|pinned| {
-            pinned
-                .pin()
-                .map(|pin| (pin.transport.drag_held, transport_clock(&pin.transport)))
-        })
-        .filter(|(held, _)| *held);
-
-    let Some((_, at)) = ours else {
-        return;
-    };
-
-    update_pin_transport(|state| state.released(at.unwrap_or(0.0)));
-}
-
-/// Put the frame a background rendered for this park in place of the one the park captured, and
-/// repaint the band that is holding it.
-///
-/// **The repaint is the whole of what is asked of the window here, and it cannot be left to the
-/// next one.** A park still standing has no drag in flight to repaint it — the drag's own repaints
-/// are its pointer moves, and those are over — and the tick's own raise is answered out of the hand
-/// while a park stands, so an upgrade nothing paints is a frame that is held and never shown. The
-/// paint is the ordinary one for a window standing where it is, and it reads the band as a parked
-/// band, so the frame goes up under the same opaque fill the park painted with it (see
-/// `compose_parked_band`).
-fn upgrade_the_parked_band(window: &dyn PinWindow) -> bool {
-    if !install_resume_frame() {
-        return false;
-    }
-
-    window.repaint();
-    true
-}
-
-/// The arm this band's park is to be taken on, and how long it has been waiting for one — or
-/// nothing at all while it is still to be waited for.
-///
-/// **The stamp is taken once and kept, so a park that outlives its bound is waiting on the rest of
-/// its wait rather than starting a new one.** That is what makes an expired park with no window
-/// cheap rather than a loop: the next tick that finds a window hands it the band at once, whether
-/// it arrives a millisecond after the bound or a second after it, and the ticks in between cost
-/// one comparison (see `park_swap_arm`).
-fn park_swap_arm_for_the_band(window_up: bool) -> Option<(ParkSwap, Duration)> {
-    // Read before the park's own lock is taken, and not inside the guard below: that guard asks
-    // the pin, and the park's record is written with the pin held, so holding the park while asking
-    // it is the wrong way round for two locks (see `park_pinned_player_inner`).
-    let expectation_live = cover_relaunch_is_still_possible();
-
-    // Read through a poisoned lock rather than refused by it: this is the function that decides
-    // whether the band is ever handed back, and a park that no tick will end is a black band for
-    // the rest of the pin's life.
-    let mut held = PIN_PARK_SWAP
-        .lock()
-        .unwrap_or_else(|swap| swap.into_inner());
-
-    // A cover that expects a relaunch is held for it only while that relaunch can still arrive: a
-    // scrub the pointer is still down on is not a wait with no end, and neither is the press's own
-    // dead interval or a replacement that has already been begun. An expectation nothing can satisfy
-    // is not a wait — it is the residue of a release that came and got no player, or of one the
-    // release road refused — and holding a cover on it is the opaque band nothing ends. So it falls
-    // through to the arms below, which hand the band back on a window or give the cover up on its
-    // own bound (see `cover_relaunch_is_still_possible`).
-    if held.as_ref().is_some_and(|swap| {
-        swap.awaiting_relaunch && !player_replaced_since(swap.player) && expectation_live
-    }) {
-        return None;
-    }
-
-    // **A park with no record of itself is a park with no replacement to wait for**, and that is
-    // what it is answered as: there is nothing behind it that this app began and nothing that is
-    // going to arrive, so it is handed to whatever window is standing in the band on the first tick
-    // that finds one. The alternative — the refusal a missing record used to be — is the stuck
-    // placeholder: the band stays painted flat over a film nothing is going to be shown behind, and
-    // nothing will ever write the record that could have ended it.
-    let (owner, replaced, waited) = held
-        .as_mut()
-        .map(|swap| {
-            let since = *swap.since.get_or_insert_with(Instant::now);
-            (
-                swap.owner,
-                swap.replacing || player_replaced_since(swap.player),
-                since.elapsed(),
-            )
-        })
-        .unwrap_or((ParkArm::Carry, false, Duration::ZERO));
-
-    park_swap_arm(owner, window_up, replaced, waited).map(|arm| (arm, waited))
-}
-
-/// Whether the standing park is a cover that was waiting for a relaunch.
-///
-/// A scrub aims without relaunching, so until one is begun behind the cover there is nothing
-/// for the settle to swap to; a gesture that ends without relaunching one — a move let go of, a
-/// capture stolen mid-aim — hands the band back to the player it covers instead of leaving a
-/// cover nothing ends (see `finish_pin_drag` and `pin_capture_lost`).
-///
-/// **This asks whether the cover was waiting, and not whether it still should be** — and the two
-/// are different questions because both of its callers *are* the release: each has just dropped the
-/// pointer's own record and is the moment the relaunch would have been made, so a cover that was
-/// waiting is exactly what they are here to hand back. Whether the tick should go on *holding* for
-/// a relaunch is the other question, and it is asked where the hold is (see
-/// `cover_relaunch_is_still_possible`).
-pub(super) fn seek_cover_is_waiting() -> bool {
-    PIN_PARK_SWAP
-        .lock()
-        .ok()
-        .and_then(|held| {
-            held.as_ref()
-                .map(|swap| swap.awaiting_relaunch && !player_replaced_since(swap.player))
-        })
-        .unwrap_or(false)
-}
-
-/// Give up the record of a park there is no longer, with the pin held.
-///
-/// **The pin is held across the write, and that is the other half of the park and its record being
-/// one fact.** A park writes the flag and the record together under the pin's lock (see
-/// `park_pinned_player`), so a park begun while this is deciding has either written both already —
-/// and this sees the flag up and leaves the record alone — or writes both after this has released
-/// the lock. Read without it, a park begun in the gap between the read and the write loses the
-/// record it had just written, and a park that has lost its record is a placeholder nothing ends.
-///
-/// The in-flight relaunch goes with it: the swap consumed it, or there never was a cover for it
-/// to wait behind — a relaunch with no park standing is showable only by the relaunch's own
-/// immediate place, which has already run, so nothing is left for the settle to gate on.
-fn forget_the_park_that_is_not() {
-    let Some(mut pinned) = pin_state() else {
-        return;
-    };
-    let Some(pin) = pinned.pin_mut() else {
-        return;
-    };
-    if pin.parked {
-        return;
-    }
-
-    clear_pending_pinned_relaunch();
-    forget_pin_park_swap();
-}
-
-/// Put down everything a park was holding: its bookkeeping, and the frame the background was
-/// preparing for it.
-///
-/// **Given up with the pin held wherever it is asked for from the loop**, which is what
-/// `forget_the_park_that_is_not` is for; it is this function because a test standing a park needs to
-/// give it up without a pin's lock in the way.
-pub(super) fn forget_pin_park_swap() {
-    PIN_PARK_SWAP
-        .lock()
-        .unwrap_or_else(|swap| swap.into_inner())
-        .take();
-    forget_resume_frame();
-}
-
-/// The park taken back when `player_up` says the player's own window is standing in the band, or
-/// left standing when it does not: the flag and the window are two facts and the flag is only ever
-/// this app's own account of the window (see `settle_pinned_park`).
-///
-/// The frame goes with the park rather than with the drag, because it is the band's picture for as
-/// long as the band has no window in it and not one tick longer (see `forget_video_frame`).
-pub(super) fn settle_pinned_park_onto(player_up: bool) -> bool {
-    let settled = player_up && take_the_park_down();
-
-    if settled {
-        forget_video_frame();
-    }
-
-    settled
 }

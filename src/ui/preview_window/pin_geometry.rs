@@ -566,6 +566,10 @@ pub(super) unsafe fn pin_command_request(
             restore_pin(&Win32PinWindow, PinRestore::Pressed);
             None
         }
+        Some(PinCommand::CameBack) => {
+            restore_pin(&Win32PinWindow, PinRestore::TheShell);
+            None
+        }
         Some(PinCommand::Maximize) => {
             toggle_pin_maximized(request);
             None
@@ -659,6 +663,10 @@ pub(super) unsafe fn release_pin_capture(hwnd: HWND) {
 
 /// Carry a pinned window's drag on: the pointer has moved, and what the press began is applied to
 /// the box the window had when it began.
+///
+/// Nothing here waits. A resize applies wherever the pointer is now, every pass, and a pass that is
+/// skipped costs nothing because the next one reads the pointer again — the positions in between are
+/// coalesced by Windows and never arrive as boxes of their own.
 pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     let (drag, dpi, transport, overlay, frame, caption) = {
         let Some(pinned) = pin_state() else {
@@ -712,19 +720,18 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             let share = home_share(zoom.drawn.0 - window, window);
             let carried = (carried.0 * share, carried.1 * share);
 
-            pin.zoom = Some(PinZoom {
-                pan: carried,
-                // A hand taking the picture is a hand taking over from the wheel: a travel still in
-                // flight ends at the size the picture has reached rather than going on under a hand
-                // that is carrying it, which would be two answers to where the picture is — and the
-                // loop owes the frame of that size for the same reason it owes one to any other size a
-                // picture has settled at (see `pin_zoom_oversize_box`). The bounce ends with it, for
-                // the same reason a notch's end does: a hand taking the picture is a hand taking over
-                // from the wheel (see `pin_zoom_bounce`).
-                toward: zoom.drawn.0,
-                bounce: 0.0,
-                ..zoom
-            });
+            // A hand taking the picture is a hand taking over from the wheel: a travel still in
+            // flight ends at the size the picture has reached rather than going on under a hand
+            // that is carrying it, which would be two answers to where the picture is — and the
+            // loop owes the frame of that size for the same reason it owes one to any other size a
+            // picture has settled at (see `pin_zoom_oversize_box`). The bounce ends with it, for
+            // the same reason a notch's end does: a hand taking the picture is a hand taking over
+            // from the wheel (see `pin_zoom_bounce`).
+            let mut settled = zoom;
+            settled.pan = carried;
+            settled.toward = zoom.drawn.0;
+            settled.bounce = 0.0;
+            pin.zoom = Some(settled);
             // Where the pointer has been carried out to, so that the next ask for a pointer that has
             // not moved is recognised as the same question (see the early return above).
             if let Some(drag) = pin.dragging.as_mut() {
@@ -763,7 +770,7 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     let window = clamp_pinned_box(asked, dpi, &DESKTOPS);
     let content = content_box_of(window, dpi, transport, overlay, caption);
 
-    {
+    let was = {
         let Some(mut pinned) = pin_state() else {
             return;
         };
@@ -775,7 +782,18 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // there is no maximize left to undo, so the caption's restore glyph goes back to a maximize
         // with it and the button maximizes again (see `pin_restore_box`).
         pin.restore = pin_restore_box(pin.restore, pin.content, content);
+        let was = pin.content;
         pin.content = content;
+        // A hand that has carried the window has moved the ideal centre with it: the box the next
+        // notch is grown about is the box the hand left and not the one it was carried from (see
+        // `PinZoom::carried`). A move changes no size, so the centre moves by exactly the distance the
+        // box did. A resize is a box chosen for the whole window and hands the picture back to filling
+        // it below, which seats a centre of its own.
+        if matches!(drag.action, PinDragAction::Move) {
+            if let Some(zoom) = pin.zoom.as_mut() {
+                zoom.carried((content.0 - was.0, content.1 - was.1));
+            }
+        }
         // A hand that pulled the box to a size is the box's new bound as well as its size: the
         // side the user dragged the window out to is the side the files that follow may use, and
         // it writes one where the pin had none — a size asked for by hand is the size, not the box
@@ -797,7 +815,8 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         if let Some(drag) = pin.dragging.as_mut() {
             drag.carried = point;
         }
-    }
+        was
+    };
 
     let (width, height) = (window.2 - window.0, window.3 - window.1);
 
@@ -826,19 +845,39 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // was decoded with, which is what the paint below scales into that band, as it always did.
         relayout_text_for_the_box(content);
 
-        render_pinned_preview_at(hwnd, window.0, window.1);
+        // **The two commits keep the film inside the pin's own box, and the direction of the step
+        // says which of them goes first.** The host is a window of the desktop's standing *below* the
+        // chrome rather than a child of it, so nothing clips it to the pin: a host put at a band the
+        // pin's window does not cover is film on the screen outside its own frame, and a step that
+        // committed the larger of the two boxes first would show exactly that, once per pointer move.
+        // So a step that grows commits the pin first — the new box holds the old one, and the film at
+        // its old band stays inside it — and a step that shrinks commits the host first, which is the
+        // same fact the other way round (see `a_resize_step_grows`).
+        //
+        // **The order was the other one while the host was a `WS_CHILD` of this window.** A child is
+        // clipped by its parent, so an oversized host showed nothing of itself, and putting it down
+        // first on a growth was free: the strip the growth revealed was already the film's. An owned
+        // host is shown in full, so that order was the film standing outside the chrome instead, and
+        // what the order below costs is the mirror of what the old one bought — on a growth the newly
+        // exposed strip stands as this app's own band, the alpha-1 claim on the pixel that the desktop
+        // shows through, until the host catches up. That is milder than a strip of picture outside the
+        // window, and it cannot be painted out: the chrome is above the film, so an opaque band would
+        // hide the picture for the whole of the step rather than for the instant the strip is bare.
+        let grew = a_resize_step_grows(was, content);
+        pin_resize_probe::begin_step(window, grew);
+        if grew {
+            render_pinned_preview_at(hwnd, window.0, window.1);
+            place_pinned_siblings();
+        } else {
+            place_pinned_siblings();
+            render_pinned_preview_at(hwnd, window.0, window.1);
+        }
+        pin_resize_probe::end_step();
 
-        // The box is already the one the paint applied; what is re-asserted here is only the
-        // place in the z-order a carried window gets from its own `SetWindowPos`.
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        // The band is not re-asked here. It is a question about the setting rather than about the
+        // box (`band_place`), so a step that re-asked it was a DWM reorder per pointer move for a
+        // window already in the band it named — and the drag's own two ends ask it once each (see
+        // `begin_pin_drag` and `finish_pin_drag`).
     } else {
         // Kept in its band without touching the z-order: the order (engine above preview) is
         // established where the pin comes up, and re-asserting TOPMOST per move fights the
@@ -852,11 +891,26 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             height,
             SWP_NOACTIVATE | SWP_NOZORDER,
         );
-    }
 
-    // Whatever stands in the media band travels with it — after the box it stands in is the
-    // window's, so that a player's window is never put where the surface has not caught up.
-    place_pinned_siblings();
+        // Whatever stands in the media band travels with it — after the box it stands in is the
+        // window's, so that a player's window is never put where the surface has not caught up. A
+        // resize takes that order where it grows; a step that shrinks puts the film down first (see
+        // above).
+        place_pinned_siblings();
+    }
+}
+
+/// Whether a resize step grows the window, which is the whole of what decides the order its two
+/// commits go in (see `apply_pin_drag`).
+///
+/// **Per axis rather than by area**, because it is per axis that one box holds another: a box pulled
+/// wider and shorter at once makes the two boxes cross rather than nest, so no order keeps the film
+/// inside the window there, and the side that grew is the one the order is about — the side whose new
+/// strip the film would fill rather than the side the window gave up. A step that changed neither
+/// extent is not a growth and takes the shrinking order: the two commits then write the same boxes in
+/// either order, so there is nothing for the choice to be seen in.
+pub(super) fn a_resize_step_grows(was: ScreenRegion, now: ScreenRegion) -> bool {
+    (now.2 - now.0) > (was.2 - was.0) || (now.3 - now.1) > (was.3 - was.1)
 }
 
 /// Put a pinned window in the middle of the screen it stands on, its size untouched: what a

@@ -1,6 +1,7 @@
 //! The pin's chrome: the heights and near-misses its caption, transport bar and volume button
 //! are drawn at, and the level they are at.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 /// What a pinned preview adds to the box its media is in, in the units every other margin
@@ -13,11 +14,15 @@ pub(super) const PIN_BUBBLE_PIXELS: f32 = 44.0;
 /// long a pin shows its chrome for whether or not the pointer is near it — a moment after the pin
 /// is taken up, which is when a hand is looking for the buttons.
 ///
-/// There is no fade between those two states, and none is wanted: the chrome is drawn into the
-/// window's own rows rather than composited over anything, so a half-shown one is a strip with the
-/// picture missing behind it rather than a fainter strip — and what is cheap is the state rather
-/// than a level, since a chrome that has been asked for is drawn whole in the paint that notices.
+/// There is no fade between those two states, and none is wanted: the chrome is carried in
+/// windows of its own rather than composited over anything, so a half-shown one is a strip with
+/// the picture missing behind it rather than a fainter strip — and what is cheap is the state
+/// rather than a level, since a chrome that has been asked for is drawn whole in the paint that
+/// notices.
 pub(super) const PIN_CHROME_NEAR_PIXELS: f32 = 24.0;
+/// The arrival window tests still exercise; no real install arms one — every pin comes up hidden
+/// and only the pointer asks a strip back (see `PinChrome::hidden`).
+#[cfg(test)]
 pub(super) const PIN_CHROME_ARRIVAL_SECONDS: f32 = 1.5;
 /// The volume a pinned preview is playing at.
 ///
@@ -242,6 +247,15 @@ pub(super) fn close_pin_volume() -> bool {
 /// to; and nothing is holding it, because there is no transport that could be holding it (see
 /// `pin_is_playing` and `video_loop_tick`).
 pub(super) fn pin_is_playing_current() -> bool {
+    // **A pin waiting on its hosted film's frame is holding that film, whatever its transport
+    // says.** The player is begun paused on the frame the hover froze on (see
+    // `pin_film_host::settle_pin_handover`), and the transport's clock is the only thing that says
+    // otherwise — so the loop is told the truth here, and a film frozen a tenth of a second from its
+    // end is not rewound and set going underneath the wait.
+    if pin_film_host::pin_handover_armed() {
+        return false;
+    }
+
     pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin_is_playing(&pin.transport)))
         .unwrap_or(true)
@@ -297,8 +311,8 @@ pub(super) unsafe fn pin_ask_keyboard_back(hwnd: HWND) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct PinChrome {
     /// Whether the pointer is asking for the caption, and for the transport bar. There is no
-    /// half-shown state: a strip is drawn into the window's own rows, so one painted at a share
-    /// of itself would be a strip with the picture gone behind it. Each is drawn whole or not at
+    /// half-shown state: a strip stands in a window of its own, so one painted at a share of
+    /// itself would be a strip with the picture gone behind it. Each is drawn whole or not at
     /// all (see the note over `PIN_CHROME_NEAR_PIXELS`).
     pub(super) caption: bool,
     pub(super) bar: bool,
@@ -307,8 +321,10 @@ pub(super) struct PinChrome {
 }
 
 impl PinChrome {
-    /// The chrome a pinned window comes up with: both strips, and staying that way for a moment
-    /// whether or not the pointer is near them.
+    /// The chrome a pinned window comes up with in the tests that still exercise an arrival
+    /// window: both strips, and staying that way for a moment whether or not the pointer is near
+    /// them. Nothing in the app arms one: every install comes up hidden.
+    #[cfg(test)]
     pub(super) fn on_arrival(now: Instant) -> Self {
         Self {
             caption: true,
@@ -326,6 +342,36 @@ impl PinChrome {
             until: None,
         }
     }
+
+    /// The chrome of a kind that hides it after a step: neither strip showing, and no arrival
+    /// window armed — what the swap's cover shows under, until the pointer asks for a strip back
+    /// (see `take_up_pinned_window`).
+    pub(super) fn hidden() -> Self {
+        Self {
+            caption: false,
+            bar: false,
+            until: None,
+        }
+    }
+}
+
+/// Whether the chrome is held down by something other than the pointer: a hosted film's handover.
+/// The cheap term only, so a hand that moves over the pin can ask it; the player read is
+/// `refresh_pin_chrome`'s alone (see `film_window_without_a_picture` there).
+pub(super) fn pin_chrome_is_held_down() -> bool {
+    pin_film_host::pin_handover_armed()
+}
+
+/// Ask the chrome question now, outside the loop's tick, answering whether it changed. The caller
+/// decides what that is owed — the strips are synced where they are (see `refresh_pin_chrome`).
+pub(super) fn refresh_the_pin_chrome_now() -> bool {
+    let Some(mut pinned) = pin_state() else {
+        return false;
+    };
+    let Some(pin) = pinned.pin_mut() else {
+        return false;
+    };
+    refresh_pin_chrome(pin, Instant::now(), cursor_screen_point())
 }
 
 /// Ask which strips of a pinned window's chrome the pointer is calling for, answering whether
@@ -364,15 +410,58 @@ pub(super) fn refresh_pin_chrome(
     // (see `pin_hides_chrome`).
     let mut shown = false;
     if pin.hides_chrome {
-        // The arrival window is spent the moment it closes, and there is no bringing it back:
-        // what asks for a strip after it is the pointer and nothing else.
-        if pin.chrome.until.is_some_and(|until| now >= until) {
-            pin.chrome.until = None;
-        }
+        // A pin waiting on its hosted film's first frame shows no chrome meanwhile: the strips
+        // belong to the pin-mode frame, and that frame is not on screen yet. The handover shows
+        // no chrome either — it is the pin's first frame, not an arrival, and only the pointer
+        // asks a strip back (see `pin_film_host::settle_pin_handover`).
+        //
+        // A file step holds the strips down while it is on its way: the strips go down with the
+        // step, not with the ask, and the file that replaces it asks them back (see
+        // `pin_chrome_is_held_down`).
+        //
+        // A hosted film whose player has a window but no frame yet is a band that would be black
+        // behind an *arrival's* chrome: the strips of an arrival window wait for the picture the
+        // player itself says it drew. What they do not wait for is the pointer's chrome, which is
+        // the strip a hand is already resting on: a file step's incoming player has its window under
+        // the host for a tick or more before its frame is proved, and a step is not an arrival —
+        // taking the hand's strip down there is the blink a step used to have (see
+        // `take_up_pinned_window`).
+        let pid = VIDEO_PID.load(Ordering::SeqCst);
+        let film_window_without_a_picture = pin_film_host::the_hosted_player_is_drawing(pid)
+            && !pin_film_host::the_hosted_frame_is_up(pid);
+        let (caption, bar) = if pin_chrome_is_held_down() {
+            (false, false)
+        } else {
+            // The arrival window is spent the moment it closes, and there is no bringing it back:
+            // what asks for a strip after it is the pointer and nothing else.
+            if pin.chrome.until.is_some_and(|until| now >= until) {
+                pin.chrome.until = None;
+            }
 
-        let (caption, bar) = match pin.chrome.until.is_some() {
-            true => (true, true),
-            false => pin_chrome_near(pin, cursor),
+            match pin.chrome.until.is_some() {
+                true if film_window_without_a_picture => (false, false),
+                true => (true, true),
+                false => {
+                    let (caption, bar) = pin_chrome_near(pin, cursor);
+                    // Near is only geometric: a pointer over a window standing over the pin is near
+                    // it without hovering it, so the strips stay hidden there (see
+                    // `pin_chrome_occluded`).
+                    let (caption, bar) = if (caption || bar) && pin_chrome_occluded(cursor) {
+                        (false, false)
+                    } else {
+                        (caption, bar)
+                    };
+                    // **A strip that is already on the screen stays while the film it belongs to has
+                    // no frame yet**: the band behind it is black either way, and taking it out from
+                    // under a hand resting on it is the blink a step's wait used to be. What the gate
+                    // above keeps is a strip that is *down* down (see `PinChrome::hidden`).
+                    if film_window_without_a_picture {
+                        (caption && pin.chrome.caption, bar && pin.chrome.bar)
+                    } else {
+                        (caption, bar)
+                    }
+                }
+            }
         };
 
         // The strip the popup came out of stays showing while it is open, whatever the pointer
@@ -519,6 +608,10 @@ pub(super) fn refresh_pin_volume(pin: &mut PinnedPreview, cursor: Option<(i32, i
 /// they have in common is the room beside them — a strip is asked for from either side of the
 /// window's own edge, since a pointer that has not quite arrived is on its way there — so a pointer
 /// out beyond the window's sides is near neither.
+///
+/// Near is geometric only: whether the pointer is really over the pin rather than over a window
+/// standing over it is the hover question's own, asked where the answer is used (see
+/// `pin_chrome_occluded`).
 pub(super) fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -> (bool, bool) {
     let Some((x, y)) = cursor else {
         return (false, false);
@@ -544,6 +637,118 @@ pub(super) fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -
 
     (at_the_top, at_the_bottom)
 }
+
+/// Whether the pointer the chrome's hover question is about is over another window rather than
+/// the pin's own: a hand past the pin's edge counts as near, but one over a window standing over
+/// the pin is a hand somewhere else — Notepad over the pin is not a hand asking for the pin's
+/// caption (see `refresh_pin_chrome`).
+///
+/// **A window of the film the pin is showing is the pin, not a window over it.** A player begun for
+/// the pin is born at the band and shows itself there before the host has it (see
+/// `pin_film_thumbnail::the_source_launch_origin`), so the hand resting on a strip during a step is
+/// over a window of a player this app began for a film — the incoming one, or the outgoing one it is
+/// kept on screen until the incoming one draws — and a film the pin is showing is not a program
+/// standing over it. The film's host answers the same way for a step whose player is already drawing
+/// in it.
+///
+/// **The player is asked of the app's own record rather than of the pid the host happens to hold**,
+/// and that is what makes the answer the same at every tick of a handover: the host names whichever
+/// player the step last recorded, while the window under the hand is whichever of the two is in
+/// front, and a rule keyed on that one pid answers the same window as somebody else's on the ticks
+/// where the two disagree — the intermittent strip (see `engine_processes::holds_a_player`).
+///
+/// **A window of this app's own is the pin, not a window over it**, whether it is a window of a film
+/// the pin is showing or one of the app's own: with `Pin Mode → Always On Top` off a pin on the screen
+/// wears the taskbar stand-in, which is a window of this app's own and can stand over the pin's
+/// caption — the intermittent strip the user's trace named, by a window that was neither the film's
+/// host nor the player. The question of whose window it is is the one the rest of the app asks (see
+/// `pin_lifecycle::pid_is_the_previews`), asked here of the same pids.
+///
+/// Asked of the window under the point rather than of the order, because the pin's children —
+/// the host, the strips — are disabled and `WindowFromPoint` skips them, so the pin's own window
+/// comes back wherever the pointer is genuinely over the pin. A pin with no window of its own
+/// has nothing standing over it to ask about, so there the geometric question stands as it did.
+fn pin_chrome_occluded(cursor: Option<(i32, i32)>) -> bool {
+    let (Some((x, y)), Some(hwnd)) = (cursor, pin_real_window::real_pin_window()) else {
+        return false;
+    };
+    let under = window_at_point(x, y);
+    let occluded = under != hwnd.0 as isize && !a_window_of_the_pins_own(under);
+    if occluded {
+        note_pin_trace!(
+            "chrome occluded by {:?} over the pin {:?}: the strips the pointer asked for go down",
+            HWND(under as *mut _),
+            hwnd,
+        );
+    }
+    occluded
+}
+
+/// Whether a window under the pointer belongs to the pin rather than to somebody else: the pin's own
+/// window and its children, the film's host — a window of this app's standing at the band the pin is in
+/// — a window of any player this app began for a film, and a window of this app's own process at all
+/// (see `pin_chrome_occluded`). No window at all under the point is nobody's, which is the same answer
+/// as the pin's: nothing stands over a pin in open space.
+///
+/// The player is asked for by its process, which is the same question the hover's own probe asks of
+/// a film's window — and of the app's record of the players it began rather than of the host, because
+/// the host names one player and the handover has two (see `pin_chrome_occluded`). A window of any
+/// other process is somebody else's however close it stands.
+fn a_window_of_the_pins_own(under: isize) -> bool {
+    // **Nothing at all under the point is nothing standing over the pin.** `WindowFromPoint` answers
+    // no window where no window is there — a hand past every window the desktop has — and a rule that
+    // read that as somebody else's would take a strip away from a pointer that is near the pin in
+    // open space.
+    if under == 0 {
+        return true;
+    }
+
+    // **The pin's own children are the pin.** The chrome strips are children of its window, and a
+    // strip that `WindowFromPoint` does answer (a platform or a setting that lets it) is the chrome
+    // the pointer is asking for rather than a window over it.
+    if pin_real_window::real_pin_window()
+        .is_some_and(|pin| unsafe { GetAncestor(HWND(under as *mut _), GA_ROOT) == pin })
+    {
+        return true;
+    }
+
+    if pin_film_host::film_host().is_some_and(|host| host.0 as isize == under) {
+        return true;
+    }
+    let mut owner = 0;
+    unsafe { GetWindowThreadProcessId(HWND(under as *mut _), Some(&mut owner)) };
+    pin_lifecycle::pid_is_the_previews(owner)
+        || engine_processes::holds_a_player(owner)
+        || pin_film_host::hosted_player_pid() == Some(owner)
+}
+
+/// The window under a screen point, which a test stands in rather than reading off the desktop:
+/// a headless run has no pointer, and the desktop under it has no pin in it (see
+/// `pin_chrome_occluded`).
+fn window_at_point(x: i32, y: i32) -> isize {
+    #[cfg(test)]
+    if let Ok(held) = WINDOW_AT_POINT_STAND_IN.lock() {
+        if let Some(answer) = *held {
+            return answer;
+        }
+    }
+
+    use windows::Win32::UI::WindowsAndMessaging::WindowFromPoint;
+    unsafe { WindowFromPoint(POINT { x, y }) }.0 as isize
+}
+
+/// Stand an answer for `window_at_point` in place of the desktop's own, or give the desktop's
+/// own answer back with `None` — put back the same way.
+#[cfg(test)]
+pub(super) fn stand_window_at_point_in(answer: Option<isize>) {
+    if let Ok(mut held) = WINDOW_AT_POINT_STAND_IN.lock() {
+        *held = answer;
+    }
+}
+
+/// The answer `window_at_point` gives while a test stands one in (see `stand_window_at_point_in`).
+#[cfg(test)]
+static WINDOW_AT_POINT_STAND_IN: Mutex<Option<isize>> = Mutex::new(None);
 
 /// Whether a pinned window's chrome — the caption and the transport bar — is drawn *over* the
 /// media rather than in bands above and below it.
@@ -948,7 +1153,7 @@ pub(super) fn settle_pin_volume() {
         ) {
             PinLevelSettling::Relaunch => {
                 let playhead = pin_playhead(&transport).unwrap_or(0.0);
-                restart_pinned_player(&path, content, playhead, false);
+                restart_pinned_player(&path, content, playhead, false, RestartReason::Volume);
             }
             PinLevelSettling::OwedToTheNextPlayer => {
                 // Nothing is done, and nothing is written: the claim of what the running player

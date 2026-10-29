@@ -2,21 +2,40 @@
 //! pinned window is divided into, and the compose, stretch, resample and blend each is filled
 //! by.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 pub(super) unsafe fn render_layered_preview(hwnd: HWND) {
+    // **A pin is painted into the window the pin stands in**, and the handle a road carries is only
+    // whichever window its message came to: the loop's own is the hover's, which a picture pin has put
+    // down (see `pinned_window`). Asked of the state instead, so a road that runs on the loop — a
+    // spinner put away, a playhead turned, a frame laid out again, a menu dismissed — reaches the window
+    // the user is looking at rather than a hidden one. It was the tick's restore that used to catch a
+    // picture pin up every tick, and that road is asked of the pin's own window now (see
+    // `the_pin_window_is_down`), so nothing catches it up any more.
+    //
+    // The answer is the same handle for every other pin: one that is not its own window stands in the
+    // preview's, and a hover is not a pin at all. The window and the painter it is owed are one
+    // answer rather than two asks of the same question.
+    let (window, a_pin) = if pinned() {
+        (pinned_window(), true)
+    } else {
+        (hwnd, false)
+    };
+
     let mut rect = RECT::default();
-    if GetWindowRect(hwnd, &mut rect).is_err() {
+    if GetWindowRect(window, &mut rect).is_err() {
         return;
     }
 
     // The window is two things: the hover's own frame, and — while a preview is pinned — a
     // window with a caption and a bar of its own. Which of the two it is showing is not a
-    // question about its size, so it is asked here rather than worked out by each painter.
-    if pinned() {
-        render_pinned_preview_at(hwnd, rect.left, rect.top);
+    // question about its size, so it is settled with the window rather than worked out by each
+    // painter.
+    if a_pin {
+        render_pinned_preview_at(window, rect.left, rect.top);
     } else {
-        render_layered_preview_at(hwnd, rect.left, rect.top);
+        render_layered_preview_at(window, rect.left, rect.top);
     }
 }
 
@@ -143,26 +162,40 @@ pub(super) unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
 ///
 /// A pin whose media is a film a player of its own draws is a pin whose band is not its pixels at
 /// all: the band is a hole onto that player's window, and a hole is click-through, because hit
-/// testing of a layered window is answered by the shape of its pixels. That is what FFmpeg's
-/// player is owed, and it is what a preview this app draws for itself costs nothing. **mpv is the
-/// one answer that is neither.** Its film is not parked for a gesture, so the window it draws in
-/// travels with the band rather than being left behind a strip of the pin's chrome, and the film
-/// is therefore the pin's own drag handle: a hand on the picture carries the window, the chrome
-/// and the film as one thing. A handle cannot be a hole, so the band is given the least coverage
-/// a pixel can have (see `fill_band_hit_testable`).
+/// testing of a layered window is answered by the shape of its pixels. **A film's band is never
+/// that hole.** What a hole hands the press to is the player's own window, so every press on the
+/// picture is a press the pin never sees: the window it is over cannot be carried by its picture,
+/// and the player is handed a pointer it uses for itself — a double click in FFmpeg's player is
+/// its fullscreen toggle, which leaves the film blown up over the screen under a hand that was
+/// carrying a window. The band is therefore given the least coverage a pixel can have, which is a
+/// change no eye can see and the pin's own point to win (see `fill_band_hit_testable`).
 ///
-/// Which player is up is read off the recorded player image, which is the record the carry is
-/// read off too — a second way to know which player is up would be a second thing to keep in step
-/// with this one, and the two arms would be free to disagree about the same film (see
-/// `video_process_image`). The kind is read with it because a film a player draws is the only band
-/// that is a hole in the first place: every other kind's band is this app's own pixels already,
-/// and a band a park has painted flat is left alone, since what stands in it is the parked film.
-pub(super) fn film_band_is_hit_testable(media: MediaType, image: &str, parked: bool) -> bool {
-    !parked && matches!(media, MediaType::Video) && image == MPV_IMAGE_NAME
+/// The kind is what is read, because a film is the only band a player of somebody else's stands
+/// in; every other kind's band is this app's own pixels already. The chrome's own rows are the
+/// same claim wherever they are not the media's own: a kind whose chrome stands in bands around its
+/// media owes them the same least pixel (see `chrome_rows_are_hit_testable`), and a kind whose
+/// chrome is drawn over its media has no such rows — they are the band's own, answered here.
+pub(super) fn film_band_is_hit_testable(media: MediaType) -> bool {
+    matches!(media, MediaType::Video)
 }
 
-/// Paint a pinned window: the caption, the media in the band below it, and — for a kind that
-/// plays — the transport bar below that.
+/// Whether the chrome's own rows of a pinned window are the pin's claim rather than its chrome:
+/// they always are where they are not the media's own. The strips carry the chrome on every road,
+/// so the bitmap owes those rows only the least pixel a press can land on — the same one part in
+/// 255 the film's band is given, and for the same reason (see `pin_chrome_strips`).
+///
+/// Asked of the overlay because rows that are the band's own are the band's answer rather than
+/// this one's: a kind whose chrome is drawn over its media has its chrome rows inside the band,
+/// already the media, the cover, or the film's claim (see `film_band_is_hit_testable`). A kind
+/// whose chrome stands in bands around its media leaves its first and last rows to the strips, and
+/// what stands in them is this.
+pub(super) fn chrome_rows_are_hit_testable(overlay: bool) -> bool {
+    !overlay
+}
+
+/// Paint a pinned window: the media in its band, and the pin's alpha-1 claim on the chrome's
+/// rows for the strips to stand over — for a kind that plays, the transport bar's rows below the
+/// band as well (see `pin_chrome_strips`).
 ///
 /// It is the same composition `render_layered_preview_at` performs, for a window that is no
 /// longer the frame's size: the surface is the window's whole box, the frame is composed into
@@ -177,18 +210,25 @@ pub(super) fn film_band_is_hit_testable(media: MediaType, image: &str, parked: b
 /// stands in the whole of it — a pin whose chrome is drawn over its media is media the
 /// whole of the window down (see `pinned_band_rows`). What the band is then is nothing at
 /// all — alpha zero, which is what lets the window underneath be seen through it and,
-/// more to the point, be *clicked*: hit testing of a layered window is answered by the
-/// shape of its pixels, so a band of transparent ones is a band the player keeps for
-/// itself. The one exception is a film mpv draws, whose band is the pin's own handle and
-/// is therefore painted the least a pixel can be (see `film_band_is_hit_testable`).
+/// for an engine's page, be *clicked*: hit testing of a layered window is answered by the
+/// shape of its pixels, so a band of transparent ones is a band the page keeps for itself.
+/// A film is the one band that is painted instead, the least a pixel can be, because a
+/// press on a picture is the pin's own (see `film_band_is_hit_testable`).
 pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
+    // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock, taken only where a resize step is being
+    // measured (see `pin_resize_probe`).
+    let started = pin_resize_probe::a_step_started();
     let Some(paint) = pinned_paint() else {
         return;
     };
 
     let (width, height) = (paint.width, paint.height);
     let caption_height = paint.caption_height;
-    let (padding, slack) = the_slack_a_resize_paints_with(paint.resizing);
+    let (padding, slack) =
+        the_slack_a_resize_paints_with(a_resize_asks_the_surface_for_a_row_of_slack(
+            paint.resizing,
+            pin_film_host::film_host().is_some(),
+        ));
     let rows = height + slack;
     let Some(bits) = ensure_layered_surface(hwnd.0 as isize, width as u32, rows as u32) else {
         return;
@@ -301,42 +341,6 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         );
     }
 
-    // A player parked for the length of a drag is painted over rather than painted through: the
-    // band is transparent everywhere else so that FFmpeg's own window shows through it, and a
-    // transparent band with the player hidden is a hole in the desktop shaped like a video. So the
-    // band is filled with the last frame the player had on screen, scaled to the box being dragged
-    // to exactly as a picture's own frame is (see `compose_parked_band`), and black under it rather
-    // than the configured `Background -> Video` — that setting is allowed to be `Transparent`, and
-    // a deliberately transparent band is exactly the hole this is here not to leave.
-    if paint.parked {
-        if mem_dc.is_some() {
-            let held = held_video_frame();
-            compose_parked_band(
-                held.as_ref()
-                    .map(|frame| (frame.pixels.as_slice(), (frame.width, frame.height))),
-                band_width,
-                BandTarget {
-                    out,
-                    width: band_width,
-                    origin_y: band_top.max(0) as u32,
-                    height: band_height,
-                    frame,
-                    // A parked film is stood in for by the frame it was holding, scaled to the place the
-                    // box is: the film is in a window of its own over this band, so this is the last frame
-                    // before the drag and not a picture the wheel has placed.
-                    exact: (
-                        frame.0 as f32,
-                        frame.1 as f32,
-                        frame.2 as f32,
-                        frame.3 as f32,
-                    ),
-                },
-            );
-        } else {
-            fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
-        }
-    }
-
     if mem_dc.is_some() {
         if let Ok(media) = CURRENT_MEDIA.lock() {
             if let Some(media) = media.as_ref() {
@@ -371,15 +375,51 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                             exact,
                         },
                     );
-                } else if film_band_is_hit_testable(
-                    media.media_type,
-                    video_process_image(),
-                    paint.parked,
-                ) {
+                } else if film_band_is_hit_testable(media.media_type) {
                     // Nothing is composed into this band — the film is in a window under it — so
                     // what is written here is only ever the pin's own claim on the pixel (see
-                    // `film_band_is_hit_testable`).
-                    fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
+                    // `film_band_is_hit_testable`). A hosted film with no first frame in the host
+                    // yet is not a hole to see through: the band stays opaque until the player's
+                    // shown child arrives, so chrome up over an empty host is chrome over black
+                    // rather than over the desktop (see `pin_film_host`).
+                    //
+                    // **Except where this app's own cover stands in the host**, which is the frame a
+                    // relaunch holds for the whole of the wait: that picture is the host's, drawn
+                    // under this band, and an opaque fill here paints over it. Measured without this
+                    // line, the pin's next repaint — ~70 ms after the seek — is a lit band and then a
+                    // black one for the rest of the gap (see `pin_film_host::the_cover_stands`).
+                    //
+                    // **And except where the host is already drawing a picture of any player's**,
+                    // which is the outgoing film standing while the next one is opened and adopted
+                    // (see `pin_film_host::the_host_is_drawing`). The player's own window is under
+                    // this band, so an opaque fill here is the black frame between the two films.
+                    //
+                    // Only where the host stands: a pin never shown has no host yet, and its
+                    // bitmap keeps the pin's claim the way the strips' own test reads it (see
+                    // `the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows`).
+                    //
+                    // **And only where a host with nothing in it really does stand there**, which is
+                    // the answer `the_band_is_a_standing_host` carries rather than three separate
+                    // questions: a film taken off the band has left a host that is hidden and a
+                    // registration that is gone, and a band still claiming that pixel would be the
+                    // black rectangle that stands where the film was for the whole rest of the run
+                    // (see `pin_film_host::take_the_film_off_the_band`).
+                    if pin_film_host::the_band_is_a_standing_host() {
+                        if let Some(host) = pin_film_host::film_host() {
+                            note_pin_trace!(
+                                "pin band filled black: host {:?} drawing 0 cover 0",
+                                host,
+                            );
+                        }
+                        fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
+                    } else {
+                        fill_band_hit_testable(
+                            out,
+                            band_width,
+                            band_top.max(0) as u32,
+                            band_height,
+                        );
+                    }
                 }
             }
         }
@@ -390,16 +430,14 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // wait is not allowed to cost the window (see `paint_pin_spinner`).
     paint_pin_spinner(out, width.max(1) as u32, band_top, band_height as i32);
 
-    // The chrome, for kinds that draw it over their media: each strip whole, or not painted at
-    // all, which is what makes a picture whose chrome has gone a picture and nothing else — and the
-    // two are asked about one at a time, so a hand at one end of a window does not bring out what
-    // is at the other end of it (see `PinChrome`). The palette both strips are drawn in is read
-    // once for the paint, and not at all where neither is drawn. The caption, across the window's
-    // first rows.
-    let palette = if paint.caption
-        || (paint.transport_height > 0 && paint.bar)
-        || (!paint.overlay && caption_height > 0)
-    {
+    // The chrome, for the strips to carry: each strip whole, or not painted at all, which is what
+    // makes a picture whose chrome has gone a picture and nothing else — and the two are asked
+    // about one at a time, so a hand at one end of a window does not bring out what is at the
+    // other end of it (see `PinChrome`). The bitmap carries none of it: the strips composite over
+    // the rows, and what stands in them is the pin's own claim (see `chrome_rows_are_hit_testable`).
+    // The palette both strips are drawn in is read once for the paint, and not at all where neither
+    // is drawn. The caption, for the window's first rows.
+    let palette = if paint.caption || (paint.transport_height > 0 && paint.bar) {
         pin_chrome::ChromePalette::current()
     } else {
         None
@@ -428,36 +466,34 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 }
                 if let Some(surface) = surface.as_ref() {
                     pin_chrome::paint_caption(surface, palette, &caption, paint.dpi);
-                    copy_surface_rows_into(surface, out, width as u32, 0);
                 }
             });
         }
-    } else if !paint.overlay && caption_height > 0 {
-        // The rows a caption leaves behind are the window's own however it went: a window too
-        // narrow to hold one, or a chrome that has been asked to leave it off. A kind that draws
-        // its chrome over its media has the media under them and owes nothing; a page is drawn
-        // between them, so those rows would be left as the surface's own emptiness — a hole across
-        // the top of the window, with the desktop showing through it and a press falling through
-        // it, since a layered window is hit-tested by the shape of its pixels. What fills them is
-        // the bar the caption draws on, so a caption with nothing left in it is the bar and
-        // nothing else (see `caption_fits` and `pinned_band_rows`).
-        //
-        // shortcut: the rows stay the caption's rather than becoming the page's, so a caption that
-        // goes away leaves a band of bar and not a window 30 pixels shorter; upgrade if the box a
-        // pin is given should follow its caption going and coming back.
-        if let Some(palette) = palette.as_ref() {
-            let bar = palette.background;
-            let stride = width.max(1) as usize * 4;
-            let strip = (caption_height as usize * stride).min(out.len());
-            for row in out[..strip].chunks_exact_mut(stride) {
-                for pixel in row.chunks_exact_mut(4) {
-                    pixel.copy_from_slice(&[bar[2], bar[1], bar[0], 255]);
-                }
-            }
+    }
+
+    // The chrome's own rows, where they are not the media's: a kind whose chrome stands in bands
+    // around its media leaves its first rows and its last to the strips, and what stands in them
+    // is the pin's claim rather than a hole a press falls through — a layered window is hit-tested
+    // by the shape of its pixels (see `chrome_rows_are_hit_testable`). A kind whose chrome is drawn
+    // over its media has no such rows — they are the band's own, painted above — and owes nothing
+    // here. A caption too narrow to hold one, or asked away, leaves the same claim: the strips
+    // carry nothing where the pin paints nothing, and the rows stay the pin's either way.
+    if chrome_rows_are_hit_testable(paint.overlay) {
+        if caption_height > 0 {
+            fill_band_hit_testable(out, width.max(1) as u32, 0, caption_height.max(1) as u32);
+        }
+        if paint.transport_height > 0 {
+            fill_band_hit_testable(
+                out,
+                width.max(1) as u32,
+                (height - paint.transport_height).max(0) as u32,
+                paint.transport_height.max(1) as u32,
+            );
         }
     }
 
-    // The transport bar, for the kinds that play, across the window's last rows.
+    // The transport bar, for the kinds that play, for the window's last rows — painted for the
+    // strips and never into the bitmap, the way the caption is.
     if paint.transport_height > 0 && paint.bar {
         if let Some(palette) = palette.as_ref() {
             let state = pin_chrome::TransportState {
@@ -483,12 +519,6 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 }
                 if let Some(surface) = surface.as_ref() {
                     pin_chrome::paint_transport(surface, palette, &state, paint.dpi);
-                    copy_surface_rows_into(
-                        surface,
-                        out,
-                        width as u32,
-                        (height - paint.transport_height).max(0) as u32,
-                    );
                 }
             });
         }
@@ -512,6 +542,59 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 paint.volume.level,
                 paint.volume.dragging,
             );
+
+            // And into a strip of its own, carrying only the popup's footprint: a hosted film is
+            // a child of this window and composites over the surface painted above, so the panel
+            // drawn into this surface is a panel under the picture (see `pin_chrome_strips`). The
+            // popup is shifted to the strip's own corner, and the surface is cleared first because
+            // the paint blends onto a transparency rather than onto the window.
+            let bounds = pin_chrome::volume_popup_bounds(popup, width, height);
+            let wanted = (
+                (bounds.right - bounds.left).max(0) as u32,
+                (bounds.bottom - bounds.top).max(0) as u32,
+            );
+            if wanted.0 > 0 && wanted.1 > 0 {
+                let shifted = pin_chrome::VolumePopup {
+                    panel: RECT {
+                        left: popup.panel.left - bounds.left,
+                        top: popup.panel.top - bounds.top,
+                        right: popup.panel.right - bounds.left,
+                        bottom: popup.panel.bottom - bounds.top,
+                    },
+                    track: RECT {
+                        left: popup.track.left - bounds.left,
+                        top: popup.track.top - bounds.top,
+                        right: popup.track.right - bounds.left,
+                        bottom: popup.track.bottom - bounds.top,
+                    },
+                };
+
+                VOLUME_SURFACE.with(|cell| {
+                    let mut surface = cell.borrow_mut();
+                    if surface
+                        .as_ref()
+                        .map(|surface| (surface.width, surface.height))
+                        != Some(wanted)
+                    {
+                        *surface = DibSurface::create(wanted.0, wanted.1);
+                    }
+                    if let Some(surface) = surface.as_ref() {
+                        let stride = wanted.0 as usize * 4;
+                        let bits = surface.bits();
+                        let whole =
+                            std::slice::from_raw_parts_mut(bits, stride * wanted.1 as usize);
+                        whole.fill(0);
+                        pin_chrome::paint_volume_popup(
+                            whole,
+                            wanted.0 as i32,
+                            &palette,
+                            &shifted,
+                            paint.volume.level,
+                            paint.volume.dragging,
+                        );
+                    }
+                });
+            }
         }
     }
 
@@ -555,8 +638,28 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         );
     }
 
+    // And the strips the chrome stands in, which carry what this paint just painted into their own
+    // surfaces — the bitmap carries none of it (see `pin_chrome_strips`): asked here because the
+    // chrome's own show and hide is answered on this paint everywhere else (see `PinChrome`).
+    pin_chrome_strips::sync_the_chrome_strips();
+    pin_resize_probe::note_the_paint(started);
+
     // As in `render_layered_preview_at`: the hold is the tick's to publish, because a publish
     // per painted frame is what made the 500 ms throttle suppress nothing.
+}
+
+/// Whether a resize's paint asks the surface for the row of slack it paints with.
+///
+/// **A pin whose film is drawn in a host asks for none.** The picture there is another window the
+/// Shell composes, so the row the slack moves the pin's window by would be the band moving while the
+/// film stayed — moving on every paint is exactly the jitter the hand sees. A native strip's picture
+/// is this app's own pixels and lands on the box the paint gives it, so it keeps the slack that
+/// clears the ghost of a shrink (see `the_slack_a_resize_paints_with`).
+pub(super) fn a_resize_asks_the_surface_for_a_row_of_slack(
+    resizing: bool,
+    a_film_host_stands: bool,
+) -> bool {
+    resizing && !a_film_host_stands
 }
 
 /// How many rows of the surface stand above the pin's own picture, and how many rows the surface has
@@ -588,19 +691,51 @@ pub(super) fn the_slack_a_resize_paints_with(resizing: bool) -> (i32, i32) {
     static STANDING_ON: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
     if !resizing {
+        THE_ROW_A_RESIZE_PAINTS_THE_PICTURE_DOWN.store(0, Ordering::SeqCst);
         return (0, 0);
     }
 
     let Ok(mut on) = STANDING_ON.lock() else {
+        THE_ROW_A_RESIZE_PAINTS_THE_PICTURE_DOWN.store(0, Ordering::SeqCst);
         return (0, 0);
     };
     *on = !*on;
 
-    if *on {
-        (1, 1)
-    } else {
-        (0, 1)
+    let chosen = if *on { (1, 1) } else { (0, 1) };
+    THE_ROW_A_RESIZE_PAINTS_THE_PICTURE_DOWN.store(chosen.0, Ordering::SeqCst);
+    chosen
+}
+
+/// The row the last paint chose to push the pin's own picture down into the slack, which is the row
+/// the window itself was moved up by (see `the_slack_a_resize_paints_with`).
+///
+/// **It exists for the children of the pin's window.** The chrome strips are placed in the pin's
+/// client coordinates, so they ride every move of the window — and the slack moves the window a pixel
+/// on every paint of a resize, which leaves the chrome bobbing at paint rate while the hand's own
+/// resize should be smooth. Asked here so they can put themselves back down by the same row and stay
+/// on the band (see `pin_chrome_strips::place_the_chrome_strips`). The film is not one of these: it
+/// is a window of the desktop's the Shell composes, so moving the pin does not move it.
+///
+/// **It answers nothing unless a resize is the drag in flight**, so a release or a lost capture that
+/// never repaints cannot leave a row standing over children whose window has stopped moving. The
+/// cost of that guard is the single paint at a drag's end: between the release and the last paint of
+/// it the window is still a row up while the row asked for is already zero.
+static THE_ROW_A_RESIZE_PAINTS_THE_PICTURE_DOWN: AtomicI32 = AtomicI32::new(0);
+
+pub(super) fn the_row_a_resize_paints_the_picture_down() -> i32 {
+    let resizing = pin_state()
+        .and_then(|pinned| {
+            pinned
+                .pin()
+                .and_then(|pin| pin.dragging.map(|drag| drag.action))
+        })
+        .is_some_and(|action| matches!(action, PinDragAction::Resize(_)));
+
+    if !resizing {
+        return 0;
     }
+
+    THE_ROW_A_RESIZE_PAINTS_THE_PICTURE_DOWN.load(Ordering::SeqCst)
 }
 
 /// Everything a repaint of a pinned window needs, taken in one look: what the caption says and
@@ -613,8 +748,8 @@ pub(super) struct PinnedPaint {
     pub(super) width: i32,
     pub(super) height: i32,
     /// Whether a resize is the drag in flight, which is the one thing that makes a paint of this
-    /// window a paint that may give part of it up — and so the one thing that asks the surface for a
-    /// row of slack (see `the_slack_a_resize_paints_with`).
+    /// window a paint that may give part of it up — and so, where no film host stands, the one thing
+    /// that asks the surface for a row of slack (see `a_resize_asks_the_surface_for_a_row_of_slack`).
     pub(super) resizing: bool,
     pub(super) caption_height: i32,
     pub(super) transport_height: i32,
@@ -660,14 +795,6 @@ pub(super) struct PinnedPaint {
     pub(super) playing: bool,
     pub(super) position: Option<f64>,
     pub(super) duration: Option<f64>,
-    /// Whether this pin's player has been put away for the length of a drag, which is what makes
-    /// the band a flat colour rather than a hole the player is supposed to show through.
-    ///
-    /// It is a field rather than a question asked of the pin at the paint because the paint may
-    /// not hold the pin's lock, and because the answer changes without anything about the window
-    /// changing — the same window, the same media, the same box, painted a different colour
-    /// because a hand is on its edge (see `park_pinned_player`).
-    pub(super) parked: bool,
 }
 
 /// A repaint's one tooltip, taken out of the pin as a value: which button is saying it and what
@@ -737,7 +864,6 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             volume: pin.volume,
             volume_popup: None,
             transport_live: pin.transport_live,
-            parked: pin.parked,
         }
     };
 
@@ -917,42 +1043,6 @@ pub(super) fn copy_frame_into_band(
         destination.copy_from_slice(source);
     }
 
-    true
-}
-
-///
-/// **This is the whole of what a drag of a pinned film is drawn from, and both halves of it are
-/// load-bearing.** The opaque fill is there whatever else happens: the band is transparent
-/// everywhere a film is playing, and a transparent band with nothing behind it is a hole in the
-/// desktop shaped like a video, so a picture that could not be taken has to leave black rather
-/// than leave a hole. And the picture is the *last frame the player had on screen*, scaled to the
-/// box the window is being dragged to by the same road a resized picture is scaled by — so a band
-/// grown shows the film larger and a band shrunk shows it smaller, and a hand is choosing a size
-/// against the film rather than against a rectangle (see `compose_media_into_band`).
-///
-/// A frame that is no longer held is not a reason to paint black twice over: the flat fill is the
-/// fallback and the frame goes on top of it, so a frame of a size that does not cover the whole
-/// band — or a road that declines to draw at all — leaves a band that is still opaque.
-pub(super) fn compose_parked_band(
-    held: Option<(&[u8], (u32, u32))>,
-    width: u32,
-    target: BandTarget<'_>,
-) -> bool {
-    fill_band_opaque(&mut *target.out, width, target.origin_y, target.height);
-
-    let Some((pixels, (frame_width, frame_height))) = held else {
-        return false;
-    };
-
-    compose_media_into_band(
-        pixels,
-        frame_width,
-        frame_height,
-        (width, target.height),
-        TransparentBackground::Black,
-        true,
-        target,
-    );
     true
 }
 
@@ -1484,7 +1574,7 @@ unsafe fn show_at_the_wait(hwnd: HWND, pl: &PendingLoad, media: MediaData) {
     }
     let _ = SetWindowPos(
         hwnd,
-        HWND_TOPMOST,
+        band_place(),
         x,
         y,
         side,

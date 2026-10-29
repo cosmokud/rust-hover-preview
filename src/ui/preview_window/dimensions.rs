@@ -223,10 +223,11 @@ pub(super) fn video_subtitles(path: &Path) -> SubtitleStreams {
 ///
 /// What asks is the pin's take-up: the `ffplay` a hover began is adopted by the pin as it stands
 /// (see `take_up_pinned_window`), so a player begun while the copy was still coming is one a
-/// pinned window would draw on without the subtitles — and the take-up begins it again where
-/// this answers yes and the player was one of those (see `reload_adopted_subtitles`). A film no
-/// probe has answered for is answered `false` here on the same terms as `video_subtitles`: an
-/// answer nothing read is not a copy, and a player begun for such a film has nothing to correct.
+/// pinned window would draw on without the subtitles — and the take-up preloads the copy for the
+/// next relaunch where this answers yes and the player was one of those (see
+/// `reload_adopted_subtitles`). A film no probe has answered for is answered `false` here on the
+/// same terms as `video_subtitles`: an answer nothing read is not a copy, and a player begun for
+/// such a film has nothing to correct.
 pub(super) fn video_copy_ready(path: &Path) -> bool {
     if !subtitles_wanted() {
         return false;
@@ -236,6 +237,28 @@ pub(super) fn video_copy_ready(path: &Path) -> bool {
         Some(ProbedGeometry::Measured(geometry)) => geometry.derived.is_some(),
         _ => false,
     }
+}
+
+/// The small file this film's copied subtitles are drawn from, where one is ready: the track this app
+/// copied out of the film, or the first copy where the track named is not one it carries (see
+/// `video_launch::subtitle_filter`, which names the same file for a launch).
+///
+/// It is what a player that is **already running** is handed at runtime — mpv takes it as a subtitle
+/// file of its own (see `pin_playback::reload_pinned_subtitles`) — rather than the filtergraph a
+/// launch is given. A copy that is not there is answered with nothing: naming a file that does not
+/// exist is a player asked to open something that is not there.
+pub(super) fn video_subtitle_copy(path: &Path, track: Option<usize>) -> Option<PathBuf> {
+    let Some(ProbedGeometry::Measured(geometry)) = cached_video_geometry(path) else {
+        return None;
+    };
+    let derived = geometry.derived?;
+    let track = track
+        .filter(|track| *track < derived.tracks.len())
+        .unwrap_or(0);
+    derived
+        .track(track)
+        .filter(|track_file| track_file.is_file())
+        .map(Path::to_path_buf)
 }
 
 /// Whether this file is a video the probe has not answered for yet.
@@ -402,7 +425,7 @@ pub(super) fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(
 /// It is asked of the answer rather than of the path because the caller is `media_dimensions`,
 /// which was handed the same answer a few lines above and used to read the file's directory
 /// entry again to get it (see `HoverFacts`).
-pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u32)> {
+pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &Path) -> Option<(u32, u32)> {
     // What the file's content says it is comes ahead of what its name does, where the two
     // disagree: the box a file is placed at is the box of the kind its content belongs to,
     // and a format no kind previews is placed nowhere at all — see `content_type`.
@@ -546,7 +569,7 @@ pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Opt
 ///
 /// Two kinds have no size of their own: an archive listing and a text preview are both laid
 /// out from the frame the loader paints rather than from anything their file says.
-pub(super) fn media_dimensions_of_kind(kind: PreviewType, path: &PathBuf) -> Option<(u32, u32)> {
+pub(super) fn media_dimensions_of_kind(kind: PreviewType, path: &Path) -> Option<(u32, u32)> {
     if !kind.enabled() {
         return None;
     }
@@ -680,7 +703,7 @@ pub(super) fn magick_box(path: &Path) -> Option<(u32, u32)> {
 
 /// A picture's own size, read the way this app reads one: its own header, and the codec
 /// Windows keeps for the picture formats this app's decoder has no reader for.
-pub(super) fn picture_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+pub(super) fn picture_dimensions(path: &Path) -> Option<(u32, u32)> {
     image_dimensions_with_header_check(path)
 }
 
@@ -734,7 +757,7 @@ pub(super) fn page_is_on_the_way(path: &Path) -> bool {
 /// can fit it into the space beside the cursor, and the text renderer is handed
 /// the box that comes out of that.
 pub(super) fn media_dimensions(
-    path: &PathBuf,
+    path: &Path,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<(u32, u32)> {
@@ -746,7 +769,7 @@ pub(super) fn media_dimensions(
 /// this and `get_media_dimensions` used to read between them (see `HoverFacts`).
 pub(super) fn media_dimensions_of(
     hover: &HoverFacts,
-    path: &PathBuf,
+    path: &Path,
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<(u32, u32)> {

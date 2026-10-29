@@ -24,6 +24,27 @@ pub(super) fn pin_update_settings() -> (bool, bool) {
         .unwrap_or((DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER))
 }
 
+/// The frame of the window a press was made in: what a press that named no file puts the pin behind,
+/// as a handle because the answer names a window without this app's own types. Zero where the shell
+/// describes no window at all, which is no place to go behind.
+///
+/// That window and not the foreground one, which is still the window the user came from while the
+/// click that made the press has not been dispatched yet (see `pin_press_was_not_a_pick`).
+///
+/// The owner chain is walked where the press landed on a window of the frame's own rather than in it
+/// — a menu the shell put over its rows is a top-level window owned by the frame — because the popup
+/// is not a place to go behind: it stands over the listing, and a pin put under it is a pin still
+/// over the listing.
+fn press_frame(pointer: &PointerTick) -> isize {
+    let Some(root) = item_window_of(pointer.window) else {
+        return 0;
+    };
+
+    let root = HWND(root.frame as *mut _);
+    let owner = unsafe { GetAncestor(root, GA_ROOTOWNER) };
+    (if owner.is_invalid() { root } else { owner }).0 as isize
+}
+
 /// What the hook watches while a preview is pinned, so that the tray's `Pin Mode … Update Preview`
 /// can show the pin the file the user picks next.
 ///
@@ -66,7 +87,9 @@ pub(super) struct PinUpdateWatch {
     pub(super) pin_box: Option<(i32, i32, i32, i32)>,
     /// When the pointer last moved, which is what a hover of what is under it is measured from.
     pub(super) settled_at: Option<Instant>,
-    /// Whether the file under a settled pointer has already been resolved for that settle.
+    /// Whether the rest the hand is making has already been answered, so that it is not asked about
+    /// again: a pick resolves a file for it, and a press on a menu spends it outright (see
+    /// `PinUpdateWatch::follow` and `a_rest_is_a_hover`). Cleared when the hand moves.
     pub(super) probed: bool,
     /// Whether the hand has moved at all since this watch began. A pointer parked on another
     /// file while the pin goes up has not hovered anything.
@@ -226,6 +249,33 @@ impl PinUpdateWatch {
             self.probed = false;
         }
 
+        // What the press was read on, on both ticks: a menu or flyout is chrome, whether it is the
+        // shell's own popup over its rows or this app's panel over them (see
+        // `window_is_menu_popup_chrome`), and the press bit is spent on whichever tick finds it.
+        let current_is_chrome = window_is_menu_popup_chrome(pointer.window);
+        let previous_was_chrome = previous_window.is_some_and(window_is_menu_popup_chrome);
+        let clicked = focus_move.clicked;
+
+        // A press on one of this app's own panels spends the rest of the hand, so that the rest is not
+        // read as a hover of the file the panel was covering (see `a_rest_is_a_hover`). Asked on both
+        // ticks the press could be read on: while the panel is still up, and on the poll after the
+        // shell has taken it down and the point reads as the listing again (see
+        // `press_is_on_the_pins_own_menu`).
+        //
+        // The bubble's menu is read by the same rule: it is drawn in the bubble's own window rather
+        // than in a window of its own, so the window under the hand is the bubble on the tick the row
+        // is pressed and — the panel gone with the press — the listing the panel covered on the tick
+        // after it.
+        //
+        // Spent here rather than beside the press's own answer below, because the tick that reads the
+        // press is the tick that would offer the file: the rest is measured from this, once, below.
+        if clicked
+            && (press_is_on_the_pins_own_menu(pointer.window)
+                || previous_window.is_some_and(press_is_on_the_pins_own_menu))
+        {
+            self.probed = true;
+        }
+
         // Whether this tick looks at what the pointer is on, and why. A click is the pointer acting
         // on the view — what it does in Explorer is select, and the file it selected is the pin's to
         // show — and it counts whatever else is on: it is the one reason the setting leaves on when
@@ -235,7 +285,7 @@ impl PinUpdateWatch {
             .settled_at
             .map(|at| at.elapsed() >= Duration::from_millis(hover_delay_ms))
             .unwrap_or(false);
-        let hovered = on_hover && self.arrived && !self.probed && settled;
+        let hovered = a_rest_is_a_hover(on_hover, self.arrived, self.probed, settled);
         // Read by the tick that hands the watch its input rather than here, because the press bit is
         // the one thing about a click that can only be read once a tick (see `focus_move_input`).
         //
@@ -265,9 +315,6 @@ impl PinUpdateWatch {
         // is still up, or on the poll after it has closed and the point reads as the listing it
         // was covering. The hand does not move for either, and the file under it is not one it
         // picked (see `window_is_menu_popup_chrome`).
-        let clicked = focus_move.clicked;
-        let current_is_chrome = window_is_menu_popup_chrome(pointer.window);
-        let previous_was_chrome = previous_window.is_some_and(window_is_menu_popup_chrome);
         let pick = clicked
             && self.press_is_a_pick(pointer.point, threshold, now)
             && press_is_a_listing(
@@ -310,6 +357,61 @@ impl PinUpdateWatch {
         if clicked {
             resolver.forget_item();
             resolver.forget_window_views();
+        }
+
+        // A press in Explorer's own window is answered: it either names a file this app previews, in
+        // which case the pin is put back in front of the listing for it, or it names anything else —
+        // a folder, a file no kind previews, the tree, the toolbar, the header, the gap between the
+        // rows, the path bar, a tab, a menu the shell put over its own rows — and it is a press that
+        // picked no file, so the pin goes back behind the listing (see `PreviewMessage::PinNoPick`).
+        // Asked of every press rather than of the presses the pick rule accepts, because what the pin
+        // owes the listing is the answer to a press that did *not* pick: a press on the path bar
+        // picks nothing, and it was leaving the pin in front of the listing.
+        //
+        // What is read for the file under the point is still gated on the pick rule: the second half
+        // of a double-click and a press on a menu the shell put over its own rows both name a file
+        // neither of them picked, and the pin is neither raised nor taken behind for them. A row the
+        // shell has not named yet is left for the retry below rather than guessed at either way.
+        //
+        // A press on this app's own window is left out: it is the pin being used rather than the
+        // listing under it being picked, and what the pin stands over is not changed by it.
+        if press_is_answered(
+            clicked,
+            over_explorer,
+            over_our_own,
+            window_is_gone(previous_window),
+        ) {
+            // **The row the shell names can be a tick or ten behind the click**, so the file under the
+            // point is read for every press rather than only for the presses the row answered: a click
+            // the shell had not named yet is still the file the press picked, and answering it with "no
+            // pick" put the pin behind the listing it picked in and cleared the front it was owed (see
+            // `where_the_band_goes_back`). A gap between the rows still reads as no file either way, and
+            // so does a folder.
+            let under_the_point = get_file_under_cursor(resolver, &pointer);
+            let row = match uia_item_from_point(resolver, pointer.point, false) {
+                Some(_) => Some(under_the_point),
+                None => under_the_point.map(Some),
+            };
+            let picked = match &row {
+                Some(Some(path)) if !path.is_dir() && is_media_file(path) => {
+                    if pick {
+                        press_pinned_preview(press_frame(&pointer));
+                    }
+                    pick
+                }
+                Some(Some(_)) | None => {
+                    pin_press_was_not_a_pick(press_frame(&pointer));
+                    false
+                }
+                Some(None) => false,
+            };
+            note_pin_click!(
+                "press answer  pick {}  row {}  at {},{}",
+                picked as u8,
+                row.is_some() as u8,
+                pointer.point.x,
+                pointer.point.y,
+            );
         }
 
         // A pick is already a press that landed on a listing — that is what `press_is_a_listing`
@@ -420,6 +522,12 @@ impl PinUpdateWatch {
 
                     match get_file_under_cursor(resolver, &pointer) {
                         Some(path) => {
+                            // The click is answered with a folder — the item it landed on is one, and
+                            // no file is at the point — so it picked nothing the pin can show, and
+                            // the raise the press made is given back.
+                            if path.is_dir() {
+                                pin_press_was_not_a_pick(press_frame(&pointer));
+                            }
                             let offered = self.offer(&path, &showing);
                             self.answer_click(&path, &showing, clicked, now, pointer.point);
                             trace_click(
@@ -852,6 +960,20 @@ impl PinUpdateWatch {
             return false;
         }
 
+        // **A file the pin is already on its way to is answered, not asked for again.** The pin's own
+        // path is the file it is *showing* and does not move until the incoming one is installed, so a
+        // press on the file being loaded or held reads as a new pick here — and a pick during a hold
+        // restarts the swap, which drops the film the pin was keeping across it (see
+        // `update_pinned_preview` and `pin_install::THE_FILE_IN_FLIGHT`). The answer is `true` rather
+        // than `false`: this press named a file, and the pin is already going to it.
+        if crate::ui::preview_window::pin_file_in_flight()
+            .as_deref()
+            .is_some_and(|in_flight| same_path(path, in_flight))
+        {
+            note_pin_click!("PICK dropped: already in flight");
+            return true;
+        }
+
         if !is_media_file(path) {
             return true;
         }
@@ -909,6 +1031,15 @@ impl PinUpdateWatch {
         let selected = selected_file_in_view(resolver, pointer);
 
         if let Some(path) = self.note_selection(place, selected, clicked) {
+            // A folder the listing holds selected is not a file the pin can show, and a click
+            // that selected one picked no file: the pin goes back behind the listing the click
+            // put in front. A held click is what the demote waits for, because a press the point
+            // answered has been answered already — by the file it resolved, or by the folder's
+            // own `is_dir` there — and a stale folder read over a file that was just picked must
+            // not undo the pick (see `PinUpdateWatch::answer_click`).
+            if path.is_dir() && self.pending.is_some() {
+                pin_press_was_not_a_pick(press_frame(pointer));
+            }
             self.offer(&path, showing);
         }
     }

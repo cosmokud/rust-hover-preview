@@ -262,6 +262,26 @@ pub(crate) fn volume_popup_from_button(button: RECT, width: i32, dpi: u32) -> Vo
     VolumePopup { panel, track }
 }
 
+/// The footprint a volume popup paints in the window: its panel, the shadow held under it, and a
+/// pixel of margin around the edge the panel's antialiasing can land in — clamped to the window,
+/// because a popup at its edge has nothing to paint outside it.
+///
+/// It is what a strip of the popup's own is placed at, so it is the same shadow the painter draws
+/// (see `paint_volume_popup`) rather than a second set of numbers for one panel.
+pub(crate) fn volume_popup_bounds(popup: &VolumePopup, width: i32, height: i32) -> RECT {
+    let panel_height = (popup.panel.bottom - popup.panel.top).max(1) as f32;
+    let scale = panel_height / VOLUME_PANEL_HEIGHT as f32;
+    let shadow = (2.0 * scale).round().max(1.0) as i32;
+    let margin = (1.0 * scale).round().max(1.0) as i32;
+
+    RECT {
+        left: (popup.panel.left - margin).clamp(0, width),
+        top: (popup.panel.top - margin).clamp(0, height),
+        right: (popup.panel.right + margin).clamp(0, width),
+        bottom: (popup.panel.bottom + shadow + margin).clamp(0, height),
+    }
+}
+
 /// Where along a volume popup's groove a point is, as a share of the level: the bottom of the
 /// groove is nothing and the top of it is everything, which is the way a level is read.
 pub(crate) fn volume_share_at(y: i32, track: RECT) -> f64 {
@@ -859,11 +879,10 @@ pub(super) fn size_in(scale: f32, side: i32, nominal: i32) -> i32 {
 /// Paint the popup a volume button opens: a panel floating over the media above the bar, the
 /// groove in it, the level the groove has been taken to, and the knob that is dragged.
 ///
-/// It is written straight into the window's own surface rather than into a strip of its own,
-/// because that is what it is: a thing drawn over the picture, with the picture behind it. What
-/// is behind it is the media wherever the media is this app's pixels and the player's own window
-/// everywhere else, which is what brings the pin's window above the player's while it is open
-/// (see `pin_volume_open`).
+/// It is drawn into the window's own surface and into a strip of its own: the panel floats over
+/// this app's pixels, and over a hosted film — a child of the pin's window, which composites
+/// over its parent's layered surface — only a strip of the popup's own stands above the picture
+/// (see `pin_chrome_strips` and `volume_popup_bounds`).
 pub(crate) fn paint_volume_popup(
     buffer: &mut [u8],
     width: i32,

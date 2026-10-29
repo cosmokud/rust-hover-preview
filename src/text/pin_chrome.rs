@@ -45,8 +45,8 @@ pub(crate) use menu::{
 pub(crate) use primitives::{fill_disc, fill_ring, stroke_segment, surface_pixels, ChromePalette};
 pub(crate) use transport::{
     paint_card_control, paint_transport, paint_volume_popup, transport_part_at, transport_share_at,
-    volume_popup_from_button, volume_popup_layout, volume_share_at, ControlGlyph, TransportPart,
-    TransportState, VolumePopup,
+    volume_popup_bounds, volume_popup_from_button, volume_popup_layout, volume_share_at,
+    ControlGlyph, TransportPart, TransportState, VolumePopup,
 };
 
 #[cfg(test)]

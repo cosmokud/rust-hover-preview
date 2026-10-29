@@ -9,16 +9,16 @@ use super::defaults::{
     DEFAULT_AUDIO_VOLUME, DEFAULT_CHECK_FOR_UPDATES, DEFAULT_DECODE_BUDGET_GB,
     DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE,
     DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_MPV_PATH,
+    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH,
     DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS,
+    DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS,
     DEFAULT_PIN_ZOOM_BOUNCE_POWER, DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML,
     DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_SPINNER_DELAY_MS,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TICK_MS,
-    DEFAULT_TTC_FACE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL,
-    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME,
-    DEFAULT_WEBP_PLAYBACK_FPS, DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
+    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES,
+    DEFAULT_VIDEO_VOLUME, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use super::setting_types::{
     AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile,
@@ -48,6 +48,9 @@ pub struct AppConfig {
     pub check_for_updates: bool,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
+    /// The key that turns previews on or off while File Explorer is the foreground window,
+    /// by the same spellings the trigger and pin keys accept.
+    pub toggle_key: String,
     /// The modifier the trigger key watches, by name.
     pub trigger_key: String,
     /// What holding it does: stop previews, or allow them.
@@ -555,6 +558,12 @@ pub struct AppConfig {
     /// played without subtitles rather than paid for on every launch (see
     /// `preview_window::subtitle_files` and `video_probe`).
     pub video_subtitles: bool,
+    /// How long the mpv a film is played by is kept between films, which is the tray's
+    /// `Engine → MPV TTL` setting.
+    ///
+    /// Stored and read back for that menu; nothing keeps mpv warm yet, so nothing reads it
+    /// beyond the mark the menu puts on its item (see `EngineIdle`).
+    pub video_engine_idle: EngineIdle,
     /// How long the Office engine a family started is kept after that family's
     /// last page, which is the tray's `Engine → Microsoft Office TTL` setting.
     pub office_engine_idle: EngineIdle,
@@ -571,23 +580,13 @@ pub struct AppConfig {
     /// never let go of is a process this app holds for the rest of the run (see
     /// `libreoffice_render`).
     pub libreoffice_idle: EngineIdle,
-    /// How long Explorer has to be out of reach before an engine that is not marked
-    /// `Persistent` is let go, which is the tray's `Engine → AFK Timer` setting.
+    /// How long Explorer has to be out of reach before an engine set to `Away` is let go,
+    /// which is the tray's `Engine → AFK Timer` setting.
     ///
     /// It is the whole of what bounds such an engine: one is kept while an Explorer window
     /// is reachable and let go once none has been for this long, whatever its idle time
     /// says (see `app::afk`).
     pub afk_timer_seconds: u64,
-    /// Whether the Office engines are kept whatever the user is doing, which is the
-    /// `Persistent` toggle at the top of the tray's `Engine → Microsoft Office TTL`
-    /// submenu. On, an engine is kept for its idle time while Explorer is minimized or
-    /// behind another application; off, `afk_timer_seconds` is what bounds it.
-    pub office_engine_persistent: bool,
-    /// The same for the browser engine, under `Engine → WebView2 TTL`.
-    pub webview_persistent: bool,
-    /// The same for the engine the documents beside Office are drawn by, under
-    /// `Engine → LibreOffice TTL`.
-    pub libreoffice_persistent: bool,
     /// What one hover may decode or read for, in gigabytes.
     ///
     /// The one setting here that bounds a file rather than a cache: a reader is
@@ -691,13 +690,14 @@ impl Default for AppConfig {
             check_for_updates: DEFAULT_CHECK_FOR_UPDATES,
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
             preview_enabled: true,
+            toggle_key: DEFAULT_TOGGLE_KEY.to_string(),
             trigger_key: "alt".to_string(),
             trigger_key_mode: TriggerKeyMode::Disable,
             trigger_key_enabled: true,
             trigger_key_affect_pin_mode: DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
             pin_enabled: true,
             pin_always_on_top: DEFAULT_PIN_ALWAYS_ON_TOP,
-            pin_key: "space".to_string(),
+            pin_key: "mouse3,space".to_string(),
             pin_minimize_to: DEFAULT_PIN_MINIMIZE_TO,
             pin_double_click_center: DEFAULT_PIN_DOUBLE_CLICK_CENTER,
             pin_double_click_reset_size: DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE,
@@ -778,13 +778,11 @@ impl Default for AppConfig {
             mpv_path: DEFAULT_MPV_PATH.to_string(),
             video_engine_fallback: DEFAULT_VIDEO_ENGINE_FALLBACK,
             video_subtitles: DEFAULT_VIDEO_SUBTITLES,
-            office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
-            webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
-            libreoffice_idle: EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS),
+            video_engine_idle: EngineIdle::Away,
+            office_engine_idle: EngineIdle::Away,
+            webview_idle: EngineIdle::Away,
+            libreoffice_idle: EngineIdle::Away,
             afk_timer_seconds: DEFAULT_AFK_TIMER_SECS,
-            office_engine_persistent: false,
-            webview_persistent: false,
-            libreoffice_persistent: false,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
             video_hw_accel: DEFAULT_VIDEO_HW_ACCEL,
             hdr_tone_map: DEFAULT_HDR_TONE_MAP,

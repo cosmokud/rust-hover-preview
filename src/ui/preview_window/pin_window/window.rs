@@ -22,6 +22,17 @@ pub(crate) trait PinWindow {
     /// The window a pin is drawn in, or zero where there is none.
     fn hwnd(&self) -> isize;
 
+    /// The window in front on the desktop, or zero where it has none.
+    ///
+    /// Asked of the window rather than read by the road for the reason `pointer` is: whether the
+    /// foreground is one of ours is not a fact about the pin's own handle, and a road that had to
+    /// look it up itself could not be read back on a machine with no desktop. It is asked where a
+    /// pin that held no keyboard comes down (see `end_pin`).
+    ///
+    /// Read and not recorded, unlike the rest of this list: it is the desktop's answer about a
+    /// window that is not the pin's, so it says nothing about what the road chose to do.
+    fn foreground(&self) -> isize;
+
     /// Where the pointer is, in screen coordinates.
     ///
     /// Read rather than taken from a mouse message, and that is the whole of why: a window being
@@ -79,26 +90,6 @@ pub(crate) trait PinWindow {
     /// memory rather than a test.
     fn repaint(&self);
 
-    /// Put the window FFmpeg draws the picture into back where the pin's media band is, and put it
-    /// up there — which is the whole of what undoes a drag's park.
-    ///
-    /// One method rather than a show and a place, because on a window of another process the show
-    /// *is* the place: `ShowWindow` un-hides a window where it stands, and both halves of undoing
-    /// a park are one `SetWindowPos` carrying `SWP_SHOWWINDOW` (see `ensure_video_window_topmost`).
-    /// Split into two, the second is the half that can be left out, and a show without the place
-    /// is a film on screen at the box the drag began at — the failure this call exists to be able
-    /// to assert about.
-    ///
-    /// The band is read at the moment the park ends rather than remembered from before it, which
-    /// is the whole of what a move changes: the hand carries the window somewhere else and every
-    /// place that would have told the player about it was answered out of the hand while the park
-    /// stood, so the rect the player's window is still at is the one the drag started from.
-    ///
-    /// `None` for a pin with no band to go back into — collapsed, or already gone — where there is
-    /// no rect to be told and only the window's own hiddenness left to take back. That is a real
-    /// answer rather than a degenerate one, and the recorder can be given it.
-    fn unpark_player_window(&self, band: Option<ScreenRegion>);
-
     /// Leave a message for the loop to answer, rather than making it answer now.
     fn post(&self, hwnd: isize, message: u32);
 }
@@ -135,13 +126,6 @@ pub(crate) enum PinWindowCall {
     /// The pin's own window drawn as it stands, which is what a drag's end owes after letting
     /// go of the pointer: the window is where the hand left it and the screen has to be told.
     Repaint,
-    /// The player's own window put back where the pin's band is and put up there — the band, or
-    /// nothing at all where there is no band to put it back into.
-    ///
-    /// Recorded whole rather than as a show and a place, because the two are one `SetWindowPos` on
-    /// a window of another process and a test that could only see one of them would pass against
-    /// the defect this records: a picture on screen at the box the drag began at.
-    UnparkPlayerWindow(Option<ScreenRegion>),
     Post(u32),
 }
 
@@ -162,6 +146,13 @@ pub(crate) struct RecordedPinWindow {
     /// Where the window stands, for a drag begun from the screen's own box rather than the pin's.
     box_: Option<ScreenRegion>,
     calls: Mutex<Vec<PinWindowCall>>,
+    /// The windows the keyboard was handed to, in the order it was handed over, which the call list
+    /// above cannot say: `PinWindowCall::SetForeground` is one item whatever it was asked with, and
+    /// what a hand-back owes is a window that can still take it (see `hand_keyboard_back`).
+    foreground: Mutex<Vec<isize>>,
+    /// The window this recorder says is in front on the desktop (see `PinWindow::foreground`), which
+    /// is a fact a test process cannot stage: it cannot make a window of its own the foreground.
+    front: isize,
 }
 
 #[cfg(test)]
@@ -189,7 +180,18 @@ impl RecordedPinWindow {
             pointer,
             box_,
             calls: Mutex::new(Vec::new()),
+            foreground: Mutex::new(Vec::new()),
+            front: 0,
         }
+    }
+
+    /// The recorder, standing for a desktop whose window in front is `front`.
+    ///
+    /// A builder rather than a fourth argument, because the front is asked of two roads only: the
+    /// close that held no keyboard, and nothing else (see `foreground`).
+    pub(crate) fn with_the_window_in_front(mut self, front: isize) -> Self {
+        self.front = front;
+        self
     }
 
     /// Everything the road did, in the order it did it.
@@ -197,6 +199,14 @@ impl RecordedPinWindow {
         self.calls
             .lock()
             .map(|calls| calls.clone())
+            .unwrap_or_default()
+    }
+
+    /// The windows the keyboard was handed to (see `foreground`).
+    pub(crate) fn handed_the_keyboard_to(&self) -> Vec<isize> {
+        self.foreground
+            .lock()
+            .map(|foreground| foreground.clone())
             .unwrap_or_default()
     }
 
@@ -211,6 +221,10 @@ impl RecordedPinWindow {
 impl PinWindow for RecordedPinWindow {
     fn hwnd(&self) -> isize {
         self.hwnd
+    }
+
+    fn foreground(&self) -> isize {
+        self.front
     }
 
     fn pointer(&self) -> Option<(i32, i32)> {
@@ -240,7 +254,10 @@ impl PinWindow for RecordedPinWindow {
         self.record(PinWindowCall::SetFocus);
     }
 
-    fn set_foreground(&self, _hwnd: isize) {
+    fn set_foreground(&self, hwnd: isize) {
+        if let Ok(mut foreground) = self.foreground.lock() {
+            foreground.push(hwnd);
+        }
         self.record(PinWindowCall::SetForeground);
     }
 
@@ -254,10 +271,6 @@ impl PinWindow for RecordedPinWindow {
 
     fn repaint(&self) {
         self.record(PinWindowCall::Repaint);
-    }
-
-    fn unpark_player_window(&self, band: Option<ScreenRegion>) {
-        self.record(PinWindowCall::UnparkPlayerWindow(band));
     }
 
     fn post(&self, _hwnd: isize, message: u32) {

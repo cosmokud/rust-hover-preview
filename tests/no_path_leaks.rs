@@ -2,14 +2,15 @@
 //! something it cannot take back: a path typed into a fixture is a path in every clone,
 //! every fork, and every cached diff of every commit that ever carried it.
 //!
-//! This walks the tree and fails on the shapes that name an *account's own* directory.
+//! This reads the files a clone receives — what git tracks and what it would add — and fails
+//! on the shapes that name an *account's own* directory.
 //! A drive letter by itself is not a leak — this repository is full of made-up fixtures
 //! like `C:\docs\` and `D:/Pictures/`, and they are what the tests are written against.
 //! What is a leak is a path rooted at a profile directory, because that directory is
 //! named after the account that owns it.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// A file this size is a build product or an asset, not source that was written by hand.
@@ -89,6 +90,35 @@ fn check(path: &Path, root: &Path, shapes: &[Vec<u8>], hits: &mut Vec<String>) {
     }
 }
 
+/// The files a clone receives: what git tracks, plus what it would add, which is the set a
+/// commit can carry without asking for it by name. A file the repository ignores is
+/// machine-local and cannot be published, so it is not read — the walk below is what a
+/// source export falls back to, where there is no checkout to ask.
+fn published_files(root: &Path) -> Option<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .split('\0')
+            .filter(|name| !name.is_empty())
+            .map(|name| root.join(name))
+            .collect(),
+    )
+}
+
 fn walk(dir: &Path, root: &Path, shapes: &[Vec<u8>], hits: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -113,13 +143,28 @@ fn walk(dir: &Path, root: &Path, shapes: &[Vec<u8>], hits: &mut Vec<String>) {
     }
 }
 
-#[test]
-fn no_file_names_an_account_directory() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+/// Every hit in the files a clone receives. A source export has no checkout to ask, so the
+/// walk answers instead with everything it can read.
+fn hits_in(root: &Path) -> Vec<String> {
     let shapes = shapes();
     let mut hits = Vec::new();
 
-    walk(root, root, &shapes, &mut hits);
+    match published_files(root) {
+        Some(files) => {
+            for file in &files {
+                check(file, root, &shapes, &mut hits);
+            }
+        }
+        None => walk(root, root, &shapes, &mut hits),
+    }
+
+    hits
+}
+
+#[test]
+fn no_file_names_an_account_directory() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let hits = hits_in(root);
 
     assert!(
         hits.is_empty(),
@@ -130,9 +175,56 @@ fn no_file_names_an_account_directory() {
     );
 }
 
+/// A file the repository ignores is machine-local by definition, and the one this repository
+/// writes itself names the checkout by an absolute path: `post-checkout` rewrites
+/// `.cargo/target-dir.local.toml` with `RHP_WORKTREE` on every switch. Reading the directory
+/// instead of what git publishes therefore fails every push on a machine that set
+/// `rhp.targetDir`, which is the workflow CONTRIBUTING.md asks for.
+#[test]
+fn a_file_git_ignores_is_not_read() {
+    let root = std::env::temp_dir().join(format!("no-path-leaks-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let Ok(init) = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&root)
+        .output()
+    else {
+        let _ = fs::remove_dir_all(&root);
+        return;
+    };
+    if !init.status.success() {
+        let _ = fs::remove_dir_all(&root);
+        return;
+    }
+
+    // Spelled from the fragments the patterns are made of, so this file carries no path of
+    // its own for the other test to find.
+    let leak = format!(
+        "dir = \"C{}someone\"\n",
+        String::from_utf8_lossy(&shapes()[1])
+    );
+
+    fs::write(root.join(".gitignore"), "local.toml\n").unwrap();
+    fs::write(root.join("local.toml"), &leak).unwrap();
+    fs::write(root.join("tracked.rs"), &leak).unwrap();
+
+    let hits = hits_in(&root);
+
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(
+        hits,
+        vec!["tracked.rs:1".to_owned()],
+        "only what a clone receives is read: the ignored file is this checkout's own and \
+         never leaves it, and the tracked one is what a push publishes"
+    );
+}
+
 /// What a commit carries besides its files: the message, and the names it was written under.
-/// A path in any of those reaches every clone the way a path in a fixture does, and a walk of
-/// the tree cannot see one because a message is not a file.
+/// A path in any of those reaches every clone the way a path in a fixture does, and a pass
+/// over the files cannot see one because a message is not a file.
 ///
 /// This asks only about the checked-out branch. The commits that carried the paths are not its
 /// ancestors, so no depth of history makes them appear here, and the tags that do reach them

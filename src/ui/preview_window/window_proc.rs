@@ -273,7 +273,7 @@ pub(super) unsafe extern "system" fn window_proc(
             // see (see `pinned_key_command`).
             LRESULT(0)
         }
-        WM_CLOSE | WM_SYSCOMMAND => {
+        WM_CLOSE => {
             // The window is never to be destroyed. It is created once, for the life of the
             // process, and put up and taken down a thousand times over as previews come and go;
             // letting a close reach `DestroyWindow` would end every preview from here on with
@@ -289,6 +289,43 @@ pub(super) unsafe extern "system" fn window_proc(
                 request_pin_end();
             }
             LRESULT(0)
+        }
+        WM_SYSCOMMAND => {
+            // **Not every system command is a close**, and answering them all as one is what made
+            // `Win`+`D` end Pin Mode. Show Desktop is the Shell minimizing every window that offers
+            // a minimize box, and that ask arrives here as `SC_MINIMIZE` on the pin's own window: the
+            // gesture meant to clear the screen took the pin away with it, though nothing had closed
+            // and nothing had been collapsed (see `pin_real_window` for the styles that make the
+            // window one Show Desktop takes).
+            //
+            // Only `SC_CLOSE` is a close: the window's own button, and the row the Shell's menu
+            // beside its taskbar button puts on it. The rest of what a system command can be —
+            // minimizing with the desktop and coming back with it above all — is the desktop's
+            // business with the window and belongs to `DefWindowProcW`, the road every other window
+            // in the system takes for it.
+            //
+            // A stand-in of `pin_taskbar`'s window answers those two commands itself, because that
+            // window is not the pin and has nothing to minimize: the pin is put away into its bubble
+            // instead (see `handle_taskbar_restore`).
+            // The low four bits of a system command belong to the application that sends one, so the
+            // command is the word without them — the mask `pin_taskbar`'s own procedure reads its two
+            // with.
+            if (wparam.0 & 0xFFF0) as u32 == SC_CLOSE {
+                if pinned() {
+                    request_pin_end();
+                }
+                return LRESULT(0);
+            }
+
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_SIZE => {
+            // **A pin put away as a window comes back as a window, and the pin's state has to follow it.**
+            // The gate and the ask are one implementation shared with the film host that owns the pin's
+            // chrome on the other road a pin is put away as a window (see `the_pin_came_back`).
+            the_pin_came_back(hwnd, msg, wparam);
+
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_CHAR => {
             // The character a key press has already been answered as. It is swallowed for the
@@ -336,14 +373,17 @@ pub(super) unsafe extern "system" fn window_proc(
             // behind everything, so the press is the only thing that says the user means it rather
             // than the file behind it — and once the keyboard is here, the keys the pin answers are
             // keys the listing behind it is not sent (see `pin_take_focus`).
-            if pinned() && !pin_is_focused() {
-                pin_take_focus(hwnd, &Win32PinWindow);
-            }
-
-            // A press on a pinned window is the pin's before it is anything else's: the volume
-            // popup over the picture, the caption's buttons, the caption itself, an edge, and the
-            // media under the hand are all things a window does with a pointer (see `pinned_press`).
-            if pinned() && (pinned_volume_press(hwnd, x, y) || pinned_press(hwnd, x, y)) {
+            //
+            // **And the press is answered before the keyboard is asked for.** A press on a pinned
+            // window is the pin's before it is anything else's: the volume popup over the picture,
+            // the caption's buttons, the caption itself, an edge, and the media under the hand are
+            // all things a window does with a pointer — and the drag or the resize one of them
+            // begins is the pointer taken for this window. That has to happen before any of the
+            // window-manager work the keyboard costs, or the first press of a hand that is already
+            // moving has nothing to carry it (see `press_the_pin`).
+            if pinned()
+                && press_the_pin(hwnd, x, y, &Win32PinWindow, !pin_is_focused())
+            {
                 return LRESULT(0);
             }
 

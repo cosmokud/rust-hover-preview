@@ -5,11 +5,20 @@
 //! seek, a pause and a track step are lines written down a named pipe rather than a player ended
 //! and begun again.
 //!
-//! **Write-only by decision.** The pipe is opened, one JSON command line is written, and the
-//! handle is dropped: there is no reader thread, no request id, no reply parsed and nothing read
-//! back — the app knows what it needs without asking, the sidecar from the filesystem and the
-//! level from the pin. A command that wants no answer says so with `"async": true` rather than
-//! leaving a reply nobody reads in the pipe.
+//! **A command is written and its reply left unread.** The pipe is opened, one JSON command line is
+//! written, and the handle is dropped: there is no reader thread and no reply parsed — the app knows
+//! what it needs without asking, the sidecar from the filesystem and the level from the pin. A
+//! command that wants no answer says so with `"async": true` rather than leaving a reply nobody
+//! reads in the pipe.
+//!
+//! **Two facts are the player's own, and they are read.** Where its picture is standing, and whether
+//! the video output has drawn the frame it is standing on, are things this app cannot assert: a hover
+//! is frozen on mpv's last frame and the pin begins on that same frame, so the second it is at is
+//! asked of the player rather than estimated, and the swap is made on the player's own word that the
+//! frame is up (see `get_property`, `pin_playback::freeze_the_hover` and
+//! `pin_film_host::the_hosted_frame_is_presented`). **A read is always bounded**: it is asked on the
+//! thread that is waiting for it, it is answered out of what has already landed on the pipe, and a
+//! player that has not answered in ten milliseconds is one this app does not wait for.
 //!
 //! The pipe the launch names is remembered against the player's own process id, and forgotten when
 //! that player is killed or parked, so a command can never reach a player this app has stopped
@@ -18,8 +27,33 @@
 //! level moved on a player begun with none has a track to ask back for (see `HeldPlayer` and
 //! `set_volume`). The name is unique per launch (a counter) so two previews could never share one.
 
+use std::os::windows::io::AsRawHandle;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+
+use windows::Win32::Foundation::{BOOL, HANDLE};
+
+// `PeekNamedPipe`, which is the one call that says how much of an answer has landed without waiting
+// for what has not.
+//
+// **It is declared here because a read has to be bounded and this build's `windows` features carry no
+// pipes module.** The alternative — a thread of its own and a wait on it — is a read that outlives its
+// deadline on the pipe, and mpv serves one client at a time: a client that never lets go of the pipe
+// is every later command to that player lost (see `deliver`). kernel32 is in every process already, so
+// this is a link and not a dependency.
+#[link(name = "kernel32")]
+extern "system" {
+    // The same call, declared: `PeekNamedPipe(pipe, buffer, size, read, available, left)`, which
+    // copies what has landed on the pipe into the buffer and reports both counts.
+    fn PeekNamedPipe(
+        pipe: HANDLE,
+        buffer: *mut std::ffi::c_void,
+        size: u32,
+        read: *mut u32,
+        available: *mut u32,
+        left: *mut u32,
+    ) -> BOOL;
+}
 
 /// The pipe a launch names, unique to that launch and to this run of the app.
 ///
@@ -91,6 +125,14 @@ fn held_player(pid: u32) -> Option<HeldPlayer> {
         .and_then(|slot| slot.as_ref().filter(|held| held.pid == pid).cloned())
 }
 
+/// Whether this player can be asked a property at all: the pipe this app opened to it when it was
+/// begun. FFmpeg's player is begun with none, so it answers nothing and has no video output to
+/// report — the source being up is the whole of what it proves (see
+/// `pin_film_host::the_hosted_frame_is_up`).
+pub(super) fn answers_properties(pid: u32) -> bool {
+    held_player(pid).is_some()
+}
+
 /// Where a command actually goes: the pipe of the player behind `pid`, or nothing where there is
 /// no such player.
 fn write(pid: u32, line: String) -> bool {
@@ -98,6 +140,16 @@ fn write(pid: u32, line: String) -> bool {
         return false;
     };
     deliver(&held.pipe, line)
+}
+
+/// Where a line that is worth waiting for goes: the same pipe, offered until `within` has passed
+/// (see `deliver_within`). A pid this app holds no pipe for is still nobody's player, so nothing is
+/// waited on for it.
+fn write_within(pid: u32, line: String, within: std::time::Duration) -> bool {
+    let Some(held) = held_player(pid) else {
+        return false;
+    };
+    deliver_within(&held.pipe, line, within)
 }
 
 /// How many times a line is offered to the pipe, and how long the wait between two offers is.
@@ -115,6 +167,15 @@ const PIPE_OFFER_WAIT: std::time::Duration = std::time::Duration::from_millis(2)
 /// Windows' own `ERROR_PIPE_BUSY`, which is what an open that finds every instance of the pipe
 /// taken answers — the one failure worth waiting for rather than reporting.
 const ERROR_PIPE_BUSY: i32 = 231;
+
+/// Windows' own `ERROR_FILE_NOT_FOUND`, which is what an open answers before the player has made
+/// the pipe it was told to listen on: mpv creates its end of it while it starts, and a line offered
+/// before it is there has nowhere to go (see `deliver_within`).
+const ERROR_FILE_NOT_FOUND: i32 = 2;
+
+/// Windows' own `ERROR_PIPE_NOT_CONNECTED`, which is the pipe a player has made but is not yet
+/// listening on — the moment between the name existing and mpv taking the one client it serves.
+const ERROR_PIPE_NOT_CONNECTED: i32 = 233;
 
 /// Write one command line down the pipe and close it. MPV holds the other end; a pipe that cannot
 /// be opened is a player that is not there, and a command for one is not an error.
@@ -147,6 +208,56 @@ fn deliver(name: &str, line: String) -> bool {
         match std::fs::OpenOptions::new().write(true).open(&path) {
             Ok(mut pipe) => return pipe.write_all(line.as_bytes()).is_ok(),
             Err(error) if offers > 0 && error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                std::thread::sleep(PIPE_OFFER_WAIT);
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Whether an open that failed is one worth offering the line again for: every instance of the pipe
+/// is taken, or the pipe is not there yet, or it is there with nobody listening on it yet (see
+/// `deliver_within`).
+fn worth_offering_again(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(ERROR_PIPE_BUSY | ERROR_FILE_NOT_FOUND | ERROR_PIPE_NOT_CONNECTED)
+    )
+}
+
+/// Write one command line down the pipe and close it, offering it again until `within` has passed
+/// or the pipe takes it: `deliver`'s write, with the patience a player that has only just been begun
+/// needs.
+///
+/// **A player is a process before a pipe is a player's.** mpv makes its end of the JSON IPC while
+/// it starts, and measured on this machine with mpv 0.41.0 the pipe appears 40 ms after the spawn
+/// with the file cache warm and 211 ms after it on a first run: a line offered before that is
+/// answered `ERROR_FILE_NOT_FOUND`, which `deliver` reports at once. Every other command wants that
+/// immediate answer — a line for a player that is not there is not a line worth half a second of
+/// anybody's hover — so the waiting is this second function, and its one caller is the first
+/// `loadfile` of a resident that has just been begun (see `mpv_resident::serve`).
+///
+/// **A probe connection would not do the job it looks like it does.** The obvious way to wait for a
+/// pipe is to open one and count that as the player being ready — but mpv serves a single client at
+/// a time, so the probe's own instance is the one the file would then be waiting behind, and the
+/// write would be late by exactly as much as the probe was early. Offering the line itself costs
+/// the same opens and lands it the moment there is somewhere to put it.
+fn deliver_within(name: &str, line: String, within: std::time::Duration) -> bool {
+    #[cfg(test)]
+    if !WRITE_TO_A_REAL_PIPE.load(Ordering::Acquire) {
+        if let Ok(mut noted) = NOTED.lock() {
+            noted.push(line);
+        }
+        return true;
+    }
+
+    use std::io::Write;
+    let path = format!(r"\\.\pipe\{name}");
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        match std::fs::OpenOptions::new().write(true).open(&path) {
+            Ok(mut pipe) => return pipe.write_all(line.as_bytes()).is_ok(),
+            Err(error) if worth_offering_again(&error) && std::time::Instant::now() < deadline => {
                 std::thread::sleep(PIPE_OFFER_WAIT);
             }
             Err(_) => return false,
@@ -228,6 +339,49 @@ pub(super) fn seek_absolute(pid: u32, seconds: f64) -> bool {
     )
 }
 
+/// Load a file on a player that is standing, replacing whatever it holds: the whole of what a hover
+/// costs the resident, which is a file opened rather than a process started (see `mpv_resident`).
+///
+/// `replace` rather than `append`, because a hover plays one film and the one before it is the hover
+/// the pointer left. The per-file options the launch named — no `--start`, no `--pause`, the
+/// subtitle answer, `--aid=no` where the launch was muted — are given to this file as they were to
+/// the first, which is what makes a served hover the launch a hover would have had (see
+/// `video_launch::mpv_args`).
+pub(super) fn load_file(pid: u32, file: &std::path::Path) -> bool {
+    write(pid, load_file_line(file))
+}
+
+/// The same line for a player whose pipe may not be there yet, offered until `within` has passed:
+/// the first `loadfile` of a resident that has just been begun, which is the one line in this
+/// module written to a player that is still starting (see `deliver_within` and
+/// `mpv_resident::PIPE_UP_WAIT`).
+pub(super) fn load_file_within(
+    pid: u32,
+    file: &std::path::Path,
+    within: std::time::Duration,
+) -> bool {
+    write_within(pid, load_file_line(file), within)
+}
+
+/// The line a file is loaded with: the command, the file, `replace` and the newline the JSON IPC
+/// reads a message up to (see `deliver`).
+///
+/// It is one function because the resident offers this very line by two roads — at once to a player
+/// that is standing, and patiently to one that has just been begun — and a line built at each call
+/// site is a line one of the two can get wrong (see `load_file` and `load_file_within`).
+fn load_file_line(file: &std::path::Path) -> String {
+    format!(
+        r#"{{"command":["loadfile",{},"replace"],"async":true}}"#,
+        a_json_string(&file.to_string_lossy()),
+    ) + "\n"
+}
+
+/// Drop the file a player holds and leave it idle rather than ended: what a hover ending leaves the
+/// resident as (see `mpv_resident::finish`).
+pub(super) fn stop_playing(pid: u32) -> bool {
+    write(pid, r#"{"command":["stop"],"async":true}"#.to_string() + "\n")
+}
+
 /// Hold mpv where it is, or set it going again.
 pub(super) fn set_paused(pid: u32, paused: bool) -> bool {
     write(
@@ -263,6 +417,192 @@ pub(super) fn cycle_subtitles(pid: u32) -> bool {
     )
 }
 
+/// Give a running mpv a subtitle file and draw it, which is the one thing that makes a film's late
+/// copy cost no relaunch.
+///
+/// **A copy that becomes ready while the pin is up needs no player begun again** so that the file it
+/// names is drawn — a player begun again is the black frame and the second decode this road removes (see
+/// `pin_playback::reload_pinned_subtitles`). mpv can simply be handed the file: the copy is a whole
+/// subtitle with no streams of its own, so `select` is what says to draw it.
+pub(super) fn add_subtitles(pid: u32, file: &std::path::Path) -> bool {
+    write(
+        pid,
+        format!(
+            r#"{{"command":["sub-add",{},"select"],"async":true}}"#,
+            a_json_string(&file.to_string_lossy()),
+        ) + "\n",
+    )
+}
+
+/// One command argument as the JSON IPC reads it.
+///
+/// **A Windows path is backslashes**, and a backslash in a JSON string is an escape: an unescaped one
+/// is a line mpv cannot parse, so the file would never be added and every test that asserted the
+/// string would still be green (see `a_real_mpv_quits_on_the_line_this_app_writes` for why that is
+/// the half a string cannot hold). A quote is escaped with it, because a quote ends the string.
+fn a_json_string(text: &str) -> String {
+    format!(
+        "\"{}\"",
+        text.replace('\\', "\\\\").replace('"', "\\\"")
+    )
+}
+
+/// How long an answer is waited for, and how long between two looks at a pipe that has not answered
+/// yet.
+///
+/// A read is asked on the thread that is waiting for it — the press that freezes a hover, and the
+/// tick that waits for a film's first frame — so it is bounded by something shorter than a frame: a
+/// local mpv answers a `get_property` in microseconds, and a player that has not answered in ten
+/// milliseconds is one this app does not wait for (see `get_property`).
+const READ_WAIT: std::time::Duration = std::time::Duration::from_millis(10);
+const READ_POLL: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// The most of one reply line that is looked at: mpv writes a reply as one line and a scalar property
+/// is a short one, so a line that does not fit in this is not a reply this app asked for (see
+/// `read_reply`).
+const REPLY_BYTES: usize = 512;
+
+/// Ask a running mpv where one of its properties stands, and read the one line it answers with.
+///
+/// **The one thing this app cannot know without asking** (see the module note). Everything else mpv
+/// is told is an assertion of this app's; these two are the player's, and both callers want the same
+/// answer out of them: the second its picture is standing at, which is the frame a hover freezes on
+/// and the pin begins on (see `pin_playback::freeze_the_hover`), and whether its video output has
+/// drawn that frame, which is the difference between a window mpv has made and a picture it is
+/// showing (see `pin_film_host::the_hosted_frame_is_presented`).
+///
+/// `None` is every way the answer can fail to arrive: no pipe held for the player, a pipe that cannot
+/// be opened, a property mpv has no value for — `time-pos` before a file is loaded is exactly what a
+/// player still opening answers — and a reply that has not landed inside `READ_WAIT`. It is one
+/// answer because the callers want the same thing from it: nothing is known yet, so nothing is done
+/// on it.
+pub(super) fn get_property(pid: u32, property: &str) -> Option<String> {
+    #[cfg(test)]
+    if !WRITE_TO_A_REAL_PIPE.load(Ordering::Acquire) {
+        return held_player(pid).and_then(|_| noted_answer(pid, property));
+    }
+
+    let held = held_player(pid)?;
+    read_reply(&held.pipe, property_request(property))
+}
+
+/// The one line a property is asked with: the command, the property, and the newline the JSON IPC
+/// reads a message up to (see `deliver`).
+///
+/// It is one function rather than a format string at each site for the reason this module's tests
+/// exist at all: a line written by two hands is a line one of them can get wrong, and the newline is
+/// exactly what was missing from every command this module wrote while every test stayed green.
+fn property_request(property: &str) -> String {
+    format!(r#"{{"command":["get_property","{property}"],"request_id":1}}"#) + "\n"
+}
+
+/// Open the pipe, ask the one question and read the one line back, all inside `READ_WAIT`.
+///
+/// **The answer is peeked rather than read**, and that is what makes it bounded: `PeekNamedPipe`
+/// copies what has already landed without waiting for what has not, so a player that says nothing
+/// costs one look a millisecond and nothing else — where a read would be this thread stopped until
+/// the player spoke, on a pipe that player will not hand to anyone else meanwhile. The pipe is
+/// dropped at the end, which takes the line with it: nothing here is a conversation.
+fn read_reply(name: &str, request: String) -> Option<String> {
+    use std::io::Write;
+
+    let path = format!(r"\\.\pipe\{name}");
+    let mut offers = PIPE_OFFERS;
+    let mut pipe = loop {
+        offers -= 1;
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+        {
+            Ok(pipe) => break pipe,
+            Err(error) if offers > 0 && error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                std::thread::sleep(PIPE_OFFER_WAIT);
+            }
+            Err(_) => return None,
+        }
+    };
+
+    if pipe.write_all(request.as_bytes()).is_err() {
+        return None;
+    }
+
+    let handle = HANDLE(pipe.as_raw_handle());
+    let deadline = std::time::Instant::now() + READ_WAIT;
+    let mut landed = [0u8; REPLY_BYTES];
+    loop {
+        let mut read = 0u32;
+        let mut available = 0u32;
+        // SAFETY: `handle` is the pipe this function has just opened and still holds, and the buffer
+        // and the two counts are this frame's own. The call copies at most `size` bytes into the
+        // buffer, reports how many it copied and how many are waiting, and removes nothing.
+        let peeked = unsafe {
+            PeekNamedPipe(
+                handle,
+                landed.as_mut_ptr().cast(),
+                landed.len() as u32,
+                &mut read,
+                &mut available,
+                std::ptr::null_mut(),
+            )
+        };
+        if !peeked.as_bool() {
+            return None;
+        }
+
+        // A reply is one line, and a line that has not ended yet is a reply still being written:
+        // what is read is the line, never the part of it that has landed.
+        let seen = &landed[..read as usize];
+        if let Some(end) = seen.iter().position(|byte| *byte == b'\n') {
+            return reply_data(&String::from_utf8_lossy(&seen[..end]));
+        }
+
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(READ_POLL);
+    }
+}
+
+/// The value out of one JSON reply line: what stands after `"data":`, and nothing where the reply
+/// carries none.
+///
+/// It is a read of the one field rather than a parser, and the scalar properties it is used for are
+/// numbers and booleans, so the value is taken up to the next `,` or `}` and handed back as the text
+/// it is. A property mpv has no value for is answered with an error and no `data` at all, which is the
+/// `None` a caller reads as "not known yet" (see `get_property`).
+///
+/// **A `data` that opens an object is handed back whole**, up to the brace that closes it: a node
+/// property (`video-params`, see `pin_film_thumbnail::the_players_picture_size`) is the one answer on
+/// this pipe with more than one field in it, and cutting it at its first `,` would be handing the
+/// caller the first field of a film's geometry and calling it the geometry.
+///
+/// shortcut: a string value with a `,` in it would be cut at it, and a brace inside a string would
+/// close an object early, which no property read here is; upgrade to a parser when one that is is.
+fn reply_data(line: &str) -> Option<String> {
+    let at = line.find(r#""data""#)? + r#""data""#.len();
+    let rest = line[at..].trim_start().strip_prefix(':')?.trim_start();
+    if rest.starts_with('{') {
+        let mut depth = 0usize;
+        for (index, byte) in rest.bytes().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(rest[..=index].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        return None;
+    }
+    let end = rest.find([',', '}']).unwrap_or(rest.len());
+    let value = rest[..end].trim();
+    (!value.is_empty() && value != "null").then(|| value.trim_matches('"').to_string())
+}
+
 /// The JSON lines this app would have written, in order, for a test build.
 ///
 /// The pipe is the one seam under `#[cfg(test)]` in the same spirit as `spawn_player`'s noted
@@ -275,6 +615,63 @@ static NOTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 #[cfg(test)]
 pub(super) fn noted_lines() -> Vec<String> {
     NOTED.lock().map(|noted| noted.clone()).unwrap_or_default()
+}
+
+/// The answers a test build gives instead of opening a pipe, and the questions it was asked.
+///
+/// The same seam as `NOTED`'s and for the same reason: a test run opens no pipe and talks to no
+/// player, so what a read would have said is written down here and what it would have asked is noted
+/// (see `get_property`). A question nothing was written down for is answered by silence, which is a
+/// player that has not said yet — the state every wait here is bounded by.
+#[cfg(test)]
+static READ_ANSWERS: Mutex<Vec<(u32, String, Option<String>)>> = Mutex::new(Vec::new());
+
+/// The questions a test build has been asked, in order, as `pid:property`.
+#[cfg(test)]
+static READ_REQUESTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Answer what a test build reads of `property` on the player behind `pid`.
+#[cfg(test)]
+pub(super) fn answer_a_read(pid: u32, property: &str, answer: Option<&str>) {
+    if let Ok(mut answers) = READ_ANSWERS.lock() {
+        answers.push((pid, property.to_string(), answer.map(str::to_string)));
+    }
+}
+
+/// The questions asked so far (see `READ_REQUESTS`).
+#[cfg(test)]
+pub(super) fn noted_reads() -> Vec<String> {
+    READ_REQUESTS
+        .lock()
+        .map(|asked| asked.clone())
+        .unwrap_or_default()
+}
+
+/// Forget the answers and the questions, so a test reads its own.
+#[cfg(test)]
+pub(super) fn clear_reads() {
+    if let Ok(mut answers) = READ_ANSWERS.lock() {
+        answers.clear();
+    }
+    if let Ok(mut asked) = READ_REQUESTS.lock() {
+        asked.clear();
+    }
+}
+
+/// The answer a test build gives: the last one written down for this player and property, and
+/// silence where none was.
+#[cfg(test)]
+fn noted_answer(pid: u32, property: &str) -> Option<String> {
+    if let Ok(mut asked) = READ_REQUESTS.lock() {
+        asked.push(format!("{pid}:{property}"));
+    }
+    READ_ANSWERS.lock().ok().and_then(|answers| {
+        answers
+            .iter()
+            .rev()
+            .find(|(owner, name, _)| *owner == pid && name == property)
+            .and_then(|(_, _, answer)| answer.clone())
+    })
 }
 
 /// Forget the lines noted so far, so a test reads its own commands.
@@ -420,6 +817,7 @@ mod tests {
         assert!(set_paused(7, false));
         assert!(set_ontop(7, false));
         assert!(cycle_subtitles(7));
+        assert!(add_subtitles(7, std::path::Path::new(r"films\an episode.srt")));
 
         assert_eq!(
             noted_lines(),
@@ -441,12 +839,98 @@ mod tests {
                     r#"{"command":["set_property","ontop",false],"async":true}"#
                 ),
                 format!("{}\n", r#"{"command":["cycle","sub"],"async":true}"#),
+                format!(
+                    "{}\n",
+                    r#"{"command":["sub-add","films\\an episode.srt","select"],"async":true}"#
+                ),
             ],
-            "each line names the command and its argument, and every one is async"
+            "each line names the command and its argument, and every one is async — and a \
+             Windows path is escaped, because a backslash is what JSON reads a string's escape by"
         );
 
         forget_pipe(7);
         clear_noted();
+    }
+
+    /// **A read is asked of the player this app holds and no other, and its answer is what the
+    /// player said** — the value out of the reply's own `data`, and nothing where mpv has no value to
+    /// give.
+    #[test]
+    fn a_property_is_read_back_from_the_player_that_is_held() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        clear_reads();
+        remember_pipe(51, "a-pipe", false);
+        answer_a_read(51, "time-pos", Some("12.345000"));
+
+        assert_eq!(
+            get_property(51, "time-pos").as_deref(),
+            Some("12.345000"),
+            "the second the player is standing at is read back as the player spelled it"
+        );
+        assert_eq!(
+            get_property(51, "vo-configured"),
+            None,
+            "a property nothing answered for is a player that has not said, which is not a value"
+        );
+        assert_eq!(
+            get_property(53, "time-pos"),
+            None,
+            "a pid this app holds no pipe for is nobody's player, so nothing is asked of it"
+        );
+        assert_eq!(
+            noted_reads(),
+            vec!["51:time-pos".to_string(), "51:vo-configured".to_string()],
+            "and the question that was asked is the one the caller named, of the player it named"
+        );
+
+        forget_pipe(51);
+        clear_reads();
+    }
+
+    /// The value is taken out of the reply's `data` field whatever else the line carries: an answer is
+    /// `{"error":…,"data":…,"request_id":…}`, and a property mpv has no value for carries no `data`
+    /// at all — which is the silence a caller waits past rather than a value of nothing.
+    #[test]
+    fn the_value_is_the_one_after_data_and_an_unavailable_property_has_none() {
+        assert_eq!(
+            reply_data(r#"{"error":"success","data":12.345,"request_id":1}"#).as_deref(),
+            Some("12.345"),
+            "a number is the text after `data` up to the field beside it"
+        );
+        assert_eq!(
+            reply_data(r#"{"error":"success","data":true,"request_id":2}"#).as_deref(),
+            Some("true"),
+            "and a boolean is the word mpv spells it with"
+        );
+        assert_eq!(
+            reply_data(r#"{"error":"property unavailable","request_id":3}"#),
+            None,
+            "a property with no value is answered with an error and no data, which is no answer"
+        );
+        assert_eq!(
+            reply_data(r#"{"error":"success","data":null,"request_id":4}"#),
+            None,
+            "and a null is a value of nothing, which is the same answer here"
+        );
+        // A node property's answer is one object, and the whole of it: `osd-dimensions` is how this
+        // app asks mpv what its output is really drawing (see `pin_film_thumbnail`), and a reply cut
+        // at its first field would be a geometry of which only the width was read.
+        assert_eq!(
+            reply_data(
+                r#"{"data":{"w":640,"h":300,"par":1.000000,"aspect":2.133333,"mt":0,"mb":0,"ml":53,"mr":54},"request_id":5,"error":"success"}"#
+            )
+            .as_deref(),
+            Some(r#"{"w":640,"h":300,"par":1.000000,"aspect":2.133333,"mt":0,"mb":0,"ml":53,"mr":54}"#),
+            "an object is handed back to the brace that closes it, and the braces inside it with it"
+        );
+        assert_eq!(
+            reply_data(r#"{"data":{"w":640,"h":300"#),
+            None,
+            "and an object that never closes is not an answer"
+        );
     }
 
     /// The pipe, end to end: one command line handed to a real mpv down its own pipe, and the player
@@ -719,7 +1203,21 @@ mod tests {
         // level of zero (see `video_launch::mpv_args`), and the name is the app's own pipe.
         let name = next_pipe_name();
         let args = video_launch::mpv_args(
-            &picture, 0, 0, 320, 240, 0.0, 0, None, false, false, None, &name,
+            &picture,
+            0,
+            0,
+            320,
+            240,
+            0.0,
+            false,
+            0,
+            None,
+            false,
+            false,
+            None,
+            &name,
+            false,
+            true,
         );
         let audio_file = format!("--audio-file={}", soundtrack.to_string_lossy());
         let started = engine_processes::hidden_command(&program)
@@ -924,9 +1422,9 @@ mod tests {
 
         let path = format!(r"\\.\pipe\{name}");
         // The line is built here rather than inside the thread, so what the thread owns is its bytes
-        // and its pipe, and nothing borrowed has to outlive the call.
-        let mut line = format!(r#"{{"command":["get_property","{property}"],"request_id":1}}"#);
-        line.push('\n');
+        // and its pipe, and nothing borrowed has to outlive the call. It is the app's own line, from
+        // the one place the app builds it (see `property_request`).
+        let line = property_request(property);
         let (send, receive) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let answer = (|| -> Option<String> {
@@ -983,5 +1481,95 @@ mod tests {
             Some(text) => Some(text.split('"').next()?.to_string()),
             None => Some(data.split([',', '}']).next()?.trim().to_string()),
         }
+    }
+
+    /// **The read, end to end: the app's own question down a real player's pipe, and the app's own
+    /// parse of the one line that answers it.** Everything else here asserts a string this app meant
+    /// to write; the peeked read is the half nothing but a real player can answer for — whether mpv
+    /// hands an answer to a client that has asked and is looking, and whether the line it hands is the
+    /// shape `reply_data` reads.
+    ///
+    /// An idle player is asked two things it can answer without a film: `idle-active`, which is true,
+    /// and `time-pos`, which has no value at all until a file is loaded — the same "not yet" the
+    /// handover waits past (see `pin_film_host::the_hosted_frame_is_presented`).
+    ///
+    /// Ignored for the reason the tests above it are, and run the same way: `cargo test
+    /// a_real_mpv_answers_the_property_this_app_asks_it -- --ignored`, alone.
+    #[test]
+    #[ignore = "starts a real mpv, which a test run must never do; needs one installed"]
+    fn a_real_mpv_answers_the_property_this_app_asks_it() {
+        use crate::app::engine_processes;
+        use crate::formats::codecs;
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+
+        let Some(program) = codecs::resolve_mpv(None, &codecs::mpv_installs()) else {
+            println!("this machine has no mpv, so there is no pipe to ask anything of");
+            return;
+        };
+
+        let name = next_pipe_name();
+        let ipc = format!(r#"--input-ipc-server=\\.\pipe\{name}"#);
+        let started = engine_processes::hidden_command(&program)
+            .args([
+                "--no-config",
+                "--idle=yes",
+                "--vo=null",
+                "--ao=null",
+                ipc.as_str(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        let mut player = match started {
+            Ok(player) => player,
+            Err(error) => {
+                println!(
+                    "mpv is installed but could not be started ({}), so there is no pipe to ask \
+                     anything of",
+                    error.kind()
+                );
+                return;
+            }
+        };
+
+        remember_pipe(player.id(), &name, false);
+        write_to_a_real_pipe(true);
+
+        // The player puts its end of the pipe up while it starts, so the question is asked until one
+        // is answered: a pipe that cannot be opened is not a player that said nothing (see
+        // `get_property`).
+        let patience = Instant::now() + Duration::from_secs(5);
+        let look = Duration::from_millis(25);
+        let mut idle = None;
+        while idle.is_none() && Instant::now() < patience {
+            idle = get_property(player.id(), "idle-active");
+            if idle.is_none() {
+                std::thread::sleep(look);
+            }
+        }
+
+        // And the property a player with no film has no value for, asked of the same idle player.
+        let unloaded = get_property(player.id(), "time-pos");
+
+        let _ = player.kill();
+        let _ = player.wait();
+        forget_pipe(player.id());
+        write_to_a_real_pipe(false);
+
+        assert_eq!(
+            idle.as_deref(),
+            Some("true"),
+            "an idle player answers the question this app asks it, out of the line this app reads: \
+             {:?}",
+            idle
+        );
+        assert_eq!(
+            unloaded, None,
+            "and a property it has no value for is no answer rather than a value of nothing: \
+             {unloaded:?}"
+        );
     }
 }

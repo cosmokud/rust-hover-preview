@@ -138,7 +138,7 @@ pub fn run_explorer_hook() {
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
     const VIDEO_PROCESS_SWEEP_MS: u64 = 1000;
 
-    let (mut config_snapshot, mut trigger_key_vk, mut trigger_key_seen) = CONFIG
+    let (mut config_snapshot, mut trigger_binding, mut trigger_key_seen) = CONFIG
         .lock()
         .map(|c| {
             let snapshot = (
@@ -155,8 +155,11 @@ pub fn run_explorer_hook() {
             // Resolved once per config change instead of once per tick: what the tick
             // compares is the spelling, and a spelling that has not changed is a key that
             // has not changed (see the snapshot below).
-            let vk = crate::shell::key_input::key_to_vk(&c.trigger_key);
-            (snapshot, vk, c.trigger_key.clone())
+            let binding = crate::shell::key_binding::parse_or_default(
+                &c.trigger_key,
+                crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
+            );
+            (snapshot, binding, c.trigger_key.clone())
         })
         .unwrap_or((
             (
@@ -170,7 +173,10 @@ pub fn run_explorer_hook() {
                 DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
                 DEFAULT_TICK_MS,
             ),
-            Some(0x12),
+            crate::shell::key_binding::parse_or_default(
+                "",
+                crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
+            ),
             "alt".to_string(),
         ));
     let mut explorer_probe_backoff_until: Option<Instant> = None;
@@ -405,7 +411,10 @@ pub fn run_explorer_hook() {
             // behind it happens once per change.
             if config.trigger_key != trigger_key_seen {
                 trigger_key_seen = config.trigger_key.clone();
-                trigger_key_vk = crate::shell::key_input::key_to_vk(&config.trigger_key);
+                trigger_binding = crate::shell::key_binding::parse_or_default(
+                    &config.trigger_key,
+                    crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
+                );
             }
         }
 
@@ -433,7 +442,7 @@ pub fn run_explorer_hook() {
             trigger_key_mode == TriggerKeyMode::Disable && pinned() && !trigger_key_affect_pin_mode;
         let trigger_key_down = trigger_key_enabled
             && !trigger_key_muted_by_pin
-            && trigger_key_vk.is_some_and(key_is_down);
+            && crate::shell::key_binding::binding_is_active(&trigger_binding);
         let previews_allowed =
             !trigger_key_enabled || trigger_key_mode.allows_previews(trigger_key_down);
 
@@ -606,8 +615,16 @@ pub fn run_explorer_hook() {
 
         // Periodically re-evaluate the state
         if last_state_check.elapsed() > Duration::from_millis(state_recheck_ms) {
+            let was = current_state;
             current_state = read_explorer_state();
             last_state_check = Instant::now();
+            // **The one line a run needs when the previews stop with the pointer over a listing**,
+            // written on the transition into the state rather than on every recheck of it: what it
+            // says about a window is a fact of that moment, and a state re-read every two seconds
+            // would bury the transition in repetitions of itself (see `RHP_PIN_TRACE`).
+            if current_state == ExplorerState::HiddenByForeground && was != current_state {
+                note_the_window_that_hides_the_shell();
+            }
         }
 
         // If Explorer is not accessible, hide preview and sleep
@@ -1606,6 +1623,15 @@ pub fn run_explorer_hook() {
                             } else {
                                 None
                             };
+                            // One line per hover shown, so a run that shows none says so by
+                            // having none rather than by having nothing to read (see `note_pin_click`).
+                            note_pin_click!(
+                                "hover {}  at {},{}  win {}",
+                                trace_name(&file_path),
+                                cursor_pos.x,
+                                cursor_pos.y,
+                                window_class_of(pointer.window),
+                            );
                             show_preview(
                                 &file_path,
                                 cursor_pos.x,
@@ -1650,6 +1676,16 @@ pub fn run_explorer_hook() {
                                 continue;
                             }
                         } else {
+                            // A parked pointer that resolves no file, and the window it was over
+                            // instead: a hover that never appears is named here by what stood where
+                            // the file was (see `note_pin_click`).
+                            note_pin_click!(
+                                "hover: nothing under the pointer at {},{}  win {}  cls {}",
+                                cursor_pos.x,
+                                cursor_pos.y,
+                                pointer.window.0 as isize,
+                                window_class_of(pointer.window),
+                            );
                             stationary_search_miss_started_at = None;
                         }
                     }
@@ -1673,4 +1709,39 @@ pub fn run_explorer_hook() {
     unsafe {
         CoUninitialize();
     }
+}
+
+/// Write down who is in front when the gate decides that no listing can be reached: the window, its
+/// process, its class, and the region its own rectangle was read as covering.
+///
+/// The state alone says only that nothing is reachable, and every answer that makes it readable is a
+/// fact about the window in front rather than about the loop: a player of this app's left there, a
+/// window of somebody else's, and a rectangle that was read as a cover although its class hides
+/// nothing (see `foreground_cover_rect` and `a_foreground_of_this_class_covers_what_is_behind`).
+/// Written through the preview's own `RHP_PIN_TRACE` log, because it is the same run being read.
+fn note_the_window_that_hides_the_shell() {
+    if !crate::ui::preview_window::pin_trace_asked() {
+        return;
+    }
+
+    let foreground = unsafe { GetForegroundWindow() };
+    let mut pid = 0u32;
+    let mut name = [0u16; 64];
+    let (pid, class) = unsafe {
+        GetWindowThreadProcessId(foreground, Some(&mut pid));
+        let len = GetClassNameW(foreground, &mut name).max(0) as usize;
+        (pid, String::from_utf16_lossy(&name[..len.min(name.len())]))
+    };
+
+    let cover = match foreground_cover_rect() {
+        Some(cover) => format!(
+            "cover {}, {}, {}, {}",
+            cover.left, cover.top, cover.right, cover.bottom
+        ),
+        None => "cover none".to_string(),
+    };
+
+    crate::ui::preview_window::note_a_trace_line(&format!(
+        "hidden by foreground {foreground:?} pid {pid} class {class} {cover}"
+    ));
 }

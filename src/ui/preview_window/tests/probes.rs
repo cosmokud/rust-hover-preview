@@ -837,13 +837,15 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    let previous_own = pin_is_its_own_window();
     let mut pin = overlay_pin(content, PinChrome::always());
     pin.path = PathBuf::from("a-pin-whose-player-is-mpv.mkv");
     pin.transport.begun(30.0, true, false);
     stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
-    forget_resume_frame();
+    // **A film pin stands in a window of its own**, which is where its host is made: the film is
+    // drawn through that host rather than being the player's window over the band (see
+    // `pin_film_host`).
+    pin_stands_in_its_own_window(true);
 
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
@@ -858,10 +860,6 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     assert!(
         pin_chrome_up(),
         "the caption the hand is on is up over the band"
-    );
-    assert!(
-        !pin_player_is_parked(),
-        "and mpv's window is the one the drag has to carry"
     );
 
     for step in 1..=3 {
@@ -894,6 +892,152 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_video_engine_in(None);
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// A resize drag asks for the pin's band where it begins and where it ends, and never on a step
+/// between the two.
+///
+/// **The fault this is a regression test for is a `SetWindowPos` per pointer move.** The band a pin
+/// belongs in is a question about the setting rather than about its box (`band_place`), so a resize
+/// that re-asserted it on every step was a DWM reorder per move for a window already in the band it
+/// named. What a drag owes is the band at its press and at its release — so this reads both, one
+/// direction for each setting, and reads the band a step leaves behind in between.
+///
+/// The window is a real one of this app's own (the same stand-in the player placements are read
+/// off), because a band is a fact about a window and nothing in this view keeps a record of it: the
+/// raised state is read back off the machine with `window_holds_the_topmost_band`.
+#[test]
+fn a_resize_drag_bands_the_pin_at_its_two_ends_and_not_on_a_step_between_them() {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_band = PIN_BAND_HELD.swap(false, Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+
+    let content = (100, 80, 420, 320);
+    // A real window of the machine's own, born topmost — the state this test puts the pin in the
+    // wrong band of is its own, so what is read after the press is this app's answer and not the
+    // window's creation.
+    let pin_window = unsafe { stand_a_player_window(content) };
+    assert!(
+        unsafe { window_holds_the_topmost_band(pin_window) },
+        "the stand-in is born in the topmost band, so a window read as ordinary after the press \
+         was put there by the drag"
+    );
+
+    // **`Always On Top` off: the press and the release are the band's, and a step's is not.** The
+    // band is put back in the topmost one by hand mid-drag, which is any road that put the window in
+    // the band `band_place` does not name: a step that re-asked the band would take it away again.
+    let banded = |window: HWND| unsafe { window_holds_the_topmost_band(window) };
+    let band_the_pin = |window: HWND, band: HWND| unsafe {
+        let _ = SetWindowPos(
+            window,
+            band,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        let _ = DwmFlush();
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+
+    let hwnd = pin_window;
+    let window = a_window_at(content);
+    begin_pin_drag(
+        hwnd,
+        &window,
+        PinDragAction::Resize(edge(false, false, true, true)),
+        true,
+    );
+    assert!(
+        !banded(pin_window),
+        "the press puts the pin in the band the setting names, which with `Always On Top` off is \
+         the ordinary one"
+    );
+
+    band_the_pin(pin_window, HWND_TOPMOST);
+    assert!(banded(pin_window), "the window is back in the wrong band");
+
+    for step in 1..=3 {
+        step_the_pin_drag_by(step * 12, step * 9);
+        unsafe { apply_pin_drag(hwnd) };
+        assert!(
+            banded(pin_window),
+            "step {step}: a step of a resize asked for the band again, which is a DWM reorder per \
+             pointer move for a window already in it"
+        );
+    }
+
+    finish_pin_drag(hwnd, &window);
+    assert!(
+        !banded(pin_window),
+        "and the release is the other end the band is asked at: the pin goes back to the ordinary \
+         band however a step left it"
+    );
+
+    // **`Always On Top` on: the same two ends, the other way.** The window is put in the ordinary
+    // band first, so the topmost read at each end is the drag's answer rather than the band it began
+    // in.
+    if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+        *request = None;
+    }
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    band_the_pin(pin_window, HWND_NOTOPMOST);
+    assert!(
+        !banded(pin_window),
+        "the window is out of the band the setting names"
+    );
+
+    begin_pin_drag(
+        hwnd,
+        &window,
+        PinDragAction::Resize(edge(false, false, true, true)),
+        true,
+    );
+    assert!(
+        banded(pin_window),
+        "the press of a resize puts the pin in the topmost band where the setting asks for it"
+    );
+    step_the_pin_drag_by(8, 6);
+    unsafe { apply_pin_drag(hwnd) };
+    assert!(
+        banded(pin_window),
+        "and a step leaves the band it found alone"
+    );
+    finish_pin_drag(hwnd, &window);
+    assert!(
+        banded(pin_window),
+        "and the release leaves the pin in the band the setting asks for"
+    );
+
+    if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+        *request = None;
+    }
+    unsafe { DestroyWindow(pin_window).expect("the stand-in window let go of") };
+    PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+    }
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
@@ -1279,7 +1423,7 @@ fn a_player_begun_behind_a_bubble_is_begun_off_the_desktop() {
 /// by `pinned_content_is_the_pins`, and the caption, the buttons, the edges and the corners are
 /// asked about first and win where they are drawn — so the film is a handle rather than a gesture
 /// of its own. Nothing is parked and nothing is held, because mpv's window *is* the film and is
-/// carried rather than put away (see `gesture_press_freeze`).
+/// carried rather than put away: a gesture asks nothing of the player.
 #[test]
 fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1299,13 +1443,14 @@ fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    let previous_own = pin_is_its_own_window();
     let mut pin = overlay_pin(content, PinChrome::always());
     pin.path = PathBuf::from("a-film-mpv-draws.mkv");
     let caption = pin.caption;
     stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
-    forget_resume_frame();
+    // **A film pin stands in a window of its own**, which is where its host is made (see
+    // `pin_film_host`).
+    pin_stands_in_its_own_window(true);
 
     // This app writes the player down as it begins one, and nothing here begins one (see
     // `note_player_process`).
@@ -1355,10 +1500,6 @@ fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
         Some(content),
         "and the band the press landed in is that same box"
     );
-    assert!(
-        !pin_player_is_parked(),
-        "mpv is left drawing: a gesture writes commands down its pipe rather than ending its player"
-    );
 
     finish_pin_drag(hwnd, &window);
 
@@ -1367,6 +1508,7 @@ fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
     stand_video_engine_in(None);
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
+    pin_stands_in_its_own_window(previous_own);
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
@@ -1407,9 +1549,6 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
     let mut pin = overlay_pin(content, PinChrome::always());
     pin.path = PathBuf::from("a-film-whose-window-is-clicked-through.mkv");
     stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
-    forget_resume_frame();
 
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
@@ -1516,7 +1655,7 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
 #[test]
 fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
     assert_eq!(
-        player_order(MPV_IMAGE_NAME, true, false, false, false, false),
+        player_order(MPV_IMAGE_NAME, true, false, false, false),
         PlayerOrder::Raise,
         "an mpv pin's film is raised with nothing of the pin's own drawn over the band: the pin \
          is put back over it right after"
@@ -1532,14 +1671,7 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
         (false, false, true, "with the card's menu up over it"),
     ] {
         assert_eq!(
-            player_order(
-                MPV_IMAGE_NAME,
-                true,
-                chrome_up,
-                volume_open,
-                menu_open,
-                false
-            ),
+            player_order(MPV_IMAGE_NAME, true, chrome_up, volume_open, menu_open),
             PlayerOrder::Leave,
             "an mpv pin's film is left exactly where it is {what}: a raise would put the film \
              over what the user is looking at and blink it, while mpv's own window holds the band \
@@ -1548,14 +1680,14 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
     }
 
     assert_eq!(
-        player_order(MPV_IMAGE_NAME, false, false, false, false, false),
+        player_order(MPV_IMAGE_NAME, false, false, false, false),
         PlayerOrder::Raise,
         "the same film on a hover is raised as it always was: a hover must keep falling through to \
          what is behind it"
     );
 
     assert_eq!(
-        player_order(FFPLAY_IMAGE_NAME, true, false, false, false, false),
+        player_order(FFPLAY_IMAGE_NAME, true, false, false, false),
         PlayerOrder::Raise,
         "an ffplay pin raises its player over the band as it always has"
     );
@@ -1570,36 +1702,16 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
         (false, false, true, "while the card's menu floats over it"),
     ] {
         assert_eq!(
-            player_order(
-                FFPLAY_IMAGE_NAME,
-                true,
-                chrome_up,
-                volume_open,
-                menu_open,
-                false
-            ),
+            player_order(FFPLAY_IMAGE_NAME, true, chrome_up, volume_open, menu_open),
             PlayerOrder::Leave,
             "an ffplay pin's player is left exactly where it is {what}: on that route the band is \
              that very window, and a raise would bury what this app is drawing there"
         );
     }
-
-    assert_eq!(
-        player_order(FFPLAY_IMAGE_NAME, true, false, false, false, true),
-        PlayerOrder::Leave,
-        "and a film parked for a gesture is left alone: a raise here would show it back over the \
-         cover the park painted"
-    );
-    assert_eq!(
-        player_order(MPV_IMAGE_NAME, true, false, false, false, true),
-        PlayerOrder::Leave,
-        "mpv's own film included — nothing on screen is raised, and a parked band would be the \
-         desktop under the pin's own pixel"
-    );
 }
-
 /// A player's window is asserted the styles **with** the topmost bit, and the click-through style
-/// besides.
+/// besides. The film is topmost for as long as the pin is Always On Top, because a pin's band is the
+/// band its film stands in (see `pin_holds_the_front`).
 ///
 /// Topmost is what keeps a film above every ordinary window — Explorer, and whatever else the user
 /// brings up — which is the whole of why a band painted over a film is not a band over a film nobody
@@ -1610,6 +1722,26 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
 /// `a_pinned_players_placement_puts_the_pin_back_over_it`; the style half is this test.
 #[test]
 fn a_players_window_is_asserted_topmost() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+    stand_pin(Some(overlay_pin((100, 80, 420, 320), PinChrome::always())));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+        config.pin_update_move_to_top = true;
+    }
+    assert!(
+        pin_holds_the_front(),
+        "a pin that is Always On Top holds the band, and that is the band the film is asserted into"
+    );
+
     let a_style_the_player_needs = 0x0004_0000isize;
     let asserted = player_ex_style_for(WS_EX_TOPMOST.0 as isize | a_style_the_player_needs);
 
@@ -1630,6 +1762,13 @@ fn a_players_window_is_asserted_topmost() {
         "and the click-through bit with it, which is what a press on the film reaches the pin \
          through"
     );
+
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
 }
 
 /// The film of a pinned mpv preview is placed where the band is, and put under the pin, through
@@ -1678,9 +1817,6 @@ fn a_pinned_mpv_film_is_placed_by_a_tick_a_drag_and_a_monitor_pass() {
     pin.path = PathBuf::from("a-film-the-pin-stands-above.mkv");
     pin.transport.begun(30.0, true, false);
     stand_pin(Some(pin));
-    forget_pin_park_swap();
-    forget_video_frame();
-    forget_resume_frame();
 
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
@@ -1762,6 +1898,12 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
     let previous_image = video_process_image();
     let previous_pin = take_pin_for_a_test();
+    let always_on_top = pin_always_on_top();
+    // The pair the re-raise is about is a Topmost one: a pin with the setting off puts its film
+    // *below* itself, so there is nothing to put the pin back over (see `place_player_window`).
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
 
     let content = (100, 80, 420, 320);
     let player = unsafe { stand_a_player_window(content) };
@@ -1886,6 +2028,9 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
     stand_pin(previous_pin);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+    }
 }
 
 /// The answer the chrome block's raise is asked against: whether the player's window is standing
@@ -1973,8 +2118,8 @@ fn the_player_stands_over_the_pin_only_while_it_is_raised_over_it() {
          raise left standing"
     );
 
-    // A parked film is not on screen, and a window that is not on screen covers nothing — the
-    // answer a drag's own moves owe while the window is hidden (see `pin_player_is_parked`).
+    // A film's window that is not on screen covers nothing — the answer a drag's own moves owe
+    // while the window is hidden (see `player_stands_over_the_pin`).
     unsafe {
         raise(player, content);
         let _ = ShowWindow(player, SW_HIDE);
@@ -1997,4 +2142,23 @@ fn the_player_stands_over_the_pin_only_while_it_is_raised_over_it() {
         let _ = DestroyWindow(pin);
     }
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+}
+
+/// The rule a press on a document the engine draws is read by, without a desktop under it: a
+/// window the engine's own browser owns is the page, whatever the host's tree answers for.
+///
+/// The case that matters is the third one. A press on a picture was read as a press on somebody
+/// else's window because the browser's window is not a child of the host's in the tree the walk
+/// sees, and the pin was left where it was by a click that was meant to bring it forward.
+#[test]
+fn a_window_of_the_engines_browser_is_the_page() {
+    // The host window itself, and a window drawn inside it.
+    assert!(the_engines_window(true, false, 4242, 4242));
+    assert!(the_engines_window(false, true, 0, 4242));
+    // The browser's own window, which the host's tree does not answer for.
+    assert!(the_engines_window(false, false, 4242, 4242));
+    // Another program's window, a browser this app never started, and nothing at all.
+    assert!(!the_engines_window(false, false, 9001, 4242));
+    assert!(!the_engines_window(false, false, 4242, 0));
+    assert!(!the_engines_window(false, false, 0, 0));
 }

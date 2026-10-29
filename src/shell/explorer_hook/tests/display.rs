@@ -168,6 +168,49 @@ fn every_window_behind_the_one_in_front_is_hidden() {
     );
 }
 
+/// The region the desktop covers when it is the window in front: the whole display, which is what
+/// made it read as a fullscreen window over every listing on it.
+fn the_desktop_in_front() -> Option<RECT> {
+    primary_display()
+}
+
+/// **A desktop left in front is no window over the listing.** `Progman` and `WorkerW` are drawn over
+/// the whole display, so a gate that reads the window in front by its rectangle alone answers every
+/// Explorer window as hidden behind it — and the loop then hides the preview and sleeps, which is a
+/// hover that does nothing at all until the user clicks some other window. That is the state a
+/// player of this app's leaves behind when it is killed while it holds the foreground.
+#[test]
+fn the_desktop_in_front_hides_no_listing() {
+    for desktop in ["Progman", "WorkerW", "progman"] {
+        assert!(
+            !a_foreground_of_this_class_covers_what_is_behind(desktop),
+            "{desktop} is the desktop, and the desktop covers no listing"
+        );
+    }
+
+    // The same box under any other class is a window over the listing, which is the whole of what
+    // the two classes above are kept out of.
+    for window in [
+        "CabinetWClass",
+        "Chrome_WidgetWin_1",
+        "ApplicationFrameWindow",
+        "",
+    ] {
+        assert!(
+            a_foreground_of_this_class_covers_what_is_behind(window),
+            "{window} is a window, and a window in front may hide what is behind it"
+        );
+    }
+
+    // And what the gate does with the region: the desktop's own rectangle, read as a window's, is the
+    // answer the state went hidden on.
+    assert_eq!(
+        explorer_state_from_counts(&counts(1, 1, 0, the_desktop_in_front()), false),
+        ExplorerState::HiddenByForeground,
+        "a region over every listing is hidden, which is what the desktop's box must never be read as"
+    );
+}
+
 /// A foreground window that hides nothing — an ordinary one — leaves every
 /// Explorer window reachable, whatever display it is on.
 #[test]

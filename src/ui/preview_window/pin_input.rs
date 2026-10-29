@@ -119,10 +119,13 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         // way the tick asks it: it is the strip the pointer is in, not the window it is over.
         let (_, height) = pin.window_size();
         let bar_top = height - pinned_transport_height(pin.dpi, pin.transport_bar);
-        if y < caption.height {
+        // A handover holds the strips down: a move must not bring one back over the film it is
+        // taking the picture from (see `pin_chrome_is_held_down`).
+        let held_down = pin_chrome_is_held_down();
+        if !held_down && y < caption.height {
             pin.chrome.caption = true;
         }
-        if pin.transport_bar && y >= bar_top {
+        if !held_down && pin.transport_bar && y >= bar_top {
             pin.chrome.bar = true;
         }
 
@@ -323,11 +326,6 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             // stopped for the whole of the drag, which is a pause rather than a seek. So the cover,
             // the end and the relaunch are the release's own (see `pinned_transport_release`), and a
             // film mpv draws is ended at neither end of the gesture (see `mpv_ipc`).
-            if current_media_type() == Some(MediaType::Video) {
-                // A newer gesture supersedes whatever relaunch is still in flight: the bump kills
-                // it before it can publish a player this gesture is not waiting for.
-                bump_pinned_generation();
-            }
         }
         // The volume button is held rather than acted on where it is pressed, like every button a
         // window has: what a click does is open the popup or put it away, and that is a release
@@ -406,12 +404,9 @@ pub(super) unsafe fn pinned_transport_release(
         return false;
     }
 
-    // The kill road the press may have armed, read before the pointer is let
-    // go of: the release below re-enters `pin_capture_lost` synchronously
-    // through `WM_CAPTURECHANGED`. Through the window seam rather than a bare
-    // `ReleaseCapture` so a test can stand in that re-entrancy; on the machine
-    // the two are the same release, the press having taken the capture.
-    let kill_road = gesture_snapshot_active();
+    // Through the window seam rather than a bare `ReleaseCapture` so a test can stand in the
+    // re-entrancy of `WM_CAPTURECHANGED`; on the machine the two are the same release, the press
+    // having taken the capture.
     release_the_pointer(window, hwnd.0 as isize);
 
     if let Some(part) = part {
@@ -451,50 +446,28 @@ pub(super) unsafe fn pinned_transport_release(
     // A drag of the bar: the file is taken to the second the hand stopped at, which is the one
     // moment an FFmpeg player is ended and begun again (see `seek_pinned_playback`). The film was
     // playing under the hand until this moment — the press ends nothing (see
-    // `pinned_transport_press`) — so the cover is raised here, over the frame the hand let go on,
-    // and the player ends behind it with the replacement begun on the next line.
+    // `pinned_transport_press`) — and it goes on being the picture while the replacement opens the
+    // file: the registration standing in the pin's host is what covers a relaunch.
     if let Some(seconds) = seeking {
         // The aim is put back into the transport before any road below can paint from it: letting go
         // of the pointer above re-entered `pin_capture_lost`, and that road takes the aim with it —
-        // a capture taken away is a drag abandoned. A cover is painted *from* the transport, so
-        // without this the strip under the still stood at the second the ended player's own clock
-        // had reached, which is where the thumb was before the drag, and that is the strip handed to
-        // the compositor until the relaunch rebases the clock: the frame that flashes at the release,
-        // for as long as the kill and the spawn take. Nothing is left standing by it either, because
+        // a capture taken away is a drag abandoned. The transport is what the strips and the bar are
+        // painted from, so without this the strip under the hand stood at the second the player's own
+        // clock had reached until the relaunch rebased it: the frame that flashed at the release, for
+        // as long as the kill and the spawn took. Nothing is left standing by it either, because
         // every road that takes a file somewhere clears the aim itself (`begun` and `sought`).
         if current_media_type() == Some(MediaType::Video) {
             update_pin_transport(|transport| transport.seeking = Some(seconds));
         }
 
-        // The kill road owns the gesture's one relaunch, at the aimed second
-        // rather than the press's: the take inside `relaunch_gesture_end_at`
-        // makes it the only one across the capture-lost re-entered above and
-        // this release, whichever runs first.
-        if kill_road {
-            if let Some((_, content, _, _)) = pinned_playback_state() {
-                relaunch_gesture_end_at(content, Some(seconds));
-            }
-        } else if let Some((path, content, _, _)) = pinned_playback_state() {
-            // The cover, the end and the relaunch, in the order a park owns: the frame is read and
-            // painted flat before the window is hidden and before the player is killed, and the
-            // player taking its place is begun last (see `park_pinned_player_for_seek`). Only the
-            // roads that end a player raise the cover: a film the media engine draws is told where
-            // to go and gets there itself, and mpv's is a command written down its pipe and answered
-            // while the film runs (see `seek_pinned_playback` and `mpv_ipc`).
-            if current_media_type() == Some(MediaType::Video)
-                && video_route(&path) != VideoRoute::Mpv
-            {
-                let at = window_origin(hwnd)
-                    .map(|origin| (origin.0, origin.1))
-                    .or_else(|| pinned_content().map(|content| (content.0, content.1)))
-                    .unwrap_or((0, 0));
-                park_pinned_player_for_seek(hwnd, at);
-                kill_pinned_player_async();
-            }
+        if let Some((path, content, _, _)) = pinned_playback_state() {
+            // **Nothing is taken off the screen here**, and that is the whole of the order: the
+            // player the hand was watching keeps drawing, its source keeps the registration, and the
+            // player taking its place is begun behind it (see `seek_pinned_playback`). Only the roads
+            // that end a player relaunch: a film the media engine draws is told where to go and gets
+            // there itself, and mpv's is a command written down its pipe and answered while the film
+            // runs (see `mpv_ipc`).
             seek_pinned_playback(&path, content, seconds);
-            // A relaunch that never came up leaves no swap to disarm the
-            // dead interval: a snapshot some other road left standing goes with it.
-            disarm_gesture_if_no_relaunch();
         }
     }
 
@@ -620,23 +593,9 @@ pub(super) unsafe fn pinned_volume_press(hwnd: HWND, x: i32, y: i32) -> bool {
 
     let _ = SetCapture(hwnd);
     with_pin(|pin| pin.volume.dragging = true);
-    // The kill road, once at the first step iff a player lives: the press
-    // snapshots the playhead and freezes the clock, the park captures the
-    // frame and stands the cover, and only then is the player killed. Rapid
-    // steps find the snapshot standing and rewrite the owed level only — one
-    // relaunch at the settle, at the latest level.
-    if current_media_type() == Some(MediaType::Video) && gesture_press_freeze() {
-        let at = window_origin(hwnd)
-            .map(|origin| (origin.0, origin.1))
-            .or_else(|| pinned_content().map(|content| (content.0, content.1)))
-            .unwrap_or((0, 0));
-        // The record the cover's own end will wait on, written by the road that raised it and by
-        // nobody else: a press that arrives over a file step's cover extends that record and
-        // leaves its arm alone (see `park_pinned_player_for_gesture`).
-        park_pinned_player_for_gesture(hwnd, at, false);
-        kill_pinned_player_async();
-        bump_pinned_generation();
-    }
+    // **The press does nothing to the player.** FFmpeg's player cannot be told a level, so the
+    // player that plays at the new one is begun at the release — one relaunch for the change
+    // (see `settle_pin_volume`), and the film plays on under the hand until then.
     set_pin_volume((pin_chrome::volume_share_at(y, popup.track) * 100.0).round() as u32);
     render_layered_preview(hwnd);
     true
@@ -683,33 +642,10 @@ pub(super) unsafe fn pinned_volume_release(hwnd: HWND, window: &dyn PinWindow) -
         return false;
     }
 
-    // The kill road the press may have armed, read before the pointer is let
-    // go of: the release below re-enters `pin_capture_lost` synchronously
-    // through `WM_CAPTURECHANGED`, and that road relaunches — so the check
-    // after it would find the take already spent and settle the level a
-    // second time behind the first relaunch. Through the window seam rather
-    // than a bare `ReleaseCapture` so a test can stand in that re-entrancy;
-    // on the machine the two are the same release, the press having taken the
-    // capture.
-    let kill_road = gesture_snapshot_active();
+    // Through the window seam rather than a bare `ReleaseCapture` so a test can stand in the
+    // re-entrancy of `WM_CAPTURECHANGED`; on the machine the two are the same release, the press
+    // having taken the capture.
     release_the_pointer(window, hwnd.0 as isize);
-    // A gesture that killed settles in the one relaunch its press armed: at
-    // the snapshot second, the box the hand left behind, the latest level —
-    // carrying was-held or the gesture's hold for the swap to settle without
-    // a key. The take inside `relaunch_gesture_kill_at` makes it the only one
-    // across the capture-lost re-entered above and this release, whichever
-    // runs first. The remembered level is still written once, where the knob
-    // was let go of.
-    if kill_road {
-        if let Some((_, content, _, volume)) = pinned_playback_state() {
-            save_remembered_pin_volume(volume.level);
-            relaunch_gesture_kill_at(content);
-        } else {
-            take_gesture_snapshot();
-        }
-        render_layered_preview(hwnd);
-        return true;
-    }
     settle_pin_volume();
     render_layered_preview(hwnd);
     true
@@ -759,28 +695,32 @@ pub(super) unsafe fn toggle_pin_volume(hwnd: HWND) {
 /// without moving anything: the order the tick keeps for the player, asked the other way round for
 /// as long as a volume popup is open.
 ///
-/// **A pin that is not Always On Top is not raised at all.** It is an ordinary window there, and
-/// one put over every other window on the machine the moment its chrome came up — or its volume
-/// panel, or the film beneath it was placed — is a pin that behaves like a topmost one while the
-/// setting says it is not, which is the whole of what that setting is about. What the chrome and
-/// the panel are owed is the film's place, and the film is moved instead: put directly below the
-/// pin it is out of the way of both, and the pair keeps the place the user's own clicks gave it
-/// (see `put_player_under_the_pin`).
+/// **A pin that does not hold the front is not raised at all.** It holds no band there, and one
+/// put over every other window on the machine the moment its chrome came up — or its volume panel,
+/// or the film beneath it was placed — is a window in front of whatever the user is working in
+/// without having been asked to be. What the chrome and the panel are owed is the film's place, and
+/// the film is moved instead: put directly below the pin it is out of the way of both, and the pair
+/// keeps the place the user's own clicks gave it (see `put_player_under_the_pin`).
 pub(super) unsafe fn raise_pinned_window(hwnd: HWND) {
-    if !pin_always_on_top() {
+    if !pin_holds_the_front() {
         put_player_under_the_pin();
         return;
     }
 
     if let Some((window, width, height)) = pinned_window_box() {
+        // The pair's band, then the chrome's own box: a film's host that owns the chrome takes the
+        // band and Windows puts the chrome in it, so the picture is raised with the chrome rather than
+        // left under the program the chrome was raised over (see
+        // `pin_film_host::place_the_pin_in_the_band`).
+        pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST);
         let _ = SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            HWND::default(),
             window.0,
             window.1,
             width,
             height,
-            SWP_NOACTIVATE,
+            SWP_NOZORDER | SWP_NOACTIVATE,
         );
     }
 }
@@ -883,7 +823,7 @@ pub(super) fn begin_pin_pan(hwnd: HWND, window: &dyn PinWindow) -> bool {
 /// Nothing is taken hold of for a pair: the first press of the two was a drag the hand let go of
 /// where it began, and a window moved out from under a press still holding the pointer would have
 /// the next pointer move carry it back to where the first one started.
-unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool) {
+unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool, window: &dyn PinWindow) {
     if double_click && pin_double_click_center() {
         // A size is what a media is laid out at rather than a place it is carried to, so the reset
         // is asked for on the loop's own road — the one the maximize button asks its box on, where
@@ -897,7 +837,7 @@ unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool) {
         return;
     }
 
-    begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Move, true);
+    begin_pin_drag(hwnd, window, PinDragAction::Move, true);
 }
 
 /// A press on a pinned window, answering whether it was the pin's to act on.
@@ -915,7 +855,17 @@ unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool) {
 /// reaches for on a window it wants wider. What the caption keeps is everything outside the band,
 /// which is where its buttons are: a corner's share of a button is a resize, and the rest of it is
 /// the button, exactly as it is on a window whose frame the system draws.
-pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
+///
+/// **The window is a parameter rather than a fact of the module**, because the two things a press asks
+/// of one — where the pointer is, and the capture the drag takes — are the half a test stands a
+/// recorder in front of (see `PinWindow`). Nothing else about the press is the window's: what a point
+/// means is the pin's.
+pub(super) unsafe fn pinned_press_on(
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    window: &dyn PinWindow,
+) -> bool {
     // Whether this press is the second of a pair, asked before any of the arms below so that one
     // answer serves the whole window: what a pair means is the window put in the middle of its
     // screen, and the two arms it is put to are the two a press carries the window from (see
@@ -956,7 +906,7 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             pinned.pin().and_then(|pin| pin.resize_edge(x, y))
         };
         if let Some(edge) = edge {
-            begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Resize(edge), true);
+            begin_pin_drag(hwnd, window, PinDragAction::Resize(edge), true);
             return true;
         }
     }
@@ -982,7 +932,7 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             }
         }
 
-        press_carries_the_pin(hwnd, double_click);
+        press_carries_the_pin(hwnd, double_click, window);
         return true;
     }
 
@@ -1005,15 +955,54 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         // presses is left to the window's own road whatever the picture is doing — a double-click is
         // what puts a window in the middle of its screen, and a pan begun under it would be the first
         // press of the pair taken from the second (see `press_carries_the_pin`).
-        if !double_click && begin_pin_pan(hwnd, &Win32PinWindow) {
+        if !double_click && begin_pin_pan(hwnd, window) {
             return true;
         }
 
-        press_carries_the_pin(hwnd, double_click);
+        press_carries_the_pin(hwnd, double_click, window);
         return true;
     }
 
     false
+}
+
+/// The press on this app's own window, for the tests that ask what a point of the pin means rather
+/// than what a window was asked to do (see `pinned_press_on`).
+#[cfg(test)]
+pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
+    unsafe { pinned_press_on(hwnd, x, y, &Win32PinWindow) }
+}
+
+/// A press on a pinned window's own frame, and the keyboard the press asks for — **in that order, and
+/// the order is the whole of what this function is**.
+///
+/// **The pointer is taken before any window work.** A pin the user has not clicked is not the window
+/// the foreground is in, and a press on one has two things to do: begin the drag or the resize the
+/// press means — which is the pointer taken for this window, so that the moves that follow arrive
+/// here — and make the pin the window the user is in. The second is window-manager work that is
+/// synchronous and can be long: `SetForegroundWindow` and `SetFocus` deliver messages back into this
+/// thread, and the window the keyboard is taken from is a window of this app's often enough that the
+/// ordinary window behind it has to be found (see `pin_take_focus`). Asked first, that work stands
+/// between the press and the pointer — and a first press whose moves have nowhere to go is a drag
+/// that does nothing until the hand lets go and presses again, which is the user's "the first
+/// click-and-hold does nothing, the second works".
+///
+/// `wants_the_keyboard` is the caller's answer to *the pin is not the window the user is in*: asked of
+/// Windows by the window procedure rather than here, and staged by a test that has no desktop.
+pub(super) unsafe fn press_the_pin(
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    window: &dyn PinWindow,
+    wants_the_keyboard: bool,
+) -> bool {
+    let answered = unsafe { pinned_volume_press(hwnd, x, y) || pinned_press_on(hwnd, x, y, window) };
+
+    if wants_the_keyboard {
+        unsafe { pin_take_focus(hwnd, window) };
+    }
+
+    answered
 }
 
 /// A press on one of the controls a pinned sound's card carries: the walk either side of the
@@ -1279,6 +1268,14 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
 
         render_layered_preview(hwnd);
         return true;
+    }
+
+    // A resize applies the pointer's last place once more, because the release can arrive before the
+    // move that carried that place was applied: the window is owed the box the hand actually let go
+    // on, and `apply_pin_drag` reads the pointer itself and passes for one that has not shifted since
+    // the last apply, so a drag that had already settled costs nothing here.
+    if carried_drag().is_some_and(|drag| matches!(drag.action, PinDragAction::Resize(_))) {
+        apply_pin_drag(hwnd);
     }
 
     finish_pin_drag(hwnd, window)

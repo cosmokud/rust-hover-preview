@@ -9,11 +9,17 @@
 //! pieces decided, which is a change to the program rather than a move of it. Nothing is
 //! extracted out of it here, and no helper is introduced into it: it is the file as it was.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
 pub fn run_preview_window() {
+    // **The one question this app asks the installed player before any film is begun**: which
+    // `--focus-on*` spelling it parses, asked once on a thread of its own so that no hover ever waits
+    // on it (see `video_launch::probe_focus_on_once`).
+    video_launch::probe_focus_on_once();
+
     // Page sizes come from Windows.Data.Pdf and picture sizes from the codec Windows
     // has, so this thread needs an apartment before the first layout asks for one.
     pdf_preview::initialize_apartment();
@@ -242,10 +248,23 @@ pub fn run_preview_window() {
         // the answer lands, which is a tick of its own, so this outlives the tick the way the
         // replay flags above it do (see `PinPlan::Awaiting`).
         let mut pin_awaiting_box: Option<PathBuf> = None;
-        // Until when a pinned window owes the front of its band, because it has just answered a
-        // pick: the click reaches the listing's window after it reaches this loop, and the listing
-        // is activated then — over the pin (see `PIN_RAISE_GRACE` and `keep_pin_at_the_front`).
-        let mut pin_raise_deadline: Option<Instant> = None;
+        // The return a put-away pin is owed once a file it can be shown is on the window: a pick
+        // names a file nothing has read yet, and a window put up on the pick shows the file before it
+        // for as long as the read and the decode take — the flash the user sees between the two
+        // images. So the return is owed where the file is picked and answered where the file is on
+        // the window (see `bring_a_put_away_pin_back` and the `PreviewMessage::Pin` arm, which is the
+        // only place this is read).
+        //
+        // It is the pin the debt is owed to and not a file, because the file a pick names may be one
+        // nothing can be shown for: a pin that stays away for it is brought back by the first file
+        // the walk lands on that can be shown (see `pin_failure_plan`), which is the answer the user
+        // asked for — the pin is the thing missed, not the file it was asked for.
+        let mut pin_return_owed = false;
+        // The pick a pinned window still owes the front of its band for, because it has just
+        // answered one: the click reaches the listing's window after it reaches this loop, and the
+        // listing is activated then — over the pin (see `PIN_RAISE_GRACE`, `PinFrontOwed` and
+        // `keep_pin_at_the_front`).
+        let mut pin_front_owed: Option<PinFrontOwed> = None;
         // The file picked in Explorer while the pin is a bubble: held rather than shown, because a
         // pin that is a bubble has no window to show anything in, and what the user is doing
         // behind it is walking through files. The key is what brings the window back up on it
@@ -329,6 +348,10 @@ pub fn run_preview_window() {
         // count is published by the hook for the life of the process, so a snapshot of it
         // outlives the pin it was taken in and swallows the first press of the next one.
         let mut engine_press_seen: u64 = 0;
+        // And the same count for the raise a press owes any of the preview's windows — the pin's
+        // own, a film in its band, a page the engine draws in one — kept the same way and reset
+        // with it (see `settle_pinned_press`).
+        let mut pin_press_seen: u64 = 0;
         // Static-tick throttle state (see `STATIC_WAIT_MS`): whether the media on
         // screen was dynamic the last time it was fully looked at, when that look
         // was, and which generation it was for. A swap bumps `current_generation`,
@@ -398,15 +421,25 @@ pub fn run_preview_window() {
                 // Re-assert layered window style after DWM restart.
                 // DWM is reinitialized during resume and the layered window's
                 // per-pixel alpha composition surface may need a fresh anchor.
+                //
+                // The band is re-asserted as the window's own rather than as the topmost one for
+                // every window: a hover is topmost, and a pin is topmost while it holds the front
+                // (see `pin_holds_the_front`) — a pin owed nothing is an ordinary window, and this
+                // is the one road to the band that does not go through the pin's own raise.
+                let banded = !pinned() || pin_holds_the_front();
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                 SetWindowLongPtrW(
                     hwnd,
                     GWL_EXSTYLE,
-                    ex_style | WS_EX_LAYERED.0 as isize | WS_EX_TOPMOST.0 as isize,
+                    if banded {
+                        ex_style | WS_EX_LAYERED.0 as isize | WS_EX_TOPMOST.0 as isize
+                    } else {
+                        (ex_style | WS_EX_LAYERED.0 as isize) & !(WS_EX_TOPMOST.0 as isize)
+                    },
                 );
                 let _ = SetWindowPos(
                     hwnd,
-                    HWND_TOPMOST,
+                    if banded { HWND_TOPMOST } else { HWND_NOTOPMOST },
                     0,
                     0,
                     0,
@@ -448,9 +481,24 @@ pub fn run_preview_window() {
             // the tick publishing what it already knows. Zero for both says there is no such pin,
             // which is what leaves the arrows alone in the listing behind a preview that is not
             // one (see `key_input::pin_owns_caret`).
-            let pin_keys_owner = if pinned() { hwnd.0 as u64 } else { 0 };
+            //
+            // **The owner is the pin's own window**, which is the window Windows activates and the
+            // one the hook reads as the foreground. The preview's window is where a pin that stands
+            // in it draws, and it is the same window in that case; a pinned film's is not (see
+            // `pinned_window`).
+            let pin_keys_owner = if pinned() {
+                pinned_window().0 as u64
+            } else {
+                0
+            };
+            // And the third window a press can land in, where the pin's film is drawn by the Shell
+            // from a window of the player's own: mpv's window, which takes the pointer when the film
+            // is pressed and would otherwise be a foreground the hook knows nothing about (see
+            // `pin_film_host::the_films_own_window`).
             let pin_keys_video = if pin_keys_owner != 0 {
-                VIDEO_HWND.load(Ordering::SeqCst) as u64
+                pin_film_host::the_films_own_window()
+                    .map_or(VIDEO_HWND.load(Ordering::SeqCst), |film| film.0 as isize)
+                    as u64
             } else {
                 0
             };
@@ -469,6 +517,13 @@ pub fn run_preview_window() {
             crate::shell::wheel_input::publish_preview_under_the_pointer(
                 cursor_preview_hover().any(),
             );
+
+            // A press of the preview shortcut, counted by the hook only while Explorer was in
+            // front. It is drained here rather than acted on in the hook so that the lock and
+            // the file write behind the setting happen on a thread that may wait.
+            for _ in 0..crate::shell::key_input::take_preview_toggle_presses() {
+                crate::shell::tray::toggle_preview_enabled();
+            }
 
             // The key is drained whether or not it is watched, so that a press made while the
             // feature was off is not acted on when it comes back on.
@@ -522,10 +577,10 @@ pub fn run_preview_window() {
                 // rather than because it died, and the loop that replaces them is this one (see
                 // `loop_ended_pinned_player`).
                 //
-                // Not while the cover is owed a player: a supersede-kill leaves the clock near
-                // the film's end with no player behind it, and a loop begun at the beginning
-                // here would stack a second relaunch onto the replacement already on its way.
-                if !pin_park_covers_a_relaunch() {
+                // Not while a relaunch is in flight: a supersede-kill leaves the clock near the
+                // film's end with no player behind it, and a loop begun at the beginning here
+                // would stack a second relaunch onto the replacement already on its way.
+                if !a_relaunch_is_in_flight() {
                     // An advance already on its way is not asked for again (see
                     // `loop_ended_pinned_player`): the wait, the walk and the load are
                     // what say one is.
@@ -547,6 +602,13 @@ pub fn run_preview_window() {
                 // band is a browser's window over this one, so the press is read here and the
                 // drag it means begun here (see `settle_pinned_engine_press`).
                 settle_pinned_engine_press(hwnd, &mut engine_press_seen);
+
+                // And a press on any of the preview's windows is the preview being asked for: the
+                // window comes forward whether or not Windows granted it the foreground, and
+                // whichever of its windows took the press (see `settle_pinned_press`).
+                // The pin's own window, for the same reason the raise above asks for it: the handle
+                // this loop holds is the hover's (see `pinned_window`).
+                settle_pinned_press(pinned_window(), &mut pin_press_seen);
 
                 // And a drag that press began carried on, and let go of, from what the hook
                 // publishes rather than from a message — which is the only end it can have, the
@@ -783,13 +845,11 @@ pub fn run_preview_window() {
                 // rather than of what this app wrote down, because everything a bar says about a
                 // video FFmpeg plays is something this app asserted (see `settle_pinned_transport`).
                 settle_pinned_transport();
-                settle_video_retirement();
-                // And the band a drag's parking is holding: it is a hole again only once the
-                // player's own window is standing in it, which for a relaunch begun on a resize's
-                // release is the first tick that finds the replacement up (see
-                // `settle_pinned_park`).
-                settle_pinned_park();
                 settle_pending_hold();
+                // And the topmost band a step between two films holds is given back where no picture
+                // ever changed hands inside the player-start bound: a hold with no release is a pin
+                // over every program on a setting that says it must not be (see `PIN_STEP_BAND_HELD`).
+                pin_lifecycle::settle_the_step_band_hold();
 
                 // And what the taskbar button's own hover is offering, which is settled by the same
                 // tick for the same reason the chrome is: a pin put away into the taskbar can be
@@ -797,15 +857,6 @@ pub fn run_preview_window() {
                 // transport is doing (see `refresh_pin_media_buttons`). Nothing is sent while the
                 // stand-in is not up, so this is two atomics and a comparison on a tick that has no
                 // taskbar button to draw.
-                //
-                // And the form the button is in, which the Shell has gestures of its own for — a
-                // second click on the button, `Win+M`, its own `Minimize` — so the pin's place is
-                // what it is read back against, once a tick: a stand-in the Shell has minimized
-                // under a pin that is on the screen is a hover frozen on the frame it was put down
-                // with, and a stand-in the Shell has taken away altogether is a button the user has
-                // lost until the app is restarted (see `keep_the_stand_in_up`). Nothing is asked of
-                // the Shell here: the window is this app's own, and both reads are of it.
-                keep_the_stand_in_up();
 
                 // The picture the hover shows is the same two facts and is asked the same way: what
                 // the pin is drawn by, mirrored into the stand-in by the Shell, which is a picture
@@ -864,6 +915,16 @@ pub fn run_preview_window() {
                     render_layered_preview(hwnd);
                 }
 
+                // **A picture that has changed hands in the pin's host is the band painted again**,
+                // and this is the only road that paints it: a film a player draws advances no frame
+                // of this app's, so nothing else on a pinned film's tick would ever ask for this
+                // paint — and the paint during the wait, before the picture arrived, would be the
+                // last word on it (see `pin_film_host::the_band_owes_a_repaint`).
+                if pin_film_host::take_the_band_repaint() {
+                    last_pin_repaint = Instant::now();
+                    render_layered_preview(hwnd);
+                }
+
                 // A window waiting for a file is painted again for the arc: once, when the
                 // wait has run for the delay `spinner_delay_ms` names, and then once per turn
                 // of it. A window with a transport bar would have been repainted anyway and
@@ -918,6 +979,43 @@ pub fn run_preview_window() {
                 }
             }
 
+            // **A player a film handover parked outlives no pin**: the picture it is kept on screen
+            // for is the pin's, so a pin that has gone is the other end of that wait — a step's
+            // outgoing player is ended here, and a kill not confirmed on the spot is retried, where
+            // nothing of the pin is left to ask. Asked of every tick and not of a pinned one for
+            // exactly that reason (see `settle_video_retirement`).
+            settle_video_retirement();
+
+            // **And the two settles that were only asked of a pin are asked of every tick**, for the
+            // reason the retirement above is: each has a "the pin is gone" half that nothing on a
+            // tick after the pin would ever reach, so a pin closed in the middle of the thing they
+            // settle left it standing for the rest of the run.
+
+            // A pin taken up on a hover's film goes up once its hosted player draws, and comes down
+            // where that player never does: the handover is the only visible swap, and the teardown
+            // for a wait with nothing to swap to goes down the road a dead film has always gone (see
+            // `pin_film_host::settle_pin_handover`). A pin that went away down another road — closed
+            // while the wait was still out — disarms the wait and ends the hover it froze here, which
+            // is the picture that would otherwise stand over the listing with a player of its own
+            // behind it.
+            if matches!(
+                pin_film_host::settle_pin_handover(),
+                pin_film_host::PinHandover::Failed
+            ) && pin_request.is_none()
+            {
+                pin_request = Some(end_pin_state(Reason::MediaGone));
+            }
+
+            // And the form the taskbar button is in, which the Shell has gestures of its own for —
+            // a second click on the button, `Win+M`, its own `Minimize` — so the pin's place is what
+            // it is read back against, once a tick: a stand-in the Shell has minimized under a pin
+            // that is on the screen is a hover frozen on the frame it was put down with, and a
+            // stand-in the Shell has taken away altogether is a button the user has lost until the
+            // app is restarted. A pin that has gone owes no button at all, and the stand-in it left
+            // standing goes with it (see `keep_the_stand_in_up`). Nothing is asked of the Shell
+            // here: the window is this app's own, and both reads are of it.
+            keep_the_stand_in_up();
+
             // A player that has been started and has not put its window up yet is being
             // waited for: what is on screen is the spinner standing in for the video, at
             // the pointer it is shown at for every other kind of wait, and the wait ends
@@ -926,8 +1024,10 @@ pub fn run_preview_window() {
             // never came up — one that died, one that took longer than a start ever does
             // — is ended here rather than left playing behind nothing (see `player_wait`).
             if let Some(start) = video_start.take() {
-                let window_up = VIDEO_HWND.load(Ordering::SeqCst) != 0
-                    && VIDEO_PID.load(Ordering::SeqCst) == start.pid;
+                // **A hosted hover's player is drawn through the hover's own host**, and the
+                // source adopted there is the window the wait is for — the same question a
+                // top-level player's window answers (see `the_players_window_is_up`).
+                let window_up = pin_film_host::the_players_window_is_up(start.pid);
                 let alive = is_player_pid_alive(start.pid);
 
                 // The hover this player was started for may have moved on before its
@@ -955,6 +1055,16 @@ pub fn run_preview_window() {
                         // (see `rebase_video_loop_clock`).
                         rebase_video_loop_clock(start.pid);
 
+                        // A hosted hover's picture is the host, not the preview's own window:
+                        // show it at the hover's box once the player is drawing, so the wait ends
+                        // on the film rather than on the desktop (see `hover_film_host`).
+                        if start.hosted {
+                            hover_film_host::reveal_the_hover_film_host(
+                                start.pid,
+                                hover_film_host::the_hover_box_as_a_region(video_pos),
+                            );
+                        }
+
                         let _ = ShowWindow(hwnd, SW_HIDE);
                         pending_load = None;
                         clear_pointer_hold();
@@ -963,13 +1073,61 @@ pub fn run_preview_window() {
                         // The player is not coming, or the hover it was started for has
                         // gone: ending it here is what keeps a process this app started
                         // from playing behind a preview that has gone.
-                        let mut media = start.media;
-                        stop_video_playback(&mut media);
+                        //
+                        // **A hosted hover that never drew is given one ordinary launch.** The
+                        // source adopted into the host is the only sign a hosted player gives, and a
+                        // player that is alive but has put nothing there inside the start bound is
+                        // a host this app cannot show a picture through; the hover is begun again
+                        // once without a host, and a second failure is abandoned below (see
+                        // `restart_hover_video_without_a_host`).
+                        let mut media = Some(start.media);
+                        let mut relaunched = false;
 
-                        if current {
-                            let _ = ShowWindow(hwnd, SW_HIDE);
-                            pending_load = None;
-                            clear_pointer_hold();
+                        if current
+                            && the_hover_host_fallback_is_owed(start.hosted, start.fell_back, alive)
+                        {
+                            if let Some(held) = media.as_mut() {
+                                stop_video_playback(held);
+                            }
+                            let (x, y, width, height) = video_pos;
+                            if let Some(process) = restart_hover_video_without_a_host(
+                                &start.path,
+                                x,
+                                y,
+                                width,
+                                height,
+                                0.0,
+                                false,
+                                current_video_volume(),
+                                None,
+                            ) {
+                                let pid = process.id();
+                                let mut data = media.take().expect("the hover's media is in hand");
+                                data.video_process = Some(process);
+                                current_video_path = Some(start.path.clone());
+                                let _ = ensure_video_window_topmost(x, y, width, height);
+                                video_start = Some(VideoStart {
+                                    media: data,
+                                    path: start.path,
+                                    pid,
+                                    started: Instant::now(),
+                                    hosted: false,
+                                    fell_back: true,
+                                });
+                                relaunched = true;
+                            }
+                        }
+
+                        if !relaunched {
+                            if let Some(held) = media.as_mut() {
+                                stop_video_playback(held);
+                            }
+
+                            if current {
+                                let _ = ShowWindow(hwnd, SW_HIDE);
+                                pending_load = None;
+                                clear_pointer_hold();
+                            }
                         }
                     }
                     // Still starting: the wait goes on, and the player stays in hand.
@@ -988,7 +1146,7 @@ pub fn run_preview_window() {
             // is the one place a player's window is put on top and is reached from four others that
             // this guard did not cover (see `ensure_video_window_topmost`).
             let topmost_cadence_ms = topmost_cadence_ms(pinned());
-            if current_video_path.is_some()
+            if pin_film_host::the_video_window_is_owed_the_front(current_video_path.as_deref())
                 && !pin_is_collapsed()
                 && last_topmost_check.elapsed() >= Duration::from_millis(topmost_cadence_ms)
             {
@@ -1009,22 +1167,7 @@ pub fn run_preview_window() {
                 // this is a question of which of the two is nearer the front of one band, and the
                 // answer is put in rather than left to whoever raised last.
                 //
-                // And a player parked for the length of a drag is not raised at all, which this arm
-                // is where a hand resting on an edge is answered: the drag's own raises only run
-                // while the pointer is moving, so a raise here is the whole of what a still hand
-                // would be looking at — and it put the film back over a band being held flat (see
-                // `pin_player_is_parked`). The slider is still raised over a parked player, because
-                // it is drawn into the pin's own window and that window is the one thing on screen.
-                if pin_volume_open() {
-                    raise_pinned_window(HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _));
-                } else if !pin_player_is_parked() {
-                    let _ = ensure_video_window_topmost(
-                        video_pos.0,
-                        video_pos.1,
-                        video_pos.2,
-                        video_pos.3,
-                    );
-                }
+                video_playback::bring_the_video_window_to_the_front(video_pos);
             }
 
             // A player this app is looping itself is begun again at the beginning of its file rather
@@ -1060,6 +1203,11 @@ pub fn run_preview_window() {
                 );
             }
 
+            // The hover road's own player is kept between hovers, and this is the tick that says
+            // whether it is still wanted: a fresh one a pin's take-over owes, and one standing by
+            // that its `MPV TTL` setting has let go (see `mpv_resident`).
+            mpv_resident::tick();
+
             // A pin that still believes it holds the keyboard, and that Windows says does not, is
             // asked for it back. The player is begun again on every navigation and every resize, and
             // its window is created activatable and only styled once this app finds it — so an arrow
@@ -1068,20 +1216,6 @@ pub fn run_preview_window() {
             if pinned() {
                 let _ = pin_ask_keyboard_back(hwnd);
             }
-
-            // A window being carried or pulled to a new size stops playing for the length of the
-            // gesture and picks the film up where it left off on release. A video whose picture is
-            // another program's window is re-scaled and re-presented on every one of the pointer's
-            // messages, and doing that to a film that is also decoding is what makes a drag stutter;
-            // every other kind of pinned window does the same work out of a surface it owns and is
-            // not troubled (see `video_drag_hold`).
-            //
-            // **The gesture's own two ends settle this, so on a gesture of this window's own there
-            // is nothing left for the tick to do** — it is here for the gestures that are not: one
-            // begun off the hook's published press count is carried on from the pointer's position
-            // rather than from a release message, so the tick is what finds it ended (see
-            // `settle_pinned_engine_drag`).
-            settle_video_drag_hold(pin_is_dragging());
 
             // Advance animation frames if needed
             let mut needs_repaint = false;
@@ -1528,27 +1662,22 @@ pub fn run_preview_window() {
                     if abandoned {
                         // The take-down the `Hide` message performs, for the same reason and
                         // in the same order: the wait is over, so its window, its media, the
-                        // hold it published and anything it had asked for go with it.
+                        // hold it published and anything it had asked for go with it. A pin
+                        // that owns the window keeps all of that: this hide was posted before
+                        // the take-up, and the pin's own end is the only road that takes it
+                        // down (see `take_the_hover_down`).
                         current_generation += 1;
                         clear_load_request(&load_request_slot);
                         if let Some(cancel) = pending_load_cancel.take() {
                             cancel.store(true, Ordering::Release);
                         }
 
-                        let _ = ShowWindow(hwnd, SW_HIDE);
-                        clear_pointer_hold();
-                        webview_preview::hide();
-
-                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                            if let Some(ref mut media) = *current {
-                                media.cancel_background_work();
-                                stop_video_playback(media);
-                            }
-                            *current = None;
-                        }
-                        current_video_path = None;
-                        video_pos = (0, 0, 0, 0);
-
+                        note_pin_trace!("abandoned load hide");
+                        pin_lifecycle::take_the_hover_down(
+                            hwnd,
+                            &mut current_video_path,
+                            &mut video_pos,
+                        );
                         if let Some(path) = current_show.as_ref().and_then(self::show_path) {
                             office_render::hover_ended(path);
                         }
@@ -2088,7 +2217,7 @@ pub fn run_preview_window() {
             // tick before it and not from whenever the last zoom happened to be.
             let zoom_elapsed = last_zoom_frame.elapsed().as_secs_f32();
             last_zoom_frame = Instant::now();
-            step_pin_zoom(hwnd, zoom_elapsed);
+            step_pin_zoom(zoom_elapsed);
 
             // And the frame it is owed. A picture the wheel has taken past its window is a frame the
             // window is holding scaled up, so the file itself is asked for at the size the picture has
@@ -2236,23 +2365,29 @@ pub fn run_preview_window() {
                     // way its own close button takes it.
                     PreviewMessage::PinChanged => {
                         if pinned() {
+                            // A pin that is Always On Top owes the front to the setting, and one
+                            // whose row is off never owed it: the flag is what either setting
+                            // leaves behind otherwise, and it would be a pin holding a band its
+                            // own setting does not name.
+                            if pin_always_on_top() || !pin_update_move_to_top() {
+                                PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+                            }
                             if !pin_enabled() {
                                 pin_request = Some(end_pin_state(Reason::SwitchedOff));
                             } else {
-                                let insert_after = if pin_always_on_top() {
-                                    HWND_TOPMOST
-                                } else {
-                                    HWND_NOTOPMOST
-                                };
-                                let _ = SetWindowPos(
-                                    hwnd,
-                                    insert_after,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                                );
+                                // **The band the setting now names, on the windows that are in it**:
+                                // a pin that is a window of its own is not this window and neither is
+                                // the host that owns its chrome, and the row used to be answered by
+                                // placing the preview — a window the pin has put down — in the band.
+                                // What that left was a pin taken up with the setting off and then
+                                // told it was Always On Top, still ordinary and so behind the listing
+                                // it was asked for from (see `place_the_pin_where_the_setting_names`).
+                                place_the_pin_where_the_setting_names();
+                                // **And the button goes with it.** A pair whose button is the host's
+                                // is not the stand-in below, and a row that only answered the stand-in
+                                // left a pin with `Always On Top` on wearing the button it had
+                                // (see `the_button_follows_the_setting`).
+                                pin_film_host::the_button_follows_the_setting();
                                 if pin_always_on_top() {
                                     if !pin_is_collapsed() {
                                         hide_pin_taskbar();
@@ -2304,12 +2439,67 @@ pub fn run_preview_window() {
                         // would have to find before they could see it (see
                         // `Pin Mode → Update Preview → Move To Top`). The raise happens here rather
                         // than at the install so the pin answers the pick at once, with the wait
-                        // for the file drawn in it where the read is not instant — and it is owed
-                        // the front for a moment after, because the click that made the pick
-                        // reaches the listing after it reaches this loop (see
-                        // `PIN_RAISE_GRACE`).
-                        raise_pinned_preview(hwnd);
-                        pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
+                        // for the file drawn in it where the read is not instant — and it keeps the
+                        // band where a pick's press is holding it, because the click that made the
+                        // pick activates the listing after this loop reads it (see `PIN_FRONT_OWED`).
+                        // An update with no press behind it — a file walked to with the keys, a
+                        // hover — has no activation to be kept out of, so its raise is the band
+                        // taken and given straight back.
+                        arm_pin_to_the_front();
+                        // The window raised is the pin's own, which for a picture is not the handle
+                        // this loop holds: the loop's window is the hover's, and a raise that moved it
+                        // moved a window nobody can see while the pin stayed behind the listing (see
+                        // `pinned_window`).
+                        raise_pinned_preview(pinned_window(), pin_front_owed.is_some());
+                        extend_pin_front_owed(&mut pin_front_owed);
+                    }
+                    PreviewMessage::PinPress { window } => {
+                        // The click that made the press activates the listing, and that is the
+                        // listing being put over the pin — before the shell has said which file
+                        // was picked, and before any `PinUpdate` can answer for it. The pin owes
+                        // the front from here, and holds the band the activation of the listing
+                        // cannot undo (see `PIN_FRONT_OWED` and `keep_pin_at_the_front`); the
+                        // pick's answer comes forward again when it lands.
+                        //
+                        // **The band is held across the activation rather than given back before
+                        // it**, which is the whole of why a pick no longer shows the listing for a
+                        // tick: this press is read off the hook *before* the click reaches the
+                        // listing, so a raise made here is a raise the activation that follows
+                        // undoes — and the correction is a tick late, which the user sees as the
+                        // listing flashing over the pin.
+                        //
+                        // The window the grace asks about is the one the press was made in, which
+                        // is the listing itself and not the foreground: the foreground is the
+                        // window the user came from, the activation still to land, and a window
+                        // the pin is already behind (see `PinFrontOwed` and
+                        // `pin_press_was_not_a_pick`).
+                        arm_pin_to_the_front();
+                        raise_pinned_preview(pinned_window(), true);
+                        // The two clocks the press begins, from the one moment it was read: how long the
+                        // pick is answered for, and how long the band it took is held for. Only the first
+                        // is extended, by a file that reaches the window late (see `PinFrontOwed`).
+                        let pressed = Instant::now();
+                        pin_front_owed = Some(PinFrontOwed {
+                            until: pressed + PIN_RAISE_GRACE,
+                            band_until: pressed + PIN_RAISE_GRACE,
+                            listing: HWND(window as *mut _),
+                        });
+                    }
+                    PreviewMessage::PinNoPick { window } => {
+                        // A press that named no file was a click on the folder tree, the gap
+                        // between the rows, or the toolbar above them: the user's own click put
+                        // the listing in front and the pin belongs behind it. The grace a pick
+                        // began is ended with the raise it was holding up, so what the press
+                        // above came forward for is given back at once — behind the window the
+                        // press was made in, which is the one the user is looking at, and not the
+                        // foreground, which can still be the window they came from (see
+                        // `pin_press_was_not_a_pick`).
+                        //
+                        // The window lowered is the pin's own, which for a picture is not the handle
+                        // this loop holds: a lowering that moved the loop's window moved a window
+                        // nobody can see while the pin stayed over the listing (see `pinned_window`).
+                        pin_front_owed = None;
+                        lower_pinned_preview(pinned_window(), HWND(window as *mut _));
                     }
                     PreviewMessage::OfficeRenderReady {
                         path,
@@ -2353,11 +2543,11 @@ pub fn run_preview_window() {
                         }
                     }
                     PreviewMessage::VideoSubtitlesReady(path) => {
-                        // A pinned window showing this film is begun again so the copy that just
-                        // landed is drawn by the frame after it — the one reload a hover
-                        // deliberately does not have (see `reload_pinned_subtitles`). Nothing
-                        // here is hover bookkeeping: the message is not an answer to a hover, and
-                        // a hover is never begun again for it.
+                        // A pinned window showing this film takes the copy that just landed as a
+                        // preload for its next relaunch — the one road a hover deliberately does
+                        // not have (see `reload_pinned_subtitles`). Nothing here is hover
+                        // bookkeeping: the message is not an answer to a hover, and a hover is
+                        // never begun again for it.
                         reload_pinned_subtitles(&path);
                     }
                     PreviewMessage::PinAnswered(answer) => {
@@ -2391,6 +2581,9 @@ pub fn run_preview_window() {
                                         pin_walk_synced_its_playlist(&walk);
                                         pin_walk = Some(walk);
                                     }
+                                    // The pin has left the file this walk was asked from: the
+                                    // answer is dropped rather than carried onto the file that
+                                    // replaced it.
                                 }
                                 // The hand-off button's name, for the file the pin is showing
                                 // now. An answer for a file the pin has already left is
@@ -2485,20 +2678,24 @@ pub fn run_preview_window() {
 
                 if changed == Some(true) {
                     refresh_requested = true;
+                    // The strips are the chrome now, so a change answers them here rather than
+                    // waiting for the repaint below: the paint carries their pixels, and the sync
+                    // carries the paint onto the screen (see `sync_the_chrome_strips`).
+                    pin_chrome_strips::sync_the_chrome_strips();
                 }
 
-                // A strip of a pin's chrome is painted into the pin's own rows, which for a
-                // video a player draws are rows of that window — and that window is the one on
-                // top for as long as no strip is showing. Both of its raises are held off from
-                // here on (see `pin_chrome_up`), so the raise the pin owes is the pin's own: on
-                // the way up, which is a moment a hand is looking for a close button, and again
-                // for as long as a strip is showing, because the film stands itself back up over
-                // the pin on its own band (see `player_stands_over_the_pin`). The way out needs
-                // none: the first raise through either caller once the last strip has gone puts
-                // the player back on top. What keeps this one raise from being a raise per tick
-                // is that it is asked of the order that is standing rather than of the strips
-                // that are up — the player *under* the pin is the answer both raisers put in,
-                // and the one this leaves alone (see `place_player_window`).
+                // A strip of the pin's chrome stands over whatever is in the band — a hosted film,
+                // the cover, or FFmpeg's player — and that window is the one on top for as long as
+                // no strip is showing. Both of its raises are held off from here on (see
+                // `pin_chrome_up`), so the raise the pin owes is the pin's own: on the way up,
+                // which is a moment a hand is looking for a close button, and again for as long
+                // as a strip is showing, because the film stands itself back up over the pin on
+                // its own band (see `player_stands_over_the_pin`). The way out needs none: the
+                // first raise through either caller once the last strip has gone puts the player
+                // back on top. What keeps this one raise from being a raise per tick is that it
+                // is asked of the order that is standing rather than of the strips that are up —
+                // the player *under* the pin is the answer both raisers put in, and the one this
+                // leaves alone (see `place_player_window`).
                 if pin_chrome_up() {
                     // A topmost pin is put back over the film whenever the film has stood itself
                     // back up on its band. A pin that is not Always On Top has no such fight to
@@ -2835,6 +3032,13 @@ pub fn run_preview_window() {
                 // screen, because a pin ended and another taken up in the same tick is a tick this
                 // is the only place to notice.
                 pin_bubble_pick = None;
+                // And a return owed a pin that is over is not owed to the pin that follows it: the
+                // file it was owed for belongs to the window that has gone (see `pin_return_owed`).
+                pin_return_owed = false;
+                // And the file a pin that is over was on its way to is nobody's in flight: the
+                // proof that a pick is a duplicate belongs to the window it was picked into (see
+                // `THE_FILE_IN_FLIGHT`).
+                note_the_pin_file_in_flight(None);
             }
 
             if let Some((path, walk, user_named)) = take_pin_pick(
@@ -2882,7 +3086,23 @@ pub fn run_preview_window() {
                 // than stalling silent: what the user is doing behind a bubble is picking, and
                 // a bubble that took the pin down on the first pick would be a window lost for
                 // a file they did not ask to see (see `pin_bubble_pick`).
-                if pinned() && pin_is_collapsed() && walk.is_none() {
+                //
+                // **Unless the update is the pin coming back.** `Pin Mode → Update Preview → Move
+                // To Top` is the row that says an update brings the pin in front of the listing it
+                // follows, and a pin that is away has no window in any band to bring forward — so
+                // with that row on, the file the pick names is the file the pin comes back up on
+                // and is put in front of the listing by, rather than one held for the key (see
+                // `bring_a_put_away_pin_back`). It is asked here, before the file is planned,
+                // because a file held for the key is not one the pin is being shown; and only where
+                // nothing is loading, which is the rule the key's own restore keeps for the bubble it
+                // brings up — a load already in hand is a tick the pick below has no work for, and a
+                // window put back up without the file it was brought back for is a worse answer than
+                // the bubble it stayed in (see `pin_bubble_pick`).
+                let the_pin_comes_back = walk.is_none()
+                    && pending_load.is_none()
+                    && an_update_brings_a_put_away_pin_back();
+
+                if pinned() && pin_is_collapsed() && walk.is_none() && !the_pin_comes_back {
                     pin_bubble_pick = Some(path);
                 } else if pinned() && (pin_update_enabled() || !user_named) {
                     if pending_load.is_some() {
@@ -2892,8 +3112,15 @@ pub fn run_preview_window() {
                         // reads twice. It is held here and taken up on a tick when nothing is
                         // loading, rather than dropped: the walk is carried with it, so a caption
                         // step held this way is still a step of the walk it was a part of.
+                        let road = if walk.is_some() {
+                            PickRoad::Walk
+                        } else {
+                            PickRoad::Update
+                        };
                         pin_walk = walk;
-                        pin_held_pick = Some(path);
+                        pin_held_pick = Some(path.clone());
+                        note_the_pin_file_in_flight(Some(&path));
+                        note_the_pick(road, &path);
                     } else {
                         // The setting is the gate on a *pick in the listing* — a file the pointer
                         // or the keyboard chose behind the window — and not on a step of the pin's
@@ -2941,6 +3168,18 @@ pub fn run_preview_window() {
 
                                 if outstanding {
                                     pin_awaiting_box = Some(path.clone());
+                                    // The file the pin is waiting for a box of is the file it has
+                                    // been asked for, so a second press on it is nobody's new pick
+                                    // (see `THE_FILE_IN_FLIGHT`).
+                                    note_the_pin_file_in_flight(Some(&path));
+                                    note_the_pick(
+                                        if walk.is_some() {
+                                            PickRoad::Walk
+                                        } else {
+                                            PickRoad::Update
+                                        },
+                                        &path,
+                                    );
                                     // The walk is parked, not dropped: the box it is a step of
                                     // is still waited on, and the pick retried when the answer
                                     // lands is a step of the same playlist rather than the
@@ -2987,6 +3226,17 @@ pub fn run_preview_window() {
                             // The read and the decode are a thread's work, so a file whose load is
                             // slow is a wait the pin is painted for rather than a window frozen
                             // for as long as the disk takes (see `PinLoad`).
+                            //
+                            // The file is written down as the one the pin has been asked for
+                            // before its load starts, so a press on it while the read runs is a
+                            // duplicate rather than a second swap (see `THE_FILE_IN_FLIGHT`).
+                            let road = if walk.is_some() {
+                                PickRoad::Walk
+                            } else {
+                                PickRoad::Update
+                            };
+                            note_the_pin_file_in_flight(Some(&path));
+                            note_the_pick(road, &path);
                             pin_load = Some(PinLoad::start(&path, update, walk));
                         } else if refused {
                             // A file the pin cannot be shown is stepped over rather than stopped
@@ -3000,6 +3250,27 @@ pub fn run_preview_window() {
                             // walk runs out on is the other case, and the mark is the answer to
                             // that (see `show_pin_failure`).
                             pin_step_off(walk, &mut pin_walk);
+                        }
+
+                        // **And the pin comes back up on the file it was brought back for, which is
+                        // not here.** It is owed here, after the plan, for the reason the key's own
+                        // restore waits for a pick to be in hand: a window put back up without the
+                        // file it was brought back for is a worse answer than the bubble it stayed in
+                        // (see `pin_bubble_pick`).
+                        //
+                        // And it is answered at the take-up of the file rather than here, because a
+                        // pick names a file nothing has read yet: a window put up now comes up on the
+                        // file before it and swaps the new one in a tick or more later, which is the
+                        // flash between the two images the user reported (see
+                        // `bring_a_put_away_pin_back`). The one file there is nothing to wait for is
+                        // the file the pin is already showing — it is on the window now — and the door
+                        // answers for that one alone, every other answer being the take-up's below.
+                        if the_pin_comes_back {
+                            // The door answers for the file the pin is already showing, which is the
+                            // one pick there is nothing to wait for: a pin left owing a return for it
+                            // would wait on a load that is never asked for, since a swap to the file
+                            // already on the window is no swap at all (see `pin_update_plan`).
+                            pin_return_owed = !bring_a_put_away_pin_back(&path);
                         }
                     }
                 } else if pinned() {
@@ -3070,39 +3341,129 @@ pub fn run_preview_window() {
                     // one that cannot be shown — and where the walk has nothing left to ask
                     // for, the mark for the file is what the pin is left standing over (see
                     // `pin_step_off` and `show_pin_failure`).
+                    //
+                    // A pin that is away stays away for it: the file was never put on the window,
+                    // so there is nothing for it to come back on — and the mark is no file either
+                    // (see `pin_failure_plan`). What brings it back is the first file in the walk
+                    // that can be shown (see `pin_return_owed`).
                     PinSwap::Refused { path, walk } => refuse_pinned_media(install, path, walk),
                     PinSwap::Ready(file) => {
                         install_pinned_media(install, file);
 
                         // The pin has just been put up with the file the user picked, and what the
                         // click that picked it did to the z-order may have landed while the file
-                        // was being read: the grace the pick began is begun again here, where the
+                        // was being read: the front the pin owes is owed again here, where the
                         // window that is to stand over the listing is what is on screen (see
-                        // `PIN_RAISE_GRACE`).
-                        pin_raise_deadline = Some(Instant::now() + PIN_RAISE_GRACE);
+                        // `PIN_FRONT_OWED`).
+                        arm_pin_to_the_front();
+                        extend_pin_front_owed(&mut pin_front_owed);
 
-                        // And the band a step's cover is holding, where this install came out of
-                        // a hold: the park's own settle ran earlier in this tick, before the pin
-                        // had the box it has just been given, so it is asked again now the file
-                        // the window was held for is in it. A cover left standing over a band
-                        // that has moved is the outgoing frame stretched into the incoming
-                        // file's shape, which is the whole of what the hold was for (see
-                        // `PinSwapHold` and `settle_pinned_park`).
-                        settle_pinned_park();
+                        // The chrome a step took down comes back with the file that replaced its
+                        // film: asked here, after the take-up has cleared the step, because a
+                        // refresh earlier in this tick — before this install — is answered as held
+                        // down. The repaint below carries the new file's caption into the strips
+                        // and syncs them, so the strips stand with the first paint of the film
+                        // rather than a tick later.
+                        if refresh_the_pin_chrome_now() {
+                            refresh_requested = true;
+                        }
                     }
                 }
             }
 
-            // A pin that has just answered a pick keeps asking for the front of its band for a
-            // moment after it: the click is this loop's before it is the listing's, and the
-            // window the listing is in is activated after it — which is that window being put
-            // over the pin again (see `PIN_RAISE_GRACE`).
+            // The pin's window is this app's own to keep on the screen, where Windows is not already
+            // keeping it. The Shell's `Win+D` takes every ordinary window away and gives them all back on
+            // the second press, and a pin that stands in a window of its own is one of them — so what is
+            // left to this road is the pin that stands in the hover's window, which is no window of the
+            // Shell's list: it is put up here at the first tick the user is back in a window rather than
+            // looking at the desktop (see `the_pin_owes_a_show` for the whole of the question, and
+            // `foreground_is_the_desktop` for the one answer it refuses).
+            if the_pin_owes_a_show(pinned_window(), GetForegroundWindow()) {
+                show_pinned_window(pinned_window());
+            }
+
+            // A pin that has just answered a pick keeps answering for the front of its band for a
+            // moment after it: the click is this loop's before it is the listing's, and the window the
+            // listing is in is activated after it — which is that window being put over the pin again
+            // where the band is not held across it (see `PIN_RAISE_GRACE` and `keep_pin_at_the_front`).
             keep_pin_at_the_front(
-                hwnd,
-                GetForegroundWindow(),
-                &mut pin_raise_deadline,
+                pinned_window(),
+                &mut pin_front_owed,
                 Instant::now(),
+                GetForegroundWindow(),
             );
+
+            // A pin that owes the front owes it while the window it follows is the one the user is
+            // in. Another program in front is the user working elsewhere, so the band goes back to
+            // the ordinary one and the pin goes below that program — the desktop included, except
+            // that the desktop is the bottom of the desktop's own list and the pin keeps the place
+            // it stands in rather than going under the wallpaper (see `pin_holds_the_front` and
+            // `foreground_is_the_desktop`). Without this, a pin that holds the band would stay over
+            // every other program until the next press that named no file, which is one click too
+            // late — and with `Always On Top` off that band is not the setting's to keep. A pick's
+            // grace is left alone: the click it answers may not have activated the listing yet, and
+            // the window in front at that moment is the one the user is coming *from*.
+            if pin_front_owed.is_none() && !pin_always_on_top() && pin_holds_the_front() {
+                let foreground = GetForegroundWindow();
+                if !foreground.is_invalid()
+                    && !foreground_is_ours(foreground)
+                    && !crate::shell::explorer_hook::is_foreground_explorer()
+                {
+                    if foreground_is_the_desktop(foreground) {
+                        lower_pinned_preview(pinned_window(), HWND(ptr::null_mut()));
+                    } else {
+                        lower_pinned_preview(pinned_window(), foreground);
+                    }
+                }
+            }
+
+            // A pin that owes nothing and holds the topmost band is a window in the wrong band,
+            // whatever road put it there, and the band is given back here: with `Always On Top` off
+            // nothing else in this app gives it back on its own, so the pin would stand over every
+            // program the user worked in until the first press that happened to raise it — the one
+            // road that takes the band off a window — which is one click too late. `HWND_NOTOPMOST`
+            // is the whole repair: the window keeps the place it stands among the ordinary ones and
+            // lands in front of them, which is where a pin with the setting off belongs while the
+            // user is in it (see `band_place`, the same question asked where a window is placed).
+            //
+            // **The pin's own window is asked too, and it is the one that needs it most.** A pick's
+            // press holds that band across the listing's activation, and the grace that began it is
+            // what gives it back; a debt that ended by any other road — the flag cleared by a press on
+            // the pin's chrome, a setting turned off under it — would otherwise leave the pin over
+            // every program the user works in, with nothing left ticking to look for it (see
+            // `PinFrontOwed` and `give_the_band_back`).
+            if pinned()
+                && pin_front_owed.is_none()
+                && !pin_always_on_top()
+                && !pin_holds_the_front()
+            {
+                // And the band is nobody's to hold any more, so the next placement asks the setting
+                // again rather than keeping a window in a band its hold is over (see `PIN_BAND_HELD`).
+                PIN_BAND_HELD.store(false, Ordering::SeqCst);
+                // **The pin's band is the band of every window of the pair.** Where a film's host owns
+                // the chrome, the band is the host's and Windows takes the chrome out with it; asking
+                // the chrome alone would be the demotion of half a pair (see
+                // `pin_film_host::the_pin_window_that_holds_the_band`). Asked of the chrome as well
+                // because the setting is the chrome's and a band left on it is a pin over every
+                // program the user works in with `Always On Top` off.
+                for window in [
+                    hwnd,
+                    pinned_window(),
+                    pin_film_host::the_pin_window_that_holds_the_band(pinned_window()),
+                ] {
+                    if window_holds_the_topmost_band(window) {
+                        let _ = SetWindowPos(
+                            window,
+                            HWND_NOTOPMOST,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                    }
+                }
+            }
 
             // The pin's request, if it made one, is the newest thing that happened and speaks
             // for what is on screen: a key that was pressed, a button that was clicked, or the
@@ -3338,6 +3699,18 @@ pub fn run_preview_window() {
                         }
                     }
                     PreviewMessage::Hide => {
+                        // A pin that stands in a window of its own is not the hover this message
+                        // was posted for: the dismissal (or the abandoned load above) can be in
+                        // the channel before the take-up, and a hide already queued must not
+                        // clear the media out from under the pin it now belongs to. The pin's own
+                        // end is the only road that takes its window down.
+                        note_pin_trace!("hover hide");
+                        pin_lifecycle::take_the_hover_down(
+                            hwnd,
+                            &mut current_video_path,
+                            &mut video_pos,
+                        );
+
                         // Invalidate any pending background loads
                         current_generation += 1;
                         pending_load = None;
@@ -3345,24 +3718,6 @@ pub fn run_preview_window() {
                         if let Some(cancel) = pending_load_cancel.take() {
                             cancel.store(true, Ordering::Release);
                         }
-
-                        let _ = ShowWindow(hwnd, SW_HIDE);
-                        clear_pointer_hold();
-
-                        // A document the engine is playing goes with the preview: its
-                        // window is its own, so nothing else here takes it down.
-                        webview_preview::hide();
-
-                        // Stop video playback if any
-                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                            if let Some(ref mut media) = *current {
-                                media.cancel_background_work();
-                                stop_video_playback(media);
-                            }
-                            *current = None;
-                        }
-                        current_video_path = None;
-                        video_pos = (0, 0, 0, 0);
 
                         // The page held for the preview that is going away is no
                         // longer being waited on: at a budget of nothing it is
@@ -3405,7 +3760,28 @@ pub fn run_preview_window() {
                     // drawn over its media needs no room for any of it: the window *is* the
                     // media's box, and what is drawn over it is asked for rather than always
                     // there (see `pin_overlay_chrome`).
-                    PreviewMessage::Pin { path, rect } => {
+                    PreviewMessage::Pin {
+                        path,
+                        rect,
+                        arriving,
+                    } => {
+                        // **A pin that has ended is not given a file, and a pin that is arriving is
+                        // not one that has ended.** The take-up below writes the pin's state whole,
+                        // so a file that lands after the window went would re-create the pin it
+                        // belongs to — and a pin can end between the pick and the install, because
+                        // the watchdog ends a hung one from a thread of its own. The arrival is the
+                        // other way round: it is the file the pin key asked for, and it comes with no
+                        // pin standing because there is nothing to stand in yet, so refusing it there
+                        // was the pin key doing nothing at all (see `the_pin_takes_the_file_up`).
+                        if !the_pin_takes_the_file_up(arriving) {
+                            note_pin_trace!(
+                                "pin install dropped: {} was installed with no pin standing",
+                                pin_trace::path_name(&path)
+                            );
+                            pin_awaiting_box = None;
+                            continue;
+                        }
+
                         // A window that has just been taken up is waiting for nothing: a file an
                         // earlier pin was still waiting for a box of is that pin's wait, and this
                         // window is not it (see `pin_awaiting_box`).
@@ -3426,6 +3802,7 @@ pub fn run_preview_window() {
                         // equivalent is a destructive drain rather than a snapshot, so that
                         // there is no state to go stale between two things.
                         engine_press_seen = pin_media_press_count();
+                        pin_press_seen = pin_media_press_count();
 
                         // And it is owed no hover's wait either, which is the one it inherits.
                         // A pin is taken up out of a hover, and a hover that was still loading
@@ -3482,7 +3859,9 @@ pub fn run_preview_window() {
                         // frame, and the transport the new file is to be played by. Both roads
                         // that reach this arm reach it through the same call, so a window shown
                         // another file is the same window as one shown its first (see
-                        // `take_up_pinned_window`).
+                        // `take_up_pinned_window`). Whether a pin is already up tells the second
+                        // road from the first: a swap installs through here with the pin standing,
+                        // and a take-up from a hover arrives with none (see `settle_pin_handover`).
                         let pin = take_up_pinned_window(&path, rect);
                         let content = pin.content;
 
@@ -3494,9 +3873,35 @@ pub fn run_preview_window() {
                             .ok()
                             .and_then(|media| media.as_ref().map(|media| media.media_type));
 
+                        // Whether this pin stands in a window of its own is decided here, once,
+                        // from the kind it was taken up on — or from the file's route where the
+                        // media is a placeholder — and never asked of the media again: every kind
+                        // this app draws the whole way is in a window Windows activates and
+                        // lists, and the kinds whose band holds somebody else's window keep the
+                        // preview's (see `pin_should_stand_in_its_own_window`).
+                        pin_stands_in_its_own_window(pin_should_stand_in_its_own_window(
+                            kind, &path,
+                        ));
+
+                        // A film the pin draws in its own host is the pin's film from here, not
+                        // the hover's that put it up: the tick's place-and-show reads this rather
+                        // than the hover's bookkeeping, which a late `Hide` can empty (see
+                        // `the_video_window_is_owed_the_front`). The box is the band the take-up
+                        // just gave the window.
+                        if pin_film_host::the_film_is_shown_in_a_host(&path, None) {
+                            current_video_path = Some(path.clone());
+                            video_pos = (rect.0, rect.1, rect.2 - rect.0, rect.3 - rect.1);
+                        }
+
                         // The pin is published as up inside this, after the state it publishes
                         // is written (see `pin_window::install`).
                         install(pin);
+
+                        // A pin that is taken up owes the front from the moment it is up: the
+                        // click that picks the next file activates the listing, and a pin in the
+                        // ordinary band is that window over it for a frame however fast the pick
+                        // is answered (see `PIN_FRONT_OWED`).
+                        arm_pin_to_the_front();
 
                         // The button a collapsed pin left says which file the pin is of, and the
                         // file has just changed: a stand-in already up is not shown again by the
@@ -3505,25 +3910,27 @@ pub fn run_preview_window() {
                         // (see `pin_taskbar::refresh_pin_taskbar_title`).
                         pin_taskbar::refresh_pin_taskbar_title();
 
-                        // And a film adopted from a hover is told whose setting governs its window
-                        // now: the hover's topmost band is the preview's, and the pin's own
-                        // `Always On Top` is the answer from here on (see
-                        // `settle_pinned_mpv_ontop`).
-                        settle_pinned_mpv_ontop();
-
                         // A pin comes up under a pointer that may be anywhere, including inside a
                         // name being renamed, so it may take the focus but is not given it until
                         // the hand presses it (see `pin_set_focusable`). The pin holds no keyboard
                         // at all until then, so there is nothing here to clear.
-                        pin_set_focusable(hwnd, true);
+                        //
+                        // **And a pin that stands in a window of its own leaves the preview's alone.**
+                        // The hover's window must never be activatable — it appears under a pointer
+                        // that may be inside a name being renamed — and the pin's own window was made
+                        // with the styles that let Windows activate it (see `pin_real_window`).
+                        if !pin_is_its_own_window() {
+                            pin_set_focusable(hwnd, true);
+                        }
 
-                        // **A player adopted without its film's copied subtitles is begun
-                        // again here**, where the copy is ready now and the adopted player is
-                        // one the hover began before it existed — the corner the ready-message
-                        // cannot reach, because it has already been and gone (see
-                        // `reload_adopted_subtitles`). A pin taken up on a film that is still
-                        // being copied is not this: the message will find the pin when it
-                        // lands, and there is nothing to draw yet in any case.
+                        // **A player adopted without its film's copied subtitles takes the
+                        // copy as a preload for its next relaunch here**, where the copy is
+                        // ready now and the adopted player is one the hover began before it
+                        // existed — the corner the ready-message cannot reach, because it has
+                        // already been and gone (see `reload_adopted_subtitles`). A pin taken
+                        // up on a film that is still being copied is not this: the message will
+                        // find the pin when it lands, and there is nothing to draw yet in any
+                        // case.
                         reload_adopted_subtitles(&path);
 
                         // A text preview is the one kind a pin *changes* rather than frames: it
@@ -3586,9 +3993,33 @@ pub fn run_preview_window() {
                             }
                         }
 
-                        show_pinned_window(hwnd);
+                        // **A pin that was away comes back here, where the file is on the window.**
+                        // The take-up above has just given the window the box the file's own kind
+                        // asks for, and the show behind this paints before it appears — so the return
+                        // owed at the pick is answered here and nowhere earlier, and what comes up is
+                        // the file the update named rather than the one before it (see
+                        // `bring_a_put_away_pin_back` and `pin_return_owed`).
+                        //
+                        // Everything else that reaches this arm — a file a walk landed on, a pin that
+                        // was never away, a first take-up — is owed the show alone, which is the
+                        // paint of the new file. The debt is read once and let go of either way: this
+                        // is the take-up it was owed for.
+                        let came_back = pin_return_owed && bring_a_put_away_pin_back(&path);
+                        pin_return_owed = false;
+                        if !came_back {
+                            show_pinned_window(hwnd);
+                        }
+
+                        // A film adopted from a hover is told whose setting governs its window
+                        // now: the hover's topmost band is the preview's, and the pin's own
+                        // `Always On Top` is the answer from here on. Asked after the show rather
+                        // than at the take-up, because a take-up that defers its showing keeps the
+                        // hover up and playing behind it — and a hover still on screen keeps the
+                        // band it was given (see `pin_film_host::settle_pin_handover`).
+                        settle_pinned_mpv_ontop();
+
                         place_pinned_siblings();
-                        publish_pointer_hold(hwnd);
+                        publish_pointer_hold(pinned_window());
                     }
                     // The pinned window was given another box — maximized, restored, resized,
                     // or put back on a display that changed: the media is laid out again at the
@@ -3662,6 +4093,7 @@ pub fn run_preview_window() {
                     // which is answered above: it is not a hover, so nothing here has a layout
                     // to make for it (see `PreviewMessage::PinUpdate`).
                     PreviewMessage::PinUpdate(_) => {}
+                    PreviewMessage::PinPress { .. } | PreviewMessage::PinNoPick { .. } => {}
                     // And what the planner answered, which is the pin's own walk and its
                     // hand-off name rather than a hover — taken where a pin is acted on, not
                     // here (see `PreviewMessage::PinAnswered`).
@@ -3875,18 +4307,20 @@ pub fn run_preview_window() {
                                 // before a new one takes the screen.
                                 kill_stray_video_process();
 
-                                let video_process = start_video_playback(
+                                let video_process = start_hover_video_playback(
                                     &path,
                                     pos_x,
                                     pos_y,
                                     media_width,
                                     media_height,
                                     0.0,
+                                    false,
                                     current_video_volume(),
                                     // A hover shows the file the way the player chooses to, which
                                     // is its first subtitle stream and the one any relaunch
                                     // reaches again by the same route. Only a pinned window is
                                     // remembering a track of its own (see `next_subtitle`).
+                                    None,
                                     None,
                                 );
                                 let pid = video_process
@@ -3921,6 +4355,11 @@ pub fn run_preview_window() {
                                         path: path.clone(),
                                         pid,
                                         started: Instant::now(),
+                                        hosted:
+                                            hover_film_host::the_hover_player_was_begun_in_the_host(
+                                                pid,
+                                            ),
+                                        fell_back: false,
                                     });
                                     pending_load = Some(PendingLoad {
                                         generation: current_generation,

@@ -1,5 +1,37 @@
 use super::*;
 
+/// **A step that grows is a step whose window has to be down before its film is**, and one that
+/// shrinks is the other way round (see `apply_pin_drag`). The direction is read off the box the step
+/// came from against the one it goes to, on either axis.
+#[test]
+fn a_resize_step_grows_where_either_side_of_it_is_pulled_out() {
+    let at = (100, 100, 500, 400);
+
+    assert!(
+        a_resize_step_grows(at, (100, 100, 600, 400)),
+        "a box pulled wider grew"
+    );
+    assert!(
+        a_resize_step_grows(at, (100, 100, 500, 500)),
+        "and so did one pulled taller"
+    );
+    assert!(
+        a_resize_step_grows(at, (200, 100, 700, 400)),
+        "and a box pulled wider and shorter at once, because the side it exposes is the one the \
+         order is about — the two boxes cross rather than nest there, so no order keeps the film \
+         inside and the side that grew is the one the order can still get right"
+    );
+    assert!(
+        !a_resize_step_grows(at, (100, 100, 400, 300)),
+        "a box smaller on both sides shrank"
+    );
+    assert!(
+        !a_resize_step_grows(at, at),
+        "and a step that changed neither side is no growth, so it takes the shrinking order: the two \
+         commits then write the same box whichever goes first"
+    );
+}
+
 #[test]
 fn a_resize_keeps_the_shape_of_what_is_pinned() {
     // A media box 400 x 300, dragged by its right edge 200 to the right: the media grows by
@@ -1119,4 +1151,56 @@ fn a_box_the_frames_pixels_already_cover_owes_the_pin_no_decode() {
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous;
     }
+}
+
+/// **The temporary `RHP_RESIZE_TRACE` diagnostic measures a step only where the machine named it**,
+/// which is the whole of what makes it safe to leave in the tree: a run with it unset opens no step,
+/// writes no line, and a step that is opened is one a test can read back (see `pin_resize_probe`).
+#[test]
+fn a_resize_step_is_measured_only_where_the_diagnostic_asked_for_it() {
+    pin_resize_probe::stand_the_trace_in(Some(false));
+    pin_resize_probe::begin_step((100, 200, 400, 600), true);
+    assert!(
+        pin_resize_probe::a_step_started().is_none(),
+        "nothing is measured where the trace was not asked for"
+    );
+    pin_resize_probe::end_step();
+
+    pin_resize_probe::stand_the_trace_in(Some(true));
+    pin_resize_probe::begin_step((100, 200, 400, 600), true);
+    assert!(
+        pin_resize_probe::a_step_started().is_some(),
+        "and a step is opened where the trace did ask for one"
+    );
+    pin_resize_probe::forget_the_step();
+    pin_resize_probe::stand_the_trace_in(None);
+}
+
+/// **A step's line carries the box the pointer asked for, the direction the step went in, and each
+/// cost the step paid** — the numbers a future agent reads to see where a step's time went. A cost
+/// written as a dash is one nothing measured.
+#[test]
+fn a_resize_step_writes_its_box_its_direction_and_the_costs_it_paid() {
+    let took = |ms: u64| Some(Duration::from_micros(ms * 1000));
+    let mut step = pin_resize_probe::a_step_at((100, 200, 400, 600), true);
+    step.paint = took(3);
+    step.host = took(1);
+
+    let line = pin_resize_probe::a_step_line(&step);
+    for field in [
+        "box 100,200,300x400",
+        "grew",
+        "paint 3.000ms",
+        "host 1.000ms",
+    ] {
+        assert!(line.contains(field), "{field} is in the line: {line}");
+    }
+
+    // A step that paid none of them says so rather than printing a zero, and one that shrank says
+    // that: the two are what a line is read against.
+    let mut bare = pin_resize_probe::a_step_at((100, 200, 400, 600), false);
+    bare.host = took(1);
+    let line = pin_resize_probe::a_step_line(&bare);
+    assert!(line.contains("shrank"), "{line}");
+    assert!(line.contains("paint - host 1.000ms"), "{line}");
 }

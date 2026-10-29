@@ -34,9 +34,53 @@ fn main() {
         res.set("ProductName", "Rust Hover Preview");
         res.set("FileDescription", "Rust Hover Preview");
         res.set("LegalCopyright", "Copyright 2026");
+        // And the version lie with it. An executable with no manifest is given the compatibility
+        // of the oldest Windows there is: `GetVersionExW` answers 6.2 on a machine far past it and
+        // the pre-Win8 semantics come with it, and one of those is that a `WS_CHILD` window may
+        // not be `WS_EX_LAYERED` — `CreateWindowExW` refuses the pair with error 87, which is what
+        // buried a pinned mpv film's chrome (the film's host is that pair; see `pin_film_host`).
+        // Declaring the Windows this app supports is the whole of what turns those semantics off,
+        // and it is asked for as raw XML rather than through a convenience form, so that nothing
+        // rides along with it — no common-controls dependency, no DPI declaration, no requested
+        // execution level — because every one of those would change how this app is treated in a
+        // way nothing here has measured.
+        res.set_manifest(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{4a2f28c8-2506-4483-a6d7-18b95a9b46ea}"/>
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+</assembly>
+"#,
+        );
+
+        // A failure here is not a warning to read later. The icon and the version block are what
+        // the Shell draws this app by and what its own tray loads at run time (see
+        // `shell::app_icon`), so a binary built without them is a binary that wears the system's
+        // placeholder — and nothing else about it is wrong, so nothing else says a word.
         if let Err(e) = res.compile() {
-            eprintln!("Warning: Failed to compile Windows resources: {}", e);
+            panic!("could not compile the Windows resources: {e}");
         }
+
+        // And what the compiler produced has to be handed to the *binary's* link. Cargo passes a
+        // build script's `rustc-link-lib` to the package's library target rather than to the
+        // binary that links it, so a `src/lib.rs` appearing beside `main.rs` is enough to drop
+        // both the icon and the version block out of the executable with every exit code still
+        // zero (`tests/executable_icon` is what asks, and there is no other symptom until a
+        // build is run). Named here as the binary's own link argument, the file arrives whatever
+        // else the package grows, and winres's own `rustc-link-lib` line stays where it is: the
+        // same file, named for the library target.
+        let resource_file = std::path::Path::new(&env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
+            .join("resource.lib");
+        println!(
+            "cargo:rustc-link-arg-bin={}={}",
+            env::var("CARGO_PKG_NAME").expect("cargo sets CARGO_PKG_NAME"),
+            resource_file.display()
+        );
     }
 }
 

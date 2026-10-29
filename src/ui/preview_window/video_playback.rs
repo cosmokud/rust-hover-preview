@@ -1,7 +1,50 @@
 //! Starting and stopping a film: the launch itself, the wait for its window and for its first
 //! frame, and putting the player's window back in front.
 
+use super::pin_trace::note_pin_trace;
 use super::*;
+
+/// The one SDL renderer an FFmpeg film is ever begun with, and the escape hatch that names another.
+///
+/// **Direct3D 9 is the composed renderer and Direct3D 11 is the one that makes the panel flicker.**
+/// SDL presents its Direct3D 11 surfaces through a flip-model DXGI swapchain, which Windows may hand
+/// an independent-flip plane of its own; the display's adaptive sync then follows the film's 24-30 fps
+/// cadence, so the panel swings between its floor and its maximum as each frame lands — measured here
+/// with a 24 fps film playing, the blank interval went from 6.9 ms to 20.7 ms and back, mixing 144 Hz
+/// and 48 Hz for as long as the film played. A VA panel's gamma moves with the rate, which is the
+/// whole screen pulsing over a film the user is only watching. Direct3D 9 presents through the blt
+/// model, which the desktop compositor copies into the desktop image: the same film, the same window,
+/// the same launch otherwise, measured 6.95 ms p50 / 7.03 ms max — a steady 144 Hz. It is the same
+/// reason mpv's film and this app's own video route never flicker: nothing of theirs is a flippable
+/// top-level swapchain.
+///
+/// **Why the name is given rather than left to SDL.** SDL picks its own driver when none is named, and
+/// the order is SDL's to change; the composed road is this app's requirement, not a fallback, so it is
+/// asked for by name on every launch — hosted or not, pin or hover, because an unhosted FFmpeg window
+/// is as flippable as a hosted one.
+const FFPLAY_RENDERER_VARIABLE: &str = "RHP_FFPLAY_RENDERER";
+const FFPLAY_COMPOSED_RENDERER: &str = "direct3d";
+
+/// The renderer an FFmpeg film is begun with: the composed one, unless the machine's own hand names
+/// another through `RHP_FFPLAY_RENDERER` (see [`the_renderer_asked_for`]).
+pub(super) fn the_renderer_a_film_is_begun_with() -> String {
+    the_renderer_asked_for(std::env::var(FFPLAY_RENDERER_VARIABLE).ok().as_deref())
+}
+
+/// The decision itself, with the escape hatch as a parameter: the launch is the only place that reads
+/// the environment, and a test is then a call rather than an environment write every other launch in
+/// the process would see.
+///
+/// **The hatch is for a machine the composed road cannot present on at all** — a driver with no usable
+/// Direct3D 9, where the film would otherwise be a black band. Any name SDL knows may be given
+/// (`software`, `opengl`, `direct3d11`, ...); naming a flip-model renderer brings the panel flicker
+/// back with it, which is the trade it exists to make deliberately rather than by accident.
+pub(super) fn the_renderer_asked_for(asked_by_hand: Option<&str>) -> String {
+    match asked_by_hand.map(str::trim) {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => FFPLAY_COMPOSED_RENDERER.to_string(),
+    }
+}
 
 /// The films whose most recently begun player was drawing subtitles: a sidecar, the film's own
 /// track, or the small files this app copied out of it (see `subtitle_filter`).
@@ -9,7 +52,8 @@ use super::*;
 /// What asks is the pin's take-up, and it asks because a pin does not begin a player of its
 /// own over a hover's: the `ffplay` a hover began is adopted as it stands, subtitles and all —
 /// so a player that was begun *without* them is one a pinned window would keep drawing without
-/// them, and the take-up is the moment to begin it again (see `reload_adopted_subtitles`). The
+/// them, and the take-up is the moment to preload them for the next relaunch (see
+/// `reload_adopted_subtitles`). The
 /// list holds only the films whose player is drawing; an absence is the answer that the player
 /// last begun for that film is not — which is also the answer for a film no player was begun
 /// for at all, and the one the take-up wants for it, because a film with no player up has
@@ -136,16 +180,38 @@ pub(super) enum PlayerProcess {
     #[cfg_attr(test, allow(dead_code))]
     // The test seam notes a player instead of beginning one.
     Started(Child),
+    /// The resident that serves this hover: an id, and no process of its own — the resident's
+    /// process is held in one place, so nothing here is this handle's to end (see `mpv_resident`).
+    #[cfg(not(test))]
+    Served(u32),
     /// The player a test noted in place of beginning one.
     #[cfg(test)]
     Noted(u32),
 }
 
 impl PlayerProcess {
+    /// The handle a hover is given for the resident that serves it.
+    ///
+    /// **What comes back is the same handle every road downstream treats alike**, which is the whole
+    /// of what lets a served hover be adopted, promoted, pinned and swept as an ordinary player is: a
+    /// test build notes the id, because a test run begins no process (see `spawn_player`).
+    pub(super) fn for_the_resident(pid: u32) -> Self {
+        #[cfg(not(test))]
+        {
+            Self::Served(pid)
+        }
+        #[cfg(test)]
+        {
+            Self::Noted(pid)
+        }
+    }
+
     /// The id the player is booked in and ended under.
     pub(super) fn id(&self) -> u32 {
         match self {
             Self::Started(child) => child.id(),
+            #[cfg(not(test))]
+            Self::Served(pid) => *pid,
             #[cfg(test)]
             Self::Noted(pid) => *pid,
         }
@@ -156,6 +222,9 @@ impl PlayerProcess {
     pub(super) fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         match self {
             Self::Started(child) => child.try_wait(),
+            // The resident holds its own process, and it is the one that says when that has gone.
+            #[cfg(not(test))]
+            Self::Served(_) => Ok(None),
             #[cfg(test)]
             Self::Noted(_) => Ok(None),
         }
@@ -165,6 +234,10 @@ impl PlayerProcess {
     pub(super) fn kill(&mut self) -> std::io::Result<()> {
         match self {
             Self::Started(child) => child.kill(),
+            // A served hover's film is stopped on the resident and never ended with it (see
+            // `mpv_resident::finish`, which is the road this arm is never reached from).
+            #[cfg(not(test))]
+            Self::Served(_) => Ok(()),
             #[cfg(test)]
             Self::Noted(_) => Ok(()),
         }
@@ -180,6 +253,10 @@ impl PlayerProcess {
 /// nothing else — the launch books the player in through `note_player_started` all the same.
 #[cfg(not(test))]
 pub(super) fn spawn_player(command: &mut std::process::Command) -> Option<PlayerProcess> {
+    // **The window in front before the player exists is the window its window must not keep.** A
+    // player's window is created activated and only styled afterwards, so it takes the keyboard from
+    // whatever had it and nothing would give it back (see `pin_lifecycle::note_the_foreground_before_a_player`).
+    pin_lifecycle::note_the_foreground_before_a_player();
     command.spawn().ok().map(PlayerProcess::Started)
 }
 
@@ -201,10 +278,49 @@ pub(super) fn spawn_real_player(real: bool) {
 /// The test build's launch: note a player instead of beginning one (see `spawn_player`).
 #[cfg(test)]
 pub(super) fn spawn_player(command: &mut std::process::Command) -> Option<PlayerProcess> {
+    // What a launch asked for, as the test seam reads it before nothing is begun.
+    let program = command.get_program().to_string_lossy().into_owned();
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let env = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    if let Ok(mut last) = LAST_SPAWNED_COMMAND.lock() {
+        *last = Some(LaunchedCommand { program, args, env });
+    }
     if SPAWN_REAL_PLAYER.load(Ordering::Acquire) {
+        pin_lifecycle::note_the_foreground_before_a_player();
         return command.spawn().ok().map(PlayerProcess::Started);
     }
     Some(PlayerProcess::Noted(next_noted_pid()))
+}
+
+/// The last command a test launch handed the seam, so a test can read the flags and environment
+/// the production launch builds (see `spawn_player`).
+#[cfg(test)]
+pub(super) struct LaunchedCommand {
+    pub(super) program: String,
+    pub(super) args: Vec<String>,
+    pub(super) env: Vec<(String, Option<String>)>,
+}
+
+#[cfg(test)]
+static LAST_SPAWNED_COMMAND: Lazy<Mutex<Option<LaunchedCommand>>> = Lazy::new(|| Mutex::new(None));
+
+#[cfg(test)]
+pub(super) fn take_last_spawned_command() -> Option<LaunchedCommand> {
+    LAST_SPAWNED_COMMAND
+        .lock()
+        .ok()
+        .and_then(|mut last| last.take())
 }
 
 /// The id a noted player carries, one apart from the last.
@@ -258,6 +374,16 @@ pub(super) fn bubble_players_box(x: i32, y: i32, width: i32) -> (i32, i32) {
 /// written back to the setting (see `PinVolume`). `subtitle` is the same kind of answer for the
 /// same reason: it is what a pinned window is remembering, and `None` is what a hover asks for
 /// (see `next_subtitle`).
+///
+/// `hold` is the handover's own launch: a player begun **standing** on the frame another player is
+/// showing, which is what a pin taken up from a hover begins (see
+/// `pin_playback::begin_the_pinned_film_at_the_hovers_frame`). It is mpv's to answer and no other
+/// route's — FFmpeg's player has neither a pause to begin in nor an exact seek, and no take-up of a
+/// hover's film reaches that route (see `pin_film_host::the_film_is_shown_in_a_host`).
+///
+/// `kind` is the kind being launched where the caller knows it before the media slot is written —
+/// a swap names the incoming file's own kind, whose host question must not read the emptied slot
+/// (see `swap_pinned_media`) — and `None` asks the media on screen.
 #[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 pub(super) fn start_video_playback(
     path: &PathBuf,
@@ -266,8 +392,93 @@ pub(super) fn start_video_playback(
     width: i32,
     height: i32,
     start: f64,
+    hold: bool,
     volume: u32,
     subtitle: Option<usize>,
+    kind: Option<MediaType>,
+) -> Option<PlayerProcess> {
+    start_video_playback_where(
+        path, x, y, width, height, start, hold, volume, subtitle, kind, true, false, true,
+    )
+}
+
+/// Begin the same film for a hover — the launch Explorer's pointer causes, and the one road where a
+/// player must take nothing of the listing's.
+///
+/// **What it must not take is the foreground, and that is asked of the player's own environment
+/// rather than of `STARTUPINFO`, and the answer is a measurement.** ffplay's SDL window ignores
+/// `STARTUPINFO.wShowWindow` — begun at
+/// `SW_SHOWNOACTIVATE` it still came up activated, `GetWindowPlacement().showCmd` reading 1, as it
+/// did from a plain shell launch — while SDL's own hint is honoured: with
+/// `SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN` in the child's environment the window is shown unactivated
+/// and whatever had the foreground keeps it (see the FFmpeg route in `start_video_playback_where`).
+///
+/// mpv is given two asks instead, and they are two because neither is enough alone: it ignores the
+/// same show style, so the window its own `ShowWindow` puts up is an activation whatever the command
+/// line says — and `--focus-on=never` on its own was measured to activate it all the same, for
+/// exactly that reason. So an mpv film is told not to focus where this build can be told (see
+/// `video_launch::the_focus_on_support`, asked once), *and* its window is handed to the monitor to
+/// be given `WS_EX_NOACTIVATE` the moment it exists and before it is shown (see
+/// `ffplay_window::note_a_player_about_to_show`).
+///
+/// **A pin's player is given the same three asks as a hover's** (see `start_video_playback`): a film
+/// begun for a pin is a window under the pin's own, so a launch that activates itself takes the front
+/// off the listing or the browser the user is in and gives it to a window the pin then makes
+/// invisible, bottom of the z-order and unclickable. What the pin relies on is its *own* window taking
+/// the front on a press (see `pin_take_focus`) — never its player's, which carries `WS_EX_NOACTIVATE`
+/// from the moment it has a window.
+#[allow(clippy::too_many_arguments)] // The launch's facts, passed through unchanged.
+pub(super) fn start_hover_video_playback(
+    path: &PathBuf,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    start: f64,
+    hold: bool,
+    volume: u32,
+    subtitle: Option<usize>,
+    kind: Option<MediaType>,
+) -> Option<PlayerProcess> {
+    start_video_playback_where(
+        path, x, y, width, height, start, hold, volume, subtitle, kind, true, true, true,
+    )
+}
+
+/// Begin the same film again on the ordinary top-level road, with no host: the one fallback a
+/// hover whose hosted player never drew is given (see `event_loop`'s video wait).
+#[allow(clippy::too_many_arguments)] // The launch's facts, passed through unchanged.
+pub(super) fn restart_hover_video_without_a_host(
+    path: &PathBuf,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    start: f64,
+    hold: bool,
+    volume: u32,
+    subtitle: Option<usize>,
+) -> Option<PlayerProcess> {
+    start_video_playback_where(
+        path, x, y, width, height, start, hold, volume, subtitle, None, false, true, true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
+fn start_video_playback_where(
+    path: &PathBuf,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    start: f64,
+    hold: bool,
+    volume: u32,
+    subtitle: Option<usize>,
+    kind: Option<MediaType>,
+    allow_the_hover_host: bool,
+    for_a_hover: bool,
+    must_not_activate: bool,
 ) -> Option<PlayerProcess> {
     let volume = volume.min(100);
 
@@ -300,11 +511,70 @@ pub(super) fn start_video_playback(
     };
 
     if route == VideoRoute::Mpv {
-        return start_mpv_video_playback(path, x, y, width, height, start, volume, gain);
+        return start_mpv_video_playback(
+            path,
+            x,
+            y,
+            width,
+            height,
+            start,
+            hold,
+            volume,
+            gain,
+            allow_the_hover_host,
+            kind,
+            for_a_hover,
+            must_not_activate,
+        );
     }
 
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = engine_processes::hidden_command("ffplay");
+
+    // **Where this film's picture is drawn, before the command is built.** FFmpeg's player has no
+    // switch that names a window and SDL has no embed one on Windows, so it makes a window of its
+    // own and the host shows it through the Shell's thumbnail — the road mpv's film is on, and the
+    // only one a resize can be cheap on (see `pin_film_thumbnail`). A film kept for a host is born
+    // **on the desktop and at its own size**: a source the Shell does not compose has no picture to
+    // draw, and the one placement asks the window for no box it was not already born with.
+    //
+    // **`-noborder` is passed on every launch.** It costs the player nothing now — the source is
+    // never asked to resize again — and it is what makes the window's box and its client the same
+    // rectangle, which is the rectangle the crop is cut from (see `pin_film_thumbnail`).
+    let the_pins_film = pin_film_host::the_pins_film_is_kept_in_its_host(path, kind);
+    let hover_destination = !the_pins_film
+        && allow_the_hover_host
+        && hover_film_host::the_hover_film_is_kept_in_a_host(path);
+    let hover_host = hover_destination
+        .then(|| unsafe {
+            hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
+        })
+        .flatten();
+    let kept_for_a_host = the_pins_film || hover_host.is_some();
+
+    // **What the film is presented through, on every launch.** The composed renderer, and the reason
+    // it is Direct3D 9 rather than Direct3D 11 is the whole of this app's answer to the panel
+    // flickering over a pinned film (see `the_renderer_a_film_is_begun_with`).
+    cmd.env("SDL_RENDER_DRIVER", the_renderer_a_film_is_begun_with());
+
+    // **And vsync off on every FFmpeg launch.** The composed present is a blt into the window's
+    // surface rather than a swap the display waits for, so SDL's `PRESENTVSYNC` would tie ffplay's
+    // loop to the panel's blank and gain nothing by it: the film's own frames are what pace it here,
+    // and a composed window cannot drag the panel's rate along with them (see
+    // `the_renderer_a_film_is_begun_with`). Unchanged from what every previous launch was given.
+    cmd.env("SDL_RENDER_VSYNC", "0");
+
+    // **And a player that must not take the foreground is shown without being activated** — the one
+    // ask that keeps a preview from taking the foreground off the listing (or the browser) it was
+    // begun from, and what a pin's own player is given for the same reason: a pin has no front to
+    // give, and the window a launch activates is made invisible and unclickable a moment later (see
+    // `start_hover_video_playback` and `pin_lifecycle::give_the_foreground_back_from`). Which of the
+    // two ways of asking works is measured rather than assumed, and it is this one: a
+    // `STARTUPINFO.wShowWindow` of `SW_SHOWNOACTIVATE` is ignored by ffplay's SDL window (`showCmd`
+    // 1, still activated), while this hint is honoured and leaves the foreground where it was.
+    if must_not_activate {
+        cmd.env("SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN", "1");
+    }
 
     // **And no `-hwaccel`, which is not an oversight.** It names a *device* rather than asking
     // for a decoder, and ffplay brings its Vulkan renderer up the moment the flag is present:
@@ -445,22 +715,38 @@ pub(super) fn start_video_playback(
     // to be numbered — which is also the numbering a next-track press walks in, and the one
     // `si=` is given in (see `next_subtitle`).
 
+    // **The film's own size, where it is kept for a host**: the one placement the road makes is then
+    // the box the player was born at, and nothing of the source is resized under the Shell (see
+    // `pin_film_thumbnail::the_one_placement`). A film drawn over the preview is the preview's box.
+    let (asked_width, asked_height) = match (kept_for_a_host, measured.as_ref()) {
+        (true, Some(geometry)) => (
+            (geometry.width as i32).max(1),
+            (geometry.height as i32).max(1),
+        ),
+        _ => (width.max(1), height.max(1)),
+    };
+    let width_arg = asked_width.to_string();
+    let height_arg = asked_height.to_string();
+    let left_arg = x.to_string();
+    let top_arg = y.to_string();
+    let cmd = cmd.args([
+        "-err_detect",
+        "ignore_err", // Ignore header/stream errors
+        "-fflags",
+        "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
+        "-framedrop",                    // Drop undecodable frames instead of stalling
+        "-noborder",                     // No window border: the box is the client
+    ]);
     let child = cmd
         .args([
-            "-err_detect",
-            "ignore_err", // Ignore header/stream errors
-            "-fflags",
-            "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
-            "-framedrop",                    // Drop undecodable frames instead of stalling
-            "-noborder",                     // No window border
             "-left",
-            &x.to_string(),
+            &left_arg,
             "-top",
-            &y.to_string(),
+            &top_arg,
             "-x",
-            &width.to_string(),
+            &width_arg,
             "-y",
-            &height.to_string(),
+            &height_arg,
             "-autoexit",
             "-loglevel",
             "quiet",
@@ -485,6 +771,23 @@ pub(super) fn start_video_playback(
     // name is what its id is verified as, and its loop — where the loop is this app's to give — is
     // clocked from here (see `note_player_started`).
     if let Some(ref player) = child {
+        if must_not_activate {
+            note_pin_trace!(
+                "spawn no-activate ffplay pid {} road {}",
+                player.id(),
+                if for_a_hover { "hover" } else { "pin" },
+            );
+        }
+        // The host holds this player and no older one, recorded before the player has a window of
+        // its own to adopt: the monitor's wait for that window is a wait for *this* player's (see
+        // `host_for_a_hosted_player`). A pin's player is recorded even where the host is still being
+        // made, because what the host is to draw is a fact of the launch and not of the order the
+        // two windows happen to arrive in.
+        if the_pins_film {
+            pin_film_host::note_hosted_player(player.id(), Some(path));
+        } else if hover_host.is_some() {
+            hover_film_host::note_hover_film_host_player(player.id(), path);
+        }
         note_player_started(
             player_image(VideoRoute::Ffplay),
             path,
@@ -516,8 +819,13 @@ fn start_mpv_video_playback(
     width: i32,
     height: i32,
     start: f64,
+    hold: bool,
     volume: u32,
     gain: Option<f64>,
+    allow_the_hover_host: bool,
+    kind: Option<MediaType>,
+    for_a_hover: bool,
+    must_not_activate: bool,
 ) -> Option<PlayerProcess> {
     // The switches are read here, at the launch, for the reason the ffplay route reads its own
     // here: a film already playing was started with the answer that stood then and is kept
@@ -544,26 +852,178 @@ fn start_mpv_video_playback(
     let (asked_width, asked_height) =
         video_launch::mpv_box_size(width, height, dpi_at(x, y), dpi_at(0, 0));
 
+    // **A pin's mpv film is drawn in a window of the player's own**, and the pin's host shows it
+    // through the Shell's thumbnail (see `pin_film_thumbnail`); a hover's is either the same picture
+    // in its own hover host or, where no host is kept, a window of the desktop's over the preview
+    // box. No window of this app's is handed to mpv on any of those roads: the only one this app
+    // ever named was the child road's `--wid`, and it is gone.
+    let the_pins_film = pin_film_host::the_film_is_shown_in_a_host(path, kind);
+    // **A hover's film on this road is a thumbnail of its own**, so that pinning it is the same
+    // picture re-cropped into the pin's host rather than a second player begun on a frozen frame
+    // (see `hover_film_host` and `pin_playback::adopt_the_hovered_film_in_the_host`). The host is
+    // the destination here: what shows the picture is the Shell.
+    let hover_destination = allow_the_hover_host
+        && !the_pins_film
+        && hover_film_host::the_hover_film_is_kept_in_a_host(path);
+    let behind_the_host = hover_destination || the_pins_film;
+    // **The source is launched where it will stand rather than wherever mpv would put itself.** mpv
+    // shows its own window as soon as it has opened the file — before this app has found the window
+    // and adopted it — so a launch at the corner of the box that will show it is a window of mpv's
+    // standing under that box for the moment that takes, rather than over a hover's frozen frame on
+    // a take-up from one (see `pin_film_thumbnail` and
+    // `begin_the_pinned_film_at_the_hovers_frame`). Its *size* is not named here: the one placement
+    // asks for that after the launch (see `pin_film_thumbnail`).
+    let (launch_x, launch_y) = if behind_the_host {
+        pin_film_thumbnail::the_source_launch_origin((x, y))
+    } else {
+        (x, y)
+    };
+    // **The thumbnail road's swapchain is chosen here, per launch** (see `video_launch::mpv_args`):
+    // with the knob on the player is asked for the flip model, whose buffers the compositor scales to
+    // the window, rather than the bitblt one that presents 1:1. **A source that is made invisible cannot
+    // have the flip model at all** — a layered window is not a window DXGI will hand a flip swapchain
+    // to — so the invisible road keeps the bitblt swapchain and the line below says the knob was read
+    // and overruled, rather than dropping it silently. The line is written so a run says which of the
+    // two it was, and whether the source is invisible: an A/B whose flags nobody can read back is a run
+    // nobody can compare.
+    let invisible = behind_the_host && pin_film_thumbnail::the_source_is_invisible();
+    let asked_flip = behind_the_host && video_launch::the_thumbnail_flip_knob();
+    let thumbnail_flip = video_launch::the_thumbnail_swapchain_flip(asked_flip, invisible);
+    if behind_the_host {
+        note_pin_trace!(
+            "thumbnail source launched flip {} invisible {}",
+            thumbnail_flip as u8,
+            invisible as u8
+        );
+    }
+    if asked_flip && !thumbnail_flip {
+        note_pin_trace!(
+            "RHP_THUMBNAIL_FLIP was ignored: a layered window has no flip-model swapchain, so this              player is the bitblt one"
+        );
+    }
+    // **A hover's host is made here where the picture is a thumbnail of mpv's own window**: the
+    // host is the destination the Shell draws into and not a parent the player draws in (see
+    // `pin_film_thumbnail`).
+    let hover_host = hover_destination
+        .then(|| unsafe {
+            hover_film_host::take_up_the_hover_film_host((x, y, x + width, y + height))
+        })
+        .flatten();
+
+    // **A hover's film is loaded on the warm resident where one stands**, rather than a player begun
+    // for it: the file is a `loadfile` down the pipe this app already holds, and what comes back is the
+    // same handle every road below treats alike (see `mpv_resident`). Nothing below this block runs
+    // for a served hover — no argv, no process, no spawn — and everything downstream of the launch is
+    // unchanged: the pid is booked in, its window is placed, and a pin adopts it as it adopts any
+    // hover's player.
+    //
+    // **A served hover is not normalised.** The gain is a launch flag (`--af=lavfi=[volume=…]`) and
+    // the resident was begun before this file was known.
+    // shortcut: a normalised hover's level is the file's own until the gain can be a per-file ask
+    // over the pipe; upgrade when it can.
+    if for_a_hover && !hold && start == 0.0 {
+        if let Some(served) = mpv_resident::serve(path, volume, behind_the_host) {
+            let pid = served.player.id();
+            if hover_host.is_some() {
+                hover_film_host::note_hover_film_host_player(pid, path);
+            }
+            if pinned() && !pin_holds_the_front() {
+                let _ = mpv_ipc::set_ontop(pid, false);
+            }
+            note_player_subtitles(path, subtitles_wanted());
+            note_player_started(
+                MPV_IMAGE_NAME,
+                path,
+                &served.player,
+                (x, y, x + width, y + height),
+                start,
+                true,
+            );
+            return Some(served.player);
+        }
+    }
+
+    // **A player that must not take the foreground is asked not to, where this build can be asked at
+    // all**, and that is a measurement rather than an assumption: `--focus-on=never` is the current
+    // spelling and `--focus-on-open=no` the older one, and whether the installed mpv parses either is
+    // the one question the app asks it once, off this road (see `video_launch::the_focus_on_support`
+    // and `hover_focus_switch`, which is the whole of what the launch reads). **A pin's player is
+    // asked the same thing**: the front a pin asks for is its own window's, on a press, and a player
+    // that activates itself takes the front off the listing the click was made in (see
+    // `pin_lifecycle::a_hand_back_goes_to`).
+    let mut args = video_launch::mpv_args(
+        path,
+        launch_x,
+        launch_y,
+        asked_width,
+        asked_height,
+        start,
+        hold,
+        volume,
+        gain,
+        video_hw_accel_wanted(),
+        subtitles_wanted(),
+        video_launch::mpv_input_conf(),
+        &ipc,
+        thumbnail_flip,
+        !behind_the_host,
+    );
+    if must_not_activate {
+        if let Some(switch) = video_launch::hover_focus_switch(video_launch::the_focus_on_support())
+        {
+            args.push(switch.to_string());
+        }
+    }
+
     let mut command = engine_processes::hidden_command(program);
     command
-        .args(video_launch::mpv_args(
-            path,
-            x,
-            y,
-            asked_width,
-            asked_height,
-            start,
-            volume,
-            gain,
-            video_hw_accel_wanted(),
-            subtitles_wanted(),
-            video_launch::mpv_input_conf(),
-            &ipc,
-        ))
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = spawn_player(&mut command)?;
+
+    // **A pin that steps from one film to the next holds the topmost band for the swap.** The
+    // outgoing picture is what the pin is showing while this player opens its file, and a pin that
+    // is not Always On Top is an ordinary window: a program raised over it in that gap covers the
+    // picture the step exists to keep. The hold is taken before the player exists and given back
+    // when the source it makes has taken the picture over (see `PIN_STEP_BAND_HELD`). A pin's
+    // first film has no picture standing to keep, and an Always On Top pin's band is the setting's.
+    if the_pins_film
+        && !pin_always_on_top()
+        && (pin_film_host::the_host_is_drawing() || pin_film_host::the_cover_stands())
+    {
+        unsafe { pin_lifecycle::hold_the_band_for_the_step() };
+    }
+
+    let child = match spawn_player(&mut command) {
+        Some(child) => child,
+        None => {
+            // A player that never came up is no picture to take the band over: the hold is over
+            // and the pin goes back to the band the setting gives it.
+            if the_pins_film {
+                unsafe { pin_lifecycle::give_the_step_band_back() };
+            }
+            return None;
+        }
+    };
+    // **And the player's window is handed to the monitor to be styled before it is shown**, which is
+    // the other half of the same ask: `--focus-on=never` stops mpv *choosing* to focus, and the show
+    // itself is still an activation of a window that does not carry `WS_EX_NOACTIVATE` yet (see
+    // `ffplay_window::note_a_player_about_to_show`). A pin's player is noted for it too — the window
+    // that must not take the front is the same window whichever road began it.
+    if must_not_activate {
+        ffplay_window::note_a_player_about_to_show(child.id(), for_a_hover);
+    }
+
+    // **The host holds this player and no older one**, recorded before the player has a window of
+    // its own in there: the wait for the film's first frame is a wait for this player's child and
+    // not the last film's, which is what the pid beside the host is for (see `pin_film_host` and
+    // `hover_film_host`).
+    if the_pins_film {
+        pin_film_host::note_hosted_player(child.id(), Some(path));
+    } else if hover_host.is_some() {
+        hover_film_host::note_hover_film_host_player(child.id(), path);
+    }
     // The pipe the player is told on, and the one thing a later command has to know about the
     // launch: whether it gave the player any audio at all (see `mpv_launched_without_audio`,
     // `mpv_ipc::remember_pipe` and `set_volume`).
@@ -574,11 +1034,11 @@ fn start_mpv_video_playback(
     );
 
     // **A player begun for a pin is told the pin's own answer about the topmost band before it has
-    // drawn anything.** `--ontop` is the launch's flag for a hover's window, and a pin that is not
-    // Always On Top wants the opposite of it: asking here rather than at the launch's arguments is
-    // what keeps one command line for both, and the pipe is already remembered so the ask is on the
-    // player this app holds (see `mpv_ipc::set_ontop`).
-    if pinned() && !pin_always_on_top() {
+    // drawn anything.** `--ontop` is the launch's flag for a hover's window, and a pin that does
+    // not hold the front wants the opposite of it: asking here rather than at the launch's
+    // arguments is what keeps one command line for both, and the pipe is already remembered so the
+    // ask is on the player this app holds (see `mpv_ipc::set_ontop`).
+    if pinned() && !pin_holds_the_front() {
         let _ = mpv_ipc::set_ontop(child.id(), false);
     }
 
@@ -660,6 +1120,12 @@ pub(super) struct VideoStart {
     pub(super) path: PathBuf,
     pub(super) pid: u32,
     pub(super) started: Instant,
+    /// Whether this player was begun for the hover's own host, and so is drawn there rather than
+    /// over the preview box (see `hover_film_host`).
+    pub(super) hosted: bool,
+    /// Whether the one top-level fallback has already been spent for this hover: a player kept for
+    /// a host that never draws is begun again once without one, and a second failure is abandoned.
+    pub(super) fell_back: bool,
 }
 
 /// A video the media engine plays whose preview is up but has no frame of the file in it
@@ -734,6 +1200,13 @@ pub(super) fn first_frame_lands(
 /// is worse than the desktop it leaves behind.
 pub(super) const VIDEO_START_WAIT_SECS: u64 = 10;
 
+/// Whether a hovered player that was begun into the app's host is owed the one top-level
+/// relaunch, rather than being abandoned: it is still alive and never drew, and the fallback has
+/// not already been spent on this hover (see `restart_hover_video_without_a_host`).
+pub(super) fn the_hover_host_fallback_is_owed(hosted: bool, fell_back: bool, alive: bool) -> bool {
+    hosted && !fell_back && alive
+}
+
 /// How the wait for a player stands: whether the video is on screen now, whether the
 /// wait is over some other way, or whether the player is still starting.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -775,28 +1248,31 @@ pub(super) fn player_wait(
 /// How the wait for a *swap's* player stands: the same three answers, at a swap's own bound
 /// instead of a hover's.
 ///
-/// It is `player_wait`'s question asked of the one road that already has something on screen. A
-/// hover holds back a window with a spinner behind it and nothing under the spinner that could
-/// arrive sooner, so ten seconds is a start nobody has to watch; a swap is waiting with the
-/// file the pin is leaving still up, at the box the pin is still at, and every tick of the wait
-/// is a tick of that old picture. So the bound is the one the cover a step raises is settled on
-/// — a player begun for a replacement has to open the file, seek, decode hardware and present,
-/// and a wait past that is a player this app stops watching (see `PIN_PARK_SWAP_TIMEOUT` and
-/// `settle_pinned_park`).
+/// It is `player_wait`'s question asked of the one road that already has something on screen, and
+/// what it is asked about is the one difference between the two: a hover is waiting for a window to
+/// appear over an empty preview, and a swap is waiting for the picture the pin's host is drawing to
+/// become the next film's, so that the box and the frame in it change together (see `PinSwapHold`).
+/// A hover has nothing under its spinner that could arrive sooner, so ten seconds is a start nobody
+/// has to watch; a swap is waiting with the file the pin is leaving still up, at the box the pin is
+/// still at, and every tick of the wait is a tick of that old picture — so the bound is the one the
+/// handover is given anywhere else (`VIDEO_START_WAIT_SECS`), which is where that road changes hands
+/// anyway rather than leaving the picture to a player that is ending. The two being one number is the
+/// point: a box that changed after its bound had run out would be a box of the next film's shape over
+/// the previous film's frame, which is the frame this whole wait is for.
 ///
-/// What the wait is *for* is the same fact the cover above it is settled on: the player's own
-/// window is the only sign a player of this kind gives that its film is on screen, so a window
-/// that is up has arrived, cap or no cap (see `player_wait`).
+/// A player that is gone is the end of the wait whatever else is true, because what a dead process
+/// leaves behind is a window nothing will draw into — and a picture that has changed hands has
+/// arrived, bound or no bound, exactly as a window that is up has (see `player_wait`).
 pub(super) fn player_swap_wait(
-    window_up: bool,
+    picture: bool,
     player_alive: bool,
     waited: Duration,
 ) -> Option<PlayerWait> {
-    if window_up && player_alive {
+    if picture && player_alive {
         return Some(PlayerWait::Arrived);
     }
 
-    if !player_alive || waited >= PIN_PARK_SWAP_TIMEOUT {
+    if !player_alive || waited >= Duration::from_secs(VIDEO_START_WAIT_SECS) {
         return Some(PlayerWait::Abandoned);
     }
 
@@ -832,6 +1308,13 @@ pub(super) fn stop_video_playback(media: &mut MediaData) {
     }
 
     kill_player_process(media);
+
+    // With no pin up the hover's own host is the film no longer, whatever the media held: it goes
+    // down on the preview thread that made it, so no black top-level window outlives the hover
+    // (see `hover_film_host`).
+    if !pinned() {
+        unsafe { hover_film_host::take_down_the_hover_film_host() };
+    }
 }
 
 /// End the player process a preview holds, if it has one, and forget its window.
@@ -841,6 +1324,22 @@ pub(super) fn stop_video_playback(media: &mut MediaData) {
 /// thread end the `ffplay` a hover started without reaching for the media engine, whose
 /// session is the preview thread's alone (see `stop_video_playback` and `hide_preview`).
 pub(super) fn kill_player_process(media: &mut MediaData) {
+    // **The one player this app does not kill is the resident**, and this is the whole of where that
+    // rule lives: a hover's film is stopped on it — mpv goes idle with its window still up — so the
+    // next hover loads its file on a player that is already there (see `mpv_resident`). Every other
+    // pid, a pin's included, is killed below exactly as it always was.
+    if let Some(pid) = media.video_process.as_ref().map(|process| process.id()) {
+        if mpv_resident::finish(pid) {
+            media.video_process = None;
+            // Nothing was ended, so what a kill's own bookkeeping would have cleared is cleared
+            // here: the player is no longer the film on screen, and the record of it as one goes
+            // (see `clear_video_process_state`).
+            ffplay_window::clear_video_process_state(pid);
+            return;
+        }
+    }
+
+    let killed = media.video_process.as_ref().map(|process| process.id());
     if let Some(ref mut process) = media.video_process {
         // The pipe a player was told things on goes with the player: nothing is left behind for a
         // command to reach once the process is ended (see `mpv_ipc`).
@@ -851,6 +1350,12 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
         let _ = process.kill();
     }
     media.video_process = None;
+    // **The hover's host goes with the player it was holding**, and only with that one: a pin's
+    // teardown passes another player and must not take the hover's host with it (see
+    // `hover_film_host`).
+    if let Some(pid) = killed {
+        unsafe { hover_film_host::take_down_the_hover_film_host_if_it_held(pid) };
+    }
     // Clear the video window HWND. VIDEO_PID stays recorded until the process
     // is confirmed gone, so a surviving ffplay can still be found and killed.
     VIDEO_HWND.store(0, Ordering::SeqCst);
@@ -865,7 +1370,7 @@ pub(super) enum PlayerOrder {
     /// `place_player_window`).
     Raise,
     /// Leave the window exactly as it stands: a strip of the pin's chrome or its volume popup is
-    /// drawn where the film is, or the film is parked for the length of a gesture.
+    /// drawn where the film is.
     Leave,
 }
 
@@ -934,10 +1439,7 @@ fn note_pin_re_raise() {
 /// whose window stands in its band.
 ///
 /// The raise is held off for the same reasons it always was: a strip of the pin's chrome, the
-/// volume popup or the card's menu is drawn where the film is, and a film parked for a gesture is
-/// deliberately not on screen. `parked` is asked here for the monitor, which nobody can hold off
-/// from outside; the placement road is the one road that must put a parked window back, so it asks
-/// this with no park (see `unpark_player_window`).
+/// volume popup or the card's menu is drawn where the film is.
 ///
 /// **The hold-offs stand for mpv's film as they do for FFmpeg's.** A raise put over the pin
 /// covers the caption and the transport bar the pin draws into the band over the media (see
@@ -965,15 +1467,14 @@ pub(super) fn player_order(
     chrome_up: bool,
     volume_open: bool,
     menu_open: bool,
-    parked: bool,
 ) -> PlayerOrder {
-    // A park, a strip of the pin's chrome, the volume popup and the card's menu are all refused for
-    // every window there is: a parked film is not on screen to be raised, and on any of the other
-    // routes a raise puts the film over what this app is drawing — the caption and the bar in the
-    // pin's own rows, and the panel of a card's menu in a window of its own over them. mpv's film
-    // holds its own band (`--ontop`) while the pin's own raise carries the press, and a band that
-    // has moved is placed without a raise (see the note above and `ensure_pinned_sibling_box`).
-    let order = if parked || chrome_up || volume_open || menu_open {
+    // A strip of the pin's chrome, the volume popup and the card's menu are all refused for every
+    // window there is: a raise puts the film over what this app is drawing — the caption and the
+    // bar in the pin's strips over it, and the panel of a card's menu in a window of its own over
+    // them. mpv's film holds its own band (`--ontop`) while the pin's own raise carries the press,
+    // and a band that has moved is placed without a raise (see the note above and
+    // `ensure_pinned_sibling_box`).
+    let order = if chrome_up || volume_open || menu_open {
         PlayerOrder::Leave
     } else {
         PlayerOrder::Raise
@@ -1008,8 +1509,8 @@ pub(super) fn player_order(
 /// what answers for the pin standing over it.
 ///
 /// **A `Leave` never reaches here** — both raisers refuse it before asking (see `player_order`) —
-/// so the pin is not re-raised for a park, and the three hold-offs a `Leave` stands for are
-/// answered where they are caused: a strip of the pin's chrome and an open volume popup each come
+/// so the pin is not re-raised, and the three hold-offs a `Leave` stands for are answered where
+/// they are caused: a strip of the pin's chrome and an open volume popup each come
 /// with a raise of the pin's own window (see `event_loop`'s chrome block, `toggle_pin_volume`), and
 /// an open card's menu is a window of its own that the tick raises over the film every tick (see
 /// `render_pin_menu`). Nor is a
@@ -1024,13 +1525,21 @@ pub(super) unsafe fn place_player_window(
     box_: ScreenRegion,
     flags: SET_WINDOW_POS_FLAGS,
 ) {
+    // **A film the pin draws into its own host is not placed from the outside.** Its window is a
+    // child of the pin's and the host's box is the band (see `ensure_pinned_sibling_box`), so there
+    // is no place of the desktop's for this road to put it in and nothing for the pin to be raised
+    // back over (see `pin_film_host`).
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
+        return;
+    }
+
     let (x, y, width, height) = box_;
     let _ = SetWindowPos(hwnd, player_insert_after(), x, y, width, height, flags);
 
     // A raise with no pin standing is a hover's, and there is nothing to put over it — and a pin
-    // that is not Always On Top is raised over nothing at all: the film was just put *below* it,
+    // that does not hold the front is raised over nothing at all: the film was just put *below* it,
     // which is the whole of the order that pair owes (see `player_insert_after`).
-    let re_raise = order == PlayerOrder::Raise && pinned() && pin_always_on_top();
+    let re_raise = order == PlayerOrder::Raise && pin_holds_the_front();
 
     #[cfg(test)]
     if re_raise {
@@ -1042,8 +1551,15 @@ pub(super) unsafe fn place_player_window(
     }
 }
 
-/// What a player's window is put under: the pin's own window while the pin is not Always On Top,
-/// and the topmost band everywhere else.
+/// What a player's window is put under: the pin's own window while a pin is up and keeps the
+/// ordinary band, and the topmost band where there is no pin to go under or the pin is Always On
+/// Top.
+///
+/// **It is the pin's presence that asks this, never whether the pin holds the front.** A hover's
+/// film holds the band because nothing of this app's stands over it, and so does the film of a pin
+/// that is Always On Top, whose band is the setting's. What a pin in the ordinary band owes its
+/// film is the place directly below itself — the front it holds or gave back is the pin's own and
+/// moves no window of somebody else's.
 ///
 /// **The pin's handle rather than a z-order command, because the pin is not to move.** With the
 /// setting off the pin is an ordinary window, and one raised above all the others every time its
@@ -1055,7 +1571,17 @@ pub(super) unsafe fn place_player_window(
 /// user's own clicks gave it. That an insert-after handle that is not topmost also takes the window
 /// *out* of the topmost band is the other half of it, and is what turns a film adopted from a
 /// hover — whose window wore that band for the preview's sake — into an ordinary window again.
+///
+/// **A page the engine draws is not asked this**: it is put in front of the pin rather than behind
+/// it, because a browser's surface blended through the band's hole is a resize that goes black (see
+/// `Host::put_window`). What the two windows share is the band, not the side of the pin they stand
+/// on.
 pub(super) fn player_insert_after() -> HWND {
+    // The band is the *hover's* to hold, and the setting's while the pin is Always On Top. What a
+    // pin in the ordinary band keeps is the film under it, holding the front or having given it
+    // back. Asked whether the pin holds the front instead, a demoted pin's film was put back in the
+    // topmost band by the next placement — every tick — which is a picture floating over every
+    // program with `Always On Top` off.
     if !pinned() || pin_always_on_top() {
         return HWND_TOPMOST;
     }
@@ -1074,7 +1600,7 @@ pub(super) fn player_insert_after() -> HWND {
 /// are drawn over the picture and neither window is raised above the program the user is working
 /// in.
 ///
-/// **This is the whole of what raising a pin that is not Always On Top means** (see
+/// **This is the whole of what raising a pin that does not hold the front means** (see
 /// `raise_pinned_window`): the pin has no fight to win and no business being raised, and the film
 /// is the window that may be moved to give the chrome its place.
 pub(super) unsafe fn put_player_under_the_pin() {
@@ -1116,14 +1642,14 @@ pub(super) unsafe fn player_is_under_the_pin(pin: HWND) -> bool {
     GetWindow(player, GW_HWNDPREV).is_ok_and(|above| above == pin)
 }
 
-/// Tell a pinned mpv film whether its own window is to hold the topmost band, which is the pin's
-/// setting rather than the player's own.
+/// Tell a pinned mpv film whether its own window is to hold the topmost band, which is the band
+/// the pin holds rather than the player's own.
 ///
 /// A film is launched `--ontop` because a hover is a window nothing may cover, and a film *adopted*
-/// by a pin keeps what it was begun with — so a pin that is not Always On Top would go on standing
-/// over the program the user is working in, taking the clicks in the band they overlap, while the
-/// setting says it should not. The same ask answers a setting changed under a film that is already
-/// running.
+/// by a pin keeps what it was begun with — so a pin that does not hold the front would go on
+/// standing over the program the user is working in, taking the clicks in the band they overlap,
+/// while the pin belongs behind it. The same ask answers the band given back or owed again under a
+/// film that is already running.
 ///
 /// Nothing is asked where no mpv is the film on screen: FFmpeg's player is placed by this app and
 /// has no opinion of its own to correct (see `mpv_ipc::set_ontop`).
@@ -1132,12 +1658,19 @@ pub(super) fn settle_pinned_mpv_ontop() {
         return;
     }
 
+    // **A film in the pin's own host has no band of the desktop's to be told about.** Its window is a
+    // child of the pin's, so the pin is the order it stands in and the flag `--ontop` would hold is
+    // not a window the user can see over anything (see `mpv_launch_host`).
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
+        return;
+    }
+
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     if pid == 0 || video_process_image() != MPV_IMAGE_NAME {
         return;
     }
 
-    let _ = mpv_ipc::set_ontop(pid, pin_always_on_top());
+    let _ = mpv_ipc::set_ontop(pid, pin_holds_the_front());
 }
 
 /// Put the ffplay window where it belongs and on top of everything, re-discovering and re-asserting
@@ -1149,9 +1682,9 @@ pub(super) fn settle_pinned_mpv_ontop() {
 /// **This is the one place a player's window is raised, and the volume popup and the pin's
 /// chrome are guarded here rather than by their callers.** That is the whole of the
 /// arrangement: what either one floats over is the media, and the media of a video FFmpeg
-/// plays *is* this window — a popup is drawn over the band, and a strip of chrome is
-/// painted into the pin's own rows, which for this kind are rows of this same window, so
-/// a raise while either is up puts the film over the thing the user is looking at. The
+/// plays *is* this window — a popup is drawn over the band, and a strip of the pin's chrome
+/// stands over it in a window of its own, so a raise while either is up puts the film over the
+/// thing the user is looking at. The
 /// tick was guarding the popup here,
 /// which covered the periodic re-assertion and nothing else — a seek, a resize settling and the
 /// first appearance of a pinned player all raise the window from their own call sites, and those are
@@ -1159,22 +1692,42 @@ pub(super) fn settle_pinned_mpv_ontop() {
 /// pinned window does while it is being looked at. Guarding here rather than in four places is what
 /// makes it true rather than nearly true.
 ///
-/// **The drag's park is guarded by its callers rather than here, and the reason is that this
-/// function is one of the ways a park ends.** A relaunch is a new player with a window of its own,
-/// and it is the relaunch that puts that window up and clears the flag (see `restart_pinned_player`);
-/// a guard here would answer the unpark itself with "parked" and leave the replacement hidden behind
-/// a band painted flat for it. The callers are the two that spend a drag's life raising a window that
-/// should not be on screen — a drag's own pointer moves and the tick's re-assertion — and they read
-/// the same flag (see `pin_player_is_parked`); the monitor thread's own raise, which nobody can hold
-/// off from outside, is guarded where it is raised (see `apply_noactivate_to_hwnd`).
-///
 /// **What a hold-off refuses is the raise, and never the band.** A player's window that is not on
 /// screen is owed the band whatever is up over it — the band's rows are this app's own transparent
 /// pixels, painted for that window to show through (see `film_band_is_hit_testable`), so one left
-/// hidden is a hole with the desktop standing in it, which is what a park leaves behind and what the
-/// swap out of a park fills *before* the cover comes down (see `unpark_pinned_player`). A window
-/// that is not being drawn is not carried over a strip the pin is showing by being put back
-/// (see `put_a_player_that_is_not_on_screen_back`).
+/// hidden is a hole with the desktop standing in it. A window that is not being drawn is not carried
+/// over a strip the pin is showing by being put back (see `put_a_player_that_is_not_on_screen_back`).
+/// What the last pass wrote about the film's window, and the answer it wrote: the raise road is asked
+/// on every tick, and an answer that has not moved is the heartbeat a normal session's trace does not
+/// need (938 of a 114 s run's lines were this family and `host visible`). A line is written where the
+/// answer changes, so a run reads the transitions and the measurements rather than the polling.
+static LAST_RAISED_FILM: Lazy<Mutex<(isize, &'static str)>> = Lazy::new(|| Mutex::new((0, "")));
+
+/// Write what became of the film's window on this pass, where it is not what the last pass wrote.
+fn trace_the_raised_film(window: isize, answer: &'static str) {
+    trace_the_raised_film_with(window, answer, || answer.to_string());
+}
+
+/// Whether an answer is one the trace has not written yet: the same answer for the same window is the
+/// polling line a normal session's trace does not need (see `trace_the_raised_film`).
+fn the_raise_is_new(last: (isize, &str), window: isize, answer: &str) -> bool {
+    last != (window, answer)
+}
+
+/// The same, with the line built only where the answer changed — the handle a shown window carries is
+/// worth naming, and naming it on every tick is not.
+fn trace_the_raised_film_with(window: isize, answer: &'static str, line: impl FnOnce() -> String) {
+    let Ok(mut last) = LAST_RAISED_FILM.lock() else {
+        return;
+    };
+    if !the_raise_is_new(*last, window, answer) {
+        return;
+    }
+    *last = (window, answer);
+    let said = line();
+    note_pin_trace!("{}", said);
+}
+
 pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
     // A collapsed pin has no band on screen, so nothing of the *pin's* is placed — not even the
     // hidden window a hold-off would otherwise put back: that place is a chrome-less film over
@@ -1185,25 +1738,70 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // `bubble_stream`), so there is nothing of the player's to carry into the circle and nothing to
     // put back where something has moved it.
     if pin_is_collapsed() {
+        trace_the_raised_film(0, "topmost skipped: pin collapsed");
         return false;
+    }
+    // **A film drawn into the pin's host has no window of the desktop's to order, style or raise.**
+    // The host is the picture and the pin is the order it stands in, so showing it is the
+    // whole of what the band is owed — and the box this road was handed is a top-level player's,
+    // not the host's. It is asked of the pairing rather than of the host alone: a pin that took up
+    // a hover's top-level player has a host standing empty until a relaunch fills it, and that
+    // player still has a window this road places (see `pin_film_host`).
+    if pin_film_host::the_pinned_player_was_begun_in_the_host() {
+        // The band is owed its picture back, and the picture is the host — but only once the host has
+        // a picture in it: a host shown empty is a black rectangle over the band, which is the film the
+        // hover was playing, blanked (see `pin_film_host::create`).
+        //
+        // **"Has a picture" is the registration standing in the host and not the newest player**: for
+        // the whole of a relaunch's wait the player before the replacement is frozen on screen and is
+        // what the host is drawing, so asking the newest one declares a pin empty at a seek's instant
+        // and takes the z-order re-assert off it for the wait (see `pin_film_host::the_host_is_drawing`).
+        //
+        // **Where the host stands is not this road's to say**, and the box it was handed is a
+        // top-level player's rather than the band's: the band's box is the pin's, and it is given
+        // by the roads that read it (see `ensure_pinned_sibling_box`).
+        let host = pin_film_host::film_host().map_or(0, |host| host.0 as isize);
+        if pin_film_host::the_host_is_drawing() {
+            trace_the_raised_film(host, "topmost shown: pin host drawing");
+            // SAFETY: the host is this app's own window — a child of the pin's or a window of the
+            // desktop's — and `ShowWindow` takes any window and reports rather than faults.
+            unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+        } else {
+            trace_the_raised_film(host, "topmost skipped: pin host not drawing yet");
+        }
+        return true;
+    }
+    // **A hover's film in the app's own top-level host is not a window of the desktop's to order,
+    // style or raise either.** The host is the picture and the box this road was handed is the
+    // hover's own, so placing the host at it and showing it once the player's source is adopted is
+    // the whole of what the hover is owed; neither the host nor the player's window is enumerated or
+    // styled as a top-level window of its own (see `hover_film_host`).
+    let hover_pid = VIDEO_PID.load(Ordering::SeqCst);
+    if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid) {
+        unsafe { hover_film_host::place_the_hover_film_host((x, y, x + width, y + height)) };
+        let host = hover_film_host::hover_film_host().map_or(0, |host| host.0 as isize);
+        if hover_film_host::the_hover_player_is_drawing(hover_pid) {
+            trace_the_raised_film(host, "topmost shown: hover host drawing");
+            unsafe { hover_film_host::set_the_hover_film_host_visible(true) };
+        } else {
+            trace_the_raised_film(host, "topmost skipped: hover host not drawing yet");
+        }
+        return true;
     }
     // What is to be done with the window, from the one answer both of the places that put one
     // somewhere read: everything held off — the pin's own chrome, its popup or its menu — is
     // nothing this road places, and a raise puts the pin back over the film it raised (see
     // `place_player_window`).
     //
-    // The park is deliberately not asked of it here: this is the road that must put a parked
-    // window back (see `unpark_player_window`), so the park is the callers' refusal and the
-    // monitor's rather than this one's (see the note over the function).
     let order = player_order(
         video_process_image(),
         pinned(),
         pin_chrome_up(),
         pin_volume_open(),
         pin_menu_open(),
-        false,
     );
     if order == PlayerOrder::Leave {
+        trace_the_raised_film(0, "topmost skipped: raise held off");
         // The raise is what is held off and the band is still owed (see the note over this
         // function): a window that is not on screen goes back where it stands in the band, with no
         // raise for anything to be put back over.
@@ -1222,12 +1820,14 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
 
     let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
     if hwnd_val == 0 {
+        trace_the_raised_film(0, "topmost skipped: no player hwnd");
         return false;
     }
 
     unsafe {
         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
         if hwnd.is_invalid() {
+            trace_the_raised_film(0, "topmost skipped: player hwnd invalid");
             VIDEO_HWND.store(0, Ordering::SeqCst);
             return false;
         }
@@ -1247,9 +1847,24 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        trace_the_raised_film_with(hwnd.0 as isize, "topmost shown: player hwnd", || {
+            format!("topmost shown: player hwnd {hwnd:?}")
+        });
     }
 
     true
+}
+
+/// What the tick does when the player's window is owed the front: raise the pin when its volume
+/// popup is drawn into it, or put the player's window back over the band. It is one function so
+/// that the pinned hosted film's reveal is the same road as every other one (see
+/// `the_video_window_is_owed_the_front`).
+pub(super) fn bring_the_video_window_to_the_front(video_pos: ScreenRegion) {
+    if pin_volume_open() {
+        unsafe { raise_pinned_window(HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _)) };
+    } else {
+        let _ = ensure_video_window_topmost(video_pos.0, video_pos.1, video_pos.2, video_pos.3);
+    }
 }
 
 /// Put a player's window back in the band it is owed where it is not on screen, without the raise
@@ -1262,12 +1877,9 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
 /// this app's own transparent rows, which are the desktop when nothing of the player's is drawing in
 /// them (see `film_band_is_hit_testable`).
 ///
-/// **Which is the state a park leaves, and the reason the park is not asked about here.** The window
-/// goes back up before the flag that hides it comes down, so that no frame falls between a band that
-/// is a hole and the window that fills it (see `unpark_pinned_player`, `settle_pinned_park_onto`); a
-/// road that asked the flag would refuse the very place the swap is made of. Every other caller asks
-/// the park itself and never reaches this with a parked window (see `event_loop`'s tick,
-/// `show_current_replacement`, `ensure_pinned_sibling_box`).
+/// **It is the road that puts a window that is not on screen back in the band**, without a raise:
+/// a strip of the pin's chrome or an open popup holds the raise off and owes the band its window
+/// all the same (see `player_order` and `ensure_pinned_sibling_box`).
 ///
 /// The place is `SWP_NOZORDER`, which is what keeps the film under the pin that is standing over it:
 /// the order is left exactly where it is, there is no raise here, and so there is nothing to put back
@@ -1310,9 +1922,9 @@ fn put_a_player_that_is_not_on_screen_back(x: i32, y: i32, width: i32, height: i
 ///
 /// The walk goes up from the pin and stops at the first window that is not topmost, which is where
 /// the band both of them are in ends, so what it costs is the length of that band and not of the
-/// desktop. A player's window that is not on screen covers nothing, which is the answer a parked
-/// film owes (see `unpark_player_window`), and a band with no player's window in it at all — a
-/// hover, or the media engine painting this app's own rows — is nobody standing over anything.
+/// desktop. A player's window that is not on screen covers nothing, and a band with no player's
+/// window in it at all — a hover, or the media engine painting this app's own rows — is nobody
+/// standing over anything.
 pub(super) unsafe fn player_stands_over_the_pin(pin: HWND) -> bool {
     let player = HWND(VIDEO_HWND.load(Ordering::SeqCst) as *mut std::ffi::c_void);
     if player.is_invalid() || !IsWindowVisible(player).as_bool() {
@@ -1337,4 +1949,32 @@ pub(super) unsafe fn player_stands_over_the_pin(pin: HWND) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **An answer the trace already wrote is not written again**: the raise road is asked on every
+    /// tick, so the same answer for the same window is one line and every transition is one more.
+    #[test]
+    fn a_raise_answer_is_written_when_it_changes_and_not_on_every_pass() {
+        assert!(
+            the_raise_is_new((0, ""), 0x1000, "topmost shown: pin host drawing"),
+            "the first answer of a run is the state it began in"
+        );
+        let shown = (0x1000, "topmost shown: pin host drawing");
+        assert!(
+            !the_raise_is_new(shown, 0x1000, "topmost shown: pin host drawing"),
+            "and the same answer for the same window is not written on every tick"
+        );
+        assert!(
+            the_raise_is_new(shown, 0x1000, "topmost skipped: pin host not drawing yet"),
+            "a source that is not drawing yet is a change"
+        );
+        assert!(
+            the_raise_is_new(shown, 0x2000, "topmost shown: pin host drawing"),
+            "and so is another window"
+        );
+    }
 }
