@@ -1538,14 +1538,27 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // flag above, because the demotion is what a pin that is not Always On Top owes whatever it
     // stands over; and it is asked for of a window that was *off* the screen only, since one that
     // is on it is to be left exactly where the user's own clicks put it.
-    if !pin_always_on_top() && !on_the_screen {
+    // **And a pin that is already on the screen is put in front when the window in front of it is the
+    // listing it belongs to.** A pick is made by a click in that listing, so that is where the front is
+    // when the new film installs — and nothing on a swap moves the pair: the placement above asks for
+    // the band the window already has, which changes no z-order. So the new film appeared *under* the
+    // listing the user picked it in. A pin standing over some other program is still left exactly
+    // where the user's own clicking put it, which is the reason this raise used to be for a window
+    // that was off the screen only (see `take_the_band_and_give_it_back`).
+    let the_front_is_the_pin_or_a_listing = {
+        let front = unsafe { GetForegroundWindow() };
+        front == hwnd || crate::shell::explorer_hook::explorer_browser_class_matches(front)
+    };
+    if !pin_always_on_top() && (!on_the_screen || the_front_is_the_pin_or_a_listing) {
         // **A pin that is a window is put in front the one way Windows lets a process without the
         // foreground do it: the topmost band, taken and given straight back.** `HWND_TOP` is refused
         // for such a process — the call reports success and the window stays where it was — and the
         // band is what the user sees as "exactly on top of everything" for the moment the window
         // appears, with nothing of the setting left behind it (see
         // `showing_takes_the_band_to_appear` and `take_the_band_and_give_it_back`).
-        if showing_takes_the_band_to_appear(on_the_screen) {
+        if showing_takes_the_band_to_appear(on_the_screen)
+            || (on_the_screen && pin_is_its_own_window() && the_front_is_the_pin_or_a_listing)
+        {
             // **On top of everything the moment it appears, and a normal window from then on:** what
             // is left after the band is given back is a window at the front of the ordinary one, which
             // the next click on another window puts behind it, exactly as any window behaves.
