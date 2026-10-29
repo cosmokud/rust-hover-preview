@@ -3440,12 +3440,15 @@ pub fn run_preview_window() {
                 // And the band is nobody's to hold any more, so the next placement asks the setting
                 // again rather than keeping a window in a band its hold is over (see `PIN_BAND_HELD`).
                 PIN_BAND_HELD.store(false, Ordering::SeqCst);
-                // **The pin's band is the band of the window of the pair that holds it.** Where a
-                // film's host owns the chrome, the band is the host's and Windows takes the chrome
-                // out with it; asking the chrome alone would be the demotion of half a pair (see
-                // `pin_film_host::the_pin_window_that_holds_the_band`).
+                // **The pin's band is the band of every window of the pair.** Where a film's host owns
+                // the chrome, the band is the host's and Windows takes the chrome out with it; asking
+                // the chrome alone would be the demotion of half a pair (see
+                // `pin_film_host::the_pin_window_that_holds_the_band`). Asked of the chrome as well
+                // because the setting is the chrome's and a band left on it is a pin over every
+                // program the user works in with `Always On Top` off.
                 for window in [
                     hwnd,
+                    pinned_window(),
                     pin_film_host::the_pin_window_that_holds_the_band(pinned_window()),
                 ] {
                     if window_holds_the_topmost_band(window) {

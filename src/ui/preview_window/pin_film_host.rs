@@ -677,15 +677,21 @@ unsafe fn own_the_pin_window(owned: bool) {
         unsafe { SetWindowLongPtrW(pin, GWLP_HWNDPARENT, owner) };
     }
 
-    // **The button is the setting's, and the ownership only decides which window of the pair wears
-    // it.** A window the Shell is to list is one that is not owned, so it is the host when a host owns
-    // the chrome and the pin's own window otherwise — and a pair owes no button at all while
-    // `Pin Mode → Always On Top` says the pin is over everything already (see `a_button_is_owed`,
-    // which is the same rule for the stand-in a pin in this app's own window wears).
+    // **The button is the setting's, and whose window wears it is the host's.** A pair owes no button
+    // at all while `Pin Mode → Always On Top` says the pin is over everything already (see
+    // `a_button_is_owed`, which is the same rule for the stand-in of a pin standing in this app's own
+    // window); with the setting off the host is the window that wears it, because it is the window the
+    // Shell lists for the pair, and the chrome is never listed beside it.
+    //
+    // **And the chrome takes it back the moment no host owns it**, because the pin's window is kept
+    // between pins: a film's pin closes and the next pin of a file this app draws the whole way stands
+    // in that same window, so a chrome left without a button is a file with no way back from the
+    // taskbar. The two calls are one pass on the same thread, so the show the Shell reads for it is
+    // the show the next pin makes.
     let app_window = !pin_lifecycle::pin_always_on_top();
     unsafe { pin_real_window::set_the_pin_window_appwindow(pin, !owned && app_window) };
     if let Some(host) = film_host() {
-        unsafe { pin_real_window::set_the_pin_window_appwindow(host, owned && app_window) };
+        unsafe { pin_real_window::set_the_pin_window_appwindow(host, app_window) };
     }
 
     // **The chrome is put in the band the setting names, worn or not.** A window given an owner or
