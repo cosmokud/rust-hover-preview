@@ -581,3 +581,32 @@ fn scene_the_pin_closed() {
     stand_pin(None);
     VIDEO_PID.store(0, Ordering::SeqCst);
 }
+
+/// **A resident names the window it is begun with for the road that takes it out of the Shell's
+/// lists, at the moment it is begun.**
+///
+/// The fault this is a regression test for is the user's: the warm mpv is begun with `--idle=yes
+/// --force-window=yes` so that a hover has a window to draw into, and that window is a real top-level
+/// window of the desktop's with no file in it — so the Shell gave it a taskbar button titled `No
+/// file`, from the spawn until the resident was first picked up, or for ever where it never was. The
+/// eager pass a launch writes its pid to is the pass that catches a window before its show, and a
+/// resident's window is shown as soon as mpv has configured it: the pid is named for the one road that
+/// can take a window out of the lists after it is on the screen, and this holds the name being written
+/// where the resident is begun (see `ffplay_window::note_a_window_to_unlist` and `eager_ex_style`).
+#[test]
+fn a_resident_names_its_window_for_the_shells_lists() {
+    let _one = one_at_a_time();
+    let _stand = ResidentStand::new(true);
+    ffplay_window::forget_the_window_to_unlist();
+
+    let pid = a_resident(true);
+
+    assert_eq!(
+        ffplay_window::the_window_to_unlist(),
+        Some(pid),
+        "the window the resident is begun with is the one the Shell must not list: a button titled \
+         `No file` is not one the user asked for"
+    );
+
+    ffplay_window::forget_the_window_to_unlist();
+}
