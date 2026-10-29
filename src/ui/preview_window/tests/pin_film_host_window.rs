@@ -3682,7 +3682,10 @@ fn a_second_pick_for_the_file_in_flight_is_dropped() {
     // A channel of the preview's own, stood in the slot the door sends on, so that what it sends is
     // what this test reads and a later test's channel is not read here.
     let (sender, answers) = channel();
-    let previous_sender = PREVIEW_SENDER.lock().ok().and_then(|mut held| held.replace(sender));
+    let previous_sender = PREVIEW_SENDER
+        .lock()
+        .ok()
+        .and_then(|mut held| held.replace(sender));
     pin_trace::clear_noted();
 
     let in_flight = PathBuf::from("the-file-being-loaded.mkv");
@@ -4335,7 +4338,10 @@ fn a_pin_mpv_launch_asks_for_the_same_no_focus_switch_and_eager_style_as_a_hover
     {
         let launched_command = take_last_spawned_command().expect("the pin's launch");
         assert!(
-            launched_command.program.to_ascii_lowercase().contains("mpv"),
+            launched_command
+                .program
+                .to_ascii_lowercase()
+                .contains("mpv"),
             "the pin is on the mpv road: {}",
             launched_command.program
         );
@@ -7925,7 +7931,10 @@ fn a_steps_hand_back_goes_by_the_window_the_foreground_was_taken_from() {
     pin_real_window::stand_real_pin_window_for_a_test(previous_window);
     unsafe { DestroyWindow(ours) }.expect("the window this test made goes");
 
-    assert!(a_pin_stands, "the steps this test is about are a standing pin's");
+    assert!(
+        a_pin_stands,
+        "the steps this test is about are a standing pin's"
+    );
     assert_eq!(
         from_ours, pin,
         "a front taken from a window of ours goes back to the pin: a step made in the pin is the case, \

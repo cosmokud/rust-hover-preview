@@ -538,10 +538,8 @@ pub(super) fn a_player_awaits_its_show(
     held: Option<(u32, Instant, bool)>,
     now: Instant,
 ) -> Option<(u32, bool)> {
-    held.filter(|(_, begun, _)| {
-        now.saturating_duration_since(*begun) < PLAYER_BEFORE_THE_SHOW_WAIT
-    })
-    .map(|(pid, _, for_a_hover)| (pid, for_a_hover))
+    held.filter(|(_, begun, _)| now.saturating_duration_since(*begun) < PLAYER_BEFORE_THE_SHOW_WAIT)
+        .map(|(pid, _, for_a_hover)| (pid, for_a_hover))
 }
 
 /// The marker as it stands, or nothing where it has run out — and one that has run out is dropped

@@ -1,8 +1,8 @@
 //! Putting a loaded media into a pin: the answer off the worker thread, the relayout it asks
 //! for, and the install that gives it the window.
 
-use super::*;
 use super::pin_trace::note_pin_trace;
+use super::*;
 
 /// The wait a pinned window is in, in the form a repaint can draw: the millisecond its arc
 /// began turning at, counted from [`PIN_ARC_BASE`], and `0` for a window that is waiting for
@@ -90,7 +90,10 @@ pub(super) fn note_the_pick(road: PickRoad, path: &Path) -> u64 {
 
 /// The pick the pin is being shown a file for, as the last one taken up noted it.
 pub(super) fn the_pick() -> (u64, PickRoad) {
-    THE_PICK.lock().map(|held| *held).unwrap_or((0, PickRoad::Update))
+    THE_PICK
+        .lock()
+        .map(|held| *held)
+        .unwrap_or((0, PickRoad::Update))
 }
 
 /// Show a pinned window another file: what is on screen is taken down — the frame this app holds,

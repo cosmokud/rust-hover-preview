@@ -2,8 +2,8 @@
 //! with: the calls that put a preview up, take it down and refresh it, and the notices a render
 //! sends back.
 
-use super::*;
 use super::pin_trace::note_pin_trace;
+use super::*;
 
 /// Whether a preview is pinned — a window of its own with a caption, which stays until it
 /// is closed. The Explorer hook asks this every tick: while it is true nothing is spawned

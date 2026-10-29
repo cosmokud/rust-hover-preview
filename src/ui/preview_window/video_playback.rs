@@ -969,8 +969,7 @@ fn start_mpv_video_playback(
         !behind_the_host,
     );
     if must_not_activate {
-        if let Some(switch) =
-            video_launch::hover_focus_switch(video_launch::the_focus_on_support())
+        if let Some(switch) = video_launch::hover_focus_switch(video_launch::the_focus_on_support())
         {
             args.push(switch.to_string());
         }
