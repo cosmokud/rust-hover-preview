@@ -1566,6 +1566,19 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
             );
         }
     }
+    // **The pair's button is written before the show that makes it the pin's window the Shell
+    // lists.** A window of a film's pin is owned by the host that carries the film, and while that
+    // host is down the chrome is the only window of the pair on the screen — so the bit is asked for
+    // here, where the show that reads it is about to be made, and not on a visible window's back (see
+    // `pin_film_host::the_button_follows_the_screen`). A pin standing in the preview's window has no
+    // window of its own in this pair: its button is the stand-in's, asked for below.
+    if pin_is_its_own_window() {
+        unsafe {
+            let host_is_up = pin_film_host::film_host()
+                .is_some_and(|host| IsWindowVisible(host).as_bool());
+            pin_film_host::the_button_follows_the_screen(host_is_up);
+        }
+    }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     note_pin_trace!(
         "show hwnd {:?} handover {} visible {} rect {:?}",

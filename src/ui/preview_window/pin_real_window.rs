@@ -93,9 +93,36 @@ pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) 
     if unsafe { set_an_ex_style(hwnd, WS_EX_APPWINDOW, app_window) } {
         unsafe { ask_the_window_to_re_read_its_style(hwnd) };
         if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            #[cfg(test)]
+            if let Ok(mut shown) = APPWINDOW_SHOWS.lock() {
+                shown.push(hwnd.0 as isize);
+            }
             let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
             let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
         }
+    }
+}
+
+/// The windows this run has put down and up again so that the Shell reads a taskbar bit: the one
+/// thing this road does that a style write behind a visible window's back cannot, and what a test
+/// holds a road to where the Shell itself cannot be asked (see `set_the_pin_window_appwindow`).
+#[cfg(test)]
+static APPWINDOW_SHOWS: std::sync::Mutex<Vec<isize>> = std::sync::Mutex::new(Vec::new());
+
+/// The windows whose taskbar bit this run has paid a show for (see `APPWINDOW_SHOWS`).
+#[cfg(test)]
+pub(super) fn the_appwindow_shows() -> Vec<isize> {
+    APPWINDOW_SHOWS
+        .lock()
+        .map(|shown| shown.clone())
+        .unwrap_or_default()
+}
+
+/// Forget the shows paid before a test (see `APPWINDOW_SHOWS`).
+#[cfg(test)]
+pub(super) fn forget_the_appwindow_shows() {
+    if let Ok(mut shown) = APPWINDOW_SHOWS.lock() {
+        shown.clear();
     }
 }
 

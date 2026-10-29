@@ -660,6 +660,44 @@ pub(super) unsafe fn place_the_pin_in_the_band(pin: HWND, after: HWND) {
     }
 }
 
+/// Ask for the pair's taskbar button on the window of it the Shell can list, or give it up with the
+/// setting.
+///
+/// **`Pin Mode → Always On Top` is the row that decides whether the pair has a button at all**: a pin
+/// over everything is one the user finds without one, and a pin that is not is an ordinary window with
+/// an ordinary window's button (see `pin_taskbar::a_button_is_owed`, which is the same rule for the
+/// stand-in of a pin standing in this app's own window).
+///
+/// **With the setting off the button belongs to the window the Shell lists for the pair**, which is the
+/// host while the host is on the screen: the chrome is owned by it and never listed beside it (see
+/// `own_the_pin_window`). **And while the host is down the chrome carries it**, because that is the
+/// window the user still has: a swap hides the host for the whole wait of the next player (see
+/// `take_the_film_off_the_band`), and a pair whose only window on the screen is owned by a hidden one
+/// wears no button at all — a pin that cannot be brought back from the taskbar for as long as that
+/// player takes to draw, or for good where it never draws (see `the_host_is_drawing` and
+/// `video_playback::ensure_video_window_topmost`, whose show is the only road back).
+///
+/// `the_host_is_up` is the visibility the host is to have — the show that is about to be made, or the
+/// hide that has just been taken — because a bit written *before* the show it belongs to is the bit the
+/// Shell reads with it, which is what keeps a visible window from being put down and up again for a
+/// button it could have been given for free (see `pin_real_window::set_the_pin_window_appwindow`).
+pub(super) unsafe fn the_button_follows_the_screen(the_host_is_up: bool) {
+    let Some(pin) = pin_real_window::real_pin_window() else {
+        return;
+    };
+    let app_window = !pin_lifecycle::pin_always_on_top();
+    match film_host() {
+        Some(host) => {
+            unsafe { pin_real_window::set_the_pin_window_appwindow(host, app_window) };
+            unsafe {
+                pin_real_window::set_the_pin_window_appwindow(pin, app_window && !the_host_is_up)
+            };
+        }
+        // A pair with no host is the chrome's own window, and it wears the button the setting names.
+        None => unsafe { pin_real_window::set_the_pin_window_appwindow(pin, app_window) },
+    }
+}
+
 /// Ask for the pair's taskbar button, or give it up, as the setting now reads.
 ///
 /// **`Pin Mode → Always On Top` is the row that decides whether a pin has a button at all**: a pin
@@ -672,18 +710,8 @@ pub(super) unsafe fn place_the_pin_in_the_band(pin: HWND, after: HWND) {
 /// makes: a pin already on the screen is the one the user is looking at, and it is the one that has to
 /// gain or lose the button.
 pub(super) unsafe fn the_button_follows_the_setting() {
-    let Some(pin) = pin_real_window::real_pin_window() else {
-        return;
-    };
-
-    let app_window = !pin_lifecycle::pin_always_on_top();
-    match film_host() {
-        Some(host) => {
-            unsafe { pin_real_window::set_the_pin_window_appwindow(pin, false) };
-            unsafe { pin_real_window::set_the_pin_window_appwindow(host, app_window) };
-        }
-        None => unsafe { pin_real_window::set_the_pin_window_appwindow(pin, app_window) },
-    }
+    let host_is_up = film_host().is_some_and(|host| unsafe { IsWindowVisible(host) }.as_bool());
+    unsafe { the_button_follows_the_screen(host_is_up) };
 }
 
 /// Whether the pin's host holds an FFmpeg player whose window has not been found yet: the take-up
@@ -745,7 +773,9 @@ unsafe fn own_the_pin_window(owned: bool) {
     // at all while `Pin Mode → Always On Top` says the pin is over everything already (see
     // `a_button_is_owed`, which is the same rule for the stand-in of a pin standing in this app's own
     // window); with the setting off the host is the window that wears it, because it is the window the
-    // Shell lists for the pair, and the chrome is never listed beside it.
+    // Shell lists for the pair, and the chrome is never listed beside it *while the host is on the
+    // screen* — the one road that hands it to the chrome is the host going down, and that is asked at
+    // the hide rather than here (see `the_button_follows_the_screen`).
     //
     // **And the chrome takes it back the moment no host owns it**, because the pin's window is kept
     // between pins: a film's pin closes and the next pin of a file this app draws the whole way stands
@@ -1004,6 +1034,9 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
         // other** — the one the swap's hide left off the band, put back on it with the band write the
         // show is owed (see `the_host_has_appeared`).
         let was_up = unsafe { IsWindowVisible(host) }.as_bool();
+        // And the pair's button goes with the appearance, written before the show it belongs to (see
+        // `the_button_follows_the_screen`).
+        unsafe { the_button_follows_the_screen(true) };
         let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
         if !was_up {
             unsafe { the_host_has_appeared(host) };
@@ -1051,27 +1084,20 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
     unsafe { pin_taskbar::set_pin_taskbar_title(host) };
 
     // **The hover's band and the press that falls through it go, and the pin's bits come on**: a host
-    // the Shell lists wears neither `WS_EX_TOOLWINDOW` nor `WS_EX_NOACTIVATE`, and the app-window bit
-    // is what gives the pair its button (see `create` and `own_the_pin_window`).
+    // the Shell lists wears neither `WS_EX_TOOLWINDOW` nor `WS_EX_NOACTIVATE` (see `create`).
     //
-    // **And the button is the setting's, written here rather than on a visible window's back.**
-    // `WS_EX_APPWINDOW` is what asks the Shell for a button, and the Shell reads it as a window is
-    // shown: written on the already-visible host with a re-read, it was the intermittent button the
-    // user reported (see `pin_real_window::set_the_pin_window_appwindow`, which is the one place that
-    // knows the difference). What is different here is that the promotion is already *restyling* the
-    // window — the band, the press-through and the no-activate bits all go at once — so the bit is
-    // written with them and no second show is owed for it.
+    // **The app-window bit is not written here.** `WS_EX_APPWINDOW` is what asks the Shell for a
+    // button, and the Shell reads it as a window is shown: a promotion is a host that is already on the
+    // screen, so the bit goes through the one road that puts a window down and up again for it —
+    // `pin_real_window::set_the_pin_window_appwindow`, which is the whole of why the pair's button was
+    // intermittent (see `the_button_follows_the_screen`).
     let ex = unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) };
-    let mut ex = ex
+    let ex = ex
         & !(WS_EX_TOPMOST.0 as isize)
         & !(WS_EX_TRANSPARENT.0 as isize)
         & !(WS_EX_TOOLWINDOW.0 as isize)
-        & !(WS_EX_NOACTIVATE.0 as isize);
-    if !pin_lifecycle::pin_always_on_top() {
-        ex |= WS_EX_APPWINDOW.0 as isize;
-    } else {
-        ex &= !(WS_EX_APPWINDOW.0 as isize);
-    }
+        & !(WS_EX_NOACTIVATE.0 as isize)
+        & !(WS_EX_APPWINDOW.0 as isize);
     let _ = unsafe { SetWindowLongPtrW(host, GWL_EXSTYLE, ex) };
     // A style written behind a window's back is not one it presents with until it is asked to read it,
     // and the band it was in goes with the same call.
@@ -1086,6 +1112,9 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
     };
+    // The pair's button from here is the setting's, read with the show this road pays for (see
+    // `the_button_follows_the_screen`).
+    unsafe { the_button_follows_the_screen(true) };
 
     // The chrome is the host's own window from here, and the pair is put in the band the setting
     // names in one call — the host taking it and the chrome following it (see
@@ -1245,9 +1274,15 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
                 host,
             );
         }
+        if visible {
+            // **The button is the appearing host's from the show that makes it the pair's listed
+            // window**, written before the show so that the Shell reads it with it (see
+            // `the_button_follows_the_screen`).
+            unsafe { the_button_follows_the_screen(true) };
+        }
         let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
-        // The line is written after the show rather than before it, so that the trace of a run reads
-        // in the order the desktop was asked (see `trace_the_host_show`).
+        // The line is written after the show rather than before it, so that a run's trace reads in the
+        // order the desktop was asked (see `trace_the_host_show`).
         trace_the_host_show(host, visible);
         if visible {
             claim_the_band_for_the_host();
@@ -1256,6 +1291,10 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
             if !was_up {
                 unsafe { the_host_has_appeared(host) };
             }
+        } else {
+            // **And a hidden host's button goes back to the chrome**, which is the window the user is
+            // left with once this one is down (see `the_button_follows_the_screen`).
+            unsafe { the_button_follows_the_screen(false) };
         }
         // **The film follows the host off the screen and back**, which is the one road a source is
         // hidden on: the Shell stops drawing the thumbnail of a hidden window, and there is no host
