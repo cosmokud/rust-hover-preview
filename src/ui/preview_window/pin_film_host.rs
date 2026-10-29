@@ -18,23 +18,15 @@
 //! **Why it is disabled.** A press on the picture is a press on the pin: the pin is dragged by its
 //! film, and the band's alpha-1 claim is already hit-testable (see `fill_band_hit_testable`). A
 //! disabled window is skipped by `WindowFromPoint`, so the press arrives at the pin rather than at
-//! the host. **And a disabled window cannot hold a keyboard anybody can type into**, which is why the
-//! host is also a tool window that never activates and that the Shell lists no button for: nothing is
-//! ever meant to land in the window the film is drawn in (see `create`).
+//! the host. **And a disabled window cannot hold a keyboard anybody can type into**, while it is
+//! still the window a click on the pair's taskbar button activates — so the host answers that
+//! activation with the pin's own window (see `answer_an_activation_of_the_host`).
 //!
-//! **The taskbar identity is the pin's, and never the host's.** The host is a `WS_EX_TOOLWINDOW |
-//! WS_EX_NOACTIVATE` window of the desktop's: the Shell lists no button for it and Alt+Tab does not
-//! offer it, so a show or a hide of it changes nothing about the pin's own place in the Shell's lists.
-//! That is the whole of why the pair no longer hands a `WS_EX_APPWINDOW` between them — the host is
-//! hidden for the wait of every swap (see `take_the_film_off_the_band`), and a button worn by a window
-//! that goes down for a second is a button that vanishes for that second (see
-//! `the_button_follows_the_setting`).
-//!
-//! **And it is the window a put-away film pin's picture is taken of.** A pin put away into the taskbar
-//! is the pin's own window minimized, brought back by the Shell's own restore (see `the_pin_came_back`),
-//! and its hover is the still this app takes of this host before the pair goes down — the host's own
-//! rows are the black behind the film, so a still of those rows is no picture at all (see
-//! `keep_the_pins_picture_for_the_taskbar`).
+//! **And it is the window a put-away pin's taskbar button belongs to.** An owned window carries no
+//! button of its own, so a pin put away into the taskbar is *the host minimized*, brought back by the
+//! Shell's own restore (see `the_pin_came_back`), and its hover is the still this app takes of it
+//! before it goes down — the host's own rows are the black behind the film, so a still of those rows
+//! is no picture at all (see `keep_the_pins_picture_for_the_taskbar`).
 //!
 //! The host outlives the player once begun into it: a seek is mpv's own IPC and a step begins
 //! another player behind the same host. It goes down with the pin (see
@@ -56,9 +48,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
     RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE,
     HWND_NOTOPMOST, HWND_TOPMOST, SC_CLOSE, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WM_CLOSE, WM_DWMSENDICONICTHUMBNAIL,
-    WM_ERASEBKGND, WM_PAINT, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CLOSE,
+    WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_PAINT, WM_SETFOCUS, WM_SYSCOMMAND, WNDCLASSEXW,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_POPUP, WINDOW_EX_STYLE,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -123,21 +115,23 @@ pub(super) unsafe fn answer_a_host(
         return Some(answer);
     }
 
-    // **Nothing asks the host for a keyboard.** The pair's taskbar button is the pin's own window's
-    // (see `the_button_follows_the_setting`), so an activation of the host is an activation of a tool
-    // window that never activates — there is nothing left for this procedure to hand the pin, which is
-    // the road `answer_an_activation_of_the_host` used to be.
+    // **An activation of the host is a request for the pin.** A pair that is not Always On Top wears its
+    // taskbar button on the host, and the host is disabled so that a press reaches the pin — so the
+    // activation a click on that button delivers has to be answered for the pin, whose window is the
+    // one the user asked the button for (see `answer_an_activation_of_the_host`).
+    if let Some(answer) =
+        unsafe { answer_an_activation_of_the_host(hwnd, msg, wparam, &Win32PinWindow) }
+    {
+        return Some(answer);
+    }
 
-    // **A host the Shell brings back from the taskbar is the pin coming back.** A pin put away into the
-    // taskbar is the pin's own window minimized and it is that window the Shell restores (see
-    // `the_pin_came_back`); a host restored by anything else is the film coming back over a pin that is
-    // up, which is the same question asked of the other window of the pair.
+    // **A host the Shell brings back from the taskbar is the pin coming back.** The host is the window
+    // the Shell's button belongs to on this road, and a pin left believing it is away refuses
+    // everything a pin is for (see `the_pin_came_back`, `own_the_pin_window`).
     the_pin_came_back(hwnd, msg, wparam);
 
     // The Shell's ask for the still of a button that is down, answered with the picture the collapse
-    // took of this very window. A tool window wears no button, so this is the ask of a host that is a
-    // hover's promoted into a pin's — kept for the window that changes hands under a take-up rather
-    // than for a button that no longer exists (see `keep_the_pins_picture_for_the_taskbar`).
+    // took of this very window (see `keep_the_pins_picture_for_the_taskbar`).
     if msg == WM_DWMSENDICONICTHUMBNAIL {
         return Some(unsafe { pin_taskbar_mirror::answer_a_thumbnail_ask(hwnd, lparam) });
     }
@@ -161,6 +155,54 @@ fn answer_the_hosts_close(msg: u32, wparam: WPARAM) -> Option<LRESULT> {
     if pinned() {
         request_pin_end();
     }
+    Some(LRESULT(0))
+}
+
+/// What an activation of the pin's host asks for: **the pin's window, and the keyboard in it**.
+///
+/// With `Pin Mode → Always On Top` off the pair's taskbar button belongs to the film host — the host
+/// owns the pin's chrome, so it is the window the Shell lists for the pair (see `own_the_pin_window`).
+/// That window is disabled on purpose: a press on the band has to reach the pin, and `WindowFromPoint`
+/// skips a disabled window (see the module note). A disabled window is still a window the Shell can
+/// activate — a click's activation delivers `WM_ACTIVATE` and `WM_SETFOCUS` to it — and what it cannot
+/// do is hold a keyboard anybody can type into. So the activation is answered for the pin: the window
+/// the user asked the button for is the pin's, and the pin takes the keyboard the way a press on it
+/// does (see `pin_take_focus`).
+///
+/// **Only the pin's own host, and only while a pin stands.** A hover's host is made from the same class
+/// and answered by the same procedure, and a hover is nobody's button and no pin's window (see
+/// `answer_a_host`); a pin that has ended has nothing to hand a keyboard to. **And only once per
+/// activation**: a caret already in the pin is where the user asked the button for it, and asking again
+/// is a second `SetForegroundWindow` for a question Windows has answered.
+///
+/// `window` is the seam the ask is made through, so a test can read the ask back rather than make it on
+/// the user's desktop.
+pub(super) unsafe fn answer_an_activation_of_the_host(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    window: &dyn PinWindow,
+) -> Option<LRESULT> {
+    let activated = match msg {
+        // The low word is the activation state; the high word says whether the window is minimized,
+        // and a minimized window coming back is the same request (see the message's own layout).
+        WM_ACTIVATE => matches!(
+            (wparam.0 & 0xFFFF) as u32,
+            WA_ACTIVE | WA_CLICKACTIVE
+        ),
+        WM_SETFOCUS => true,
+        _ => false,
+    };
+    if !activated
+        || film_host() != Some(hwnd)
+        || !pinned()
+        || !pin_is_its_own_window()
+        || pin_is_focused()
+    {
+        return None;
+    }
+
+    unsafe { pin_take_focus(pinned_window(), window) };
     Some(LRESULT(0))
 }
 
@@ -618,31 +660,58 @@ pub(super) unsafe fn place_the_pin_in_the_band(pin: HWND, after: HWND) {
     }
 }
 
-/// Ask for the pin's taskbar button or give it up, as the setting now reads: the one road that writes
-/// the place a pin has in the Shell's lists, and the row that changes `Pin Mode → Always On Top` is its
-/// caller.
+/// Ask for the pair's taskbar button on the window of it the Shell can list, or give it up with the
+/// setting.
 ///
-/// **`Pin Mode → Always On Top` is the row that decides whether a pin has a button at all**: a pin over
-/// everything is one the user finds without one, and a pin that is not is an ordinary window with an
-/// ordinary window's button (see `pin_taskbar::a_button_is_owed`, which is the same rule for the
+/// **`Pin Mode → Always On Top` is the row that decides whether the pair has a button at all**: a pin
+/// over everything is one the user finds without one, and a pin that is not is an ordinary window with
+/// an ordinary window's button (see `pin_taskbar::a_button_is_owed`, which is the same rule for the
 /// stand-in of a pin standing in this app's own window).
 ///
-/// **The window is the pin's own, whether a film's host is up or down.** That is what this road used to
-/// get wrong: it handed the bit to the host while the host was on the screen and back to the chrome
-/// while the host was down, and a film swap hides the host for the whole wait of the next player — so
-/// the pair's button was paid for with a hide and a show of the pin on every swap, and was absent for
-/// as long as that took. The host is a tool window with no button of its own now, and a show or a hide
-/// of it changes nothing here (see `create`).
+/// **With the setting off the button belongs to the window the Shell lists for the pair**, which is the
+/// host while the host is on the screen: the chrome is owned by it and never listed beside it (see
+/// `own_the_pin_window`). **And while the host is down the chrome carries it**, because that is the
+/// window the user still has: a swap hides the host for the whole wait of the next player (see
+/// `take_the_film_off_the_band`), and a pair whose only window on the screen is owned by a hidden one
+/// wears no button at all — a pin that cannot be brought back from the taskbar for as long as that
+/// player takes to draw, or for good where it never draws (see `the_host_is_drawing` and
+/// `video_playback::ensure_video_window_topmost`, whose show is the only road back).
 ///
-/// A pin whose window keeps its bits already is owed nothing: the write is skipped where nothing moves,
-/// so a take-up that asks this on every show pays nothing for it (see
-/// `pin_real_window::set_the_pin_window_listed`).
-pub(super) unsafe fn the_button_follows_the_setting() {
+/// `the_host_is_up` is the visibility the host is to have — the show that is about to be made, or the
+/// hide that has just been taken — because a bit written *before* the show it belongs to is the bit the
+/// Shell reads with it, which is what keeps a visible window from being put down and up again for a
+/// button it could have been given for free (see `pin_real_window::set_the_pin_window_appwindow`).
+pub(super) unsafe fn the_button_follows_the_screen(the_host_is_up: bool) {
     let Some(pin) = pin_real_window::real_pin_window() else {
         return;
     };
+    let app_window = !pin_lifecycle::pin_always_on_top();
+    match film_host() {
+        Some(host) => {
+            unsafe { pin_real_window::set_the_pin_window_appwindow(host, app_window) };
+            unsafe {
+                pin_real_window::set_the_pin_window_appwindow(pin, app_window && !the_host_is_up)
+            };
+        }
+        // A pair with no host is the chrome's own window, and it wears the button the setting names.
+        None => unsafe { pin_real_window::set_the_pin_window_appwindow(pin, app_window) },
+    }
+}
 
-    unsafe { pin_real_window::set_the_pin_window_listed(pin, !pin_lifecycle::pin_always_on_top()) };
+/// Ask for the pair's taskbar button, or give it up, as the setting now reads.
+///
+/// **`Pin Mode → Always On Top` is the row that decides whether a pin has a button at all**: a pin
+/// over everything is one the user finds without one, and a pin that is not is an ordinary window with
+/// an ordinary window's button (see `own_the_pin_window` and `pin_taskbar::a_button_is_owed`, which is
+/// the same rule for the stand-in of a pin standing in this app's own window).
+///
+/// The bit is the Shell's to read, and it reads it as a window is shown (see
+/// `pin_real_window::set_the_pin_window_appwindow`), so this is the call a row that changes the setting
+/// makes: a pin already on the screen is the one the user is looking at, and it is the one that has to
+/// gain or lose the button.
+pub(super) unsafe fn the_button_follows_the_setting() {
+    let host_is_up = film_host().is_some_and(|host| unsafe { IsWindowVisible(host) }.as_bool());
+    unsafe { the_button_follows_the_screen(host_is_up) };
 }
 
 /// Whether the pin's host holds an FFmpeg player whose window has not been found yet: the take-up
@@ -678,21 +747,19 @@ fn the_film_host_box(content: ScreenRegion) -> (i32, i32, i32, i32) {
     )
 }
 
-/// Make the pin's chrome window owned by its film host, or give it back to the Shell.
+/// Make the pin's chrome window owned by its film host, or give it back to the Shell, and take the
+/// taskbar button and the Alt+Tab entry with it.
 ///
 /// **Who Windows lists and activates is asked of a window once, when it is made, and ownership is the
 /// answer that can still be written later.** An owned window stands above its owner, hides with it,
 /// and is out of Alt+Tab and the taskbar — which is the whole of what the film road needs from the OS,
-/// and the whole of what the pin owes the host for holding its film (see `the_pins_chrome_is_owned`).
+/// and the whole of what the pin owes the host for holding its film (see
+/// `the_pins_chrome_is_owned`). `WS_EX_APPWINDOW` is what asks for a taskbar
+/// button regardless of ownership, so it goes with the road that owns the pin and comes back with the
+/// one that does not (see `pin_real_window::real_pin_style`).
 ///
-/// **The button is not this road's any more.** It used to hand `WS_EX_APPWINDOW` between the pair as
-/// ownership moved: the host wore it while it was on the screen and the chrome took it back when the
-/// host went down. A button that changes windows twice per film is a button that vanishes for as long
-/// as the second write takes, so the pin wears it itself and the setting is the only thing that moves
-/// it (see `the_button_follows_the_setting` and `pin_real_window::set_the_pin_window_listed`).
-///
-/// Both calls here are same-process calls into a window of this app's own: there is no cross-process
-/// send, and nothing of this app's is locked across either.
+/// Both are same-process calls into a window of this app's own: there is no cross-process send here,
+/// and nothing of this app's is locked across either.
 unsafe fn own_the_pin_window(owned: bool) {
     let Some(pin) = pin_real_window::real_pin_window() else {
         return;
@@ -700,6 +767,25 @@ unsafe fn own_the_pin_window(owned: bool) {
     let owner = if owned { film_host() } else { None }.map_or(0, |owner| owner.0 as isize);
     if unsafe { GetWindowLongPtrW(pin, GWLP_HWNDPARENT) } != owner {
         unsafe { SetWindowLongPtrW(pin, GWLP_HWNDPARENT, owner) };
+    }
+
+    // **The button is the setting's, and whose window wears it is the host's.** A pair owes no button
+    // at all while `Pin Mode → Always On Top` says the pin is over everything already (see
+    // `a_button_is_owed`, which is the same rule for the stand-in of a pin standing in this app's own
+    // window); with the setting off the host is the window that wears it, because it is the window the
+    // Shell lists for the pair, and the chrome is never listed beside it *while the host is on the
+    // screen* — the one road that hands it to the chrome is the host going down, and that is asked at
+    // the hide rather than here (see `the_button_follows_the_screen`).
+    //
+    // **And the chrome takes it back the moment no host owns it**, because the pin's window is kept
+    // between pins: a film's pin closes and the next pin of a file this app draws the whole way stands
+    // in that same window, so a chrome left without a button is a file with no way back from the
+    // taskbar. The two calls are one pass on the same thread, so the show the Shell reads for it is
+    // the show the next pin makes.
+    let app_window = !pin_lifecycle::pin_always_on_top();
+    unsafe { pin_real_window::set_the_pin_window_appwindow(pin, !owned && app_window) };
+    if let Some(host) = film_host() {
+        unsafe { pin_real_window::set_the_pin_window_appwindow(host, app_window) };
     }
 
     // **The chrome is put in the band the setting names, worn or not.** A window given an owner or
@@ -948,6 +1034,9 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
         // other** — the one the swap's hide left off the band, put back on it with the band write the
         // show is owed (see `the_host_has_appeared`).
         let was_up = unsafe { IsWindowVisible(host) }.as_bool();
+        // And the pair's button goes with the appearance, written before the show it belongs to (see
+        // `the_button_follows_the_screen`).
+        unsafe { the_button_follows_the_screen(true) };
         let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
         if !was_up {
             unsafe { the_host_has_appeared(host) };
@@ -995,17 +1084,20 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
     unsafe { pin_taskbar::set_pin_taskbar_title(host) };
 
     // **The hover's band and the press that falls through it go, and the pin's bits come on**: a host
-    // a pin's film is drawn in is a window of the desktop's that owns the pin's chrome, and it is a tool
-    // window that never activates (see `create`).
+    // the Shell lists wears neither `WS_EX_TOOLWINDOW` nor `WS_EX_NOACTIVATE` (see `create`).
     //
-    // **No taskbar bit is written here, and there is none to write.** The pair's button is the pin's own
-    // window's, and this host is a tool window whether it is a hover's or a pin's — which is what keeps
-    // a swap's hide of it from taking the pair's button with it (see `the_button_follows_the_setting`).
+    // **The app-window bit is not written here.** `WS_EX_APPWINDOW` is what asks the Shell for a
+    // button, and the Shell reads it as a window is shown: a promotion is a host that is already on the
+    // screen, so the bit goes through the one road that puts a window down and up again for it —
+    // `pin_real_window::set_the_pin_window_appwindow`, which is the whole of why the pair's button was
+    // intermittent (see `the_button_follows_the_screen`).
     let ex = unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) };
-    let ex = (ex & !(WS_EX_TOPMOST.0 as isize) & !(WS_EX_TRANSPARENT.0 as isize))
-        & !(WS_EX_APPWINDOW.0 as isize)
-        | WS_EX_TOOLWINDOW.0 as isize
-        | WS_EX_NOACTIVATE.0 as isize;
+    let ex = ex
+        & !(WS_EX_TOPMOST.0 as isize)
+        & !(WS_EX_TRANSPARENT.0 as isize)
+        & !(WS_EX_TOOLWINDOW.0 as isize)
+        & !(WS_EX_NOACTIVATE.0 as isize)
+        & !(WS_EX_APPWINDOW.0 as isize);
     let _ = unsafe { SetWindowLongPtrW(host, GWL_EXSTYLE, ex) };
     // A style written behind a window's back is not one it presents with until it is asked to read it,
     // and the band it was in goes with the same call.
@@ -1020,9 +1112,9 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
     };
-    // The pair's button from here is the setting's, written before any show this road makes (see
-    // `the_button_follows_the_setting`).
-    unsafe { the_button_follows_the_setting() };
+    // The pair's button from here is the setting's, read with the show this road pays for (see
+    // `the_button_follows_the_screen`).
+    unsafe { the_button_follows_the_screen(true) };
 
     // The chrome is the host's own window from here, and the pair is put in the band the setting
     // names in one call — the host taking it and the chrome following it (see
@@ -1183,10 +1275,12 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
             );
         }
         if visible {
-            let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
-        } else {
-            let _ = ShowWindow(host, SW_HIDE);
+            // **The button is the appearing host's from the show that makes it the pair's listed
+            // window**, written before the show so that the Shell reads it with it (see
+            // `the_button_follows_the_screen`).
+            unsafe { the_button_follows_the_screen(true) };
         }
+        let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
         // The line is written after the show rather than before it, so that a run's trace reads in the
         // order the desktop was asked (see `trace_the_host_show`).
         trace_the_host_show(host, visible);
@@ -1197,11 +1291,11 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
             if !was_up {
                 unsafe { the_host_has_appeared(host) };
             }
+        } else {
+            // **And a hidden host's button goes back to the chrome**, which is the window the user is
+            // left with once this one is down (see `the_button_follows_the_screen`).
+            unsafe { the_button_follows_the_screen(false) };
         }
-        // **A hidden host takes nothing of the pin's with it, and an appearing one asks for nothing of
-        // it either.** The pair's button is the pin's own window's and neither a swap's hide nor an
-        // appearance's show of this host touches it (see `the_button_follows_the_setting`); what the
-        // hide takes off the screen is the picture, which goes with the host it is drawn in.
         // **The film follows the host off the screen and back**, which is the one road a source is
         // hidden on: the Shell stops drawing the thumbnail of a hidden window, and there is no host
         // to draw it in while the host is down (see `pin_film_thumbnail`).
@@ -1238,23 +1332,22 @@ pub(super) unsafe fn take_the_film_off_the_band() {
     the_band_owes_a_repaint();
 }
 
-/// Take the picture a put-away pin's taskbar button is to hold, while the windows it is a picture of are
-/// still on the screen to take it of: the last frame of the film, which is what the hover of a put-away
-/// pin shows.
+/// Take the picture the host's own taskbar button is to hold, while the host is still on the screen to
+/// take it of: the last frame of the film, which is what the hover of a put-away pin shows.
 ///
-/// **The picture is taken of one window and handed to the button of the other.** The button is the pin's
-/// own window's (see `the_button_follows_the_setting`), and the picture is of the **host**: a film in a
-/// host is a DWM thumbnail composed *over* the host's client and is no part of the host's own rows, so a
-/// still of those rows is the black the host is erased to, while a still of the pin's own rows is the
-/// band's hole (see `paint_the_host_behind_the_film`, `pin_taskbar_mirror`). What is taken is the host's
-/// client as the desktop is showing it, which is the film and the chrome strips drawn over it, and it is
-/// that picture the Shell is handed when it asks for the still of a button that is down.
+/// **The host is the picture, and not the source the Shell draws in it.** A film in a host is a DWM
+/// thumbnail composed *over* the host's client — it is no part of the host's own rows — so a still the
+/// Shell took of those rows is the black the host is erased to (see
+/// `paint_the_host_behind_the_film`, `pin_taskbar_mirror`). What is taken instead is the host's client
+/// as the desktop is showing it, which is the film and the chrome strips drawn over it, and it is that
+/// picture the Shell is handed when it asks for the still of a button that is down.
 ///
-/// **And the button is told to use it for as long as the pin is away**, because neither window has a
-/// composition of its own for the Shell to freeze: a forced still is what keeps the hover of a minimized
-/// pin the pin rather than the icon the Shell falls back on (see `the_buttons_still_is_the_apps_own`).
+/// **And the button is told to use it for as long as the pin is away**, because the host has no
+/// composition of its own for the Shell to freeze: a forced still is what keeps the hover of a
+/// minimized host the pin rather than the icon the Shell falls back on (see
+/// `the_buttons_still_is_the_apps_own`).
 ///
-/// **The picture is taken while the pair is still on the screen, and the button is told to hold it
+/// **The picture is taken while the host is still on the screen, and the button is told to hold it
 /// whether or not this row could take one.** The row that puts a pin away into the taskbar takes it
 /// here; the row that asks for the taskbar from the *bubble* has had no window of the pin's on the
 /// screen since the bubble's own collapse, and the picture that collapse took — the last frame the
@@ -1262,20 +1355,19 @@ pub(super) unsafe fn take_the_film_off_the_band() {
 /// that forced nothing here left the hover of such a pin blank, because a window that is down has no
 /// composition of its own for the Shell to freeze.
 ///
-/// Safety: `button` is the pin's own window and `pictured` is the film host it is drawn through, both
-/// asked by the collapse before the pin leaves the screen.
-pub(super) unsafe fn keep_the_pins_picture_for_the_taskbar(button: HWND, pictured: HWND) {
-    unsafe { take_the_pins_picture(pictured) };
-    pin_taskbar_mirror::the_stills_are_out_of_date(button);
-    unsafe { pin_taskbar::the_buttons_still_is_the_apps_own(button, true) };
+/// Safety: `host` is the pin's own film host, asked by the collapse before the pin leaves the screen.
+pub(super) unsafe fn keep_the_pins_picture_for_the_taskbar(host: HWND) {
+    unsafe { take_the_pins_picture(host) };
+    pin_taskbar_mirror::the_stills_are_out_of_date(host);
+    unsafe { pin_taskbar::the_buttons_still_is_the_apps_own(host, true) };
 }
 
-/// Take the host's picture, to be handed to the Shell as the still of the pin's button: the film and the
+/// Take the host's picture, to be handed to the Shell as the still of its button: the film and the
 /// chrome as the desktop is showing them, which is the last frame of a pin that is put away.
 ///
 /// **It is taken at every collapse and not only at a put-away into the taskbar**, because the last
 /// moment the host is on the screen is the collapse — a pin moved on to the taskbar from the bubble
-/// wears the pin's button too, and every window of the pair's has been off the screen since (see
+/// wears the host's button too, and every window of the pin's has been off the screen since (see
 /// `keep_the_pins_picture_for_the_taskbar`).
 ///
 /// A window that is not drawn where it stands is no picture at all, and what the button already holds
@@ -1295,10 +1387,10 @@ pub(super) unsafe fn take_the_pins_picture(host: HWND) {
 ///
 /// **Nothing else brings the pair back on this road.** A pin put away as a window takes its film off the
 /// screen with it — the host is hidden and the source hidden with it (see `hide_pinned_siblings`,
-/// `pin_film_thumbnail::set_the_source_visible`) — and the window the Shell restores is the pin's own,
-/// which is up again by the time this is asked. `place_the_pin_film_host` moves a window and the tick
-/// holds its own show back for a pin whose chrome is owned (see `the_pin_owes_a_show`), so a host left
-/// down here is the black band a restore used to leave.
+/// `pin_film_thumbnail::set_the_source_visible`) — and the window the Shell restores is the host, which
+/// no road of this app's shows: `place_the_pin_film_host` moves a window and the tick holds its own
+/// show back for a pin whose chrome is owned (see `the_pin_owes_a_show`). What a restore that showed
+/// neither left was a black band where the film had been.
 ///
 /// It is asked where the pin's *state* says it is up — the restore's own road — rather than on the
 /// tick, so that the film comes back with the pin in the same pass rather than a frame later, and so
@@ -1312,13 +1404,13 @@ pub(super) unsafe fn bring_the_film_back() {
     };
 
     // **A pin the user asked for is up with its film, whatever the Shell has not finished doing.** The
-    // window the Shell restores is the pin's own, and the size that says it is back can arrive before
-    // the iconic bit has gone — the gate in `set_the_pin_film_host_visible` holds a *tick* back from
+    // window the Shell restores is the host, and the size that says it is back can arrive before the
+    // iconic bit has gone — the gate in `set_the_pin_film_host_visible` holds a *tick* back from
     // showing a host the user minimized, and it must not hold this road back: the pin's state is up
-    // here because the Shell brought the window back, and a host left iconic is the black band with the
-    // pin's own window standing over it, recovered only by whatever pass happens to show it later. So
-    // the host is asked up rather than waited for, without activating it — the pin's own window is the
-    // one the restore gave the front to.
+    // here because the Shell brought the window back, and a host left iconic is the black band with
+    // the pin's own window standing over it, recovered only by whatever pass happens to show it later.
+    // So the host is asked up rather than waited for, without activating it — the pin's own window is
+    // the one the restore gave the front to.
     if unsafe { IsIconic(host) }.as_bool() {
         let _ = unsafe { ShowWindow(host, SW_SHOWNOACTIVATE) };
     }
@@ -1326,12 +1418,8 @@ pub(super) unsafe fn bring_the_film_back() {
     unsafe { set_the_pin_film_host_visible(true) };
 
     // **A pin that is up is drawn live again**: the still that stood for it while it was away is the
-    // pin's no longer, and a forced one would freeze the hover of a film the user is watching. The still
-    // is the pin's own button's, and it is the pin the Shell draws it from (see
-    // `the_button_follows_the_setting`).
-    if let Some(pin) = pin_real_window::real_pin_window() {
-        unsafe { pin_taskbar::the_buttons_still_is_the_apps_own(pin, false) };
-    }
+    // pin's no longer, and a forced one would freeze the hover of a film the user is watching.
+    unsafe { pin_taskbar::the_buttons_still_is_the_apps_own(host, false) };
     pin_taskbar_mirror::forget_the_pin_picture();
 }
 
@@ -1423,10 +1511,14 @@ unsafe fn create() -> Option<HWND> {
     //
     // **`WS_CLIPCHILDREN`** so that the host's own erase is clipped to the area outside the chrome
     // strips when a pin's window is not the one painting (see `pin_real_window::real_pin_style`).
-    // **A host is a tool window that never activates, and it carries no taskbar bit at any time**: the
-    // pair's button is the pin's own window's, so the Shell lists nothing for this window and a hide of
-    // it for a swap cannot take the pair's button away (see `the_button_follows_the_setting`).
-    let ex_style = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+    // **A pin that is Always On Top owes no taskbar button, and the host is where a pair's button
+    // lives** — so the bit is asked of the setting here rather than always added (see
+    // `own_the_pin_window`, which is the road that keeps it in step afterwards).
+    let ex_style = if pin_lifecycle::pin_always_on_top() {
+        WINDOW_EX_STYLE(0)
+    } else {
+        WS_EX_APPWINDOW
+    };
     let host = CreateWindowExW(
         ex_style,
         FILM_HOST_CLASS,
@@ -1436,8 +1528,8 @@ unsafe fn create() -> Option<HWND> {
         0,
         1,
         1,
-        // A window of the desktop's has no parent — it is the one that has an *owner*, and it is this
-        // window that owns the pin's chrome rather than being owned by it (see `own_the_pin_window`).
+        // A window of the desktop's has no parent — it is the one that has an *owner*, and the owner
+        // is the pin's chrome (see `own_the_pin_window`).
         HWND::default(),
         None,
         hinstance,

@@ -669,36 +669,36 @@ pub(super) fn the_pin_is_being_put_down() -> bool {
 ///
 /// It is the one door both roads into a taskbar take for such a pin — the minimize button and the bubble's
 /// `To Taskbar` row — because a window that wears its own taskbar button is put away by being minimized,
-/// and a window that is hidden has no button at all. Hiding it is what took the button with it: a pin cut
-/// off the screen wears no button (see `pin_real_window::set_the_pin_window_listed`).
+/// and a window that is hidden has no button at all. Hiding it is what took the button with it: this pin is
+/// refused the stand-in that would wear one, so the pin left the screen and the taskbar together (see
+/// `hide_pinned_siblings` and `a_button_is_owed`).
 ///
-/// **The window is the pin's own, on every road.** A film's host is a tool window the Shell lists nothing
-/// for (see `pin_film_host::create`), so minimizing it would put away a window nobody has a button for
-/// and leave the pin — the window that does wear one — on the screen with no picture. What is minimized
-/// is the chrome, which is the pair's window in the Shell's lists, and the host goes down with the
-/// picture it holds (see `pin_film_host::the_button_follows_the_setting`).
-///
-/// **And no stand-in is shown for such a pin**: no stand-in wears this pin's button, so a picture of the
-/// pin taken for one is a picture of nothing. What *is* taken is the picture the pin's own button is to
-/// hold, and it is taken of the host where the pin has one — because the hover of a button that is down
-/// is a still of the window and a host's own rows are the black behind its film (see
+/// Nothing is taken for a stand-in either: no stand-in wears this pin's button, so a picture of the pin
+/// taken for one is a picture of nothing. What *is* taken is the picture of the window that wears the
+/// button — the film host, where the pin has one — because the hover of a button that is down is a still
+/// of the window and a host's own rows are the black behind its film (see
 /// `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
 unsafe fn put_the_pins_window_in_the_taskbar() {
     // **The picture the button is to hold is taken before the pin leaves the screen**, and of the host
-    // where there is one: a picture of a window that has been taken off the screen is a picture of
-    // nothing, and the film in a host is composed over it rather than in its rows (see
+    // itself: a picture of a window that has been taken off the screen is a picture of nothing, and the
+    // film in a host is composed over it rather than in its rows (see
     // `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
-    let button = pinned_window();
     if let Some(host) = pin_film_host::film_host() {
-        unsafe { pin_film_host::keep_the_pins_picture_for_the_taskbar(button, host) };
+        unsafe { pin_film_host::keep_the_pins_picture_for_the_taskbar(host) };
     }
 
     hide_pinned_siblings();
-    // **The window put down is the pin's own, and it is put down the way a window is put down.** The
-    // host that owns the chrome has gone down with the picture above, and the pin is the window the
-    // Shell's button belongs to: minimized rather than hidden, so that the button is still there to
-    // bring it back (see `ask_the_pin_down` and `the_pin_came_back`).
-    ask_the_pin_down(button);
+    // **A pin whose chrome is owned by its film host is put away by the host.** The host is the
+    // window the Shell's button belongs to on this road, and minimizing it hides the pin with it —
+    // the owned window goes down with its owner — while a minimized pin over a host on the screen
+    // would be a chrome gone and a film left standing on the desktop (see
+    // `pin_film_host::own_the_pin_window`).
+    let window = if pin_film_host::the_pins_chrome_is_owned() {
+        pin_film_host::film_host().unwrap_or_else(pinned_window)
+    } else {
+        pinned_window()
+    };
+    ask_the_pin_down(window);
 }
 
 /// Put the pin away into the taskbar rather than the bubble: the bubble goes, the stand-in comes
