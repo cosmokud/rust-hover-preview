@@ -373,14 +373,17 @@ pub(super) unsafe extern "system" fn window_proc(
             // behind everything, so the press is the only thing that says the user means it rather
             // than the file behind it — and once the keyboard is here, the keys the pin answers are
             // keys the listing behind it is not sent (see `pin_take_focus`).
-            if pinned() && !pin_is_focused() {
-                pin_take_focus(hwnd, &Win32PinWindow);
-            }
-
-            // A press on a pinned window is the pin's before it is anything else's: the volume
-            // popup over the picture, the caption's buttons, the caption itself, an edge, and the
-            // media under the hand are all things a window does with a pointer (see `pinned_press`).
-            if pinned() && (pinned_volume_press(hwnd, x, y) || pinned_press(hwnd, x, y)) {
+            //
+            // **And the press is answered before the keyboard is asked for.** A press on a pinned
+            // window is the pin's before it is anything else's: the volume popup over the picture,
+            // the caption's buttons, the caption itself, an edge, and the media under the hand are
+            // all things a window does with a pointer — and the drag or the resize one of them
+            // begins is the pointer taken for this window. That has to happen before any of the
+            // window-manager work the keyboard costs, or the first press of a hand that is already
+            // moving has nothing to carry it (see `press_the_pin`).
+            if pinned()
+                && press_the_pin(hwnd, x, y, &Win32PinWindow, !pin_is_focused())
+            {
                 return LRESULT(0);
             }
 

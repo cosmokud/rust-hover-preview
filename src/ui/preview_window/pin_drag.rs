@@ -185,15 +185,18 @@ pub(super) unsafe fn settle_pinned_engine_press(hwnd: HWND, seen_presses: &mut u
         return;
     };
 
-    // A press on a pinned window is what makes the pin the window the user is in, whichever part
-    // of it was pressed, and what it begins is the drag its place means.
-    pin_take_focus(hwnd, &Win32PinWindow);
+    // **A press on a pinned window is what makes the pin the window the user is in, whichever part
+    // of it was pressed** — and what it begins is the drag its place means. The drag is begun first
+    // for the reason the pin's own procedure begins it first: the pointer is what carries the hand,
+    // and the window work the keyboard costs must not stand between the press and it (see
+    // `pin_input::press_the_pin`).
     begin_pin_drag(
         hwnd,
         &Win32PinWindow,
         pinned_engine_press_action(window, dpi, frame, point),
         false,
     );
+    pin_take_focus(hwnd, &Win32PinWindow);
 }
 
 /// Bring a pinned window to the front of its band for a press the user made on the preview,
