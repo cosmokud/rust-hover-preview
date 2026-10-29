@@ -2375,20 +2375,14 @@ pub fn run_preview_window() {
                             if !pin_enabled() {
                                 pin_request = Some(end_pin_state(Reason::SwitchedOff));
                             } else {
-                                let insert_after = if pin_holds_the_front() {
-                                    HWND_TOPMOST
-                                } else {
-                                    HWND_NOTOPMOST
-                                };
-                                let _ = SetWindowPos(
-                                    hwnd,
-                                    insert_after,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                                );
+                                // **The band the setting now names, on the windows that are in it**:
+                                // a pin that is a window of its own is not this window and neither is
+                                // the host that owns its chrome, and the row used to be answered by
+                                // placing the preview — a window the pin has put down — in the band.
+                                // What that left was a pin taken up with the setting off and then
+                                // told it was Always On Top, still ordinary and so behind the listing
+                                // it was asked for from (see `place_the_pin_where_the_setting_names`).
+                                place_the_pin_where_the_setting_names();
                                 if pin_always_on_top() {
                                     if !pin_is_collapsed() {
                                         hide_pin_taskbar();

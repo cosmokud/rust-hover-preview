@@ -544,38 +544,54 @@ pub(super) fn the_pin_window_that_holds_the_band(pin: HWND) -> HWND {
 /// only is the split this window exists to end (measured: the chrome in the band and the host out of
 /// it).
 ///
+/// **And the band is asked of both windows of the pair, whatever one of them holds it.** An owned
+/// window out of its owner's band is a window the desktop can leave behind an ordinary one — the pin
+/// behind the listing it was asked for from, with the film it belongs to in front of the listing — and
+/// what the pairing was thought to buy is an assumption about the desktop rather than a bit this app
+/// set. So the pin's own window is put in the band the pair belongs in beside the window that holds it,
+/// which is what `Always On Top` means for a pin: measured on the real screen, a pin promoted out of a
+/// hover had its own band written `HWND_NOTOPMOST` at the promotion and was never asked again.
+///
 /// Both windows are this app's own: nothing here is a call into another process.
 pub(super) unsafe fn place_the_pin_in_the_band(pin: HWND, after: HWND) {
     let window = the_pin_window_that_holds_the_band(pin);
-    let _ = SetWindowPos(
-        window,
-        after,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-    );
 
-    if after == HWND_TOPMOST && !pin_lifecycle::window_holds_the_topmost_band(window) {
+    let place = |window: HWND| {
         let _ = SetWindowPos(
             window,
-            HWND_NOTOPMOST,
+            after,
             0,
             0,
             0,
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         );
-        let _ = SetWindowPos(
-            window,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+
+        if after == HWND_TOPMOST && !pin_lifecycle::window_holds_the_topmost_band(window) {
+            let _ = SetWindowPos(
+                window,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+            let _ = SetWindowPos(
+                window,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    };
+
+    place(window);
+    if window != pin && !pin.is_invalid() {
+        place(pin);
     }
 }
 
@@ -635,13 +651,18 @@ unsafe fn own_the_pin_window(owned: bool) {
     }
     unsafe { pin_real_window::set_the_pin_window_appwindow(pin, !owned) };
 
-    // **The chrome carries no band of its own**, and a window given an owner or given back keeps
-    // whatever band it wore before (measured): a bit left on it by the pin before this one, or the
-    // band it held while its last host owned it, is a pair that disagrees about where it stands (see
-    // `the_pin_window_that_holds_the_band`). A host that owns the chrome bands it with itself, so what
-    // is written here is the band a window of its own belongs in, and every placement after this
-    // asks the setting again (see `band_place`).
-    let band = if owned { HWND_NOTOPMOST } else { band_place() };
+    // **The chrome is put in the band the setting names, worn or not.** A window given an owner or
+    // given back keeps whatever band it wore before (measured): a bit left on it by the pin before this
+    // one, or the band it held while its last host owned it, is a pair that disagrees about where it
+    // stands (see `the_pin_window_that_holds_the_band`). The host is put in that band with it on the
+    // same pass, and every placement after this asks the setting again (see `band_place` and
+    // `place_the_pin_in_the_band`).
+    //
+    // **It used to be `HWND_NOTOPMOST` for an owned pin, on the assumption that Windows keeps an owned
+    // window in its owner's band.** That is not a bit this app can rely on: the pin's own window was
+    // then never topmost however the setting read, which is the pin that appears behind Explorer with
+    // `Always On Top` on.
+    let band = band_place();
     let _ = unsafe {
         SetWindowPos(
             pin,

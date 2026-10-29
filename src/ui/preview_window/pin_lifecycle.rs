@@ -372,6 +372,22 @@ pub(crate) fn band_place() -> HWND {
     }
 }
 
+/// Put the pin that is on the screen in the band the setting now names, on every window of it.
+///
+/// **The row that changes the setting is a placement**, because a pin already up is a window the user
+/// is looking at: `Pin Mode → Always On Top` turned on under a pin that was taken up with it off is a
+/// window that has to be put in the topmost band, and turned off is one that has to be taken out of
+/// it. What it is asked of is the pair rather than of this app's preview window — a pin that stands in
+/// a window of its own has put the preview down, and a film's host is the window that holds the pair's
+/// band — so the answer is the one every other placement asks (see `band_place` and
+/// `pin_film_host::place_the_pin_in_the_band`).
+///
+/// It is a function rather than three lines in the loop for the reason the rows of a menu are: the
+/// loop cannot be asked what it did, and this is a rule about a band that a test can.
+pub(super) unsafe fn place_the_pin_where_the_setting_names() {
+    unsafe { pin_film_host::place_the_pin_in_the_band(pinned_window(), band_place()) };
+}
+
 /// Whether a pin being put up takes the topmost band for the moment it appears, and gives it back.
 ///
 /// A pin that is a window of its own is put up over everything, whatever the setting says: a window
