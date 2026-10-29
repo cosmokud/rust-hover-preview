@@ -627,6 +627,10 @@ pub(super) unsafe fn place_the_pin_in_the_band(pin: HWND, after: HWND) {
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         );
+        // One line per placement, so that a run — and a test holding the order of a road to what it
+        // asked the desktop for — reads the band write rather than inferring it (see
+        // `the_host_has_appeared`).
+        note_pin_trace!("band {:?} asked of {:?}", after, window);
 
         if after == HWND_TOPMOST && !pin_lifecycle::window_holds_the_topmost_band(window) {
             let _ = SetWindowPos(
@@ -996,7 +1000,14 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
     // module note on `create`).
     claim_the_band_for_the_host();
     if the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)) {
+        // **A host a restore takes up is drawing already, and showing it is an appearance like any
+        // other** — the one the swap's hide left off the band, put back on it with the band write the
+        // show is owed (see `the_host_has_appeared`).
+        let was_up = unsafe { IsWindowVisible(host) }.as_bool();
         let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+        if !was_up {
+            unsafe { the_host_has_appeared(host) };
+        }
         pin_chrome_strips::sync_the_chrome_strips();
     }
 }
@@ -1126,6 +1137,41 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
     pin_chrome_strips::place_the_chrome_strips();
 }
 
+/// Put the pair where it belongs the moment the window that carries the film appears: the band the
+/// setting names, asked again of both windows of it.
+///
+/// **Every band write of a pin's arrival lands while the host is still hidden** — the take-up's
+/// placement, the appearance raise `take_the_band_and_give_it_back`, and the placement
+/// `show_pinned_window` makes before it shows the chrome. A fresh host is hidden until its player
+/// draws (see `create` and `video_playback::ensure_video_window_topmost`), and a swap hides the host
+/// for the wait of the next player (see `take_the_film_off_the_band`), so with
+/// `Pin Mode → Always On Top` off the pair came up behind whatever was in front of the listing and
+/// stayed there until the user picked the file again: a second pick only "worked" because by then
+/// the host was on the screen and the same call landed on live windows (see
+/// `place_the_pin_in_the_band`).
+///
+/// **A band asked of a window that is already in the ordinary one is no raise, and the show of a
+/// hidden window is no raise either** — both measured on this desktop: `HWND_NOTOPMOST` answers
+/// success and leaves the window exactly where it was, and a window shown back into the place it went
+/// down in comes back behind everything opened over it in the meantime. What does raise a window of a
+/// process without the foreground is the topmost band taken for one call and given straight back,
+/// which is the road the pin's arrival already takes (see `take_the_band_and_give_it_back`) and the
+/// reason `HWND_TOP` is not used anywhere here.
+///
+/// **A band that is held is not this road's to give back.** Where a press's grace or a step's wait
+/// names the topmost band, `band_place` answers it and that is the band the pair is left in: neither
+/// hold is cleared here, so the band is given back by the clock that took it and not by an
+/// appearance.
+unsafe fn the_host_has_appeared(host: HWND) {
+    let pin = pinned_window();
+    let band = band_place();
+    if band != HWND_TOPMOST {
+        note_pin_trace!("host appeared {:?}: the band taken to bring the pair forward", host);
+        unsafe { place_the_pin_in_the_band(pin, HWND_TOPMOST) };
+    }
+    unsafe { place_the_pin_in_the_band(pin, band) };
+}
+
 /// Hide or show the host the film is drawn in.
 ///
 /// **Nothing but the film leaving the pin hides it** (see `take_the_film_off_the_band`), and a hide
@@ -1199,10 +1245,17 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
                 host,
             );
         }
-        trace_the_host_show(host, visible);
         let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        // The line is written after the show rather than before it, so that the trace of a run reads
+        // in the order the desktop was asked (see `trace_the_host_show`).
+        trace_the_host_show(host, visible);
         if visible {
             claim_the_band_for_the_host();
+            // **The band is asked again of a host that has just appeared**, because every band write
+            // of an arrival landed while this window was still hidden (see `the_host_has_appeared`).
+            if !was_up {
+                unsafe { the_host_has_appeared(host) };
+            }
         }
         // **The film follows the host off the screen and back**, which is the one road a source is
         // hidden on: the Shell stops drawing the thumbnail of a hidden window, and there is no host
