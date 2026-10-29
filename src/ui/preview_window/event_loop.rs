@@ -3113,10 +3113,15 @@ pub fn run_preview_window() {
                         // reads twice. It is held here and taken up on a tick when nothing is
                         // loading, rather than dropped: the walk is carried with it, so a caption
                         // step held this way is still a step of the walk it was a part of.
+                        let road = if walk.is_some() {
+                            PickRoad::Walk
+                        } else {
+                            PickRoad::Update
+                        };
                         pin_walk = walk;
                         pin_held_pick = Some(path.clone());
                         note_the_pin_file_in_flight(Some(&path));
-                        note_the_pick(PickRoad::Walk, &path);
+                        note_the_pick(road, &path);
                     } else {
                         // The setting is the gate on a *pick in the listing* — a file the pointer
                         // or the keyboard chose behind the window — and not on a step of the pin's
