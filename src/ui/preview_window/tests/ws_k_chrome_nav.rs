@@ -829,7 +829,7 @@ fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_land
     let mut pin = wide_banded_video_pin(content, 30.0);
     pin.hides_chrome = true;
     stand_pin(Some(pin));
-    pin_film_host::note_hosted_player(0);
+    pin_film_host::note_hosted_player(0, None);
     take_pin_command();
     if let Ok(mut pending) = PIN_JOBS.0.lock() {
         *pending = None;
@@ -920,7 +920,7 @@ fn a_step_ask_leaves_the_chrome_up_while_the_outgoing_film_is_live() {
     let mut pin = wide_banded_video_pin(content, 30.0);
     pin.hides_chrome = true;
     stand_pin(Some(pin));
-    pin_film_host::note_hosted_player(0);
+    pin_film_host::note_hosted_player(0, None);
     take_pin_command();
     if let Ok(mut pending) = PIN_JOBS.0.lock() {
         *pending = None;

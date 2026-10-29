@@ -736,9 +736,36 @@ pub(super) fn the_source_is_standing(pid: u32) -> bool {
         return false;
     }
     let number = SOURCE.load(Ordering::SeqCst);
-    THUMBNAIL.lock().ok().is_some_and(|held| {
-        held.registration != 0 && held.registered == number && number != 0
-    })
+    THUMBNAIL
+        .lock()
+        .ok()
+        .is_some_and(|held| the_registration_draws(&held, number))
+}
+
+/// The same question asked by a reader that may not wait for it: the tick.
+///
+/// **The record is held by the pass that watches the player, and that pass asks the host for its own
+/// client origin while it holds it** — a call into this very thread — so a tick that waited on the
+/// record would be the loop stopped dead behind the thread it is meant to be driving (see
+/// `place_the_source_when_the_player_answers` and `client_origin`). A record that cannot be taken at
+/// once is therefore answered as a picture that has not changed hands yet, which is the answer that
+/// costs one more tick and never one that acts: what asks this settles the same wait again on the
+/// next turn (see `PinSwapHold::settle`).
+pub(super) fn the_source_is_standing_try(pid: u32) -> bool {
+    if !the_source_is_up(pid) {
+        return false;
+    }
+    let number = SOURCE.load(Ordering::SeqCst);
+    THUMBNAIL
+        .try_lock()
+        .ok()
+        .is_some_and(|held| the_registration_draws(&held, number))
+}
+
+/// Whether the registration in the record draws the source `number`: the one step of a handover,
+/// shared by the two ways of asking it (see `the_source_is_standing`).
+fn the_registration_draws(held: &Thumbnail, number: isize) -> bool {
+    held.registration != 0 && held.registered == number && number != 0
 }
 
 /// Whether any registration is standing in the pin's host, whichever player it draws: the state the
@@ -1799,12 +1826,12 @@ fn the_films_native_size(pid: u32) -> Option<(i32, i32)> {
 /// geometry cache and never asked of the player, which is the fallback for a player that has not
 /// opened the file by the time its window is adopted (see `the_films_native_size`).
 ///
-/// **The probe only answers for the film the player was begun for.** The pin's own file is the
-/// outgoing one for the moment a step's source is adopted — the pin does not install the new file
-/// until its player has drawn — and a probe of that file would place the new film's source at the old
-/// film's size and shape, which is the previous film's shape cropping the next one's first frames.
-/// A player this app cannot name a file for is answered nothing here, and the player's own
-/// `video-params` is what places it (see `the_film_the_player_plays`).
+/// **The probe only answers for the film the player was begun for**, which the player's own record
+/// names: the pin is still showing the file it is leaving for the whole of a swap's wait, so a probe of
+/// *that* file would place the new film's source at the old film's size and shape, which is the
+/// previous film's shape cropping the next one's first frames. A player this app cannot name a file
+/// for is answered nothing here, and the player's own `video-params` is what places it (see
+/// `the_film_the_player_plays`).
 fn the_films_own_size(pid: u32) -> Option<(i32, i32)> {
     let path = the_film_the_player_plays(pid)?;
     match cached_video_geometry(&path)? {
@@ -1816,18 +1843,22 @@ fn the_films_own_size(pid: u32) -> Option<(i32, i32)> {
 }
 
 /// The file the player `pid` was begun for, where this app has it on record: the hover's own file
-/// beside the hover's player, and the pin's file only while the player the pin holds is that very
-/// one.
+/// beside the hover's player, the pin's beside the player begun into the pin's host, and the pin's own
+/// media only while the player the pin holds is that very one.
 ///
-/// **The second half is what keeps a step's outgoing film from answering for the incoming one.** The
-/// pin's media is replaced when the new file is installed, and the player is adopted before that; a
-/// path read without the player beside it is the old film's (see `the_films_own_size`).
+/// **The record is what keeps a step's outgoing film from answering for the incoming one**, and the
+/// player's own record is what answers for a film the pin has not installed yet: a swap's player is
+/// begun before the file it plays is the pin's, and a path read off the pin's media without the player
+/// beside it is the old film's (see `the_films_own_size` and `pin_film_host::the_hosted_players_file`).
 fn the_film_the_player_plays(pid: u32) -> Option<PathBuf> {
     if pid == 0 {
         return None;
     }
     if hover_film_host::hover_film_host_player() == Some(pid) {
         return hover_film_host::the_hover_players_file(pid);
+    }
+    if let Some(path) = pin_film_host::the_hosted_players_file(pid) {
+        return Some(path);
     }
     let (path, _) = pinned_media_owner()?;
     let held = CURRENT_MEDIA.lock().ok().and_then(|media| {

@@ -78,22 +78,22 @@ fn waits_for_a_player_only_until_it_is_there_or_gone() {
 }
 
 /// A swap's wait for its player is a hover's wait at a swap's own bound, and the two differ in
-/// what the wait is for: a hover has nothing on screen but a spinner, and a swap has the file
-/// the pin is leaving, at the box the pin is still at. So the bound is the player start's rather than
-/// the hover's — a replacement that has not put a window up by then is one this app stops
-/// watching, and the file it was holding for is installed the way a swap with no hold at all
-/// would have installed it (see `player_swap_wait` and `PinSwapWait::Abandoned`).
+/// what the wait is for: a hover has nothing on screen but a spinner, and a swap has the file the
+/// pin is leaving, at the box the pin is still at — so what ends it is the picture changing hands
+/// rather than a window appearing, and the bound is the one the handover is given anywhere else.
+/// A player that is gone ends it whatever else is true, because a dead process leaves a window
+/// nothing will draw into (see `player_swap_wait`).
 #[test]
-fn a_swap_is_held_for_a_players_window_at_the_swaps_own_bound() {
+fn a_swap_is_held_for_its_picture_at_the_swaps_own_bound() {
     assert_eq!(
         player_swap_wait(true, true, Duration::ZERO),
         Some(PlayerWait::Arrived),
-        "a window that is up has arrived, however young the start is"
+        "a picture that has changed hands is the film on screen, however young the start is"
     );
     assert_eq!(
         player_swap_wait(false, true, Duration::ZERO),
         None,
-        "a player still starting is a wait that goes on"
+        "a player that has drawn nothing is a wait that goes on, window or no window"
     );
     assert_eq!(
         player_swap_wait(
@@ -118,7 +118,7 @@ fn a_swap_is_held_for_a_players_window_at_the_swaps_own_bound() {
     assert_eq!(
         player_swap_wait(true, false, Duration::ZERO),
         Some(PlayerWait::Abandoned),
-        "a window whose process has died is a window onto nothing"
+        "a picture whose process has died is a picture nothing is drawing into"
     );
 }
 
@@ -217,21 +217,21 @@ fn a_swap_is_held_for_a_first_frame_until_it_arrives_or_the_engine_gives_it_up()
     );
 }
 
-/// The other half of the hold — a film FFmpeg's player or mpv draws, which reaches the screen as
-/// a window of its own and is settled on that window and on nothing else.
+/// The other half of the hold — a film FFmpeg's player or mpv draws, which reaches the screen as a
+/// window of its own that the pin's host draws through a registration.
 ///
-/// A window up is the film on screen, which is the same answer a first start is settled on; a
-/// player that is gone, or a start that has outrun the player-start bound, is the end of the
-/// wait and the file is installed the way a swap with no hold at all installs one. What the wait
-/// buys is the whole of the stretched frame: the install is what gives the window its new box, so
-/// installing before the window is up is resizing the band the outgoing frame is held in into the
-/// shape of a film that has drawn nothing yet (see `PinSwapHold::settle`).
+/// What the wait is for is the picture changing hands and not the window: a player that has made
+/// its window has drawn nothing, and the box is what the picture in it is cropped to, so a file
+/// installed on a window is the next film's box over the previous film's last frame (see
+/// `PinSwapHold::settle`). A player that is gone, or a start that has outrun the handover's own
+/// bound, is the end of the wait and the file is installed the way a swap with no hold at all
+/// installs one.
 ///
 /// A test has no player in it — the launch seam notes one instead of beginning one — so what is
-/// asserted here is the wait that goes on and the bound that ends it; the window half is the same
-/// question `pin_film_host::the_players_window_is_up` asks of the same process.
+/// asserted here is the wait that goes on and the bound that ends it; the picture half is the same
+/// question `pin_film_thumbnail::the_source_is_standing` asks of the same player.
 #[test]
-fn a_swap_of_a_players_film_is_held_for_its_window_until_the_bound() {
+fn a_swap_of_a_players_film_is_held_for_its_picture_until_the_bound() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -257,8 +257,9 @@ fn a_swap_of_a_players_film_is_held_for_its_window_until_the_bound() {
         walk: None,
     };
 
-    // A player that has put no window up yet, and has not been running long enough to have been
-    // given up on: the wait goes on, and the pin keeps what it has.
+    // No source of this player's is the picture the host is drawing, and the start has not been
+    // running long enough to have been given up on: the wait goes on, and the pin keeps what it
+    // has.
     let mut starting = PinSwapHold {
         file,
         arc: PinArc::new(),
@@ -267,8 +268,8 @@ fn a_swap_of_a_players_film_is_held_for_its_window_until_the_bound() {
     assert_eq!(
         starting.settle(),
         None,
-        "a player still starting is a wait that goes on: the window is the old file's box, at the \
-         old file's size, until the replacement's window says the next film is on screen"
+        "a player that has drawn nothing is a wait that goes on: the window is the old file's box, \
+         at the old file's size, until the replacement's picture is what the host is drawing"
     );
 
     // The same wait past the swap's own bound: the file is installed the way a swap with no hold
@@ -278,8 +279,8 @@ fn a_swap_of_a_players_film_is_held_for_its_window_until_the_bound() {
     assert_eq!(
         starting.settle(),
         Some(PinSwapWait::Abandoned),
-        "and the bound is the player start's own: a player that has not put a window up by then is one \
-         this app stops watching, and the file it was holding for goes into the window"
+        "and the bound is the one the handover is given: a picture that has not changed hands by \
+         then is one this app stops waiting for, and the file it was holding for goes into the window"
     );
 
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
