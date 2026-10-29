@@ -73,13 +73,19 @@ pub(super) unsafe fn pin_take_focus(hwnd: HWND, window: &dyn PinWindow) {
     // moment before the press, and the only moment it can be read is the moment the pin takes
     // over from it (see `pin_window::take_keyboard`).
     //
-    // **And it is never one of this app's own windows.** A step begins the next film's player
-    // between the press and the close, and that window is created activated and only styled
-    // afterwards — so the window in front at this moment can be the film's own rather than the
-    // listing the user is working in. Recorded, it is the window the close hands the keyboard back
-    // to: a window the close is about to kill, so the hand-back is refused, and the foreground stays
-    // on a window of this app's instead of the listing (see `pin_lifecycle::the_window_behind`).
-    let behind = pin_lifecycle::the_window_behind(GetForegroundWindow().0 as isize, 0);
+    // **What is read here is the window in front and nothing more.** Resolving that window into the
+    // ordinary window a hand-back goes to is a walk of the desktop (see
+    // `pin_lifecycle::the_window_behind`), and this is the press path: the drag the press began is
+    // already carrying the hand, and a walk over two hundred windows between the press and the moves
+    // that follow is the first press that appears to do nothing. The resolution is made where the
+    // claim is handed back, which is the only place that reads it, and where the z-order is the one
+    // the hand-over is actually happening in. **And a window of this app's own is never the answer**:
+    // a step begins the next film's player between the press and the close, and that window is created
+    // activated and only styled afterwards — recorded, it is the window the close hands the keyboard
+    // back to, a window the close is about to kill, so the hand-back is refused and the foreground
+    // stays on a window of this app's instead of the listing (see
+    // `pin_lifecycle::the_window_behind`, which answers exactly that).
+    let behind = GetForegroundWindow().0 as isize;
 
     // The window is only focusable while a pin is up, so the style is asked to change
     // before the focus is asked for: `SetFocus` on a `WS_EX_NOACTIVATE` window is refused

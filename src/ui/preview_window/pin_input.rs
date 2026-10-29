@@ -823,7 +823,7 @@ pub(super) fn begin_pin_pan(hwnd: HWND, window: &dyn PinWindow) -> bool {
 /// Nothing is taken hold of for a pair: the first press of the two was a drag the hand let go of
 /// where it began, and a window moved out from under a press still holding the pointer would have
 /// the next pointer move carry it back to where the first one started.
-unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool) {
+unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool, window: &dyn PinWindow) {
     if double_click && pin_double_click_center() {
         // A size is what a media is laid out at rather than a place it is carried to, so the reset
         // is asked for on the loop's own road — the one the maximize button asks its box on, where
@@ -837,7 +837,7 @@ unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool) {
         return;
     }
 
-    begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Move, true);
+    begin_pin_drag(hwnd, window, PinDragAction::Move, true);
 }
 
 /// A press on a pinned window, answering whether it was the pin's to act on.
@@ -855,7 +855,19 @@ unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool) {
 /// reaches for on a window it wants wider. What the caption keeps is everything outside the band,
 /// which is where its buttons are: a corner's share of a button is a resize, and the rest of it is
 /// the button, exactly as it is on a window whose frame the system draws.
-pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
+/// The same press, on this app's own window: what a road that answers a press as the pin's calls
+/// (see `press_the_pin`).
+///
+/// The window is a parameter rather than a fact of the module because the two things a press asks of
+/// one — where the pointer is, and the capture the drag takes — are the half a test stands a
+/// recorder in front of (see `PinWindow`). Nothing else about the press is the window's: what a point
+/// means is the pin's.
+pub(super) unsafe fn pinned_press_on(
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    window: &dyn PinWindow,
+) -> bool {
     // Whether this press is the second of a pair, asked before any of the arms below so that one
     // answer serves the whole window: what a pair means is the window put in the middle of its
     // screen, and the two arms it is put to are the two a press carries the window from (see
@@ -896,7 +908,7 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             pinned.pin().and_then(|pin| pin.resize_edge(x, y))
         };
         if let Some(edge) = edge {
-            begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Resize(edge), true);
+            begin_pin_drag(hwnd, window, PinDragAction::Resize(edge), true);
             return true;
         }
     }
@@ -922,7 +934,7 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             }
         }
 
-        press_carries_the_pin(hwnd, double_click);
+        press_carries_the_pin(hwnd, double_click, window);
         return true;
     }
 
@@ -945,15 +957,54 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         // presses is left to the window's own road whatever the picture is doing — a double-click is
         // what puts a window in the middle of its screen, and a pan begun under it would be the first
         // press of the pair taken from the second (see `press_carries_the_pin`).
-        if !double_click && begin_pin_pan(hwnd, &Win32PinWindow) {
+        if !double_click && begin_pin_pan(hwnd, window) {
             return true;
         }
 
-        press_carries_the_pin(hwnd, double_click);
+        press_carries_the_pin(hwnd, double_click, window);
         return true;
     }
 
     false
+}
+
+/// The press on this app's own window, for the tests that ask what a point of the pin means rather
+/// than what a window was asked to do (see `pinned_press_on`).
+#[cfg(test)]
+pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
+    unsafe { pinned_press_on(hwnd, x, y, &Win32PinWindow) }
+}
+
+/// A press on a pinned window's own frame, and the keyboard the press asks for — **in that order, and
+/// the order is the whole of what this function is**.
+///
+/// **The pointer is taken before any window work.** A pin the user has not clicked is not the window
+/// the foreground is in, and a press on one has two things to do: begin the drag or the resize the
+/// press means — which is the pointer taken for this window, so that the moves that follow arrive
+/// here — and make the pin the window the user is in. The second is window-manager work that is
+/// synchronous and can be long: `SetForegroundWindow` and `SetFocus` deliver messages back into this
+/// thread, and the window the keyboard is taken from is a window of this app's often enough that the
+/// ordinary window behind it has to be found (see `pin_take_focus`). Asked first, that work stands
+/// between the press and the pointer — and a first press whose moves have nowhere to go is a drag
+/// that does nothing until the hand lets go and presses again, which is the user's "the first
+/// click-and-hold does nothing, the second works".
+///
+/// `wants_the_keyboard` is the caller's answer to *the pin is not the window the user is in*: asked of
+/// Windows by the window procedure rather than here, and staged by a test that has no desktop.
+pub(super) unsafe fn press_the_pin(
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    window: &dyn PinWindow,
+    wants_the_keyboard: bool,
+) -> bool {
+    let answered = unsafe { pinned_volume_press(hwnd, x, y) || pinned_press_on(hwnd, x, y, window) };
+
+    if wants_the_keyboard {
+        unsafe { pin_take_focus(hwnd, window) };
+    }
+
+    answered
 }
 
 /// A press on one of the controls a pinned sound's card carries: the walk either side of the
