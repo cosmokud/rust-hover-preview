@@ -92,6 +92,12 @@ pub(super) unsafe fn pin_take_focus(hwnd: HWND, window: &dyn PinWindow) {
     // (see `pin_set_focusable`).
     window.set_focusable(hwnd.0 as isize, true);
 
+    // **The activation this asks for is this app's own, so it is noted before the asking.** The foreground
+    // asked for is the pin's chrome activated, which is the same `WM_ACTIVATE` a press on the pair's taskbar
+    // button delivers to it — and a press on the pin is not a press on a button, so the answer to that
+    // activation is told by this note (see `pin_film_host::note_the_app_moved_the_caret`).
+    pin_film_host::note_the_app_moved_the_caret();
+
     window.set_foreground(hwnd.0 as isize);
     window.set_focus(hwnd.0 as isize);
 
@@ -136,6 +142,13 @@ pub(super) unsafe fn pin_take_the_caret(hwnd: HWND, window: &dyn PinWindow) {
     }
 
     window.set_focusable(hwnd.0 as isize, true);
+
+    // **The caret this asks for is this app's own too**, noted before the asking for the same reason the
+    // press's foreground is: the handover is the first click on the pair's button answered as a handover,
+    // and the activation it makes must not be read as the second click (see
+    // `pin_film_host::note_the_app_moved_the_caret`).
+    pin_film_host::note_the_app_moved_the_caret();
+
     window.set_focus(hwnd.0 as isize);
 
     take_keyboard(GetForegroundWindow().0 as isize, pin_is_focused());
