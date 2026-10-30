@@ -1859,3 +1859,67 @@ fn a_group_of_picks_marks_its_answer_with_the_disc() {
 
     let _ = unsafe { DestroyMenu(menu) };
 }
+
+/// Every command id this tray hands out is a value of its own, and the list of them is read out of
+/// `ids.rs` rather than written down here a second time: an id added tomorrow is checked without
+/// anybody remembering to add it to a table.
+///
+/// The ids are allocated by hand — a base and the width of the range a submenu hands out, a lone
+/// row's own id, and the pair a retired submenu gave up left free rather than reused — so two
+/// constants holding one number is one menu item's click answered as another's. `event_loop` reads
+/// a command against its ranges in the order the menus list them and stops at the first that holds
+/// it, which is why the collisions the tests above and below enumerate are enumerated one submenu
+/// at a time: the id that lost is a row no click ever reaches, and nothing else in the tree says
+/// so.
+#[test]
+fn every_command_id_this_tray_hands_out_is_a_value_of_its_own() {
+    let source = include_str!("ids.rs");
+
+    // Whatever stands around it, a declaration is `const NAME: u16 = 1001;` on one line.
+    let mut declared: Vec<(&str, u16)> = Vec::new();
+    for line in source.lines() {
+        let Some((_, rest)) = line.split_once("const ") else {
+            continue;
+        };
+        let Some((name, rest)) = rest.split_once(": u16 = ") else {
+            continue;
+        };
+        let Some(digits) = rest.split(';').next() else {
+            continue;
+        };
+        let Ok(value) = digits.trim().parse::<u16>() else {
+            continue;
+        };
+
+        declared.push((name.trim(), value));
+    }
+
+    // A parse that found half of the table would pass every assertion below.
+    let mentions = source
+        .lines()
+        .filter(|line| line.contains("const ") && line.contains(": u16"))
+        .count();
+    assert_eq!(
+        declared.len(),
+        mentions,
+        "a `: u16` in `ids.rs` is not declared the way this reads one, so the ids are not all \
+         checked: {} of the declarations were read",
+        declared.len()
+    );
+    assert!(
+        declared.len() > 100,
+        "the tray hands out more than a hundred ids and this found {}",
+        declared.len()
+    );
+
+    for (index, (name, value)) in declared.iter().enumerate() {
+        for (other, other_value) in &declared[index + 1..] {
+            assert_ne!(
+                value, other_value,
+                "`{name}` and `{other}` are both {value}: a click on the one that lost is answered \
+                 as the other, because the window proc stops at the first range that holds it. \
+                 Give the new row an id no other row holds, and leave a retired id retired"
+            );
+        }
+    }
+}
