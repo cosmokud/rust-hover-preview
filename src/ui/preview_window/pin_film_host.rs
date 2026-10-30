@@ -15,25 +15,41 @@
 //! well as the band, and the film would be drawn over the caption. So the picture gets a window of
 //! its own at the band's box, and the pin keeps every other pixel (see `the_film_host_box`).
 //!
-//! **Why it is disabled.** A press on the picture is a press on the pin: the pin is dragged by its
-//! film, and the band's alpha-1 claim is already hit-testable (see `fill_band_hit_testable`). A
-//! disabled window is skipped by `WindowFromPoint`, so the press arrives at the pin rather than at
-//! the host. **And a disabled window cannot hold a keyboard anybody can type into**, while it is
-//! still the window a click on the pair's taskbar button activates — so the host answers that
-//! activation with the pin's own window (see `answer_an_activation_of_the_host`).
+//! **Why the presses are kept off it, and why that is the hit test rather than a disabled window.**
+//! A press on the picture is a press on the pin: the pin is dragged by its film, and the band's
+//! alpha-1 claim is already hit-testable (see `fill_band_hit_testable`). The host answers
+//! `WM_NCHITTEST` with `HTTRANSPARENT`, which is the documented road for "the window under this one,
+//! in this thread": the pin's chrome and its strips stand under the host, so a press on the band is
+//! answered by the pin, exactly as `WindowFromPoint` skipping a disabled window used to give it. **A
+//! disabled window was the wrong tool for that job**, because it is also a window the Shell can
+//! neither activate nor minimize — and this window is the one the pair's taskbar button belongs to
+//! (see `own_the_pin_window`). A real click was traced delivering nothing to a disabled host at all
+//! while the Shell gave up on activating it and re-activated the pin's chrome instead (its owner),
+//! so the button could only ever deactivate and re-activate the app.
+//!
+//! **So the host is an ordinary window of the desktop's**: the Shell lists it, activates it, and puts
+//! it down, and that button is the toggle. An activation of it gives the *pin* the caret and leaves
+//! the foreground on the host — the window whose button was pressed, and so the window a second
+//! press minimizes (see `answer_an_activation_of_the_host`) — and a minimize of it is the pin going
+//! away into the taskbar (see `the_shell_put_the_host_down`). The Shell sometimes lists the pin's
+//! chrome as well, so the chrome's own minimize is the same put-away (see
+//! `the_shell_put_the_chrome_down`), and the Shell's restore of either window is `the_pin_came_back`.
 //!
 //! **And it is the window a put-away pin's taskbar button belongs to.** An owned window carries no
 //! button of its own, so a pin put away into the taskbar is *the host minimized*, brought back by the
 //! Shell's own restore (see `the_pin_came_back`), and its hover is the still this app takes of it
 //! before it goes down — the host's own rows are the black behind the film, so a still of those rows
-//! is no picture at all (see `keep_the_pins_picture_for_the_taskbar`).
+//! is no picture at all (see `keep_the_pins_picture_for_the_taskbar`). **So that one button is the
+//! whole of the toggle**: a minimize of the host is the pin going away into the taskbar, on the road
+//! the pin's own minimize takes, and the Shell's restore of the window is the pin coming back (see
+//! `the_shell_put_the_host_down`).
 //!
 //! The host outlives the player once begun into it: a seek is mpv's own IPC and a step begins
 //! another player behind the same host. It goes down with the pin (see
 //! `take_down_the_pin_film_host`, called from the state a road out of a pin clears).
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -45,15 +61,18 @@ use windows::Win32::Graphics::Gdi::PAINTSTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
-    RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE,
-    HWND_NOTOPMOST, HWND_TOPMOST, SC_CLOSE, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CLOSE,
-    WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_PAINT, WM_SETFOCUS, WM_SYSCOMMAND, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_POPUP, WINDOW_EX_STYLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW, GetClientRect, GetWindowLongPtrW,
+    GetWindowThreadProcessId, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, GWLP_HWNDPARENT,
+    GWL_EXSTYLE, GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL,
+    SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE,
+    WM_ACTIVATEAPP, WM_CLOSE, WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT,
+    WM_QUERYOPEN, WM_SETICON, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN,
+    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WINDOW_EX_STYLE,
 };
 
-use super::pin_trace::note_pin_trace;
+use super::pin_trace::{note_a_message_of_a_window, note_pin_trace, window_name};
 use super::*;
 
 /// The class a film's host is made from. A class of its own rather than the pin window's: what a
@@ -86,8 +105,9 @@ unsafe extern "system" fn the_default_answer(
 /// **One answer rather than two procedures' worth, because the window changes hands under a take-up**:
 /// a hover's host that a pin promoted *is* the pin's host from then on, so everything the pin's own
 /// class owes — the band painted behind the film, the cover a relaunch left standing, the Shell's own
-/// close, the window coming back out of the taskbar, and the Shell's ask for the button's still — has
-/// to be answered by whichever class the window happened to be made from.
+/// close, the Shell's minimize of the button or the button's own second click, the window coming back
+/// out of the taskbar, and the Shell's ask for the button's still — has to be answered by whichever
+/// class the window happened to be made from.
 ///
 /// Safety: the answers are those of a window of this app's own, asked from its own window procedure.
 pub(super) unsafe fn answer_a_host(
@@ -96,6 +116,43 @@ pub(super) unsafe fn answer_a_host(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> Option<LRESULT> {
+    // **What a hand on the pair's taskbar button delivers is written down before anything answers
+    // it**, because the whole of the toggle that button was given assumes which messages arrive —
+    // an activation of this window, the Shell's `SC_MINIMIZE`, or the `SIZE_MINIMIZED` a window
+    // reports as it goes down (see `the_shell_put_the_host_down`) — and a click that still does
+    // nothing on a real desktop says which of the three it really is, and which window it reaches
+    // (see `note_a_message_of_a_window`). Nothing is answered differently for the line.
+    //
+    // **A hover's host is written about by nobody**, though it is made from a class answered by this
+    // same procedure: it wears no taskbar button and is nobody's click (see
+    // `pin_taskbar::a_button_is_owed`), so the line is written only for the window the pair's button
+    // belongs to, while the pin it belongs to is up.
+    if pinned() && film_host() == Some(hwnd) {
+        note_a_message_of_a_window("film host", hwnd, msg, wparam, lparam);
+    }
+
+    // **A press on the picture is a press on the pin, and the hit test is what keeps it off this
+    // window.** `HTTRANSPARENT` is the documented answer for "route this mouse message to the window
+    // under this one, in this thread": the pin's chrome and its strips stand under the host, so a
+    // press on the band is delivered to the pin and the band is dragged by its film (see
+    // `fill_band_hit_testable`).
+    //
+    // **What it replaces, and why that was the wrong tool.** This window used to be *disabled* for
+    // this, because `WindowFromPoint` skips a disabled window. A disabled window is also one the
+    // Shell can neither activate nor minimize, and this is the window the pair's taskbar button
+    // belongs to (see `own_the_pin_window`): a real click on that button was traced delivering
+    // nothing here at all, with the Shell re-activating the pin's chrome instead — the owner it falls
+    // back to when the window it was asked for is disabled — so the button could only ever deactivate
+    // and re-activate the app. The hit test does the one thing that was wanted and leaves activation
+    // and the Shell's own minimize to this window.
+    //
+    // **The hover's host is never this window.** It is made from the same class and answered here
+    // too, but it is not the pin's host, and it stays disabled and out of everything a button is (see
+    // `hover_film_host::create`).
+    if msg == WM_NCHITTEST && film_host() == Some(hwnd) {
+        return Some(LRESULT(HTTRANSPARENT as isize));
+    }
+
     // **The band behind the picture is painted here rather than erased by the class**, and the class
     // wears `NULL_BRUSH` so that this is the only hand that draws it (see
     // `paint_the_host_behind_the_film` and `create`). `1` is "handled": it is what keeps
@@ -115,10 +172,41 @@ pub(super) unsafe fn answer_a_host(
         return Some(answer);
     }
 
+    // **The Shell's own minimize of this window is the pin going away into the taskbar**, and `0` is
+    // what keeps `DefWindowProcW` from putting the window down behind the pin's state (see
+    // `the_shell_put_the_host_down`). **The collapse itself is the loop's, never this procedure's**: a
+    // window procedure that collapsed the pin would take the pin's lock, give a keyboard back and
+    // take a still of this very window from inside a message about it, so the command is queued and
+    // the pin's own `Minimize → To Taskbar` road puts the window down with the state that says so.
+    if the_shell_put_the_host_down(msg, wparam) {
+        // **The decision the log is read for**: whether this minimize is the pair's button or a
+        // window of the user's own going down with the desktop (see `the_host_wears_the_pins_button`).
+        let wears_the_button = the_host_wears_the_pins_button(hwnd);
+        note_pin_trace!(
+            "film host decision the shell's minimize: {}",
+            if wears_the_button {
+                "the host wears the button, the taskbar minimize is queued"
+            } else {
+                "refused, this is not the window the button is worn by"
+            }
+        );
+        if wears_the_button {
+            ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+            return Some(LRESULT(0));
+        }
+    }
+
+    // **A click on the button of a pin the user is already in is that pin's minimize**, and it is
+    // asked before the handover below, which is what every other click on that button is (see
+    // `answer_a_second_click_on_the_hosts_button`).
+    if let Some(answer) = answer_a_second_click_on_the_hosts_button(hwnd, msg, wparam) {
+        return Some(answer);
+    }
+
     // **An activation of the host is a request for the pin.** A pair that is not Always On Top wears its
-    // taskbar button on the host, and the host is disabled so that a press reaches the pin — so the
-    // activation a click on that button delivers has to be answered for the pin, whose window is the
-    // one the user asked the button for (see `answer_an_activation_of_the_host`).
+    // taskbar button on the host, and the host is the window that button activates — so the activation
+    // a click on that button delivers has to be answered for the pin, whose window is the one the user
+    // asked the button for (see `answer_an_activation_of_the_host`).
     if let Some(answer) =
         unsafe { answer_an_activation_of_the_host(hwnd, msg, wparam, &Win32PinWindow) }
     {
@@ -127,7 +215,10 @@ pub(super) unsafe fn answer_a_host(
 
     // **A host the Shell brings back from the taskbar is the pin coming back.** The host is the window
     // the Shell's button belongs to on this road, and a pin left believing it is away refuses
-    // everything a pin is for (see `the_pin_came_back`, `own_the_pin_window`).
+    // everything a pin is for (see `the_pin_came_back`, `own_the_pin_window`). What that same restore
+    // goes on to deliver is written down beside it, because a click it is still making is not the
+    // user's next one (see `note_the_restore_the_shell_made`).
+    note_the_restore_the_shell_made(msg, wparam);
     the_pin_came_back(hwnd, msg, wparam);
 
     // The Shell's ask for the still of a button that is down, answered with the picture the collapse
@@ -158,22 +249,582 @@ fn answer_the_hosts_close(msg: u32, wparam: WPARAM) -> Option<LRESULT> {
     Some(LRESULT(0))
 }
 
-/// What an activation of the pin's host asks for: **the pin's window, and the keyboard in it**.
+/// Whether this message is **the Shell putting the host — the window the pair's taskbar button
+/// belongs to — down**: its own system command, or the size a window is handed as it is minimized.
+///
+/// **Both readings are asked, because either is what arrives.** The Shell's ask for a window to go
+/// away is `WM_SYSCOMMAND`/`SC_MINIMIZE` — the press on the button of a window the user is already in,
+/// and what `Win`+`D` delivers to every window that offers a minimize box — while a
+/// `ShowWindow(SW_MINIMIZE)` from anywhere at all minimizes the window and reports it as
+/// `WM_SIZE`/`SIZE_MINIMIZED`. Neither is a restore, which is the other half of the same button and is
+/// read already (see `the_pin_came_back`).
+///
+/// **`SC_MINIMIZE` is read with its low four bits masked away**, because those are the Shell's own
+/// flags rather than part of the command — the same reading the close above makes of `SC_CLOSE`.
+fn the_shell_put_the_host_down(msg: u32, wparam: WPARAM) -> bool {
+    (msg == WM_SYSCOMMAND && (wparam.0 & 0xFFF0) as u32 == SC_MINIMIZE)
+        || (msg == WM_SIZE && wparam.0 as u32 == SIZE_MINIMIZED)
+}
+
+/// How long a restore the Shell has made of the host goes on being read as that restore, from the
+/// message it was noted on.
+///
+/// **One click's worth of a clock, rather than a state a later message has to clear.** The restore of a
+/// minimized host delivers a storm of messages — `WM_QUERYOPEN`, the activation the Shell makes, the size
+/// the window reports, and the activations this app's own caret handover pings between the pin's chrome
+/// and the host — and a traced click had every one of them inside some thirty milliseconds. A hand's next
+/// click on the same button is hundreds of milliseconds away at the very least, which is the gap this is
+/// set in.
+const RESTORE_SETTLE: Duration = Duration::from_millis(250);
+
+/// When the Shell last brought the host back from the taskbar, while that restore is still settling.
+///
+/// **It is what tells the click that brings the pin back from the click that puts it away** (see
+/// `the_restore_is_settling`): the restore's own activations arrive after the pin's state is up again,
+/// because its caret handover has put the keyboard in the pin by then — which is exactly the state a
+/// second click is read in, so a restore's last activation was read as the user's and the pin went
+/// straight back into the taskbar.
+static RESTORED_BY_THE_SHELL_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Whether this message is **the Shell bringing the host back from the taskbar**, which is the other half
+/// of the button `the_shell_put_the_host_down` reads.
+///
+/// **Two messages are a restore, and either is what arrives.** `WM_QUERYOPEN` is the question only a
+/// minimized window is sent before it may be opened, so it is no other kind of message at all. A size is
+/// a restore only where it is the size `the_pin_came_back` reads, and with that function's own two
+/// conjuncts beside it: a pin already collapsed — the state a put-away pin is in and a restore's is not —
+/// and no put-down of this app's in flight, because the same `ShowWindow(SW_MINIMIZE)` can leave a
+/// `SIZE_RESTORED` behind it on its way down (see `the_pin_is_being_put_down`).
+fn the_shell_brought_the_host_back(msg: u32, wparam: WPARAM) -> bool {
+    msg == WM_QUERYOPEN
+        || (msg == WM_SIZE
+            && wparam.0 as u32 == SIZE_RESTORED
+            && pin_is_collapsed()
+            && !the_pin_is_being_put_down())
+}
+
+/// Note that the Shell has just brought the host back, so that what the same restore goes on to deliver
+/// is not read as the user's next click on the pair's button (see `the_restore_is_settling`).
+fn note_the_restore_the_shell_made(msg: u32, wparam: WPARAM) {
+    if !the_shell_brought_the_host_back(msg, wparam) {
+        return;
+    }
+    if let Ok(mut restored) = RESTORED_BY_THE_SHELL_SINCE.lock() {
+        *restored = Some(Instant::now());
+    }
+}
+
+/// Whether a restore the Shell made of the host is still settling, which is what says whether a click on
+/// the pair's button is the restore's own storm or the user's next click.
+///
+/// **The click that brings the pin back is not the click that puts it away** (see `RESTORE_SETTLE`), and
+/// the restore in flight is the only thing that tells them apart: a deliberate second click arrives with
+/// no restore behind it.
+///
+/// A note that has run out is cleared as it is read, so that a restore long finished cannot shadow a
+/// click that is a click.
+fn the_restore_is_settling() -> bool {
+    let Ok(mut restored) = RESTORED_BY_THE_SHELL_SINCE.lock() else {
+        return false;
+    };
+    let Some(since) = *restored else {
+        return false;
+    };
+    if since.elapsed() < RESTORE_SETTLE {
+        return true;
+    }
+    *restored = None;
+    false
+}
+
+/// Stand a restore's note at `since` in place of the Shell's own, or give the Shell's answer back with
+/// `None` — a test of the settle, which cannot wait out a real restore's storm nor a hand's next click
+/// (see `the_restore_is_settling`).
+#[cfg(test)]
+pub(super) fn stand_the_restore_noted_at(since: Option<Instant>) {
+    if let Ok(mut restored) = RESTORED_BY_THE_SHELL_SINCE.lock() {
+        *restored = since;
+    }
+}
+
+/// How long the Shell's taking this app away — **while the pin held the keyboard** — is read as the
+/// start of a press on the pair's button, from the message it was noted on.
+///
+/// **One click's worth of a clock, rather than a state a later message has to clear.** A press on the
+/// pair's button while the pin is in front is a press on a window the Shell cannot put down, so it takes
+/// the app away and gives it straight back: a traced click delivered `WM_ACTIVATEAPP(0)` and, fourteen
+/// milliseconds later, `WM_ACTIVATEAPP(1)` with a `WA_ACTIVE`. A hand's next click on the same button is
+/// hundreds of milliseconds away at the very least, which is the gap this is set in. A note that has run
+/// out is cleared as it is read, so a taking that ended long ago cannot shadow a click that is a click
+/// (see `the_app_was_taken_away_while_the_pin_held_the_keyboard`).
+const TAKEN_AWAY_WITH_THE_CARET_SETTLE: Duration = Duration::from_millis(200);
+
+/// When the taskbar last took this app away **while the pin held the keyboard**, while that taking is
+/// still read as the first half of a press on the pair's button.
+static THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// The thread the Shell's own taskbar runs on, asked of the taskbar's window once for the run and kept
+/// from then on (see `the_taskbars_thread`).
+static THE_TASKBARS_THREAD: OnceLock<Option<u32>> = OnceLock::new();
+
+/// The taskbar's thread a test stands in place of the Shell's own, because a test cannot take one from a
+/// desktop: `0` is no stand at all (see `stand_the_taskbars_thread_at`).
+#[cfg(test)]
+static THE_TASKBARS_THREAD_STOOD: AtomicU32 = AtomicU32::new(0);
+
+/// The thread the Shell's own taskbar runs on — `Shell_TrayWnd`, the window the pair's button belongs to —
+/// asked once and kept.
+///
+/// **It is what says the *taskbar* is what took this app away.** `WM_ACTIVATEAPP`'s `lParam` is the thread
+/// id of the *other* side of the switch, so the take-away a click begins with names the taskbar and nothing
+/// else does (see `note_the_app_was_taken_away_while_the_pin_held_the_keyboard`). Measured on this desktop,
+/// `Shell_TrayWnd` is `hwnd=198044 thread=7448 pid=44484`, and a click on the pair's button blinked with
+/// `lParam=7448`.
+///
+/// **Asked once, and never again on the message path.** The question is asked of every taking, and a taking
+/// is a `WM_ACTIVATEAPP` on this app's message loop; `FindWindowW` is a window lookup across processes, so
+/// an answer taken per message would be that lookup inside every taking the app is ever handed. The answer
+/// cannot change while the taskbar lives, and a Shell that went down and up again would take a new thread
+/// this answer does not know: the press would then not be read until the run is restarted, which is the side
+/// of that to be wrong on — a button that does nothing rather than a lookup on every message.
+///
+/// A desktop with no taskbar to ask answers `None`, and a thread id the question could not name is not the
+/// taskbar's: the taking is then not noted at all, rather than noted against a guess (see
+/// `note_the_app_was_taken_away_while_the_pin_held_the_keyboard` for what a taking that is not noted costs).
+fn the_taskbars_thread() -> Option<u32> {
+    // A test cannot take a thread id from a desktop, so a stand here is the Shell's answer whole (see
+    // `stand_the_taskbars_thread_at`).
+    #[cfg(test)]
+    {
+        let stood = THE_TASKBARS_THREAD_STOOD.load(Ordering::SeqCst);
+        if stood != 0 {
+            return Some(stood);
+        }
+    }
+
+    *THE_TASKBARS_THREAD.get_or_init(|| unsafe {
+        let taskbar = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).ok()?;
+        let thread = GetWindowThreadProcessId(taskbar, None);
+        (thread != 0).then_some(thread)
+    })
+}
+
+/// Note that the **taskbar** has just **taken this app away while the pin held the keyboard**, which is the
+/// first half of a press on the pair's button while the pin is in front: the Shell cannot put that window
+/// down, so it deactivates the app and gives it straight back, and that blink is the whole of what the
+/// click delivers (see `the_app_was_taken_away_while_the_pin_held_the_keyboard`).
+///
+/// **The caret is read here, at the take-away, because at the activation there is none left to read.** A
+/// traced click on that button, with the pin in front and the caret in it, delivered `WM_ACTIVATEAPP(0)`
+/// at `.682` with `focus=pin`, and a `WM_KILLFOCUS` at `.685` — Windows takes the caret away with the app
+/// — then `WM_ACTIVATEAPP(1)` at `.696` with `GetFocus()` empty, and the chrome's `WA_ACTIVE` at `.698`,
+/// where the question asked of the caret answers `no`. Asked there, the one thing this note exists for is
+/// refused every time on this desktop; asked here, the answer is still the pin's, and what the note
+/// carries from then on is the whole fact: *this app was taken away while the pin held the keyboard*. A
+/// taking that arrives with the caret anywhere else is noted as nothing at all, which is what keeps the
+/// click that only brings the pin forward from behind the handover it has always been: the app is not
+/// taken away on that road at all.
+///
+/// **And the taking is asked *who* took it, because "taken away" on its own is not a press.** The message's
+/// `lParam` is the thread id of the other side of the switch, and measured on this desktop a blink of the
+/// pair's button read `lParam=7448` — `Shell_TrayWnd`'s own thread — while a deactivation to another
+/// program read `lParam=8940` and the come-back read `lParam=36608`, this app's own. So what the note knows
+/// from then on is the whole fact: *the taskbar took this app away while the pin held the keyboard*. A
+/// taking that names any other program is that program's rather than the taskbar's button — an Alt-Tab
+/// round trip made inside a settle is read as nothing at all — and one whose thread cannot be named is no
+/// note either: a desktop with no taskbar to ask leaves the button's press simply unread, so the pin is not
+/// put away, which is the side of that to be wrong on (see `the_taskbars_thread`).
+///
+/// It is taken from the **chrome's** procedure, because the chrome is the window the Shell drives on that
+/// road: a real click on the host's own button has been traced deactivating and re-activating the pin's
+/// own window and handing the host nothing at all.
+pub(super) fn note_the_app_was_taken_away_while_the_pin_held_the_keyboard(
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) {
+    if msg != WM_ACTIVATEAPP || wparam.0 != 0 || !pin_is_focused() {
+        return;
+    }
+    // The thread is the other side of the switch, and the taskbar's is the only one a press arrives with:
+    // a taking this app is given by any other program is that program's hand on it, not a click.
+    if Some(lparam.0 as u32) != the_taskbars_thread() {
+        return;
+    }
+    if let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE.lock() {
+        *taken_away = Some(Instant::now());
+    }
+}
+
+/// Whether the taskbar took this app away **while the pin held the keyboard** and gave it straight back
+/// just now, which is **the one thing a press on the pair's button has that no other activation of the
+/// chrome has**.
+///
+/// The button belongs to the pair, and with `Pin Mode → Always On Top` off that is the film host — but a
+/// click on it has been traced arriving at the pin's chrome instead, with the host handed nothing at
+/// all: the Shell fell back to the window that was already in front, which is one it cannot put down.
+/// What it delivers there is the blink — `WM_ACTIVATEAPP(0)`, then `WM_KILLFOCUS`, then
+/// `WM_ACTIVATEAPP(1)` and a `WA_ACTIVE` a few milliseconds later — and nothing else of a click (see
+/// `TAKEN_AWAY_WITH_THE_CARET_SETTLE`).
+///
+/// **The caret is the note's, not this reading's.** Windows takes the caret away with the app and gives
+/// it back only after the chrome has been activated (see the note above), so a `GetFocus()` asked here
+/// answers `no` for every click this desktop delivers: what is asked is whether a taking made with the
+/// caret in the pin is still inside its settle, and nothing about where the caret is now.
+///
+/// **An Alt-Tab back into the app is the shape it must not be read as**: that is the app simply coming
+/// back, with the taking away long behind it, and a note that has run out answers `no` for it. And an
+/// Alt-Tab round trip made inside a settle — away and back before this is asked — leaves no note at all,
+/// because the thread that took the app away was the other program's rather than the taskbar's (see
+/// `the_taskbars_thread`).
+fn the_app_was_taken_away_while_the_pin_held_the_keyboard() -> bool {
+    let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE.lock() else {
+        return false;
+    };
+    let Some(since) = *taken_away else {
+        return false;
+    };
+    if since.elapsed() < TAKEN_AWAY_WITH_THE_CARET_SETTLE {
+        return true;
+    }
+    *taken_away = None;
+    false
+}
+
+/// How long this app's own moving of the caret is read as that rather than as a press on the pair's
+/// button: the activation it causes lands while the ask is still being made, or in the message Windows
+/// posts for it, where a hand's next click on the same button is hundreds of milliseconds away at the
+/// very least (see `note_the_app_moved_the_caret`).
+const CARET_MOVED_SETTLE: Duration = Duration::from_millis(100);
+
+/// When this app last moved its own caret, while that move is still read as this app's rather than as a
+/// click.
+static THE_APP_MOVED_THE_CARET_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Note that **this app is moving the caret itself**, before it asks Windows to: the foreground a press on
+/// the pin asks for activates the pin's chrome, and the activation that follows is this app's doing
+/// rather than a click on a button (see `the_app_moved_the_caret_just_now`).
+///
+/// **On the asking rather than on the answer, because the answer arrives first.** `SetForegroundWindow`
+/// delivers the activation of the pin's own window before it returns, so a note taken after the ask would
+/// be a note taken after the message it exists for.
+pub(super) fn note_the_app_moved_the_caret() {
+    if let Ok(mut moved) = THE_APP_MOVED_THE_CARET_SINCE.lock() {
+        *moved = Some(Instant::now());
+    }
+}
+
+/// Whether this app moved its own caret just now, which is what says an activation of the pin's chrome was
+/// the app's own doing and **not a press on the pair's button**.
+///
+/// Two roads move it (see `pin_take_focus` and `pin_take_the_caret`): a press on the pin, whose foreground
+/// is the chrome activated, and the handover of a click on the host from behind, whose caret is the pin's.
+/// Both are the app asking for the caret rather than the Shell handing it a button, so an activation
+/// inside this settle is left alone — read as a click, a press on the pin would put the pin away.
+///
+/// A note that has run out is cleared as it is read, so a caret the app moved long ago cannot shadow a
+/// click that is a click.
+fn the_app_moved_the_caret_just_now() -> bool {
+    let Ok(mut moved) = THE_APP_MOVED_THE_CARET_SINCE.lock() else {
+        return false;
+    };
+    let Some(since) = *moved else {
+        return false;
+    };
+    if since.elapsed() < CARET_MOVED_SETTLE {
+        return true;
+    }
+    *moved = None;
+    false
+}
+
+/// Stand the note of the Shell taking the app away **while the pin held the keyboard** at `since` in
+/// place of the Shell's own, or give the Shell's answer back with `None` — a test of the blink, which
+/// cannot wait out a real click's own messages nor the hundreds of milliseconds a hand's next click is
+/// away (see `the_app_was_taken_away_while_the_pin_held_the_keyboard`).
+///
+/// **Both halves of the fact are stood together, because it is one fact**: the instant the taking was
+/// noted at, and the caret it is the taking *of*. A taking the pin held no keyboard for is no note at
+/// all — the note itself writes none — so an instant stood here is an instant that came with the caret.
+#[cfg(test)]
+pub(super) fn stand_the_app_taken_away_with_the_caret_at(since: Option<Instant>) {
+    if let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE.lock() {
+        *taken_away = since;
+    }
+}
+
+/// Stand `thread` in place of the Shell's own as the taskbar's thread, or give the Shell's answer back
+/// with `None` — a test of the click, because the taking a press is read by has to name a real taskbar and
+/// a test cannot take one from the desktop it runs on (see `the_taskbars_thread`).
+#[cfg(test)]
+pub(super) fn stand_the_taskbars_thread_at(thread: Option<u32>) {
+    THE_TASKBARS_THREAD_STOOD.store(thread.unwrap_or(0), Ordering::SeqCst);
+}
+
+/// Stand the note of this app moving its own caret at `since` in place of a press's own, or give the
+/// press's answer back with `None` — the same stand as the blink's above (see
+/// `the_app_moved_the_caret_just_now`).
+#[cfg(test)]
+pub(super) fn stand_the_caret_moved_at(since: Option<Instant>) {
+    if let Ok(mut moved) = THE_APP_MOVED_THE_CARET_SINCE.lock() {
+        *moved = since;
+    }
+}
+
+/// Whether a minimize of this window is the pin's own going away: **this is the host the pair's button
+/// is worn by, and there is a pin on the screen for the button to put away.**
+///
+/// **`Pin Mode → Always On Top` is the answer that must not be left out.** With the setting on the
+/// pair wears no button at all (see `own_the_pin_window`), so nothing the Shell can press belongs to
+/// it, and a minimize arriving on the host is the user's own — `Win`+`D`, or a call of something
+/// else's — which is a window going down with the desktop and coming back with it. Turned into a
+/// collapse, it would leave a pin over everything with no button to bring it back (see
+/// `the_button_follows_the_setting`).
+///
+/// **And a pin already away, or on its way, is nothing to put away.** A collapse sets `collapsed`
+/// before it asks the window down, and `the_pin_is_being_put_down()` is that same road's note that the
+/// messages arriving now are its own (see `collapse_pin_to` and `put_the_pins_window_in_the_taskbar`):
+/// either answer says this minimize is not a new ask, and a second collapse of a pin that is already
+/// away is a command the loop would spend on nothing.
+fn the_host_wears_the_pins_button(hwnd: HWND) -> bool {
+    film_host() == Some(hwnd) && the_chrome_wears_the_pins_button()
+}
+
+/// Whether a minimize of the pin's **chrome** is the pair's button being pressed: the pin's chrome is
+/// owned by a film host, and the pair is one that wears the button at all (see
+/// `the_host_wears_the_pins_button`, which is this and the window).
+///
+/// **The Shell sometimes lists the chrome too, and drives it.** The pin's window is unowned and not a
+/// tool window on this road (the host owns it), so it can be listed beside the host, and a real click
+/// has been seen deactivating and re-activating it. Whichever window of the pair the Shell puts down,
+/// the pin's state and the collapse have to be the same, so the chrome's minimize is read as the same
+/// put-away (see `the_shell_put_the_chrome_down`).
+pub(super) fn the_chrome_wears_the_pins_button() -> bool {
+    film_host().is_some()
+        && pinned()
+        && pin_is_its_own_window()
+        && !pin_lifecycle::pin_always_on_top()
+        && !pin_is_collapsed()
+        && !the_pin_is_being_put_down()
+}
+
+/// Whether this message is **the Shell putting the chrome of the pair down**, in the words the chrome's
+/// own procedure reads: the same command and the same size a host is put down by, for the window the
+/// Shell may be driving instead of the host (see `the_chrome_wears_the_pins_button`).
+///
+/// The answer is the host's own — the taskbar minimize — so that whichever window of the pair the Shell
+/// puts down, the pin goes away once, by the state that says so (see `the_shell_put_the_host_down`).
+pub(super) fn the_shell_put_the_chrome_down(msg: u32, wparam: WPARAM) -> bool {
+    the_shell_put_the_host_down(msg, wparam) && the_chrome_wears_the_pins_button()
+}
+
+/// What the **second** click on the pair's taskbar button asks for: **the pin, put away into the
+/// taskbar**.
+///
+/// The Shell activates the window its button belongs to on every click, and with `Pin Mode → Always On
+/// Top` off that window is the film host (see `own_the_pin_window`). The **first** click arrives while
+/// the user is in something else — `pin_is_focused()` is false — and it is the keyboard handover this
+/// window has always made (see `answer_an_activation_of_the_host`): the pin is the window the button
+/// was asked for, so it is given the caret.
+///
+/// The second click arrives the same way, while the pin already holds the keyboard the first one gave
+/// it — and **a window whose own button is clicked while the user is in it is a window being
+/// minimized**. That is what every other window on this desktop does with its second click, and it is
+/// the toggle this pair was missing: the click puts the pin away by the road its own `Minimize → To
+/// Taskbar` takes, and the same button brings it back by the Shell's restore (see
+/// `the_pin_came_back`).
+///
+/// **To the taskbar, whatever `Pin Mode → Minimize to` says.** The button is the taskbar's: a pin
+/// collapsed into its bubble has its host hidden with it, and a hidden host has no button at all (see
+/// `the_button_follows_the_screen`), so a bubble collapse would be a click that took away the very
+/// button it came from.
+///
+/// **And a click that arrives while the pin holds no keyboard is left alone.** The user is in another
+/// program, so the click is the handover it has always been and not the start of a toggle: answered
+/// here, the pin would go away instead of coming to the front.
+///
+/// **And the click that brings the pin back is not the click that puts it away.** The Shell's restore of a
+/// minimized host delivers a storm of activations of it — this app's own caret handover pings one between
+/// the pin's chrome and the host — and by the time the last of them arrives the pin is up and holds the
+/// keyboard, which is exactly the state a second click is read in. So the restore is noted as it lands and
+/// a click inside that settle is left alone: it is the restore's own storm rather than the user's next
+/// click (see `the_restore_is_settling`).
+fn answer_a_second_click_on_the_hosts_button(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+) -> Option<LRESULT> {
+    if msg != WM_ACTIVATE
+        || !matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE)
+        || !pin_is_focused()
+        || !the_host_wears_the_pins_button(hwnd)
+        || the_restore_is_settling()
+    {
+        // **Which check answered is what makes a log of one click decisive**, and only the message
+        // the toggle is is written: this procedure is asked about every message the host is handed,
+        // and a line for each of them is a flood rather than a trace (see
+        // `why_the_second_click_was_not_the_toggle`).
+        if msg == WM_ACTIVATE {
+            note_pin_trace!(
+                "film host decision a second click on the button: refused, {}",
+                why_the_second_click_was_not_the_toggle(hwnd, wparam)
+            );
+        }
+        return None;
+    }
+
+    note_pin_trace!(
+        "film host decision a second click on the button: the taskbar minimize is queued"
+    );
+    ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+    // Nothing is asked of the window: the pin is already the window the user is in, and this click
+    // asked for that window to go away rather than for the caret to be put in it.
+    Some(LRESULT(0))
+}
+
+/// **Which check of `answer_a_second_click_on_the_hosts_button` answered `no`**, in the words a trace
+/// line can be read by: an activation of some other kind, a pin that holds no keyboard, a window that
+/// is not the one the button is worn by, a pin that is already away or over everything, or a restore of
+/// the Shell's that is still making its own clicks.
+///
+/// **It decides nothing.** The gate is that function's and this is only asked where it has already
+/// refused a click, so that a log says which of them it was; the two ask the same facts in the
+/// same order, and the day they disagree the gate is the answer.
+fn why_the_second_click_was_not_the_toggle(hwnd: HWND, wparam: WPARAM) -> &'static str {
+    if !matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE) {
+        return "not an activation";
+    }
+
+    if !pin_is_focused() {
+        return "the pin holds no keyboard";
+    }
+
+    if film_host() != Some(hwnd) || !pin_is_its_own_window() {
+        return "not the button's host";
+    }
+
+    if !the_host_wears_the_pins_button(hwnd) {
+        return "the pin is away/always-on-top";
+    }
+
+    "the click that restored the pin"
+}
+
+/// What a **press on the pair's taskbar button while the pin is in front** asks for on the chrome's road:
+/// the same taskbar minimize the host's own click asks for.
+///
+/// **The button is the pair's, and either window of the pair may be handed the click.** With
+/// `Pin Mode → Always On Top` off the film host is the window the Shell lists for the pair, and an
+/// activation of it is the handover `answer_a_second_click_on_the_hosts_button` reads. But a real click on
+/// that button has been traced activating and deactivating the pin's **chrome** and handing the host
+/// nothing at all: the Shell fell back to the window that was already in front, which is a window it
+/// cannot put down. What arrives there is the Shell taking the app away and giving it straight back, and
+/// that blink is the click (see `the_app_was_taken_away_while_the_pin_held_the_keyboard`).
+///
+/// **And the caret the blink was made with is the note's, not this activation's**: Windows takes the caret
+/// away with the app and gives it back after the chrome has been activated, so by the time this click
+/// arrives `GetFocus()` is empty — on this desktop, on every click (see the note). What is asked here is
+/// what that note recorded.
+///
+/// **And nothing this app did to its own caret is such a click** (see `the_app_moved_the_caret_just_now`):
+/// a press on the pin activates the chrome by asking for the foreground, and the handover of a click from
+/// behind asks for the caret the same way. **Nor is a restore of the pair**, whose own storm of
+/// activations is already told from the user's next click (see `the_restore_is_settling`). Every one of
+/// those is refused, and the refusal names it, because a log of a click that does nothing is what these
+/// lines are for.
+///
+/// **Nothing here minimizes or hides anything.** The collapse is the loop's, on the pin's own
+/// `Minimize → To Taskbar` road (see `collapse_pin_to`): a window procedure that collapsed the pin would
+/// take the pin's lock from inside a message about it and put the very window it is answering for down
+/// behind the pin's state, so the command is queued and the state that says so does the rest.
+pub(super) fn answer_a_click_on_the_chromes_button(msg: u32, wparam: WPARAM) -> Option<LRESULT> {
+    // The low word of `WM_ACTIVATE` is the activation state and the high word says whether the window is
+    // minimized, so the activation is read from the low word alone — the same reading the host's own
+    // second click makes of it.
+    if msg != WM_ACTIVATE
+        || !matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE)
+        || !the_chrome_wears_the_pins_button()
+        || !the_app_was_taken_away_while_the_pin_held_the_keyboard()
+        || the_app_moved_the_caret_just_now()
+        || the_restore_is_settling()
+    {
+        // **Which check answered is what makes a log of one click decisive**, and only the message the
+        // toggle is is written: this procedure is asked about every message the chrome is handed, and a
+        // line for each of them is a flood rather than a trace (see
+        // `why_the_click_on_the_chromes_button_was_not_the_toggle`).
+        if msg == WM_ACTIVATE {
+            note_pin_trace!(
+                "pin decision a click on the chrome's button: refused, {}",
+                why_the_click_on_the_chromes_button_was_not_the_toggle(wparam)
+            );
+        }
+        return None;
+    }
+
+    note_pin_trace!("pin decision a click on the chrome's button: the taskbar minimize is queued");
+    ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+    // Nothing is asked of the window: the click is the button's, and the window it reached is the one the
+    // Shell could not put down itself.
+    Some(LRESULT(0))
+}
+
+/// **Which check of `answer_a_click_on_the_chromes_button` answered `no`**, in the words a trace line can
+/// be read by: an activation of some other kind, a pair the pin's chrome does not wear the button for, a
+/// taking away that was not the taskbar's while the pin held the keyboard (or one whose settle has run
+/// out), an activation this app's own caret caused, or a restore of the Shell's that is still making its
+/// own clicks.
+///
+/// **It decides nothing.** The gate is that function's and this is only asked where it has already refused
+/// a click, so that a log says which of them it was; the two ask the same facts in the same order, and the
+/// day they disagree the gate is the answer.
+fn why_the_click_on_the_chromes_button_was_not_the_toggle(wparam: WPARAM) -> &'static str {
+    if !matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE) {
+        return "not an activation";
+    }
+
+    if !the_chrome_wears_the_pins_button() {
+        return "the pin is away/always-on-top";
+    }
+
+    if !the_app_was_taken_away_while_the_pin_held_the_keyboard() {
+        return "the taskbar did not take the app away while the pin held the keyboard";
+    }
+
+    if the_app_moved_the_caret_just_now() {
+        return "the app moved the caret";
+    }
+
+    "the click that restored the pin"
+}
+
+/// What an activation of the pin's host asks for: **the caret in the pin, and nothing else**.
 ///
 /// With `Pin Mode → Always On Top` off the pair's taskbar button belongs to the film host — the host
 /// owns the pin's chrome, so it is the window the Shell lists for the pair (see `own_the_pin_window`).
-/// That window is disabled on purpose: a press on the band has to reach the pin, and `WindowFromPoint`
-/// skips a disabled window (see the module note). A disabled window is still a window the Shell can
-/// activate — a click's activation delivers `WM_ACTIVATE` and `WM_SETFOCUS` to it — and what it cannot
-/// do is hold a keyboard anybody can type into. So the activation is answered for the pin: the window
-/// the user asked the button for is the pin's, and the pin takes the keyboard the way a press on it
-/// does (see `pin_take_focus`).
+/// The host is an ordinary window now, so the Shell activates it: a click's activation delivers
+/// `WM_ACTIVATE` and `WM_SETFOCUS` to it, and what the user asked the button for is the pin. So the
+/// pin is made focusable and given the caret, and the window procedure that answers this is the one
+/// the pin's own keys arrive at from that moment.
+///
+/// **And the foreground is left where it is, which is the host.** Handing it to the pin would put the
+/// Shell back where the disabled host had it: `GetForegroundWindow()` would no longer be the window
+/// whose button the user pressed, and the next press of that button could not minimize it — the
+/// Shell's own toggle would be dead again. The caret is also all the pin needs: `GetFocus()` is the
+/// pin, so its own `WM_KEYDOWN` answers its keys, and the low-level key hook leaves them alone because
+/// `key_input::pin_owns_caret` counts the pin's own window as the pin's (see `pin_take_the_caret`).
 ///
 /// **Only the pin's own host, and only while a pin stands.** A hover's host is made from the same class
 /// and answered by the same procedure, and a hover is nobody's button and no pin's window (see
 /// `answer_a_host`); a pin that has ended has nothing to hand a keyboard to. **And only once per
 /// activation**: a caret already in the pin is where the user asked the button for it, and asking again
-/// is a second `SetForegroundWindow` for a question Windows has answered.
+/// is a second ask for a question Windows has answered. **But the click that arrives
+/// once the pin has that keyboard is the button's own minimize** — a window the user is in whose button
+/// is pressed is a window going away — and it is answered before this (see
+/// `answer_a_second_click_on_the_hosts_button`). What is left to the default answer is every other
+/// activation of a window the pin is already in.
+///
+/// **The host's own `WM_SETFOCUS` is the same road**, and it really is delivered now that the host is
+/// enabled — an activation puts the caret on it before this answer moves it.
 ///
 /// `window` is the seam the ask is made through, so a test can read the ask back rather than make it on
 /// the user's desktop.
@@ -193,16 +844,27 @@ pub(super) unsafe fn answer_an_activation_of_the_host(
         WM_SETFOCUS => true,
         _ => false,
     };
-    if !activated
-        || film_host() != Some(hwnd)
-        || !pinned()
-        || !pin_is_its_own_window()
-        || pin_is_focused()
-    {
+    if !activated || film_host() != Some(hwnd) || !pinned() || !pin_is_its_own_window() {
         return None;
     }
 
-    unsafe { pin_take_focus(pinned_window(), window) };
+    // **A caret already in the pin is where the user asked the button for it**, so this activation is
+    // not the handover: the click that arrives once the pin has that keyboard is the button's own
+    // minimize, and it is answered before this (see
+    // `answer_a_second_click_on_the_hosts_button`). Written down as the refusal it is: a log of a
+    // click that does nothing is the whole of why these lines exist.
+    if pin_is_focused() {
+        note_pin_trace!(
+            "film host decision an activation of the host: refused, the pin already holds the keyboard"
+        );
+        return None;
+    }
+
+    note_pin_trace!(
+        "film host decision an activation of the host: the pin takes the caret, the foreground is left \
+         on the host"
+    );
+    unsafe { pin_take_the_caret(pinned_window(), window) };
     Some(LRESULT(0))
 }
 
@@ -1083,6 +1745,13 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
     claim_the_band_for_the_host();
     unsafe { pin_taskbar::set_pin_taskbar_title(host) };
 
+    // **The two style words the Shell reads the pair's button for come on with the pin's bits**, on
+    // a host that was made from the *hover's* class and never went through `create`: a promoted host
+    // is the window the pair's button belongs to from here, and it is given them, and the app's
+    // icon with them, before the show this road pays for below — that show being the one a button is
+    // drawn from (see `the_button_shells_reads_its_gestures_from`).
+    unsafe { the_button_shells_reads_its_gestures_from(host) };
+
     // **The hover's band and the press that falls through it go, and the pin's bits come on**: a host
     // the Shell lists wears neither `WS_EX_TOOLWINDOW` nor `WS_EX_NOACTIVATE` (see `create`).
     //
@@ -1112,6 +1781,11 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
     };
+    // **The hover's host was made disabled, and the pin's host is an ordinary window**: a disabled one
+    // is skipped by `WindowFromPoint`, but it is also a window the Shell can neither activate nor put
+    // down, and this is the window the pair's button belongs to from here (see `create` and the module
+    // note). The presses are the hit test's on this road too (see `answer_a_host`).
+    let _ = unsafe { EnableWindow(host, true) };
     // The pair's button from here is the setting's, read with the show this road pays for (see
     // `the_button_follows_the_screen`).
     unsafe { the_button_follows_the_screen(true) };
@@ -1488,10 +2162,18 @@ fn a_client_box(hwnd: HWND) -> Option<(i32, i32)> {
 unsafe fn create() -> Option<HWND> {
     FILM_HOST_CLASS_REGISTERED.call_once(|| {
         let hinstance = GetModuleHandleW(None).expect("the module's own handle");
+        // **The icon this class's windows are given a taskbar button with.** A class takes an icon
+        // once, as it registers, and a window whose class has none is drawn with the default exe
+        // rectangle rather than with the app's own face (see `app_icon`). The host a hover is
+        // promoted into is made from the *hover's* class and is given the same icon on the window
+        // instead (see `the_button_shells_reads_its_gestures_from`).
+        let icon = unsafe { crate::shell::app_icon::app_icon() };
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(the_default_answer),
             hInstance: hinstance.into(),
+            hIcon: icon,
+            hIconSm: icon,
             // **No background brush, because the host paints its own erase** (see
             // `paint_the_host_behind_the_film`): the class's brush is what erased a grown band
             // black, and the one erase road is the window procedure's.
@@ -1511,6 +2193,14 @@ unsafe fn create() -> Option<HWND> {
     //
     // **`WS_CLIPCHILDREN`** so that the host's own erase is clipped to the area outside the chrome
     // strips when a pin's window is not the one painting (see `pin_real_window::real_pin_style`).
+    //
+    // **`WS_SYSMENU | WS_MINIMIZEBOX` are the Shell's read of the taskbar button this window wears,
+    // and nothing drawn of them**: there is no caption here to draw a system menu on, so what the
+    // bits are for is the button — a window with no system menu is given one with no icon on it, and
+    // the button's own minimize and restore are the `SC_MINIMIZE` and `SIZE_MINIMIZED` this app
+    // answers (see `the_button_shells_reads_its_gestures_from`, and
+    // `pin_taskbar::stand_in_style`, which is the same two words for the same reason).
+    //
     // **A pin that is Always On Top owes no taskbar button, and the host is where a pair's button
     // lives** — so the bit is asked of the setting here rather than always added (see
     // `own_the_pin_window`, which is the road that keeps it in step afterwards).
@@ -1523,7 +2213,7 @@ unsafe fn create() -> Option<HWND> {
         ex_style,
         FILM_HOST_CLASS,
         w!("film host"),
-        WS_POPUP | WS_CLIPCHILDREN,
+        WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         0,
         0,
         1,
@@ -1537,10 +2227,30 @@ unsafe fn create() -> Option<HWND> {
     )
     .ok()?;
 
-    // Disabled before it is ever shown: the picture is the Shell's thumbnail, and the press that
-    // lands on it has to reach the pin (see the module doc).
-    let _ = EnableWindow(host, false);
+    // The window is made *with* the two words the Shell reads its button for rather than given them
+    // after its first show, and the helper is asked here for the icon and so that the two roads to a
+    // pin's host are one (see `the_button_shells_reads_its_gestures_from`).
+    unsafe { the_button_shells_reads_its_gestures_from(host) };
+
+    // **An ordinary window of the desktop's, enabled and activatable.** Its presses are kept for the
+    // pin by its own hit test rather than by `WS_DISABLED`, so that the Shell can activate and put
+    // down the window the pair's taskbar button belongs to (see `answer_a_host` and the module note).
+    // Disabling it here is what made a click on that button deliver nothing to it at all.
     PIN_FILM_HOST.store(host.0 as isize, Ordering::SeqCst);
+    // **A log has a starting point**: what the host was made as, which every line about it is read
+    // against — whether it wears the Shell's own button (the `WS_EX_APPWINDOW` this app asks for
+    // with `Always On Top` off), which band the pair stands in, and who owns whom. The owner is
+    // written as it stands here: the host is made with none, and the pin's chrome is given to it by
+    // `own_the_pin_window` afterwards (see it for the road that writes the relation).
+    note_pin_trace!(
+        "film host created appwindow={} always-on-top={} owner={} pin-owner={}",
+        ((GetWindowLongPtrW(host, GWL_EXSTYLE) as u32 & WS_EX_APPWINDOW.0) != 0) as u8,
+        pin_lifecycle::pin_always_on_top() as u8,
+        window_name(HWND(GetWindowLongPtrW(host, GWLP_HWNDPARENT) as *mut _)),
+        window_name(HWND(
+            GetWindowLongPtrW(pinned_window(), GWLP_HWNDPARENT) as *mut _
+        )),
+    );
     // **The host is the window the Shell lists**, so the button the pin used to carry names the file
     // the pin is of (see `pin_taskbar::set_pin_taskbar_title`), and it is made supplying the still its
     // button's hover is drawn of — this window's own rows are the black it erases to, not the film the
@@ -1552,6 +2262,58 @@ unsafe fn create() -> Option<HWND> {
     // `pin_chrome_strips`).
     unsafe { pin_chrome_strips::raise_the_chrome_strips_over_the_host() };
     Some(host)
+}
+
+/// **The two style words the Shell reads the pair's taskbar button for, and the icon it is drawn
+/// with**, asked of the one window that wears that button: the pin's film host, whichever road made
+/// it.
+///
+/// **Why the words.** A window with no system menu is given a taskbar button with no icon on it, and
+/// the minimize and restore on a button's own menu are what the Shell sends a window it is able to
+/// put down — the same two words the stand-in and the pin's own window are made with (see
+/// `pin_taskbar::stand_in_style` and `pin_real_window::real_pin_style`). They draw nothing here: this
+/// host is a borderless popup with no `WS_CAPTION`, so there is no caption for a system menu to be
+/// drawn on. What they are is the Shell's own read of a button.
+///
+/// **Why the icon.** A button is drawn from the window's own icon, and a window whose class carries
+/// none is drawn with the default exe rectangle. The pin's host class carries the app's own (see
+/// `create`); a host promoted out of a hover was made from the *hover's* class, which carries none
+/// and must not, so the window is given it here, both sizes. Setting the icon a window already has is
+/// no change, which is what makes this safe to ask at every road.
+///
+/// **Why a re-read after the style write, and what it is for.** The rule the rest of this app holds
+/// styles to is that one written behind a window's back is not one it presents with until it is asked
+/// to read it again (see `pin_real_window::set_the_pin_window_appwindow`), so the write is followed by
+/// the same `SWP_FRAMECHANGED` call its ex-style road makes. There is no non-client frame here for
+/// that word to recalculate — no caption, no border — so this call is the rule's price rather than a
+/// frame's fix. **The read that matters for the button is the show**, and both roads have one: a host
+/// this app made is created with the words before its first show, and a promotion writes them before
+/// the show `the_button_follows_the_screen` pays for in the same pass (see
+/// `pin_real_window::set_the_pin_window_appwindow`, which is why a show is what a button is read on).
+unsafe fn the_button_shells_reads_its_gestures_from(host: HWND) {
+    let style = unsafe { GetWindowLongPtrW(host, GWL_STYLE) };
+    let wanted = style | (WS_SYSMENU | WS_MINIMIZEBOX).0 as isize;
+    if wanted != style {
+        let _ = unsafe { SetWindowLongPtrW(host, GWL_STYLE, wanted) };
+        let _ = unsafe {
+            SetWindowPos(
+                host,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+        };
+    }
+
+    // The window's own icon, both sizes: the small one is what a taskbar button draws, and the
+    // large one what anything listing the window as a window draws.
+    let icon = unsafe { crate::shell::app_icon::app_icon() };
+    let icon = LPARAM(icon.0 as isize);
+    let _ = unsafe { SendMessageW(host, WM_SETICON, WPARAM(ICON_BIG as usize), icon) };
+    let _ = unsafe { SendMessageW(host, WM_SETICON, WPARAM(ICON_SMALL as usize), icon) };
 }
 
 /// When the take-up that is waiting on its hosted film began waiting, while one is.

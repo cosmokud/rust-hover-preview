@@ -665,9 +665,11 @@ pub(super) fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -
 /// `pin_lifecycle::pid_is_the_previews`), asked here of the same pids.
 ///
 /// Asked of the window under the point rather than of the order, because the pin's children —
-/// the host, the strips — are disabled and `WindowFromPoint` skips them, so the pin's own window
-/// comes back wherever the pointer is genuinely over the pin. A pin with no window of its own
-/// has nothing standing over it to ask about, so there the geometric question stands as it did.
+/// the strips — are disabled and `WindowFromPoint` skips them, so the pin's own window comes back
+/// wherever the pointer is genuinely over the pin's chrome; the film host standing over the band is
+/// read as the pin's own as well, because the band is the pin's picture (see
+/// `a_window_of_the_pins_own`). A pin with no window of its own has nothing standing over it to ask
+/// about, so there the geometric question stands as it did.
 fn pin_chrome_occluded(cursor: Option<(i32, i32)>) -> bool {
     let (Some((x, y)), Some(hwnd)) = (cursor, pin_real_window::real_pin_window()) else {
         return false;

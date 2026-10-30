@@ -92,6 +92,12 @@ pub(super) unsafe fn pin_take_focus(hwnd: HWND, window: &dyn PinWindow) {
     // (see `pin_set_focusable`).
     window.set_focusable(hwnd.0 as isize, true);
 
+    // **The activation this asks for is this app's own, so it is noted before the asking.** The foreground
+    // asked for is the pin's chrome activated, which is the same `WM_ACTIVATE` a press on the pair's taskbar
+    // button delivers to it — and a press on the pin is not a press on a button, so the answer to that
+    // activation is told by this note (see `pin_film_host::note_the_app_moved_the_caret`).
+    pin_film_host::note_the_app_moved_the_caret();
+
     window.set_foreground(hwnd.0 as isize);
     window.set_focus(hwnd.0 as isize);
 
@@ -106,6 +112,46 @@ pub(super) unsafe fn pin_take_focus(hwnd: HWND, window: &dyn PinWindow) {
     // keyboard in it did arrive then, and Windows drops that claim itself the moment the pin is
     // activated away from (see the `WM_ACTIVATE` above).
     take_keyboard(behind, pin_is_focused());
+}
+
+/// Give the pin the **caret** without taking the foreground: what an activation of the pair's film
+/// host asks for (see `pin_film_host::answer_an_activation_of_the_host`).
+///
+/// **The foreground stays where the Shell put it, and that is the point.** With `Pin Mode → Always On
+/// Top` off the pair's taskbar button belongs to the film host, and the host is an ordinary window the
+/// Shell activates and puts down: a click on that button makes the host the foreground window, and a
+/// second click minimizes it, which is the toggle (see `pin_film_host::the_shell_put_the_host_down`).
+/// Handing the foreground to the pin is what would break that — the button's window would no longer be
+/// the foreground window, so the Shell's second click could not put it down, which is exactly what a
+/// disabled host left behind.
+///
+/// **And the caret is all the pin needs.** `GetFocus()` is the pin's window, so a key Windows routes
+/// to the window it is in arrives at the pin's own `WM_KEYDOWN`. The low-level key hook is the other
+/// half of it: it runs in a callback that cannot ask a caret of another thread and asks the foreground
+/// window instead (see `key_input::pin_owns_caret`, which is handed `GetForegroundWindow`), so it sees
+/// the host rather than the pin and passes the key on — which is what leaves it to the window procedure
+/// that has the caret.
+///
+/// The claim is written by the same question a press writes it with, on the answer rather than on the
+/// asking (see `pin_take_focus`). **The window recorded as "behind" is this app's own host** — the
+/// window the Shell activated — and a hand-back gives it nothing: `pin_lifecycle::the_window_behind`
+/// refuses a window of this app's own and resolves the ordinary window behind the pin instead.
+pub(super) unsafe fn pin_take_the_caret(hwnd: HWND, window: &dyn PinWindow) {
+    if !pinned() {
+        return;
+    }
+
+    window.set_focusable(hwnd.0 as isize, true);
+
+    // **The caret this asks for is this app's own too**, noted before the asking for the same reason the
+    // press's foreground is: the handover is the first click on the pair's button answered as a handover,
+    // and the activation it makes must not be read as the second click (see
+    // `pin_film_host::note_the_app_moved_the_caret`).
+    pin_film_host::note_the_app_moved_the_caret();
+
+    window.set_focus(hwnd.0 as isize);
+
+    take_keyboard(GetForegroundWindow().0 as isize, pin_is_focused());
 }
 
 /// Hand the keyboard back, from the pin having lost it: the user has clicked into another window,

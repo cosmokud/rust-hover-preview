@@ -2430,6 +2430,12 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
 /// A pin of another kind stands in a window of `pin_taskbar`'s, whose own procedure answers those
 /// two commands because that window is not this one: there is no pin there to minimize, and the pin
 /// is put away into its bubble instead (see `handle_taskbar_restore`).
+///
+/// **The pin stood here has no film host**, which is what keeps this the road it was: the one window
+/// this pin has is the one the Shell puts down, so there is no pair whose chrome could be read as the
+/// pair's button (see `pin_film_host::the_shell_put_the_chrome_down`). A film pin's chrome minimize
+/// is the collapse instead, wherever the Shell lists that chrome — a real click has been traced on it
+/// too — and that is `a_pin_whose_chrome_is_the_pairs_button_is_put_away_by_the_shells_minimize`'s.
 #[test]
 fn the_shells_show_desktop_minimizes_a_pin_that_is_a_window_of_its_own() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -2452,6 +2458,14 @@ fn the_shells_show_desktop_minimizes_a_pin_that_is_a_window_of_its_own() {
         pin_real_window::real_pin_window_at(box_)
     }
     .expect("the pin's own window");
+
+    // **No film host stands with this pin**, and that is what keeps the command below the one the
+    // default procedure answers: there is no pair here whose chrome could be read as the pair's
+    // button (see `pin_film_host::the_shell_put_the_chrome_down`).
+    assert!(
+        pin_film_host::film_host().is_none(),
+        "the pin stood here is no pair of windows: it has no film host"
+    );
 
     // What Show Desktop sends every window with a minimize box, and what it therefore sends this
     // one: the Shell is the sender, and the command is the window's own.
