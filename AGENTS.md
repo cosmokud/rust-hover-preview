@@ -14,9 +14,9 @@ Windows 11 tray app. Hovering a file in Explorer previews it in-process or throu
 | Test everything | `cargo test` | 1459 passed, 37 ignored, ~10 s after compile |
 | Test a slice | `cargo test <filter>` | `cargo test pin_zoom` = 49 tests in 0.4 s; `cargo test config` = 106 in 0.36 s |
 | Path gate | `cargo test --test no_path_leaks` | every tracked file, and every commit message |
-| Lint | `cargo clippy --all-targets -- -D warnings` | ~0.3 s warm; the line `.github/workflows/manual-ci.yml` runs |
+| Lint | `cargo clippy --all-targets -- -D warnings` | ~0.3 s warm; the gate is `Cargo.toml`'s `[lints.clippy] all = "deny"`, so a bare `cargo clippy` denies the same lints and the flag adds rustc's warnings |
 | Format | `cargo fmt --all -- --check` | `--check` is the half that reports; without it rustfmt rewrites every file it reaches |
-| The whole gate | `pwsh -File scripts/verify.ps1` | `-Fast`, `-Pure`, `-Filter <name>`; runs the gates above in CI's order |
+| The whole gate | `pwsh -File scripts/verify.ps1` | the real file, not a recipe; `-Fast` = check + the three `tests/` targets (~1 s), `-Pure` = the suite without `ui::`/`shell::` (475 tests), `-Filter <name>`, `-NoTest`; runs the gates above in CI's order |
 
 ## Run it
 

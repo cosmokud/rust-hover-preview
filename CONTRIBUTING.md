@@ -143,8 +143,11 @@ them.
 - `pre-push` runs `cargo test --test no_path_leaks` — the tracked tree and the messages in its
   history — and stops the push on a failure, building on a drive rather than a Windows-hosted share
   because a share gives cargo's session directory no file locking.
-- `pre-commit` does not exist yet: it will run `cargo fmt --all -- --check` and
-  `cargo clippy --all-targets -- -D warnings` before the commit is written.
+- `pre-commit` runs `cargo fmt --all -- --check`, then `cargo clippy --all-targets -- -D warnings` when
+  the cargo target directory already holds a build — a first commit in a fresh clone skips the lint
+  rather than paying for a 194-dependency compile — and stops the commit on a failure, printing the
+  command that fixes what failed. It runs no test, so it cannot hang.
+  `RHP_SKIP_PRECOMMIT=1 git commit ...` skips both checks for that one commit and prints that it did.
 
 ## Opening a pull request
 
