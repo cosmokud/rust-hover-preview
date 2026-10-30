@@ -8,6 +8,61 @@
 
 set -eu
 
+# A Windows-hosted build over a share cannot run this test where the tree lives. The
+# share gives no file locking, so cargo cannot create the session directory lock file
+# that incremental compilation asks for, and the compile dies before the test it was
+# started for has read a source file. The sources themselves read fine — it is the
+# writing that fails — so the build is moved onto a drive and the incremental state the
+# share cannot hold is dropped. Those artifacts are disposable, a clean build costs less
+# than a push that cannot run, and every artifact it does write lands on the drive.
+#
+# Every other shell is left exactly as it was. The machine that builds natively and CI
+# both take neither branch here, so they run the cargo line below the way they always
+# have.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) windows=1 ;;
+  *) windows=0 ;;
+esac
+
+share=0
+if [ "$windows" = 1 ]; then
+  # A top level that starts at a doubled separator is a share rather than a directory
+  # on a drive. Both spellings are folded into one first, so the shape is read once.
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || root=''
+  root=$(printf '%s' "${root:-}" | tr '\\' '/')
+  case "$root" in
+    //*) share=1 ;;
+  esac
+fi
+
+if [ "$share" = 1 ]; then
+  base=${LOCALAPPDATA:-}
+  if [ -n "$base" ]; then
+    base=$base/Temp
+  else
+    base=${TMPDIR:-${TMP:-/tmp}}
+  fi
+
+  # A base that already carries a drive is what a native cargo wants. One that starts
+  # at a separator is a path this shell understands and cargo does not, so it is
+  # converted before cargo is handed it.
+  case "$(printf '%s' "$base" | tr '\\' '/')" in
+    [A-Za-z]:/*) target=$base/rhp-push-check ;;
+    *)
+      target=$(cygpath -w "$base/rhp-push-check" 2>/dev/null) || target=''
+      # Never empty: cargo reads no target dir as the checkout's own target/, which
+      # is on the share this guard is here to keep the build off.
+      if [ -z "$target" ]; then
+        target=$base/rhp-push-check
+      fi
+      ;;
+  esac
+
+  CARGO_INCREMENTAL=0
+  CARGO_TARGET_DIR=$target
+  export CARGO_INCREMENTAL CARGO_TARGET_DIR
+fi
+
 if ! cargo test --test no_path_leaks; then
   echo "" >&2
   echo "The push is stopped. Fix what is above, commit, and push again." >&2
