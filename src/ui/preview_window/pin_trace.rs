@@ -18,7 +18,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, WA_ACTIVE, WA_CLICKACTIVE, WA_INACTIVE,
     WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLOSE, WM_ENABLE, WM_KILLFOCUS, WM_MOUSEACTIVATE,
     WM_NCACTIVATE, WM_QUERYOPEN, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_SYSCOMMAND,
-    WM_WINDOWPOSCHANGED,
 };
 
 static READ: Once = Once::new();
@@ -109,9 +108,10 @@ pub(super) fn window_name(hwnd: HWND) -> &'static str {
 
 /// Whether a message a pin's window is handed is one a hand on the pair's taskbar button could
 /// arrive as, and so is worth a line: the activations, the system command and the size a window is
-/// put down by, the show and the enable, and the close. **Paint, erase, cursor, pointer and
-/// thumbnail traffic is left out** — it is most of what a run of messages is, and none of it is a
-/// hand on a button.
+/// put down by, the show and the enable, and the close. **Paint, erase, cursor, pointer, thumbnail
+/// and placement traffic is left out** — it is most of what a run of messages is, and none of it is a
+/// hand on a button. `WM_WINDOWPOSCHANGED` in particular is the placement tick's own: the pair is
+/// re-positioned constantly, and it was 538 of the 637 lines a traced click wrote.
 fn a_click_could_be_this(msg: u32) -> bool {
     matches!(
         msg,
@@ -126,7 +126,6 @@ fn a_click_could_be_this(msg: u32) -> bool {
             | WM_QUERYOPEN
             | WM_MOUSEACTIVATE
             | WM_ENABLE
-            | WM_WINDOWPOSCHANGED
             | WM_CLOSE
     )
 }
@@ -145,7 +144,6 @@ fn the_messages_name(msg: u32) -> &'static str {
         WM_QUERYOPEN => "WM_QUERYOPEN",
         WM_MOUSEACTIVATE => "WM_MOUSEACTIVATE",
         WM_ENABLE => "WM_ENABLE",
-        WM_WINDOWPOSCHANGED => "WM_WINDOWPOSCHANGED",
         WM_CLOSE => "WM_CLOSE",
         _ => "other",
     }

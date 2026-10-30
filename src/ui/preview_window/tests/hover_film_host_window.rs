@@ -10,7 +10,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WINDOW_EX_STYLE,
     WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+    WS_EX_TRANSPARENT, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
 
 const NOWHERE: i32 = -32000;
@@ -150,6 +150,13 @@ fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() 
             style & WS_CHILD.0 as isize,
             0,
             "and not a child of anything"
+        );
+        assert_eq!(
+            style & (WS_SYSMENU | WS_MINIMIZEBOX).0 as isize,
+            0,
+            "and no system menu: a window without one is given a taskbar button with no icon on \
+             it, and a hover's host wears no button of anyone's — it is a pin's host that gets the \
+             two words, and only once it is one (see `pin_taskbar::stand_in_style`)"
         );
         for bit in [
             WS_EX_TOOLWINDOW,
