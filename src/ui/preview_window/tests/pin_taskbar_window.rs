@@ -221,6 +221,10 @@ fn a_button_the_shell_has_taken_away_comes_back_on_the_tick() {
         let _ = ShowWindow(bubble, SW_SHOWNOACTIVATE);
     }
     PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
+    // The bubble is the window a picture of a put-away pin is taken of, so it is a window the desk has
+    // to show; the curtain of the suite's own over it is the window of the pair that is drawn as
+    // nothing (see `stand_a_curtain_over`).
+    let curtain = unsafe { stand_a_curtain_over(the_box_on_the_desk_of(bubble)) };
     forget_the_stand_in();
     keep_the_stand_in_up();
     assert!(
@@ -228,8 +232,9 @@ fn a_button_the_shell_has_taken_away_comes_back_on_the_tick() {
         "a pin put away into its bubble wears the bubble and no taskbar button"
     );
 
-    // Safety: the bubble's window is this test's and the stand-in is the app's own.
+    // Safety: the windows are this test's own and the stand-in is the app's own.
     unsafe {
+        let _ = DestroyWindow(curtain);
         let _ = DestroyWindow(bubble);
     }
     PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
@@ -323,6 +328,10 @@ fn the_picture_of_a_pin_put_away_into_a_bubble_is_the_bubble() {
         let _ = ShowWindow(bubble, SW_SHOWNOACTIVATE);
     }
     PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
+    // The bubble is the window a picture of a put-away pin is taken of, so it is a window the desk has
+    // to show; the curtain of the suite's own over it is the window of the pair that is drawn as
+    // nothing (see `stand_a_curtain_over`).
+    let curtain = unsafe { stand_a_curtain_over(the_box_on_the_desk_of(bubble)) };
 
     let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
     pin.collapsed = true;
@@ -351,9 +360,10 @@ fn the_picture_of_a_pin_put_away_into_a_bubble_is_the_bubble() {
         "a pin that is up is not pictured by a bubble"
     );
 
-    // Safety: the window is this test's own and the stand-in is the app's own; both are let go of,
+    // Safety: the windows are this test's own and the stand-in is the app's own; both are let go of,
     // and the handles the app holds are put back as they were.
     unsafe {
+        let _ = DestroyWindow(curtain);
         let _ = DestroyWindow(bubble);
     }
     PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
@@ -1038,6 +1048,17 @@ unsafe fn the_client_box(hwnd: HWND) -> (i32, i32) {
     (client.right - client.left, client.bottom - client.top)
 }
 
+/// Where a window's client area stands on the screen, which is the box a picture of it is read off the
+/// desk in — and so the box a curtain of the suite's own is stood over (see `stand_a_curtain_over`).
+///
+/// Safety: the handle is a window of this app's own or of the test's that is on the screen, and the
+/// question is a measurement of it rather than a change to it.
+unsafe fn the_box_on_the_desk_of(hwnd: HWND) -> ScreenRegion {
+    let area = unsafe { pin_taskbar_mirror::client_area_on_the_screen(hwnd) }
+        .expect("a window of the test's that is on the screen, with an area to be pictured");
+    (area.left, area.top, area.right, area.bottom)
+}
+
 /// A pin put away into the taskbar keeps the picture its collapse took, and is never pictured by a
 /// window that is not on the screen.
 ///
@@ -1600,6 +1621,11 @@ fn a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up() {
     let _ = unsafe { DwmFlush() };
     VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
     let player_box = unsafe { the_client_box(player) };
+    // The curtain of the suite's own over the player, at the box the picture is to be of: the player is
+    // a window the desk has to show, and the curtain is the window of the pair that is drawn as nothing
+    // (see `stand_a_curtain_over`).
+    let player_on_the_desk = unsafe { the_box_on_the_desk_of(player) };
+    let curtain = unsafe { stand_a_curtain_over(player_on_the_desk) };
 
     // The film the pin is showing — the kind whose picture is its player's own window — and the pin
     // put away with no bubble standing in its place (see `current_media_type`, `mirror_source`).
@@ -1616,8 +1642,10 @@ fn a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up() {
     let stand_in = the_stand_in();
 
     // The collapse's own taking, while the window the pin is drawn by is still up (see
-    // `keep_the_pin_for_the_taskbar`).
+    // `keep_the_pin_for_the_taskbar`) — with the curtain put back over that window first, since the
+    // road below puts a window of the suite's up at its box.
     unsafe {
+        keep_the_curtain_over(curtain, player_on_the_desk);
         keep_the_pin_for_the_taskbar();
     }
     assert_eq!(
@@ -1653,9 +1681,10 @@ fn a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up() {
          any more to take another of"
     );
 
-    // Safety: the window is this test's own and the stand-in is the app's own; the handles the app
+    // Safety: the windows are this test's own and the stand-in is the app's own; the handles the app
     // holds are put back as they were.
     unsafe {
+        let _ = DestroyWindow(curtain);
         let _ = DestroyWindow(player);
     }
     forget_the_stand_in();
@@ -1738,6 +1767,11 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     }
     let _ = unsafe { DwmFlush() };
     VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+    // The curtain of the suite's own over the pin's own window, which is the picture this button
+    // holds: that window is one the desk has to show, and the curtain is the window of the pair that is
+    // drawn as nothing (see `stand_a_curtain_over`).
+    let pin_on_the_desk = unsafe { the_box_on_the_desk_of(pin_window) };
+    let curtain = unsafe { stand_a_curtain_over(pin_on_the_desk) };
 
     let mut video = create_loading_media(64, 48);
     video.media_type = MediaType::Video;
@@ -1762,6 +1796,9 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
     // behind `DwmFlush` above). The wait is bounded by a few frames.
     let mut picture = None;
     for _ in 0..40 {
+        // The curtain is put back over the pin's window before every frame that is taken: the road in
+        // the loop is one that puts a window of the suite's up at that window's own box.
+        unsafe { keep_the_curtain_over(curtain, pin_on_the_desk) };
         unsafe { keep_the_pin_for_the_taskbar() };
         picture = the_pin_picture();
         if picture.is_some() {
@@ -1782,8 +1819,9 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
         "a button made again holds no picture of the pin the button before it belonged to"
     );
 
-    // Safety: the window is this test's own; the handles the app holds are put back as they were.
+    // Safety: the windows are this test's own; the handles the app holds are put back as they were.
     unsafe {
+        let _ = DestroyWindow(curtain);
         let _ = DestroyWindow(player);
         let _ = DestroyWindow(pin_window);
     }
@@ -1840,6 +1878,12 @@ fn a_film_hosts_button_holds_a_picture_of_the_host_itself() {
     // for anything to be measured in.
     let host_box = unsafe { the_client_box(host) };
 
+    // The curtain of the suite's own over the host, which is the window this picture is a picture of:
+    // the host is one the desk has to show, and the curtain is the window of the pair that is drawn as
+    // nothing (see `stand_a_curtain_over`).
+    let host_on_the_desk = unsafe { the_box_on_the_desk_of(host) };
+    let curtain = unsafe { stand_a_curtain_over(host_on_the_desk) };
+
     collapse_pin_to(PinMinimizeTo::Taskbar);
 
     let (pixels, width, height) = the_pin_picture()
@@ -1865,6 +1909,12 @@ fn a_film_hosts_button_holds_a_picture_of_the_host_itself() {
         handed_over + 1,
         "the ask is answered with a bitmap made in the box it asked in"
     );
+
+    // Safety: the curtain is this test's own window, and the film's stand is what puts the rest of it
+    // back.
+    unsafe {
+        let _ = DestroyWindow(curtain);
+    }
 }
 
 /// **A pin moved from the bubble into the taskbar keeps the picture its bubble collapse took.**
@@ -1903,6 +1953,11 @@ fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubb
     }
     let _ = unsafe { DwmFlush() };
     let host_box = unsafe { the_client_box(host) };
+    // The curtain of the suite's own over the host: the bubble's collapse takes its picture off the
+    // desk while it is still standing there, so it is a window the desk has to show, and the curtain is
+    // the window of the pair that is drawn as nothing (see `stand_a_curtain_over`).
+    let host_on_the_desk = unsafe { the_box_on_the_desk_of(host) };
+    let curtain = unsafe { stand_a_curtain_over(host_on_the_desk) };
 
     // **The frame the collapse takes has to be a frame the desktop is showing.** The fill above is a
     // GDI call the host's own surface has not necessarily taken yet, and the compositor has not
@@ -1934,7 +1989,9 @@ fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubb
          picture is of this host rather than of what stood there before it. It kept showing {shown:x?}"
     );
 
-    // The road the user takes: the pin goes away into the round bubble first.
+    // The road the user takes: the pin goes away into the round bubble first, and the frame composed
+    // there is the picture — so the curtain is put back over the host before it.
+    unsafe { keep_the_curtain_over(curtain, host_on_the_desk) };
     collapse_pin_to(PinMinimizeTo::Bubble);
     assert!(
         !unsafe { IsWindowVisible(host) }.as_bool(),
@@ -1975,6 +2032,12 @@ fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubb
         A_COLOUR_OF_ITS_OWN.0,
         "a row that could take no picture of a window that is not there hands over no second one"
     );
+
+    // Safety: the curtain is this test's own window, and the film's stand is what puts the rest of it
+    // back.
+    unsafe {
+        let _ = DestroyWindow(curtain);
+    }
 }
 
 /// **A film host moved from the bubble into the taskbar comes back with its film and its source.**
