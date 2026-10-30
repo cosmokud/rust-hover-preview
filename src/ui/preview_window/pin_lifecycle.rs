@@ -1587,8 +1587,8 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // window of its own in this pair: its button is the stand-in's, asked for below.
     if pin_is_its_own_window() {
         unsafe {
-            let host_is_up = pin_film_host::film_host()
-                .is_some_and(|host| IsWindowVisible(host).as_bool());
+            let host_is_up =
+                pin_film_host::film_host().is_some_and(|host| IsWindowVisible(host).as_bool());
             pin_film_host::the_button_follows_the_screen(host_is_up);
         }
     }

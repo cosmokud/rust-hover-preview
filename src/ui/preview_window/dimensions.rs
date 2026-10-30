@@ -756,11 +756,7 @@ pub(super) fn page_is_on_the_way(path: &Path) -> bool {
 /// measurement an intrinsic size in the same sense a PDF page's is: the layout
 /// can fit it into the space beside the cursor, and the text renderer is handed
 /// the box that comes out of that.
-pub(super) fn media_dimensions(
-    path: &Path,
-    bounds: ScreenBounds,
-    dpi: u32,
-) -> Option<(u32, u32)> {
+pub(super) fn media_dimensions(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
     media_dimensions_of(&HoverFacts::read(path), path, bounds, dpi)
 }
 

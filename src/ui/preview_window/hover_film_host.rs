@@ -158,9 +158,7 @@ pub(super) fn forget_the_hover_film_host_that_was_handed_over(host: HWND) {
 /// player through `start_audio_player` and never asks here (see `the_hover_film_to_adopt` for the
 /// media-type gate every take-up asks, where the media on screen is the one that decides).
 pub(super) fn the_hover_film_is_kept_in_a_host(path: &Path) -> bool {
-    !pinned()
-        && pin_enabled()
-        && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
+    !pinned() && pin_enabled() && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
 }
 
 /// Whether the player this app is holding was begun into the hover's host.

@@ -760,7 +760,12 @@ unsafe fn stand_a_player_window(box_: ScreenRegion) -> HWND {
     // stand-ins never stand in any order at all. Born topmost, both are in the band from the
     // first placement on, the way the pin and the film it stands over are (see
     // `show_pinned_window`).
-    a_window_of_the_suite_kept_back(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, w!("STATIC"), WS_POPUP, box_)
+    a_window_of_the_suite_kept_back(
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        w!("STATIC"),
+        WS_POPUP,
+        box_,
+    )
 }
 
 /// Where a window stands on the screen right now, read back off the machine — the very box

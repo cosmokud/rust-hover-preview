@@ -522,17 +522,9 @@ fn an_engine_persistent_switch_is_read_as_the_ttl_item_it_meant() {
         (Some("600"), None, EngineIdle::Seconds(600)),
         (Some("600"), Some("false"), EngineIdle::Away),
         (Some("600"), Some("true"), EngineIdle::Seconds(600)),
-        (
-            Some("indefinitely"),
-            None,
-            EngineIdle::Indefinite,
-        ),
+        (Some("indefinitely"), None, EngineIdle::Indefinite),
         (Some("indefinitely"), Some("false"), EngineIdle::Away),
-        (
-            Some("indefinitely"),
-            Some("true"),
-            EngineIdle::Indefinite,
-        ),
+        (Some("indefinitely"), Some("true"), EngineIdle::Indefinite),
         (Some("0"), None, EngineIdle::Seconds(0)),
         (Some("0"), Some("false"), EngineIdle::Away),
         (Some("0"), Some("true"), EngineIdle::Seconds(0)),
@@ -627,11 +619,7 @@ fn the_mpv_ttl_is_read_from_its_own_key() {
         EngineIdle::Seconds(0),
     ] {
         let mut ini = written_file();
-        ini.set(
-            CONFIG_SECTION,
-            "video_engine_idle",
-            Some(idle.as_str()),
-        );
+        ini.set(CONFIG_SECTION, "video_engine_idle", Some(idle.as_str()));
 
         let config = read_file(&mut ini);
 

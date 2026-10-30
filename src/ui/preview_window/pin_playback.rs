@@ -510,7 +510,9 @@ pub(super) fn freeze_the_outgoing_picture(pid: u32) -> bool {
         Some(false) => "black",
         None => "none",
     };
-    note_pin_trace!("outgoing picture frozen pid {pid} suspended threads {threads} sample {sample}");
+    note_pin_trace!(
+        "outgoing picture frozen pid {pid} suspended threads {threads} sample {sample}"
+    );
     true
 }
 

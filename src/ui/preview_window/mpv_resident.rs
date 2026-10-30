@@ -486,10 +486,7 @@ pub(super) fn finish(pid: u32) -> bool {
     let Ok(mut slot) = RESIDENT.lock() else {
         return false;
     };
-    let Some(resident) = slot
-        .as_mut()
-        .filter(|resident| resident.player.id() == pid)
-    else {
+    let Some(resident) = slot.as_mut().filter(|resident| resident.player.id() == pid) else {
         return false;
     };
 
@@ -548,11 +545,7 @@ pub(super) fn tick() {
         RE_WARM.store(true, Ordering::Release);
     }
 
-    if the_resident_is_owed_a_re_warm(
-        RE_WARM.load(Ordering::Acquire),
-        pinned(),
-        slot.is_some(),
-    ) {
+    if the_resident_is_owed_a_re_warm(RE_WARM.load(Ordering::Acquire), pinned(), slot.is_some()) {
         RE_WARM.store(false, Ordering::Release);
         let ttl_volume = current_video_volume();
         if let Some(signature) = LaunchSignature::of_the_machine(false) {
@@ -567,9 +560,9 @@ pub(super) fn tick() {
     let idle = the_ttl();
     let expired = slot.as_ref().is_some_and(|resident| {
         !resident.serving
-            && resident
-                .idle_since
-                .is_some_and(|since| the_resident_may_be_reaped(false, false, idle, since.elapsed()))
+            && resident.idle_since.is_some_and(|since| {
+                the_resident_may_be_reaped(false, false, idle, since.elapsed())
+            })
     });
     if expired {
         if let Some(resident) = slot.take() {

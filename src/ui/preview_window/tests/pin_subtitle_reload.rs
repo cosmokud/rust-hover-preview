@@ -118,7 +118,11 @@ fn a_pin_hands_its_late_copied_subtitles_to_mpv_and_preloads_them_for_ffplays_ne
         0,
         "and no player is begun for it: the copy is preloaded, not a reason for a swap"
     );
-    assert_eq!(last_restart_reason(), None, "so nothing says a relaunch happened");
+    assert_eq!(
+        last_restart_reason(),
+        None,
+        "so nothing says a relaunch happened"
+    );
     assert!(
         pin_trace::noted_lines()
             .iter()
@@ -131,19 +135,12 @@ fn a_pin_hands_its_late_copied_subtitles_to_mpv_and_preloads_them_for_ffplays_ne
     // the copy the film's geometry holds, and one line says it is carrying it (see
     // `preload_the_subtitles_for_the_next_relaunch`).
     pin_trace::clear_noted();
-    restart_pinned_player(
-        &film,
-        (100, 80, 420, 320),
-        30.0,
-        false,
-        RestartReason::Seek,
-    );
+    restart_pinned_player(&film, (100, 80, 420, 320), 30.0, false, RestartReason::Seek);
     let launched = take_last_spawned_command().expect("a player begun for the seek");
     assert!(
-        launched
-            .args
-            .windows(2)
-            .any(|pair| pair[0] == "-vf" && pair[1].contains("subtitles=") && pair[1].contains("sub0.ass")),
+        launched.args.windows(2).any(|pair| pair[0] == "-vf"
+            && pair[1].contains("subtitles=")
+            && pair[1].contains("sub0.ass")),
         "the relaunch draws the copy: {:?}",
         launched.args
     );

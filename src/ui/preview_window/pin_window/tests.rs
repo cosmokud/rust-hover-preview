@@ -1033,12 +1033,16 @@ fn a_hand_back_that_nothing_is_coming_for_is_abandoned() {
     assert!(
         pin_lifecycle::a_front_request_is_young_enough(
             asked,
-            asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR - std::time::Duration::from_millis(1)
+            asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR
+                - std::time::Duration::from_millis(1)
         ),
         "and one inside the wait this app gives a player is still its own"
     );
     assert!(
-        !pin_lifecycle::a_front_request_is_young_enough(asked, asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR),
+        !pin_lifecycle::a_front_request_is_young_enough(
+            asked,
+            asked + pin_lifecycle::A_FRONT_REQUEST_IS_WANTED_FOR
+        ),
         "a request older than that wait is a request nothing is coming for"
     );
 

@@ -292,9 +292,7 @@ fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
     use windows::Win32::Graphics::Gdi::{
         GetStockObject, InvalidateRect, UpdateWindow, HBRUSH, NULL_BRUSH,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        IsWindowVisible, RegisterClassExW, WS_VISIBLE,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{IsWindowVisible, RegisterClassExW, WS_VISIBLE};
 
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
@@ -329,12 +327,7 @@ fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
                 ERASE_PROBE_CLASS,
                 style,
                 // Side by side, so that neither stands over the other's band.
-                (
-                    index as i32 * 320,
-                    0,
-                    index as i32 * 320 + 320,
-                    240,
-                ),
+                (index as i32 * 320, 0, index as i32 * 320 + 320, 240),
             );
             // The child before the show, so that every erase this window is handed is one with a
             // child in it.
@@ -2542,7 +2535,9 @@ fn a_handover_that_is_over_does_not_hold_the_chrome_down() {
     // And the other half of the same answer: a wait that has run out is not a wait either, whatever
     // the window is doing. The arm is read against the start's own bound rather than only against a
     // road that remembers to clear it.
-    unsafe { let _ = ShowWindow(film.pin_hwnd, SW_HIDE); }
+    unsafe {
+        let _ = ShowWindow(film.pin_hwnd, SW_HIDE);
+    }
     pin_film_host::stand_pin_handover_armed_at(Some(
         Instant::now() - Duration::from_secs(VIDEO_START_WAIT_SECS + 1),
     ));
@@ -4036,7 +4031,9 @@ fn a_pin_that_ends_during_a_take_ups_handover_leaves_what_a_pin_that_never_waite
             // is not (see `pin_film_host::pin_handover_armed`) — with the hover's player frozen on a
             // second and the wait armed for the pin's player to report that same frame. The id is no
             // process of this run's, so the end it asks for is the bookkeeping rather than a kill.
-            unsafe { let _ = ShowWindow(film.pin_hwnd, SW_HIDE); }
+            unsafe {
+                let _ = ShowWindow(film.pin_hwnd, SW_HIDE);
+            }
             pin_film_host::hold_the_hover_for_the_handover(0x7FFF_FFFB, 12.0);
             pin_film_host::arm_pin_handover();
             assert!(
@@ -6295,7 +6292,11 @@ fn a_late_subtitle_swaps_nothing_and_rides_the_relaunch_the_user_asks_for() {
         0,
         "and no player is begun for it: a copy is not a reason to change the picture's hands"
     );
-    assert_eq!(last_restart_reason(), None, "so no relaunch happened at all");
+    assert_eq!(
+        last_restart_reason(),
+        None,
+        "so no relaunch happened at all"
+    );
     assert!(
         pin_film_thumbnail::the_standing_source_is_the_current_one(),
         "the picture on screen is the source it was"
@@ -7190,7 +7191,10 @@ fn the_retained_cover_survives_a_resize_and_is_never_black() {
         box_.0,
         box_.1
     ));
-    assert!(pin_film_host::the_cover_stands(), "the host holds the frame");
+    assert!(
+        pin_film_host::the_cover_stands(),
+        "the host holds the frame"
+    );
 
     // A resize in the middle of the gap: the pin is pulled wider, so the cover has to be cut to the
     // new shape rather than stretched or dropped.
@@ -7261,7 +7265,10 @@ fn the_dc_road_paints_the_sources_own_frame_and_ends_the_player_before_the_repla
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
-    let previous_retirement = VIDEO_RETIREMENT.lock().ok().and_then(|mut held| held.take());
+    let previous_retirement = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -7353,7 +7360,11 @@ fn the_dc_road_paints_the_sources_own_frame_and_ends_the_player_before_the_repla
         "nothing erases the host while the cover stands"
     );
     assert_eq!(
-        VIDEO_RETIREMENT.lock().ok().and_then(|held| *held).map(|parked| parked.retiring),
+        VIDEO_RETIREMENT
+            .lock()
+            .ok()
+            .and_then(|held| *held)
+            .map(|parked| parked.retiring),
         None,
         "the player ended at once is not left parked for the loop"
     );
@@ -7362,7 +7373,10 @@ fn the_dc_road_paints_the_sources_own_frame_and_ends_the_player_before_the_repla
         "the dc road suspends nothing"
     );
     assert_eq!(ffplay_window::pause_posts(), 0, "and posts no key");
-    assert!(mpv_ipc::noted_lines().is_empty(), "nor is there a hold down a pipe");
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "nor is there a hold down a pipe"
+    );
 
     // The replacement draws, and the registration that takes the box over composes above the cover:
     // the cover goes with it, and nothing has to erase anything.
@@ -7404,7 +7418,10 @@ fn a_source_with_no_lit_frame_paints_no_cover_and_leaves_the_old_picture_playing
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
-    let previous_retirement = VIDEO_RETIREMENT.lock().ok().and_then(|mut held| held.take());
+    let previous_retirement = VIDEO_RETIREMENT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -7441,8 +7458,10 @@ fn a_source_with_no_lit_frame_paints_no_cover_and_leaves_the_old_picture_playing
         "and the relaunch is the off road, said out loud: {lines:?}"
     );
     assert!(
-        !lines.iter().any(|line| line.starts_with("placeholder painted")
-            || line.starts_with("outgoing player ended at once")),
+        !lines
+            .iter()
+            .any(|line| line.starts_with("placeholder painted")
+                || line.starts_with("outgoing player ended at once")),
         "nothing is painted and nothing is ended: {lines:?}"
     );
     assert!(
@@ -7553,9 +7572,11 @@ fn a_relaunch_on_the_off_road_freezes_nothing() {
     );
     let lines = pin_trace::noted_lines();
     assert!(
-        !lines.iter().any(|line| line.starts_with("outgoing picture frozen")
-            || line.starts_with("placeholder")
-            || line.starts_with("still captured")),
+        !lines
+            .iter()
+            .any(|line| line.starts_with("outgoing picture frozen")
+                || line.starts_with("placeholder")
+                || line.starts_with("still captured")),
         "and no line claims a freeze or a cover that was not made: {lines:?}"
     );
     assert!(ffplay_window::suspended_players().is_empty());
@@ -7679,8 +7700,9 @@ fn the_standing_source_is_what_the_tracker_and_the_topmost_road_follow() {
         "a host with a registration standing has a picture in it"
     );
     assert!(
-        pin_trace::noted_lines().iter().any(|line| line
-            == &format!("hosted drawing pid {pid} host {host:?} drawing 1")),
+        pin_trace::noted_lines()
+            .iter()
+            .any(|line| line == &format!("hosted drawing pid {pid} host {host:?} drawing 1")),
         "and the tracker names the player whose source it is: {:?}",
         pin_trace::noted_lines()
     );
@@ -8914,8 +8936,18 @@ fn always_on_top_is_the_pins_own_band_and_not_only_the_hosts() {
         // while its owner is in the topmost one, which is the pin behind the listing with the setting
         // on: an owned window follows its owner into a band it is not standing in.
         unsafe { pin_film_host::place_the_pin_in_the_band(pin, HWND_TOPMOST) };
-        unsafe { SetWindowPos(pin, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) }
-            .expect("the band a promotion wrote on the chrome");
+        unsafe {
+            SetWindowPos(
+                pin,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .expect("the band a promotion wrote on the chrome");
         assert!(
             !unsafe { window_holds_the_topmost_band(pin) },
             "a chrome put out of its owner's band is not in it, however the host stands"

@@ -297,8 +297,7 @@ fn run() {
         let facts = super::pin_film_thumbnail::the_sources_window_facts(pid);
         // **Whose window the box is drawn through, as the record answers it**: the outgoing player is
         // `pid` and any other is `other`, which is a registration re-pointed rather than one gone.
-        let drawn =
-            super::pin_film_thumbnail::the_standing_source_process(HWND(host as *mut _));
+        let drawn = super::pin_film_thumbnail::the_standing_source_process(HWND(host as *mut _));
         let z = match drawn {
             Some(drawn) if drawn == pid => "pid",
             Some(_) => "other",
@@ -478,7 +477,8 @@ mod tests {
             "a still that was never read black is the road proven, and one end is one line:              {lines:?}"
         );
         assert!(
-            lines[0].starts_with("still probe result painted=yes black_at=never src_first_black_at="),
+            lines[0]
+                .starts_with("still probe result painted=yes black_at=never src_first_black_at="),
             "{lines:?}"
         );
 
@@ -503,7 +503,10 @@ mod tests {
             2,
             "a measurement given up says why and then what it had: {lines:?}"
         );
-        assert_eq!(lines[0], "still probe ended without a swap: the pin is going");
+        assert_eq!(
+            lines[0],
+            "still probe ended without a swap: the pin is going"
+        );
         assert!(
             lines[1].starts_with("still probe result painted=no black_at=never"),
             "and a road with no still in it never claims one was painted: {lines:?}"
@@ -545,7 +548,9 @@ mod tests {
         let result = lines
             .iter()
             .find(|line| line.starts_with("still probe result"))
-            .unwrap_or_else(|| panic!("the source's readings are written with the pin's: {lines:?}"));
+            .unwrap_or_else(|| {
+                panic!("the source's readings are written with the pin's: {lines:?}")
+            });
         assert!(
             result.ends_with("src_first_black_at=+72ms src_lit_at_swap=0%"),
             "where the source first went black, and what it was at the swap: {result}"

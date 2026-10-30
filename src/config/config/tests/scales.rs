@@ -121,7 +121,10 @@ fn away_expires_on_the_away_timer_and_not_on_the_engines_clock() {
     afk::note_explorer_reachable(true);
     assert!(!EngineIdle::Away.has_expired(year));
 
-    let timer = CONFIG.lock().map(|config| config.afk_timer_seconds).unwrap();
+    let timer = CONFIG
+        .lock()
+        .map(|config| config.afk_timer_seconds)
+        .unwrap();
     if let Ok(mut config) = CONFIG.lock() {
         config.afk_timer_seconds = 0;
     }

@@ -383,7 +383,10 @@ fn what_has_no_signature_is_left_to_the_name_it_has() {
 fn a_name_a_language_and_a_format_share_is_settled_by_the_head() {
     // VHDL source under the disk image's own name: the text lists' page.
     assert_eq!(
-        classified("design.vhd", b"library ieee;\nuse ieee.std_logic_1164.all;\n"),
+        classified(
+            "design.vhd",
+            b"library ieee;\nuse ieee.std_logic_1164.all;\n"
+        ),
         Content::Kind(PreviewType::Text),
         "a VHDL source is the page of text it is written as"
     );

@@ -1537,8 +1537,8 @@ mod tests {
                 true,
                 Some(Path::new("scratch/mpv-input.conf")),
                 IPC,
-            false,
-            true
+                false,
+                true
             ),
             [
                 "films/episode.mkv",
@@ -1589,13 +1589,13 @@ mod tests {
             None,
             IPC,
             true,
-            false);
+            false,
+        );
         assert!(
             with_flip.iter().any(|arg| arg == "--d3d11-flip=yes"),
             "a player that makes a window of its own on the thumbnail road is asked for the flip \
              model when the knob is on: {with_flip:?}"
         );
-
     }
 
     /// The flip knob is exactly `1`: the A/B is two runs, and a value that is not the one named must
@@ -1658,8 +1658,8 @@ mod tests {
             true,
             None,
             IPC,
-        false,
-        true
+            false,
+            true,
         );
         assert!(
             args.iter().any(|arg| arg == "--window-dragging=no"),
@@ -1690,8 +1690,8 @@ mod tests {
                 false,
                 None,
                 IPC,
-            false,
-            true
+                false,
+                true
             ),
             [
                 "a.mkv",
@@ -1737,8 +1737,8 @@ mod tests {
                 true,
                 None,
                 IPC,
-            false,
-            true
+                false,
+                true
             ),
             [
                 "a.mkv",
@@ -1783,8 +1783,8 @@ mod tests {
                 true,
                 None,
                 IPC,
-            false,
-            true
+                false,
+                true
             ),
             [
                 "a.mkv",
@@ -1838,8 +1838,8 @@ mod tests {
                 true,
                 None,
                 IPC,
-            false,
-            true
+                false,
+                true
             ),
             [
                 "a.mkv",
@@ -1932,7 +1932,7 @@ mod tests {
             None,
             IPC,
             false,
-            true
+            true,
         );
         assert!(
             held.contains(&"--start=12.500".to_string()),
@@ -1964,7 +1964,7 @@ mod tests {
             None,
             IPC,
             false,
-            true
+            true,
         );
         assert!(
             !playing
@@ -2004,8 +2004,8 @@ mod tests {
                     true,
                     None,
                     IPC,
-                false,
-                true
+                    false,
+                    true
                 ),
                 [
                     "a.mkv",
@@ -2046,8 +2046,8 @@ mod tests {
                 true,
                 None,
                 IPC,
-            false,
-            true
+                false,
+                true
             )
             .contains(&"--geometry=640x360+0+0".to_string()),
             "a box at the primary display's own origin is passed as it stands"
@@ -2096,8 +2096,8 @@ mod tests {
                 true,
                 None,
                 IPC,
-            false,
-            true
+                false,
+                true
             ),
             [
                 "a.mkv",
@@ -2164,8 +2164,8 @@ mod tests {
                 true,
                 None,
                 IPC,
-            false,
-            true
+                false,
+                true
             ),
             [
                 "a.mkv",

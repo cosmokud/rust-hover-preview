@@ -637,7 +637,9 @@ fn the_first_press_takes_the_pointer_before_it_asks_for_the_keyboard() {
     );
     assert!(
         settled_window.calls().contains(&PinWindowCall::Capture)
-            && !settled_window.calls().contains(&PinWindowCall::SetForeground),
+            && !settled_window
+                .calls()
+                .contains(&PinWindowCall::SetForeground),
         "the pointer is taken and the keyboard is left alone: {:?}",
         settled_window.calls()
     );

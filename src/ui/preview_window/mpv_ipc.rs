@@ -379,7 +379,10 @@ fn load_file_line(file: &std::path::Path) -> String {
 /// Drop the file a player holds and leave it idle rather than ended: what a hover ending leaves the
 /// resident as (see `mpv_resident::finish`).
 pub(super) fn stop_playing(pid: u32) -> bool {
-    write(pid, r#"{"command":["stop"],"async":true}"#.to_string() + "\n")
+    write(
+        pid,
+        r#"{"command":["stop"],"async":true}"#.to_string() + "\n",
+    )
 }
 
 /// Hold mpv where it is, or set it going again.
@@ -441,10 +444,7 @@ pub(super) fn add_subtitles(pid: u32, file: &std::path::Path) -> bool {
 /// string would still be green (see `a_real_mpv_quits_on_the_line_this_app_writes` for why that is
 /// the half a string cannot hold). A quote is escaped with it, because a quote ends the string.
 fn a_json_string(text: &str) -> String {
-    format!(
-        "\"{}\"",
-        text.replace('\\', "\\\\").replace('"', "\\\"")
-    )
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// How long an answer is waited for, and how long between two looks at a pipe that has not answered
@@ -817,7 +817,10 @@ mod tests {
         assert!(set_paused(7, false));
         assert!(set_ontop(7, false));
         assert!(cycle_subtitles(7));
-        assert!(add_subtitles(7, std::path::Path::new(r"films\an episode.srt")));
+        assert!(add_subtitles(
+            7,
+            std::path::Path::new(r"films\an episode.srt")
+        ));
 
         assert_eq!(
             noted_lines(),
@@ -1203,21 +1206,7 @@ mod tests {
         // level of zero (see `video_launch::mpv_args`), and the name is the app's own pipe.
         let name = next_pipe_name();
         let args = video_launch::mpv_args(
-            &picture,
-            0,
-            0,
-            320,
-            240,
-            0.0,
-            false,
-            0,
-            None,
-            false,
-            false,
-            None,
-            &name,
-            false,
-            true,
+            &picture, 0, 0, 320, 240, 0.0, false, 0, None, false, false, None, &name, false, true,
         );
         let audio_file = format!("--audio-file={}", soundtrack.to_string_lossy());
         let started = engine_processes::hidden_command(&program)

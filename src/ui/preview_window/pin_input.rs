@@ -860,12 +860,7 @@ unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool, window: &dyn Pin
 /// of one — where the pointer is, and the capture the drag takes — are the half a test stands a
 /// recorder in front of (see `PinWindow`). Nothing else about the press is the window's: what a point
 /// means is the pin's.
-pub(super) unsafe fn pinned_press_on(
-    hwnd: HWND,
-    x: i32,
-    y: i32,
-    window: &dyn PinWindow,
-) -> bool {
+pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn PinWindow) -> bool {
     // Whether this press is the second of a pair, asked before any of the arms below so that one
     // answer serves the whole window: what a pair means is the window put in the middle of its
     // screen, and the two arms it is put to are the two a press carries the window from (see
@@ -996,7 +991,8 @@ pub(super) unsafe fn press_the_pin(
     window: &dyn PinWindow,
     wants_the_keyboard: bool,
 ) -> bool {
-    let answered = unsafe { pinned_volume_press(hwnd, x, y) || pinned_press_on(hwnd, x, y, window) };
+    let answered =
+        unsafe { pinned_volume_press(hwnd, x, y) || pinned_press_on(hwnd, x, y, window) };
 
     if wants_the_keyboard {
         unsafe { pin_take_focus(hwnd, window) };

@@ -659,12 +659,7 @@ fn a_host_activation_hands_the_keyboard_to_the_pin() {
     let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
     assert!(
         unsafe {
-            pin_film_host::answer_an_activation_of_the_host(
-                host,
-                WM_SETFOCUS,
-                WPARAM(0),
-                &recorder,
-            )
+            pin_film_host::answer_an_activation_of_the_host(host, WM_SETFOCUS, WPARAM(0), &recorder)
         }
         .is_some(),
         "a focus that lands on the host is answered for the pin as well"
@@ -1944,7 +1939,8 @@ fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubb
         forced + 1,
         "and the button is told to hold the app's own still for as long as the pin is away, whether or          not this row had a window of the pin's on the screen to picture"
     );
-    let (pixels, width, _) = the_pin_picture().expect("and the picture taken at the collapse is kept");
+    let (pixels, width, _) =
+        the_pin_picture().expect("and the picture taken at the collapse is kept");
     assert_eq!(
         the_colour_in(&pixels, width, 0, 0),
         A_COLOUR_OF_ITS_OWN.0,
@@ -3135,8 +3131,7 @@ fn the_pairs_taskbar_button_is_the_settings() {
     // never draws.
     unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
     assert!(
-        !unsafe { IsWindowVisible(host) }.as_bool()
-            && unsafe { IsWindowVisible(pin) }.as_bool(),
+        !unsafe { IsWindowVisible(host) }.as_bool() && unsafe { IsWindowVisible(pin) }.as_bool(),
         "the host is down and the chrome it owns is still the window the user has"
     );
     assert!(

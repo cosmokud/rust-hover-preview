@@ -1277,7 +1277,8 @@ fn suspend_the_threads(pid: u32) -> usize {
         if Thread32First(snapshot, &mut entry).is_ok() {
             loop {
                 if entry.th32OwnerProcessID == pid {
-                    if let Ok(thread) = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID) {
+                    if let Ok(thread) = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID)
+                    {
                         if SuspendThread(thread) != u32::MAX {
                             suspended += 1;
                         }
@@ -1309,7 +1310,8 @@ fn resume_the_threads(pid: u32) {
         if Thread32First(snapshot, &mut entry).is_ok() {
             loop {
                 if entry.th32OwnerProcessID == pid {
-                    if let Ok(thread) = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID) {
+                    if let Ok(thread) = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID)
+                    {
                         let _ = ResumeThread(thread);
                         let _ = CloseHandle(thread);
                     }
@@ -1537,11 +1539,7 @@ mod tests {
                 0,
                 "a player's window is out of the taskbar when the passes are done with it"
             );
-            assert_ne!(
-                styled & noactivate,
-                0,
-                "and it never takes the keyboard"
-            );
+            assert_ne!(styled & noactivate, 0, "and it never takes the keyboard");
             assert_eq!(
                 eager_ex_style(styled),
                 styled,
