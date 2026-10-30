@@ -13,9 +13,10 @@
 
 <!-- How do you know it works? Example: cargo test, hovered a .png and a .pdf on Windows 11. -->
 
-- [ ] `cargo fmt --check` passes
+- [ ] `cargo fmt --all -- --check` passes
 - [ ] `cargo clippy --all-targets -- -D warnings` passes
 - [ ] `cargo test` passes
+- [ ] `cargo test --test no_path_leaks` passes (the `pre-push` hook runs it)
 - [ ] I tested the app manually (if it changes what users see)
 
 ## Checklist

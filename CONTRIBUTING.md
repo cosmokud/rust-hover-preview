@@ -1,8 +1,7 @@
 # Contributing to Rust Hover Preview
 
-Thank you for your interest in contributing! This guide will help you get
-started, even if this is your first time contributing to an open-source
-project.
+Thank you for your interest in contributing. This guide gets you set up and tells you what the
+checks cost and what they do not cover.
 
 ## Code of Conduct
 
@@ -41,11 +40,7 @@ cargo build
 cargo test
 ```
 
-The release binary is written to `target/release/rust-hover-preview.exe`:
-
-```bash
-cargo build --release
-```
+The release binary is written to `target/release/rust-hover-preview.exe` by `cargo build --release`.
 
 `cargo test` runs against folders of the tests' own rather than the machine's: a test build of
 the app keeps its `config.ini`, its engine records and its browser profiles under
@@ -88,12 +83,68 @@ for a full system overview.
    ```
 
    If a check fails, fix it before opening a pull request. `rust-toolchain.toml` pins
-   the toolchain, so cargo, rustfmt and clippy answer the same on every machine as
-   they do in CI — the `manual-ci.yml` workflow, which runs exactly these three
-   commands and is started by hand from the Actions tab.
+   the toolchain, so cargo, rustfmt and clippy answer the same on every machine as they
+   do in CI — `manual-ci.yml`, which runs these three commands plus
+   `cargo test --test no_path_leaks` and is started by hand from the Actions tab.
 4. Write a clear commit message in the present tense, for example
    `Fix preview placement on second monitor` rather than `Fixed...`.
 5. Push your branch and open a pull request against `main`.
+
+## Checks, and what they cost
+
+Measured warm, on the pinned toolchain: a clean build is minutes, because the 194 dependencies in
+the lock include native C and C++ in the image and archive crates. Then `cargo check --all-targets`
+is about 5 s, `cargo clippy --all-targets -- -D warnings` 0.3 s, `cargo fmt --all -- --check` 1.5 s,
+and `cargo test` about 10 s of test time.
+
+## Running one test
+
+The suite is over 1,400 tests, so filtering is how you iterate on one of them: cargo matches a
+filter against a test's path, so a module name is a filter, and `--test <name>` picks one file
+under `tests/` rather than the whole target:
+
+```bash
+cargo test pin_zoom              # 49 tests in 0.4 s
+cargo test config                # 106 tests in 0.36 s
+cargo test --test no_path_leaks  # one file under tests/, 0.8 s
+```
+
+## The suite and the desktop
+
+The default suite creates real windows, so it wants an interactive Windows session: one helper,
+`src/ui/preview_window/tests.rs::a_window_of_the_suite`, makes each of them as a layered window at
+no alpha, shown unactivated — on the desktop, drawn as nothing. A headless session has nothing for
+those windows to answer, so verify the data layers instead: `formats`, `config`, `readers` and
+`text` read files, parse bytes and answer values. `preview_window` and `explorer_hook` get no
+signal there — their tests are written against a desktop, a window made or Explorer's view read —
+so a failure is the session answering rather than the change.
+
+## The tests that do not run
+
+37 tests carry `#[ignore]`: they start a third-party program, ask the network, or read a desktop a
+run of the suite must not take over — a window shown, a pointer driven, the composed desk. Each
+message names its input; `grep -rn '#[ignore' src tests` finds all of them with those reasons.
+
+The engine files are handed in one variable each — `RHP_OFFICE_PROBE`, `RHP_LIBRE_PROBE`,
+`RHP_PEAZIP_PROBE`, `RHP_CALIBRE_PROBE`, `RHP_COMIC_PROBE`, `RHP_CONTENT_PROBE`, `RHP_PDF_PROBE`,
+`RHP_AUDIO_PROBE`, `RHP_AUDIO_FACTS_PROBE`, `RHP_VIDEO_PROBE`, `RHP_WEBVIEW_PROBE` — and a film
+played at the display's own size is `RHP_VIDEO_PERF`, with `RHP_VIDEO_PERF_BOX` for its box. The
+rest take no variable: the network ask in `app::updates`, the real mpv in `mpv_ipc`, the audio
+stream in `tests/audio_bands`, the pointer probes in `tests/probes`, and the four composed-desktop
+reads in `tests/pin_taskbar_window`, which cannot be made headless. `cargo test -- --ignored` runs
+them.
+
+## Hooks
+
+`git config core.hooksPath .githooks` is what makes these run:
+
+- `prepare-commit-msg` refuses a message that names a profile directory, which reaches every clone
+  the way a path in a fixture does; `--no-verify` does not skip it.
+- `pre-push` runs `cargo test --test no_path_leaks` — the tracked tree and the messages in its
+  history — and stops the push on a failure, building on a drive rather than a Windows-hosted share
+  because a share gives cargo's session directory no file locking.
+- `pre-commit` does not exist yet: it will run `cargo fmt --all -- --check` and
+  `cargo clippy --all-targets -- -D warnings` before the commit is written.
 
 ## Opening a pull request
 
