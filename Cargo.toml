@@ -227,6 +227,15 @@ sevenz-rust2 = { version = "0.20", features = ["compress", "util"] }
 # they read back rather than checking a binary fixture into the tree.
 brotli = "8"
 
+# Clippy's default set is denied by the manifest rather than by a flag on one command line,
+# so the gate travels with the package: a bare `cargo clippy`, the pre-commit hook,
+# `scripts/verify.ps1` and the workflows all read this table instead of each remembering
+# `-D warnings`. Rustc's own warnings are left to that flag, which the script and the
+# workflows pass; denying them here as well would make a plain `cargo build` fail on what
+# the CI already reports, without catching anything it does not.
+[lints.clippy]
+all = "deny"
+
 # What this app is built out of is mostly other people's code — the Windows bindings,
 # the syntax highlighter, the archive readers, the browser bindings — and what a change
 # to it costs is mostly those crates and the link at the end. These two settings are what
