@@ -16,12 +16,6 @@ target/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-AGENTS.md
-GLOSSARY.md
-MEMORY.md
-/docs/agents
-/docs/adr
-/graphify-out/
 /scratchpad/
 /.scratch/
 /.tmp/
