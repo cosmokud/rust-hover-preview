@@ -23,10 +23,7 @@
 //! the desk, in `pin_taskbar_window.rs` — is made directly for that reason. Those are shown
 //! unactivated, so they take no caret, and they are a rectangle of the suite's for as long as they
 //! are up: that is the price of a picture read off the screen, and it is not a price a layered
-//! window can pay. A curtain of the suite's own is stood over each of them (see
-//! `stand_a_curtain_over`), which is a window of the same road as the rest rather than an exemption:
-//! measured, a window at no alpha is composed as nothing and shows nothing of itself over what it
-//! stands in front of, so a curtain leaves exactly the rectangle it was stood over where it was.
+//! window can pay.
 
 use std::fs;
 use std::path::{Path, PathBuf};
