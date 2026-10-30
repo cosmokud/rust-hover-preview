@@ -49,7 +49,7 @@
 //! `take_down_the_pin_film_host`, called from the state a road out of a pin clears).
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -61,8 +61,9 @@ use windows::Win32::Graphics::Gdi::PAINTSTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
-    RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW, GetClientRect, GetWindowLongPtrW,
+    GetWindowThreadProcessId, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, GWLP_HWNDPARENT,
     GWL_EXSTYLE, GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL,
     SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE,
@@ -358,11 +359,57 @@ pub(super) fn stand_the_restore_noted_at(since: Option<Instant>) {
 /// (see `the_app_was_taken_away_while_the_pin_held_the_keyboard`).
 const TAKEN_AWAY_WITH_THE_CARET_SETTLE: Duration = Duration::from_millis(200);
 
-/// When the Shell last took this app away **while the pin held the keyboard**, while that taking is
+/// When the taskbar last took this app away **while the pin held the keyboard**, while that taking is
 /// still read as the first half of a press on the pair's button.
 static THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
 
-/// Note that the Shell has just **taken this app away while the pin held the keyboard**, which is the
+/// The thread the Shell's own taskbar runs on, asked of the taskbar's window once for the run and kept
+/// from then on (see `the_taskbars_thread`).
+static THE_TASKBARS_THREAD: OnceLock<Option<u32>> = OnceLock::new();
+
+/// The taskbar's thread a test stands in place of the Shell's own, because a test cannot take one from a
+/// desktop: `0` is no stand at all (see `stand_the_taskbars_thread_at`).
+#[cfg(test)]
+static THE_TASKBARS_THREAD_STOOD: AtomicU32 = AtomicU32::new(0);
+
+/// The thread the Shell's own taskbar runs on — `Shell_TrayWnd`, the window the pair's button belongs to —
+/// asked once and kept.
+///
+/// **It is what says the *taskbar* is what took this app away.** `WM_ACTIVATEAPP`'s `lParam` is the thread
+/// id of the *other* side of the switch, so the take-away a click begins with names the taskbar and nothing
+/// else does (see `note_the_app_was_taken_away_while_the_pin_held_the_keyboard`). Measured on this desktop,
+/// `Shell_TrayWnd` is `hwnd=198044 thread=7448 pid=44484`, and a click on the pair's button blinked with
+/// `lParam=7448`.
+///
+/// **Asked once, and never again on the message path.** The question is asked of every taking, and a taking
+/// is a `WM_ACTIVATEAPP` on this app's message loop; `FindWindowW` is a window lookup across processes, so
+/// an answer taken per message would be that lookup inside every taking the app is ever handed. The answer
+/// cannot change while the taskbar lives, and a Shell that went down and up again would take a new thread
+/// this answer does not know: the press would then not be read until the run is restarted, which is the side
+/// of that to be wrong on — a button that does nothing rather than a lookup on every message.
+///
+/// A desktop with no taskbar to ask answers `None`, and a thread id the question could not name is not the
+/// taskbar's: the taking is then not noted at all, rather than noted against a guess (see
+/// `note_the_app_was_taken_away_while_the_pin_held_the_keyboard` for what a taking that is not noted costs).
+fn the_taskbars_thread() -> Option<u32> {
+    // A test cannot take a thread id from a desktop, so a stand here is the Shell's answer whole (see
+    // `stand_the_taskbars_thread_at`).
+    #[cfg(test)]
+    {
+        let stood = THE_TASKBARS_THREAD_STOOD.load(Ordering::SeqCst);
+        if stood != 0 {
+            return Some(stood);
+        }
+    }
+
+    *THE_TASKBARS_THREAD.get_or_init(|| unsafe {
+        let taskbar = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).ok()?;
+        let thread = GetWindowThreadProcessId(taskbar, None);
+        (thread != 0).then_some(thread)
+    })
+}
+
+/// Note that the **taskbar** has just **taken this app away while the pin held the keyboard**, which is the
 /// first half of a press on the pair's button while the pin is in front: the Shell cannot put that window
 /// down, so it deactivates the app and gives it straight back, and that blink is the whole of what the
 /// click delivers (see `the_app_was_taken_away_while_the_pin_held_the_keyboard`).
@@ -378,14 +425,30 @@ static THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE: Mutex<Option<Instant>> = Mut
 /// click that only brings the pin forward from behind the handover it has always been: the app is not
 /// taken away on that road at all.
 ///
+/// **And the taking is asked *who* took it, because "taken away" on its own is not a press.** The message's
+/// `lParam` is the thread id of the other side of the switch, and measured on this desktop a blink of the
+/// pair's button read `lParam=7448` — `Shell_TrayWnd`'s own thread — while a deactivation to another
+/// program read `lParam=8940` and the come-back read `lParam=36608`, this app's own. So what the note knows
+/// from then on is the whole fact: *the taskbar took this app away while the pin held the keyboard*. A
+/// taking that names any other program is that program's rather than the taskbar's button — an Alt-Tab
+/// round trip made inside a settle is read as nothing at all — and one whose thread cannot be named is no
+/// note either: a desktop with no taskbar to ask leaves the button's press simply unread, so the pin is not
+/// put away, which is the side of that to be wrong on (see `the_taskbars_thread`).
+///
 /// It is taken from the **chrome's** procedure, because the chrome is the window the Shell drives on that
 /// road: a real click on the host's own button has been traced deactivating and re-activating the pin's
 /// own window and handing the host nothing at all.
 pub(super) fn note_the_app_was_taken_away_while_the_pin_held_the_keyboard(
     msg: u32,
     wparam: WPARAM,
+    lparam: LPARAM,
 ) {
     if msg != WM_ACTIVATEAPP || wparam.0 != 0 || !pin_is_focused() {
+        return;
+    }
+    // The thread is the other side of the switch, and the taskbar's is the only one a press arrives with:
+    // a taking this app is given by any other program is that program's hand on it, not a click.
+    if Some(lparam.0 as u32) != the_taskbars_thread() {
         return;
     }
     if let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE.lock() {
@@ -393,7 +456,7 @@ pub(super) fn note_the_app_was_taken_away_while_the_pin_held_the_keyboard(
     }
 }
 
-/// Whether the Shell took this app away **while the pin held the keyboard** and gave it straight back
+/// Whether the taskbar took this app away **while the pin held the keyboard** and gave it straight back
 /// just now, which is **the one thing a press on the pair's button has that no other activation of the
 /// chrome has**.
 ///
@@ -410,7 +473,10 @@ pub(super) fn note_the_app_was_taken_away_while_the_pin_held_the_keyboard(
 /// caret in the pin is still inside its settle, and nothing about where the caret is now.
 ///
 /// **An Alt-Tab back into the app is the shape it must not be read as**: that is the app simply coming
-/// back, with the taking away long behind it, and a note that has run out answers `no` for it.
+/// back, with the taking away long behind it, and a note that has run out answers `no` for it. And an
+/// Alt-Tab round trip made inside a settle — away and back before this is asked — leaves no note at all,
+/// because the thread that took the app away was the other program's rather than the taskbar's (see
+/// `the_taskbars_thread`).
 fn the_app_was_taken_away_while_the_pin_held_the_keyboard() -> bool {
     let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE.lock() else {
         return false;
@@ -485,6 +551,14 @@ pub(super) fn stand_the_app_taken_away_with_the_caret_at(since: Option<Instant>)
     if let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE.lock() {
         *taken_away = since;
     }
+}
+
+/// Stand `thread` in place of the Shell's own as the taskbar's thread, or give the Shell's answer back
+/// with `None` — a test of the click, because the taking a press is read by has to name a real taskbar and
+/// a test cannot take one from the desktop it runs on (see `the_taskbars_thread`).
+#[cfg(test)]
+pub(super) fn stand_the_taskbars_thread_at(thread: Option<u32>) {
+    THE_TASKBARS_THREAD_STOOD.store(thread.unwrap_or(0), Ordering::SeqCst);
 }
 
 /// Stand the note of this app moving its own caret at `since` in place of a press's own, or give the
@@ -696,8 +770,9 @@ pub(super) fn answer_a_click_on_the_chromes_button(msg: u32, wparam: WPARAM) -> 
 
 /// **Which check of `answer_a_click_on_the_chromes_button` answered `no`**, in the words a trace line can
 /// be read by: an activation of some other kind, a pair the pin's chrome does not wear the button for, a
-/// taking away the pin held no keyboard for (or one whose settle has run out), an activation this app's
-/// own caret caused, or a restore of the Shell's that is still making its own clicks.
+/// taking away that was not the taskbar's while the pin held the keyboard (or one whose settle has run
+/// out), an activation this app's own caret caused, or a restore of the Shell's that is still making its
+/// own clicks.
 ///
 /// **It decides nothing.** The gate is that function's and this is only asked where it has already refused
 /// a click, so that a log says which of them it was; the two ask the same facts in the same order, and the
@@ -712,7 +787,7 @@ fn why_the_click_on_the_chromes_button_was_not_the_toggle(wparam: WPARAM) -> &'s
     }
 
     if !the_app_was_taken_away_while_the_pin_held_the_keyboard() {
-        return "the pin did not hold the keyboard when the app was taken away";
+        return "the taskbar did not take the app away while the pin held the keyboard";
     }
 
     if the_app_moved_the_caret_just_now() {
