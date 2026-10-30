@@ -3324,17 +3324,32 @@ fn a_promoted_pair_asks_for_its_button_on_the_show_that_reads_it() {
 }
 
 /// **What a click on the pair's button delivers when the Shell cannot put the window down**: the app
-/// taken away, the chrome deactivated, and then the app and the chrome given straight back. It is the
-/// blink the chrome's own answer is read by (see
-/// `pin_film_host::answer_a_click_on_the_chromes_button`), in the order a traced click had it.
+/// taken away while the caret is in the pin, the caret taken with it, the app and the chrome given back
+/// with no caret at all, and the caret back in the pin afterwards. It is the blink the chrome's own answer
+/// is read by (see `pin_film_host::answer_a_click_on_the_chromes_button`), in the order a traced click had
+/// it: `.682` the take-away with `focus=pin`, `.685` the `WM_KILLFOCUS` that takes the caret with the app,
+/// `.696` the app back with `GetFocus()` empty, `.698` the chrome's `WA_ACTIVE`, `.698` the caret back in
+/// the pin.
 ///
-/// Safety: the messages are sent to the pin's own window, with the numbers the Shell sends with them.
+/// **The order is the whole of why the note is taken at the take-away**: the caret is gone by the time the
+/// activation arrives, so an answer that asks Windows for it there refuses the very click it exists for
+/// (see `pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard`).
+///
+/// Safety: the messages are sent to the pin's own window, with the numbers the Shell sends with them, and
+/// the caret is moved on this thread's own windows.
 unsafe fn the_shell_blinks_the_app_away_and_back(chrome: HWND) {
     unsafe {
+        // The take-away, with the caret still in the pin: this is the instant the fact is read at.
         SendMessageW(chrome, WM_ACTIVATEAPP, WPARAM(0), LPARAM(0));
-        SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_INACTIVE as usize), LPARAM(0));
+        // Windows takes the caret with the app — the same `WM_KILLFOCUS` the trace has at `.685` — and
+        // `GetFocus()` is empty from here to the end of the blink.
+        let _ = SetFocus(None);
+        // The app given back, with no caret anywhere.
         SendMessageW(chrome, WM_ACTIVATEAPP, WPARAM(1), LPARAM(0));
+        // The chrome's own activation, which is the click all of the above is read by.
         SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0));
+        // The caret back in the pin, which is where the click's own activation leaves it.
+        let _ = SetFocus(chrome);
     }
 }
 
@@ -3392,6 +3407,11 @@ fn a_click_on_the_pairs_button_at_the_chrome_is_the_pins_minimize() {
         "the blink is the button's press, and the pin is put away by its own taskbar road"
     );
     assert!(
+        pin_is_focused(),
+        "and the caret is back in the pin, which is where the blink's last message left it — the \
+         activation the press was read at came with no caret in the pin at all"
+    );
+    assert!(
         !pin_is_collapsed(),
         "and the chrome answers with the command rather than putting anything down itself: the \
          collapse is the loop's"
@@ -3403,9 +3423,9 @@ fn a_click_on_the_pairs_button_at_the_chrome_is_the_pins_minimize() {
 }
 
 /// **A pin that simply comes back is not a click on the pair's button.** The blink the chrome reads a
-/// press by is the app being taken away, so an app that was never taken away — an Alt-Tab back into it,
-/// say — comes back with no press behind it, however the chrome is activated (see
-/// `pin_film_host::the_app_was_taken_away_and_given_back`).
+/// press by is the app being taken away **while the pin held the keyboard**, so an app that was never
+/// taken away — an Alt-Tab back into it, say — comes back with no press behind it, however the chrome is
+/// activated (see `pin_film_host::the_app_was_taken_away_while_the_pin_held_the_keyboard`).
 ///
 /// And a taking away that ended long ago is no part of this click either: the note's settle is the
 /// window a press has, and a note that has run out is cleared as it is read.
@@ -3443,7 +3463,9 @@ fn a_pin_that_simply_comes_back_is_not_a_click_on_the_chromes_button() {
     );
 
     // And a taking away whose settle has run out is a blink long finished rather than this click.
-    pin_film_host::stand_the_app_taken_away_at(Some(Instant::now() - Duration::from_millis(300)));
+    pin_film_host::stand_the_app_taken_away_with_the_caret_at(Some(
+        Instant::now() - Duration::from_millis(300),
+    ));
     unsafe { SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
     assert_eq!(
         take_pin_command(),
@@ -3453,12 +3475,67 @@ fn a_pin_that_simply_comes_back_is_not_a_click_on_the_chromes_button() {
 
     // The same activation with a taking away inside its settle is the press the refusals above are told
     // from, which is what says the note is the check that answered them.
-    pin_film_host::stand_the_app_taken_away_at(Some(Instant::now()));
+    pin_film_host::stand_the_app_taken_away_with_the_caret_at(Some(Instant::now()));
     unsafe { SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
     assert_eq!(
         take_pin_command(),
         Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
         "a pin the Shell took away and gave back inside the settle is the button's press"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **A taking away the pin held no keyboard for is not a click on the pair's button**, however much the
+/// messages around it look like one: what says a press arrived is that the Shell took the app away **with
+/// the caret in the pin**, and the caret is read at the take-away because the activation arrives with none
+/// (see `pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard`).
+///
+/// The same messages a click delivers are sent here, so what refuses the activation is the taking the note
+/// never made rather than the shape of the blink — and the run's own line is asked which check answered,
+/// so a refusal that came of the caret read at the activation instead would be seen.
+#[test]
+fn a_take_away_while_the_pin_holds_no_keyboard_is_not_a_click_on_the_chromes_button() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back when
+    // the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let chrome = film.pin_hwnd;
+    let _ = take_pin_command();
+    pin_film_host::stand_the_caret_moved_at(Some(Instant::now() - Duration::from_millis(300)));
+    pin_film_host::stand_the_app_taken_away_with_the_caret_at(None);
+    assert!(
+        !pin_is_focused(),
+        "the pin holds no keyboard: this is a click that arrives while the user is in another program"
+    );
+
+    // The blink a click delivers, with no caret in the pin at its take-away.
+    pin_trace::clear_noted();
+    unsafe { SendMessageW(chrome, WM_ACTIVATEAPP, WPARAM(0), LPARAM(0)) };
+    unsafe { SendMessageW(chrome, WM_ACTIVATEAPP, WPARAM(1), LPARAM(0)) };
+    unsafe { SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    let noted = pin_trace::noted_lines();
+
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "a taking away the pin held no keyboard for is no part of a click on the button"
+    );
+    assert!(
+        noted.iter().any(|line| line
+            == "pin decision a click on the chrome's button: refused, the pin did not hold the keyboard \
+                when the app was taken away"),
+        "and the taking is the check that answered rather than the caret read at the activation: {noted:?}"
     );
 
     if let Ok(mut config) = CONFIG.lock() {
@@ -3502,7 +3579,7 @@ fn a_click_the_app_moved_its_own_caret_for_is_not_a_click_on_the_chromes_button(
     // activates. The blink is noted as the Shell leaves it, so that the caret's note is the one check
     // that answers.
     pin_film_host::stand_the_caret_moved_at(None);
-    pin_film_host::stand_the_app_taken_away_at(Some(Instant::now()));
+    pin_film_host::stand_the_app_taken_away_with_the_caret_at(Some(Instant::now()));
     let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
     // Safety: the ask is recorded rather than made on the user's desktop.
     unsafe { pin_take_focus(film.pin_hwnd, &recorder) };
@@ -3514,8 +3591,8 @@ fn a_click_the_app_moved_its_own_caret_for_is_not_a_click_on_the_chromes_button(
     );
     assert!(
         pin_is_focused(),
-        "and the pin holds the caret still, so the refusal is the caret's own note rather than a pin \
-         that holds no keyboard"
+        "and the pin holds the caret still, so the refusal is the caret's own note rather than a taking \
+         the note never made"
     );
 
     // **The handover of a click from behind**, which moves the caret the other road's way and is read by
@@ -3524,7 +3601,7 @@ fn a_click_the_app_moved_its_own_caret_for_is_not_a_click_on_the_chromes_button(
     let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
     // Safety: the ask is recorded rather than made on the user's desktop.
     unsafe { pin_take_the_caret(film.pin_hwnd, &recorder) };
-    pin_film_host::stand_the_app_taken_away_at(Some(Instant::now()));
+    pin_film_host::stand_the_app_taken_away_with_the_caret_at(Some(Instant::now()));
     unsafe { SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
     assert_eq!(
         take_pin_command(),
@@ -3535,7 +3612,7 @@ fn a_click_the_app_moved_its_own_caret_for_is_not_a_click_on_the_chromes_button(
     // With the caret's note gone the same activation is a press, which is what says the note — rather
     // than the pin, the button or the blink — is the check that refused both of them.
     pin_film_host::stand_the_caret_moved_at(None);
-    pin_film_host::stand_the_app_taken_away_at(Some(Instant::now()));
+    pin_film_host::stand_the_app_taken_away_with_the_caret_at(Some(Instant::now()));
     unsafe { SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
     assert_eq!(
         take_pin_command(),
@@ -3583,7 +3660,7 @@ fn the_click_that_restored_the_pin_is_not_a_click_on_the_chromes_button() {
     pin_film_host::stand_the_caret_moved_at(Some(Instant::now() - Duration::from_millis(300)));
 
     // A press on the button, with a restore of the pair settling behind it.
-    pin_film_host::stand_the_app_taken_away_at(Some(Instant::now()));
+    pin_film_host::stand_the_app_taken_away_with_the_caret_at(Some(Instant::now()));
     pin_film_host::stand_the_restore_noted_at(Some(Instant::now()));
     unsafe { SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
     assert_eq!(

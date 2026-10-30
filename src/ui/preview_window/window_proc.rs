@@ -216,9 +216,11 @@ pub(super) unsafe extern "system" fn window_proc(
     // **A press on the pair's button is the Shell taking this app away and giving it straight back**, and
     // this is where the first half of that blink is noted: the chrome is the window the Shell drives when
     // it cannot put the host down, because it is the window already in front (see
-    // `pin_film_host::note_the_app_was_taken_away`). The note is what tells that click from every
-    // activation this app makes of itself.
-    pin_film_host::note_the_app_was_taken_away(msg, wparam);
+    // `pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard`). The note is what
+    // tells that click from every activation this app makes of itself, and it carries the caret too: only
+    // a taking made while the pin holds the keyboard is noted, because by the time the activation arrives
+    // Windows has taken the caret away with the app and not yet given it back.
+    pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard(msg, wparam);
 
     match msg {
         WM_DISPLAYCHANGE | WM_DPICHANGED => {

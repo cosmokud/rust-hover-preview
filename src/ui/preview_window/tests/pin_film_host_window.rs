@@ -175,9 +175,9 @@ impl Drop for StandingFilm {
         // back (see `the_restore_is_settling`).
         pin_film_host::stand_the_restore_noted_at(None);
         // And neither note a click on the pair's button is read by, which the tests stand in the
-        // Shell's place and in this app's own (see `the_app_was_taken_away_and_given_back` and
-        // `the_app_moved_the_caret_just_now`).
-        pin_film_host::stand_the_app_taken_away_at(None);
+        // Shell's place and in this app's own (see
+        // `the_app_was_taken_away_while_the_pin_held_the_keyboard` and `the_app_moved_the_caret_just_now`).
+        pin_film_host::stand_the_app_taken_away_with_the_caret_at(None);
         pin_film_host::stand_the_caret_moved_at(None);
         unsafe {
             pin_film_host::take_down_the_pin_film_host();
