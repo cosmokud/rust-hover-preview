@@ -346,58 +346,79 @@ pub(super) fn stand_the_restore_noted_at(since: Option<Instant>) {
     }
 }
 
-/// How long the Shell's taking this app away is read as the start of a press on the pair's button,
-/// from the message it was noted on.
+/// How long the Shell's taking this app away — **while the pin held the keyboard** — is read as the
+/// start of a press on the pair's button, from the message it was noted on.
 ///
 /// **One click's worth of a clock, rather than a state a later message has to clear.** A press on the
 /// pair's button while the pin is in front is a press on a window the Shell cannot put down, so it takes
-/// the app away and gives it straight back: a traced click delivered `WM_ACTIVATEAPP(0)` and, seventeen
+/// the app away and gives it straight back: a traced click delivered `WM_ACTIVATEAPP(0)` and, fourteen
 /// milliseconds later, `WM_ACTIVATEAPP(1)` with a `WA_ACTIVE`. A hand's next click on the same button is
 /// hundreds of milliseconds away at the very least, which is the gap this is set in. A note that has run
 /// out is cleared as it is read, so a taking that ended long ago cannot shadow a click that is a click
-/// (see `the_app_was_taken_away_and_given_back`).
-const TAKEN_AWAY_SETTLE: Duration = Duration::from_millis(200);
+/// (see `the_app_was_taken_away_while_the_pin_held_the_keyboard`).
+const TAKEN_AWAY_WITH_THE_CARET_SETTLE: Duration = Duration::from_millis(200);
 
-/// When the Shell last took this app away, while that taking is still read as the first half of a press
-/// on the pair's button.
-static THE_APP_WAS_TAKEN_AWAY_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+/// When the Shell last took this app away **while the pin held the keyboard**, while that taking is
+/// still read as the first half of a press on the pair's button.
+static THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
 
-/// Note that the Shell has just **taken this app away**, which is the first half of a press on the
-/// pair's button while the pin is in front: the Shell cannot put that window down, so it deactivates the
-/// app and gives it straight back, and that blink is the whole of what the click delivers (see
-/// `the_app_was_taken_away_and_given_back`).
+/// Note that the Shell has just **taken this app away while the pin held the keyboard**, which is the
+/// first half of a press on the pair's button while the pin is in front: the Shell cannot put that window
+/// down, so it deactivates the app and gives it straight back, and that blink is the whole of what the
+/// click delivers (see `the_app_was_taken_away_while_the_pin_held_the_keyboard`).
+///
+/// **The caret is read here, at the take-away, because at the activation there is none left to read.** A
+/// traced click on that button, with the pin in front and the caret in it, delivered `WM_ACTIVATEAPP(0)`
+/// at `.682` with `focus=pin`, and a `WM_KILLFOCUS` at `.685` — Windows takes the caret away with the app
+/// — then `WM_ACTIVATEAPP(1)` at `.696` with `GetFocus()` empty, and the chrome's `WA_ACTIVE` at `.698`,
+/// where the question asked of the caret answers `no`. Asked there, the one thing this note exists for is
+/// refused every time on this desktop; asked here, the answer is still the pin's, and what the note
+/// carries from then on is the whole fact: *this app was taken away while the pin held the keyboard*. A
+/// taking that arrives with the caret anywhere else is noted as nothing at all, which is what keeps the
+/// click that only brings the pin forward from behind the handover it has always been: the app is not
+/// taken away on that road at all.
 ///
 /// It is taken from the **chrome's** procedure, because the chrome is the window the Shell drives on that
 /// road: a real click on the host's own button has been traced deactivating and re-activating the pin's
 /// own window and handing the host nothing at all.
-pub(super) fn note_the_app_was_taken_away(msg: u32, wparam: WPARAM) {
-    if msg != WM_ACTIVATEAPP || wparam.0 != 0 {
+pub(super) fn note_the_app_was_taken_away_while_the_pin_held_the_keyboard(
+    msg: u32,
+    wparam: WPARAM,
+) {
+    if msg != WM_ACTIVATEAPP || wparam.0 != 0 || !pin_is_focused() {
         return;
     }
-    if let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_SINCE.lock() {
+    if let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE.lock() {
         *taken_away = Some(Instant::now());
     }
 }
 
-/// Whether the Shell took this app away and gave it straight back just now, which is **the one thing a
-/// press on the pair's button has that no other activation of the chrome has**.
+/// Whether the Shell took this app away **while the pin held the keyboard** and gave it straight back
+/// just now, which is **the one thing a press on the pair's button has that no other activation of the
+/// chrome has**.
 ///
 /// The button belongs to the pair, and with `Pin Mode → Always On Top` off that is the film host — but a
 /// click on it has been traced arriving at the pin's chrome instead, with the host handed nothing at
 /// all: the Shell fell back to the window that was already in front, which is one it cannot put down.
-/// What it delivers there is the blink — `WM_ACTIVATEAPP(0)`, then `WM_ACTIVATEAPP(1)` and a `WA_ACTIVE`
-/// a few milliseconds later — and nothing else of a click (see `TAKEN_AWAY_SETTLE`).
+/// What it delivers there is the blink — `WM_ACTIVATEAPP(0)`, then `WM_KILLFOCUS`, then
+/// `WM_ACTIVATEAPP(1)` and a `WA_ACTIVE` a few milliseconds later — and nothing else of a click (see
+/// `TAKEN_AWAY_WITH_THE_CARET_SETTLE`).
+///
+/// **The caret is the note's, not this reading's.** Windows takes the caret away with the app and gives
+/// it back only after the chrome has been activated (see the note above), so a `GetFocus()` asked here
+/// answers `no` for every click this desktop delivers: what is asked is whether a taking made with the
+/// caret in the pin is still inside its settle, and nothing about where the caret is now.
 ///
 /// **An Alt-Tab back into the app is the shape it must not be read as**: that is the app simply coming
 /// back, with the taking away long behind it, and a note that has run out answers `no` for it.
-fn the_app_was_taken_away_and_given_back() -> bool {
-    let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_SINCE.lock() else {
+fn the_app_was_taken_away_while_the_pin_held_the_keyboard() -> bool {
+    let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE.lock() else {
         return false;
     };
     let Some(since) = *taken_away else {
         return false;
     };
-    if since.elapsed() < TAKEN_AWAY_SETTLE {
+    if since.elapsed() < TAKEN_AWAY_WITH_THE_CARET_SETTLE {
         return true;
     }
     *taken_away = None;
@@ -451,13 +472,17 @@ fn the_app_moved_the_caret_just_now() -> bool {
     false
 }
 
-/// Stand the note of the Shell taking the app away at `since` in place of the Shell's own, or give the
-/// Shell's answer back with `None` — a test of the blink, which cannot wait out a real click's own
-/// messages nor the hundreds of milliseconds a hand's next click is away (see
-/// `the_app_was_taken_away_and_given_back`).
+/// Stand the note of the Shell taking the app away **while the pin held the keyboard** at `since` in
+/// place of the Shell's own, or give the Shell's answer back with `None` — a test of the blink, which
+/// cannot wait out a real click's own messages nor the hundreds of milliseconds a hand's next click is
+/// away (see `the_app_was_taken_away_while_the_pin_held_the_keyboard`).
+///
+/// **Both halves of the fact are stood together, because it is one fact**: the instant the taking was
+/// noted at, and the caret it is the taking *of*. A taking the pin held no keyboard for is no note at
+/// all — the note itself writes none — so an instant stood here is an instant that came with the caret.
 #[cfg(test)]
-pub(super) fn stand_the_app_taken_away_at(since: Option<Instant>) {
-    if let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_SINCE.lock() {
+pub(super) fn stand_the_app_taken_away_with_the_caret_at(since: Option<Instant>) {
+    if let Ok(mut taken_away) = THE_APP_WAS_TAKEN_AWAY_WITH_THE_CARET_SINCE.lock() {
         *taken_away = since;
     }
 }
@@ -620,7 +645,12 @@ fn why_the_second_click_was_not_the_toggle(hwnd: HWND, wparam: WPARAM) -> &'stat
 /// that button has been traced activating and deactivating the pin's **chrome** and handing the host
 /// nothing at all: the Shell fell back to the window that was already in front, which is a window it
 /// cannot put down. What arrives there is the Shell taking the app away and giving it straight back, and
-/// that blink is the click (see `the_app_was_taken_away_and_given_back`).
+/// that blink is the click (see `the_app_was_taken_away_while_the_pin_held_the_keyboard`).
+///
+/// **And the caret the blink was made with is the note's, not this activation's**: Windows takes the caret
+/// away with the app and gives it back after the chrome has been activated, so by the time this click
+/// arrives `GetFocus()` is empty — on this desktop, on every click (see the note). What is asked here is
+/// what that note recorded.
 ///
 /// **And nothing this app did to its own caret is such a click** (see `the_app_moved_the_caret_just_now`):
 /// a press on the pin activates the chrome by asking for the foreground, and the handover of a click from
@@ -640,8 +670,7 @@ pub(super) fn answer_a_click_on_the_chromes_button(msg: u32, wparam: WPARAM) -> 
     if msg != WM_ACTIVATE
         || !matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE)
         || !the_chrome_wears_the_pins_button()
-        || !pin_is_focused()
-        || !the_app_was_taken_away_and_given_back()
+        || !the_app_was_taken_away_while_the_pin_held_the_keyboard()
         || the_app_moved_the_caret_just_now()
         || the_restore_is_settling()
     {
@@ -667,8 +696,8 @@ pub(super) fn answer_a_click_on_the_chromes_button(msg: u32, wparam: WPARAM) -> 
 
 /// **Which check of `answer_a_click_on_the_chromes_button` answered `no`**, in the words a trace line can
 /// be read by: an activation of some other kind, a pair the pin's chrome does not wear the button for, a
-/// pin that holds no keyboard, an activation with no blink behind it, one this app's own caret caused, or
-/// a restore of the Shell's that is still making its own clicks.
+/// taking away the pin held no keyboard for (or one whose settle has run out), an activation this app's
+/// own caret caused, or a restore of the Shell's that is still making its own clicks.
 ///
 /// **It decides nothing.** The gate is that function's and this is only asked where it has already refused
 /// a click, so that a log says which of them it was; the two ask the same facts in the same order, and the
@@ -682,12 +711,8 @@ fn why_the_click_on_the_chromes_button_was_not_the_toggle(wparam: WPARAM) -> &'s
         return "the pin is away/always-on-top";
     }
 
-    if !pin_is_focused() {
-        return "the pin holds no keyboard";
-    }
-
-    if !the_app_was_taken_away_and_given_back() {
-        return "the app was not taken away";
+    if !the_app_was_taken_away_while_the_pin_held_the_keyboard() {
+        return "the pin did not hold the keyboard when the app was taken away";
     }
 
     if the_app_moved_the_caret_just_now() {
