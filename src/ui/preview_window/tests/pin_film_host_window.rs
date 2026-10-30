@@ -12,12 +12,13 @@
 
 use super::*;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
     GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE,
-    SWP_NOZORDER, SW_RESTORE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_ERASEBKGND, WS_CHILD,
+    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SC_MINIMIZE,
+    SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, SW_SHOWNOACTIVATE, WA_ACTIVE,
+    WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ERASEBKGND, WM_SIZE, WM_SYSCOMMAND, WS_CHILD,
     WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
@@ -4654,6 +4655,340 @@ fn a_film_host_brought_back_is_the_pin_and_its_film_coming_back() {
         "and the source the Shell draws through the host is up again: a restore that showed the host \
          alone left the band black"
     );
+}
+
+/// **The Shell's own minimize of a film host's button is the pin going away into the taskbar**, and it
+/// goes by the road the pin's own `Minimize → To Taskbar` takes.
+///
+/// The fault this is a regression test for: with `Pin Mode → Always On Top` off the pair's button is the
+/// film host's — the host owns the pin's chrome, so it is the window the Shell lists for the pair (see
+/// `own_the_pin_window`) — and clicking that button did nothing at all. The Shell's minimize of the host
+/// reached the default answer, which minimized the window and left `pin.collapsed == false`: a pin
+/// answering every press with no window of its own on the screen, and a button that could only ever
+/// bring that window back onto a pin that believed it had never gone.
+///
+/// The window is left standing by the answer, and the command is the whole of the ask: `DefWindowProcW`
+/// must not put the host down behind the pin's state, or the two would disagree for the whole of a
+/// collapse the pin never knew it was in (see `the_shell_put_the_host_down`).
+#[test]
+fn the_shells_minimize_of_a_films_host_puts_the_pin_away_in_the_taskbar() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and the setting is put back before it ends.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _ = take_pin_command();
+
+    // What a second click on the pair's button (and a `Win`+`D`) sends the window it lists.
+    unsafe { SendMessageW(host, WM_SYSCOMMAND, WPARAM(SC_MINIMIZE as usize), LPARAM(0)) };
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        "the Shell's minimize of the host is the pin's own road into the taskbar"
+    );
+    assert!(
+        !unsafe { IsIconic(host) }.as_bool(),
+        "and the window is still up: it is the app's collapse that puts it down, with the state that \
+         says the pin is away, rather than the default answer doing it behind the pin"
+    );
+    assert!(
+        !pin_is_collapsed(),
+        "so the pin's state has not moved yet either — the queued command is the whole of the ask"
+    );
+
+    // And the size a window reports as it goes down, which is what a `ShowWindow(SW_MINIMIZE)` from
+    // anywhere at all delivers.
+    unsafe { SendMessageW(host, WM_SIZE, WPARAM(SIZE_MINIMIZED as usize), LPARAM(0)) };
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        "the size a minimize reports is the same ask"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **A second click on a film host's button is the pin's minimize**, and the first is still the keyboard
+/// handover.
+///
+/// The Shell activates the window the pair's button belongs to on every click. The first arrives while
+/// the user is in another program, and it is the handover this window has always made (see
+/// `answer_an_activation_of_the_host`). The second arrives while the pin already holds that keyboard,
+/// and a window whose own button is clicked while the user is in it is a window being minimized — the
+/// toggle the pair was missing, and the same button brings the pin back by the Shell's restore (see
+/// `answer_a_second_click_on_the_hosts_button`).
+///
+/// **The keyboard is what tells the two clicks apart**, so the test measures it where Windows puts it.
+/// The claim a handover takes is dropped between the two clicks: a click answered as a handover would
+/// take it again and say so, and the minimize touches no keyboard at all.
+#[test]
+fn a_second_click_on_a_films_host_button_is_the_pins_minimize() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and the setting is put back before it ends.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _ = take_pin_command();
+    assert!(
+        !pin_is_focused(),
+        "the pin begins with no keyboard, which is the state a take-up leaves it in"
+    );
+
+    // The first click on the button: the handover, unchanged.
+    unsafe {
+        SendMessageW(
+            host,
+            WM_ACTIVATE,
+            WPARAM(WA_CLICKACTIVE as usize),
+            LPARAM(0),
+        )
+    };
+    assert_eq!(
+        unsafe { GetFocus() },
+        film.pin_hwnd,
+        "the first click leaves the caret in the pin, not on a disabled window"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and a click that only hands the keyboard over asks for nothing else"
+    );
+
+    // The claim goes, so that a second handover would be visible in what it takes again.
+    pin_release_focus();
+    assert!(
+        !pin_holds_a_keyboard(),
+        "the claim the handover takes is the one thing this test reads the second click by"
+    );
+
+    // The second click, with the pin the window the user is in.
+    unsafe {
+        SendMessageW(
+            host,
+            WM_ACTIVATE,
+            WPARAM(WA_CLICKACTIVE as usize),
+            LPARAM(0),
+        )
+    };
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        "the second click on the button is the button's own minimize"
+    );
+    assert!(
+        !pin_holds_a_keyboard(),
+        "and it is no handover: a click answered as one would have taken the keyboard again and \
+         claimed it, which is the ask this one must not make"
+    );
+    assert_eq!(
+        unsafe { GetFocus() },
+        film.pin_hwnd,
+        "the caret is where the first click put it, because this click asked for the window to go \
+         away rather than for the keyboard"
+    );
+    assert!(
+        !pin_is_collapsed(),
+        "and the host is left for the pin's own collapse to put down, as the state's road does"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **A first click on a film host's button is still the pin's keyboard**, and it asks for nothing else.
+///
+/// The user is in another program, so the pin holds no keyboard and the click is the handover it has
+/// always been — the one case the new arm beside it must never take (see
+/// `answer_a_second_click_on_the_hosts_button`). Answered as a minimize, the button would put the pin
+/// away instead of bringing it to the front.
+#[test]
+fn a_first_click_on_a_films_host_button_still_hands_the_pin_its_keyboard() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and the setting is put back before it ends.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _ = take_pin_command();
+    assert!(
+        !pin_is_focused(),
+        "the user is in another program, so the pin the click arrives at holds no keyboard"
+    );
+
+    unsafe { SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    assert_eq!(
+        unsafe { GetFocus() },
+        film.pin_hwnd,
+        "the click hands the pin its keyboard, as the first click on that button always has"
+    );
+    assert!(
+        pin_holds_a_keyboard(),
+        "and the pin holds the claim a press gives it, so its own keys are answered"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and nothing is minimized: the pin was not the window the user was in"
+    );
+    assert!(!pin_is_collapsed(), "so the pin stands where it was");
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **A hover's film host is never a pin's minimize**, though it is made from the same class and answered
+/// by the same procedure (see `answer_a_host`): the gate is the pin's own host, and a hover is nobody's
+/// button. The pin's own host is standing beside it here, so what says no is the window the message
+/// arrives at rather than there being no pin to put away.
+#[test]
+fn a_hover_film_host_is_never_a_pins_minimize() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and the hover's window is taken down below.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let hover = unsafe {
+        hover_film_host::take_up_the_hover_film_host((NOWHERE, NOWHERE, NOWHERE + 64, NOWHERE + 48))
+    }
+    .expect("the hover's host");
+    let _ = take_pin_command();
+
+    // The answer the shared procedure gives a hover's host is the default one: nothing of the app's
+    // claims its minimize for a pin.
+    assert!(
+        unsafe {
+            pin_film_host::answer_a_host(
+                hover,
+                WM_SYSCOMMAND,
+                WPARAM(SC_MINIMIZE as usize),
+                LPARAM(0),
+            )
+        }
+        .is_none(),
+        "a hover's host is no pin's button, so neither of the minimize's messages is answered"
+    );
+    assert!(
+        unsafe {
+            pin_film_host::answer_a_host(hover, WM_SIZE, WPARAM(SIZE_MINIMIZED as usize), LPARAM(0))
+        }
+        .is_none(),
+        "and the size a minimize reports is answered the same way"
+    );
+
+    // And through the window's own procedure, which is the road a real message takes.
+    unsafe {
+        SendMessageW(
+            hover,
+            WM_SYSCOMMAND,
+            WPARAM(SC_MINIMIZE as usize),
+            LPARAM(0),
+        )
+    };
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "a hover's host is no pin's button, so its minimize asks nothing of a pin"
+    );
+    assert!(
+        !unsafe { IsIconic(hover) }.as_bool(),
+        "and nothing of a pin's touched the window: a disabled host is not put down by a system \
+         command at all, and either way the hover is left as it was"
+    );
+
+    // The same message to the pin's own host, so that the test says what makes the difference: the
+    // window, and not a road turned off for the whole run.
+    unsafe { SendMessageW(host, WM_SYSCOMMAND, WPARAM(SC_MINIMIZE as usize), LPARAM(0)) };
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        "while the pin's own host is the one ask that is the pin going away"
+    );
+
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **A window that is not the pin's host is never a pin's minimize**, whatever it is sent: both of the
+/// arms the shell's own messages are answered by are gated on the window being the host the pair's
+/// button belongs to, and a stray handle is answered with nothing at all.
+#[test]
+fn a_window_that_is_not_the_pins_host_is_never_a_pins_minimize() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and the setting is put back before it ends.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let _ = pin_film_host::film_host().expect("the film's host");
+    let _ = take_pin_command();
+
+    let elsewhere = HWND(0x3000 as *mut _);
+    assert!(
+        unsafe {
+            pin_film_host::answer_a_host(
+                elsewhere,
+                WM_SYSCOMMAND,
+                WPARAM(SC_MINIMIZE as usize),
+                LPARAM(0),
+            )
+        }
+        .is_none(),
+        "the Shell's minimize of a window that is not the pin's host is nobody's ask"
+    );
+    assert!(
+        unsafe {
+            pin_film_host::answer_a_host(
+                elsewhere,
+                WM_ACTIVATE,
+                WPARAM(WA_ACTIVE as usize),
+                LPARAM(0),
+            )
+        }
+        .is_none(),
+        "and neither is an activation of one"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "so no minimize is queued for a window the pair's button is not worn by"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
 }
 
 /// Let the shows a restore asks for land: the source is shown with `ShowWindowAsync`, which is a message

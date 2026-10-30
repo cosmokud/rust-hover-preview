@@ -20,13 +20,18 @@
 //! disabled window is skipped by `WindowFromPoint`, so the press arrives at the pin rather than at
 //! the host. **And a disabled window cannot hold a keyboard anybody can type into**, while it is
 //! still the window a click on the pair's taskbar button activates — so the host answers that
-//! activation with the pin's own window (see `answer_an_activation_of_the_host`).
+//! activation with the pin's own window, and the click that arrives once the pin already has the
+//! keyboard puts the pin away (see `answer_an_activation_of_the_host` and
+//! `answer_a_second_click_on_the_hosts_button`).
 //!
 //! **And it is the window a put-away pin's taskbar button belongs to.** An owned window carries no
 //! button of its own, so a pin put away into the taskbar is *the host minimized*, brought back by the
 //! Shell's own restore (see `the_pin_came_back`), and its hover is the still this app takes of it
 //! before it goes down — the host's own rows are the black behind the film, so a still of those rows
-//! is no picture at all (see `keep_the_pins_picture_for_the_taskbar`).
+//! is no picture at all (see `keep_the_pins_picture_for_the_taskbar`). **So that one button is the
+//! whole of the toggle**: a minimize of the host is the pin going away into the taskbar, on the road
+//! the pin's own minimize takes, and the Shell's restore of the window is the pin coming back (see
+//! `the_shell_put_the_host_down`).
 //!
 //! The host outlives the player once begun into it: a seek is mpv's own IPC and a step begins
 //! another player behind the same host. It goes down with the pin (see
@@ -47,10 +52,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
     RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE,
-    HWND_NOTOPMOST, HWND_TOPMOST, SC_CLOSE, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CLOSE,
-    WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_PAINT, WM_SETFOCUS, WM_SYSCOMMAND, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_POPUP, WINDOW_EX_STYLE,
+    HWND_NOTOPMOST, HWND_TOPMOST, SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE,
+    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE,
+    WA_CLICKACTIVE, WM_ACTIVATE, WM_CLOSE, WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_PAINT,
+    WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_POPUP,
+    WINDOW_EX_STYLE,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -86,8 +92,9 @@ unsafe extern "system" fn the_default_answer(
 /// **One answer rather than two procedures' worth, because the window changes hands under a take-up**:
 /// a hover's host that a pin promoted *is* the pin's host from then on, so everything the pin's own
 /// class owes — the band painted behind the film, the cover a relaunch left standing, the Shell's own
-/// close, the window coming back out of the taskbar, and the Shell's ask for the button's still — has
-/// to be answered by whichever class the window happened to be made from.
+/// close, the Shell's minimize of the button or the button's own second click, the window coming back
+/// out of the taskbar, and the Shell's ask for the button's still — has to be answered by whichever
+/// class the window happened to be made from.
 ///
 /// Safety: the answers are those of a window of this app's own, asked from its own window procedure.
 pub(super) unsafe fn answer_a_host(
@@ -112,6 +119,24 @@ pub(super) unsafe fn answer_a_host(
     }
 
     if let Some(answer) = answer_the_hosts_close(msg, wparam) {
+        return Some(answer);
+    }
+
+    // **The Shell's own minimize of this window is the pin going away into the taskbar**, and `0` is
+    // what keeps `DefWindowProcW` from putting the window down behind the pin's state (see
+    // `the_shell_put_the_host_down`). **The collapse itself is the loop's, never this procedure's**: a
+    // window procedure that collapsed the pin would take the pin's lock, give a keyboard back and
+    // take a still of this very window from inside a message about it, so the command is queued and
+    // the pin's own `Minimize → To Taskbar` road puts the window down with the state that says so.
+    if the_shell_put_the_host_down(msg, wparam) && the_host_wears_the_pins_button(hwnd) {
+        ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+        return Some(LRESULT(0));
+    }
+
+    // **A click on the button of a pin the user is already in is that pin's minimize**, and it is
+    // asked before the handover below, which is what every other click on that button is (see
+    // `answer_a_second_click_on_the_hosts_button`).
+    if let Some(answer) = answer_a_second_click_on_the_hosts_button(hwnd, msg, wparam) {
         return Some(answer);
     }
 
@@ -158,6 +183,90 @@ fn answer_the_hosts_close(msg: u32, wparam: WPARAM) -> Option<LRESULT> {
     Some(LRESULT(0))
 }
 
+/// Whether this message is **the Shell putting the host — the window the pair's taskbar button
+/// belongs to — down**: its own system command, or the size a window is handed as it is minimized.
+///
+/// **Both readings are asked, because either is what arrives.** The Shell's ask for a window to go
+/// away is `WM_SYSCOMMAND`/`SC_MINIMIZE` — the press on the button of a window the user is already in,
+/// and what `Win`+`D` delivers to every window that offers a minimize box — while a
+/// `ShowWindow(SW_MINIMIZE)` from anywhere at all minimizes the window and reports it as
+/// `WM_SIZE`/`SIZE_MINIMIZED`. Neither is a restore, which is the other half of the same button and is
+/// read already (see `the_pin_came_back`).
+///
+/// **`SC_MINIMIZE` is read with its low four bits masked away**, because those are the Shell's own
+/// flags rather than part of the command — the same reading the close above makes of `SC_CLOSE`.
+fn the_shell_put_the_host_down(msg: u32, wparam: WPARAM) -> bool {
+    (msg == WM_SYSCOMMAND && (wparam.0 & 0xFFF0) as u32 == SC_MINIMIZE)
+        || (msg == WM_SIZE && wparam.0 as u32 == SIZE_MINIMIZED)
+}
+
+/// Whether a minimize of this window is the pin's own going away: **this is the host the pair's button
+/// is worn by, and there is a pin on the screen for the button to put away.**
+///
+/// **`Pin Mode → Always On Top` is the answer that must not be left out.** With the setting on the
+/// pair wears no button at all (see `own_the_pin_window`), so nothing the Shell can press belongs to
+/// it, and a minimize arriving on the host is the user's own — `Win`+`D`, or a call of something
+/// else's — which is a window going down with the desktop and coming back with it. Turned into a
+/// collapse, it would leave a pin over everything with no button to bring it back (see
+/// `the_button_follows_the_setting`).
+///
+/// **And a pin already away, or on its way, is nothing to put away.** A collapse sets `collapsed`
+/// before it asks the window down, and `the_pin_is_being_put_down()` is that same road's note that the
+/// messages arriving now are its own (see `collapse_pin_to` and `put_the_pins_window_in_the_taskbar`):
+/// either answer says this minimize is not a new ask, and a second collapse of a pin that is already
+/// away is a command the loop would spend on nothing.
+fn the_host_wears_the_pins_button(hwnd: HWND) -> bool {
+    film_host() == Some(hwnd)
+        && pinned()
+        && pin_is_its_own_window()
+        && !pin_lifecycle::pin_always_on_top()
+        && !pin_is_collapsed()
+        && !the_pin_is_being_put_down()
+}
+
+/// What the **second** click on the pair's taskbar button asks for: **the pin, put away into the
+/// taskbar**.
+///
+/// The Shell activates the window its button belongs to on every click, and with `Pin Mode → Always On
+/// Top` off that window is the film host (see `own_the_pin_window`). The **first** click arrives while
+/// the user is in something else — `pin_is_focused()` is false — and it is the keyboard handover this
+/// window has always made (see `answer_an_activation_of_the_host`): the pin is the window the button
+/// was asked for, and the host is disabled, so it can never keep the caret itself.
+///
+/// The second click arrives the same way, while the pin already holds the keyboard the first one gave
+/// it — and **a window whose own button is clicked while the user is in it is a window being
+/// minimized**. That is what every other window on this desktop does with its second click, and it is
+/// the toggle this pair was missing: the click puts the pin away by the road its own `Minimize → To
+/// Taskbar` takes, and the same button brings it back by the Shell's restore (see
+/// `the_pin_came_back`).
+///
+/// **To the taskbar, whatever `Pin Mode → Minimize to` says.** The button is the taskbar's: a pin
+/// collapsed into its bubble has its host hidden with it, and a hidden host has no button at all (see
+/// `the_button_follows_the_screen`), so a bubble collapse would be a click that took away the very
+/// button it came from.
+///
+/// **And a click that arrives while the pin holds no keyboard is left alone.** The user is in another
+/// program, so the click is the handover it has always been and not the start of a toggle: answered
+/// here, the pin would go away instead of coming to the front.
+fn answer_a_second_click_on_the_hosts_button(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+) -> Option<LRESULT> {
+    if msg != WM_ACTIVATE
+        || !matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE)
+        || !pin_is_focused()
+        || !the_host_wears_the_pins_button(hwnd)
+    {
+        return None;
+    }
+
+    ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+    // Nothing is asked of the window: the pin is already the window the user is in, and this click
+    // asked for that window to go away rather than for the caret to be put in it.
+    Some(LRESULT(0))
+}
+
 /// What an activation of the pin's host asks for: **the pin's window, and the keyboard in it**.
 ///
 /// With `Pin Mode → Always On Top` off the pair's taskbar button belongs to the film host — the host
@@ -173,7 +282,11 @@ fn answer_the_hosts_close(msg: u32, wparam: WPARAM) -> Option<LRESULT> {
 /// and answered by the same procedure, and a hover is nobody's button and no pin's window (see
 /// `answer_a_host`); a pin that has ended has nothing to hand a keyboard to. **And only once per
 /// activation**: a caret already in the pin is where the user asked the button for it, and asking again
-/// is a second `SetForegroundWindow` for a question Windows has answered.
+/// is a second `SetForegroundWindow` for a question Windows has answered. **But the click that arrives
+/// once the pin has that keyboard is the button's own minimize** — a window the user is in whose button
+/// is pressed is a window going away — and it is answered before this (see
+/// `answer_a_second_click_on_the_hosts_button`). What is left to the default answer is every other
+/// activation of a window the pin is already in.
 ///
 /// `window` is the seam the ask is made through, so a test can read the ask back rather than make it on
 /// the user's desktop.
