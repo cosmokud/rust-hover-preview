@@ -530,7 +530,14 @@ pub(super) const ID_TRAY_IMAGE_DISK_CACHE_BASE: u16 = 1340;
 /// between hovers. It holds the small files a film's own subtitle tracks were copied into, with
 /// the container's fonts dumped beside them (see `subtitle_files`), which is what a hover of an
 /// embedded-subtitle film draws from instead of streaming the whole film before its first frame.
-pub(super) const ID_TRAY_GENERAL_DISK_CACHE_BASE: u16 = 1360;
+///
+/// It is the one cache of the four that is not in the run the other three start at 1300: 1360 is
+/// where the video half of `Volume` begins, so a size there was answered as a level of it — the
+/// window proc stops at the first range that holds a click (see `tray::tests`) — and the level it
+/// was answered as was one nobody asked for. It takes the stretch the font sizes leave instead:
+/// 1425 is the first id past the `Font Size` range, which runs 1420 up to but not including it,
+/// and the `Design` shares begin at 1445, which is room for all fifteen of the sizes it lists.
+pub(super) const ID_TRAY_GENERAL_DISK_CACHE_BASE: u16 = 1425;
 /// The `Performance → Decode Budget` submenu: one command per ceiling it offers, in
 /// the order it lists them. It sits in the slack between the `Cache` sizes and the
 /// document scale's own range.
