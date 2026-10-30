@@ -213,6 +213,13 @@ pub(super) unsafe extern "system" fn window_proc(
         pin_trace::note_a_message_of_a_window("pin", hwnd, msg, wparam, lparam);
     }
 
+    // **A press on the pair's button is the Shell taking this app away and giving it straight back**, and
+    // this is where the first half of that blink is noted: the chrome is the window the Shell drives when
+    // it cannot put the host down, because it is the window already in front (see
+    // `pin_film_host::note_the_app_was_taken_away`). The note is what tells that click from every
+    // activation this app makes of itself.
+    pin_film_host::note_the_app_was_taken_away(msg, wparam);
+
     match msg {
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
             reset_preview_after_display_change(hwnd);
@@ -229,6 +236,15 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_ACTIVATE => {
+            // **A press on the pair's taskbar button while the pin is in front is this pin going away**,
+            // and on the road the Shell takes for it the click arrives at this window rather than at the
+            // host the button belongs to (see `pin_film_host::answer_a_click_on_the_chromes_button`).
+            // Asked before the arm's own work: a deactivation is not an activation, so it falls through to
+            // what this arm has always answered it with.
+            if let Some(answer) = pin_film_host::answer_a_click_on_the_chromes_button(msg, wparam) {
+                return answer;
+            }
+
             // Windows is the only thing that can say which window the user is in, and it says it
             // here: a pin that has lost the focus is a pin the user has clicked away from, and
             // the keys belong to whatever is in front of it now. Nothing is asked of the pin on
