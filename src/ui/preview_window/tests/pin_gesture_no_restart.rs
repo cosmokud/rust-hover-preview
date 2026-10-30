@@ -57,9 +57,7 @@ fn nothing_of_the_film_was_touched(pid: u32, what: &str) {
 /// was pressed.
 #[test]
 fn a_press_with_no_movement_does_nothing_to_the_film_on_either_route() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     for (ffplay, mpv, what) in [
         (true, false, "FFmpeg's route"),
@@ -117,9 +115,7 @@ fn a_press_with_no_movement_does_nothing_to_the_film_on_either_route() {
 /// asked for a source placement — so the film the pin is drawing has no gap in it.
 #[test]
 fn a_drag_and_a_resize_keep_the_same_player_throughout() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
@@ -204,9 +200,7 @@ fn a_drag_and_a_resize_keep_the_same_player_throughout() {
 /// `player restarted for volume`. The press itself told the player nothing.
 #[test]
 fn a_volume_change_restarts_once_and_says_why() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();

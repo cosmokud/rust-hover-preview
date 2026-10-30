@@ -11,9 +11,7 @@ use super::*;
 /// the pin that `Pin Mode → Update Preview` follows (see `left_button_down`).
 #[test]
 fn a_published_press_is_not_missed_by_a_slower_poll() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // The two are one set for the whole process, so this test stands in with the others
     // that publish the machine's own state rather than racing them.
@@ -60,9 +58,7 @@ fn a_published_press_is_not_missed_by_a_slower_poll() {
 #[test]
 #[ignore = "shows a preview window"]
 fn app_hover_probe() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let Ok(path) = std::env::var("RHP_APP_PROBE") else {
         println!("set RHP_APP_PROBE to a path");
@@ -361,9 +357,7 @@ fn pin_a_document(path: &std::path::Path) -> ScreenRegion {
 #[test]
 #[ignore = "drives the pointer over a pinned drawing"]
 fn pin_drawing_drag_probe() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let path = probe_document();
     let content = pin_a_document(&path);
@@ -807,9 +801,7 @@ fn window_box_on_screen(hwnd: HWND) -> ScreenRegion {
 fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
@@ -911,9 +903,7 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
 fn a_resize_drag_bands_the_pin_at_its_two_ends_and_not_on_a_step_between_them() {
     use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
 
     let previous_pin = take_pin_for_a_test();
@@ -1058,9 +1048,7 @@ fn a_resize_drag_bands_the_pin_at_its_two_ends_and_not_on_a_step_between_them() 
 fn only_an_mpv_players_window_is_placed_with_the_pins_chrome_up() {
     use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
@@ -1139,9 +1127,7 @@ fn only_an_mpv_players_window_is_placed_with_the_pins_chrome_up() {
 fn a_players_window_that_is_not_on_screen_is_put_back_in_the_band() {
     use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
@@ -1215,9 +1201,7 @@ fn a_players_window_that_is_not_on_screen_is_put_back_in_the_band() {
 fn a_collapsed_pin_places_no_players_window() {
     use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, ShowWindow, SW_HIDE};
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
@@ -1304,9 +1288,7 @@ fn a_collapsed_pin_takes_a_players_window_off_the_screen() {
         DestroyWindow, ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE,
     };
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
@@ -1370,9 +1352,7 @@ fn a_collapsed_pin_takes_a_players_window_off_the_screen() {
 /// with a pin that is not a bubble, is the box it always was.
 #[test]
 fn a_player_begun_behind_a_bubble_is_begun_off_the_desktop() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let content = (100, 80, 420, 320);
@@ -1422,9 +1402,7 @@ fn a_player_begun_behind_a_bubble_is_begun_off_the_desktop() {
 /// carried rather than put away: a gesture asks nothing of the player.
 #[test]
 fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
@@ -1523,9 +1501,7 @@ fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
 fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re_assert() {
     use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
@@ -1718,9 +1694,7 @@ fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
 /// `a_pinned_players_placement_puts_the_pin_back_over_it`; the style half is this test.
 #[test]
 fn a_players_window_is_asserted_topmost() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
     let always_on_top = pin_always_on_top();
@@ -1783,9 +1757,7 @@ fn a_players_window_is_asserted_topmost() {
 /// `a_pinned_players_placement_puts_the_pin_back_over_it`.
 #[test]
 fn a_pinned_mpv_film_is_placed_by_a_tick_a_drag_and_a_monitor_pass() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
@@ -1886,9 +1858,7 @@ fn a_pinned_mpv_film_is_placed_by_a_tick_a_drag_and_a_monitor_pass() {
 fn a_pinned_players_placement_puts_the_pin_back_over_it() {
     use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
@@ -2048,9 +2018,7 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
 fn the_player_stands_over_the_pin_only_while_it_is_raised_over_it() {
     use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, ShowWindow, SW_HIDE};
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
 

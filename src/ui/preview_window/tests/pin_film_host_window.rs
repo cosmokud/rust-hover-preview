@@ -294,9 +294,7 @@ fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
     };
     use windows::Win32::UI::WindowsAndMessaging::{IsWindowVisible, RegisterClassExW, WS_VISIBLE};
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     const ERASE_PROBE_CLASS: windows::core::PCWSTR = w!("RustHoverPreviewTestEraseProbe");
     let hinstance = unsafe { GetModuleHandleW(None) }.expect("the module's own handle");
     let registered = unsafe {
@@ -452,9 +450,7 @@ fn a_surface_of(width: u32, height: u32, colour: [u8; 4]) -> DibSurface {
 /// the black it always was.
 #[test]
 fn a_hovers_own_host_is_erased_black_with_a_pins_frame_in_hand() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     // No pin and no pin's host: this window is a hover's, and nothing else's.
     unsafe { pin_film_host::take_down_the_pin_film_host() };
     let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 64, 48)) }
@@ -506,9 +502,7 @@ fn a_hovers_own_host_is_erased_black_with_a_pins_frame_in_hand() {
 /// `the_pinned_player_was_begun_in_the_host`).
 #[test]
 fn the_top_level_roads_leave_a_hosted_player_alone() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let pid = VIDEO_PID.load(Ordering::SeqCst);
@@ -610,9 +604,7 @@ unsafe fn a_window_of_the_desktops() -> HWND {
 /// pin would take up as its picture (see `pin_film_host`).
 #[test]
 fn a_pin_that_ends_takes_its_film_host_with_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -634,9 +626,7 @@ fn a_pin_that_ends_takes_its_film_host_with_it() {
 /// `place_the_pin_film_host`).
 #[test]
 fn the_film_host_follows_the_pins_band() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -706,9 +696,7 @@ impl Drop for HostedHover {
 /// is the seamless hover-to-pin take-up: no relaunch, no black flash.
 #[test]
 fn an_ffplay_hover_taken_up_is_moved_into_the_pin_not_begun() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     let path = PathBuf::from("a-film.mkv");
     let hover = unsafe { HostedHover::up(&film, &path, 7.25) };
@@ -780,9 +768,7 @@ fn an_ffplay_hover_taken_up_is_moved_into_the_pin_not_begun() {
 /// the screen is the same player's from the key to the film.
 #[test]
 fn an_owned_pin_takes_a_hovered_film_up_by_promoting_its_host() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let hover = unsafe { HostedHover::up(&film, &path, 9.5) };
@@ -927,9 +913,7 @@ fn an_owned_pin_takes_a_hovered_film_up_by_promoting_its_host() {
 /// falls back to its own hosted launch: exactly one player is begun, never two.
 #[test]
 fn a_hover_that_cannot_be_adopted_falls_back_to_one_pinned_launch() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     let path = PathBuf::from("a-film.mkv");
     with_pin(|pin| pin.path = path.clone());
@@ -969,9 +953,7 @@ fn a_hover_that_cannot_be_adopted_falls_back_to_one_pinned_launch() {
 /// playhead rather than from a frozen second.
 #[test]
 fn a_hosted_hover_move_keeps_its_clock_and_takes_the_pins_volume() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let hover = unsafe { HostedHover::up(&film, &path, 41.0) };
@@ -1023,9 +1005,7 @@ fn a_hosted_hover_move_keeps_its_clock_and_takes_the_pins_volume() {
 /// swap to be invisible (see `begin_the_pinned_film_at_the_hovers_frame`).
 #[test]
 fn the_hover_is_frozen_on_its_own_frame_and_the_pin_begins_there() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let hovered = 0x7FFF_FFFB;
     film.taken_up_from_a_hover(hovered);
@@ -1098,9 +1078,7 @@ fn the_hover_is_frozen_on_its_own_frame_and_the_pin_begins_there() {
 /// it would have been begun before the read existed.
 #[test]
 fn a_read_that_does_not_answer_leaves_the_clock_as_the_second() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let hovered = 0x7FFF_FFFB;
     film.taken_up_from_a_hover(hovered);
@@ -1142,9 +1120,7 @@ fn a_read_that_does_not_answer_leaves_the_clock_as_the_second() {
 /// under the host — which is the flash this whole road is (see `pin_film_host::FrozenHover`).
 #[test]
 fn the_frozen_hover_is_retired_only_once_the_pin_has_the_frame() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let previous_retirement = VIDEO_RETIREMENT
         .lock()
         .ok()
@@ -1225,9 +1201,7 @@ fn the_frozen_hover_is_retired_only_once_the_pin_has_the_frame() {
 /// of here (see `PinTransport::paused_at`).
 #[test]
 fn a_film_the_user_held_stays_held_at_the_handover() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     film.taken_up_from_a_hover(101);
     let hover = unsafe { StandingHover::up() };
@@ -1283,9 +1257,7 @@ fn a_film_the_user_held_stays_held_at_the_handover() {
 /// process this app would never end.
 #[test]
 fn a_pin_that_goes_away_takes_the_frozen_hover_with_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let hovered = 0x7FFF_FFFB;
     film.taken_up_from_a_hover(hovered);
@@ -1332,9 +1304,7 @@ fn a_pin_that_goes_away_takes_the_frozen_hover_with_it() {
 /// and `ensure_video_window_topmost`).
 #[test]
 fn a_host_with_no_film_in_it_is_not_on_screen() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -1374,9 +1344,7 @@ fn a_host_with_no_film_in_it_is_not_on_screen() {
 /// pixels, so it lands on the box the hand asked for either way and keeps the ghost-clearing row.
 #[test]
 fn a_resize_of_a_pin_with_a_film_host_asks_the_surface_for_no_row_of_slack() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
 
     // A pin with no host standing is the native road: its picture is this app's own pixels and lands
@@ -1418,9 +1386,7 @@ fn a_resize_of_a_pin_with_a_film_host_asks_the_surface_for_no_row_of_slack() {
 /// `pin_film_host::set_the_pin_film_host_visible`).
 #[test]
 fn the_topmost_road_neither_moves_nor_raises_the_host() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -1458,9 +1424,7 @@ fn the_topmost_road_neither_moves_nor_raises_the_host() {
 /// recorded, so the source has to be the one this player made.
 #[test]
 fn the_film_is_drawing_when_the_players_own_window_is_the_source() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -1494,9 +1458,7 @@ fn the_film_is_drawing_when_the_players_own_window_is_the_source() {
 /// `stop_pinned_player`).
 #[test]
 fn a_stopped_pinned_player_leaves_no_empty_host_over_the_band() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let drawn = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(drawn);
@@ -1536,9 +1498,7 @@ fn a_stopped_pinned_player_leaves_no_empty_host_over_the_band() {
 /// `swap_pinned_media` and `take_down_pinned_media`).
 #[test]
 fn a_swap_from_a_hosted_film_to_a_picture_takes_the_host_off_the_band() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let drawn = 0x7FFF_FFFA;
     film.drawn_in_the_host(drawn);
@@ -1583,9 +1543,7 @@ fn a_swap_from_a_hosted_film_to_a_picture_takes_the_host_off_the_band() {
 /// player never has (see `settle_video_retirement`).
 #[test]
 fn a_hosted_replacement_ends_the_retirement_it_took_over_from() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.load(Ordering::SeqCst);
     let previous_image = video_process_image();
     let previous_retirement = VIDEO_RETIREMENT
@@ -1643,9 +1601,7 @@ fn a_hosted_replacement_ends_the_retirement_it_took_over_from() {
 /// `PinSwapHold::settle` and `pin_film_thumbnail::the_source_is_standing`).
 #[test]
 fn a_hosted_swaps_wait_is_answered_by_the_picture_changing_hands() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     // The source this test stands is the test's own process's, so the player the host holds has to
     // be this process as well (see `the_hosted_player_is_drawing`).
@@ -1715,9 +1671,7 @@ fn a_hosted_swaps_wait_is_answered_by_the_picture_changing_hands() {
 /// player's own window is made at rather than the order `--ontop` would hold it in over the pin.
 #[test]
 fn a_pin_drawn_through_a_thumbnail_is_begun_with_no_window_of_this_apps() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     pin_film_host::film_host().expect("the film's host");
@@ -1765,9 +1719,7 @@ fn the_strips_geometry() -> (i32, i32, i32, i32) {
 /// paints for them (see `pin_chrome_strips`).
 #[test]
 fn the_chrome_of_a_hosted_film_stands_over_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
     let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
@@ -1820,9 +1772,7 @@ fn the_chrome_of_a_hosted_film_stands_over_it() {
 /// `pinned_paint`).
 #[test]
 fn the_chrome_strips_of_a_hosted_film_stand_where_the_chrome_is_painted() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -1859,9 +1809,7 @@ fn the_chrome_strips_of_a_hosted_film_stand_where_the_chrome_is_painted() {
 /// `place_the_pin_film_host`).
 #[test]
 fn the_chrome_strips_of_a_hosted_film_follow_the_band() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -1895,9 +1843,7 @@ fn the_chrome_strips_of_a_hosted_film_follow_the_band() {
 /// park — the host hidden — leaves the chrome standing over the cover (see `pin_chrome_strips`).
 #[test]
 fn the_chrome_strips_outlive_the_film_host() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -1952,9 +1898,7 @@ fn the_chrome_strips_outlive_the_film_host() {
 /// already on — a strip the pin is not painting is a strip off the screen (see `PinChrome`).
 #[test]
 fn the_chrome_strips_of_a_hosted_film_carry_the_chrome_state() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -2008,9 +1952,7 @@ fn the_chrome_strips_of_a_hosted_film_carry_the_chrome_state() {
 /// `pin_chrome_strips` and `volume_popup_bounds`).
 #[test]
 fn the_volume_popup_of_a_hosted_film_stands_over_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| {
         pin.transport_bar = true;
@@ -2061,9 +2003,7 @@ fn the_volume_popup_of_a_hosted_film_stands_over_it() {
 /// cover, FFmpeg's player, or a picture this app draws itself (see `pin_chrome_strips`).
 #[test]
 fn the_strips_belong_to_the_pins_window_not_its_film_host() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     // No take-up: the host is made when the pin is shown, and the strips are already here.
     let film = StandingFilm::new();
 
@@ -2107,9 +2047,7 @@ fn the_strips_belong_to_the_pins_window_not_its_film_host() {
 /// `pin_chrome_strips`).
 #[test]
 fn the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
 
@@ -2187,9 +2125,7 @@ fn the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows() {
 /// them (see `pin_chrome_strips`).
 #[test]
 fn a_film_without_a_host_carries_its_chrome_in_the_strips() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -2216,9 +2152,7 @@ fn a_film_without_a_host_carries_its_chrome_in_the_strips() {
 /// read as the pin's own (see `refresh_pin_chrome` and `pin_chrome_occluded`).
 #[test]
 fn a_hover_over_the_pin_itself_asks_its_chrome_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     // The step's own state: hidden, with no arrival armed (see `take_up_pinned_window`) — on a
     // film's pin, whose bar the pointer below is near.
@@ -2258,9 +2192,7 @@ fn a_hover_over_the_pin_itself_asks_its_chrome_back() {
 /// standing over it — is not a hover, so the chrome stays hidden (see `refresh_pin_chrome`).
 #[test]
 fn a_pointer_over_a_window_covering_the_pin_shows_no_chrome() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _film = StandingFilm::new();
     with_pin(|pin| {
         pin.chrome = PinChrome::hidden();
@@ -2300,9 +2232,7 @@ fn a_pointer_over_a_window_covering_the_pin_shows_no_chrome() {
 /// `sync_the_chrome_strips`).
 #[test]
 fn the_chrome_stays_hidden_at_spawn_and_follows_the_pointer_over_the_pin() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| {
         pin.chrome = PinChrome::hidden();
@@ -2365,9 +2295,7 @@ fn the_chrome_stays_hidden_at_spawn_and_follows_the_pointer_over_the_pin() {
 /// `set_the_strip_at`).
 #[test]
 fn a_strip_left_up_by_a_hidden_pin_is_not_revealed_when_the_next_one_appears() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.chrome = PinChrome::always());
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -2405,9 +2333,7 @@ fn a_strip_left_up_by_a_hidden_pin_is_not_revealed_when_the_next_one_appears() {
 /// player, so a new player proves its own frame (see `the_hosted_frame_is_up`).
 #[test]
 fn the_chrome_waits_for_the_hosted_films_frame_not_its_window() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -2483,9 +2409,7 @@ fn the_chrome_waits_for_the_hosted_films_frame_not_its_window() {
 /// refused by a wait that was over.
 #[test]
 fn a_handover_that_is_over_does_not_hold_the_chrome_down() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| {
         pin.chrome = PinChrome::hidden();
@@ -2557,9 +2481,7 @@ fn a_handover_that_is_over_does_not_hold_the_chrome_down() {
 /// down with the chrome hidden until the film is really drawing (see `settle_pin_handover`).
 #[test]
 fn a_pin_taken_up_on_a_hover_waits_for_the_first_frame() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     // Taken up from a hover: the film is the hover's player's, drawing in a window of the
     // desktop's rather than in the host's, so the take-up relaunches it into the host behind
@@ -2622,9 +2544,7 @@ fn a_pin_taken_up_on_a_hover_waits_for_the_first_frame() {
 /// `the_hosted_player_is_drawing`).
 #[test]
 fn a_window_that_is_not_the_source_is_not_a_film_drawing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let drawn = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(drawn);
@@ -2671,9 +2591,7 @@ fn a_window_that_is_not_the_source_is_not_a_film_drawing() {
 /// a picture this app owns rather than over the desktop (see `render_pinned_preview_at`).
 #[test]
 fn a_hosted_band_with_no_film_in_it_is_opaque_never_a_hole() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     // No child: the player has put nothing under the host yet, so there is no first frame.
@@ -2790,9 +2708,7 @@ impl Drop for LiveStandInPlayer {
 /// in it and the chrome hidden over that film, and the hover comes down in the same pass.
 #[test]
 fn the_handover_shows_the_pin_over_the_drawn_film_and_takes_the_hover_down() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     film.taken_up_from_a_hover(101);
     let hover = unsafe { StandingHover::up() };
@@ -2893,9 +2809,7 @@ fn the_handover_shows_the_pin_over_the_drawn_film_and_takes_the_hover_down() {
 /// the frame is drawn: the second it is standing at, and a video output configured for it.
 #[test]
 fn a_window_alone_is_not_a_handover() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     film.taken_up_from_a_hover(101);
     let hover = unsafe { StandingHover::up() };
@@ -2970,9 +2884,7 @@ fn a_window_alone_is_not_a_handover() {
 /// stays hidden no matter what the pointer does.
 #[test]
 fn no_handover_before_the_first_frame() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     film.taken_up_from_a_hover(101);
     let hover = unsafe { StandingHover::up() };
@@ -3030,9 +2942,7 @@ fn no_handover_before_the_first_frame() {
 /// until the pointer asks for it.
 #[test]
 fn a_step_handover_starts_the_new_film_with_the_chrome_hidden() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     film.taken_up_from_a_hover(101);
     let hover = unsafe { StandingHover::up() };
@@ -3080,9 +2990,7 @@ fn a_step_handover_starts_the_new_film_with_the_chrome_hidden() {
 /// the hidden pin comes down with the hover still up.
 #[test]
 fn a_film_that_never_draws_hands_the_pin_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     film.taken_up_from_a_hover(101);
     let hover = unsafe { StandingHover::up() };
@@ -3140,9 +3048,7 @@ fn a_film_that_never_draws_hands_the_pin_back() {
 /// is one that will not, and a hidden pin waiting past the start ever does is a stuck one.
 #[test]
 fn a_film_that_keeps_starting_hands_the_pin_back_at_the_start_timeout() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     film.taken_up_from_a_hover(101);
     let hover = unsafe { StandingHover::up() };
@@ -3219,9 +3125,7 @@ unsafe fn a_players_own_window() -> HWND {
 /// `start_video_playback_where` and `ffplay_window::try_apply_noactivate_style`).
 #[test]
 fn a_pinned_ffplay_film_is_begun_into_the_pins_film_host() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -3267,9 +3171,7 @@ fn a_pinned_ffplay_film_is_begun_into_the_pins_film_host() {
 /// is cut from (see `pin_film_thumbnail`).
 #[test]
 fn every_ffplay_launch_asks_for_the_composed_renderer_and_a_borderless_window() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let path = PathBuf::from("a-film.mkv");
@@ -3387,9 +3289,7 @@ fn the_composed_renderer_is_asked_for_unless_a_machine_names_another() {
 /// the new pid is what the wait for its child is a wait for.
 #[test]
 fn a_step_begins_the_next_ffplay_film_into_the_same_host() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -3443,9 +3343,7 @@ fn a_step_begins_the_next_ffplay_film_into_the_same_host() {
 /// began a second mpv behind the one it could not see.
 #[test]
 fn a_step_begins_the_next_mpv_film_into_the_pins_host() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -3570,9 +3468,7 @@ fn a_step_onto_the_next_film_at(content: ScreenRegion) -> PinSwap {
 /// `PinSwapHold`).
 #[test]
 fn a_step_onto_a_film_from_a_picture_goes_in_at_once() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let _parked = AStepParkedTheOldPlayer::take();
@@ -3620,9 +3516,7 @@ impl Drop for AStepParkedTheOldPlayer {
 /// (see `pin_film_host::the_host_is_drawing`).
 #[test]
 fn a_step_leaves_the_pins_band_to_the_outgoing_picture_until_the_next_is_adopted() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     let host = unsafe { a_pin_showing_a_registered_film(&film) };
@@ -3672,9 +3566,7 @@ fn a_step_leaves_the_pins_band_to_the_outgoing_picture_until_the_next_is_adopted
 /// `pin_film_host::take_the_film_off_the_band` and `paint`'s host arm).
 #[test]
 fn a_click_road_swap_keeps_the_picture_standing_until_the_next_film_can_draw() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     let host = unsafe { a_pin_showing_a_registered_film(&film) };
@@ -3742,9 +3634,7 @@ fn a_click_road_swap_keeps_the_picture_standing_until_the_next_film_can_draw() {
 /// that offers a file goes through.
 #[test]
 fn a_second_pick_for_the_file_in_flight_is_dropped() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     stand_pin(Some(PinnedPreview {
         path: PathBuf::from("the-file-on-the-window.mkv"),
@@ -3803,9 +3693,7 @@ fn a_second_pick_for_the_file_in_flight_is_dropped() {
 /// (see `PIN_STEP_BAND_HELD`).
 #[test]
 fn a_step_holds_the_pins_band_until_the_new_source_is_adopted() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let always_on_top = CONFIG.lock().ok().map(|config| config.pin_always_on_top);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -3866,9 +3754,7 @@ fn a_step_holds_the_pins_band_until_the_new_source_is_adopted() {
 /// cannot outlive the pair it was taken for (see `take_down_the_pin_film_host`).
 #[test]
 fn a_pin_taken_down_in_a_step_clears_the_band_it_held() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let always_on_top = CONFIG.lock().ok().map(|config| config.pin_always_on_top);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -3912,9 +3798,7 @@ fn a_pin_taken_down_in_a_step_clears_the_band_it_held() {
 /// from rather than the frames that follow it (see `swap_pinned_media`).
 #[test]
 fn a_step_pauses_the_outgoing_mpv_player_it_keeps() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let _host = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
@@ -3951,9 +3835,7 @@ fn a_step_pauses_the_outgoing_mpv_player_it_keeps() {
 /// be retried, and a player this app began still on the books for a pin that is gone.
 #[test]
 fn a_pin_that_ends_after_a_step_leaves_what_a_pin_that_never_stepped_leaves() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
 
     // What a close leaves, with a step of the walk behind it or without one: the wait a step parked,
     // the kills still owed, and whether the app still holds the player the step kept.
@@ -4015,9 +3897,7 @@ fn a_pin_that_ends_after_a_step_leaves_what_a_pin_that_never_stepped_leaves() {
 /// app began still held on one frame.
 #[test]
 fn a_pin_that_ends_during_a_take_ups_handover_leaves_what_a_pin_that_never_waited_leaves() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
 
     // What a close leaves after a take-up that waited and one that did not: the wait still armed,
     // and the hover it froze where one was held.
@@ -4072,9 +3952,7 @@ fn a_pin_that_ends_during_a_take_ups_handover_leaves_what_a_pin_that_never_waite
 /// record of it is left behind (see `pin_film_thumbnail`).
 #[test]
 fn a_pin_that_ends_takes_its_ffplay_film_host_with_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -4103,9 +3981,7 @@ fn a_pin_that_ends_takes_its_ffplay_film_host_with_it() {
 /// left exactly as it was (see `pin_film_thumbnail::adopt_the_source`).
 #[test]
 fn the_top_level_roads_leave_a_hosted_ffplay_player_alone() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -4142,9 +4018,7 @@ fn the_top_level_roads_leave_a_hosted_ffplay_player_alone() {
 /// road — without it the chrome would stay hidden for the life of the pin.
 #[test]
 fn a_hosted_ffplay_films_frame_is_its_source_and_the_chrome_comes_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let pid = VIDEO_PID.load(Ordering::SeqCst);
@@ -4192,9 +4066,7 @@ fn a_hosted_ffplay_films_frame_is_its_source_and_the_chrome_comes_back() {
 /// all stay exactly where the take-up put them.
 #[test]
 fn a_late_hide_leaves_the_pins_window_host_and_media_alone() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let pid = unsafe { GetCurrentProcessId() };
@@ -4254,9 +4126,7 @@ fn a_late_hide_leaves_the_pins_window_host_and_media_alone() {
 /// tick follows and the hover's film host all go with it.
 #[test]
 fn a_hide_with_the_pin_in_the_preview_window_takes_the_hover_down() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     // The take-up did not give this pin a window of its own: it is drawn in the preview's.
     pin_stands_in_its_own_window(false);
@@ -4311,9 +4181,7 @@ fn a_hide_with_the_pin_in_the_preview_window_takes_the_hover_down() {
 /// child is under it.
 #[test]
 fn a_pinned_hosted_film_is_revealed_without_a_hover_path() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let pid = unsafe { GetCurrentProcessId() };
@@ -4341,9 +4209,7 @@ fn a_pinned_hosted_film_is_revealed_without_a_hover_path() {
 /// is under the host, and both the window and the host are on screen with no hover path at all.
 #[test]
 fn a_pinned_ffplay_film_is_revealed_without_a_hover_path() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let pid = unsafe { GetCurrentProcessId() };
@@ -4386,9 +4252,7 @@ fn a_pinned_ffplay_film_is_revealed_without_a_hover_path() {
 /// `pin_lifecycle::give_the_foreground_back_from`).
 #[test]
 fn a_pin_mpv_launch_asks_for_the_same_no_focus_switch_and_eager_style_as_a_hover() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     stand_mpv_in(Some(true));
@@ -4453,9 +4317,7 @@ fn a_pin_mpv_launch_asks_for_the_same_no_focus_switch_and_eager_style_as_a_hover
 /// was unhosted, and the take-up that followed began a second player in the host at the start.
 #[test]
 fn a_step_into_an_ffplay_film_begins_it_in_the_pins_host_once() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let _host = pin_film_host::film_host().expect("the film's host");
@@ -4563,17 +4425,13 @@ fn a_pin_put_away_in_the_taskbar_leaves_its_film_standing(ffplay: bool) {
 
 #[test]
 fn a_ffplay_pin_put_away_in_the_taskbar_leaves_its_film_standing_for_the_shells_still() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     a_pin_put_away_in_the_taskbar_leaves_its_film_standing(true);
 }
 
 #[test]
 fn an_mpv_pin_put_away_in_the_taskbar_leaves_its_film_standing_for_the_shells_still() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     a_pin_put_away_in_the_taskbar_leaves_its_film_standing(false);
 }
 
@@ -4588,9 +4446,7 @@ fn an_mpv_pin_put_away_in_the_taskbar_leaves_its_film_standing_for_the_shells_st
 /// the restore's showed either (see `the_pin_came_back`, `pin_film_host::bring_the_film_back`).
 #[test]
 fn a_film_host_brought_back_is_the_pin_and_its_film_coming_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -4666,9 +4522,7 @@ fn a_film_host_brought_back_is_the_pin_and_its_film_coming_back() {
 /// collapse the pin never knew it was in (see `the_shell_put_the_host_down`).
 #[test]
 fn the_shells_minimize_of_a_films_host_puts_the_pin_away_in_the_taskbar() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -4720,9 +4574,7 @@ fn the_shells_minimize_of_a_films_host_puts_the_pin_away_in_the_taskbar() {
 /// the button could only ever deactivate and re-activate the app.
 #[test]
 fn a_pins_host_is_enabled_after_a_take_up_and_after_a_promotion() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -4786,9 +4638,7 @@ fn a_pins_host_is_enabled_after_a_take_up_and_after_a_promotion() {
 /// `is_preview_window`).
 #[test]
 fn a_press_on_the_band_is_kept_for_the_pin_by_the_hit_test() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -4861,9 +4711,7 @@ fn a_press_on_the_band_is_kept_for_the_pin_by_the_hit_test() {
 /// window that is not part of a pair is put down by the default procedure, with the desktop.
 #[test]
 fn a_pin_whose_chrome_is_the_pairs_button_is_put_away_by_the_shells_minimize() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -4950,9 +4798,7 @@ fn a_pin_whose_chrome_is_the_pairs_button_is_put_away_by_the_shells_minimize() {
 /// take it again and say so, and the minimize touches no keyboard at all.
 #[test]
 fn a_second_click_on_a_films_host_button_is_the_pins_minimize() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -5042,9 +4888,7 @@ fn a_second_click_on_a_films_host_button_is_the_pins_minimize() {
 /// restore leaves it, and once older than the settle a hand's next click is beyond.
 #[test]
 fn the_click_that_restored_the_pin_is_not_the_click_that_puts_it_away() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -5105,9 +4949,7 @@ fn the_click_that_restored_the_pin_is_not_the_click_that_puts_it_away() {
 /// activation that follows it here is the one the restore's own storm delivers, and it is refused.
 #[test]
 fn the_shells_question_to_open_the_host_is_the_restore_noted() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -5155,9 +4997,7 @@ fn the_shells_question_to_open_the_host_is_the_restore_noted() {
 /// pin the caret, and the one after it is the storm's last rather than a hand's next click.
 #[test]
 fn the_size_a_restore_reports_is_the_restore_noted() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -5219,9 +5059,7 @@ fn the_size_a_restore_reports_is_the_restore_noted() {
 /// away instead of bringing it to the front.
 #[test]
 fn a_first_click_on_a_films_host_button_still_hands_the_pin_its_keyboard() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -5269,9 +5107,7 @@ fn a_first_click_on_a_films_host_button_still_hands_the_pin_its_keyboard() {
 /// and both are read back out of the trace's own seam rather than out of the log.
 #[test]
 fn a_message_the_host_is_handed_is_written_down_with_its_decision() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -5374,9 +5210,7 @@ fn a_message_the_host_is_handed_is_written_down_with_its_decision() {
 /// arrives at rather than there being no pin to put away.
 #[test]
 fn a_hover_film_host_is_never_a_pins_minimize() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -5453,9 +5287,7 @@ fn a_hover_film_host_is_never_a_pins_minimize() {
 /// button belongs to, and a stray handle is answered with nothing at all.
 #[test]
 fn a_window_that_is_not_the_pins_host_is_never_a_pins_minimize() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -5520,9 +5352,7 @@ pub(super) fn let_the_posted_shows_land() {
 /// follows, at the same pid, rather than begun again at zero.
 #[test]
 fn a_show_adopts_the_pin_player_a_step_began_unhosted() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     VIDEO_PID.store(0, Ordering::SeqCst);
@@ -5576,9 +5406,7 @@ fn a_show_adopts_the_pin_player_a_step_began_unhosted() {
 /// instead, so this asserts both halves of that pair rather than the picture, which no test can see.
 #[test]
 fn an_owned_pin_gets_a_window_of_the_desktop_that_owns_its_chrome() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
 
     unsafe { pin_film_host::take_up_the_pin_film_host(None) };
@@ -5646,9 +5474,7 @@ fn an_owned_pin_gets_a_window_of_the_desktop_that_owns_its_chrome() {
 /// `pin_film_host::the_film_host_box`).
 #[test]
 fn an_owned_pins_host_is_the_band_at_every_step_of_a_grow_and_a_shrink() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
     let film = StandingFilm::new();
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -5716,9 +5542,7 @@ fn an_owned_pins_host_is_the_band_at_every_step_of_a_grow_and_a_shrink() {
 /// suite can answer: what a press does with the order it is given is Windows'.
 #[test]
 fn an_owned_pin_and_its_film_stand_in_one_band() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let always_on_top = CONFIG
         .lock()
@@ -5891,9 +5715,7 @@ unsafe fn a_hover_drawn_through_a_thumbnail(
 /// and `pin_lifecycle`). The pin's end takes the source and the registration down with it.
 #[test]
 fn a_hover_drawn_through_a_thumbnail_is_taken_up_without_a_player_or_a_placement() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (hover, source, pid) =
@@ -5964,9 +5786,7 @@ fn a_hover_drawn_through_a_thumbnail_is_taken_up_without_a_player_or_a_placement
 /// (see `hover_film_host` and `pin_film_thumbnail::forget_the_thumbnail_of`).
 #[test]
 fn a_hover_drawn_through_a_thumbnail_that_is_never_pinned_leaves_no_source() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (_, source, pid) =
@@ -5996,9 +5816,7 @@ fn a_hover_drawn_through_a_thumbnail_that_is_never_pinned_leaves_no_source() {
 /// size, with exactly one placement and no second ask (see `pin_film_thumbnail`).
 #[test]
 fn a_film_is_placed_once_and_never_resized_across_a_whole_gesture() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     a_whole_gesture_places_a_source_once(StandingFilm::new(), VideoRoute::Mpv);
 }
 
@@ -6012,9 +5830,7 @@ fn a_film_is_placed_once_and_never_resized_across_a_whole_gesture() {
 /// teardown.
 #[test]
 fn an_ffmpeg_film_is_placed_once_and_never_resized_across_a_whole_gesture() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     a_whole_gesture_places_a_source_once(ffplay_standing_film(), VideoRoute::Ffplay);
 }
 
@@ -6121,9 +5937,7 @@ fn a_whole_gesture_places_a_source_once(film: StandingFilm, route: VideoRoute) {
 /// nothing at all, which is what keeps one window from being placed twice.
 #[test]
 fn a_source_that_replaced_itself_is_adopted_once_and_takes_the_picture_when_it_is_ready() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (host, first, pid) =
@@ -6271,9 +6085,7 @@ fn a_source_that_replaced_itself_is_adopted_once_and_takes_the_picture_when_it_i
 /// `pin_playback::preload_the_subtitles_for_the_next_relaunch`).
 #[test]
 fn a_late_subtitle_swaps_nothing_and_rides_the_relaunch_the_user_asks_for() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (host, _first, pid) =
@@ -6364,9 +6176,7 @@ fn a_late_subtitle_swaps_nothing_and_rides_the_relaunch_the_user_asks_for() {
 /// one player and no registration: the picture standing is kept for the window that replaces it.
 #[test]
 fn a_seek_moves_the_second_and_not_the_picture_on_either_engine() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (host, source, pid) =
@@ -6503,9 +6313,7 @@ fn a_seek_moves_the_second_and_not_the_picture_on_either_engine() {
 /// leaving the one before it to a player that is ending (see `hand_the_picture_over`).
 #[test]
 fn a_source_that_never_reaches_its_asked_client_does_not_blank_the_pin() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let (host, source, pid) = unsafe {
         a_hover_drawn_through_a_thumbnail(&film, &PathBuf::from("a-film.mkv"), VideoRoute::Mpv)
@@ -6578,9 +6386,7 @@ fn a_source_that_never_reaches_its_asked_client_does_not_blank_the_pin() {
 /// order, and the one line that says a picture was ended while it stood is written by no reason at all.
 #[test]
 fn every_relaunch_ends_its_old_player_only_after_the_new_picture_stands() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (host, _first, old_pid) =
@@ -6749,9 +6555,7 @@ fn every_relaunch_ends_its_old_player_only_after_the_new_picture_stands() {
 /// `reap_superseded_relaunch`).
 #[test]
 fn a_relaunch_record_that_names_the_picture_is_forgotten_rather_than_killed() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (_host, source, pid) =
@@ -6798,9 +6602,7 @@ fn a_relaunch_record_that_names_the_picture_is_forgotten_rather_than_killed() {
 /// wait written down once (see `pin_film_thumbnail::the_source_drew`).
 #[test]
 fn a_source_at_the_asked_client_takes_the_picture_only_once_it_has_drawn() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (host, first, pid) =
@@ -6869,9 +6671,7 @@ fn a_source_at_the_asked_client_takes_the_picture_only_once_it_has_drawn() {
 /// says so is the one a black opening frame is read from (see `pin_film_thumbnail::hand_the_picture_over`).
 #[test]
 fn a_source_that_never_draws_is_swapped_at_the_bound_and_says_so() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (host, first, pid) =
@@ -6917,9 +6717,7 @@ fn a_source_that_never_draws_is_swapped_at_the_bound_and_says_so() {
 /// enough (see `pin_film_thumbnail::the_source_has_lit_pixels`).
 #[test]
 fn the_drawn_sample_reads_a_lit_client_and_a_dark_one() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let window = unsafe { a_window_of_the_players_own() };
     // **A window off the desktop has no visible region to be written through**, so this one stands where
     // it can be drawn in and is shown the way a player shows its own — small, and for the length of one
@@ -6973,9 +6771,7 @@ unsafe fn fill_the_client(window: HWND, colour: COLORREF) {
 /// `pin_film_thumbnail::note_the_seek_picture`).
 #[test]
 fn a_seek_on_ffplay_ends_no_standing_source_and_crops_by_the_placed_client() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (_host, source, pid) =
@@ -7037,9 +6833,7 @@ fn a_seek_on_ffplay_ends_no_standing_source_and_crops_by_the_placed_client() {
 /// superseded one (see `pin_playback::settle_the_published_relaunch`).
 #[test]
 fn the_swap_forgets_the_relaunch_that_put_the_picture_up() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (host, first, pid) =
@@ -7102,9 +6896,7 @@ fn the_freeze_road_is_the_runs_own_setting() {
 /// the registration draws, and `black` is a window with nothing in it.
 #[test]
 fn a_player_with_no_command_channel_is_suspended_and_its_frame_sampled() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (_host, _source, pid) =
@@ -7181,9 +6973,7 @@ fn a_player_with_no_command_channel_is_suspended_and_its_frame_sampled() {
 /// paint puts there and not about the bookkeeping around it.
 #[test]
 fn the_retained_cover_survives_a_resize_and_is_never_black() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
@@ -7268,9 +7058,7 @@ fn the_retained_cover_survives_a_resize_and_is_never_black() {
 /// decoded at the press.
 #[test]
 fn the_dc_road_paints_the_sources_own_frame_and_ends_the_player_before_the_replacement() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let previous_retirement = VIDEO_RETIREMENT
         .lock()
         .ok()
@@ -7421,9 +7209,7 @@ fn the_dc_road_paints_the_sources_own_frame_and_ends_the_player_before_the_repla
 /// ended, so that relaunch is `off` and the player before it goes on drawing until its replacement does.
 #[test]
 fn a_source_with_no_lit_frame_paints_no_cover_and_leaves_the_old_picture_playing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let previous_retirement = VIDEO_RETIREMENT
         .lock()
         .ok()
@@ -7510,9 +7296,7 @@ fn a_source_with_no_lit_frame_paints_no_cover_and_leaves_the_old_picture_playing
 
 #[test]
 fn a_failed_handover_ends_the_player_it_suspended() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (_host, _source, pid) =
@@ -7552,9 +7336,7 @@ fn a_failed_handover_ends_the_player_it_suspended() {
 /// run's own setting because `RHP_FREEZE` is one value for the whole process (see `freeze_road`).
 #[test]
 fn a_relaunch_on_the_off_road_freezes_nothing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (_host, _source, pid) =
@@ -7621,9 +7403,7 @@ fn a_relaunch_on_the_off_road_freezes_nothing() {
 fn a_posted_pause_key_reaches_a_window_wearing_the_sources_own_style() {
     // A window of this process's own, and one the passes that look at this process's windows are
     // answered with: it takes the suite's lock (see `PIN_TESTS_ONE_AT_A_TIME`).
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let window = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -7684,9 +7464,7 @@ fn a_posted_pause_key_reaches_a_window_wearing_the_sources_own_style() {
 /// cover of this app's own, which the host already owes the screen (see `FreezeRoad`).
 #[test]
 fn the_standing_source_is_what_the_tracker_and_the_topmost_road_follow() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     stand_mpv_in(Some(false));
@@ -7787,9 +7565,7 @@ fn the_standing_source_is_what_the_tracker_and_the_topmost_road_follow() {
 /// either case. Both engines' stands are run, because the rare mpv flash is the same hole.
 #[test]
 fn a_registration_whose_source_has_gone_is_not_a_host_drawing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
 
     // One engine's stand at a time, because each stands the pin's host and the pin's globals over
     // again.
@@ -7824,9 +7600,7 @@ fn a_registration_whose_source_has_gone_is_not_a_host_drawing() {
 /// — `pic!=asked` — is only written where a picture was actually read (see `note_the_seek_picture`).
 #[test]
 fn a_seeks_picture_line_calls_nothing_a_mismatch_that_was_never_read() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
     let (host, _first, pid) =
@@ -7956,9 +7730,7 @@ fn the_band_one_paint_left(film: &StandingFilm) -> (Vec<[u8; 4]>, usize, usize) 
 /// `fill_band_opaque`).
 #[test]
 fn a_host_with_no_picture_owes_the_pins_band_black() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -7992,9 +7764,7 @@ fn a_host_with_no_picture_owes_the_pins_band_black() {
 /// the cover was off the screen for the rest of the gap.
 #[test]
 fn a_cover_standing_leaves_the_pins_band_to_the_host() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     // FFmpeg's player is the road a relaunch's cover is painted on (see
     // `pin_film_thumbnail::stand_the_outgoing_picture_from_its_dc`).
     let film = ffplay_standing_film();
@@ -8032,9 +7802,7 @@ fn a_cover_standing_leaves_the_pins_band_to_the_host() {
 /// runs while it holds a cover (see `pin_film_host::paint_the_host_behind_the_film`).
 #[test]
 fn a_pin_repainting_under_a_cover_leaves_the_host_alone() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = ffplay_standing_film();
     with_pin(|pin| pin.transport_bar = true);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -8096,9 +7864,7 @@ fn a_pin_repainting_under_a_cover_leaves_the_host_alone() {
 /// considered — opaque with no cover standing, and the cover's own pixels with one.
 #[test]
 fn an_mpv_film_takes_the_bands_answers_as_they_were() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -8160,9 +7926,7 @@ unsafe fn stands_over(above: HWND, below: HWND) -> bool {
 /// change at all.
 #[test]
 fn a_step_leaves_the_pin_standing_over_the_films_host() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     let host = unsafe { a_pin_showing_a_registered_film(&film) };
@@ -8244,9 +8008,7 @@ fn a_step_leaves_the_pin_standing_over_the_films_host() {
 /// is the picture the incoming player has begun rather than nothing at all.
 #[test]
 fn a_steps_wait_for_its_first_frame_leaves_the_hands_chrome_up() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     let host = unsafe { a_pin_showing_a_registered_film(&film) };
@@ -8337,9 +8099,7 @@ fn a_steps_wait_for_its_first_frame_leaves_the_hands_chrome_up() {
 /// `a_pointer_over_a_window_covering_the_pin_shows_no_chrome`).
 #[test]
 fn a_steps_own_player_window_under_the_hand_is_not_a_window_over_the_pin() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     let _host = unsafe { a_pin_showing_a_registered_film(&film) };
@@ -8437,9 +8197,7 @@ fn a_steps_own_player_window_under_the_hand_is_not_a_window_over_the_pin() {
 /// else's window, which is the intermittent strip that is being removed here.
 #[test]
 fn the_window_a_step_puts_under_the_hand_is_the_films_own_at_every_tick_of_its_handover() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     let _host = unsafe { a_pin_showing_a_registered_film(&film) };
@@ -8548,9 +8306,7 @@ fn the_window_a_step_puts_under_the_hand_is_the_films_own_at_every_tick_of_its_h
 /// whichever player the pin is showing.
 #[test]
 fn a_window_of_this_apps_own_under_the_hand_is_not_a_window_over_the_pin() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     // A window of this app's own process, of the kind the pin wears with Always On Top off: what the
     // Shell lists and stands over the caption is the taskbar stand-in, and any window of ours stands
     // for it here (see `pin_taskbar`).
@@ -8631,9 +8387,7 @@ fn a_window_of_this_apps_own_under_the_hand_is_not_a_window_over_the_pin() {
 /// from, and what stands under it is the film that replaced the one it was watching.
 #[test]
 fn a_step_leaves_the_hand_chrome_up_from_its_take_up_to_its_first_frame() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     let host = unsafe { a_pin_showing_a_registered_film(&film) };
@@ -8748,9 +8502,7 @@ fn a_step_leaves_the_hand_chrome_up_from_its_take_up_to_its_first_frame() {
 /// already fills — a road that changes no box at all, and so answers the same way.
 #[test]
 fn a_step_leaves_the_chrome_that_the_pointer_is_resting_on_up() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
     let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
@@ -8841,9 +8593,7 @@ fn a_step_leaves_the_chrome_that_the_pointer_is_resting_on_up() {
 /// cannot leave a pin, or a window, standing in for the tests that follow.
 #[test]
 fn a_steps_hand_back_goes_by_the_window_the_foreground_was_taken_from() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_window = pin_real_window::real_pin_window();
 
@@ -8915,9 +8665,7 @@ fn a_steps_hand_back_goes_by_the_window_the_foreground_was_taken_from() {
 /// with the setting's two answers.
 #[test]
 fn always_on_top_is_the_pins_own_band_and_not_only_the_hosts() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
 
     // Both engines are on the one host road (see `pin_film_host`), so both are asked: the picture is
     // the same window either way, and what is under test is the pair's band.
@@ -9062,9 +8810,7 @@ fn the_line(lines: &[String], line: String) -> usize {
 /// no appearance, and the recorded run says so by writing nothing.
 #[test]
 fn the_band_is_asked_of_the_pair_after_its_host_appears() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
 
     let standing = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
@@ -9154,9 +8900,7 @@ fn the_band_is_asked_of_the_pair_after_its_host_appears() {
 /// the pin's, which is what puts it in front of them.
 #[test]
 fn a_pin_whose_host_appears_over_an_ordinary_window_is_put_in_front_of_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
 
     let standing = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {

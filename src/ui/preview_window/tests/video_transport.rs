@@ -3,9 +3,7 @@ use super::*;
 /// a pinned video laid out again for the box its window was dragged to, which /// is where a resize used to flash a sheared picture for the moment before the engine handed /// the next frame over.
 #[test]
 fn a_resized_pinned_video_keeps_the_frame_its_pixels_are() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
@@ -53,9 +51,7 @@ fn a_resized_pinned_video_keeps_the_frame_its_pixels_are() {
 /// a seek made while a pinned video is paused.
 #[test]
 fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -675,9 +671,7 @@ fn a_playing_pin(film: &Path, content: ScreenRegion) -> PinnedPreview {
 /// and begun again there — the gate this ticket turns on, asserted on both routes.
 #[test]
 fn a_seek_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -771,9 +765,7 @@ fn a_seek_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays() {
 /// whose player has no window to be posted a key to is begun again (see `toggle_pinned_playback`).
 #[test]
 fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -875,9 +867,7 @@ fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume()
 /// relaunch a seek is for it (see `restart_pinned_player`).
 #[test]
 fn a_press_over_a_finished_ffplay_film_begins_it_again_at_the_top() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -944,9 +934,7 @@ fn a_press_over_a_finished_ffplay_film_begins_it_again_at_the_top() {
 /// which was the whole of "Play on a collapsed pin does nothing".
 #[test]
 fn a_play_on_a_collapsed_pins_bubble_gives_the_park_back_and_keeps_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _switches = PausePreviewSettings::stood_at(true, true);
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
@@ -1059,9 +1047,7 @@ fn a_play_on_a_collapsed_pins_bubble_gives_the_park_back_and_keeps_it() {
 /// `toggle_pinned_by_key` and `settle_bubble_playback`).
 #[test]
 fn a_play_on_a_collapsed_pins_bubble_that_parked_nothing_keeps_the_film_going() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _switches = PausePreviewSettings::stood_at(true, true);
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
@@ -1132,9 +1118,7 @@ fn a_play_on_a_collapsed_pins_bubble_that_parked_nothing_keeps_the_film_going() 
 /// there, and FFmpeg's film is begun again at it (see `video_loop_tick`).
 #[test]
 fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -1256,9 +1240,7 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
 /// wrap (see `rebase_video_loop_clock`).
 #[test]
 fn the_loop_clock_is_moved_onto_the_moment_the_film_began_playing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let content = (0, 0, 320, 240);
     let film = PathBuf::from("slow-to-open-film.mkv");
@@ -1348,9 +1330,7 @@ impl Drop for VideoJumps {
 /// The wrap is posted before the film gets there, so it is the same seek a loop's wrap is.
 #[test]
 fn the_tick_takes_a_pausing_film_back_to_its_top_and_holds_it_there() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -1447,9 +1427,7 @@ fn the_tick_takes_a_pausing_film_back_to_its_top_and_holds_it_there() {
 /// `video_loop_action`).
 #[test]
 fn a_pinned_films_loop_is_the_pins_own_end_of_file_and_not_the_hovers() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -1609,9 +1587,7 @@ fn a_pass_still_being_played_ends_at_the_length_of_its_file() {
 /// within — is still this reading's, because otherwise nothing would ever stop the clock over it.
 #[test]
 fn the_end_of_file_that_pauses_is_left_to_the_rewind_where_it_can_take_the_film() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_live_video_media();
@@ -1702,9 +1678,7 @@ fn the_end_of_file_that_pauses_is_left_to_the_rewind_where_it_can_take_the_film(
 /// the pin up while it is out.
 #[test]
 fn a_native_pass_end_takes_its_film_home_or_asks_for_the_next_one() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
 
     let content = (0, 0, 320, 240);
@@ -1806,9 +1780,7 @@ fn a_native_films_end_of_file_is_read_off_the_engines_own_clock() {
 /// own window — measured, and the band is a hole that window is the picture through.
 #[test]
 fn the_end_of_file_that_pauses_takes_a_ffplay_film_home_and_holds_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_live_video_media();
@@ -1914,9 +1886,7 @@ fn the_end_of_file_that_pauses_takes_a_ffplay_film_home_and_holds_it() {
 /// with the play button a finished film is owed.
 #[test]
 fn the_end_of_file_that_pauses_stops_a_film_the_rewind_cannot_take_home() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_live_video_media();
@@ -1983,9 +1953,7 @@ fn the_end_of_file_that_pauses_stops_a_film_the_rewind_cannot_take_home() {
 /// walk is asked at the end of the file and not a moment before it.
 #[test]
 fn the_end_of_file_that_continues_waits_for_the_films_own_end() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_live_video_media();
@@ -2047,9 +2015,7 @@ fn the_end_of_file_that_continues_waits_for_the_films_own_end() {
 /// at, and after the first wrap it stood a whole pass away from the picture it was drawn over.
 #[test]
 fn an_mpv_wrap_moves_the_pins_bar_onto_the_pass_it_began() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -2126,9 +2092,7 @@ fn an_mpv_wrap_moves_the_pins_bar_onto_the_pass_it_began() {
 /// film back to the beginning because the clock a pass is measured by is still where the seek left.
 #[test]
 fn an_mpv_seek_moves_the_loops_clock_onto_the_second() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -2207,9 +2171,7 @@ fn an_mpv_seek_moves_the_loops_clock_onto_the_second() {
 /// stood at its end, which is the road the test below covers.
 #[test]
 fn a_film_the_tick_holds_at_its_top_is_resumed_by_one_command() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_live_video_media();
@@ -2273,9 +2235,7 @@ fn a_film_the_tick_holds_at_its_top_is_resumed_by_one_command() {
 /// clocks are written at the second it is now played from.
 #[test]
 fn a_film_held_at_its_end_plays_again_from_the_top() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_live_video_media();
@@ -2346,9 +2306,7 @@ fn a_film_held_at_its_end_plays_again_from_the_top() {
 /// and every end of file — Pause, Loop and Continue alike — would be that stretch late.
 #[test]
 fn a_pin_taken_up_on_a_film_already_playing_starts_where_the_picture_is() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -2390,9 +2348,7 @@ fn a_pin_taken_up_on_a_film_already_playing_starts_where_the_picture_is() {
 /// `bubble_stream::settle` and `grab_bubble_frame`).
 #[test]
 fn a_film_let_go_of_behind_a_bubble_is_shown_the_second_it_was_held_at() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     // The film plays on behind the bubble: a bubble whose film is *held* is a bubble whose second
     // never moves, which is not the report (see `bubble_playback_to_park`).
     let _switches = PausePreviewSettings::stood_at(false, false);

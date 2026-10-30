@@ -9,9 +9,7 @@ use super::*;
 /// `pin_update_content` and `audio_box`).
 #[test]
 fn a_sound_picked_into_a_pin_is_the_wait_for_its_probe_until_that_has_answered() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let folder = std::env::temp_dir().join("rust-hover-preview-pin-sound");
     std::fs::create_dir_all(&folder).expect("a test folder");
@@ -158,9 +156,7 @@ fn a_sound_picked_into_a_pin_is_the_wait_for_its_probe_until_that_has_answered()
 /// it (see `pin_keeps_its_box`).
 #[test]
 fn a_text_file_picked_into_a_pin_is_laid_out_in_the_room_and_not_fitted_into_the_bound() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let folder = std::env::temp_dir().join("rust-hover-preview-pin-text");
     std::fs::create_dir_all(&folder).expect("a test folder");
@@ -755,9 +751,7 @@ fn a_press_on_the_engines_window_begins_the_drag_its_place_means() {
 /// "magnet" the resized window was reported as.
 #[test]
 fn a_left_border_and_a_right_border_stroke_each_land_the_edge_where_the_hand_put_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
 
     // The room the app reads for a box: the work area of the display the box's middle stands on,
@@ -903,9 +897,7 @@ fn a_left_border_and_a_right_border_stroke_each_land_the_edge_where_the_hand_put
 /// (see `begin_pin_pan`).
 #[test]
 fn a_stroke_that_pulls_an_edge_in_leaves_a_press_carrying_the_window_rather_than_the_picture() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
 
     // A picture the wheel zooms, taken up filling the box it stands at: the state every pin of

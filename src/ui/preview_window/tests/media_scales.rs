@@ -166,7 +166,7 @@ fn a_picture_asks_the_file_about_moving_only_when_the_two_sizes_differ() {
 }
 
 // The lock the tests below take over the preview's own process-wide state is
-// `pin_window::PIN_TESTS_ONE_AT_A_TIME`, declared there beside the slot it guards and
+// `the_room_to_itself`, declared in the harness beside `a_window_of_the_suite` and
 // documented at its definition: there is one lock for that state, not one per module,
 // because a second lock over the same slot is no lock at all.
 

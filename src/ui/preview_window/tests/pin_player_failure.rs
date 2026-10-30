@@ -26,9 +26,7 @@ fn stand_a_video(width: u32, height: u32) -> Option<MediaData> {
 
 #[test]
 fn a_covers_own_player_is_not_a_failed_file() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = stand_a_video(640, 360);
     let previous_pin = take_pin_for_a_test();

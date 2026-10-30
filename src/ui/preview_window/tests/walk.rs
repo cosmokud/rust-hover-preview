@@ -155,9 +155,7 @@ fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
 /// a file the pin could not draw is shown as the mark rather than as the file it /// came from, and the mark is a live kind.
 #[test]
 fn a_failed_file_with_nowhere_to_step_to_is_left_standing_as_the_mark() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -593,9 +591,7 @@ fn the_mark_is_drawn_wherever_a_frame_is() {
 /// the four above it a real answer rather than an accident of where they are written.
 #[test]
 fn a_pin_being_shown_another_file_is_alive_whatever_is_on_screen() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -1402,9 +1398,7 @@ fn a_file_that_could_not_be_shown_is_stepped_over_onto_the_next_file() {
 /// standing on (see `ask_pin_walk`).
 #[test]
 fn a_press_asks_with_the_walk_the_pin_is_standing_on() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let folder = sounded_folder("session-carried");
 
@@ -1473,9 +1467,7 @@ fn a_press_asks_with_the_walk_the_pin_is_standing_on() {
 /// another (see `pin_walk_synced_its_playlist`).
 #[test]
 fn a_playlist_an_answer_made_goes_onto_the_pin_without_moving_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let folder = sounded_folder("session-drew");
     let sounds = vec![
@@ -1535,9 +1527,7 @@ fn a_playlist_an_answer_made_goes_onto_the_pin_without_moving_it() {
 /// file's (`Others → All`), not the sound's (`Audio → Same Category`).
 #[test]
 fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     // The planner's slot is emptied first, so the job taken below is this test's own:
@@ -1894,9 +1884,7 @@ fn installing_a_pick_in_the_walks_folder_keeps_the_playlist() {
 /// behind it joins the same playlist rather than resetting it.
 #[test]
 fn a_pin_walks_its_playlist_press_after_press_through_its_own_session() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     if let Ok(mut pending) = PIN_JOBS.0.lock() {
         *pending = None;
@@ -2043,9 +2031,7 @@ fn a_pin_walks_its_playlist_press_after_press_through_its_own_session() {
 /// fresh, which is the one thing a take-up is a boundary for.
 #[test]
 fn a_pin_taken_up_again_on_its_own_file_keeps_the_walk() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let folder = sounded_folder("take-up-keeps");
     let order = vec![

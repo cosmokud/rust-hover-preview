@@ -659,9 +659,7 @@ fn puts_the_spinner_up_once_the_load_has_run_for_the_delay() {
 /// and by nothing else — from being taken down by a hover's clock.
 #[test]
 fn a_hover_that_comes_to_nothing_ends_as_a_mark_that_goes_after_three_seconds() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
     assert!(

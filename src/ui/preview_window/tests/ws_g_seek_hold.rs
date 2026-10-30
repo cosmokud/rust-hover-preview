@@ -53,9 +53,7 @@ fn the_seek_line(seconds: f64) -> String {
 /// the release, and nothing about the film may change before then.
 #[test]
 fn a_seek_press_and_scrub_tell_the_player_nothing_on_either_route() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -134,9 +132,7 @@ fn a_seek_press_and_scrub_tell_the_player_nothing_on_either_route() {
 /// player that was drawing it is still the one the bar reads from until its replacement stands.
 #[test]
 fn a_seek_release_restarts_once_and_the_film_stays_on_screen() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -244,9 +240,7 @@ fn a_seek_release_restarts_once_and_the_film_stays_on_screen() {
 /// and the line says `from 0` with no player for the retirement to hold.
 #[test]
 fn a_seek_release_ends_no_player_before_its_replacement_can_draw() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();

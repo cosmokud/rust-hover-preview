@@ -296,9 +296,7 @@ fn exactly_one_of_the_two_minimize_picks_carries_the_disc() {
 /// carries no row at all.
 #[test]
 fn the_pause_switch_carries_the_check_of_the_kind_it_stands_for() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _switches = PausePreviewSettings::stood_at(false, true);
 
     let film = bubble_menu_chrome_rows(Some(MediaType::Video), false, false, true, false);
@@ -337,9 +335,7 @@ fn the_pause_switch_carries_the_check_of_the_kind_it_stands_for() {
 /// every click, shrank as it ran out of room, and ended up against the edge of the screen.
 #[test]
 fn a_pin_restored_from_a_bubble_that_was_never_carried_comes_back_at_its_own_box() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
@@ -511,9 +507,7 @@ unsafe fn a_pin_put_away_into_its_bubble() -> (HWND, HWND) {
 /// the caret, the way a press on the window itself leaves it (see `restore_pin`, `pin_take_focus`).
 #[test]
 fn a_pin_brought_back_by_a_press_on_its_bubble_comes_back_in_front_and_takes_the_keyboard() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -576,9 +570,7 @@ fn a_pin_brought_back_by_a_press_on_its_bubble_comes_back_in_front_and_takes_the
 /// (see `PinRestore::Key`).
 #[test]
 fn a_pin_brought_back_by_its_key_leaves_the_keyboard_in_the_listing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -637,9 +629,7 @@ fn a_pin_brought_back_by_its_key_leaves_the_keyboard_in_the_listing() {
 /// the preview's window, which is put up with `HWND_TOP` (see `bring_a_put_away_pin_back`).
 #[test]
 fn an_update_brings_a_pin_put_away_into_its_bubble_back_on_top() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -762,9 +752,7 @@ fn an_update_brings_a_pin_put_away_into_its_bubble_back_on_top() {
 /// is read off the desktop's own list, where the press that gives the band back leaves the pin.
 #[test]
 fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -872,9 +860,7 @@ fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
 /// holding the band is a decision this app makes, and where the pin ends is the desktop's to place.
 #[test]
 fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -1009,9 +995,7 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
 fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
     use windows::Win32::UI::WindowsAndMessaging::{HWND_NOTOPMOST, HWND_TOPMOST};
 
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -1112,9 +1096,7 @@ fn a_film_goes_under_its_pin_and_holds_the_band_only_with_none() {
 fn a_window_of_the_player_is_a_window_of_the_preview() {
     // The published player is one slot for the process, so this takes the suite's lock (see
     // `PIN_TESTS_ONE_AT_A_TIME`).
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
 
     // No window's process is "nobody's": a pid of nothing is what a failed ask leaves, and it must
@@ -1147,9 +1129,7 @@ fn a_window_of_the_player_is_a_window_of_the_preview() {
 /// than putting the pin back over the listing that press just took it behind.
 #[test]
 fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -1309,9 +1289,7 @@ fn a_pin_raised_for_a_pick_answers_for_the_front_while_the_grace_lasts() {
 /// next click puts in front (see `keep_pin_at_the_front` and `take_the_band_and_give_it_back`).
 #[test]
 fn a_pick_chases_the_listing_when_the_activation_lands_after_its_raise() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -1419,9 +1397,7 @@ fn a_pick_chases_the_listing_when_the_activation_lands_after_its_raise() {
 /// the window the user is in (see `raise_pinned_preview` and `keep_pin_at_the_front`).
 #[test]
 fn a_pick_holds_the_pin_over_the_listing_until_the_click_activates_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -1562,9 +1538,7 @@ fn a_pick_holds_the_pin_over_the_listing_until_the_click_activates_it() {
 /// and puts the pin below that window, which is what every other press of theirs would have done.
 #[test]
 fn a_band_held_for_a_pick_goes_back_behind_the_window_the_user_moved_to() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -1664,9 +1638,7 @@ fn a_band_held_for_a_pick_goes_back_behind_the_window_the_user_moved_to() {
 /// click, and not on the arrows, which walk the same files without a press to hold anything.
 #[test]
 fn a_picks_own_placement_keeps_the_band_the_press_held() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -1777,9 +1749,7 @@ fn a_picks_own_placement_keeps_the_band_the_press_held() {
 /// and a give back, no band kept.
 #[test]
 fn a_pick_whose_band_the_desktop_did_not_give_is_still_owed_the_front() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -1899,9 +1869,7 @@ fn a_pick_whose_band_the_desktop_did_not_give_is_still_owed_the_front() {
 /// make the longest the pin stands over the user's programs as long as their hand keeps moving.
 #[test]
 fn a_band_held_for_a_pick_is_given_back_on_the_presss_own_clock() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -2018,9 +1986,7 @@ fn a_band_held_for_a_pick_is_given_back_on_the_presss_own_clock() {
 /// thing that setting must never do (see `PinFrontOwed`).
 #[test]
 fn a_pick_answers_only_the_listing_its_click_was_made_in() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -2121,9 +2087,7 @@ fn a_pick_answers_only_the_listing_its_click_was_made_in() {
 /// moved to instead, which is the one thing `Always On Top` off must never do (see `PinFrontOwed`).
 #[test]
 fn a_pick_whose_listing_is_gone_answers_for_nothing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -2227,9 +2191,7 @@ fn a_pick_whose_listing_is_gone_answers_for_nothing() {
 /// clicks put it.
 #[test]
 fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_an_update() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -2438,9 +2400,7 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
 /// too — and that is `a_pin_whose_chrome_is_the_pairs_button_is_put_away_by_the_shells_minimize`'s.
 #[test]
 fn the_shells_show_desktop_minimizes_a_pin_that_is_a_window_of_its_own() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_own = pin_is_its_own_window();
     let previous_pin = take_pin_for_a_test();
@@ -2559,9 +2519,7 @@ fn the_shells_show_desktop_minimizes_a_pin_that_is_a_window_of_its_own() {
 /// with `Always On Top` off meaning the pin is then an ordinary window that the next click puts behind.
 #[test]
 fn a_pin_that_is_a_window_of_its_own_takes_the_band_to_appear_and_gives_it_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let before = pin_always_on_top();

@@ -22,9 +22,7 @@ fn a_pin_awaiting_a_press() {
 /// from a box alone is a drag from the wrong origin.
 #[test]
 fn a_press_takes_the_pointer_for_its_drag_and_a_drag_it_cannot_begin_lets_it_go() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let window = a_window_at((300, 200, 700, 600));
     let hwnd = HWND(0x1000 as *mut _);
@@ -73,9 +71,7 @@ fn a_press_takes_the_pointer_for_its_drag_and_a_drag_it_cannot_begin_lets_it_go(
 /// installed, and a refusal returns with nothing installed and nothing taken.
 #[test]
 fn a_press_that_cannot_be_measured_takes_nothing_at_all() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     for window in [
         RecordedPinWindow::with(0x1000, None, Some((300, 200, 700, 600))),
@@ -114,9 +110,7 @@ fn a_press_that_cannot_be_measured_takes_nothing_at_all() {
 /// release puts the pointer back and repaints, and touches nothing of somebody else's.
 #[test]
 fn a_drag_lets_go_of_the_pointer_it_took() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let window = a_window_at((300, 200, 700, 600));
     let hwnd = HWND(0x1000 as *mut _);
@@ -522,9 +516,7 @@ fn a_gain_puts_a_probed_native_sound_on_ffmpegs_player() {
 /// the one thing a pause has to say.
 #[test]
 fn a_sound_a_key_held_is_drawn_where_it_was_held() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     // A sound the pointer is on is a hover's, so no pin is up while its clock is measured: the
     // rule it goes round by is the hover's own switch rather than a pin's (see `pin_audio_loops`).
     // Stood rather than assumed, so that a pin another test left standing cannot decide it.
@@ -674,9 +666,7 @@ fn a_sound_of_three_minutes() -> (PathBuf, PathBuf) {
 /// the sound is at, which is the one thing that keeps the bar moving.
 #[test]
 fn the_clock_of_a_player_that_loops_itself_goes_round_with_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     // A hover's clock again, so no pin is up to answer for it (see `pin_audio_loops`).
     stand_pin(None);
     let _loop_on = LoopSwitch::put(true);
@@ -718,9 +708,7 @@ fn the_clock_of_a_player_that_loops_itself_goes_round_with_it() {
 /// `GetFocus` (see `pin_is_focused`), which is the one answer that cannot be wrong.
 #[test]
 fn the_keyboard_is_dropped_on_every_road_out_of_a_pin() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(PinnedPreview::for_test());
     assert!(
@@ -780,9 +768,7 @@ fn the_pin_key_only_brings_a_bubble_back_and_never_hides_a_window() {
 /// like a dead key rather than a dead pin.
 #[test]
 fn the_file_the_pin_key_asks_for_is_taken_up_with_no_pin_standing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
 
     let arrival = PreviewMessage::Pin {
         path: PathBuf::from("a-film-the-key-was-pressed-on.mkv"),
@@ -864,9 +850,7 @@ impl Drop for EndOfFileSwitch {
 /// respected the moment the walk stepped to the next file.
 #[test]
 fn a_sound_a_pin_is_about_to_show_is_begun_with_the_pin_s_end_of_file() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _hover_loops = LoopSwitch::put(true);
     let _end_of_file = EndOfFileSwitch::put(PinEndOfFile::Continue);
 
@@ -1086,9 +1070,7 @@ impl Drop for PagePutBack {
 /// `pinned_key_command`, `text_scroll_line` and `pin_command_request`).
 #[test]
 fn a_pin_holding_a_page_scrolls_for_the_keys_the_page_owns() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     a_pin_awaiting_a_press();
 
     // The keys, as the pin's own window maps them: the two the folder shares with the page, the two

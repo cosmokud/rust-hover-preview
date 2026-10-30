@@ -684,7 +684,7 @@ pub(super) fn clear_noted() {
 
 #[cfg(test)]
 mod tests {
-    use super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME;
+    use super::super::tests::the_room_to_itself;
     use super::*;
 
     /// The name a launch names is one apart from the last, so no two previews can share a pipe —
@@ -703,9 +703,7 @@ mod tests {
     /// pid guard is for: the pipe outlives a kill by nothing, so a stale pid names no pipe.
     #[test]
     fn a_command_reaches_the_player_it_names_and_no_other() {
-        let _one = PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _room = the_room_to_itself();
 
         clear_noted();
         remember_pipe(41, "a-pipe", false);
@@ -749,9 +747,7 @@ mod tests {
         // The noted log is one the pin's own tests write in as well, and the three tests here that
         // read it are one at a time only because they hold the pin's own lock: without it a
         // sibling's clear lands between the two lines this test is counting.
-        let _one = PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _room = the_room_to_itself();
 
         clear_noted();
         // A player of the kind a level of nothing is begun as.
@@ -805,9 +801,7 @@ mod tests {
     /// one flag the manual names, and each says it wants no reply.
     #[test]
     fn each_command_is_the_line_mpv_is_told_with() {
-        let _one = PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _room = the_room_to_itself();
 
         clear_noted();
         remember_pipe(7, "a-pipe", false);
@@ -860,9 +854,7 @@ mod tests {
     /// give.
     #[test]
     fn a_property_is_read_back_from_the_player_that_is_held() {
-        let _one = PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _room = the_room_to_itself();
 
         clear_reads();
         remember_pipe(51, "a-pipe", false);

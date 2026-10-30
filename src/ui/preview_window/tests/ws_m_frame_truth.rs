@@ -333,9 +333,7 @@ fn the_pressed_button() -> Option<pin_chrome::CaptionButton> {
 
 #[test]
 fn a_dump_of_three_take_ups_is_comparable() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = stand_a_video(640, 360);
     clean_slate();
 
@@ -394,9 +392,7 @@ fn a_dump_of_three_take_ups_is_comparable() {
 /// else, and every press after it is answered by the wrong arm.
 #[test]
 fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_a_video(640, 360);
     clean_slate();
@@ -556,9 +552,7 @@ fn write_a_png_of_size(path: &Path, width: u32, height: u32) {
 /// the caption would pass a test that asked about the caption.
 #[test]
 fn a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_bar() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_a_video(640, 360);
     clean_slate();
@@ -694,9 +688,7 @@ fn a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_b
 /// written out rather than left to a diff nobody reads.
 #[test]
 fn a_swap_leaves_the_state_a_box_change_leaves() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = stand_a_video(640, 360);
     clean_slate();
 
@@ -769,9 +761,7 @@ fn a_swap_leaves_the_state_a_box_change_leaves() {
 /// here is the road the loop takes rather than a piece of it.
 #[test]
 fn the_box_a_swap_measures_is_the_box_the_take_up_installs() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = stand_a_picture();
     clean_slate();
 
@@ -840,9 +830,7 @@ fn the_box_a_swap_measures_is_the_box_the_take_up_installs() {
 /// showing).
 #[test]
 fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = stand_a_picture();
     clean_slate();
 
@@ -1024,9 +1012,7 @@ fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
 /// `show_pinned_window`).
 #[test]
 fn a_walk_while_the_pin_is_a_bubble_leaves_the_window_a_bubble_on_the_next_file() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = stand_a_video(640, 360);
     clean_slate();
 

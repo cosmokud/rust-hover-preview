@@ -3070,6 +3070,7 @@ unsafe fn window_box(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::the_room_to_itself;
     use super::*;
 
     /// **A captured frame is gated on the same grid the pin is measured with, and a dark scene passes
@@ -3488,9 +3489,7 @@ mod tests {
     /// `place_the_source`).
     #[test]
     fn a_second_placement_is_refused_out_loud_and_counted() {
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|held| held.into_inner());
+        let _room = the_room_to_itself();
         clear_the_source_placements();
         let placed = SourceShape {
             source: 0x1000,
@@ -3533,9 +3532,7 @@ mod tests {
     /// crop at all — never the previous film's crop.
     #[test]
     fn a_film_adopted_after_another_is_never_cropped_by_the_old_films_shape() {
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|held| held.into_inner());
+        let _room = the_room_to_itself();
 
         // Film A: a 2.39:1 picture placed once at its own size.
         let a = SourceShape {
@@ -3619,9 +3616,7 @@ mod tests {
     /// film's shape cropping the next one's first frames (see `the_films_own_size`).
     #[test]
     fn a_probe_answers_only_for_the_film_the_player_was_begun_for() {
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|held| held.into_inner());
+        let _room = the_room_to_itself();
         let path = PathBuf::from("a-probed-film.mkv");
         let key = VideoGeometryKey {
             path: path.clone(),
@@ -3791,9 +3786,7 @@ mod tests {
     /// and a player this app does not hold is not asked at all (see `the_players_picture_size`).
     #[test]
     fn the_picture_size_is_one_read_of_the_video_params_node() {
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|held| held.into_inner());
+        let _room = the_room_to_itself();
         let pid = 0x5eed;
         mpv_ipc::remember_pipe(pid, "rhp-test-picture-size", false);
         mpv_ipc::clear_reads();
@@ -3856,9 +3849,7 @@ mod tests {
     /// (see `the_films_native_size`).
     #[test]
     fn a_film_that_is_not_yet_sized_is_waited_for_and_not_guessed() {
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|held| held.into_inner());
+        let _room = the_room_to_itself();
         let pid = 0x5eed;
         mpv_ipc::remember_pipe(pid, "rhp-test-unsized-film", false);
         mpv_ipc::clear_reads();

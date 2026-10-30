@@ -120,9 +120,7 @@ fn a_remembered_sound(folder: &str) -> PathBuf {
 /// that was gone.
 #[test]
 fn no_road_out_of_a_pin_leaves_what_it_left_behind_standing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     for reason in [
         Reason::Closed,
@@ -281,9 +279,7 @@ fn a_sound_is_given_no_caption_above_its_card() {
 /// answered by: what a hand lands on is the card's own row, which is the whole of the window.
 #[test]
 fn a_sound_with_no_caption_above_it_has_no_band_to_press_in() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
 
@@ -333,9 +329,7 @@ fn sound_pin_volume_button(pin: &PinnedPreview) -> (i32, i32) {
 /// notices the pointer has gone has to ask for that card rather than for the window.
 #[test]
 fn a_hover_off_the_card_leaves_its_buttons_unlit() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let pin = sound_pin();
@@ -390,9 +384,7 @@ fn a_hover_off_the_card_leaves_its_buttons_unlit() {
 /// and the bar is what they are carved out of.
 #[test]
 fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let folder = std::env::temp_dir().join("rust-hover-preview-pin-sound-box");
     std::fs::create_dir_all(&folder).expect("a test folder");
@@ -467,9 +459,7 @@ fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
 /// share.
 #[test]
 fn a_card_is_built_at_the_share_s_font_not_the_text_s() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _settings = CardFontSettings::stood_at(PreviewScale::Percent(5), 200);
 
     assert_eq!(
@@ -493,9 +483,7 @@ fn a_card_is_built_at_the_share_s_font_not_the_text_s() {
 /// drawn smaller than the window that is showing it.
 #[test]
 fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
@@ -595,9 +583,7 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
 /// stays where it was.
 #[test]
 fn a_repaint_keeps_the_frame_it_was_painted_at() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _settings = CardFontSettings::stood_the_share_at(DEFAULT_AUDIO_SCALE);
 
     let path = a_remembered_sound("rust-hover-preview-pin-sound-repaint");
@@ -677,9 +663,7 @@ fn a_repaint_keeps_the_frame_it_was_painted_at() {
 /// is freshly loaded — so it takes up the new share.
 #[test]
 fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _settings = CardFontSettings::stood_the_share_at(DEFAULT_AUDIO_SCALE);
 
     let path = a_remembered_sound("rust-hover-preview-pin-sound-take-up");
@@ -804,9 +788,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
 /// where it is.
 #[test]
 fn a_repaint_still_follows_the_theme_setting() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _settings = CardFontSettings::stood_the_share_at(DEFAULT_AUDIO_SCALE);
 
     let path = a_remembered_sound("rust-hover-preview-pin-sound-theme");
@@ -890,9 +872,7 @@ fn a_repaint_still_follows_the_theme_setting() {
 /// layout the card is drawn in.
 #[test]
 fn a_pin_taken_up_after_a_change_keeps_the_hovers_size() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _settings = CardFontSettings::stood_the_share_at(DEFAULT_AUDIO_SCALE);
 
     let path = a_remembered_sound("rust-hover-preview-pin-sound-take-up-size");
@@ -1001,9 +981,7 @@ fn a_pin_taken_up_after_a_change_keeps_the_hovers_size() {
 /// in changes size; the card stays one card at its own share.
 #[test]
 fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _settings = CardFontSettings::stood_the_share_at(DEFAULT_AUDIO_SCALE);
 
     let path = a_remembered_sound("rust-hover-preview-pin-sound-relayout-share");
@@ -1096,9 +1074,7 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
 /// sound nobody can move through.
 #[test]
 fn a_pinned_sounds_bar_is_answered_from_the_card_and_not_from_below_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // The window is a fixed box, and the box a 400-by-200 window holds is the
     // card at the anchor's font — the 10% share's own — so the share is stood
@@ -1183,9 +1159,7 @@ fn a_pinned_sounds_bar_is_answered_from_the_card_and_not_from_below_it() {
 /// the distinction is the whole of why a sound's buttons light up at all.
 #[test]
 fn the_card_asks_to_be_repainted_when_its_hover_changes() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let pin = sound_pin();
@@ -1366,6 +1340,7 @@ fn a_pins_chrome_is_asked_for_one_strip_at_a_time() {
 
 #[test]
 fn a_pins_chrome_is_shown_and_hidden_by_where_the_pointer_is() {
+    let _room = the_room_to_itself();
     let now = Instant::now();
     let content = (100, 100, 500, 400);
     let far = Some((-1000, -1000));
@@ -1563,6 +1538,7 @@ fn the_two_hand_off_buttons_name_themselves_once_the_pointer_settles() {
 /// has as much to learn from a name as a hand on a picture's.
 #[test]
 fn a_caption_says_its_name_whatever_kind_of_pin_it_is_on() {
+    let _room = the_room_to_itself();
     let now = Instant::now();
     let content = (100, 100, 500, 400);
 
@@ -1634,9 +1610,7 @@ fn a_sound_window_button_point(pin: &PinnedPreview, control: CardControl) -> (i3
 /// it, which is what makes a mark this small a thing a hand can hit.
 #[test]
 fn a_sounds_window_buttons_are_answered_over_the_margin_they_stand_in() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let mut pin = sound_pin();
     pin.audio_window_buttons = true;
@@ -1699,9 +1673,7 @@ fn the_pressed_control() -> Option<CardControl> {
 /// assertion below is about.
 #[test]
 fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
 
     for (control, command) in [
@@ -1757,9 +1729,7 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
 
 #[test]
 fn a_sounds_always_on_top_button_toggles_pin_always_on_top() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
 
     let mut shown = sound_pin();
@@ -1805,9 +1775,7 @@ fn a_sounds_always_on_top_button_toggles_pin_always_on_top() {
 /// the band puts them away and asks for it again too.
 #[test]
 fn a_hand_near_the_top_border_brings_a_sounds_window_buttons_up() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
 
@@ -1853,9 +1821,7 @@ fn a_hand_near_the_top_border_brings_a_sounds_window_buttons_up() {
 /// away.
 #[test]
 fn the_tick_asks_for_the_window_buttons_where_a_hand_is_near_the_top_border() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
 
@@ -1942,9 +1908,7 @@ fn the_tick_asks_for_the_window_buttons_where_a_hand_is_near_the_top_border() {
 /// was, and no pressed state is left standing.
 #[test]
 fn a_press_that_slides_off_a_sounds_window_button_asks_for_nothing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
 
     // The window buttons are controls only while they are
@@ -1983,9 +1947,7 @@ fn a_press_that_slides_off_a_sounds_window_button_asks_for_nothing() {
 /// which is the corner every other pin's bubble stands in.
 #[test]
 fn a_sounds_bubble_takes_the_place_of_the_minimize_button() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let pin = sound_pin();
     let window = pin.window_box();
@@ -2063,9 +2025,7 @@ fn a_sounds_bubble_takes_the_place_of_the_minimize_button() {
 /// press found no player behind the card and let go of nothing at all.
 #[test]
 fn a_play_on_a_collapsed_pins_bubble_begins_the_parked_sound_again() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _switches = PausePreviewSettings::stood_at(true, true);
 
     let path = a_remembered_sound("rust-hover-preview-pin-bubble-play");

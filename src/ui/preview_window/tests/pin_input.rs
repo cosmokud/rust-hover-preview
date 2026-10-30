@@ -248,9 +248,7 @@ pub(super) fn take_relayout_request() -> Option<ScreenRegion> {
 /// press of a pair of its own (see `within_double_click`).
 #[test]
 fn two_presses_are_one_double_click_only_inside_the_machines_own_measures() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     stand_pin(Some(overlay_pin((100, 100, 500, 400), PinChrome::always())));
 
@@ -313,9 +311,7 @@ fn two_presses_are_one_double_click_only_inside_the_machines_own_measures() {
 /// test below (see `DoubleClickSettings`).
 #[test]
 fn a_paired_press_on_a_pinned_window_puts_it_in_the_middle_of_its_screen() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let _settings = DoubleClickSettings::stood_at(true, false);
@@ -377,9 +373,7 @@ fn a_paired_press_on_a_pinned_window_puts_it_in_the_middle_of_its_screen() {
 /// loop will lay the file out at is the loop's to write (see `reset_pinned_size`).
 #[test]
 fn a_paired_press_asks_for_the_size_back_rather_than_writing_one() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let _settings = DoubleClickSettings::stood_at(true, true);
@@ -437,9 +431,7 @@ fn a_paired_press_asks_for_the_size_back_rather_than_writing_one() {
 /// handle is the picture's own size against the window it is drawn in (see `PinZoom::picture_box`).
 #[test]
 fn a_press_on_a_picture_bigger_than_its_window_carries_the_picture_rather_than_the_window() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
 
     let content = (100, 100, 500, 400);
@@ -530,9 +522,7 @@ fn a_press_on_a_picture_bigger_than_its_window_carries_the_picture_rather_than_t
 /// which edge a point is on, what a caption means — are the same ones the presses above are asked of.
 #[test]
 fn the_first_press_takes_the_pointer_before_it_asks_for_the_keyboard() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 

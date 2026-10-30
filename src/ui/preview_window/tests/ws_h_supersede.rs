@@ -36,9 +36,7 @@ fn restore(previous_pin: Option<PinnedPreview>, previous_pid: u32) {
 /// is already nothing.
 #[test]
 fn kill_path_reaps_and_clears() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
 
     assert!(
@@ -64,9 +62,7 @@ fn kill_path_reaps_and_clears() {
 /// `reap_superseded_relaunch`).
 #[test]
 fn a_superseded_relaunch_is_dropped_and_named_in_one_line() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
 
@@ -147,9 +143,7 @@ fn generations_tag_relaunches_and_move_only_on_a_relaunch() {
 /// rather than clearing the record from under a kill.
 #[test]
 fn teardown_reaps_a_confirmed_in_flight_relaunch() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
 
@@ -183,9 +177,7 @@ fn teardown_reaps_a_confirmed_in_flight_relaunch() {
 /// hand: what the test proves is the reaper half — nothing handed to it is ever dropped.
 #[test]
 fn orphan_reaper_retries_to_confirmation() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
 
     // A confirmed kill never reaches the list: reaped on the spot.
@@ -217,9 +209,7 @@ fn orphan_reaper_retries_to_confirmation() {
 /// The helper clears the record the spawn would otherwise stack behind.
 #[test]
 fn superseded_kill_clears_the_record_for_the_next_spawn() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
 
@@ -250,9 +240,7 @@ fn superseded_kill_clears_the_record_for_the_next_spawn() {
 /// the kill rather than placing anything.
 #[test]
 fn gated_show_refuses_a_superseded_generation() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
 
@@ -289,9 +277,7 @@ fn gated_show_refuses_a_superseded_generation() {
 /// the shown player is exactly what that interleave leaves behind.
 #[test]
 fn revalidation_hides_a_player_condemned_mid_show() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
 

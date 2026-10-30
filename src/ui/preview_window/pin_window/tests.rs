@@ -1,3 +1,4 @@
+use super::super::tests::the_room_to_itself;
 use super::*;
 
 use windows::core::w;
@@ -86,9 +87,7 @@ fn why() -> Option<Reason> {
 /// same reason the state does — the release is a message back into this thread.
 #[test]
 fn the_pointer_goes_before_the_state_and_only_where_this_thread_holds_it() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     let loop_window = RecordedPinWindow::new(0x1000);
@@ -131,9 +130,7 @@ fn the_pointer_goes_before_the_state_and_only_where_this_thread_holds_it() {
 /// would have passed against the copy.
 #[test]
 fn the_whole_of_what_each_road_owes_the_window() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     a_pin_holding_the_keyboard(0x2000);
     let loop_window = RecordedPinWindow::new(0x1000);
@@ -184,9 +181,7 @@ fn the_whole_of_what_each_road_owes_the_window() {
 /// is over whether or not there was anything to take down.
 #[test]
 fn a_road_with_no_window_asks_it_for_nothing() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     for reason in EVERY_REASON {
         install(a_pin());
@@ -218,9 +213,7 @@ fn a_road_with_no_window_asks_it_for_nothing() {
 /// the time the focus is given up, the pin is already gone.
 #[test]
 fn the_pin_s_own_lock_is_not_held_across_a_window_call() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     a_pin_holding_the_keyboard(0x2000);
     let window = LookingWindow::new();
@@ -336,9 +329,7 @@ impl PinWindow for LookingWindow {
 /// over a window nothing would ever take down.
 #[test]
 fn the_published_flag_and_the_state_never_disagree() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     assert!(pin_is_up(), "installed: a pin is published as up");
@@ -369,9 +360,7 @@ fn the_published_flag_and_the_state_never_disagree() {
 /// claiming it, rather than leaving a claim on a file the window is no longer showing.
 #[test]
 fn a_pin_taken_up_over_another_one_keeps_the_window_s_own_queue_and_drops_its_claim() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     a_pin_holding_the_keyboard(0x2000);
     install(a_pin());
@@ -400,9 +389,7 @@ fn a_pin_taken_up_over_another_one_keeps_the_window_s_own_queue_and_drops_its_cl
 /// nothing else — so a button whose code nothing reads back is a button that does nothing.
 #[test]
 fn every_command_a_caption_asks_for_comes_back_to_the_loop() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     for command in [
@@ -440,9 +427,7 @@ fn every_command_a_caption_asks_for_comes_back_to_the_loop() {
 /// session ends. What goes is the oldest, so what survives is what was last asked for.
 #[test]
 fn a_command_queue_drops_the_oldest_rather_than_growing_without_end() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     for _ in 0..(PIN_COMMANDS_MAX + 4) {
@@ -470,9 +455,7 @@ fn a_command_queue_drops_the_oldest_rather_than_growing_without_end() {
 /// window that was in front a moment ago.
 #[test]
 fn the_keyboard_goes_back_to_the_window_it_came_from() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     take_keyboard(0x2000, true);
@@ -499,9 +482,7 @@ fn the_keyboard_goes_back_to_the_window_it_came_from() {
 /// never there.
 #[test]
 fn a_pin_that_took_the_keyboard_from_nothing_hands_it_back_to_nothing() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     take_keyboard(0, true);
@@ -526,9 +507,7 @@ fn a_pin_that_took_the_keyboard_from_nothing_hands_it_back_to_nothing() {
 /// `make_the_window_unfocusable_again`).
 #[test]
 fn a_pin_with_nothing_on_the_keyboard_owes_nobody_a_handover() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     let window = RecordedPinWindow::new(0x1000);
@@ -567,9 +546,7 @@ fn a_pin_with_nothing_on_the_keyboard_owes_nobody_a_handover() {
 /// handover itself would have gone on each.
 #[test]
 fn a_road_out_of_a_pin_holding_no_keyboard_still_puts_the_style_back() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     for reason in EVERY_REASON {
         // A pin the hand never pressed, which is the ordinary one: nothing is claimed, so the
@@ -622,9 +599,7 @@ fn a_road_out_of_a_pin_holding_no_keyboard_still_puts_the_style_back() {
 /// bit and a handle that could be set one without the other.
 #[test]
 fn the_note_that_the_keyboard_was_taken_is_dropped_with_the_focus() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     take_keyboard(0x2000, true);
@@ -653,9 +628,7 @@ fn the_note_that_the_keyboard_was_taken_is_dropped_with_the_focus() {
 /// it from (see `make_the_window_unfocusable_again`).
 #[test]
 fn a_press_the_windows_refused_leaves_no_claim_to_hand_over() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     take_keyboard(0x2000, false);
@@ -701,9 +674,7 @@ fn every_reason_is_the_loop_s_own_tick_except_the_watchdog_s() {
 /// be the one that leaves the keyboard claimed.
 #[test]
 fn two_roads_racing_on_one_pin_end_it_once() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     a_pin_holding_the_keyboard(0x2000);
     end_pin(Reason::Hung, &RecordedPinWindow::new(0x1000));
@@ -734,9 +705,7 @@ fn two_roads_racing_on_one_pin_end_it_once() {
 /// sample of it, because each of those four items was one the copy had wrong.
 #[test]
 fn every_reason_reaches_the_same_teardown() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     for reason in EVERY_REASON {
         a_pin_holding_the_keyboard(0x2000);
@@ -777,9 +746,7 @@ fn every_reason_reaches_the_same_teardown() {
 /// and `the_window_behind`).
 #[test]
 fn the_keyboard_is_never_handed_to_a_window_that_is_gone_or_one_of_ours() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // A handle that is not a window: the player the pin recorded while it was in front, gone by
     // the time the pin ends.
@@ -826,9 +793,7 @@ fn the_keyboard_is_never_handed_to_a_window_that_is_gone_or_one_of_ours() {
 /// and the fallback behind it are for the two cases where that window cannot take it.
 #[test]
 fn the_keyboard_goes_back_to_the_listing_it_came_from() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // The Shell's own window: a window of somebody else's that is always there, so the one road a
     // close takes with a live window behind it is asked without a player of this app's being begun.
@@ -862,9 +827,7 @@ fn the_keyboard_goes_back_to_the_listing_it_came_from() {
 /// The window that is kept is the fourth case and the ordinary one.
 #[test]
 fn a_keyboard_belongs_to_a_window_that_is_there_and_is_not_ours() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let ours = a_window_of_this_processs_own();
     let shell = unsafe { GetShellWindow() };
@@ -920,9 +883,7 @@ fn a_keyboard_belongs_to_a_window_that_is_there_and_is_not_ours() {
 /// ours rather than for one, which is the half that never depends on the desk.
 #[test]
 fn a_close_with_no_claim_hands_back_a_foreground_that_is_one_of_ours() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // A window of this process's own is the window a step's give-back leaves in front, and it is one
     // of ours by the only fact that makes one so. Nothing is pressed into the pin after the step, so
@@ -976,9 +937,7 @@ fn a_close_with_no_claim_hands_back_a_foreground_that_is_one_of_ours() {
 /// a window that is not this app's own (see `a_players_foreground_goes_to`).
 #[test]
 fn a_players_foreground_goes_only_where_the_player_took_it() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let player = HWND(0x1234 as *mut _);
     let shell = unsafe { GetShellWindow() };
@@ -1073,9 +1032,7 @@ fn a_hand_back_that_nothing_is_coming_for_is_abandoned() {
 /// collapsed with the caret on it still has to hand it back.
 #[test]
 fn a_collapsed_pin_is_still_a_pin_and_still_goes_down_the_same_way() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     take_keyboard(0x2000, true);
@@ -1108,9 +1065,7 @@ fn a_collapsed_pin_is_still_a_pin_and_still_goes_down_the_same_way() {
 /// watchdog's road cannot, and its own thread's hide covers it (see `hide_pin_windows`).
 #[test]
 fn a_pin_whose_window_is_a_bubble_takes_the_bubble_with_it() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     install(a_pin());
     let window = RecordedPinWindow::new(0x1000);
@@ -1125,9 +1080,7 @@ fn a_pin_whose_window_is_a_bubble_takes_the_bubble_with_it() {
 /// The pin's own value is readable while it is up and gone once it is over.
 #[test]
 fn the_pin_s_own_state_is_readable_while_it_is_up_and_gone_once_it_is_over() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     assert!(
         pin_state().is_none_or(|state| state.pin().is_none()),
@@ -1156,9 +1109,7 @@ fn the_pin_s_own_state_is_readable_while_it_is_up_and_gone_once_it_is_over() {
 /// that happened to remember to do it.
 #[test]
 fn a_pin_s_end_is_published_to_the_hook_once() {
-    let _one = PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // Whatever a test elsewhere on the machine left published is drained first, since the
     // flag is process-wide and this one is about what an end does rather than about the

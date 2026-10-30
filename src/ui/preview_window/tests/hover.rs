@@ -194,9 +194,7 @@ fn ask_as_the_show_arm_does(path: &Path, bounds: ScreenBounds, dpi: u32) {
 /// `fs::metadata` calls those questions made, whatever the caches above it did.
 #[test]
 fn a_hover_reads_the_files_entry_once() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let folder = std::env::temp_dir().join("rust-hover-preview-one-probe");
     std::fs::create_dir_all(&folder).expect("a test folder");
@@ -309,9 +307,7 @@ fn a_share_follows_the_content_rather_than_the_name() {
 /// that would otherwise be drawn.
 #[test]
 fn a_box_follows_the_content_rather_than_the_name() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let folder = std::env::temp_dir().join("rust-hover-preview-content-box");
     std::fs::create_dir_all(&folder).expect("a test folder");
@@ -358,9 +354,7 @@ fn a_box_follows_the_content_rather_than_the_name() {
 /// `text_box`).
 #[test]
 fn a_page_of_text_is_laid_out_as_the_wait_until_its_read_lands() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let folder = std::env::temp_dir().join("rust-hover-preview-text-wait");
     std::fs::create_dir_all(&folder).expect("a test folder");
