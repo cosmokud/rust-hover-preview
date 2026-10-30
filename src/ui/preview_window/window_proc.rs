@@ -204,6 +204,14 @@ pub(super) unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // **This window is the one the Shell may be answering a click with instead of the film host**, so
+    // the same set of messages is written down for it — and only while a pin stands, because this is
+    // the hover's own procedure as well and a hover is nobody's button (see
+    // `pin_trace::note_a_message_of_a_window`). Nothing is answered differently for the line.
+    if pinned() {
+        pin_trace::note_a_message_of_a_window("pin", hwnd, msg, wparam, lparam);
+    }
+
     match msg {
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
             reset_preview_after_display_change(hwnd);
