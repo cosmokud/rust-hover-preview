@@ -199,27 +199,19 @@ fn a_button_the_shell_has_taken_away_comes_back_on_the_tick() {
 
     // A pin put away into the *bubble* asks for no taskbar button at all, and the tick does not make
     // one behind the round bubble's back (see `a_button_is_owed`).
+    //
+    // The bubble is a window of the suite's own, drawn as nothing. What is asked of it here is that
+    // it be a window on the screen — `showing_bubble_window` reads `IsWindowVisible`, which a window
+    // of the suite's answers yes — and nothing is read off the desk it stands on, so it never has to
+    // be a window the desk shows (see `a_window_of_the_suite`).
     let bubble = unsafe {
-        CreateWindowExW(
+        a_window_of_the_suite(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!(""),
             WS_POPUP,
-            0,
-            0,
-            120,
-            120,
-            None,
-            None,
-            None,
-            None,
+            (0, 0, 120, 120),
         )
-        .expect("a window for the bubble")
     };
-    // Safety: the window is this test's own, and it is only asked to be on the screen.
-    unsafe {
-        let _ = ShowWindow(bubble, SW_SHOWNOACTIVATE);
-    }
     PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
     forget_the_stand_in();
     keep_the_stand_in_up();
@@ -228,7 +220,7 @@ fn a_button_the_shell_has_taken_away_comes_back_on_the_tick() {
         "a pin put away into its bubble wears the bubble and no taskbar button"
     );
 
-    // Safety: the bubble's window is this test's and the stand-in is the app's own.
+    // Safety: the bubble's window is this test's own and the stand-in is the app's own.
     unsafe {
         let _ = DestroyWindow(bubble);
     }
@@ -298,30 +290,18 @@ fn the_picture_of_a_pin_put_away_into_a_bubble_is_the_bubble() {
     let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
-    // A bubble standing on the screen, stood in by a real window of the machine's own: what the
-    // mirror reads is whether the window is visible, and a window that was never shown is not.
+    // A bubble standing on the screen, stood in by a window of the suite's own: what the mirror
+    // reads is whether the window is visible, and a window that was never shown is not. A window of
+    // the suite's is drawn as nothing and still answers that yes, and nothing here is read off the
+    // desk it stands on — the picture this test is about is never taken (see `a_window_of_the_suite`).
     let bubble = unsafe {
-        CreateWindowExW(
+        a_window_of_the_suite(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!(""),
             WS_POPUP,
-            0,
-            0,
-            120,
-            120,
-            None,
-            None,
-            None,
-            None,
+            (0, 0, 120, 120),
         )
-        .expect("a window for the bubble")
     };
-    // Safety: the window is this test's own, and it is only asked to be on the screen for as long as
-    // the question is asked.
-    unsafe {
-        let _ = ShowWindow(bubble, SW_SHOWNOACTIVATE);
-    }
     PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
 
     let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
@@ -1060,30 +1040,21 @@ fn a_pin_put_away_keeps_the_picture_its_collapse_took() {
 
     register_the_stand_in_class();
 
-    // The bubble a collapse leaves, standing on the screen at the circle's own size: what the mirror
-    // is taken of while the pin is being put away (see `showing_bubble_window`).
+    // The bubble a collapse leaves, at the circle's own size: what the mirror is taken of while the
+    // pin is being put away (see `showing_bubble_window`).
+    //
+    // It is a window of the suite's own, drawn as nothing: what is asked of it here is that it be a
+    // window on the screen and the size of its client area, and a layered window answers both. No
+    // colour is read off the desk it stands on, so it never has to be a window the desk shows (see
+    // `a_window_of_the_suite`).
     let bubble = unsafe {
-        CreateWindowExW(
+        a_window_of_the_suite(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!(""),
             WS_POPUP,
-            0,
-            0,
-            44,
-            44,
-            None,
-            None,
-            None,
-            None,
+            (0, 0, 44, 44),
         )
-        .expect("a window for the bubble")
     };
-    // Safety: the window is this test's own, and it is asked to be on the screen: a bubble the
-    // mirror is taken of is one the Shell is composing (see `showing_bubble_window`).
-    unsafe {
-        let _ = ShowWindow(bubble, SW_SHOWNOACTIVATE);
-    }
     PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
     let bubble_box = unsafe { the_client_box(bubble) };
 
