@@ -266,3 +266,81 @@ fn a_list_is_keyed_by_its_section_and_its_key() {
         "one section holds two lists and it is the text one"
     );
 }
+
+/// The entries this app took out of a built-in list and put in no other one, and the row each was
+/// taken out of.
+///
+/// The repair rewrites a file holding one of the lists this app shipped into the built-in list of
+/// now, so an entry dropped from a built-in list is an entry dropped from every `config.ini` that
+/// holds it. That is the right answer for a name no engine here reads — `[libre]`'s older spelling
+/// named the documents LibreOffice cannot open, and a name left in a list is a hover that offers a
+/// preview which never comes — and the wrong answer for a format that has merely been forgotten,
+/// which is what the test below is for. So the ones that went nowhere are named here, and an entry
+/// that goes nowhere without being named here is that test's failure.
+const RETIRED_ENTRIES: &[(&str, &[&str])] = &[(
+    "libre",
+    &[
+        "agd", "fhd", "jtd", "jtt", "plt", "pm3", "pm4", "pm5", "pxl", "qxp", "rl", "sdp", "sgf",
+        "sgl", "uof", "uop", "uos", "uot", "vor", "vssm", "vstm", "vtx", "vsx",
+    ],
+)];
+
+/// Every entry of every list this app has shipped is still claimed by a list of now — the one it
+/// was in, or the one the kind moved to when the two were told apart — because an entry that is
+/// neither is an entry no hover can meet any more, taken out of every `config.ini` that had it by
+/// the very repair that is here to put the formats of now into it.
+///
+/// This is walked from the table rather than written out list by list, for the reason the round
+/// trip above is: they are the older lists the repair matches a file against, and an entry they
+/// name and the built-in list does not is the one shape of that data nothing else reads.
+#[test]
+fn an_entry_an_older_list_names_is_still_claimed_by_a_list_of_now() {
+    let mut checked = 0;
+
+    for list in LISTS {
+        let canonical = list.built_in();
+        let retired = RETIRED_ENTRIES
+            .iter()
+            .find(|(section, _)| *section == list.section)
+            .map(|(_, entries)| *entries)
+            .unwrap_or(&[]);
+
+        for older in list.before {
+            for entry in list.entries.sanitize(older) {
+                checked += 1;
+
+                let moved_to = LISTS.iter().any(|other| {
+                    (other.section, other.key) != (list.section, list.key)
+                        && other.built_in().contains(&entry)
+                });
+
+                assert!(
+                    canonical.contains(&entry) || moved_to || retired.contains(&entry.as_str()),
+                    "`{entry}` is in the `[{}]` list this app shipped and in no list of now, so \
+                     the repair takes it out of every `config.ini` that holds it and no hover \
+                     meets the format again. Put it back in the built-in list, name the row that \
+                     claims it now, or write down in `RETIRED_ENTRIES` why this app does not \
+                     offer it",
+                    list.section
+                );
+            }
+        }
+
+        // An entry declared retired and claimed again is a line that would let the next removal
+        // of it pass, so it goes with the change that claimed it.
+        for entry in retired {
+            assert!(
+                !canonical.iter().any(|held| held.as_str() == *entry),
+                "`{entry}` is in the `[{}]` list of now and is still written down as retired: \
+                 take it out of `RETIRED_ENTRIES`",
+                list.section
+            );
+        }
+    }
+
+    assert!(
+        checked > 20,
+        "this app shipped more than twenty older list entries and this found {checked}, so the \
+         table is not being read"
+    );
+}

@@ -644,3 +644,147 @@ fn the_mpv_ttl_is_read_from_its_own_key() {
         );
     }
 }
+
+/// The values that move a key whose own value a generic one cannot: a word from a fixed
+/// vocabulary — an enum's own spelling, a scale's — is turned away by the read when it is not one
+/// the setting keeps, so a word with something added to it changes nothing and the key reads as
+/// one nothing loads. Each of these names a value the read does accept, and the check below holds
+/// the setting to it the same way a switch or a number is held: an alternative that the setting
+/// keeps has to reach the setting.
+const ANOTHER_VALUE: &[(&str, &str)] = &[
+    ("audio_seek", "start"),
+    ("avoid_mode", "off"),
+    ("dds_background", "black"),
+    ("design_background", "black"),
+    ("design_scale", "50"),
+    ("document_scale", "50"),
+    ("ebook_scale", "50"),
+    ("font_background", "black"),
+    ("hdr_tone_map", "aces"),
+    ("html_background", "black"),
+    ("image_background", "black"),
+    ("libreoffice_idle", "30"),
+    ("markdown_mode", "source"),
+    ("office_engine", "libreoffice"),
+    ("office_engine_idle", "30"),
+    ("pin_minimize_to", "taskbar"),
+    ("pin_mode_audio_end_of_file", "pause"),
+    ("pin_mode_audio_seek", "middle"),
+    ("pin_mode_video_end_of_file", "pause"),
+    ("pin_nav_audio", "all"),
+    ("pin_nav_others", "category"),
+    ("pin_nav_video", "all"),
+    ("text_scale", "50"),
+    ("theme", "dark"),
+    ("trigger_key_mode", "enable"),
+    ("vector_background", "black"),
+    ("vector_scale", "50"),
+    ("video_engine", "mpv"),
+    ("video_engine_idle", "30"),
+    ("webp_playback_fps", "30"),
+    ("webview_idle", "30"),
+    ("zoom_background", "white"),
+];
+
+/// The values tried on the keys not named above: a switch turned over, a number moved by one, and
+/// a word with something added to it. Any one of them is enough for the key to have been read —
+/// what is held here is that the setting moved, not where it moved to.
+fn other_values(value: &str) -> Vec<String> {
+    let mut others = Vec::new();
+
+    match value {
+        "true" => others.push("false".to_string()),
+        "false" => others.push("true".to_string()),
+        _ => {}
+    }
+    if let Ok(number) = value.parse::<i64>() {
+        others.push((number + 1).to_string());
+    }
+    if let Ok(number) = value.parse::<f64>() {
+        others.push((number + 1.0).to_string());
+    }
+    others.push(format!("{value}rhn"));
+    others.push(format!("rhn{value}"));
+    others.dedup();
+
+    others
+}
+
+/// Every key the file writes is a key the file reads: each one is given a value that is not the
+/// one this build writes, the text of the file is read back, and the configuration that comes out
+/// has to be one the default configuration is not.
+///
+/// This is the half the round trip above cannot see. That test holds a file written from a
+/// configuration against the configuration read back out of it, so a key that nothing reads
+/// passes it whenever the value it was written with was the value a fresh configuration starts at
+/// — which is every key the test does not set, and every key a later change adds. Such a key is a
+/// setting a user cannot set: the menu moves it, `to_ini` writes it, and the next load puts it
+/// back where it started with nothing red anywhere.
+#[test]
+fn every_key_the_file_writes_is_a_key_the_file_reads() {
+    let defaults = AppConfig::default().to_ini();
+    let default_text = ordered_text(&defaults);
+    let mut checked = 0;
+
+    // A name written down here that the file no longer holds is a line that moves nothing, and
+    // the key it used to stand for would be left to a generic value that changes nothing either.
+    let written: Vec<&str> = defaults
+        .get_map_ref()
+        .values()
+        .flat_map(|keys| keys.keys().map(String::as_str))
+        .collect();
+    for (key, _) in ANOTHER_VALUE {
+        assert!(
+            written.contains(key),
+            "`{key}` is named as a key a value of its own vocabulary moves, and the file writes \
+             no such key: take it out of `ANOTHER_VALUE`"
+        );
+    }
+
+    for (section, keys) in defaults.get_map_ref() {
+        for (key, value) in keys {
+            let Some(value) = value else {
+                panic!("`{key}` is written with no value at all")
+            };
+
+            // The keys one of these moves are the ones a word of their own vocabulary answers.
+            let others = match ANOTHER_VALUE
+                .iter()
+                .find(|(named, _)| *named == key.as_str())
+            {
+                Some((_, other)) => vec![other.to_string()],
+                None => other_values(value),
+            };
+
+            let mut moved = false;
+            for other in &others {
+                let mut ini = Ini::new();
+                ini.read(default_text.clone())
+                    .expect("a file this app wrote");
+                ini.set(section, key, Some(other.clone()));
+
+                let mut config = AppConfig::default();
+                config.apply_ini(&ini);
+                if ordered_text(&config.to_ini()) != default_text {
+                    moved = true;
+                    break;
+                }
+            }
+
+            checked += 1;
+            assert!(
+                moved,
+                "`{key}` is written to the file and not read back from it: none of {others:?} \
+                 moved the setting, so a value set in the menu is the value a fresh configuration \
+                 starts at on the next load. Read it in `apply_ini`, or — for a key nothing is \
+                 meant to read — say so where the file writes it"
+            );
+        }
+    }
+
+    assert!(
+        checked > 100,
+        "the file holds more than a hundred keys and this found {checked}, so the file is not \
+         being walked"
+    );
+}
