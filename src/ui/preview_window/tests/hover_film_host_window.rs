@@ -8,9 +8,9 @@
 use super::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WINDOW_EX_STYLE,
-    WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    DestroyWindow, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WINDOW_EX_STYLE, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
 const NOWHERE: i32 = -32000;
@@ -87,25 +87,17 @@ fn window_rect(hwnd: HWND) -> (i32, i32, i32, i32) {
 /// The film drawing in the hover's host, on the road both engines are on: a window of the player's
 /// own, recorded as the source the Shell draws into it (see `pin_film_thumbnail`). It is this
 /// process's window, which is the player every stand in this file records, and the caller destroys
-/// it.
+/// it — a window of the suite's own, off every display and composited as nothing, since a player's
+/// window is no part of what the user is meant to see here (see `a_window_of_the_suite`).
 unsafe fn a_source_of_the_host(pid: u32) -> HWND {
     let source = unsafe {
-        CreateWindowExW(
+        a_window_of_the_suite(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!(""),
-            WS_POPUP | WS_VISIBLE,
-            NOWHERE,
-            NOWHERE,
-            320,
-            180,
-            None,
-            None,
-            None,
-            None,
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 180),
         )
-    }
-    .expect("a window of the player's own, in this process");
+    };
     pin_film_thumbnail::note_the_source(source, pid);
     source
 }
@@ -512,8 +504,13 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
     stand_ffplay_in(Some(true));
     stand_mpv_in(Some(false));
     let pid = unsafe { GetCurrentProcessId() };
-    unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 320, 180)) }
+    let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 320, 180)) }
         .expect("a host standing for an FFmpeg player");
+    // **The box the take-up places the host at is on the desktop**, and a host an earlier test left
+    // on screen is a black rectangle of the app's over it: the host is composited as nothing for the
+    // whole of this test, whether this take-up is what put it up or a test before this one did (see
+    // `keep_a_window_of_the_suite_unseen`).
+    unsafe { keep_a_window_of_the_suite_unseen(host) };
     hover_film_host::note_hover_film_host_player(pid, &path);
     let _source = unsafe { a_source_of_the_host(pid) };
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -728,8 +725,11 @@ fn a_hosted_hover_that_never_draws_falls_back_once_without_a_host() {
     );
 
     let path = a_film();
-    unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 320, 180)) }
+    let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 320, 180)) }
         .expect("the host the first player was begun in");
+    // The host is placed on the desktop by the take-up, so it is made composited-as-nothing here for
+    // the reason the other take-up on this box gives (see `keep_a_window_of_the_suite_unseen`).
+    unsafe { keep_a_window_of_the_suite_unseen(host) };
     let process = restart_hover_video_without_a_host(&path, 0, 0, 320, 180, 0.0, false, 0, None)
         .expect("a noted player");
     assert!(

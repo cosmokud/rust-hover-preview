@@ -293,7 +293,7 @@ fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
         GetStockObject, InvalidateRect, UpdateWindow, HBRUSH, NULL_BRUSH,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsWindowVisible, RegisterClassExW, ShowWindow, WS_VISIBLE,
+        IsWindowVisible, RegisterClassExW, WS_VISIBLE,
     };
 
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -323,22 +323,18 @@ fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
         };
         // SAFETY: both windows are this test's own, and both are destroyed below.
         unsafe {
-            let parent = CreateWindowExW(
+            let parent = a_window_of_the_suite_kept_back(
                 WINDOW_EX_STYLE::default(),
                 ERASE_PROBE_CLASS,
-                w!("erase probe"),
                 style,
                 // Side by side, so that neither stands over the other's band.
-                index as i32 * 320,
-                0,
-                320,
-                240,
-                None,
-                None,
-                hinstance,
-                None,
-            )
-            .expect("a window to erase");
+                (
+                    index as i32 * 320,
+                    0,
+                    index as i32 * 320 + 320,
+                    240,
+                ),
+            );
             // The child before the show, so that every erase this window is handed is one with a
             // child in it.
             let child = CreateWindowExW(
@@ -357,8 +353,11 @@ fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
             )
             .expect("a child of the window's, in this process");
             // Shown, because a window's visible region — which is what it is erased within — is the
-            // desktop's, and a window off it has none to be asked about.
-            let _ = ShowWindow(parent, SW_SHOWNOACTIVATE);
+            // desktop's, and a window off it has none to be asked about. It is shown by the suite's
+            // own road rather than created visible: a window created visible is activated wherever
+            // it stands, and it is made unseen at the same time, so the region the erase is asked
+            // about is a real window's and nothing of it is drawn (see `a_window_of_the_suite`).
+            show_a_window_of_the_suite(parent);
             assert!(
                 IsWindowVisible(parent).as_bool(),
                 "a window off the desktop has no visible region to be erased within"
@@ -2630,24 +2629,17 @@ fn a_window_that_is_not_the_source_is_not_a_film_drawing() {
 
     // A window the player has made and nothing has adopted: the pass that watches a player has not
     // run over it yet, which is a film whose source is not the host's picture (see
-    // `pin_film_thumbnail::adopt_the_source`).
+    // `pin_film_thumbnail::adopt_the_source`). A window of the suite's own, shown unactivated and
+    // composited as nothing, so the film it stands in for is never a rectangle of the user's (see
+    // `a_window_of_the_suite`).
     let unmade = unsafe {
-        CreateWindowExW(
+        a_window_of_the_suite(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!(""),
-            WS_POPUP | WS_VISIBLE,
-            NOWHERE,
-            NOWHERE,
-            320,
-            180,
-            None,
-            None,
-            None,
-            None,
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 180),
         )
-    }
-    .expect("a window of the player's own, in this process");
+    };
 
     assert!(
         !pin_film_host::the_hosted_player_is_drawing(VIDEO_PID.load(Ordering::SeqCst)),
@@ -2718,23 +2710,17 @@ struct StandingHover {
 impl StandingHover {
     unsafe fn up() -> StandingHover {
         let previous = PREVIEW_HWND.load(Ordering::SeqCst);
+        // A window of the suite's own, up and composited as nothing: what is asked of it here is
+        // that it be a hover the take-up finds on screen, and never that the user see it (see
+        // `a_window_of_the_suite`).
         let hwnd = unsafe {
-            CreateWindowExW(
+            a_window_of_the_suite(
                 WINDOW_EX_STYLE::default(),
                 w!("STATIC"),
-                w!(""),
-                WS_POPUP | WS_VISIBLE,
-                NOWHERE,
-                NOWHERE,
-                320,
-                240,
-                None,
-                None,
-                None,
-                None,
+                WS_POPUP,
+                (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
             )
-        }
-        .expect("a window for the hover to be up in");
+        };
         PREVIEW_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
         StandingHover { hwnd, previous }
     }
@@ -3210,25 +3196,18 @@ fn ffplay_standing_film() -> StandingFilm {
 }
 
 /// A player's own top-level window of this process, framed and visible, as FFmpeg's player makes
-/// it before the adoption restyles it.
+/// it before the adoption restyles it — a window of the suite's own, shown unactivated and
+/// composited as nothing, because it stands off every display and is no part of what the user is
+/// meant to see either way (see `a_window_of_the_suite`).
 unsafe fn a_players_own_window() -> HWND {
     unsafe {
-        CreateWindowExW(
+        a_window_of_the_suite(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!(""),
-            WS_POPUP | WS_VISIBLE,
-            NOWHERE,
-            NOWHERE,
-            320,
-            180,
-            None,
-            None,
-            None,
-            None,
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 180),
         )
     }
-    .expect("a player's own window")
 }
 
 /// A pinned FFmpeg film is kept for the pin's host and publishes no top-level window of its own: the
@@ -5775,24 +5754,16 @@ fn an_owned_pin_and_its_film_stand_in_one_band() {
 
     // Another program's window opened over the pin. The pair is moved behind it in one call, and the
     // window a press over the band would go to is the one at the point — which is that window, because
-    // both windows of the pair are behind it.
+    // both windows of the pair are behind it. A window of the suite's own, standing where the listing
+    // the user picked in stood, and composited as nothing (see `a_window_of_the_suite`).
     let cover = unsafe {
-        CreateWindowExW(
+        a_window_of_the_suite(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!(""),
-            WS_POPUP | WS_VISIBLE,
-            at.0 + 40,
-            at.1 + 40,
-            200,
-            120,
-            None,
-            None,
-            None,
-            None,
+            WS_POPUP,
+            (at.0 + 40, at.1 + 40, at.0 + 240, at.1 + 160),
         )
-    }
-    .expect("a window of the test's own standing over the pin");
+    };
     unsafe { pin_film_host::place_the_pin_in_the_band(film.pin_hwnd, cover) };
     assert!(
         !unsafe { pin_stands_over(film.pin_hwnd, cover) }
@@ -5818,25 +5789,18 @@ fn an_owned_pin_and_its_film_stand_in_one_band() {
     drop(film);
 }
 /// The window of the player's own that a thumbnail samples, on this test's own process: the source a
-/// launch without `--wid` gives mpv, with a box of its own so a placement has somewhere to land.
+/// launch without `--wid` gives mpv, with a box of its own so a placement has somewhere to land — a
+/// window of the suite's own, off every display and composited as nothing (see
+/// `a_window_of_the_suite`).
 unsafe fn a_window_of_the_players_own() -> HWND {
     unsafe {
-        CreateWindowExW(
+        a_window_of_the_suite(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!(""),
-            WS_POPUP | WS_VISIBLE,
-            NOWHERE,
-            NOWHERE,
-            1920,
-            1080,
-            None,
-            None,
-            None,
-            None,
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 1920, NOWHERE + 1080),
         )
     }
-    .expect("a window of the player's own, in this process")
 }
 
 /// Where a hover's film's own size comes from, when the player is one that answers nothing: the
@@ -9162,24 +9126,17 @@ fn a_pin_whose_host_appears_over_an_ordinary_window_is_put_in_front_of_it() {
         let host = pin_film_host::film_host().expect("the film's host");
         let pin = pin_real_window::real_pin_window().expect("the pin's own window");
 
-        // The window opened over the pin after it, which is the listing the user picked in.
+        // The window opened over the pin after it, which is the listing the user picked in — a window
+        // of the suite's own, standing where the listing did and composited as nothing (see
+        // `a_window_of_the_suite`).
         let listing = unsafe {
-            CreateWindowExW(
+            a_window_of_the_suite(
                 WINDOW_EX_STYLE::default(),
                 w!("STATIC"),
-                w!(""),
-                WS_POPUP | WS_VISIBLE,
-                NOWHERE,
-                NOWHERE,
-                200,
-                120,
-                None,
-                None,
-                None,
-                None,
+                WS_POPUP,
+                (NOWHERE, NOWHERE, NOWHERE + 200, NOWHERE + 120),
             )
-        }
-        .expect("a window of the test's own standing over the pin");
+        };
         assert!(
             unsafe { stands_over(listing, host) },
             "the window opened after the pin's is the one in front of the film it is hiding ({engine})"

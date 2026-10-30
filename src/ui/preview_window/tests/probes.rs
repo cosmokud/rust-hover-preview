@@ -745,6 +745,11 @@ fn audio_probe() {
 /// A `STATIC` popup of the machine's own class, so nothing has to be registered; it is never
 /// shown by the stand-in itself, and the placement that is being watched is the only thing that
 /// can put it on screen.
+///
+/// A window of the suite's own, kept back rather than shown (see `a_window_of_the_suite`): the
+/// box it stands at is on the desktop, which is what a placement is asked about, and whenever a
+/// road does put it on screen it is a window composited as nothing and one that takes no
+/// activation from the user's keyboard.
 unsafe fn stand_a_player_window(box_: ScreenRegion) -> HWND {
     use windows::core::w;
 
@@ -755,21 +760,7 @@ unsafe fn stand_a_player_window(box_: ScreenRegion) -> HWND {
     // stand-ins never stand in any order at all. Born topmost, both are in the band from the
     // first placement on, the way the pin and the film it stands over are (see
     // `show_pinned_window`).
-    CreateWindowExW(
-        WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-        w!("STATIC"),
-        w!(""),
-        WS_POPUP,
-        box_.0,
-        box_.1,
-        (box_.2 - box_.0).max(1),
-        (box_.3 - box_.1).max(1),
-        None,
-        None,
-        None,
-        None,
-    )
-    .expect("a stand-in window for the player")
+    a_window_of_the_suite_kept_back(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, w!("STATIC"), WS_POPUP, box_)
 }
 
 /// Where a window stands on the screen right now, read back off the machine — the very box
