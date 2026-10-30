@@ -24,6 +24,20 @@
 //! unactivated, so they take no caret, and they are a rectangle of the suite's for as long as they
 //! are up: that is the price of a picture read off the screen, and it is not a price a layered
 //! window can pay.
+//!
+//! **Four of the tests on that road are `#[ignore]`d, which is why a run of the suite is silent
+//! about them**: the picture they read back is `pin_taskbar_mirror::take_the_picture_of`, which
+//! goes through `surfaces::screen_pixels` — a `BitBlt` of the *composed desktop* at the source's own
+//! client box, not the compositor's thumbnail of a window — so the window read has to be opaque and
+//! on the screen, and what comes back is whatever the desk has composed there. A window of the
+//! suite's own is composed as nothing and a window standing in front of the source is what the read
+//! returns instead, so those four cannot be made headless: a test that reads the composed desktop
+//! cannot run invisibly. They are
+//! `a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up`,
+//! `a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to`,
+//! `a_film_hosts_button_holds_a_picture_of_the_host_itself` and
+//! `a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubble_collapse_took`,
+//! and `cargo test -- --ignored` runs them.
 
 use std::fs;
 use std::path::{Path, PathBuf};
