@@ -219,8 +219,11 @@ pub(super) unsafe extern "system" fn window_proc(
     // `pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard`). The note is what
     // tells that click from every activation this app makes of itself, and it carries the caret too: only
     // a taking made while the pin holds the keyboard is noted, because by the time the activation arrives
-    // Windows has taken the caret away with the app and not yet given it back.
-    pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard(msg, wparam);
+    // Windows has taken the caret away with the app and not yet given it back. **And the thread the message
+    // names is asked as well**, because `WM_ACTIVATEAPP`'s `lParam` is the other side of the switch: a
+    // taking the taskbar did is a click on its button, and a taking any other program did — an Alt-Tab — is
+    // that program's hand on the app and no click at all.
+    pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard(msg, wparam, lparam);
 
     match msg {
         WM_DISPLAYCHANGE | WM_DPICHANGED => {

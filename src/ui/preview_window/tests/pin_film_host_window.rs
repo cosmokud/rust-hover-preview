@@ -179,6 +179,9 @@ impl Drop for StandingFilm {
         // `the_app_was_taken_away_while_the_pin_held_the_keyboard` and `the_app_moved_the_caret_just_now`).
         pin_film_host::stand_the_app_taken_away_with_the_caret_at(None);
         pin_film_host::stand_the_caret_moved_at(None);
+        // And not the taskbar's thread either, which is a desktop's answer rather than a test's (see
+        // `pin_film_host::the_taskbars_thread`).
+        pin_film_host::stand_the_taskbars_thread_at(None);
         unsafe {
             pin_film_host::take_down_the_pin_film_host();
             // The strips with the host: the window going down destroys them, and the handles must

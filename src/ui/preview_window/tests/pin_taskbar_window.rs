@@ -14,6 +14,7 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GdiFlush, GetDC, ReleaseDC};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClientRect, GetForegroundWindow, GetWindow,
@@ -3323,6 +3324,16 @@ fn a_promoted_pair_asks_for_its_button_on_the_show_that_reads_it() {
     drop(hover);
 }
 
+/// The taskbar's thread on the desktop the click was measured on — `Shell_TrayWnd`'s own — stood in place
+/// of the Shell's by the tests below, which cannot take one from the desktop they run on (see
+/// `pin_film_host::stand_the_taskbars_thread_at`).
+const THE_TASKBARS_THREAD: u32 = 7_448;
+
+/// The thread of another program on that same measurement: what an Alt-Tab away from the pin names as the
+/// side that took it, and what a click's take-away must never name (see
+/// `a_take_away_by_another_program_is_not_a_click_on_the_chromes_button`).
+const ANOTHER_PROGRAMS_THREAD: u32 = 8_940;
+
 /// **What a click on the pair's button delivers when the Shell cannot put the window down**: the app
 /// taken away while the caret is in the pin, the caret taken with it, the app and the chrome given back
 /// with no caret at all, and the caret back in the pin afterwards. It is the blink the chrome's own answer
@@ -3335,17 +3346,33 @@ fn a_promoted_pair_asks_for_its_button_on_the_show_that_reads_it() {
 /// activation arrives, so an answer that asks Windows for it there refuses the very click it exists for
 /// (see `pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard`).
 ///
+/// **And both `lParam`s are the switch's other side, which is what says who did it**: the take-away names
+/// `taskbars_thread` — the taskbar the pair's button belongs to, stood by the caller in place of the
+/// Shell's own — and the come-back names this app's own thread, the way the traced come-back did (see
+/// `pin_film_host::the_taskbars_thread`).
+///
 /// Safety: the messages are sent to the pin's own window, with the numbers the Shell sends with them, and
 /// the caret is moved on this thread's own windows.
-unsafe fn the_shell_blinks_the_app_away_and_back(chrome: HWND) {
+unsafe fn the_shell_blinks_the_app_away_and_back(chrome: HWND, taskbars_thread: u32) {
     unsafe {
-        // The take-away, with the caret still in the pin: this is the instant the fact is read at.
-        SendMessageW(chrome, WM_ACTIVATEAPP, WPARAM(0), LPARAM(0));
+        // The take-away, with the caret still in the pin and the taskbar named as the side that took it:
+        // this is the instant the fact is read at.
+        SendMessageW(
+            chrome,
+            WM_ACTIVATEAPP,
+            WPARAM(0),
+            LPARAM(taskbars_thread as isize),
+        );
         // Windows takes the caret with the app — the same `WM_KILLFOCUS` the trace has at `.685` — and
         // `GetFocus()` is empty from here to the end of the blink.
         let _ = SetFocus(None);
-        // The app given back, with no caret anywhere.
-        SendMessageW(chrome, WM_ACTIVATEAPP, WPARAM(1), LPARAM(0));
+        // The app given back, with no caret anywhere, by this app's own thread.
+        SendMessageW(
+            chrome,
+            WM_ACTIVATEAPP,
+            WPARAM(1),
+            LPARAM(GetCurrentThreadId() as isize),
+        );
         // The chrome's own activation, which is the click all of the above is read by.
         SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0));
         // The caret back in the pin, which is where the click's own activation leaves it.
@@ -3398,8 +3425,12 @@ fn a_click_on_the_pairs_button_at_the_chrome_is_the_pins_minimize() {
     // for: it is stood in the past here rather than waited out.
     pin_film_host::stand_the_caret_moved_at(Some(Instant::now() - Duration::from_millis(300)));
 
+    // The taskbar's thread, stood in place of the Shell's because a test cannot take one from a desktop
+    // (see `pin_film_host::stand_the_taskbars_thread_at`).
+    pin_film_host::stand_the_taskbars_thread_at(Some(THE_TASKBARS_THREAD));
+
     // The click itself, as the Shell delivers it at the chrome.
-    unsafe { the_shell_blinks_the_app_away_and_back(chrome) };
+    unsafe { the_shell_blinks_the_app_away_and_back(chrome, THE_TASKBARS_THREAD) };
 
     assert_eq!(
         take_pin_command(),
@@ -3453,8 +3484,15 @@ fn a_pin_that_simply_comes_back_is_not_a_click_on_the_chromes_button() {
     let _ = take_pin_command();
     pin_film_host::stand_the_caret_moved_at(Some(Instant::now() - Duration::from_millis(300)));
 
-    // The Alt-Tab shape: the app is given back, with no taking away behind it.
-    unsafe { SendMessageW(chrome, WM_ACTIVATEAPP, WPARAM(1), LPARAM(0)) };
+    // The Alt-Tab shape: the app is given back by its own thread, with no taking away behind it.
+    unsafe {
+        SendMessageW(
+            chrome,
+            WM_ACTIVATEAPP,
+            WPARAM(1),
+            LPARAM(GetCurrentThreadId() as isize),
+        )
+    };
     unsafe { SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
     assert_eq!(
         take_pin_command(),
@@ -3489,13 +3527,14 @@ fn a_pin_that_simply_comes_back_is_not_a_click_on_the_chromes_button() {
 }
 
 /// **A taking away the pin held no keyboard for is not a click on the pair's button**, however much the
-/// messages around it look like one: what says a press arrived is that the Shell took the app away **with
+/// messages around it look like one: what says a press arrived is that the taskbar took the app away **with
 /// the caret in the pin**, and the caret is read at the take-away because the activation arrives with none
 /// (see `pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard`).
 ///
-/// The same messages a click delivers are sent here, so what refuses the activation is the taking the note
-/// never made rather than the shape of the blink — and the run's own line is asked which check answered,
-/// so a refusal that came of the caret read at the activation instead would be seen.
+/// The same messages a click delivers are sent here, the taskbar's own thread and all, so what refuses the
+/// activation is the caret the taking was never made with — rather than the shape of the blink or the
+/// thread that took it. And the run's own line is asked which check answered, so a refusal that came of
+/// the caret read at the activation instead would be seen.
 #[test]
 fn a_take_away_while_the_pin_holds_no_keyboard_is_not_a_click_on_the_chromes_button() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -3519,10 +3558,25 @@ fn a_take_away_while_the_pin_holds_no_keyboard_is_not_a_click_on_the_chromes_but
         "the pin holds no keyboard: this is a click that arrives while the user is in another program"
     );
 
-    // The blink a click delivers, with no caret in the pin at its take-away.
+    // The blink a click delivers, from the taskbar, with no caret in the pin at its take-away.
+    pin_film_host::stand_the_taskbars_thread_at(Some(THE_TASKBARS_THREAD));
     pin_trace::clear_noted();
-    unsafe { SendMessageW(chrome, WM_ACTIVATEAPP, WPARAM(0), LPARAM(0)) };
-    unsafe { SendMessageW(chrome, WM_ACTIVATEAPP, WPARAM(1), LPARAM(0)) };
+    unsafe {
+        SendMessageW(
+            chrome,
+            WM_ACTIVATEAPP,
+            WPARAM(0),
+            LPARAM(THE_TASKBARS_THREAD as isize),
+        )
+    };
+    unsafe {
+        SendMessageW(
+            chrome,
+            WM_ACTIVATEAPP,
+            WPARAM(1),
+            LPARAM(GetCurrentThreadId() as isize),
+        )
+    };
     unsafe { SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
     let noted = pin_trace::noted_lines();
 
@@ -3533,9 +3587,90 @@ fn a_take_away_while_the_pin_holds_no_keyboard_is_not_a_click_on_the_chromes_but
     );
     assert!(
         noted.iter().any(|line| line
-            == "pin decision a click on the chrome's button: refused, the pin did not hold the keyboard \
-                when the app was taken away"),
+            == "pin decision a click on the chrome's button: refused, the taskbar did not take the app \
+                away while the pin held the keyboard"),
         "and the taking is the check that answered rather than the caret read at the activation: {noted:?}"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **A taking away by another program is not a click on the pair's button**, however much the messages
+/// around it look like the blink: `WM_ACTIVATEAPP`'s `lParam` is the other side of the switch, so a press on
+/// the taskbar's button names the taskbar's own thread while an Alt-Tab away from the pin — and back — names
+/// the other program's (see `pin_film_host::the_taskbars_thread`).
+///
+/// The two `lParam`s measured on this desktop are the two sent here: the button's blink named `7448`, which
+/// is `Shell_TrayWnd`'s thread, and the deactivation to another program named `8940`. The same blink
+/// follows with the taskbar's thread, which is what says the thread is the check that refused the first.
+#[test]
+fn a_take_away_by_another_program_is_not_a_click_on_the_chromes_button() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = super::pin_film_host_window::StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and every global written here is put back when
+    // the stand is dropped.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let chrome = film.pin_hwnd;
+    let _ = take_pin_command();
+
+    // The caret in the pin, and the hand's next click beyond the caret's own note: this is the state a
+    // second click on the button is read in.
+    unsafe { SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    assert!(pin_is_focused(), "the pin is the window the user is in");
+    let _ = take_pin_command();
+    pin_film_host::stand_the_caret_moved_at(Some(Instant::now() - Duration::from_millis(300)));
+
+    // The taskbar's thread, stood in place of the Shell's, and **another program's** as the side that took
+    // the app away: the Alt-Tab shape, away and back inside a settle.
+    pin_film_host::stand_the_taskbars_thread_at(Some(THE_TASKBARS_THREAD));
+    pin_trace::clear_noted();
+    unsafe {
+        SendMessageW(
+            chrome,
+            WM_ACTIVATEAPP,
+            WPARAM(0),
+            LPARAM(ANOTHER_PROGRAMS_THREAD as isize),
+        )
+    };
+    unsafe {
+        SendMessageW(
+            chrome,
+            WM_ACTIVATEAPP,
+            WPARAM(1),
+            LPARAM(GetCurrentThreadId() as isize),
+        )
+    };
+    unsafe { SendMessageW(chrome, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    let noted = pin_trace::noted_lines();
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "an app another program took away and gave back is not a click on the taskbar's button"
+    );
+    assert!(
+        noted.iter().any(|line| line
+            == "pin decision a click on the chrome's button: refused, the taskbar did not take the app \
+                away while the pin held the keyboard"),
+        "and the thread that took the app is the check that answered: {noted:?}"
+    );
+
+    // The same blink from the taskbar itself is the press the refusal above is told from, which is what
+    // says the thread — rather than the caret, the button or the settle — is the check that refused it.
+    unsafe { the_shell_blinks_the_app_away_and_back(chrome, THE_TASKBARS_THREAD) };
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        "a taking the taskbar made while the pin held the keyboard is the button's press"
     );
 
     if let Ok(mut config) = CONFIG.lock() {
