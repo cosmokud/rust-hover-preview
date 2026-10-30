@@ -59,7 +59,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINDOW_EX_STYLE,
 };
 
-use super::pin_trace::note_pin_trace;
+use super::pin_trace::{note_a_message_of_a_window, note_pin_trace, window_name};
 use super::*;
 
 /// The class a film's host is made from. A class of its own rather than the pin window's: what a
@@ -103,6 +103,14 @@ pub(super) unsafe fn answer_a_host(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> Option<LRESULT> {
+    // **What a hand on the pair's taskbar button delivers is written down before anything answers
+    // it**, because the whole of the toggle that button was given assumes which messages arrive —
+    // an activation of this window, the Shell's `SC_MINIMIZE`, or the `SIZE_MINIMIZED` a window
+    // reports as it goes down (see `the_shell_put_the_host_down`) — and a click that still does
+    // nothing on a real desktop says which of the three it really is, and which window it reaches
+    // (see `note_a_message_of_a_window`). Nothing is answered differently for the line.
+    note_a_message_of_a_window("film host", hwnd, msg, wparam, lparam);
+
     // **The band behind the picture is painted here rather than erased by the class**, and the class
     // wears `NULL_BRUSH` so that this is the only hand that draws it (see
     // `paint_the_host_behind_the_film` and `create`). `1` is "handled": it is what keeps
@@ -128,9 +136,22 @@ pub(super) unsafe fn answer_a_host(
     // window procedure that collapsed the pin would take the pin's lock, give a keyboard back and
     // take a still of this very window from inside a message about it, so the command is queued and
     // the pin's own `Minimize → To Taskbar` road puts the window down with the state that says so.
-    if the_shell_put_the_host_down(msg, wparam) && the_host_wears_the_pins_button(hwnd) {
-        ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
-        return Some(LRESULT(0));
+    if the_shell_put_the_host_down(msg, wparam) {
+        // **The decision the log is read for**: whether this minimize is the pair's button or a
+        // window of the user's own going down with the desktop (see `the_host_wears_the_pins_button`).
+        let wears_the_button = the_host_wears_the_pins_button(hwnd);
+        note_pin_trace!(
+            "film host decision the shell's minimize: {}",
+            if wears_the_button {
+                "the host wears the button, the taskbar minimize is queued"
+            } else {
+                "refused, this is not the window the button is worn by"
+            }
+        );
+        if wears_the_button {
+            ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+            return Some(LRESULT(0));
+        }
     }
 
     // **A click on the button of a pin the user is already in is that pin's minimize**, and it is
@@ -258,13 +279,49 @@ fn answer_a_second_click_on_the_hosts_button(
         || !pin_is_focused()
         || !the_host_wears_the_pins_button(hwnd)
     {
+        // **Which check answered is what makes a log of one click decisive**, and only the message
+        // the toggle is is written: this procedure is asked about every message the host is handed,
+        // and a line for each of them is a flood rather than a trace (see
+        // `why_the_second_click_was_not_the_toggle`).
+        if msg == WM_ACTIVATE {
+            note_pin_trace!(
+                "film host decision a second click on the button: refused, {}",
+                why_the_second_click_was_not_the_toggle(hwnd, wparam)
+            );
+        }
         return None;
     }
 
+    note_pin_trace!(
+        "film host decision a second click on the button: the taskbar minimize is queued"
+    );
     ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
     // Nothing is asked of the window: the pin is already the window the user is in, and this click
     // asked for that window to go away rather than for the caret to be put in it.
     Some(LRESULT(0))
+}
+
+/// **Which check of `answer_a_second_click_on_the_hosts_button` answered `no`**, in the words a trace
+/// line can be read by: an activation of some other kind, a pin that holds no keyboard, a window that
+/// is not the one the button is worn by, or a pin that is already away or over everything.
+///
+/// **It decides nothing.** The gate is that function's and this is only asked where it has already
+/// refused a click, so that a log says which of the four it was; the two ask the same facts in the
+/// same order, and the day they disagree the gate is the answer.
+fn why_the_second_click_was_not_the_toggle(hwnd: HWND, wparam: WPARAM) -> &'static str {
+    if !matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE) {
+        return "not an activation";
+    }
+
+    if !pin_is_focused() {
+        return "the pin holds no keyboard";
+    }
+
+    if film_host() != Some(hwnd) || !pin_is_its_own_window() {
+        return "not the button's host";
+    }
+
+    "the pin is away/always-on-top"
 }
 
 /// What an activation of the pin's host asks for: **the pin's window, and the keyboard in it**.
@@ -306,15 +363,23 @@ pub(super) unsafe fn answer_an_activation_of_the_host(
         WM_SETFOCUS => true,
         _ => false,
     };
-    if !activated
-        || film_host() != Some(hwnd)
-        || !pinned()
-        || !pin_is_its_own_window()
-        || pin_is_focused()
-    {
+    if !activated || film_host() != Some(hwnd) || !pinned() || !pin_is_its_own_window() {
         return None;
     }
 
+    // **A caret already in the pin is where the user asked the button for it**, so this activation is
+    // not the handover: the click that arrives once the pin has that keyboard is the button's own
+    // minimize, and it is answered before this (see
+    // `answer_a_second_click_on_the_hosts_button`). Written down as the refusal it is: a log of a
+    // click that does nothing is the whole of why these lines exist.
+    if pin_is_focused() {
+        note_pin_trace!(
+            "film host decision an activation of the host: refused, the pin already holds the keyboard"
+        );
+        return None;
+    }
+
+    note_pin_trace!("film host decision an activation of the host: the pin takes the keyboard");
     unsafe { pin_take_focus(pinned_window(), window) };
     Some(LRESULT(0))
 }
@@ -1654,6 +1719,20 @@ unsafe fn create() -> Option<HWND> {
     // lands on it has to reach the pin (see the module doc).
     let _ = EnableWindow(host, false);
     PIN_FILM_HOST.store(host.0 as isize, Ordering::SeqCst);
+    // **A log has a starting point**: what the host was made as, which every line about it is read
+    // against — whether it wears the Shell's own button (the `WS_EX_APPWINDOW` this app asks for
+    // with `Always On Top` off), which band the pair stands in, and who owns whom. The owner is
+    // written as it stands here: the host is made with none, and the pin's chrome is given to it by
+    // `own_the_pin_window` afterwards (see it for the road that writes the relation).
+    note_pin_trace!(
+        "film host created appwindow={} always-on-top={} owner={} pin-owner={}",
+        ((GetWindowLongPtrW(host, GWL_EXSTYLE) as u32 & WS_EX_APPWINDOW.0) != 0) as u8,
+        pin_lifecycle::pin_always_on_top() as u8,
+        window_name(HWND(GetWindowLongPtrW(host, GWLP_HWNDPARENT) as *mut _)),
+        window_name(HWND(
+            GetWindowLongPtrW(pinned_window(), GWLP_HWNDPARENT) as *mut _
+        )),
+    );
     // **The host is the window the Shell lists**, so the button the pin used to carry names the file
     // the pin is of (see `pin_taskbar::set_pin_taskbar_title`), and it is made supplying the still its
     // button's hover is drawn of — this window's own rows are the black it erases to, not the film the

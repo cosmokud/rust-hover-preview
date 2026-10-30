@@ -4857,6 +4857,114 @@ fn a_first_click_on_a_films_host_button_still_hands_the_pin_its_keyboard() {
     }
 }
 
+/// **A message the film host is handed is written down with the state a reading of it depends on, and
+/// the decision the toggle made for that button beside it.** It is the diagnostic the button itself
+/// was landed with: what a real desktop delivers to these windows is the one thing the suite cannot
+/// hold, so the lines name the window, the pin's state and the answer rather than printing handles (see
+/// `pin_trace::note_a_message_of_a_window`).
+///
+/// Two of the three roads the click was assumed to take are walked here — the activation that hands
+/// the pin its keyboard, and the Shell's `SC_MINIMIZE` of the window the pair's button belongs to —
+/// and both are read back out of the trace's own seam rather than out of the log.
+#[test]
+fn a_message_the_host_is_handed_is_written_down_with_its_decision() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and the setting is put back before it ends.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    // The line the log is read from at its beginning: the host says what it was made as.
+    let created = pin_trace::noted_lines()
+        .into_iter()
+        .find(|line| line.starts_with("film host created "))
+        .expect("the host says what it was made as");
+    assert!(
+        created.contains(" appwindow=1 ") && created.contains(" always-on-top=0 owner="),
+        "a host made with the setting off wears the Shell's own button, and says who owns whom: \
+         {created}"
+    );
+
+    let _ = take_pin_command();
+    pin_trace::clear_noted();
+
+    unsafe {
+        SendMessageW(
+            host,
+            WM_ACTIVATE,
+            WPARAM(WA_CLICKACTIVE as usize),
+            LPARAM(0),
+        )
+    };
+    let lines = pin_trace::noted_lines();
+    let message = lines
+        .iter()
+        .find(|line| line.starts_with("film host msg WM_ACTIVATE "))
+        .unwrap_or_else(|| panic!("the activation the button delivers is written down: {lines:?}"));
+    assert!(
+        message.contains(" arg=WA_CLICKACTIVE wparam=2 lparam=0 own-host=1 window=host "),
+        "the message, its words, and the window it is the pin's own host at: {message}"
+    );
+    assert!(
+        message.contains(" pinned=1 collapsed=0 pin-window=1 always-on-top=0 visible="),
+        "and the pin's state beside it, which is what the same message means twice: {message}"
+    );
+    // The two windows are named rather than printed, whatever this machine's desktop is doing.
+    for field in ["foreground=", "focus="] {
+        let value = message
+            .split(field)
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .unwrap_or_default();
+        assert!(
+            matches!(
+                value,
+                "host" | "pin" | "preview" | "bubble" | "stand-in" | "none" | "other"
+            ),
+            "a window is named by what this app knows of it, never by a handle: {field}{value}"
+        );
+    }
+    assert!(
+        lines.iter().any(|line| line
+            == "film host decision an activation of the host: the pin takes the keyboard"),
+        "and the decision the activation was answered with is the handover: {lines:?}"
+    );
+
+    pin_trace::clear_noted();
+
+    unsafe { SendMessageW(host, WM_SYSCOMMAND, WPARAM(SC_MINIMIZE as usize), LPARAM(0)) };
+    let lines = pin_trace::noted_lines();
+    let message = lines
+        .iter()
+        .find(|line| line.starts_with("film host msg WM_SYSCOMMAND "))
+        .unwrap_or_else(|| panic!("the Shell's minimize of the host is written down: {lines:?}"));
+    assert!(
+        message.contains(" arg=SC_MINIMIZE ") && message.contains(" own-host=1 "),
+        "the command is named as the Shell's minimize of the host: {message}"
+    );
+    assert!(
+        lines.iter().any(|line| line
+            == "film host decision the shell's minimize: the host wears the button, the taskbar \
+                minimize is queued"),
+        "and the decision says the host is the window the button is worn by: {lines:?}"
+    );
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        "which is the queued command the log stands beside, and not a different road"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
 /// **A hover's film host is never a pin's minimize**, though it is made from the same class and answered
 /// by the same procedure (see `answer_a_host`): the gate is the pin's own host, and a hover is nobody's
 /// button. The pin's own host is standing beside it here, so what says no is the window the message
