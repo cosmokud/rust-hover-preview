@@ -442,6 +442,10 @@ fn an_adopted_pin_is_handed_the_copy_it_predates_without_a_relaunch() {
     stand_pin(Some(a_pin_playing(&film, (100, 80, 420, 320))));
     let host = unsafe { hover_film_host::take_up_the_hover_film_host((100, 80, 420, 320)) }
         .expect("a host standing in for the moved hover");
+    // The take-up places the host on the desktop, and a host an earlier test left on screen is a black
+    // rectangle of the app's over it: it is composited as nothing for the whole of this test (see
+    // `keep_a_window_of_the_suite_unseen`).
+    unsafe { keep_a_window_of_the_suite_unseen(host) };
     hover_film_host::note_hover_film_host_player(101, &film);
     note_player_subtitles(&film, false);
     assert!(

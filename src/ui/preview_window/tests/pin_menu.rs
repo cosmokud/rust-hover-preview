@@ -2451,23 +2451,16 @@ struct AStandingMenu {
 fn a_standing_menu() -> AStandingMenu {
     register_the_menu_window_class();
 
-    // Safety: a window of this test's own, standing where a card's would.
+    // Safety: a window of this test's own, standing where a card's would — and composited as nothing,
+    // because a card's window is the desktop's and the user is typing somewhere while this runs (see
+    // `a_window_of_the_suite`). It is never shown here: what the menu's roads ask of it is its box.
     let stand_in = unsafe {
-        CreateWindowExW(
+        a_window_of_the_suite_kept_back(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             w!("STATIC"),
-            w!(""),
             WS_POPUP,
-            40,
-            40,
-            200,
-            120,
-            None,
-            None,
-            None,
-            None,
+            (40, 40, 240, 160),
         )
-        .expect("a card's window to open the menu against")
     };
     let preview = PREVIEW_HWND.swap(stand_in.0 as isize, Ordering::SeqCst);
     // Made before anything can panic, so that the two slots and the mouse are put back whichever
@@ -2483,6 +2476,21 @@ fn a_standing_menu() -> AStandingMenu {
     // right-click on its caption is the window's own page.
     unsafe { open_pin_menu(stand_in, 300, 300, PinMenuPage::Chrome) };
     menu.menu = HWND(PIN_MENU_HWND.load(Ordering::SeqCst) as *mut _);
+
+    // **The menu's own window is the app's, and it is put up over the desk by the road a right-click
+    // takes** — so what is asked of it here is the one thing a test may ask of a window that is not
+    // its own: that the pixels the app painted be composited at no alpha, which leaves the panel
+    // exactly where it stands for `WindowFromPoint` and draws none of it on the user's screen (see
+    // `a_window_of_the_suite`). A window's alpha is its own and is not inherited from a window beside
+    // it, so the card's stand-in being layered is no part of this: the menu is a sibling of it.
+    //
+    // **One of 255 and not 0, measured**: a layered window at alpha 0 is skipped by the hit test, so
+    // `WindowFromPoint` answers with whatever stands behind the panel — which is the very fault this
+    // test is about, and it fails on it. One step of alpha is composited rather than absent (the same
+    // step the Shell's thumbnail of a source is kept at, see `pin_film_thumbnail::INVISIBLE_ALPHA`),
+    // so the panel is still the window under the hand and none of it reaches the user's eye.
+    unsafe { SetLayeredWindowAttributes(menu.menu, COLORREF(0), 1, LWA_ALPHA) }
+        .expect("the menu's own window, at no alpha");
 
     menu
 }

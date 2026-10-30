@@ -9,6 +9,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_TYPE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
     MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT, MOUSE_EVENT_FLAGS,
 };
+// What a window of the suite's own is made of and made unseen with: see `a_window_of_the_suite`.
+use windows::Win32::Foundation::HINSTANCE;
+use windows::Win32::UI::WindowsAndMessaging::{
+    SetLayeredWindowAttributes, LWA_ALPHA, WINDOW_EX_STYLE, WINDOW_STYLE,
+};
 
 /// A display to place on: 1000 by 800 at its top-left corner.
 fn bounds() -> ScreenBounds {
@@ -416,6 +421,157 @@ fn dragged_overlay(
     );
 
     content_box_of(window, 96, false, overlay, pinned_caption_height(96, None))
+}
+
+/// A window of the suite's own: made, shown, and invisible.
+///
+/// A test that asks the desktop about a window — the order it stands in, the region it is erased
+/// within, whether it is on the screen at all — needs a window that *is* on the desktop: one at
+/// `NOWHERE` has no visible region to be asked about, and one that was never shown covers nothing.
+/// What it must not be is a window the user sees, or one that takes their keyboard and with it the
+/// caret out of whatever they are typing in.
+///
+/// So it is layered at no alpha: `WS_EX_LAYERED` with a whole-window alpha of 0 is a window the
+/// compositor draws as nothing, and nothing else about it is any different — `IsWindowVisible`
+/// answers yes, it stands where it was put in the z-order, `WindowFromPoint` finds it over what is
+/// under it, and its visible region is the real one it is erased and clipped within, which is what
+/// the tests about the host's fill ask of it. `WS_EX_NOACTIVATE` is what keeps the caret where the
+/// user left it: nothing shown here is ever activated. `WS_EX_TOOLWINDOW` is what keeps a run of the
+/// suite from leaving a taskbar button and an Alt+Tab entry behind it.
+///
+/// **`WS_VISIBLE` at create time is the one thing that must not happen**, because a window created
+/// visible is activated wherever it stands — that, and not the box it is put at, is what takes the
+/// keyboard out of the user's terminal. The window is made hidden, made unseen, shown unactivated.
+///
+/// `extra` is the bits a caller's own window needs on top of those three (a stand-in born topmost, a
+/// card's menu against), and they are added to them rather than replacing any. A class of a test's
+/// own is registered with the module's instance; `a_window_of_the_suite_of` is the same window in an
+/// instance a caller registered its class with.
+///
+/// `WS_EX_LAYERED` on a `WS_CHILD` window is legal here because the executable's manifest declares
+/// the Windows this app supports, which is what turns the pre-Win8 refusal of the pair off (see
+/// `build.rs`, and `pin_film_host`, which relies on the same declaration for the same pair).
+pub(super) unsafe fn a_window_of_the_suite(
+    extra: WINDOW_EX_STYLE,
+    class: PCWSTR,
+    style: WINDOW_STYLE,
+    box_: ScreenRegion,
+) -> HWND {
+    // SAFETY: the class is one this process registered, and the window is the caller's to destroy.
+    unsafe {
+        a_window_of_the_suite_of(
+            GetModuleHandleW(None)
+                .expect("the module's own handle")
+                .into(),
+            extra,
+            class,
+            style,
+            box_,
+        )
+    }
+}
+
+/// The same window of the suite's own, in the instance a caller registered its class with: the erase
+/// probe registers a class with `lpfnWndProc` of its own, and a window of it has to be made in the
+/// instance that class was registered in.
+pub(super) unsafe fn a_window_of_the_suite_of(
+    hinstance: HINSTANCE,
+    extra: WINDOW_EX_STYLE,
+    class: PCWSTR,
+    style: WINDOW_STYLE,
+    box_: ScreenRegion,
+) -> HWND {
+    let hwnd = unsafe { a_window_of_the_suite_kept_back_in(hinstance, extra, class, style, box_) };
+    // SAFETY: the window is the suite's own, and showing it unactivated is what puts it on the
+    // desktop without taking the caret out of whatever the user is typing in.
+    unsafe { show_a_window_of_the_suite(hwnd) };
+
+    hwnd
+}
+
+/// The same window before it is shown: what a test keeps back for a road that shows it itself — the
+/// tick that finds a player drawing, the place a park's window is put back at — so that whenever it
+/// does appear it is already a window nothing of it is drawn of and nothing of the user's is
+/// activated.
+pub(super) unsafe fn a_window_of_the_suite_kept_back(
+    extra: WINDOW_EX_STYLE,
+    class: PCWSTR,
+    style: WINDOW_STYLE,
+    box_: ScreenRegion,
+) -> HWND {
+    // SAFETY: the class is one this process registered, and the window is the caller's to destroy.
+    unsafe {
+        a_window_of_the_suite_kept_back_in(
+            GetModuleHandleW(None)
+                .expect("the module's own handle")
+                .into(),
+            extra,
+            class,
+            style,
+            box_,
+        )
+    }
+}
+
+/// The three of them: made hidden, made unseen, and left for the caller to show. `WS_POPUP` is added
+/// to the style because every window of the suite's own is a window of the desktop's rather than a
+/// child of another — a child cannot activate, and a child of a window here is a window a test makes
+/// itself, with `WS_CHILD` named where it does.
+unsafe fn a_window_of_the_suite_kept_back_in(
+    hinstance: HINSTANCE,
+    extra: WINDOW_EX_STYLE,
+    class: PCWSTR,
+    style: WINDOW_STYLE,
+    box_: ScreenRegion,
+) -> HWND {
+    // SAFETY: the class is one this process registered, in the instance handed in, and the window is
+    // made at a box inside the desktop the caller named.
+    let hwnd = unsafe {
+        CreateWindowExW(
+            extra | WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            class,
+            w!(""),
+            style | WS_POPUP,
+            box_.0,
+            box_.1,
+            (box_.2 - box_.0).max(1),
+            (box_.3 - box_.1).max(1),
+            None,
+            None,
+            hinstance,
+            None,
+        )
+    }
+    .expect("a window of the suite's own");
+    // SAFETY: the window is this call's own, and the alpha is what makes it drawn as nothing.
+    unsafe { keep_a_window_of_the_suite_unseen(hwnd) };
+
+    hwnd
+}
+
+/// Put the bits and the alpha on a window that is on the desktop and not of the user's: the layered
+/// style, no activation, no taskbar button, and a whole-window alpha of 0 — see
+/// `a_window_of_the_suite` for why it is this rather than a box off every display.
+///
+/// Additive, because the window may be one of the app's own with bits of its own to keep (a hover's
+/// host wears four): what is asked of it here is that it be composited as nothing, not that it be
+/// made a window of another kind.
+pub(super) unsafe fn keep_a_window_of_the_suite_unseen(hwnd: HWND) {
+    let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let unseen = WS_EX_LAYERED.0 as isize | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize;
+    if ex & WS_EX_LAYERED.0 as isize == 0 {
+        let _ = unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | unseen) };
+    }
+    // SAFETY: the window is layered by the line above or already was, which is the whole of what
+    // this call asks of it; an alpha of 0 with `LWA_ALPHA` is the window composited as nothing.
+    unsafe { SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA) }
+        .expect("a window of the suite's own, at no alpha");
+}
+
+/// Show a window of the suite's own: unactivated, which is the other half of a window nothing is
+/// taken from (see `a_window_of_the_suite`).
+pub(super) unsafe fn show_a_window_of_the_suite(hwnd: HWND) {
+    let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
 }
 
 mod audio_bands;
