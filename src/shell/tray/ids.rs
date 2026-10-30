@@ -588,8 +588,9 @@ pub(super) const ID_TRAY_FONT_400: u16 = 1079;
 pub(super) const ID_TRAY_FONT_90: u16 = 1080;
 pub(super) const ID_TRAY_FONT_80: u16 = 1081;
 pub(super) const ID_TRAY_FONT_70: u16 = 1082;
-/// `110%` is listed between `125%` and `100%` and carries the one id the font sizes
-/// have left: the engine-idle ranges take 1083 up to 1096, and the `theme` folder's own
+/// `110%` is listed between `125%` and `100%` and carries one of the ids the font sizes
+/// leave: every id below the `theme` folder's own that no row above claims is free slack — the
+/// engine-idle ranges take 1680 up to 1715, past the pin rows — and the `theme` folder's own
 /// items begin at 1100.
 pub(super) const ID_TRAY_FONT_110: u16 = 1097;
 /// The sizes the `Text → Font Size` submenu offers, in the order it lists them —
