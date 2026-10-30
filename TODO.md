@@ -3,6 +3,7 @@
 ## Features
 
 - Add preview integration for voidtools Everything search.
+- Add preview integration for third-party file managers (e.g., Q-Dir)
 - **File Format Support:**
   - More design & project files (`.xcf`, ...)
   - CAD files (`.dwg`, `.step`, `.stl`, ...)
