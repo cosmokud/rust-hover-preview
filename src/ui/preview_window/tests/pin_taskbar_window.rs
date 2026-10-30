@@ -1527,6 +1527,9 @@ fn the_colour_in(pixels: &[u8], width: u32, x: u32, y: u32) -> u32 {
 /// `take_the_pin_picture`), and handed over when the Shell asks for it (see
 /// `answer_the_thumbnail_request`).
 #[test]
+#[ignore = "reads the composed desk at the source's own box (a BitBlt, not a \
+            thumbnail): the window read must be opaque and on the screen — run \
+            with `cargo test -- --ignored`"]
 fn a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
@@ -1648,6 +1651,9 @@ fn a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up() {
 /// while the picture the button holds is this app's own and not the window's, so a picture kept past
 /// the window it was handed for is a new pin's button showing the file the pin before it was of.
 #[test]
+#[ignore = "reads the composed desk at the source's own box (a BitBlt, not a \
+            thumbnail): the window read must be opaque and on the screen — run \
+            with `cargo test -- --ignored`"]
 fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
@@ -1779,6 +1785,9 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
 /// collapse (see `pin_film_host::keep_the_pins_picture_for_the_taskbar`), and handed over when the Shell
 /// asks (see `answer_a_thumbnail_ask`).
 #[test]
+#[ignore = "reads the composed desk at the host's own box (a BitBlt, not a \
+            thumbnail): the host read must be opaque and on the screen — run \
+            with `cargo test -- --ignored`"]
 fn a_film_hosts_button_holds_a_picture_of_the_host_itself() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
@@ -1848,6 +1857,9 @@ fn a_film_hosts_button_holds_a_picture_of_the_host_itself() {
 /// which is exactly what a hover of a put-away pin is for (see taking the picture at every collapse,
 /// `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
 #[test]
+#[ignore = "reads the composed desk at the host's own box (a BitBlt, not a \
+            thumbnail): the host read must be opaque and on the screen — run \
+            with `cargo test -- --ignored`"]
 fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubble_collapse_took() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
