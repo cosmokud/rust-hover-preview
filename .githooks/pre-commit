@@ -1,0 +1,80 @@
+#!/bin/sh
+# The two gates that are about the change itself, run before a commit exists: the tree is
+# what rustfmt writes, and it is lint-free. Both are cheap against a build that is already
+# there -- a formatting check is 1.5 s and a warm clippy 0.3 s -- so a commit never waits on
+# a compile that costs minutes.
+#
+# It runs no test, on purpose. The path guard is pre-push's, and the suite belongs to
+# scripts/verify.ps1 and to the workflows: a guard that reads two files and compiles nothing
+# cannot hang, and a hook that can hang is a hook that gets bypassed.
+#
+# RHP_SKIP_PRECOMMIT=1 skips both, for a commit made on a machine that has already answered
+# them. Neither pre-push nor prepare-commit-msg is skipped by it.
+
+set -eu
+
+if [ "${RHP_SKIP_PRECOMMIT:-}" = 1 ]; then
+  echo "RHP_SKIP_PRECOMMIT=1: formatting and lints are not checked for this commit." >&2
+  echo "Nothing else is skipped: pre-push still reads the tracked tree." >&2
+  exit 0
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+# The shared target dir is machine-local, so it cannot live in a committed file: it arrives
+# from `git config rhp.targetDir` through .githooks/post-checkout, which writes it into a
+# git-ignored .cargo/target-dir.local.toml that .cargo/config.toml includes. Cargo reads it
+# by itself; what is read here is the same value for a different question -- is there a build
+# to lint against at all -- because a first commit in a fresh clone should not pay a full
+# compile of 194 dependencies before it is allowed to exist. The environment wins, the way it
+# does for cargo.
+target=${CARGO_TARGET_DIR:-}
+if [ -z "$target" ] && [ -f .cargo/target-dir.local.toml ]; then
+  target=$(sed -n 's/^[[:space:]]*target-dir[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' .cargo/target-dir.local.toml | head -n 1)
+fi
+[ -n "$target" ] || target=target
+
+# A checkout on a Windows-hosted share is one cargo cannot build in: the share gives its
+# session directory no file locking and the compile dies before it reads a source file (see
+# pre-push, which moves the build onto a drive for exactly this reason). Linting is skipped
+# there rather than moved, since a hook that starts a cold build in a temp folder is the cost
+# this hook exists to avoid. Formatting still runs: it writes nothing when it passes.
+on_share=0
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    case "$(printf '%s' "$root" | tr '\\' '/')" in
+      //*) on_share=1 ;;
+    esac
+    ;;
+esac
+
+if ! cargo fmt --all -- --check; then
+  echo "" >&2
+  echo "The commit is stopped: rustfmt would rewrite what is above." >&2
+  echo "Fix it with" >&2
+  echo "" >&2
+  echo "  cargo fmt --all" >&2
+  echo "" >&2
+  echo "then stage what it rewrote and commit again." >&2
+  exit 1
+fi
+echo "pre-commit: formatting checked"
+
+if [ "$on_share" = 1 ]; then
+  echo "pre-commit: lints skipped, this checkout is on a share cargo cannot build in"
+elif [ -z "$(ls -A "$target" 2>/dev/null)" ]; then
+  echo "pre-commit: lints skipped, nothing is built in $target yet -- run cargo check once"
+else
+  if ! cargo clippy --all-targets -- -D warnings; then
+    echo "" >&2
+    echo "The commit is stopped: clippy named the warnings above." >&2
+    echo "Fix them, or let it fix the mechanical ones with" >&2
+    echo "" >&2
+    echo "  cargo clippy --all-targets --fix --allow-dirty" >&2
+    echo "" >&2
+    echo "review what that rewrote, stage it, and commit again." >&2
+    exit 1
+  fi
+  echo "pre-commit: lints checked"
+fi
