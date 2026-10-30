@@ -2,6 +2,7 @@
 //! taken, and what each of them means before it reaches the tick.
 
 use super::*;
+use super::pin_trace::note_pin_trace;
 
 pub(super) unsafe fn reset_preview_after_display_change(hwnd: HWND) {
     let _ = ShowWindow(hwnd, SW_HIDE);
@@ -204,6 +205,26 @@ pub(super) unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // **This window is the one the Shell may be answering a click with instead of the film host**, so
+    // the same set of messages is written down for it — and only while a pin stands, because this is
+    // the hover's own procedure as well and a hover is nobody's button (see
+    // `pin_trace::note_a_message_of_a_window`). Nothing is answered differently for the line.
+    if pinned() {
+        pin_trace::note_a_message_of_a_window("pin", hwnd, msg, wparam, lparam);
+    }
+
+    // **A press on the pair's button is the Shell taking this app away and giving it straight back**, and
+    // this is where the first half of that blink is noted: the chrome is the window the Shell drives when
+    // it cannot put the host down, because it is the window already in front (see
+    // `pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard`). The note is what
+    // tells that click from every activation this app makes of itself, and it carries the caret too: only
+    // a taking made while the pin holds the keyboard is noted, because by the time the activation arrives
+    // Windows has taken the caret away with the app and not yet given it back. **And the thread the message
+    // names is asked as well**, because `WM_ACTIVATEAPP`'s `lParam` is the other side of the switch: a
+    // taking the taskbar did is a click on its button, and a taking any other program did — an Alt-Tab — is
+    // that program's hand on the app and no click at all.
+    pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard(msg, wparam, lparam);
+
     match msg {
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
             reset_preview_after_display_change(hwnd);
@@ -220,6 +241,15 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_ACTIVATE => {
+            // **A press on the pair's taskbar button while the pin is in front is this pin going away**,
+            // and on the road the Shell takes for it the click arrives at this window rather than at the
+            // host the button belongs to (see `pin_film_host::answer_a_click_on_the_chromes_button`).
+            // Asked before the arm's own work: a deactivation is not an activation, so it falls through to
+            // what this arm has always answered it with.
+            if let Some(answer) = pin_film_host::answer_a_click_on_the_chromes_button(msg, wparam) {
+                return answer;
+            }
+
             // Windows is the only thing that can say which window the user is in, and it says it
             // here: a pin that has lost the focus is a pin the user has clicked away from, and
             // the keys belong to whatever is in front of it now. Nothing is asked of the pin on
@@ -317,6 +347,21 @@ pub(super) unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
+            // **A minimize of this window is the pair being put down, where this window is the pair's
+            // second one.** A film pin's chrome is unowned and not a tool window, so the Shell
+            // sometimes lists it beside its film host and a real click has been seen deactivating and
+            // re-activating it. Whichever window of the pair the Shell puts down, the pin's state and
+            // the collapse have to be the same, so the command is queued and `DefWindowProcW` is not
+            // reached: a bare minimize here would take the window down behind a pin that still
+            // believes it is up (see `pin_film_host::the_shell_put_the_chrome_down`).
+            if pin_film_host::the_shell_put_the_chrome_down(msg, wparam) {
+                note_pin_trace!(
+                    "pin decision the shell's minimize of the chrome: the taskbar minimize is queued"
+                );
+                ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+                return LRESULT(0);
+            }
+
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_SIZE => {
@@ -324,6 +369,19 @@ pub(super) unsafe extern "system" fn window_proc(
             // The gate and the ask are one implementation shared with the film host that owns the pin's
             // chrome on the other road a pin is put away as a window (see `the_pin_came_back`).
             the_pin_came_back(hwnd, msg, wparam);
+
+            // **And the size a minimize reports is the same put-away the command above is**, for the
+            // same reason: the Shell may be putting this window down rather than the host it is owned
+            // by, and a pin whose chrome went down believing it was up is a pin that answers no
+            // minimize and holds everything a collapse holds back (see
+            // `pin_film_host::the_shell_put_the_chrome_down`).
+            if pin_film_host::the_shell_put_the_chrome_down(msg, wparam) {
+                note_pin_trace!(
+                    "pin decision the shell's minimize of the chrome: the taskbar minimize is queued"
+                );
+                ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+                return LRESULT(0);
+            }
 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }

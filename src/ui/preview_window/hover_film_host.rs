@@ -12,9 +12,10 @@
 //! adopted, and placed at the hover's own box.
 //!
 //! **Why it is disabled.** A press on the picture is the hover's press, and a disabled window is
-//! skipped by `WindowFromPoint` — the same arrangement the pin's host keeps (see
-//! `pin_film_host`). It also never activates: a hover must never take the focus from a file being
-//! renamed.
+//! skipped by `WindowFromPoint`. (The pin's host keeps its presses with a `WM_NCHITTEST` answer
+//! instead, because a disabled window cannot be activated or put down and the pair's taskbar button
+//! is worn by it — see `pin_film_host::answer_a_host`.) It also never activates: a hover must never
+//! take the focus from a file being renamed.
 //!
 //! The host is still the thing the hover is, and the thing a pin takes up: it is promoted into the
 //! pin's host, so the registration the source is drawn with is already in the window that becomes
