@@ -1,5 +1,31 @@
 //! The preview window: the thread that shows a file, and everything a pin is.
 //!
+//! **Start in the family the question belongs to.** Each names the one symbol to open first:
+//!
+//! - **The window and the paint path** - `window_proc`, `paint`, `surfaces`, `pixels`, `layout`,
+//!   `dimensions`, `loading_paint`, `image_cache`, `animated`, `preview_scale`, `displays`:
+//!   `paint::compose_media_into_band`, a frame put into the band it is drawn in.
+//! - **The loop, its channel and its cadence** - `event_loop`, `requests`, `tick`:
+//!   `event_loop::run_preview_window`, which registers the classes, holds the channel and dispatches
+//!   every message the window is sent.
+//! - **A pin's life and what it holds** - `pin_window`, `pin_model`, `pin_lifecycle`,
+//!   `pin_real_window`, `pin_install`, `pin_swap`, `pin_walk`, `pin_zoom`, `pin_playback`,
+//!   `pin_drag`, `pin_input`, `pin_bubble`, `pin_trace`: `pin_window::pin_state`, the lifecycle in
+//!   one value behind one lock.
+//! - **A pin's chrome and the box it is laid out in** - `pin_chrome_layout`, `pin_chrome_strips`,
+//!   `pin_geometry`, `pin_menu`, `pin_menu_window`, `pin_taskbar`, `pin_taskbar_buttons`,
+//!   `pin_taskbar_mirror`, `pin_resize_probe`: `pin_chrome_layout::refresh_pin_chrome`, which asks
+//!   the pointer which strips are called for.
+//! - **The hosts a player of somebody else's is drawn in** - `pin_film_host`, `hover_film_host`,
+//!   `ffplay_window`, `pin_film_thumbnail`, `bubble_stream`:
+//!   `ffplay_window::host_for_a_hosted_player`, the host recorded against a player's pid.
+//! - **Loads, probes and playback** - `media_types`, `media_data`, `load`, `load_dispatch`,
+//!   `engine_render`, `still_probe`, `video_probe`, `video_playback`, `video_launch`, `video_hw`,
+//!   `video_retire`, `mpv_ipc`, `mpv_resident`, `subtitle_files`, `audio_engine`, `audio_meter`:
+//!   `load_dispatch::load_media`, the one call that answers a file with a frame.
+//! - **The suite** - `tests` and the files under `tests/`: `tests::a_window_of_the_suite`, the
+//!   layered window a test puts up, at no alpha and shown unactivated.
+//!
 //! It is one window and one message loop. Everything here exists to answer a question that loop
 //! asks, and the parts are split by what each one is asked for:
 //!
