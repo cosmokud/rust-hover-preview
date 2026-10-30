@@ -1,0 +1,71 @@
+name: CI
+
+# The automatic half of what manual-ci.yml does by hand: the same four commands, in the same
+# order, on the same runner, from the same pinned actions. That workflow is started from the
+# Actions tab and never on its own; this one runs on every push and every pull request, which
+# until now was the signal the repository did not have.
+#
+# The steps here are copied from it deliberately, including the pinning: the two must not be
+# able to disagree about which Rust formats and lints this tree, or about what "passing" is.
+# Change one, change both.
+#
+# RISK, noted the way manual-ci.yml's own log carries it: the suite creates real layered
+# windows through `ui::preview_window::tests::a_window_of_the_suite`, so it wants a session
+# with a window station. A windows-latest runner has one and the suite passes there today;
+# if a runner image ever drops it, the window tests are the ones that will say so, and
+# `scripts/verify.ps1 -Pure` is the half that needs no desktop.
+
+on:
+  push:
+  pull_request:
+
+# A second push to the same branch answers the question the first was asked: the older run is
+# cancelled rather than left to finish against a tree nobody is looking at any more.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Formatting, lints and tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      # SECURITY: pinned to the commit the tag it is written against pointed at, exactly as
+      # manual-ci.yml pins it.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The guard reads the history of this branch, not only its tree: a path in a commit
+          # message reaches every clone the way a path in a fixture does, and the default
+          # checkout is one commit deep, which leaves it nothing to read.
+          fetch-depth: 0
+
+      # The release `rust-toolchain.toml` names, asked for by name so the version a run
+      # formats and lints with is the one in its log rather than whichever stable the
+      # runner image happens to carry that week.
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: 1.98.1
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (2.9.2)
+
+      # Named on its own so a path written into a fixture is a line in the log under its own
+      # name, and not one more failure buried in the test list below.
+      - name: Path leaks
+        run: cargo test --test no_path_leaks
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lints
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test
