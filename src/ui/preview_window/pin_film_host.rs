@@ -66,9 +66,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL,
     SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CLOSE,
-    WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT, WM_SETICON, WM_SETFOCUS,
-    WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP,
-    WS_SYSMENU, WINDOW_EX_STYLE,
+    WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT, WM_QUERYOPEN, WM_SETICON,
+    WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
+    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WINDOW_EX_STYLE,
 };
 
 use super::pin_trace::{note_a_message_of_a_window, note_pin_trace, window_name};
@@ -214,7 +214,10 @@ pub(super) unsafe fn answer_a_host(
 
     // **A host the Shell brings back from the taskbar is the pin coming back.** The host is the window
     // the Shell's button belongs to on this road, and a pin left believing it is away refuses
-    // everything a pin is for (see `the_pin_came_back`, `own_the_pin_window`).
+    // everything a pin is for (see `the_pin_came_back`, `own_the_pin_window`). What that same restore
+    // goes on to deliver is written down beside it, because a click it is still making is not the
+    // user's next one (see `note_the_restore_the_shell_made`).
+    note_the_restore_the_shell_made(msg, wparam);
     the_pin_came_back(hwnd, msg, wparam);
 
     // The Shell's ask for the still of a button that is down, answered with the picture the collapse
@@ -260,6 +263,87 @@ fn answer_the_hosts_close(msg: u32, wparam: WPARAM) -> Option<LRESULT> {
 fn the_shell_put_the_host_down(msg: u32, wparam: WPARAM) -> bool {
     (msg == WM_SYSCOMMAND && (wparam.0 & 0xFFF0) as u32 == SC_MINIMIZE)
         || (msg == WM_SIZE && wparam.0 as u32 == SIZE_MINIMIZED)
+}
+
+/// How long a restore the Shell has made of the host goes on being read as that restore, from the
+/// message it was noted on.
+///
+/// **One click's worth of a clock, rather than a state a later message has to clear.** The restore of a
+/// minimized host delivers a storm of messages — `WM_QUERYOPEN`, the activation the Shell makes, the size
+/// the window reports, and the activations this app's own caret handover pings between the pin's chrome
+/// and the host — and a traced click had every one of them inside some thirty milliseconds. A hand's next
+/// click on the same button is hundreds of milliseconds away at the very least, which is the gap this is
+/// set in.
+const RESTORE_SETTLE: Duration = Duration::from_millis(250);
+
+/// When the Shell last brought the host back from the taskbar, while that restore is still settling.
+///
+/// **It is what tells the click that brings the pin back from the click that puts it away** (see
+/// `the_restore_is_settling`): the restore's own activations arrive after the pin's state is up again,
+/// because its caret handover has put the keyboard in the pin by then — which is exactly the state a
+/// second click is read in, so a restore's last activation was read as the user's and the pin went
+/// straight back into the taskbar.
+static RESTORED_BY_THE_SHELL_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Whether this message is **the Shell bringing the host back from the taskbar**, which is the other half
+/// of the button `the_shell_put_the_host_down` reads.
+///
+/// **Two messages are a restore, and either is what arrives.** `WM_QUERYOPEN` is the question only a
+/// minimized window is sent before it may be opened, so it is no other kind of message at all. A size is
+/// a restore only where it is the size `the_pin_came_back` reads, and with that function's own two
+/// conjuncts beside it: a pin already collapsed — the state a put-away pin is in and a restore's is not —
+/// and no put-down of this app's in flight, because the same `ShowWindow(SW_MINIMIZE)` can leave a
+/// `SIZE_RESTORED` behind it on its way down (see `the_pin_is_being_put_down`).
+fn the_shell_brought_the_host_back(msg: u32, wparam: WPARAM) -> bool {
+    msg == WM_QUERYOPEN
+        || (msg == WM_SIZE
+            && wparam.0 as u32 == SIZE_RESTORED
+            && pin_is_collapsed()
+            && !the_pin_is_being_put_down())
+}
+
+/// Note that the Shell has just brought the host back, so that what the same restore goes on to deliver
+/// is not read as the user's next click on the pair's button (see `the_restore_is_settling`).
+fn note_the_restore_the_shell_made(msg: u32, wparam: WPARAM) {
+    if !the_shell_brought_the_host_back(msg, wparam) {
+        return;
+    }
+    if let Ok(mut restored) = RESTORED_BY_THE_SHELL_SINCE.lock() {
+        *restored = Some(Instant::now());
+    }
+}
+
+/// Whether a restore the Shell made of the host is still settling, which is what says whether a click on
+/// the pair's button is the restore's own storm or the user's next click.
+///
+/// **The click that brings the pin back is not the click that puts it away** (see `RESTORE_SETTLE`), and
+/// the restore in flight is the only thing that tells them apart: a deliberate second click arrives with
+/// no restore behind it.
+///
+/// A note that has run out is cleared as it is read, so that a restore long finished cannot shadow a
+/// click that is a click.
+fn the_restore_is_settling() -> bool {
+    let Ok(mut restored) = RESTORED_BY_THE_SHELL_SINCE.lock() else {
+        return false;
+    };
+    let Some(since) = *restored else {
+        return false;
+    };
+    if since.elapsed() < RESTORE_SETTLE {
+        return true;
+    }
+    *restored = None;
+    false
+}
+
+/// Stand a restore's note at `since` in place of the Shell's own, or give the Shell's answer back with
+/// `None` — a test of the settle, which cannot wait out a real restore's storm nor a hand's next click
+/// (see `the_restore_is_settling`).
+#[cfg(test)]
+pub(super) fn stand_the_restore_noted_at(since: Option<Instant>) {
+    if let Ok(mut restored) = RESTORED_BY_THE_SHELL_SINCE.lock() {
+        *restored = since;
+    }
 }
 
 /// Whether a minimize of this window is the pin's own going away: **this is the host the pair's button
@@ -333,6 +417,13 @@ pub(super) fn the_shell_put_the_chrome_down(msg: u32, wparam: WPARAM) -> bool {
 /// **And a click that arrives while the pin holds no keyboard is left alone.** The user is in another
 /// program, so the click is the handover it has always been and not the start of a toggle: answered
 /// here, the pin would go away instead of coming to the front.
+///
+/// **And the click that brings the pin back is not the click that puts it away.** The Shell's restore of a
+/// minimized host delivers a storm of activations of it — this app's own caret handover pings one between
+/// the pin's chrome and the host — and by the time the last of them arrives the pin is up and holds the
+/// keyboard, which is exactly the state a second click is read in. So the restore is noted as it lands and
+/// a click inside that settle is left alone: it is the restore's own storm rather than the user's next
+/// click (see `the_restore_is_settling`).
 fn answer_a_second_click_on_the_hosts_button(
     hwnd: HWND,
     msg: u32,
@@ -342,6 +433,7 @@ fn answer_a_second_click_on_the_hosts_button(
         || !matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE)
         || !pin_is_focused()
         || !the_host_wears_the_pins_button(hwnd)
+        || the_restore_is_settling()
     {
         // **Which check answered is what makes a log of one click decisive**, and only the message
         // the toggle is is written: this procedure is asked about every message the host is handed,
@@ -367,10 +459,11 @@ fn answer_a_second_click_on_the_hosts_button(
 
 /// **Which check of `answer_a_second_click_on_the_hosts_button` answered `no`**, in the words a trace
 /// line can be read by: an activation of some other kind, a pin that holds no keyboard, a window that
-/// is not the one the button is worn by, or a pin that is already away or over everything.
+/// is not the one the button is worn by, a pin that is already away or over everything, or a restore of
+/// the Shell's that is still making its own clicks.
 ///
 /// **It decides nothing.** The gate is that function's and this is only asked where it has already
-/// refused a click, so that a log says which of the four it was; the two ask the same facts in the
+/// refused a click, so that a log says which of them it was; the two ask the same facts in the
 /// same order, and the day they disagree the gate is the answer.
 fn why_the_second_click_was_not_the_toggle(hwnd: HWND, wparam: WPARAM) -> &'static str {
     if !matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE) {
@@ -385,7 +478,11 @@ fn why_the_second_click_was_not_the_toggle(hwnd: HWND, wparam: WPARAM) -> &'stat
         return "not the button's host";
     }
 
-    "the pin is away/always-on-top"
+    if !the_host_wears_the_pins_button(hwnd) {
+        return "the pin is away/always-on-top";
+    }
+
+    "the click that restored the pin"
 }
 
 /// What an activation of the pin's host asks for: **the caret in the pin, and nothing else**.

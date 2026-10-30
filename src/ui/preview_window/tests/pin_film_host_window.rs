@@ -17,10 +17,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
     GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
     GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
-    SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, SW_SHOWNOACTIVATE,
-    WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ERASEBKGND, WM_NCHITTEST, WM_SIZE,
-    WM_SYSCOMMAND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED,
-    WS_POPUP, WS_VISIBLE,
+    SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
+    SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ERASEBKGND,
+    WM_NCHITTEST, WM_QUERYOPEN, WM_SIZE, WM_SYSCOMMAND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED,
+    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -171,6 +171,9 @@ impl Drop for StandingFilm {
         // before it disarmed — must not leak into the next test's chrome (see
         // `pin_handover_armed`).
         pin_film_host::disarm_pin_handover();
+        // And a restore a test stood in place of the Shell's must not hold the next test's click
+        // back (see `the_restore_is_settling`).
+        pin_film_host::stand_the_restore_noted_at(None);
         unsafe {
             pin_film_host::take_down_the_pin_film_host();
             // The strips with the host: the window going down destroys them, and the handles must
@@ -5026,6 +5029,188 @@ fn a_second_click_on_a_films_host_button_is_the_pins_minimize() {
     assert!(
         !pin_is_collapsed(),
         "and the host is left for the pin's own collapse to put down, as the state's road does"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **The click that brings the pin back is not the click that puts it away.**
+///
+/// The fault this is a regression test for: the Shell's restore of a minimized host delivers several
+/// activations of it — this app's own caret handover pings one between the pin's chrome and the host — and
+/// the last of them arrives once the pin's state is up again, with the keyboard already the pin's, which is
+/// exactly the state a second click on the pair's button is read in. Read as one, the restore put the pin
+/// back into the taskbar a couple of milliseconds after it had brought it out (see
+/// `answer_a_second_click_on_the_hosts_button` and `the_restore_is_settling`).
+///
+/// The note a restore leaves is stood in the Shell's place here rather than waited for, twice: once as a
+/// restore leaves it, and once older than the settle a hand's next click is beyond.
+#[test]
+fn the_click_that_restored_the_pin_is_not_the_click_that_puts_it_away() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and the setting is put back before it ends.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _ = take_pin_command();
+
+    // The caret in the pin, which is where the click that brought it back leaves it.
+    unsafe { SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    assert_eq!(
+        unsafe { GetFocus() },
+        film.pin_hwnd,
+        "the pin is the window the user is in, which is the state a second click is read in"
+    );
+    let _ = take_pin_command();
+
+    // A click with no restore behind it, which is what a hand's second click on the button is.
+    unsafe { SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        "a click that comes with no restore in flight is the button's own minimize, as it always was"
+    );
+
+    // An activation of the restore's own storm, noted as the restore leaves it.
+    pin_film_host::stand_the_restore_noted_at(Some(Instant::now()));
+    unsafe { SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and a click inside the restore that brought the pin back asks for nothing: read as the user's \
+         second it would put the pin away again, which is what a restored pin used to do"
+    );
+
+    // Past the settle a restore's storm is read inside, so the same activation is a hand's click again.
+    pin_film_host::stand_the_restore_noted_at(Some(Instant::now() - Duration::from_millis(300)));
+    unsafe { SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        "a deliberate second click, hundreds of milliseconds after the restore, is still the toggle"
+    );
+
+    pin_film_host::stand_the_restore_noted_at(None);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **The question a minimized window is asked before it may be opened is the Shell's restore of the host**,
+/// and what the same restore goes on to deliver is not the user's second click.
+///
+/// `WM_QUERYOPEN` is no other message at all — only a window being opened is handed it — so it is the one
+/// note of a restore that needs no state read beside it (see `the_shell_brought_the_host_back`). The
+/// activation that follows it here is the one the restore's own storm delivers, and it is refused.
+#[test]
+fn the_shells_question_to_open_the_host_is_the_restore_noted() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and the setting is put back before it ends.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _ = take_pin_command();
+
+    // The caret in the pin, as the click that brought it back leaves it.
+    unsafe { SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    assert_eq!(
+        unsafe { GetFocus() },
+        film.pin_hwnd,
+        "the pin is the window the user is in, which is the state a second click is read in"
+    );
+    let _ = take_pin_command();
+
+    // The question the Shell asks a minimized window before it opens it.
+    unsafe { SendMessageW(host, WM_QUERYOPEN, WPARAM(0), LPARAM(0)) };
+
+    // And the activation that comes with the same restore is that restore's own.
+    unsafe { SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "the question is the restore noted, so the click that comes with it does not put the pin away"
+    );
+    assert!(
+        !pin_is_collapsed(),
+        "and the pin stands where the restore put it, rather than going back into the taskbar"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **The size a restore reports is the Shell's restore of the host too**, and it is read with
+/// `the_pin_came_back`'s own conjuncts: a pin already away, and no put-down of this app's in flight.
+///
+/// The pin is put away by the road the button's own click takes, so that the size arrives into the state it
+/// is a restore in, and the click that brings it back is then walked: the restore's own activation gives the
+/// pin the caret, and the one after it is the storm's last rather than a hand's next click.
+#[test]
+fn the_size_a_restore_reports_is_the_restore_noted() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, and the setting is put back before it ends.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let _ = take_pin_command();
+
+    // The pin away into the taskbar, which is the state a restore arrives into.
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    assert!(
+        pin_is_collapsed(),
+        "the pin is away, as a click on the button left it"
+    );
+    let _ = take_pin_command();
+
+    // The size the Shell's restore of the host reports.
+    unsafe { SendMessageW(host, WM_SIZE, WPARAM(SIZE_RESTORED as usize), LPARAM(0)) };
+    assert!(
+        matches!(take_pin_command(), Some(PinCommand::CameBack)),
+        "the size is the pin coming back, as the host coming back always is"
+    );
+
+    // The pin up again by the road the command asks for, and the caret the same click hands it.
+    restore_pin(&a_restored_window(), PinRestore::TheShell);
+    assert!(!pin_is_collapsed(), "the pin is up again");
+    unsafe { SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    assert_eq!(
+        unsafe { GetFocus() },
+        film.pin_hwnd,
+        "the caret of the click that brought the pin back is the pin's, which is what leaves it the \
+         window a second click is read in"
+    );
+
+    // And the activation the same click delivers after that is the restore's, not the user's.
+    unsafe { SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0)) };
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "so the restore's own storm puts nothing away: the pin stays where the Shell brought it"
+    );
+    assert!(
+        !pin_is_collapsed(),
+        "and nothing of the collapse is left behind"
     );
 
     if let Ok(mut config) = CONFIG.lock() {
