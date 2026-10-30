@@ -1,11 +1,4 @@
-include = [
-  { path = "target-dir.local.toml", optional = true },
-  # Machine-local settings for a build hosted somewhere other than Windows: the
-  # directory holding an `rc.exe`-compatible compiler, the drive-less linker, and the
-  # one link argument a Windows-only dependency needs. Absent on a Windows machine,
-  # where nothing in it applies.
-  { path = "xwin.local.toml", optional = true },
-]
+include = [{ path = "target-dir.local.toml", optional = true }]
 
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld.exe"
