@@ -18,11 +18,12 @@
 //!   the behaviour under test rather than a way to put a window up.
 //!
 //! **What this does not read** is whether a window that is up is drawn: the suite's windows are
-//! layered at no alpha by construction (`a_window_of_the_suite`), and the one road that must be
-//! *composited* rather than absent — the stand-ins the app's own picture is read off the desk, in
-//! `pin_taskbar_window.rs` — is made directly for that reason. Those are shown unactivated, so they
-//! take no caret, and they are a rectangle of the suite's for as long as they are up: that is the
-//! price of a picture read off the screen, and it is not a thing a layered window can pay.
+//! layered at no alpha by construction (`a_window_of_the_suite`), and the one road that has to be
+//! *composited* rather than absent — the stand-ins whose pixels the app's own picture is read off
+//! the desk, in `pin_taskbar_window.rs` — is made directly for that reason. Those are shown
+//! unactivated, so they take no caret, and they are a rectangle of the suite's for as long as they
+//! are up: that is the price of a picture read off the screen, and it is not a price a layered
+//! window can pay.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,8 +57,8 @@ fn is_a_test_module(path: &Path) -> bool {
     named_tests || under_tests
 }
 
-/// Every `.rs` file under `dir`, walked in the order a filesystem gives them: the walk is a set
-/// rather than a sequence, so the order a finding is reported in is sorted below.
+/// Every `.rs` file under `dir`: a set rather than a sequence, so the caller sorts what it is given
+/// and a finding is reported at the same place on every machine.
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
