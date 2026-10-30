@@ -182,12 +182,11 @@ use windows::Win32::Graphics::Gdi::{
     BitBlt, ClientToScreen, GetDC, GetPixel, InvalidateRect, ReleaseDC, UpdateWindow, CLR_INVALID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, IsWindow,
-    IsWindowVisible, SetLayeredWindowAttributes, SetWindowLongPtrW,
-    SetWindowPos, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK,
-    SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    GetClientRect, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible,
+    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindowAsync, GWL_EXSTYLE,
+    HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK, SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 // Only the binary asks a window who owns it: a test has one process (see `the_source_is_up`).
 #[cfg(not(test))]
@@ -449,16 +448,20 @@ pub(super) fn clear_the_unregistrations() {
 #[cfg(test)]
 pub(super) fn the_standing_source_is_the_current_one() -> bool {
     let number = SOURCE.load(Ordering::SeqCst);
-    THUMBNAIL.lock().ok().is_some_and(|held| {
-        held.registration != 0 && held.registered == number && number != 0
-    })
+    THUMBNAIL
+        .lock()
+        .ok()
+        .is_some_and(|held| held.registration != 0 && held.registered == number && number != 0)
 }
 
 /// Whether a source adopted to take the picture over is still waiting to be ready (see
 /// `PendingSource`).
 #[cfg(test)]
 pub(super) fn a_source_is_waiting_to_take_the_picture() -> bool {
-    PENDING_SOURCE.lock().ok().is_some_and(|pending| pending.is_some())
+    PENDING_SOURCE
+        .lock()
+        .ok()
+        .is_some_and(|pending| pending.is_some())
 }
 
 /// The client the picture standing is cropped by: the one placement's, never a live read of the source
@@ -539,7 +542,6 @@ impl NativeSize {
         }
     }
 }
-
 
 #[derive(Clone, Copy)]
 struct Thumbnail {
@@ -801,16 +803,12 @@ pub(super) fn note_the_covering_registration() {
         .unwrap_or((0, 0, None, false));
     // Safety: the handle is the source this module adopted from a player's own window, and the
     // question is about the window rather than a change to it.
-    let visible = registered != 0
-        && unsafe { IsWindowVisible(HWND(registered as *mut _)) }.as_bool();
+    let visible =
+        registered != 0 && unsafe { IsWindowVisible(HWND(registered as *mut _)) }.as_bool();
     let destination = match destination {
-        Some((left, top, right, bottom)) => format!(
-            "{}x{}+{}+{}",
-            right - left,
-            bottom - top,
-            left,
-            top
-        ),
+        Some((left, top, right, bottom)) => {
+            format!("{}x{}+{}+{}", right - left, bottom - top, left, top)
+        }
         None => "none".to_string(),
     };
     note_pin_trace!(
@@ -842,10 +840,11 @@ pub(super) fn the_standing_source_process(host: HWND) -> Option<u32> {
             // nothing behind it — the desktop showing through the card for the ticks between one
             // film's source going and the next one's registration standing.
             && unsafe { IsWindow(HWND(held.registered as *mut _)) }.as_bool();
-        standing.then_some(held.registered_process).filter(|pid| *pid != 0)
+        standing
+            .then_some(held.registered_process)
+            .filter(|pid| *pid != 0)
     })
 }
-
 
 /// Take a player's own window as the film the pin's host shows: out of the Shell's lists, at the
 /// bottom of the desktop's order, and registered in the host that shows it.
@@ -881,9 +880,8 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
         // Safety: as above, and the alpha is this app's own to give a window of another process's. The
         // one step from nothing, `LWA_ALPHA`, is what keeps the window drawn (and therefore
         // thumbnailable) while nothing of it reaches the screen.
-        let applied = unsafe {
-            SetLayeredWindowAttributes(source, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA)
-        };
+        let applied =
+            unsafe { SetLayeredWindowAttributes(source, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA) };
         note_pin_trace!(
             "source invisible {:?} layered alpha {} applied ok {} (RHP_THUMBNAIL_INVISIBLE)",
             source,
@@ -968,7 +966,8 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
             the_pending_source_for(source.0 as isize, pid)
                 .is_some_and(|pending| pending.placed.is_some())
         } else {
-            held.source.is_some_and(|shape| shape.belongs_to(source, pid))
+            held.source
+                .is_some_and(|shape| shape.belongs_to(source, pid))
         };
         if sized {
             forget_the_late_placement();
@@ -1001,7 +1000,11 @@ pub(super) fn note_the_source(source: HWND, pid: u32) {
     }
 
     if the_picture_is_standing() {
-        let drawn = THUMBNAIL.lock().ok().map(|held| held.registered).unwrap_or(0);
+        let drawn = THUMBNAIL
+            .lock()
+            .ok()
+            .map(|held| held.registered)
+            .unwrap_or(0);
         arm_the_pending_source(source, pid);
         SOURCE.store(number, Ordering::SeqCst);
         SOURCE_PROCESS.store(pid, Ordering::SeqCst);
@@ -1481,7 +1484,10 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     // lands on is one line rather than an argument (see `note_the_seek_picture`). The reason is taken
     // rather than read, so a swap for a file step is not written as a seek that never happened.
     if pin_playback::take_the_last_restart_reason() == Some(pin_playback::RestartReason::Seek) {
-        note_the_seek_picture(pending.process, pin_playback::pinned_playhead().unwrap_or(0.0));
+        note_the_seek_picture(
+            pending.process,
+            pin_playback::pinned_playhead().unwrap_or(0.0),
+        );
     }
 }
 
@@ -1577,7 +1583,10 @@ pub(super) fn the_sources_picture_is_lit(pid: u32) -> Option<bool> {
     // Safety: the handle is the source this module adopted from a player's own window, and the calls
     // read a few of its pixels or report that they cannot.
     let client = unsafe { client_size(source) }.unwrap_or((0, 0));
-    Some(the_source_sample(source, (client.0.max(1), client.1.max(1))))
+    Some(the_source_sample(
+        source,
+        (client.0.max(1), client.1.max(1)),
+    ))
 }
 
 /// The same window read as what it is rather than what it draws: **whether it is on the screen, and
@@ -1654,10 +1663,9 @@ fn note_the_source_not_ready(pending: PendingSource, live: Option<(i32, i32)>) {
         let Ok(mut record) = PENDING_SOURCE.lock() else {
             return;
         };
-        let Some(waiting) = record
-            .as_mut()
-            .filter(|waiting| waiting.source == pending.source && waiting.process == pending.process)
-        else {
+        let Some(waiting) = record.as_mut().filter(|waiting| {
+            waiting.source == pending.source && waiting.process == pending.process
+        }) else {
             return;
         };
         let due = waiting.not_ready.is_none_or(|(seen, at)| {
@@ -1707,7 +1715,9 @@ pub(super) fn note_the_seek_picture(pid: u32, seconds: f64) {
         .and_then(|held| held.source)
         .map(|shape| shape.client);
     let standing = the_standing_source();
-    let source = standing.map(|(window, _)| window).or_else(the_source_window);
+    let source = standing
+        .map(|(window, _)| window)
+        .or_else(the_source_window);
     let cli = source.and_then(|source| unsafe { client_size(source) });
     // The picture belongs to the player whose window is on screen; the caller's pid is the answer only
     // where nothing is registered yet.
@@ -1737,10 +1747,7 @@ fn the_standing_source() -> Option<(HWND, u32)> {
     if held.registration == 0 || held.registered == 0 || held.registered_process == 0 {
         return None;
     }
-    Some((
-        HWND(held.registered as *mut _),
-        held.registered_process,
-    ))
+    Some((HWND(held.registered as *mut _), held.registered_process))
 }
 
 /// A box as a trace line spells it, and `none` where there is no answer at all.
@@ -1898,7 +1905,11 @@ fn the_players_picture_size(pid: u32) -> Option<(i32, i32)> {
         return None;
     }
     let turned = a_node_field(&params, "rotate").unwrap_or(0).rem_euclid(180) == 90;
-    Some(if turned { (height, width) } else { (width, height) })
+    Some(if turned {
+        (height, width)
+    } else {
+        (width, height)
+    })
 }
 
 /// One field out of a node property's answer: mpv writes an object as `{"w":640,"h":300,…}`, so the
@@ -2087,7 +2098,9 @@ pub(super) fn a_still_stands() -> bool {
 /// let go, and only then the player ended.
 pub(super) fn stand_the_outgoing_picture_from_its_dc(pid: u32, seconds: f64) -> bool {
     let Some(host) = pin_film_host::film_host() else {
-        note_pin_trace!("placeholder unavailable pid {pid}: the pin has no host to paint a still in");
+        note_pin_trace!(
+            "placeholder unavailable pid {pid}: the pin has no host to paint a still in"
+        );
         return false;
     };
     // The probe that reads the pin throughout the wait begins where the cover does (see `still_probe`).
@@ -2260,7 +2273,9 @@ fn stand_the_still(
         return false;
     }
     if !pin_film_host::put_the_cover_in(host, pixels, width, height) {
-        note_pin_trace!("placeholder unavailable pid {pid}: the host is not the one it was decoded for");
+        note_pin_trace!(
+            "placeholder unavailable pid {pid}: the host is not the one it was decoded for"
+        );
         return false;
     }
     // **One repaint and no erase**: the host's own erase is the black a still must never show, and a
@@ -2273,7 +2288,9 @@ fn stand_the_still(
     note_pin_trace!("still painted pid {pid} {width}x{height}");
     // The composition is asked to commit before the registration that covers this paint goes, so the
     // step from the Shell's picture to this app's own is one the user never sees the inside of.
-    unsafe { let _ = DwmFlush(); }
+    unsafe {
+        let _ = DwmFlush();
+    }
     note_pin_trace!("dwm flushed");
     // **Let go of before the host's record is written**, so the pass that watches the outgoing player
     // cannot adopt it back in between (see `STILL_PID`). This is the picture only: the pin is not
@@ -2312,16 +2329,25 @@ fn a_picture_fitted_to(aspect: Option<f64>, box_: (i32, i32)) -> (i32, i32, i32,
     let (width, height) = match aspect {
         Some(aspect) if aspect.is_finite() && aspect > 0.0 => {
             if (box_width as f64 / box_height as f64) > aspect {
-                let width = (box_height as f64 * aspect).round().clamp(1.0, box_width as f64);
+                let width = (box_height as f64 * aspect)
+                    .round()
+                    .clamp(1.0, box_width as f64);
                 (width as i32, box_height)
             } else {
-                let height = (box_width as f64 / aspect).round().clamp(1.0, box_height as f64);
+                let height = (box_width as f64 / aspect)
+                    .round()
+                    .clamp(1.0, box_height as f64);
                 (box_width, height as i32)
             }
         }
         _ => (box_width, box_height),
     };
-    ((box_width - width) / 2, (box_height - height) / 2, width, height)
+    (
+        (box_width - width) / 2,
+        (box_height - height) / 2,
+        width,
+        height,
+    )
 }
 
 /// What one registration of the Shell's thumbnail shows: the box the picture is drawn in, the rectangle
@@ -2689,12 +2715,7 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
 /// picture that cannot line up with its pin's box, and **`cli` and `pic` disagree only where the source
 /// was resized by something that is not this app**, which is the one way a crop can be of a surface the
 /// Shell is not sampling.
-fn note_the_thumbnail_pair(
-    host: HWND,
-    client: (i32, i32),
-    live: (i32, i32),
-    shown: ThumbnailBox,
-) {
+fn note_the_thumbnail_pair(host: HWND, client: (i32, i32), live: (i32, i32), shown: ThumbnailBox) {
     let (host_x, host_y, host_width, host_height) =
         unsafe { window_box(host) }.unwrap_or((0, 0, client.0, client.1));
     let (x, y, width, height) = shown.destination;
@@ -2757,8 +2778,7 @@ impl HeldFrames {
         }
         let line = format!(
             "thumbnail held heartbeat n={} disagrees={}",
-            self.in_the_second,
-            self.disagrees as u8,
+            self.in_the_second, self.disagrees as u8,
         );
         self.heartbeat = Some(now);
         self.in_the_second = 0;
@@ -2773,8 +2793,7 @@ impl HeldFrames {
         }
         let line = format!(
             "thumbnail held n={} disagrees={}",
-            self.since_summary,
-            self.disagrees as u8,
+            self.since_summary, self.disagrees as u8,
         );
         self.since_summary = 0;
         self.disagrees = false;
@@ -2856,9 +2875,10 @@ fn keep_the_crop_on_the_screen(host: HWND, source: HWND, shown: ThumbnailBox, a_
     };
     // The rectangle DWM samples, in the source's own client coordinates: the crop where there is one,
     // and the whole client where a picture nothing has read hands it that (see `the_thumbnail_box`).
-    let crop = shown.source.map_or((0, 0, shown.client.0, shown.client.1), |(left, top, right, bottom)| {
-        (left, top, right - left, bottom - top)
-    });
+    let crop = shown.source.map_or(
+        (0, 0, shown.client.0, shown.client.1),
+        |(left, top, right, bottom)| (left, top, right - left, bottom - top),
+    );
     let Some((host_x, host_y, host_width, host_height)) = (unsafe { window_box(host) }) else {
         return;
     };
@@ -2925,7 +2945,14 @@ fn the_sources_position(
     if (x, y) == at && !cramped {
         return None;
     }
-    Some(((x, y), if cramped { SourceFit::Cramped } else { SourceFit::Moved }))
+    Some((
+        (x, y),
+        if cramped {
+            SourceFit::Cramped
+        } else {
+            SourceFit::Moved
+        },
+    ))
 }
 
 /// One axis of `the_sources_position`: where the source stood when the crop was inside the work area,
@@ -2965,7 +2992,10 @@ fn a_source_axis(at: i32, crop: (i32, i32), work: (i32, i32)) -> (i32, bool) {
 /// `SWP_NOSIZE` — and the only caller is the one placement.
 fn size_the_source(source: HWND, box_: SourceBox) -> bool {
     let (x, y, width, height) = box_;
-    debug_assert!(width >= 1 && height >= 1, "a source is never asked for an empty box");
+    debug_assert!(
+        width >= 1 && height >= 1,
+        "a source is never asked for an empty box"
+    );
     unsafe {
         SetWindowPos(
             source,
@@ -3106,9 +3136,7 @@ mod tests {
             client: (2731, 1536),
             aspect,
         };
-        let shown_at = |box_: (i32, i32)| {
-            the_thumbnail_box(box_, source.client, source.aspect)
-        };
+        let shown_at = |box_: (i32, i32)| the_thumbnail_box(box_, source.client, source.aspect);
         let shown = shown_at(client);
         let mut holding = Thumbnail {
             host: 0x2000,
@@ -3174,8 +3202,7 @@ mod tests {
         ] {
             for shape in shapes {
                 let picture = a_picture_fitted_to(shape, (box_width, box_height));
-                let ((x, y, width, height), _) =
-                    the_crop_filling(picture, (box_width, box_height));
+                let ((x, y, width, height), _) = the_crop_filling(picture, (box_width, box_height));
                 assert!(
                     x >= picture.0
                         && y >= picture.1
@@ -3245,7 +3272,10 @@ mod tests {
                         "the destination is the box, at {client:?} {shape:?} {box_:?}"
                     );
                     let Some((left, top, right, bottom)) = shown.source else {
-                        assert!(shape.is_none(), "a shape nothing has read is the whole client");
+                        assert!(
+                            shape.is_none(),
+                            "a shape nothing has read is the whole client"
+                        );
                         continue;
                     };
                     assert!(
@@ -3261,7 +3291,6 @@ mod tests {
             }
         }
     }
-
 
     /// **A held frame prints nothing on its own, and a second of standing still prints exactly one
     /// line.** The trace's own collapse, asked of the counter rather than of a run: a step that finds
@@ -3311,7 +3340,6 @@ mod tests {
         );
     }
 
-
     /// The crop the pair would hand the Shell, as the rectangle DWM samples in the source's own
     /// client: the crop where there is one, and the whole client where there is not.
     fn a_crop_of(box_: (i32, i32), client: (i32, i32), aspect: Option<f64>) -> SourceBox {
@@ -3325,7 +3353,12 @@ mod tests {
     /// The rectangle the Shell actually samples, on the screen: where the source stands plus the crop
     /// inside its client.
     fn a_sampled_rect(at: (i32, i32), crop: SourceBox) -> ScreenRegion {
-        (at.0 + crop.0, at.1 + crop.1, at.0 + crop.0 + crop.2, at.1 + crop.1 + crop.3)
+        (
+            at.0 + crop.0,
+            at.1 + crop.1,
+            at.0 + crop.0 + crop.2,
+            at.1 + crop.1 + crop.3,
+        )
     }
 
     /// **A pin flush with any edge or corner of the desktop has its crop slid back onto the work
@@ -3343,7 +3376,8 @@ mod tests {
                 for y in ys {
                     // The source was adopted at the pin's own corner, which is the box's.
                     let at = (x, y);
-                    let (to, _) = the_sources_position(at, crop, work).unwrap_or((at, SourceFit::Moved));
+                    let (to, _) =
+                        the_sources_position(at, crop, work).unwrap_or((at, SourceFit::Moved));
                     let sampled = a_sampled_rect(to, crop);
                     assert!(
                         sampled.0 >= work.0
@@ -3392,7 +3426,8 @@ mod tests {
         let work = (0, 0, 1920, 1080);
         let crop = (97, 41, 1000, 600);
         for at in [(-400, -400), (1800, 900), (-97, 500), (900, 0)] {
-            let (to, _) = the_sources_position(at, crop, work).expect("the crop left the work area");
+            let (to, _) =
+                the_sources_position(at, crop, work).expect("the crop left the work area");
             let sampled = a_sampled_rect(to, crop);
             assert!(
                 sampled.0 >= work.0
@@ -3691,17 +3726,36 @@ mod tests {
     fn the_invisible_knob_is_on_unless_it_says_zero_and_is_the_layered_bit() {
         assert_eq!(INVISIBLE_VARIABLE, "RHP_THUMBNAIL_INVISIBLE");
         let named = |value: Option<&str>| source_is_invisible_from(value.map(std::ffi::OsStr::new));
-        assert!(named(None), "this road's default is the source nothing of which is seen");
+        assert!(
+            named(None),
+            "this road's default is the source nothing of which is seen"
+        );
         assert!(named(Some("1")));
-        assert!(!named(Some("0")), "and `0` is the visible road, byte for byte");
-        assert!(named(Some("")), "a value that names nothing is not read as off");
-        assert!(named(Some("off")), "only the one value turns it off, and it is `0`");
+        assert!(
+            !named(Some("0")),
+            "and `0` is the visible road, byte for byte"
+        );
+        assert!(
+            named(Some("")),
+            "a value that names nothing is not read as off"
+        );
+        assert!(
+            named(Some("off")),
+            "only the one value turns it off, and it is `0`"
+        );
 
         let inert = WS_EX_APPWINDOW.0 as isize | WS_EX_TOPMOST.0 as isize;
         let invisible = source_ex_style(inert, true);
-        assert_eq!(invisible & (WS_EX_LAYERED.0 as isize), WS_EX_LAYERED.0 as isize);
+        assert_eq!(
+            invisible & (WS_EX_LAYERED.0 as isize),
+            WS_EX_LAYERED.0 as isize
+        );
         for bit in [WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT] {
-            assert_eq!(invisible & (bit.0 as isize), bit.0 as isize, "{bit:?} is kept");
+            assert_eq!(
+                invisible & (bit.0 as isize),
+                bit.0 as isize,
+                "{bit:?} is kept"
+            );
         }
         assert_eq!(
             invisible & (WS_EX_APPWINDOW.0 as isize),
@@ -3749,7 +3803,9 @@ mod tests {
         mpv_ipc::answer_a_read(
             pid,
             "video-params",
-            Some(r#"{"pixelformat":"yuv420p","w":1440,"h":1080,"dw":1920,"dh":1080,"aspect":1.777778}"#),
+            Some(
+                r#"{"pixelformat":"yuv420p","w":1440,"h":1080,"dw":1920,"dh":1080,"aspect":1.777778}"#,
+            ),
         );
         assert_eq!(the_players_picture_size(pid), Some((1920, 1080)));
         assert_eq!(
@@ -3819,12 +3875,7 @@ mod tests {
             "and the wait is bounded: one read per ask and no more"
         );
         assert_eq!(
-            the_one_placement(
-                None,
-                Some((100, 200)),
-                None,
-                (3440, 1440),
-            ),
+            the_one_placement(None, Some((100, 200)), None, (3440, 1440),),
             None,
             "a film of no known size is never placed at the pin's box to be corrected later"
         );
@@ -3844,12 +3895,7 @@ mod tests {
         let max_track = (3440, 1440);
 
         assert_eq!(
-            the_one_placement(
-                None,
-                Some((100, 200)),
-                native,
-                max_track,
-            ),
+            the_one_placement(None, Some((100, 200)), native, max_track,),
             Some((100, 200, 1920, 1080)),
             "the film's own size, at the pin's corner"
         );
@@ -3940,7 +3986,10 @@ mod tests {
             "the odd pixel of the rounding is the picture's own and never a bar"
         );
         // A box of one pixel is the picture's largest square, and never nothing.
-        assert_eq!(the_crop_filling((0, 0, 1440, 1080), (1, 1)).0, (180, 0, 1080, 1080));
+        assert_eq!(
+            the_crop_filling((0, 0, 1440, 1080), (1, 1)).0,
+            (180, 0, 1080, 1080)
+        );
         assert_eq!(the_crop_filling((0, 0, 1, 4000), (1, 1)).0, (0, 1999, 1, 1));
         // **A box larger than the picture on either axis is the picture whole**, upscaled by the Shell,
         // and the trace says so: cropping a picture that is already being magnified only throws pixels
@@ -3952,7 +4001,10 @@ mod tests {
                 (0, 0, 4, 100),
                 "{box_:?} is over the picture, so the whole picture is what fills it"
             );
-            assert!(upscaled, "and the trace says the crop was cut to the picture");
+            assert!(
+                upscaled,
+                "and the trace says the crop was cut to the picture"
+            );
         }
     }
 
@@ -3994,7 +4046,10 @@ mod tests {
         let measured = Some(2595.0 / 1460.0);
         let (x, y, width, height) = a_picture_fitted_to(measured, (1000, 560));
         assert_eq!((x, y, width, height), (2, 0, 995, 560));
-        assert!(x + width <= 1000 && y + height <= 560, "never a pixel over the client");
+        assert!(
+            x + width <= 1000 && y + height <= 560,
+            "never a pixel over the client"
+        );
         assert!(x >= 0 && y >= 0, "and never one outside it");
 
         assert_eq!(a_picture_fitted_to(Some(1.7773973), (1, 1)), (0, 0, 1, 1));
@@ -4005,7 +4060,10 @@ mod tests {
             "a client of nothing is asked for what a window can be"
         );
         assert_eq!(a_picture_fitted_to(None, (800, 600)), (0, 0, 800, 600));
-        assert_eq!(a_picture_fitted_to(Some(f64::NAN), (800, 600)), (0, 0, 800, 600));
+        assert_eq!(
+            a_picture_fitted_to(Some(f64::NAN), (800, 600)),
+            (0, 0, 800, 600)
+        );
     }
 
     /// **The thumbnail shows the picture's rectangle and never the whole client**: the crop is the part
@@ -4030,7 +4088,10 @@ mod tests {
         );
 
         let nothing_read = the_thumbnail_box((1000, 560), (3217, 1460), None);
-        assert_eq!(nothing_read.source, None, "a picture nothing has read is not cropped by");
+        assert_eq!(
+            nothing_read.source, None,
+            "a picture nothing has read is not cropped by"
+        );
         assert_eq!(nothing_read.destination, (0, 0, 1000, 560));
     }
 
@@ -4062,17 +4123,11 @@ mod tests {
 
         for box_ in boxes {
             assert_eq!(
-                the_one_placement(
-                    placed,
-                    Some((100, 200)),
-                    Some((1920, 1080)),
-                    (3440, 1440),
-                ),
+                the_one_placement(placed, Some((100, 200)), Some((1920, 1080)), (3440, 1440),),
                 None,
                 "{box_:?} is a moment of the gesture, and the gesture asks for no box"
             );
-            let shown =
-                the_thumbnail_box(box_, source.client, source.aspect);
+            let shown = the_thumbnail_box(box_, source.client, source.aspect);
             assert_eq!(
                 shown.destination,
                 (0, 0, box_.0, box_.1),
@@ -4082,7 +4137,8 @@ mod tests {
                 shown.client, source.client,
                 "the crop's window is the one placement's, never a box the pin was dragged to"
             );
-            let (left, top, right, bottom) = shown.source.expect("the picture is what is cropped by");
+            let (left, top, right, bottom) =
+                shown.source.expect("the picture is what is cropped by");
             assert!(
                 left >= picture.0
                     && top >= picture.1

@@ -570,7 +570,8 @@ pub(super) unsafe fn a_window_of_the_suite_kept_back_in(
 /// made a window of another kind.
 pub(super) unsafe fn keep_a_window_of_the_suite_unseen(hwnd: HWND) {
     let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
-    let unseen = WS_EX_LAYERED.0 as isize | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize;
+    let unseen =
+        WS_EX_LAYERED.0 as isize | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize;
     if ex & WS_EX_LAYERED.0 as isize == 0 {
         let _ = unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | unseen) };
     }
@@ -598,9 +599,8 @@ pub(super) unsafe fn show_a_window_of_the_suite(hwnd: HWND) {
 fn a_window_of_the_suite_is_on_the_desktop_and_drawn_as_nothing() {
     let box_ = (40, 40, 360, 220);
     // SAFETY: a window of this test's own, destroyed below.
-    let hwnd = unsafe {
-        a_window_of_the_suite(WINDOW_EX_STYLE::default(), w!("STATIC"), WS_POPUP, box_)
-    };
+    let hwnd =
+        unsafe { a_window_of_the_suite(WINDOW_EX_STYLE::default(), w!("STATIC"), WS_POPUP, box_) };
 
     assert!(
         unsafe { IsWindowVisible(hwnd) }.as_bool(),
@@ -621,9 +621,14 @@ fn a_window_of_the_suite_is_on_the_desktop_and_drawn_as_nothing() {
     let mut alpha = 255u8;
     let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
     // SAFETY: the window is this test's own and layered, which is what the call asks of it.
-    unsafe { GetLayeredWindowAttributes(hwnd, Some(&mut colour), Some(&mut alpha), Some(&mut flags)) }
-        .expect("a layered window of the suite's own answers its own attributes");
-    assert_eq!(alpha, 0, "and is drawn at no alpha, which is the whole of why it is unseen");
+    unsafe {
+        GetLayeredWindowAttributes(hwnd, Some(&mut colour), Some(&mut alpha), Some(&mut flags))
+    }
+    .expect("a layered window of the suite's own answers its own attributes");
+    assert_eq!(
+        alpha, 0,
+        "and is drawn at no alpha, which is the whole of why it is unseen"
+    );
     assert_ne!(
         flags.0 & LWA_ALPHA.0,
         0,
@@ -648,7 +653,6 @@ mod hover;
 mod hover_film_host_window;
 mod layout;
 mod media_scales;
-mod resident;
 mod pin_audio_facts;
 mod pin_audio_pause;
 mod pin_audio_seek;
@@ -673,6 +677,7 @@ mod pin_window_kind;
 mod pin_zoom;
 mod placement;
 mod probes;
+mod resident;
 mod text_selection;
 mod video_engine;
 mod video_hold;

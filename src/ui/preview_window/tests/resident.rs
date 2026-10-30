@@ -66,7 +66,9 @@ fn a_film() -> PathBuf {
 /// A hover's launch, the way the loop makes it: from the beginning, not held, at the hover's level,
 /// and off the user's desktop, which is where every window a test makes stands.
 fn a_hover(path: &PathBuf, volume: u32) -> Option<PlayerProcess> {
-    start_hover_video_playback(path, -32000, -32000, 320, 180, 0.0, false, volume, None, None)
+    start_hover_video_playback(
+        path, -32000, -32000, 320, 180, 0.0, false, volume, None, None,
+    )
 }
 
 /// A resident begun for a test, with nothing loaded on it yet: the pid a test answers a read for
@@ -139,9 +141,11 @@ fn loadfile_asks_for_the_file_and_the_hover_volume() {
 
     let lines = mpv_ipc::noted_lines();
     assert!(
-        lines.iter().any(|line| line.contains(r#""command":["loadfile""#)
-            && line.contains("a-hovered-film.mkv")
-            && line.contains(r#""replace""#)),
+        lines
+            .iter()
+            .any(|line| line.contains(r#""command":["loadfile""#)
+                && line.contains("a-hovered-film.mkv")
+                && line.contains(r#""replace""#)),
         "the file is loaded on the player that is already there: {lines:?}"
     );
     assert!(
@@ -175,7 +179,11 @@ fn a_hover_that_cannot_be_served_falls_back_to_a_cold_player() {
 
     let cold = a_hover(&a_film(), 55).expect("a player of the hover's own");
 
-    assert_ne!(cold.id(), pid, "a player begun for the hover, not the resident");
+    assert_ne!(
+        cold.id(),
+        pid,
+        "a player begun for the hover, not the resident"
+    );
     assert_eq!(
         mpv_resident::the_resident_pid(),
         Some(pid),
@@ -397,18 +405,16 @@ fn the_ttl_item_says_when_a_standby_resident_expires() {
         "a resident let go as soon as its hover ends is let go at once"
     );
     assert!(
-        !mpv_resident::the_resident_may_be_reaped(
-            false,
-            false,
-            EngineIdle::Indefinite,
-            year
-        ),
+        !mpv_resident::the_resident_may_be_reaped(false, false, EngineIdle::Indefinite, year),
         "one kept for the life of the app never expires"
     );
 
     // `Away` is the away timer's answer rather than the resident's own clock, which is what makes it
     // the one shape a duration cannot answer (see `EngineIdle::has_expired`).
-    let timer = CONFIG.lock().map(|config| config.afk_timer_seconds).unwrap();
+    let timer = CONFIG
+        .lock()
+        .map(|config| config.afk_timer_seconds)
+        .unwrap();
     crate::app::afk::note_explorer_reachable(true);
     assert!(
         !mpv_resident::the_resident_may_be_reaped(false, false, EngineIdle::Away, year),
@@ -565,7 +571,8 @@ fn a_pin_that_took_the_resident_over_re_warms_one_after_it_closes() {
     scene_the_pin_closed();
     mpv_resident::tick();
 
-    let warmed = mpv_resident::the_resident_pid().expect("a fresh resident once the pin has closed");
+    let warmed =
+        mpv_resident::the_resident_pid().expect("a fresh resident once the pin has closed");
     assert_ne!(warmed, pid, "one begun anew, not the pin's");
     assert!(
         pin_trace::noted_lines()

@@ -51,12 +51,8 @@ const SHOWN: &str = "ShowWindow(";
 
 /// The shows that do not activate anything: the one a window of the suite's own is put up with, and
 /// the three that are the opposite of putting one up.
-const SHOWS_THAT_TAKE_NOTHING: [&str; 4] = [
-    "SW_SHOWNOACTIVATE",
-    "SW_HIDE",
-    "SW_MINIMIZE",
-    "SW_RESTORE",
-];
+const SHOWS_THAT_TAKE_NOTHING: [&str; 4] =
+    ["SW_SHOWNOACTIVATE", "SW_HIDE", "SW_MINIMIZE", "SW_RESTORE"];
 
 /// A module of the suite rather than of the app: `tests.rs` beside the part it tests, or any file
 /// under a directory named `tests`. The app's own windows are made by the roads that own them, and

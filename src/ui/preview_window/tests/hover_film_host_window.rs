@@ -118,8 +118,9 @@ fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() 
             "a film mpv plays, with Pin Mode on, is the route the host is for"
         );
 
-        let process = start_hover_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None, None)
-            .expect("a noted player");
+        let process =
+            start_hover_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None, None)
+                .expect("a noted player");
         let pid = process.id();
         assert!(
             hover_film_host::the_hover_player_was_begun_in_the_host(pid),
@@ -201,8 +202,9 @@ fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() 
             !hover_film_host::the_hover_film_is_kept_in_a_host(&path),
             "with Pin Mode off the hover is begun the way it always was"
         );
-        let process = start_hover_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None, None)
-            .expect("a noted player");
+        let process =
+            start_hover_video_playback(&path, 100, 120, 320, 180, 0.0, false, 0, None, None)
+                .expect("a noted player");
         assert!(
             hover_film_host::hover_film_host().is_none(),
             "and no host stands for it"

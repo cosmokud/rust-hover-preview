@@ -1,8 +1,8 @@
 //! The preview window's own procedure, and the keys it answers: a message read, a press
 //! taken, and what each of them means before it reaches the tick.
 
-use super::*;
 use super::pin_trace::note_pin_trace;
+use super::*;
 
 pub(super) unsafe fn reset_preview_after_display_change(hwnd: HWND) {
     let _ = ShowWindow(hwnd, SW_HIDE);
@@ -439,9 +439,7 @@ pub(super) unsafe extern "system" fn window_proc(
             // begins is the pointer taken for this window. That has to happen before any of the
             // window-manager work the keyboard costs, or the first press of a hand that is already
             // moving has nothing to carry it (see `press_the_pin`).
-            if pinned()
-                && press_the_pin(hwnd, x, y, &Win32PinWindow, !pin_is_focused())
-            {
+            if pinned() && press_the_pin(hwnd, x, y, &Win32PinWindow, !pin_is_focused()) {
                 return LRESULT(0);
             }
 

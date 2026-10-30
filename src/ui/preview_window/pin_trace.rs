@@ -260,10 +260,7 @@ pub(super) fn note_a_line_for_a_test(line: String) {
 /// The lines this run has written (see `NOTED`).
 #[cfg(test)]
 pub(super) fn noted_lines() -> Vec<String> {
-    NOTED
-        .lock()
-        .map(|noted| noted.clone())
-        .unwrap_or_default()
+    NOTED.lock().map(|noted| noted.clone()).unwrap_or_default()
 }
 
 /// Forget the lines written before a test (see `NOTED`).

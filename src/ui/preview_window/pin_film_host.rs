@@ -53,23 +53,23 @@ use std::sync::{Once, OnceLock};
 
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::PAINTSTRUCT;
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, EndPaint, FillRect, GetStockObject, SetBrushOrgEx, SetStretchBltMode, StretchBlt,
-    BLACK_BRUSH, HBRUSH, HALFTONE, NULL_BRUSH, SRCCOPY,
+    BLACK_BRUSH, HALFTONE, HBRUSH, NULL_BRUSH, SRCCOPY,
 };
-use windows::Win32::Graphics::Gdi::PAINTSTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW, GetClientRect, GetWindowLongPtrW,
     GetWindowThreadProcessId, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, GWLP_HWNDPARENT,
-    GWL_EXSTYLE, GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL,
-    SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE,
-    WM_ACTIVATEAPP, WM_CLOSE, WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT,
-    WM_QUERYOPEN, WM_SETICON, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN,
-    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WINDOW_EX_STYLE,
+    ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST,
+    HWND_TOPMOST, ICON_BIG, ICON_SMALL, SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE,
+    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE,
+    WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLOSE,
+    WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT, WM_QUERYOPEN, WM_SETFOCUS,
+    WM_SETICON, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
+    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
 use super::pin_trace::{note_a_message_of_a_window, note_pin_trace, window_name};
@@ -837,10 +837,7 @@ pub(super) unsafe fn answer_an_activation_of_the_host(
     let activated = match msg {
         // The low word is the activation state; the high word says whether the window is minimized,
         // and a minimized window coming back is the same request (see the message's own layout).
-        WM_ACTIVATE => matches!(
-            (wparam.0 & 0xFFFF) as u32,
-            WA_ACTIVE | WA_CLICKACTIVE
-        ),
+        WM_ACTIVATE => matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE),
         WM_SETFOCUS => true,
         _ => false,
     };
@@ -900,7 +897,9 @@ pub(super) unsafe fn answer_the_paint_of_a_cover(hwnd: HWND, msg: u32) -> Option
     if !dc.is_invalid() {
         unsafe { paint_the_cover(hwnd, dc) };
     }
-    unsafe { let _ = EndPaint(hwnd, &paint); };
+    unsafe {
+        let _ = EndPaint(hwnd, &paint);
+    };
     Some(LRESULT(0))
 }
 
@@ -1869,7 +1868,10 @@ unsafe fn the_host_has_appeared(host: HWND) {
     let pin = pinned_window();
     let band = band_place();
     if band != HWND_TOPMOST {
-        note_pin_trace!("host appeared {:?}: the band taken to bring the pair forward", host);
+        note_pin_trace!(
+            "host appeared {:?}: the band taken to bring the pair forward",
+            host
+        );
         unsafe { place_the_pin_in_the_band(pin, HWND_TOPMOST) };
     }
     unsafe { place_the_pin_in_the_band(pin, band) };
@@ -2417,8 +2419,7 @@ fn the_handover_has_run_out(since: Instant) -> bool {
 /// taken up in one of its own (see `pin_should_stand_in_its_own_window`), so there is nothing to ask
 /// about there and the wait is the arm's alone.
 fn the_pins_own_window_is_on_the_screen() -> bool {
-    pin_real_window::real_pin_window()
-        .is_some_and(|pin| unsafe { IsWindowVisible(pin) }.as_bool())
+    pin_real_window::real_pin_window().is_some_and(|pin| unsafe { IsWindowVisible(pin) }.as_bool())
 }
 
 /// Arm the handover a take-up on a hover's film waits on, from the moment the hosted player is
@@ -2604,7 +2605,11 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
         note_pin_trace!(
             "handover handed over after {}ms{}",
             since.elapsed().as_millis(),
-            if overtaken { " (the pin was already up)" } else { "" },
+            if overtaken {
+                " (the pin was already up)"
+            } else {
+                ""
+            },
         );
         disarm_pin_handover();
         if !overtaken {
