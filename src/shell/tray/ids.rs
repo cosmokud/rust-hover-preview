@@ -101,20 +101,34 @@ pub(super) const ID_TRAY_VECTOR_BACKGROUND_BASE: u16 = 1054;
 /// The third half of the `Background` submenu, for a font specimen — which is a page of its
 /// own and so has a backdrop of its own, the same way a document does.
 ///
-/// It sits beside the texture's half rather than in the block the first two are in: every
-/// id four wide in that block belongs to something else — 1058 to 1061 is where the text
-/// preview's `Full Mode` item is, which is where this range was to begin with, so the last
-/// two backdrops of a specimen were answered as full mode being switched on.
-pub(super) const ID_TRAY_FONT_BACKGROUND_BASE: u16 = 1204;
+/// It sits beside the texture's half and the design document's, in the slack the pin's
+/// `End of File` ranges leave before the `Codecs` commands begin: 1582 to 1591 is a run of
+/// ten ids free at every one of them, and the three halves want ten between them. It began
+/// at 1204, inside the stretch the `theme` folder's own items are handed out from — 1100 up
+/// to 1300, one id per name — where a folder with more than a hundred names in it was
+/// answered as a backdrop rather than a theme (see `ID_TRAY_THEME_CUSTOM_BASE`). Nothing
+/// four wide can sit in that stretch, however much of it looks free: its free ids are the
+/// folder's own past its cap, not the app's to hand out.
+pub(super) const ID_TRAY_FONT_BACKGROUND_BASE: u16 = 1584;
 /// The fourth, for a `.dds` texture: a texture's alpha channel is as often a mask or a
 /// channel nobody filled in as it is transparency, so what is drawn behind one is a
 /// question of its own.
-pub(super) const ID_TRAY_DDS_BACKGROUND_BASE: u16 = 1200;
+///
+/// It sits below the font specimen's half, and it is two wide, which is what makes the run
+/// the three halves share ten: it began at 1200, where the hundred-and-first name in a
+/// folder of them was handed the id this half's first backdrop carries (see
+/// `ID_TRAY_THEME_CUSTOM_BASE` for why nothing of the app's may sit in that stretch).
+pub(super) const ID_TRAY_DDS_BACKGROUND_BASE: u16 = 1582;
 /// The fifth, for a design document: what its preview is made of is the picture the file
 /// keeps of the whole document — a merged image, or the flattened document a project
 /// container holds — and that picture's transparency is the document's own, so what stands
 /// behind one is a question of its own.
-pub(super) const ID_TRAY_DESIGN_BACKGROUND_BASE: u16 = 1208;
+///
+/// It is the last of the three, four wide, ending at 1591 — eight ids short of the `Codecs`
+/// commands at 1600, which is the slack that run has left. It began at 1208, inside the
+/// `theme` folder's stretch, where the folder's hundred-and-ninth name was answered as this
+/// backdrop (see `ID_TRAY_THEME_CUSTOM_BASE`).
+pub(super) const ID_TRAY_DESIGN_BACKGROUND_BASE: u16 = 1588;
 /// The sixth, for a page of HTML: a document the browser is handed is a page already, so
 /// what stands behind it is a page to read it against rather than a transparency to look
 /// through — the reason it did not go on drawing over the vector half's backdrop.

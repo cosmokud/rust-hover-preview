@@ -1923,3 +1923,256 @@ fn every_command_id_this_tray_hands_out_is_a_value_of_its_own() {
         }
     }
 }
+
+/// Every range the tray hands out, and every lone id between the ranges, put on one number line:
+/// derived from the source rather than from a list here, because a list here is the thing that
+/// goes stale.
+///
+/// A range is a `_BASE` in `ids.rs` and an arm of the window proc in `event_loop.rs`, and the
+/// window proc stops at the first range that holds a click. So a range that reaches over another
+/// is a row no click ever lands on, and so is a range that swallows a lone id — and nothing in
+/// the tree compared them before this did. Both times it has bitten were exactly that:
+/// `Cache → General (Disk)` sat on the video half of `Volume` at 1360, and the three backdrop
+/// ranges sat inside the 200 ids the `theme` folder is handed out from — 1200, 1204 and 1208 —
+/// where a folder with more than a hundred names in it had its own items answered as a backdrop.
+/// A check of one id against one other finds neither, and the submenu tests find only the corners
+/// each of them knows.
+///
+/// What it asserts: every `_BASE` is answered by an arm and every arm is written on a `_BASE`; the
+/// width an arm reads its range with names a table this can count; no two occupied stretches share
+/// an id; and the parse found the whole tray rather than a handful of it.
+#[test]
+fn every_range_the_tray_hands_out_resolves_and_no_two_share_an_id() {
+    // The width an arm gives its own range. A width this cannot count is a range the map below
+    // would leave out, which is why an unknown one fails the test instead of being skipped.
+    fn width_of(expression: &str) -> Option<u16> {
+        // The arm's width is read to the far side of the range's closing bracket, which is
+        // whatever the arm wrote after the id it counts.
+        let expression = expression.trim().trim_end_matches(')').trim();
+        if let Some(table) = expression.strip_suffix(".len() as u16") {
+            return Some(match table.trim() {
+                "VIDEO_ENGINE_CHOICES" => VIDEO_ENGINE_CHOICES.len() as u16,
+                "BACKGROUND_CHOICES" => BACKGROUND_CHOICES.len() as u16,
+                "ZOOM_BACKGROUND_CHOICES" => ZOOM_BACKGROUND_CHOICES.len() as u16,
+                "DDS_BACKGROUND_CHOICES" => DDS_BACKGROUND_CHOICES.len() as u16,
+                "HTML_BACKGROUND_CHOICES" => HTML_BACKGROUND_CHOICES.len() as u16,
+                "PIN_END_OF_FILE_CHOICES" => PIN_END_OF_FILE_CHOICES.len() as u16,
+                "VOLUME_CHOICES" => VOLUME_CHOICES.len() as u16,
+                "AUDIO_SEEK_CHOICES" => AUDIO_SEEK_CHOICES.len() as u16,
+                "AVOID_CHOICES" => AVOID_CHOICES.len() as u16,
+                "TIMING_DELAY_CHOICES_MS" => TIMING_DELAY_CHOICES_MS.len() as u16,
+                "TICK_CHOICES_MS" => TICK_CHOICES_MS.len() as u16,
+                "ENGINE_IDLE_CHOICES" => ENGINE_IDLE_CHOICES.len() as u16,
+                "AFK_TIMER_CHOICES_SECS" => AFK_TIMER_CHOICES_SECS.len() as u16,
+                "IMAGE_CACHE_SIZE_CHOICES_MB" => IMAGE_CACHE_SIZE_CHOICES_MB.len() as u16,
+                "DISK_CACHE_SIZE_CHOICES_MB" => DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
+                "DECODE_BUDGET_CHOICES_GB" => ids::DECODE_BUDGET_CHOICES_GB.len() as u16,
+                "DOCUMENT_SCALE_CHOICES" => DOCUMENT_SCALE_CHOICES.len() as u16,
+                "BITMAP_SCALE_CHOICES" => BITMAP_SCALE_CHOICES.len() as u16,
+                "AUDIO_SCALE_CHOICES" => AUDIO_SCALE_CHOICES.len() as u16,
+                _ => return None,
+            });
+        }
+
+        match expression {
+            "CODEC_COMMANDS" => Some(CODEC_COMMANDS),
+            "MPV_COMMANDS" => Some(MPV_COMMANDS),
+            // Spelled out for the `theme` folder's arm, which is a span today and would be a
+            // base plus this cap if it were written the way every other range is.
+            "MAX_TRAY_CUSTOM_THEMES" => Some(ids::MAX_TRAY_CUSTOM_THEMES as u16),
+            _ => None,
+        }
+    }
+
+    let ids_source = include_str!("ids.rs");
+    let dispatch_source = include_str!("event_loop.rs");
+
+    // The declarations, read exactly the way the id-by-id check above reads them: one
+    // `const NAME: u16 = 1001;` to a line.
+    let mut declared: Vec<(&str, u16)> = Vec::new();
+    for line in ids_source.lines() {
+        let Some((_, rest)) = line.split_once("const ") else {
+            continue;
+        };
+        let Some((name, rest)) = rest.split_once(": u16 = ") else {
+            continue;
+        };
+        let Some(digits) = rest.split(';').next() else {
+            continue;
+        };
+        let Ok(value) = digits.trim().parse::<u16>() else {
+            continue;
+        };
+
+        declared.push((name.trim(), value));
+    }
+
+    let value_of = |name: &str| {
+        declared
+            .iter()
+            .find(|(other, _)| *other == name)
+            .map(|(_, value)| *value)
+    };
+
+    // Each arm of the window proc: the id it is written on, and the stretch it answers for.
+    let mut ranges: Vec<(&str, u16, u16)> = Vec::new();
+    for arm in dispatch_source.split("cmd if").skip(1) {
+        let Some((arm, _)) = arm.split_once(".contains(&cmd)") else {
+            continue;
+        };
+        let names: Vec<&str> = arm
+            .match_indices("ID_TRAY_")
+            .map(|(at, _)| {
+                let rest = &arm[at..];
+                let end = rest
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .unwrap_or(rest.len());
+
+                &rest[..end]
+            })
+            .collect();
+        let Some(base) = names.first().copied() else {
+            panic!(
+                "an arm of the window proc is on no `ID_TRAY_…` id at all, so nothing here can \
+                 say what it answers: {}",
+                arm.trim()
+            );
+        };
+        let start = value_of(base).unwrap_or_else(|| {
+            panic!("the arm on `{base}` is a range `ids.rs` declares no value for")
+        });
+
+        // A width is `+ <table>.len() as u16` or `+ <a u16>`. The `theme` folder's arm is the one
+        // written as a span to another id — the first id past the last name — so its width is the
+        // gap between the two ids, and the cap below is what checks that gap is the count.
+        let width = match arm.rsplit_once('+') {
+            Some((_, expression)) => width_of(expression).unwrap_or_else(|| {
+                panic!(
+                    "the range that begins at `{base}` is as wide as `{}`, which this cannot \
+                         count. A width names an id table or a `u16` in `width_of` above; one that \
+                         names neither is a range left out of the map that proves they do not \
+                         overlap, so name it there",
+                    expression.trim()
+                )
+            }),
+            None => {
+                let Some(end) = names.get(1) else {
+                    panic!(
+                        "the arm on `{base}` is neither `BASE..BASE + <width>` nor `BASE..<other \
+                         base>`, so how wide it is cannot be read: {}",
+                        arm.trim()
+                    );
+                };
+                let end = value_of(end).unwrap_or_else(|| {
+                    panic!(
+                        "the arm on `{base}` ends at `{end}`, which `ids.rs` declares no value for"
+                    )
+                });
+
+                end.checked_sub(start).unwrap_or_else(|| {
+                    panic!("the arm on `{base}` ends at {end}, before it begins at {start}")
+                })
+            }
+        };
+        assert!(
+            width > 0,
+            "the range `{base}` is handed out from {start} and holds no id at all"
+        );
+
+        ranges.push((base, start, start + width));
+    }
+
+    // Every `_BASE` is answered by an arm, and every arm is written on a `_BASE`: an arm on a lone
+    // id is a range this map never held, and a base with no arm is a submenu whose clicks are
+    // answered as whatever range comes first.
+    let mut declared_bases: Vec<&str> = declared
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| name.ends_with("_BASE"))
+        .collect();
+    let mut armed: Vec<&str> = ranges.iter().map(|(name, ..)| *name).collect();
+    declared_bases.sort_unstable();
+    armed.sort_unstable();
+
+    let unanswered: Vec<&&str> = declared_bases
+        .iter()
+        .filter(|name| !armed.contains(name))
+        .collect();
+    let unbased: Vec<&&str> = armed
+        .iter()
+        .filter(|name| !declared_bases.contains(name))
+        .collect();
+    assert!(
+        unanswered.is_empty(),
+        "`{unanswered:?}` is declared a range in `ids.rs` and no arm of the window proc answers a \
+         click against it, so the rows it is handed out to do nothing: write the arm, or declare \
+         the id as the lone row it is"
+    );
+    assert!(
+        unbased.is_empty(),
+        "the arm on `{unbased:?}` is written on an id that is not a `_BASE` of `ids.rs`, so the \
+         map below cannot hold it and could not see it reach over another range"
+    );
+
+    // The `theme` folder's span is written as the first id past it rather than as a base plus a
+    // count, so the cap the menu truncates its names to is what says how wide it really is: the
+    // two have to be moved together, and here is where they are compared.
+    let themes = ranges
+        .iter()
+        .find(|(name, ..)| *name == "ID_TRAY_THEME_CUSTOM_BASE")
+        .expect("the `theme` folder's own items are a range");
+    assert_eq!(
+        themes.2 - themes.1,
+        ids::MAX_TRAY_CUSTOM_THEMES as u16,
+        "the window proc answers {} up to {}, which is not the {} names the `theme` submenu hands \
+         out (see `MAX_TRAY_CUSTOM_THEMES`): the id past the last of them and the cap are the same \
+         number",
+        themes.1,
+        themes.2,
+        ids::MAX_TRAY_CUSTOM_THEMES
+    );
+
+    // A parse that found one arm and one id would pass everything below by finding nothing to
+    // compare, which is the one way a check of this shape goes quietly useless.
+    let lone = declared
+        .iter()
+        .filter(|(name, _)| !name.ends_with("_BASE"))
+        .count();
+    assert!(
+        ranges.len() >= 40 && lone >= 60,
+        "the tray hands out more than forty ranges and over a hundred ids, and this read {} ranges \
+         and {} lone ids: that is too few to have read the source, which is a `const NAME: u16` \
+         per id in `ids.rs` and an arm per range in `event_loop.rs`",
+        ranges.len(),
+        lone
+    );
+
+    // One number line: every range, and every lone id as the single id it is. Sorted by where each
+    // begins, so a stretch that runs over the next one is two neighbours here.
+    let mut occupied: Vec<(u16, u16, &str)> = ranges
+        .iter()
+        .map(|(name, start, end)| (*start, *end, *name))
+        .chain(
+            declared
+                .iter()
+                .filter(|(name, _)| !name.ends_with("_BASE"))
+                .map(|(name, value)| (*value, value + 1, *name)),
+        )
+        .collect();
+    occupied.sort_unstable();
+
+    for pair in occupied.windows(2) {
+        let (start, end, name) = pair[0];
+        let (next, next_end, other) = pair[1];
+
+        assert!(
+            end <= next,
+            "`{name}` owns {start} up to {end} and `{other}` owns {next} up to {next_end}: the id \
+             {next} is two rows at once. The window proc stops at the first range that holds a \
+             click, so whichever of the two is answered second is a row no click ever reaches - \
+             and a range moved onto an id another already owns breaks it without anything being \
+             added. Move one of them to a stretch this test reports as free, wide enough for its \
+             whole range, rather than to the ids that look unused between two ranges"
+        );
+    }
+}
