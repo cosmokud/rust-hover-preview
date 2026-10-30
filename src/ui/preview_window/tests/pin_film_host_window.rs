@@ -5847,6 +5847,16 @@ unsafe fn a_hover_drawn_through_a_thumbnail(
     route: VideoRoute,
 ) -> (HWND, HWND, u32) {
     let pid = unsafe { GetCurrentProcessId() };
+    // **The adoption is this test's, and the pid it follows is what keeps it so.** The pass that
+    // watches a player is a thread of the whole process: the moment it finds the pid it follows with
+    // no source standing it adopts the largest window of this process it can see as the film's source
+    // (see `ffplay_window::ensure_noactivate_monitor`), and between the forget below and the adoption
+    // after it there is that state exactly — no source, and a stand which has already published this
+    // process as its player (see `StandingFilm::new`). The window it takes need not be this film's:
+    // every test's source is a window of the same process, one of them is bigger than a 1920x1080
+    // frame, and another test's window is created and destroyed beside this one. So the pid is taken
+    // off the pass for the length of the forget-and-adopt, and written back with the picture up.
+    VIDEO_PID.store(0, Ordering::SeqCst);
     let source = unsafe { a_window_of_the_players_own() };
     // The stand begins from no picture at all: a registration left by another test is not this
     // film's, and a source window's handle is a handle the system reuses.
@@ -5870,10 +5880,6 @@ unsafe fn a_hover_drawn_through_a_thumbnail(
     }
     pin_film_thumbnail::clear_the_source_placements();
     pin_film_thumbnail::clear_the_registrations();
-    // **The adoption is this test's, not the monitor's.** The pass that watches a player is a
-    // thread of the whole process and would adopt a window of the process's own as the picture the
-    // moment it saw a player recorded and no source; it is kept off this one by the pid it follows
-    // being written after the picture is up (see `ensure_noactivate_monitor`).
     unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
     VIDEO_PID.store(pid, Ordering::SeqCst);
     (host, source, pid)
