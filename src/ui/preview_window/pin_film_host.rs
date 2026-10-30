@@ -51,12 +51,13 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
-    RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE,
-    HWND_NOTOPMOST, HWND_TOPMOST, SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE,
-    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE,
-    WA_CLICKACTIVE, WM_ACTIVATE, WM_CLOSE, WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_PAINT,
-    WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_POPUP,
-    WINDOW_EX_STYLE,
+    RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT,
+    GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL, SC_CLOSE,
+    SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CLOSE,
+    WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_PAINT, WM_SETICON, WM_SETFOCUS, WM_SIZE,
+    WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP,
+    WS_SYSMENU, WINDOW_EX_STYLE,
 };
 
 use super::pin_trace::{note_a_message_of_a_window, note_pin_trace, window_name};
@@ -109,7 +110,14 @@ pub(super) unsafe fn answer_a_host(
     // reports as it goes down (see `the_shell_put_the_host_down`) — and a click that still does
     // nothing on a real desktop says which of the three it really is, and which window it reaches
     // (see `note_a_message_of_a_window`). Nothing is answered differently for the line.
-    note_a_message_of_a_window("film host", hwnd, msg, wparam, lparam);
+    //
+    // **A hover's host is written about by nobody**, though it is made from a class answered by this
+    // same procedure: it wears no taskbar button and is nobody's click (see
+    // `pin_taskbar::a_button_is_owed`), so the line is written only for the window the pair's button
+    // belongs to, while the pin it belongs to is up.
+    if pinned() && film_host() == Some(hwnd) {
+        note_a_message_of_a_window("film host", hwnd, msg, wparam, lparam);
+    }
 
     // **The band behind the picture is painted here rather than erased by the class**, and the class
     // wears `NULL_BRUSH` so that this is the only hand that draws it (see
@@ -1261,6 +1269,13 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
     claim_the_band_for_the_host();
     unsafe { pin_taskbar::set_pin_taskbar_title(host) };
 
+    // **The two style words the Shell reads the pair's button for come on with the pin's bits**, on
+    // a host that was made from the *hover's* class and never went through `create`: a promoted host
+    // is the window the pair's button belongs to from here, and it is given them, and the app's
+    // icon with them, before the show this road pays for below — that show being the one a button is
+    // drawn from (see `the_button_shells_reads_its_gestures_from`).
+    unsafe { the_button_shells_reads_its_gestures_from(host) };
+
     // **The hover's band and the press that falls through it go, and the pin's bits come on**: a host
     // the Shell lists wears neither `WS_EX_TOOLWINDOW` nor `WS_EX_NOACTIVATE` (see `create`).
     //
@@ -1666,10 +1681,18 @@ fn a_client_box(hwnd: HWND) -> Option<(i32, i32)> {
 unsafe fn create() -> Option<HWND> {
     FILM_HOST_CLASS_REGISTERED.call_once(|| {
         let hinstance = GetModuleHandleW(None).expect("the module's own handle");
+        // **The icon this class's windows are given a taskbar button with.** A class takes an icon
+        // once, as it registers, and a window whose class has none is drawn with the default exe
+        // rectangle rather than with the app's own face (see `app_icon`). The host a hover is
+        // promoted into is made from the *hover's* class and is given the same icon on the window
+        // instead (see `the_button_shells_reads_its_gestures_from`).
+        let icon = unsafe { crate::shell::app_icon::app_icon() };
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(the_default_answer),
             hInstance: hinstance.into(),
+            hIcon: icon,
+            hIconSm: icon,
             // **No background brush, because the host paints its own erase** (see
             // `paint_the_host_behind_the_film`): the class's brush is what erased a grown band
             // black, and the one erase road is the window procedure's.
@@ -1689,6 +1712,14 @@ unsafe fn create() -> Option<HWND> {
     //
     // **`WS_CLIPCHILDREN`** so that the host's own erase is clipped to the area outside the chrome
     // strips when a pin's window is not the one painting (see `pin_real_window::real_pin_style`).
+    //
+    // **`WS_SYSMENU | WS_MINIMIZEBOX` are the Shell's read of the taskbar button this window wears,
+    // and nothing drawn of them**: there is no caption here to draw a system menu on, so what the
+    // bits are for is the button — a window with no system menu is given one with no icon on it, and
+    // the button's own minimize and restore are the `SC_MINIMIZE` and `SIZE_MINIMIZED` this app
+    // answers (see `the_button_shells_reads_its_gestures_from`, and
+    // `pin_taskbar::stand_in_style`, which is the same two words for the same reason).
+    //
     // **A pin that is Always On Top owes no taskbar button, and the host is where a pair's button
     // lives** — so the bit is asked of the setting here rather than always added (see
     // `own_the_pin_window`, which is the road that keeps it in step afterwards).
@@ -1701,7 +1732,7 @@ unsafe fn create() -> Option<HWND> {
         ex_style,
         FILM_HOST_CLASS,
         w!("film host"),
-        WS_POPUP | WS_CLIPCHILDREN,
+        WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         0,
         0,
         1,
@@ -1714,6 +1745,11 @@ unsafe fn create() -> Option<HWND> {
         None,
     )
     .ok()?;
+
+    // The window is made *with* the two words the Shell reads its button for rather than given them
+    // after its first show, and the helper is asked here for the icon and so that the two roads to a
+    // pin's host are one (see `the_button_shells_reads_its_gestures_from`).
+    unsafe { the_button_shells_reads_its_gestures_from(host) };
 
     // Disabled before it is ever shown: the picture is the Shell's thumbnail, and the press that
     // lands on it has to reach the pin (see the module doc).
@@ -1744,6 +1780,58 @@ unsafe fn create() -> Option<HWND> {
     // `pin_chrome_strips`).
     unsafe { pin_chrome_strips::raise_the_chrome_strips_over_the_host() };
     Some(host)
+}
+
+/// **The two style words the Shell reads the pair's taskbar button for, and the icon it is drawn
+/// with**, asked of the one window that wears that button: the pin's film host, whichever road made
+/// it.
+///
+/// **Why the words.** A window with no system menu is given a taskbar button with no icon on it, and
+/// the minimize and restore on a button's own menu are what the Shell sends a window it is able to
+/// put down — the same two words the stand-in and the pin's own window are made with (see
+/// `pin_taskbar::stand_in_style` and `pin_real_window::real_pin_style`). They draw nothing here: this
+/// host is a borderless popup with no `WS_CAPTION`, so there is no caption for a system menu to be
+/// drawn on. What they are is the Shell's own read of a button.
+///
+/// **Why the icon.** A button is drawn from the window's own icon, and a window whose class carries
+/// none is drawn with the default exe rectangle. The pin's host class carries the app's own (see
+/// `create`); a host promoted out of a hover was made from the *hover's* class, which carries none
+/// and must not, so the window is given it here, both sizes. Setting the icon a window already has is
+/// no change, which is what makes this safe to ask at every road.
+///
+/// **Why a re-read after the style write, and what it is for.** The rule the rest of this app holds
+/// styles to is that one written behind a window's back is not one it presents with until it is asked
+/// to read it again (see `pin_real_window::set_the_pin_window_appwindow`), so the write is followed by
+/// the same `SWP_FRAMECHANGED` call its ex-style road makes. There is no non-client frame here for
+/// that word to recalculate — no caption, no border — so this call is the rule's price rather than a
+/// frame's fix. **The read that matters for the button is the show**, and both roads have one: a host
+/// this app made is created with the words before its first show, and a promotion writes them before
+/// the show `the_button_follows_the_screen` pays for in the same pass (see
+/// `pin_real_window::set_the_pin_window_appwindow`, which is why a show is what a button is read on).
+unsafe fn the_button_shells_reads_its_gestures_from(host: HWND) {
+    let style = unsafe { GetWindowLongPtrW(host, GWL_STYLE) };
+    let wanted = style | (WS_SYSMENU | WS_MINIMIZEBOX).0 as isize;
+    if wanted != style {
+        let _ = unsafe { SetWindowLongPtrW(host, GWL_STYLE, wanted) };
+        let _ = unsafe {
+            SetWindowPos(
+                host,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+        };
+    }
+
+    // The window's own icon, both sizes: the small one is what a taskbar button draws, and the
+    // large one what anything listing the window as a window draws.
+    let icon = unsafe { crate::shell::app_icon::app_icon() };
+    let icon = LPARAM(icon.0 as isize);
+    let _ = unsafe { SendMessageW(host, WM_SETICON, WPARAM(ICON_BIG as usize), icon) };
+    let _ = unsafe { SendMessageW(host, WM_SETICON, WPARAM(ICON_SMALL as usize), icon) };
 }
 
 /// When the take-up that is waiting on its hosted film began waiting, while one is.

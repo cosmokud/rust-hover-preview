@@ -18,9 +18,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW, GetWindowRect,
     IsIconic, IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, SetWindowPos, ShowWindow,
-    GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, SC_RESTORE, SWP_NOACTIVATE, SW_MINIMIZE, SW_RESTORE,
-    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SETFOCUS, WM_SIZE,
-    WM_SYSCOMMAND, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOPMOST, ICON_BIG, SC_RESTORE, SWP_NOACTIVATE,
+    SW_MINIMIZE, SW_RESTORE, SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_GETICON,
+    WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CAPTION, WS_EX_APPWINDOW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
 /// Register the class the stand-in is made from, once for the run.
@@ -2960,6 +2961,122 @@ fn a_put_away_pin_comes_back_on_the_file_the_update_names_rather_than_before_it(
         config.pin_always_on_top = always_on_top;
         config.pin_update_enabled = updates;
         config.pin_update_move_to_top = move_to_top;
+    }
+}
+
+/// **The pair's taskbar button is a window the Shell has a system menu for**, and that is what the
+/// button and its minimize are read from: a window with no system menu is given a button with no icon
+/// on it, and the button's own minimize and restore are the `SC_MINIMIZE` and `SIZE_MINIMIZED` a
+/// window with one is sent (see `pin_taskbar::stand_in_style`).
+///
+/// The evidence this is a regression test for is a traced click on the pair's button that delivered
+/// the film host nothing at all — no activation, no `SC_MINIMIZE`, no `SIZE_MINIMIZED` — on a button
+/// drawn with the default exe rectangle. The host was the one window of the app's that wore a button
+/// without the two words the stand-in and the pin's own window are made with, so the Shell had
+/// nothing of a button to draw and nothing of one to put down.
+///
+/// Both roads to a pin's host are held here: the one that makes it, and the one that takes a hover's
+/// host up as the pin's — the second never went through `create` at all. And the host keeps what it
+/// was: disabled, so a press on the band still reaches the pin, and with no caption for a system menu
+/// to be drawn on.
+#[test]
+fn the_hosts_button_is_a_window_the_shell_has_a_system_menu_for() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+
+    // The two words, asked of the window rather than of the module, and the icon the Shell draws the
+    // button with. The read is the one `a_host_activation_hands_the_keyboard_to_the_pin` makes of the
+    // host it was handed (see `pin_real_window::real_pin_style` for the words themselves).
+    let system_menu = (WS_SYSMENU | WS_MINIMIZEBOX).0 as isize;
+    let style_of = |hwnd: HWND| unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+    let holds_the_system_menu = |hwnd: HWND| style_of(hwnd) & system_menu == system_menu;
+    let the_icon = |hwnd: HWND| unsafe {
+        SendMessageW(hwnd, WM_GETICON, WPARAM(ICON_BIG as usize), LPARAM(0)).0
+    };
+
+    // The host the pin makes for its film.
+    {
+        let film = super::pin_film_host_window::StandingFilm::new();
+        // Safety: the pin and its host are this test's own, and every global written here is put
+        // back when the stand is dropped.
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        let host = pin_film_host::film_host().expect("the film's host");
+
+        assert!(
+            holds_the_system_menu(host),
+            "the window the pair's button belongs to wears the two words the Shell reads it for: \
+             {:x}",
+            style_of(host)
+        );
+        assert_eq!(
+            style_of(host) & WS_CAPTION.0 as isize,
+            0,
+            "and no caption, because the words are the Shell's read of a button rather than a frame \
+             to be drawn around the film"
+        );
+        assert!(
+            !unsafe { IsWindowEnabled(host).as_bool() },
+            "and it is still disabled, so a press on the band still reaches the pin"
+        );
+        assert_ne!(
+            the_icon(host),
+            0,
+            "and it carries the app's own icon, rather than being the button with no icon on it \
+             that a window without a system menu is given"
+        );
+    }
+
+    // And the host a hover's was promoted into, which the pin never made.
+    {
+        let film = super::pin_film_host_window::StandingFilm::new();
+        let path = PathBuf::from("a-film.mkv");
+        let hover = unsafe { super::pin_film_host_window::HostedHover::up(&film, &path, 3.0) };
+        assert!(
+            !holds_the_system_menu(hover.host),
+            "a hover's host is nobody's button, so it is made without the two words: {:x}",
+            style_of(hover.host)
+        );
+
+        pin_stands_in_its_own_window(true);
+        // Safety: a take-up on the hover this test stood, with every global put back by the stands'
+        // own drops.
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        assert_eq!(
+            pin_film_host::film_host(),
+            Some(hover.host),
+            "the hover's host is the pin's host"
+        );
+        assert!(
+            holds_the_system_menu(hover.host),
+            "and the promotion gives it the two words the Shell reads its button for: {:x}",
+            style_of(hover.host)
+        );
+        assert_eq!(
+            style_of(hover.host) & WS_CAPTION.0 as isize,
+            0,
+            "with no caption drawn around the film"
+        );
+        assert!(
+            !unsafe { IsWindowEnabled(hover.host).as_bool() },
+            "while the host it was is still the disabled window the press falls through"
+        );
+        assert_ne!(
+            the_icon(hover.host),
+            0,
+            "and the app's icon on the window itself, because the class it was made from is the \
+             hover's and carries none"
+        );
+
+        drop(hover);
+    }
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = previous;
     }
 }
 
