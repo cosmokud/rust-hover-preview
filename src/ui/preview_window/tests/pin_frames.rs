@@ -572,7 +572,7 @@ fn surface_pixel(surface: &[u8], window: (u32, u32), row: usize, column: usize) 
 
 #[test]
 fn a_picture_the_wheel_has_taken_past_its_window_is_drawn_where_the_zoom_says_it_is() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    let _room = the_room_to_itself();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
 
@@ -832,9 +832,7 @@ fn only_the_kinds_that_play_carry_a_transport_bar() {
 /// asking whether the player behind a pinned preview is still alive walks /// the media to reach it, so the media must not be held while the walk is made.
 #[test]
 fn asking_after_a_pinned_players_liveness_does_not_stall_on_the_media_it_asks_about() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
@@ -876,9 +874,7 @@ fn asking_after_a_pinned_players_liveness_does_not_stall_on_the_media_it_asks_ab
 /// way took the window down a tick before the queued walk could be taken up.
 #[test]
 fn a_pinned_film_the_engine_failed_at_is_stepped_over_rather_than_closed() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -935,9 +931,7 @@ fn a_pinned_film_the_engine_failed_at_is_stepped_over_rather_than_closed() {
 /// a pin shown a document the browser has to *start* for.
 #[test]
 fn an_engine_coming_up_for_a_pinned_document_is_not_a_pin_that_came_apart() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -986,9 +980,7 @@ fn an_engine_coming_up_for_a_pinned_document_is_not_a_pin_that_came_apart() {
 /// a pin collapsed into its bubble whose player this app has parked, which /// is a player that is deliberately not running.
 #[test]
 fn a_player_the_bubble_parked_is_not_a_pin_that_came_apart() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -1046,9 +1038,7 @@ fn a_player_the_bubble_parked_is_not_a_pin_that_came_apart() {
 /// onto nothing, which is the answer it always had.
 #[test]
 fn a_film_behind_a_bubble_that_has_gone_leaves_the_bubble_standing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -1098,9 +1088,7 @@ fn a_film_behind_a_bubble_that_has_gone_leaves_the_bubble_standing() {
 /// another one is really installed (see `take_the_pinned_media_down_for_a_swap`).
 #[test]
 fn a_bubble_keeps_the_film_it_is_showing_when_a_swap_takes_the_standing_one_down() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -1150,9 +1138,7 @@ fn a_bubble_keeps_the_film_it_is_showing_when_a_swap_takes_the_standing_one_down
 /// a pinned window playing a sound, whose player plays the pass it was /// given and stops at the end of it.
 #[test]
 fn a_pinned_sound_is_not_a_pin_that_came_apart_between_passes() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -1478,7 +1464,7 @@ fn a_checkerboard_backdrop_keeps_its_squares_wherever_the_picture_leaves_it() {
 /// those rows only the least pixel a press can land on (see `chrome_rows_are_hit_testable`).
 #[test]
 fn a_page_too_narrow_for_its_caption_is_still_a_whole_window() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    let _room = the_room_to_itself();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
 
@@ -1636,9 +1622,7 @@ fn a_resize_paints_a_row_of_slack_so_the_window_moves_and_the_picture_does_not()
 /// `the_row_a_resize_paints_the_picture_down`).
 #[test]
 fn the_children_are_put_back_down_by_the_row_a_resize_paints_the_picture_down() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
 
     let content = (100, 100, 500, 400);
@@ -1691,9 +1675,7 @@ fn the_children_are_put_back_down_by_the_row_a_resize_paints_the_picture_down() 
 /// `take_up_pinned_window`).
 #[test]
 fn every_spawn_hides_the_pins_chrome_and_a_step_carries_the_pointers() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
 

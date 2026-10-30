@@ -255,6 +255,7 @@ pub(super) unsafe fn hide_real_pin_window() {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::the_room_to_itself;
     use super::*;
     use windows::Win32::UI::WindowsAndMessaging::{
         DestroyWindow, GetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
@@ -316,9 +317,7 @@ mod tests {
     fn a_taken_down_pin_leaves_its_own_window_one_a_click_may_activate() {
         use super::super::pin_model::pin_set_focusable;
 
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _room = the_room_to_itself();
 
         let box_ = (-20000, -20000, -19680, -19760);
         let hwnd = unsafe { real_pin_window_at(box_) }.expect("the pin's own window");
@@ -363,9 +362,7 @@ mod tests {
         // another test holding the lock while it asks for the same window is a test handed a handle
         // this one took away, so the two are one at a time like every other stand of a pin
         // (see `PIN_TESTS_ONE_AT_A_TIME`).
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _room = the_room_to_itself();
 
         let box_ = (-20000, -20000, -19680, -19760);
         let hwnd = unsafe { real_pin_window_at(box_) }.expect("the pin's own window");

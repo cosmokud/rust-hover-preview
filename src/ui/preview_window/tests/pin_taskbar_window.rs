@@ -87,9 +87,7 @@ unsafe fn the_frame_around(hwnd: HWND) -> (i32, i32) {
 /// the app's own title bar over it, which is what the user reported seeing in the hover.
 #[test]
 fn the_stand_in_wears_no_frame_over_the_picture() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // A window made for this test rather than one left by the test before it: what is measured is
     // the style the window is created with, and a window somebody else made says nothing about it.
@@ -139,9 +137,7 @@ fn the_stand_in_wears_no_frame_over_the_picture() {
 /// there, so the form is read back on the tick (see `keep_the_stand_in_up`).
 #[test]
 fn a_button_the_shell_has_taken_away_comes_back_on_the_tick() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
@@ -242,9 +238,7 @@ fn a_button_the_shell_has_taken_away_comes_back_on_the_tick() {
 /// restarted.
 #[test]
 fn a_stand_in_the_shell_has_taken_is_made_again() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let first = the_stand_in();
 
@@ -282,9 +276,7 @@ fn a_stand_in_the_shell_has_taken_is_made_again() {
 /// screen and composed of nothing.
 #[test]
 fn the_picture_of_a_pin_put_away_into_a_bubble_is_the_bubble() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
@@ -353,9 +345,7 @@ fn the_picture_of_a_pin_put_away_into_a_bubble_is_the_bubble() {
 /// early take-down was gated on.
 #[test]
 fn a_pin_restored_from_its_button_goes_back_where_it_stood() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let before = pin_always_on_top();
@@ -420,9 +410,7 @@ fn a_pin_restored_from_its_button_goes_back_where_it_stood() {
 /// `ASKING_THE_STAND_IN_UP`).
 #[test]
 fn a_pin_minimized_again_after_a_button_restore_goes_away_again() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let before = pin_always_on_top();
@@ -504,9 +492,7 @@ fn a_pin_minimized_again_after_a_button_restore_goes_away_again() {
 /// restore, behind the collapse that had just put the pin away.
 #[test]
 fn a_put_away_stand_in_is_not_brought_back_by_an_activation() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let before = pin_always_on_top();
@@ -594,9 +580,7 @@ unsafe fn stands_over(above: HWND, below: HWND) -> bool {
 /// keyboard is measured where Windows puts it — in the pin's own window of this test's.
 #[test]
 fn a_host_activation_hands_the_keyboard_to_the_pin() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
@@ -765,9 +749,7 @@ fn a_host_activation_hands_the_keyboard_to_the_pin() {
 /// behind everything opened over it while it was away (see `show_pinned_window`).
 #[test]
 fn a_pin_the_button_brings_back_comes_back_in_front_of_the_windows_it_left_behind() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -900,9 +882,7 @@ fn a_pin_the_button_brings_back_comes_back_in_front_of_the_windows_it_left_behin
 /// the run, with the pin's window raised for it on every tick (see `keep_the_stand_in_up`).
 #[test]
 fn a_stand_in_left_iconic_under_a_pin_on_the_screen_comes_back_up_on_the_tick() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let before = pin_always_on_top();
@@ -954,9 +934,7 @@ fn a_stand_in_left_iconic_under_a_pin_on_the_screen_comes_back_up_on_the_tick() 
 /// `a_button_is_owed`).
 #[test]
 fn a_stand_in_left_for_a_pin_that_is_gone_leaves_what_a_close_without_one_leaves() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // What a close leaves, with a stand-in left behind it or without one: whether a pin is up at
     // all, and whether the app still holds a window the Shell lists a button for.
@@ -1025,9 +1003,7 @@ unsafe fn the_client_box(hwnd: HWND) -> (i32, i32) {
 /// showing the stand-in's own rows, which this app has never painted.
 #[test]
 fn a_pin_put_away_keeps_the_picture_its_collapse_took() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
@@ -1135,9 +1111,7 @@ fn a_pin_put_away_keeps_the_picture_its_collapse_took() {
 /// back on the stand-in's own rows.
 #[test]
 fn a_pin_minimized_into_the_taskbar_is_pictured_before_its_windows_go() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
@@ -1240,9 +1214,7 @@ fn a_pin_minimized_into_the_taskbar_is_pictured_before_its_windows_go() {
 /// the frame already standing in the stand-in was taken with (see `mirror_source`).
 #[test]
 fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -1351,9 +1323,7 @@ fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
 /// a film is the film (see `mirror_source`).
 #[test]
 fn a_sound_is_pictured_by_the_card_the_pin_draws_for_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
@@ -1518,9 +1488,7 @@ fn the_colour_in(pixels: &[u8], width: u32, x: u32, y: u32) -> u32 {
             thumbnail): the window read must be opaque and on the screen — run \
             with `cargo test -- --ignored`"]
 fn a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
@@ -1642,9 +1610,7 @@ fn a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up() {
             thumbnail): the window read must be opaque and on the screen — run \
             with `cargo test -- --ignored`"]
 fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
@@ -1776,9 +1742,7 @@ fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to
             thumbnail): the host read must be opaque and on the screen — run \
             with `cargo test -- --ignored`"]
 fn a_film_hosts_button_holds_a_picture_of_the_host_itself() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let film = super::pin_film_host_window::StandingFilm::new();
     // Safety: the pin and its host are this test's own, and every global written here is put back when
@@ -1848,9 +1812,7 @@ fn a_film_hosts_button_holds_a_picture_of_the_host_itself() {
             thumbnail): the host read must be opaque and on the screen — run \
             with `cargo test -- --ignored`"]
 fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubble_collapse_took() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let film = super::pin_film_host_window::StandingFilm::new();
     // Safety: the pin and its host are this test's own, and every global written here is put back
@@ -1957,9 +1919,7 @@ fn a_film_host_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_bubb
 /// `pin_film_host::bring_the_film_back`).
 #[test]
 fn a_film_host_moved_from_the_bubble_into_the_taskbar_comes_back_with_its_film() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let film = super::pin_film_host_window::StandingFilm::new();
     // Safety: the pin and its host are this test's own, and every global written here is put back
@@ -2024,9 +1984,7 @@ fn a_film_host_moved_from_the_bubble_into_the_taskbar_comes_back_with_its_film()
 /// against is the last ask rather than the window (see `pin_film_thumbnail::set_the_source_visible`).
 #[test]
 fn a_film_host_restored_before_its_films_hide_has_landed_brings_the_film_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let film = super::pin_film_host_window::StandingFilm::new();
     // Safety: the pin and its host are this test's own, and every global written here is put back
@@ -2080,9 +2038,7 @@ fn a_film_host_restored_before_its_films_hide_has_landed_brings_the_film_back() 
 /// `the_pin_came_back`).
 #[test]
 fn a_film_host_still_iconic_when_the_size_says_it_came_back_is_the_pins_restore() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let film = super::pin_film_host_window::StandingFilm::new();
     // Safety: the pin and its host are this test's own, and every global written here is put back
@@ -2119,9 +2075,7 @@ fn a_film_host_still_iconic_when_the_size_says_it_came_back_is_the_pins_restore(
 /// waited for (see `pin_film_host::bring_the_film_back`).
 #[test]
 fn a_film_host_still_iconic_when_its_pin_is_restored_comes_back_up_with_its_film() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let film = super::pin_film_host_window::StandingFilm::new();
     // Safety: the pin and its host are this test's own, and every global written here is put back
@@ -2175,9 +2129,7 @@ fn a_film_host_still_iconic_when_its_pin_is_restored_comes_back_up_with_its_film
 /// `mirror_source`).
 #[test]
 fn a_picture_already_taken_is_not_taken_down_by_a_window_that_is_not_there() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
@@ -2290,9 +2242,7 @@ fn a_picture_already_taken_is_not_taken_down_by_a_window_that_is_not_there() {
 /// since every window of the pin's was off the screen (see `show_pin_taskbar`, `a_button_is_owed`).
 #[test]
 fn a_button_is_not_shown_for_a_pin_put_away_into_its_bubble() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
@@ -2373,9 +2323,7 @@ fn a_button_is_not_shown_for_a_pin_put_away_into_its_bubble() {
 /// the one thing Windows already does rather than hiding what Windows is drawing a button for.
 #[test]
 fn a_pin_that_is_a_window_keeps_its_button_when_it_is_minimized_to_the_taskbar() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_window = pin_real_window::real_pin_window();
@@ -2455,9 +2403,7 @@ fn a_pin_that_is_a_window_keeps_its_button_when_it_is_minimized_to_the_taskbar()
 /// concerned: what it plays stays parked, and the next minimize does not land (see `collapse_pin_to`).
 #[test]
 fn a_pins_own_window_brought_back_is_the_pins_own_restore() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_window = pin_real_window::real_pin_window();
@@ -2545,9 +2491,7 @@ fn a_pins_own_window_brought_back_is_the_pins_own_restore() {
 /// was the one thing that did not appear (see `bubble_to_taskbar`).
 #[test]
 fn a_pin_that_is_a_window_goes_to_the_taskbar_from_its_bubble_as_a_window() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_window = pin_real_window::real_pin_window();
@@ -2639,9 +2583,7 @@ fn a_pin_that_is_a_window_goes_to_the_taskbar_from_its_bubble_as_a_window() {
 /// `show_pinned_window`).
 #[test]
 fn an_update_brings_a_pin_put_away_into_the_taskbar_back_on_top() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_window = pin_real_window::real_pin_window();
@@ -2837,9 +2779,7 @@ fn an_update_brings_a_pin_put_away_into_the_taskbar_back_on_top() {
 /// nothing for the window to come back on.
 #[test]
 fn a_put_away_pin_comes_back_on_the_file_the_update_names_rather_than_before_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_window = pin_real_window::real_pin_window();
@@ -2971,9 +2911,7 @@ fn a_put_away_pin_comes_back_on_the_file_the_update_names_rather_than_before_it(
 /// to be drawn on.
 #[test]
 fn the_hosts_button_is_a_window_the_shell_has_a_system_menu_for() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = false;
@@ -3084,9 +3022,7 @@ fn the_hosts_button_is_a_window_the_shell_has_a_system_menu_for() {
 /// turned on kept the button it was taken up with.
 #[test]
 fn the_pairs_taskbar_button_is_the_settings() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let film = super::pin_film_host_window::StandingFilm::new();
     let pin = pin_real_window::real_pin_window().expect("the pin's own window");
@@ -3194,9 +3130,7 @@ fn the_pairs_taskbar_button_is_the_settings() {
 /// written with the rest of the pin's bits, which is the style write the promotion was already making.
 #[test]
 fn a_promoted_pair_owes_no_button_with_always_on_top() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let film = super::pin_film_host_window::StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
@@ -3248,9 +3182,7 @@ fn a_promoted_pair_owes_no_button_with_always_on_top() {
 /// beside it.
 #[test]
 fn a_promoted_pair_asks_for_its_button_on_the_show_that_reads_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let film = super::pin_film_host_window::StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
@@ -3362,9 +3294,7 @@ unsafe fn the_shell_blinks_the_app_away_and_back(chrome: HWND, taskbars_thread: 
 /// The hand's next click is beyond that note's settle, which is stood here rather than waited out.
 #[test]
 fn a_click_on_the_pairs_button_at_the_chrome_is_the_pins_minimize() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
@@ -3432,9 +3362,7 @@ fn a_click_on_the_pairs_button_at_the_chrome_is_the_pins_minimize() {
 /// window a press has, and a note that has run out is cleared as it is read.
 #[test]
 fn a_pin_that_simply_comes_back_is_not_a_click_on_the_chromes_button() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
@@ -3507,9 +3435,7 @@ fn a_pin_that_simply_comes_back_is_not_a_click_on_the_chromes_button() {
 /// the caret read at the activation instead would be seen.
 #[test]
 fn a_take_away_while_the_pin_holds_no_keyboard_is_not_a_click_on_the_chromes_button() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
@@ -3577,9 +3503,7 @@ fn a_take_away_while_the_pin_holds_no_keyboard_is_not_a_click_on_the_chromes_but
 /// follows with the taskbar's thread, which is what says the thread is the check that refused the first.
 #[test]
 fn a_take_away_by_another_program_is_not_a_click_on_the_chromes_button() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
@@ -3658,9 +3582,7 @@ fn a_take_away_by_another_program_is_not_a_click_on_the_chromes_button() {
 /// made on the user's desktop; the caret itself is the real one the click from behind handed the pin.
 #[test]
 fn a_click_the_app_moved_its_own_caret_for_is_not_a_click_on_the_chromes_button() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {
@@ -3742,9 +3664,7 @@ fn a_click_the_app_moved_its_own_caret_for_is_not_a_click_on_the_chromes_button(
 /// the answer is refused by.
 #[test]
 fn the_click_that_restored_the_pin_is_not_a_click_on_the_chromes_button() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let before = pin_always_on_top();
     if let Ok(mut config) = CONFIG.lock() {

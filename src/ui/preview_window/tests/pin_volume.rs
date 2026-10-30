@@ -6,6 +6,7 @@ use super::*;
 /// it, which is a repaint the window owes.
 #[test]
 fn a_volume_popup_is_kept_on_its_control_and_put_away_once_the_pointer_has_left_it() {
+    let _room = the_room_to_itself();
     let now = Instant::now();
     let content = (100, 100, 500, 400);
     let far = Some((-1000, -1000));
@@ -68,9 +69,7 @@ fn a_volume_popup_is_kept_on_its_control_and_put_away_once_the_pointer_has_left_
 /// it afterwards is that window's own: nothing of it is written back to `Volume → Video`.
 #[test]
 fn a_level_moved_on_a_pin_is_the_pins_and_not_the_setting() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -166,9 +165,7 @@ impl Drop for PinLevels {
 /// played at `Volume → Video` — silent, whatever the sound it replaces was at.
 #[test]
 fn a_film_stepped_onto_from_a_sound_is_played_at_the_films_own_level() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _levels = PinLevels::set(0, 100);
     let previous_pin = take_pin_for_a_test();
@@ -222,9 +219,7 @@ fn a_film_stepped_onto_from_a_sound_is_played_at_the_films_own_level() {
 /// film a hand set the knob on is the one film it is kept for (see `set_pin_volume`).
 #[test]
 fn a_level_moved_on_a_films_bar_is_the_films_and_not_the_sounds() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _levels = PinLevels::set(0, 100);
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
@@ -283,9 +278,7 @@ fn a_level_moved_on_a_films_bar_is_the_films_and_not_the_sounds() {
 fn a_sound_stepped_back_onto_from_a_film_is_at_the_level_its_own_card_was_left_at() {
     // Serialized with the pin tests: this stands pins and takes the media, which unlocked is a
     // window another test's pin is standing in.
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let mut levels = PinLevels::set(0, 10);
     levels.remembering(true, false);
@@ -435,9 +428,7 @@ fn a_remembered_level_is_written_even_where_the_configuration_already_holds_it()
 /// never writes the configuration file a level would be remembered into.
 #[test]
 fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_again() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let mut levels = PinLevels::set(100, 50);
     levels.remembering(false, false);
@@ -557,9 +548,7 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
 /// would be remembered into.
 #[test]
 fn a_level_moved_up_from_nothing_on_a_pinned_mpv_asks_the_track_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let mut levels = PinLevels::set(0, 50);
     levels.remembering(false, false);
@@ -662,9 +651,7 @@ fn a_level_moved_up_from_nothing_on_a_pinned_mpv_asks_the_track_back() {
 /// that a test never writes the configuration file a level would be remembered into.
 #[test]
 fn a_level_moved_in_the_tray_is_given_to_the_pin_that_is_up() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let mut levels = PinLevels::set(10, 50);
     levels.remembering(false, false);

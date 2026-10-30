@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::config::{PinNavFileTypes, DEFAULT_FONT_SCALE_PERCENT};
+use std::cell::Cell;
 // The key a pin answers with nothing, which is the one the mapping has to name explicitly
 // and which nothing outside a test ever has to read.
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_SPACE;
@@ -424,6 +425,123 @@ fn dragged_overlay(
     content_box_of(window, 96, false, overlay, pinned_caption_height(96, None))
 }
 
+/// Whether a window test is inside the room (see `the_room_to_itself`): the guard's own record
+/// that the one lock is held, swapped on acquire and cleared on drop.
+static THE_ROOM_IS_TAKEN: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    /// Whether it is *this* thread that took it. The room is one for the whole process and is not
+    /// re-entrant, so a thread already inside that asks for it a second time is a road that holds
+    /// the lock on itself for ever; `the_room_to_itself` says so instead of standing still
+    /// (see there).
+    static THIS_THREAD_TOOK_THE_ROOM: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The room a window test takes to be alone in, held for the length of its body:
+/// **one process, real windows, and one record of the thumbnail the Shell is drawing.**
+///
+/// The suite is one process on many threads, and the tests that stand a window up do not own what
+/// they stand it in. The thumbnail record — the source the Shell is handed, the registration and
+/// whether it is registered, the count of what was unregistered — is one set for the whole
+/// process; so are the player's id, the media in the slot, and the watcher that loops over them
+/// while `RUNNING` is true, which is the whole life of a test process. And the window picker
+/// prefers the largest window it can see, so a window another test left standing is not merely
+/// visible to this one, it *wins*: a 1920 by 1080 stand-in of somebody else's is a more attractive
+/// source than the 320 by 240 one this test just made. Two of these at once is therefore two
+/// tests asserting about each other's windows, and the assertion that fails is whichever one
+/// loses, in whichever test happens to be running, which is what makes it a one-in-ten flake in
+/// a different test every time.
+///
+/// So a test that stands a window up, paints one of the app's, enumerates the desktop's, or writes
+/// any of those records takes this room on the first line of its body and keeps it to the end.
+/// The rest of the suite — the arithmetic over values handed to it, which is most of it — takes
+/// nothing and stays parallel.
+///
+/// **There is one lock behind this room, not one per module**: `pin_window`'s
+/// `PIN_TESTS_ONE_AT_A_TIME`, declared there beside the slot it guards. A second mutex over the
+/// same state is not a second line of defence but no defence at all — a test holding that one and
+/// a test holding this one each believe they are alone with the pin, and are not. What this adds on
+/// top of it is a name, the poison tolerance, and the tripwire below.
+///
+/// **The room is not re-entrant, and it must not be taken from a helper.** A helper is called
+/// *inside* a body that already holds it, so a second take anywhere on that path used to be a
+/// suite stood still for ever with no line naming the test that did it. It is a panic now, and one
+/// that says which of the two things went wrong (see `two_window_tests_at_once`). A helper that
+/// needs the room takes nothing and is handed the guard, or the test's own line takes it.
+///
+/// A poison is read through rather than refused, as it is at the mutex itself: this holds no
+/// state, only the order of the tests around it, and refusing the lock would turn one failed
+/// assertion into every later window test of the run, each turned away over a hold it never
+/// needed.
+///
+/// # Panics
+///
+/// If this thread is already inside the room (see `two_window_tests_at_once`).
+pub(super) fn the_room_to_itself() -> RoomToItself {
+    // Asked before the lock and not after it: a second take on one thread blocks for ever on
+    // `std::sync::Mutex` rather than telling anyone what it did, so the question has to be put
+    // where the answer still costs nothing.
+    let inside_and_it_is_this_thread =
+        THE_ROOM_IS_TAKEN.load(Ordering::SeqCst) && THIS_THREAD_TOOK_THE_ROOM.with(Cell::get);
+    assert!(
+        !inside_and_it_is_this_thread,
+        "{}",
+        two_window_tests_at_once()
+    );
+
+    let _room = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    THE_ROOM_IS_TAKEN.store(true, Ordering::SeqCst);
+    THIS_THREAD_TOOK_THE_ROOM.with(|inside| inside.set(true));
+
+    RoomToItself { _room }
+}
+
+/// What `the_room_to_itself` hands out, held for the length of the test's body and put down when
+/// it goes out of scope — including when the body panics, which is what keeps one failure from
+/// becoming every window test after it.
+pub(super) struct RoomToItself {
+    /// Held for the length of the body and never read: the field is the exclusion, and its `Drop`
+    /// is what lets the next test in. A `Drop` of the type's own runs before the field's does, so
+    /// the record above it is cleared while the lock is still held, and no test can find the room
+    /// marked taken after it has been let go.
+    _room: MutexGuard<'static, ()>,
+}
+
+impl Drop for RoomToItself {
+    fn drop(&mut self) {
+        THIS_THREAD_TOOK_THE_ROOM.with(|inside| inside.set(false));
+        THE_ROOM_IS_TAKEN.store(false, Ordering::SeqCst);
+    }
+}
+
+/// What the tripwire says: the one thing the room cannot be asked a second time for.
+fn two_window_tests_at_once() -> String {
+    String::from(
+        "two window tests are running at once, or one is taking the room to itself twice: the \
+         room was asked for on a thread already inside it. The suite is one process with real \
+         windows and one record of the thumbnail the Shell is drawing, so two of these at once is \
+         two tests asserting about each other's windows. And this lock is not re-entrant: a helper \
+         that takes the room from inside a test that holds it stands the suite still for ever \
+         rather than failing here, so take it on the first line of the test's own body and hand the \
+         guard to any helper that needs it.",
+    )
+}
+
+/// What the road into the suite's windows says when it is taken without the room.
+fn a_window_of_the_suite_outside_the_room() -> String {
+    String::from(
+        "a window of the suite's own was made outside the room to itself: the test that makes one \
+         takes `the_room_to_itself` on the first line of its body, before anything touches the \
+         desktop, the thumbnail record or a player. A window of the suite's own is a window of the \
+         desktop's that outlives the test when its handle is dropped rather than destroyed, and the \
+         picker that chooses the source prefers the largest window it can see, so one of these made \
+         outside the room is handed to whichever test is next to enumerate the desktop — which is \
+         two window tests asserting about each other's windows.",
+    )
+}
+
 /// A window of the suite's own: made, shown, and invisible.
 ///
 /// A test that asks the desktop about a window — the order it stands in, the region it is erased
@@ -536,6 +654,20 @@ pub(super) unsafe fn a_window_of_the_suite_kept_back_in(
     style: WINDOW_STYLE,
     box_: ScreenRegion,
 ) -> HWND {
+    // **This is the road every window of the suite's own is made by, and it asks for the room.**
+    // A window of the suite's own is a window of the desktop's that outlives the test that made it
+    // if that test drops the handle instead of destroying it, and the picker that decides which
+    // window is the source prefers the largest one it can see — so one of these made outside the
+    // room is a source handed to whichever test is next to enumerate the desktop. A test that
+    // forgets the line is therefore not a style question; it is the flake itself. Asked of the
+    // thread and not of the process, because the flag says nothing about *which* test is inside it.
+    let this_test_holds_the_room =
+        THE_ROOM_IS_TAKEN.load(Ordering::SeqCst) && THIS_THREAD_TOOK_THE_ROOM.with(Cell::get);
+    assert!(
+        this_test_holds_the_room,
+        "{}",
+        a_window_of_the_suite_outside_the_room()
+    );
     // SAFETY: the class is one this process registered, in the instance handed in, and the window is
     // made at a box inside the desktop the caller named.
     let hwnd = unsafe {
@@ -597,6 +729,7 @@ pub(super) unsafe fn show_a_window_of_the_suite(hwnd: HWND) {
 /// source for, and a scan of the source cannot ask a window what it turned out to be.
 #[test]
 fn a_window_of_the_suite_is_on_the_desktop_and_drawn_as_nothing() {
+    let _room = the_room_to_itself();
     let box_ = (40, 40, 360, 220);
     // SAFETY: a window of this test's own, destroyed below.
     let hwnd =

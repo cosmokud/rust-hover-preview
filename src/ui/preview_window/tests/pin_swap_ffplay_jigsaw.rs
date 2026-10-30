@@ -241,9 +241,7 @@ fn a_portrait_to_landscape_pick_on_ffplay() {
         );
         return;
     };
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();

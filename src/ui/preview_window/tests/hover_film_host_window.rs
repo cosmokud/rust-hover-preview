@@ -106,9 +106,7 @@ unsafe fn a_source_of_the_host(pid: u32) -> HWND {
 /// on: with it off the hover keeps today's `--ontop --geometry` launch, and no host is made.
 #[test]
 fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
 
     {
         let _stand = HoverHostStand::new(true);
@@ -220,9 +218,7 @@ fn an_mpv_hover_is_begun_in_a_host_with_pin_mode_on_and_top_level_with_it_off() 
 /// what every "is the player's window up" road answers with while it is.
 #[test]
 fn the_hover_host_follows_the_box_and_answers_for_the_players_window() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _stand = HoverHostStand::new(true);
     let pid = unsafe { GetCurrentProcessId() };
 
@@ -300,9 +296,7 @@ fn the_hover_host_follows_the_box_and_answers_for_the_players_window() {
 /// at the box's own numbers, which is the wrong size the reveal used to put up for a frame.
 #[test]
 fn the_loops_hover_box_reveals_the_host_at_the_hovers_own_size() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _stand = HoverHostStand::new(true);
     let pid = unsafe { GetCurrentProcessId() };
     let path = a_film();
@@ -341,9 +335,7 @@ fn the_loops_hover_box_reveals_the_host_at_the_hovers_own_size() {
 /// so neither of the two the rect used to know about is on screen.
 #[test]
 fn a_visible_hover_host_is_the_rect_a_pin_takes_up() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _stand = HoverHostStand::new(true);
     let pid = unsafe { GetCurrentProcessId() };
     let path = a_film();
@@ -402,9 +394,7 @@ fn a_visible_hover_host_is_the_rect_a_pin_takes_up() {
 /// making a second.
 #[test]
 fn the_hover_host_goes_down_only_with_the_player_it_holds() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _stand = HoverHostStand::new(true);
     let path = a_film();
 
@@ -456,9 +446,7 @@ fn the_hover_host_goes_down_only_with_the_player_it_holds() {
 /// a picture keep the route they have.
 #[test]
 fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _stand = HoverHostStand::new(true);
     let path = a_film();
 
@@ -532,9 +520,7 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
 /// from. A plain top-level hover is begun the same way.
 #[test]
 fn every_hover_ffplay_launch_asks_for_the_composed_renderer_and_vsync_off() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let path = a_film();
 
     {
@@ -599,9 +585,7 @@ fn every_hover_ffplay_launch_asks_for_the_composed_renderer_and_vsync_off() {
 /// the launch's own command line and never runs a player.
 #[test]
 fn a_hover_mpv_launch_asks_for_the_focus_switch_the_build_parses() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _stand = HoverHostStand::new(true);
     let path = a_film();
 
@@ -650,9 +634,7 @@ fn a_hover_mpv_launch_asks_for_the_focus_switch_the_build_parses() {
 /// player the host holds may do so.
 #[test]
 fn hover_end_takes_the_ffplay_host_down() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _stand = HoverHostStand::new(true);
     stand_ffplay_in(Some(true));
     stand_mpv_in(Some(false));
@@ -683,9 +665,7 @@ fn hover_end_takes_the_ffplay_host_down() {
 /// this hint leaves the foreground where it was (see `start_hover_video_playback`).
 #[test]
 fn a_hover_ffplay_launch_is_shown_without_activation() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _stand = HoverHostStand::new(true);
     stand_ffplay_in(Some(true));
     stand_mpv_in(Some(false));
@@ -707,9 +687,7 @@ fn a_hover_ffplay_launch_is_shown_without_activation() {
 /// try (see `restart_hover_video_without_a_host`).
 #[test]
 fn a_hosted_hover_that_never_draws_falls_back_once_without_a_host() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let _stand = HoverHostStand::new(true);
 
     assert!(the_hover_host_fallback_is_owed(true, false, true));

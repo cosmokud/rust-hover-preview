@@ -51,14 +51,6 @@ impl Drop for ResidentStand {
     }
 }
 
-/// The one test at a time that every test of the resident takes: the resident, the pipe's noted
-/// lines and the player ids are one set for the whole process.
-fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
-    pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner())
-}
-
 fn a_film() -> PathBuf {
     PathBuf::from("a-hovered-film.mkv")
 }
@@ -90,7 +82,7 @@ fn hover_media(player: PlayerProcess) -> MediaData {
 /// comes back is the one already standing rather than a process begun for this hover.
 #[test]
 fn a_resident_serves_a_hover_when_no_pin_stands() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
     let _stand = ResidentStand::new(true);
 
     assert!(
@@ -130,7 +122,7 @@ fn a_resident_never_serves_while_a_pin_stands() {
 /// The command a served hover is, exactly: the file and the hover's own level, and nothing else.
 #[test]
 fn loadfile_asks_for_the_file_and_the_hover_volume() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
     let _stand = ResidentStand::new(true);
 
     let pid = a_resident(true);
@@ -169,7 +161,7 @@ fn loadfile_asks_for_the_file_and_the_hover_volume() {
 /// for the rest of the run.
 #[test]
 fn a_hover_that_cannot_be_served_falls_back_to_a_cold_player() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
     let _stand = ResidentStand::new(true);
 
     let pid = a_resident(true);
@@ -248,7 +240,7 @@ fn a_hover_that_cannot_be_served_falls_back_to_a_cold_player() {
 /// resident left standing by is still the resident, and the hover after it is loaded on it.
 #[test]
 fn a_resident_whose_first_load_failed_serves_the_next_hover() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
     let _stand = ResidentStand::new(true);
 
     let pid = a_resident(true);
@@ -316,7 +308,7 @@ fn only_a_just_begun_resident_is_waited_on_for_its_pipe() {
 /// and the player is still there for the next hover.
 #[test]
 fn a_finished_hover_stops_the_resident_and_does_not_kill_it() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
     let _stand = ResidentStand::new(true);
 
     let pid = a_resident(true);
@@ -347,7 +339,7 @@ fn a_finished_hover_stops_the_resident_and_does_not_kill_it() {
 /// reach it on goes with it.
 #[test]
 fn any_other_player_is_killed_as_before() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
     let _stand = ResidentStand::new(true);
 
     let _resident = a_resident(true);
@@ -375,7 +367,7 @@ fn any_other_player_is_killed_as_before() {
 /// once for `0`.
 #[test]
 fn the_ttl_item_says_when_a_standby_resident_expires() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
 
     let minute = Duration::from_secs(60);
     let year = Duration::from_secs(365 * 24 * 60 * 60);
@@ -464,7 +456,7 @@ fn a_serving_or_pin_owned_resident_is_never_reaped() {
 /// player its resident was not begun as takes the old one down and loads on a fresh one.
 #[test]
 fn a_changed_launch_signature_restarts_the_resident() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
     // No host wanted, so the launch's signature is the one the resident below was begun with…
     let _stand = ResidentStand::new(false);
     let pid = a_resident(false);
@@ -531,7 +523,7 @@ fn a_signature_behind_a_host() -> mpv_resident::LaunchSignature {
 /// sweep is for the player that outlived the hover it was begun for.
 #[test]
 fn the_stray_sweep_spares_the_resident() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
     let _stand = ResidentStand::new(true);
 
     let pid = a_resident(true);
@@ -551,7 +543,7 @@ fn the_stray_sweep_spares_the_resident() {
 /// the take-over, so the record goes then; the fresh one is begun by the tick, once no pin stands.
 #[test]
 fn a_pin_that_took_the_resident_over_re_warms_one_after_it_closes() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
     let _stand = ResidentStand::new(true);
 
     let pid = a_resident(true);
@@ -602,7 +594,7 @@ fn scene_the_pin_closed() {
 /// where the resident is begun (see `ffplay_window::note_a_window_to_unlist` and `eager_ex_style`).
 #[test]
 fn a_resident_names_its_window_for_the_shells_lists() {
-    let _one = one_at_a_time();
+    let _room = the_room_to_itself();
     let _stand = ResidentStand::new(true);
     ffplay_window::forget_the_window_to_unlist();
 

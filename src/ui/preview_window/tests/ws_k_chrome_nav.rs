@@ -202,9 +202,7 @@ unsafe extern "system" fn a_procedure_of_its_own(
 /// window would be testing the guard rather than the release.
 #[test]
 fn a_release_no_arm_owns_gives_the_pointer_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
 
@@ -324,9 +322,7 @@ fn the_pressed_button() -> Option<pin_chrome::CaptionButton> {
 /// hide all of it.
 #[test]
 fn every_caption_button_asks_its_command_on_a_press_and_a_release() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -369,9 +365,7 @@ fn every_caption_button_asks_its_command_on_a_press_and_a_release() {
 
 #[test]
 fn the_always_on_top_caption_button_toggles_pin_always_on_top() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -412,9 +406,7 @@ fn the_always_on_top_caption_button_toggles_pin_always_on_top() {
 /// so the restore-down is dead or alive with the maximize rather than beside it.
 #[test]
 fn a_restore_down_button_asks_its_command_too() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -457,9 +449,7 @@ fn a_restore_down_button_asks_its_command_too() {
 /// armed it on the press, and every arm before the bar's own had something to decline.
 #[test]
 fn the_volume_button_opens_and_closes_its_popup() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -505,9 +495,7 @@ fn the_volume_button_opens_and_closes_its_popup() {
 /// on the pin, and the release falls out of the road as a release nothing answered.
 #[test]
 fn the_two_hand_offs_reach_their_arm_on_a_press_and_a_release() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -557,9 +545,7 @@ fn caption_height_of_the_pin() -> i32 {
 
 #[test]
 fn a_seek_press_with_no_second_to_seek_to_claims_nothing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -586,9 +572,7 @@ fn a_seek_press_with_no_second_to_seek_to_claims_nothing() {
 /// bar's own to take hold of, capture and all.
 #[test]
 fn a_seek_press_with_a_second_still_arms_the_scrub() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -617,9 +601,7 @@ fn a_seek_press_with_a_second_still_arms_the_scrub() {
 /// belongs to the caption's own arm, which has not been asked yet.
 #[test]
 fn a_transport_release_with_nothing_armed_leaves_the_pointer_alone() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -648,9 +630,7 @@ fn a_transport_release_with_nothing_armed_leaves_the_pointer_alone() {
 /// is not a knob, the bar, or a caption button.
 #[test]
 fn a_card_release_with_no_button_held_leaves_the_pointer_alone() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
 
@@ -682,9 +662,7 @@ fn a_card_release_with_no_button_held_leaves_the_pointer_alone() {
 /// lent is four re-entered capture-lost roads for one press.
 #[test]
 fn a_release_with_nothing_armed_anywhere_gives_the_pointer_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -715,9 +693,7 @@ fn a_release_with_nothing_armed_anywhere_gives_the_pointer_back() {
 /// them to be asked — so a release it declines must cost nothing at all.
 #[test]
 fn a_volume_release_with_no_knob_held_leaves_the_pointer_alone() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -744,9 +720,7 @@ fn a_volume_release_with_no_knob_held_leaves_the_pointer_alone() {
 /// this is the arm that is left holding the pointer.
 #[test]
 fn a_drag_end_with_no_drag_gives_the_pointer_back() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -771,9 +745,7 @@ fn a_drag_end_with_no_drag_gives_the_pointer_back() {
 /// gesture wrote belongs to the file that made it rather than to the one arriving.
 #[test]
 fn a_swap_reconciles_the_gesture_it_is_taking_up_with() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -818,9 +790,7 @@ fn a_swap_reconciles_the_gesture_it_is_taking_up_with() {
 
 #[test]
 fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_lands() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -909,9 +879,7 @@ fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_land
 /// raised by the ask alone.
 #[test]
 fn a_step_ask_leaves_the_chrome_up_while_the_outgoing_film_is_live() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -957,9 +925,7 @@ fn a_step_ask_leaves_the_chrome_up_while_the_outgoing_film_is_live() {
 
 #[test]
 fn a_box_change_begins_no_player() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -1053,9 +1019,7 @@ fn a_maximize_remembers_its_box_and_a_restore_gives_it_back() {
 /// be a window property and not a flag.
 #[test]
 fn the_player_window_is_mouse_transparent() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_front = PIN_FRONT_OWED.load(std::sync::atomic::Ordering::SeqCst);
     let always_on_top = pin_always_on_top();
@@ -1131,9 +1095,7 @@ fn the_player_window_is_mouse_transparent() {
 /// player: the film on screen is moved into the new box and plays on through it.
 #[test]
 fn a_box_change_moves_mpv_and_begins_nothing_again() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -1215,9 +1177,7 @@ fn a_box_change_moves_mpv_and_begins_nothing_again() {
 /// which is the whole of why it is an IPC property rather than a flag on a relaunch.
 #[test]
 fn a_pinned_mpv_film_is_told_the_pins_own_answer_about_the_topmost_band() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_image = video_process_image();
     let previous_pin = take_pin_for_a_test();

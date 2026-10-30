@@ -122,9 +122,7 @@ fn the_pressed_button() -> Option<pin_chrome::CaptionButton> {
 /// band's least-coverage pixel is what makes the click the window's to carry.
 #[test]
 fn a_band_click_is_never_a_caption_button() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
@@ -159,9 +157,7 @@ fn a_band_click_is_never_a_caption_button() {
 /// as a `PinBox` against a film it was never measured for (see `reconcile_swap_take_up`).
 #[test]
 fn a_box_request_made_before_a_swap_is_not_replayed_after_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();

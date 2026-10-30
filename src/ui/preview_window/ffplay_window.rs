@@ -1421,6 +1421,7 @@ pub fn kill_stray_video_process() {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::the_room_to_itself;
     use super::*;
 
     /// **A relaunch is looked for at the start's cadence, and nothing else is.** What is left of a
@@ -1554,9 +1555,7 @@ mod tests {
     fn a_hover_with_no_window_yet_is_awaited_rather_than_styled() {
         // A test that runs the desktop's enumeration takes the suite's lock, however hopeless the
         // process it asks about (see `PIN_TESTS_ONE_AT_A_TIME`).
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|held| held.into_inner());
+        let _room = the_room_to_itself();
         assert!(
             matches!(
                 unsafe { style_the_window_before_the_show(u32::MAX - 7) },
@@ -1632,9 +1631,7 @@ mod tests {
         // **This is a window of this process's own, wearing the player's class**, so it is one the
         // other pass that enumerates by process and class would answer with — and that pass's
         // window is one this one would answer with. One at a time (see `PIN_TESTS_ONE_AT_A_TIME`).
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|held| held.into_inner());
+        let _room = the_room_to_itself();
         use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
         unsafe {
@@ -1682,9 +1679,7 @@ mod tests {
     /// rather than a hover player's.
     #[test]
     fn a_players_window_is_taken_out_of_the_shells_lists_from_its_first_appearance() {
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|held| held.into_inner());
+        let _room = the_room_to_itself();
         use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
         let pid = unsafe { GetCurrentProcessId() };
@@ -1794,9 +1789,7 @@ mod tests {
     /// leave behind (see `suspend_player_threads` and `resume_suspended_player`).
     #[test]
     fn a_suspension_is_recorded_once_and_let_go_of_once() {
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|held| held.into_inner());
+        let _room = the_room_to_itself();
         let pid = 4242;
         clear_suspended_players();
         assert_eq!(suspend_player_threads(pid), 1);

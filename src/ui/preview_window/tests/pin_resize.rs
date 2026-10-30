@@ -273,9 +273,7 @@ fn a_swap_is_fitted_into_the_bound_rather_than_the_box_the_last_file_left() {
 /// because the maximize is a state about the room and was never given up.
 #[test]
 fn a_maximized_pin_walks_its_files_against_the_room_and_not_the_last_box() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let folder = std::env::temp_dir().join("rust-hover-preview-pin-maximized");
     std::fs::create_dir_all(&folder).expect("a test folder");
@@ -412,9 +410,7 @@ fn a_maximized_pin_walks_its_files_against_the_room_and_not_the_last_box() {
 /// would not be, which is the one thing a maximize is not.
 #[test]
 fn a_maximized_pin_fits_a_file_smaller_than_the_room_to_the_room() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let folder = std::env::temp_dir().join("rust-hover-preview-pin-maximized-small");
     std::fs::create_dir_all(&folder).expect("a test folder");
@@ -490,9 +486,7 @@ fn a_maximized_pin_fits_a_file_smaller_than_the_room_to_the_room() {
 /// `50%`.
 #[test]
 fn a_window_the_hand_sized_is_put_back_to_the_size_the_setting_asks_for() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
@@ -623,9 +617,7 @@ fn a_window_the_hand_sized_is_put_back_to_the_size_the_setting_asks_for() {
 /// again at a scale the pin was not taken up at (see `reset_pinned_size`).
 #[test]
 fn a_card_is_given_the_middle_and_keeps_the_size_it_is_drawn_at() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
@@ -1074,9 +1066,7 @@ fn a_pin_with_no_bound_is_fitted_into_the_room_the_display_has() {
 /// it stretched into a box it was not laid out for is a different pageful rather than a soft one.
 #[test]
 fn a_box_the_frames_pixels_already_cover_owes_the_pin_no_decode() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
     let held = |kind: MediaType, width: u32, height: u32| {

@@ -7,9 +7,7 @@ use super::*;
 #[test]
 #[ignore = "reads the files named in RHP_OFFICE_PROBE"]
 fn office_hover_probe() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // The drawing half of the app runs in a multithreaded apartment.
     pdf_preview::initialize_apartment();
@@ -131,9 +129,7 @@ fn office_hover_probe() {
 #[test]
 #[ignore = "reads the files named in RHP_LIBRE_PROBE and starts the installed LibreOffice"]
 fn libre_hover_probe() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     pdf_preview::initialize_apartment();
 
@@ -303,9 +299,7 @@ fn libre_hover_probe() {
 #[test]
 #[ignore = "reads the files named in RHP_PEAZIP_PROBE and starts the installed PeaZip"]
 fn peazip_hover_probe() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let Ok(list) = std::env::var("RHP_PEAZIP_PROBE") else {
         println!("set RHP_PEAZIP_PROBE to one or more paths, separated by ';'");
@@ -470,9 +464,7 @@ fn peazip_hover_probe() {
 #[test]
 #[ignore = "reads the files named in RHP_COMIC_PROBE"]
 fn comic_hover_probe() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let Ok(list) = std::env::var("RHP_COMIC_PROBE") else {
         println!("set RHP_COMIC_PROBE to one or more paths, separated by ';'");
@@ -606,9 +598,7 @@ fn comic_hover_probe() {
 #[test]
 #[ignore = "reads the files named in RHP_CALIBRE_PROBE and starts the installed Calibre"]
 fn calibre_hover_probe() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let Ok(list) = std::env::var("RHP_CALIBRE_PROBE") else {
         println!("set RHP_CALIBRE_PROBE to one or more paths, separated by ';'");

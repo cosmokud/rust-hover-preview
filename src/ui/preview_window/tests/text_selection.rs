@@ -143,9 +143,7 @@ fn put_painted_line(text: &str) {
 /// (see `begin_text_selection` and `extend_word_selection`).
 #[test]
 fn a_second_press_on_a_word_takes_the_whole_of_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _media = TextPagePutBack::put();
 
     put_painted_line("hello world");
@@ -192,9 +190,7 @@ fn a_second_press_on_a_word_takes_the_whole_of_it() {
 /// `begin_text_selection` and `line_in`).
 #[test]
 fn a_third_press_on_a_word_takes_the_whole_of_the_line() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _media = TextPagePutBack::put();
 
     put_painted_line("hello world");
@@ -260,9 +256,7 @@ fn a_third_press_on_a_word_takes_the_whole_of_the_line() {
 /// hand (see `extend_word_selection`).
 #[test]
 fn a_drag_after_a_double_click_grows_the_highlight_by_whole_words() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _media = TextPagePutBack::put();
     put_painted_line("hello world");
 
@@ -375,9 +369,7 @@ fn a_page_of(text: &str, name: &str, width: u32, height: u32) -> Option<MediaDat
 /// holds (see `text_preview_clipboard_text`).
 #[test]
 fn a_copy_with_nothing_selected_is_the_whole_page() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
     stand_pin(Some(PinnedPreview::for_test()));
@@ -415,9 +407,7 @@ fn a_copy_with_nothing_selected_is_the_whole_page() {
 /// rather than a handle that carries the window (see `pinned_content_is_the_pins`).
 #[test]
 fn a_press_anywhere_on_a_page_of_text_is_the_pages_own() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
 
@@ -454,9 +444,7 @@ fn a_press_anywhere_on_a_page_of_text_is_the_pages_own() {
 /// `text_menu_row_press` and `select_all_text_preview`).
 #[test]
 fn a_press_on_select_all_selects_the_page_and_puts_the_menu_away() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
     stand_pin(Some(a_pin_whose_menu_fits_the_screen()));
@@ -503,9 +491,7 @@ fn a_press_on_select_all_selects_the_page_and_puts_the_menu_away() {
 /// `text_drag_step`).
 #[test]
 fn a_drag_carried_past_the_edge_of_a_page_keeps_selecting() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
     stand_pin(Some(PinnedPreview::for_test()));
@@ -583,9 +569,7 @@ fn a_drag_carried_past_the_edge_of_a_page_keeps_selecting() {
 /// than for the top of the document (see `find_next_in_text_preview`).
 #[test]
 fn a_find_takes_the_page_to_the_next_place_its_selection_appears() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
     stand_pin(Some(PinnedPreview::for_test()));
@@ -684,9 +668,7 @@ fn a_find_takes_the_page_to_the_next_place_its_selection_appears() {
 /// `text_menu_row_press`).
 #[test]
 fn a_press_on_the_pages_find_next_row_takes_the_page_to_the_next_place() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
     stand_pin(Some(a_pin_whose_menu_fits_the_screen()));
@@ -785,9 +767,7 @@ fn a_ctrl_wheel_steps_through_the_sizes_the_tray_offers() {
 /// nowhere left to go (see `step_pinned_text_size`).
 #[test]
 fn a_control_wheel_draws_a_pinned_page_again_at_another_size() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
     stand_pin(Some(PinnedPreview::for_test()));
@@ -910,9 +890,7 @@ fn a_control_wheel_draws_a_pinned_page_again_at_another_size() {
 /// reader who has just chosen it is most likely to do.
 #[test]
 fn a_resize_keeps_the_size_the_reader_put_the_page_to() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
     // A page keeps its state because a pin is what draws it in full mode, and the state is the
@@ -1045,9 +1023,7 @@ fn the_page_reaches_now() -> usize {
 /// own over the ones the file answered with.
 #[test]
 fn a_page_is_drawn_again_for_the_box_the_hand_took_it_to_and_a_picture_is_not() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
 
@@ -1204,9 +1180,7 @@ fn a_page_is_drawn_again_for_the_box_the_hand_took_it_to_and_a_picture_is_not() 
 /// but a page has none either.
 #[test]
 fn a_page_laid_out_again_is_loaded_at_the_size_the_reader_put_it_to() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
     stand_pin(Some(PinnedPreview::for_test()));
@@ -1327,9 +1301,7 @@ impl Drop for ThemeSetting {
 /// the reader's size goes with the pick the way it goes when the pin is closed.
 #[test]
 fn a_setting_draws_the_pinned_page_again_at_the_size_the_reader_put_it_to() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
     stand_pin(Some(PinnedPreview::for_test()));

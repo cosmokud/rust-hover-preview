@@ -654,9 +654,7 @@ fn the_wheel_is_handed_the_box_of_a_pinned_picture_and_of_nothing_else() {
     // The lock every test that reaches the pin's own state takes: what is shared is process-wide, and
     // a pin stood up here is a pin taken out from under whatever test beside this one is standing its
     // own (see `PIN_TESTS_ONE_AT_A_TIME`).
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // What the wheel hook reads has to be answered without waiting for the pin's lock, and it has to
     // be answered about the picture on the screen and nothing else: a bubble has no window to point
@@ -727,9 +725,7 @@ fn a_wheel_that_asks_for_more_notches_than_any_hand_can_turn_is_answered_with_a_
 fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     // The lock every test that reaches the pin's own state takes, and the pin this one stands for the
     // hook to find: what the hook asks is the pin's window box, which is process-wide.
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous = take_pin_for_a_test();
 
     let content = (100, 100, 500, 400);
@@ -1681,9 +1677,7 @@ fn a_travel_keeps_the_point_of_the_picture_under_the_wheel_where_it_is_drawn() {
 /// `pin_zoom_in_flight`).
 #[test]
 fn a_notch_aims_the_picture_and_leaves_it_where_it_is() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous = take_pin_for_a_test();
 
     let content = (100, 100, 500, 400);
@@ -1736,9 +1730,7 @@ fn a_notch_aims_the_picture_and_leaves_it_where_it_is() {
 /// card is a layout painted at the box rather than a picture rasterized into it.
 #[test]
 fn a_page_is_a_picture_the_wheel_zooms_and_a_card_or_an_engines_window_is_not() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
 
@@ -1804,9 +1796,7 @@ fn a_page_is_a_picture_the_wheel_zooms_and_a_card_or_an_engines_window_is_not() 
 /// than for whatever a pin happens to show.
 #[test]
 fn a_short_page_is_still_a_page_a_ctrl_wheel_resizes() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_regions = POINTER_HOLD_REGIONS
@@ -1944,9 +1934,7 @@ unsafe fn a_picture_pin_in_a_window_of_its_own(box_: ScreenRegion, zoom: PinZoom
 /// one part of a zoom this app has never been allowed to get wrong.
 #[test]
 fn a_wheel_frame_sizes_the_window_the_pin_stands_in() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_own = pin_is_its_own_window();
     let previous_pin = take_pin_for_a_test();
@@ -2006,9 +1994,7 @@ fn a_wheel_frame_sizes_the_window_the_pin_stands_in() {
 /// *hidden*: the state no button of Windows has a way back from (see `the_pin_owes_a_show`).
 #[test]
 fn the_tick_puts_up_a_pin_only_where_something_hid_its_window() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_own = pin_is_its_own_window();
     let previous_pin = take_pin_for_a_test();
@@ -2096,9 +2082,7 @@ fn the_tick_puts_up_a_pin_only_where_something_hid_its_window() {
 /// the state instead, the window is one the painter answers for itself.
 #[test]
 fn a_paint_asked_for_the_hover_reaches_the_window_the_pin_stands_in() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_own = pin_is_its_own_window();
     let previous_pin = take_pin_for_a_test();

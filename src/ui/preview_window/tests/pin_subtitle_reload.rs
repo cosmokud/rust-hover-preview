@@ -44,9 +44,7 @@ fn a_pin_playing(film: &Path, content: ScreenRegion) -> PinnedPreview {
 /// begun again for one.
 #[test]
 fn a_pin_hands_its_late_copied_subtitles_to_mpv_and_preloads_them_for_ffplays_next_relaunch() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _setting = VideoSubtitlesSetting::stood_at(true);
 
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
@@ -266,9 +264,7 @@ fn stand_subtitle_streams(film: &Path, count: usize) {
 /// engine would pick it, and each half of this is the answer one route gives.
 #[test]
 fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on_mpv() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let _setting = VideoSubtitlesSetting::stood_at(true);
 
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
@@ -350,9 +346,7 @@ fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on
 /// `preload_the_subtitles_for_the_next_relaunch`).
 #[test]
 fn an_adopted_pin_is_handed_the_copy_it_predates_without_a_relaunch() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // The switch on: this is the take-up's answer with the setting a film's
     // subtitles are wanted for, which is the answer it has always given (see

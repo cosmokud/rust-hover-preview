@@ -85,9 +85,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
         println!("set RHP_REPRO_HD to a 1080p film and RHP_REPRO_UHD to a 4K one to run this");
         return;
     };
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     pdf_preview::initialize_apartment();
     wic_image::initialize_apartment();
 

@@ -918,11 +918,12 @@ pub(super) fn stand_pin_walk(walk: Option<PinStep>) {
 /// The rule for a test that reaches this state, then: does it stand a pin up, take one down,
 /// write the media, ask any of the above, make a window of this process, call a pass that
 /// enumerates the desktop's windows by process or class, or write one of the player records the
-/// monitor waits on? Take this lock on the first line of the body, before anything touches that
-/// state. A test that touches none of it takes nothing — most of both
-/// modules is arithmetic over values handed to it — so the suite is not serialised, only the part
-/// of it that shares a machine. A lock over some other process-wide thing, like the pointer's own
-/// stand-in in `preview_window`, is a different lock and neither stands in for this one.
+/// monitor waits on? Take the room on the first line of the body, before anything touches that
+/// state: `preview_window::tests::the_room_to_itself`, which is this mutex and the only way in.
+/// A test that touches none of it takes nothing — most of both modules is arithmetic over values
+/// handed to it — so the suite is not serialised, only the part of it that shares a machine. A
+/// lock over some other process-wide thing, like the pointer's own stand-in in `preview_window`,
+/// is a different lock and neither stands in for this one.
 ///
 /// And holding the lock is half of what is owed to the test that comes next: a test that stands a
 /// pin up puts it down again before it lets the lock go. Serialising the tests puts them one at a
@@ -933,6 +934,10 @@ pub(super) fn stand_pin_walk(walk: Option<PinStep>) {
 /// order and shows up as an occasional red under load, where thread scheduling decides who runs
 /// next. Three tests here stood a pin up to ask about its queue and left it up, and the read of
 /// the empty slot is what caught it.
+/// Locked through `preview_window::tests::the_room_to_itself` and nowhere else: the guard is what
+/// carries the poison tolerance, the record of who is inside, and the tripwire that says so when a
+/// thread asks for the room a second time — which, on a mutex that is not re-entrant, is a suite
+/// stood still for ever with no line naming the test that did it.
 #[cfg(test)]
 pub(super) static PIN_TESTS_ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 

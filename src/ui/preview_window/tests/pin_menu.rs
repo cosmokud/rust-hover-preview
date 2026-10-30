@@ -170,9 +170,7 @@ fn a_sound_card_whose_menu_fits_the_screen() -> PinnedPreview {
 /// lists them in, with the one the pin plays by carrying its disc.
 #[test]
 fn the_menu_holds_the_settings_it_is_the_face_of() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Middle, PinEndOfFile::Continue, true);
 
@@ -292,9 +290,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
 /// a test notes one rather than beginning one (see `PlayerProcess::Noted`).
 #[test]
 fn the_hold_row_is_named_for_what_it_will_do() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
@@ -339,9 +335,7 @@ fn the_hold_row_is_named_for_what_it_will_do() {
 /// A point near the window's own corner is held inside the window.
 #[test]
 fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -457,9 +451,7 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
 /// `pinned_menu_paint`).
 #[test]
 fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _put_back = PutBack(take_pin_for_a_test());
     let _kind = MediaKindPutBack::put(MediaType::StaticImage);
@@ -500,9 +492,7 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
 /// with (see `PinMenuPage::Body`).
 #[test]
 fn a_right_click_on_the_media_holds_no_setting_rows() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _put_back = PutBack(take_pin_for_a_test());
     let _kind = MediaKindPutBack::put(MediaType::StaticImage);
@@ -543,9 +533,7 @@ fn a_right_click_on_the_media_holds_no_setting_rows() {
 /// `bubble_menu_rows`).
 #[test]
 fn a_standing_menu_opens_on_the_walk_and_the_maximize_under_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // A film still standing: the walk, the maximize, and the hold glued under it.
     assert_eq!(
@@ -617,9 +605,7 @@ fn a_standing_menu_opens_on_the_walk_and_the_maximize_under_it() {
 /// strip along the bottom (see `pin_right_click_page`).
 #[test]
 fn a_right_click_asks_for_the_page_its_row_of_the_window_holds() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _put_back = PutBack(take_pin_for_a_test());
     let _no_page = TextHoldingPutBack::put(false);
@@ -706,9 +692,7 @@ fn a_right_click_asks_for_the_page_its_row_of_the_window_holds() {
 /// (see `PinMenuPage` and `bubble_menu_rows`).
 #[test]
 fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _put_back = PutBack(take_pin_for_a_test());
     let _kind = MediaKindPutBack::put(MediaType::Text);
@@ -755,9 +739,7 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
 /// rows every kind holds and a press on the first of them is that row's (see `PinMenuPage::over`).
 #[test]
 fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _put_back = PutBack(take_pin_for_a_test());
     // A picture under a panel a right-click in the text of a page opened.
@@ -804,9 +786,7 @@ fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
 /// panel away rather than the pin under it (see `close_pin_menu` and `pin_bubble`).
 #[test]
 fn a_key_puts_the_menu_away_and_escape_leaves_the_pin_standing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _put_back = PutBack(take_pin_for_a_test());
     let _kind = MediaKindPutBack::put(MediaType::StaticImage);
@@ -857,9 +837,7 @@ fn a_key_puts_the_menu_away_and_escape_leaves_the_pin_standing() {
 /// `PinCommand::MinimizeTo`).
 #[test]
 fn a_press_on_a_row_a_pin_shares_with_a_bubble_leaves_its_ask() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _put_back = PutBack(take_pin_for_a_test());
     let _kind = MediaKindPutBack::put(MediaType::StaticImage);
@@ -905,9 +883,7 @@ fn a_press_on_a_row_a_pin_shares_with_a_bubble_leaves_its_ask() {
 /// away with the pick (see `shared_menu_row_press`).
 #[test]
 fn a_press_on_a_minimize_pick_writes_the_setting_the_tray_writes() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _config_file = ConfigFilePutBack::take();
     let _put_back = PutBack(take_pin_for_a_test());
@@ -948,9 +924,7 @@ fn a_press_on_a_minimize_pick_writes_the_setting_the_tray_writes() {
 /// film is a kind with playback for it to hold back.
 #[test]
 fn the_switch_a_pin_shares_with_a_bubble_stays_up_with_its_mark() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _switches = PausePreviewSettings::stood_at(true, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -994,9 +968,7 @@ fn the_switch_a_pin_shares_with_a_bubble_stays_up_with_its_mark() {
 /// than beginning the drag a title bar begins (see `pinned_press`).
 #[test]
 fn a_press_on_a_row_over_the_title_bar_is_the_rows_own() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _put_back = PutBack(take_pin_for_a_test());
     let _kind = MediaKindPutBack::put(MediaType::StaticImage);
@@ -1042,9 +1014,7 @@ fn a_press_on_a_row_over_the_title_bar_is_the_rows_own() {
 /// which is what keeps the row's door sign up without its room.
 #[test]
 fn the_menu_carries_its_arrow_with_the_flyout_down() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1111,9 +1081,7 @@ fn the_menu_carries_its_arrow_with_the_flyout_down() {
 /// wait for the hover does not have to.
 #[test]
 fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1182,9 +1150,7 @@ fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
 /// writes is put back what it was when the test is done.
 #[test]
 fn a_press_on_the_shuffle_row_turns_it_over_and_writes_it_down() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _file = ConfigFilePutBack::take();
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
@@ -1251,9 +1217,7 @@ fn a_press_on_the_shuffle_row_turns_it_over_and_writes_it_down() {
 /// a card no wider than the menu still has a flyout to open (see `pinned_menu_paint`).
 #[test]
 fn the_flyout_opens_right_of_the_menu_unless_the_screens_right_edge_says_otherwise() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1314,9 +1278,7 @@ fn the_flyout_opens_right_of_the_menu_unless_the_screens_right_edge_says_otherwi
 /// the seek flyout's rows make (see `the_flyout_s_rows_answer_presses`).
 #[test]
 fn a_press_on_an_end_of_file_choice_sets_it_and_puts_the_menu_away() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _file = ConfigFilePutBack::take();
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
@@ -1388,9 +1350,7 @@ fn a_press_on_an_end_of_file_choice_sets_it_and_puts_the_menu_away() {
 /// one the panel does not hold.
 #[test]
 fn a_press_outside_the_panel_puts_it_away() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1418,9 +1378,7 @@ fn a_press_outside_the_panel_puts_it_away() {
 /// and the arrow keys do (see `PinCommand`).
 #[test]
 fn the_rows_that_do_something_leave_their_ask_with_the_loop() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1465,9 +1423,7 @@ fn the_rows_that_do_something_leave_their_ask_with_the_loop() {
 /// behind and the menu stays exactly where it is.
 #[test]
 fn a_press_on_a_rule_is_nothing_at_all() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1511,9 +1467,7 @@ fn a_press_on_a_rule_is_nothing_at_all() {
 /// plays by carrying its disc.
 #[test]
 fn the_seek_row_opens_its_flyout_beside_the_menu() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Middle, PinEndOfFile::Continue, true);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1599,9 +1553,7 @@ fn the_seek_row_opens_its_flyout_beside_the_menu() {
 /// the answer — rather than a press outside the menu.
 #[test]
 fn the_flyout_s_rows_answer_presses() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Remember, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1663,9 +1615,7 @@ fn the_flyout_s_rows_answer_presses() {
 /// the test is done.
 #[test]
 fn a_choice_made_in_the_flyout_is_written_down_and_puts_the_whole_menu_away() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _file = ConfigFilePutBack::take();
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
@@ -1728,9 +1678,7 @@ fn a_choice_made_in_the_flyout_is_written_down_and_puts_the_whole_menu_away() {
 /// wait for the hover does not have to.
 #[test]
 fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1782,9 +1730,7 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
 /// below the flyout.
 #[test]
 fn a_press_outside_both_panels_puts_the_whole_menu_away() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1928,9 +1874,7 @@ fn flyout_is_up() -> bool {
 /// finds the delay elapsed.
 #[test]
 fn hovering_the_seek_row_opens_the_flyout_after_a_short_delay() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -1969,9 +1913,7 @@ fn hovering_the_seek_row_opens_the_flyout_after_a_short_delay() {
 /// waiting there afterwards does not open it either.
 #[test]
 fn leaving_the_seek_row_before_the_delay_cancels_its_flyout() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -2004,9 +1946,7 @@ fn leaving_the_seek_row_before_the_delay_cancels_its_flyout() {
 /// pointer hovers another main-menu row or leaves the menu entirely.
 #[test]
 fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -2077,9 +2017,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
 /// flyout's row where it is on the flyout.
 #[test]
 fn the_row_under_the_pointer_is_the_row_that_is_washed() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -2131,9 +2069,7 @@ fn the_row_under_the_pointer_is_the_row_that_is_washed() {
 /// menu that is up exactly where it is.
 #[test]
 fn the_loop_takes_a_foreign_press_ask_and_puts_the_menu_away() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -2173,9 +2109,7 @@ fn the_loop_takes_a_foreign_press_ask_and_puts_the_menu_away() {
 /// `close_pin_bubble_menu`).
 #[test]
 fn the_same_ask_puts_the_bubbles_menu_away() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -2213,9 +2147,7 @@ fn the_same_ask_puts_the_bubbles_menu_away() {
 /// it stands, the way the card's own `Shuffle` row answers (see `bubble_menu_press`).
 #[test]
 fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // Both switches on, so the press below has one of them to turn off, and a pin whose card
     // the standing menu is read against.
@@ -2284,9 +2216,7 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
 /// `shared_menu_row_press`).
 #[test]
 fn a_press_on_the_bubbles_minimize_pick_writes_the_setting() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _config_file = ConfigFilePutBack::take();
     let _put_back = PutBack(take_pin_for_a_test());
@@ -2342,9 +2272,7 @@ fn a_press_on_the_bubbles_minimize_pick_writes_the_setting() {
 /// the hook's ask a tick later.
 #[test]
 fn closing_the_menu_from_the_window_side_puts_both_panels_away() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -2376,9 +2304,7 @@ fn closing_the_menu_from_the_window_side_puts_both_panels_away() {
 /// panel's own rows (see `pin_menu_point_is_outside`).
 #[test]
 fn a_point_off_both_panels_is_outside_and_one_on_a_row_is_not() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
@@ -2525,9 +2451,7 @@ impl Drop for AStandingMenu {
 /// to it, which brought the window back showing that file.
 #[test]
 fn the_hand_on_a_row_of_the_menu_is_on_the_menu() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _put_back = PutBack(take_pin_for_a_test());
     let _kind = MediaKindPutBack::put(MediaType::StaticImage);

@@ -232,9 +232,7 @@ fn a_swap_is_held_for_a_first_frame_until_it_arrives_or_the_engine_gives_it_up()
 /// question `pin_film_thumbnail::the_source_is_standing` asks of the same player.
 #[test]
 fn a_swap_of_a_players_film_is_held_for_its_picture_until_the_bound() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let previous_pid = VIDEO_PID.load(Ordering::SeqCst);
     let previous_hwnd = VIDEO_HWND.load(Ordering::SeqCst);
     VIDEO_PID.store(0, Ordering::SeqCst);
@@ -292,9 +290,7 @@ fn a_hold_that_has_come_to_its_end_is_the_answer_the_tick_gives() {
     // Serialized with the pin tests: a wait that ends with no window in it is the answer the
     // tick gives for it, and the media it was holding is the loop's own slot (see
     // `settle_pin_swap`).
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
+    let _room = the_room_to_itself();
     let mut media = create_loading_media(200, 360);
     // A film a player of this app's own draws, which is the route whose wait is the player's
     // window — and a test has no player behind it at all, so nothing is alive to be waited for.

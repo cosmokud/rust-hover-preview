@@ -44,9 +44,7 @@ fn a_kinds_bubble_mark_is_the_glyph_of_what_that_kind_is_doing() {
 /// of nothing to paint again for (see `bubble_bars_are_moving`).
 #[test]
 fn a_bubbles_bars_move_for_a_sound_and_for_a_film_that_is_making_one() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
 
@@ -128,9 +126,7 @@ fn a_bubbles_bars_move_for_a_sound_and_for_a_film_that_is_making_one() {
 /// being left as this bubble's picture (see `grab_bubble_frame`).
 #[test]
 fn a_collapse_asks_for_a_still_of_the_film_at_the_second_the_bar_is_showing() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
     let previous_still = BUBBLE_FRAME.lock().ok().and_then(|mut frame| frame.take());
@@ -200,9 +196,7 @@ fn a_collapse_asks_for_a_still_of_the_film_at_the_second_the_bar_is_showing() {
 /// colour from the moment it goes up to the moment it comes down (see `bubble_art`).
 #[test]
 fn the_frames_read_beside_a_player_are_ringed_in_the_stills_own_colour() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
     let previous_still = BUBBLE_FRAME.lock().ok().and_then(|mut frame| frame.take());

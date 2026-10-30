@@ -521,7 +521,7 @@ static STOOD_IN_FRAME: Mutex<Option<(Vec<u8>, u32)>> = Mutex::new(None);
 
 #[cfg(test)]
 mod tests {
-    use super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME;
+    use super::super::tests::the_room_to_itself;
     use super::*;
 
     /// The command a stream is begun with: the film from the second the player is at, at the rate a
@@ -567,9 +567,7 @@ mod tests {
     /// asserted is the decision: which film, at which second, at which side, and how often.
     #[test]
     fn a_film_a_player_is_drawing_is_read_beside_it_while_it_plays() {
-        let _one = PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _room = the_room_to_itself();
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
         stand_no_stream();
@@ -690,9 +688,7 @@ mod tests {
     /// kept for one tick is a bubble back on its still the moment after.
     #[test]
     fn a_film_paused_while_collapsed_is_left_on_the_frame_it_stopped_on() {
-        let _one = PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _room = the_room_to_itself();
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
         // The pause below hands the frame it keeps to the bubble as well as showing it, and a test

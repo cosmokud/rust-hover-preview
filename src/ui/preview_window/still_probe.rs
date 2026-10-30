@@ -434,6 +434,7 @@ fn a_flag(asked: Option<bool>) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::the_room_to_itself;
     use super::*;
 
     fn a_probe(painted: bool) -> Probe {
@@ -460,9 +461,7 @@ mod tests {
     #[test]
     fn the_still_probe_answers_once_and_says_what_it_saw() {
         // The trace buffer is process-wide, so the tests that read it go one at a time.
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _room = the_room_to_itself();
 
         super::super::pin_trace::clear_noted();
 
@@ -522,9 +521,7 @@ mod tests {
     #[test]
     fn the_source_is_read_beside_the_pin_and_says_which_of_the_two_went_black() {
         // The same one-at-a-time as above: both tests announce into the one trace buffer.
-        let _one = super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _room = the_room_to_itself();
 
         assert_eq!(the_source_reading(Some(true)), "100%|ok");
         assert_eq!(the_source_reading(Some(false)), "0%|black");

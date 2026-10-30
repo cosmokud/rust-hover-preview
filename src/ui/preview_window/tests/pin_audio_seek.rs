@@ -39,9 +39,7 @@ impl Drop for SeekSettings {
 /// starts where the pin says, and the hover's where the hover says.
 #[test]
 fn a_pinned_sound_starts_where_the_pin_says_a_hover_does_not_have_to() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     let _settings = SeekSettings::put(AudioSeek::Random, AudioSeek::Middle);
     assert_eq!(
@@ -98,9 +96,7 @@ fn the_two_settings_start_at_their_own_answers() {
 /// and a hover keeps its even where the pin's is not.
 #[test]
 fn the_position_written_down_is_what_the_sound_s_own_setting_says() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _room = the_room_to_itself();
 
     // The pin's setting is the one that resumes a pinned sound
     // and the hover's the one that resumes a hovered one, so each

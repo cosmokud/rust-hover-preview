@@ -51,9 +51,7 @@ fn every_kind_the_pin_draws_whole_stands_in_the_pins_own_window() {
 /// route answer the same way, placeholder or not (see `pin_film_host`).
 #[test]
 fn a_film_stands_in_the_pins_own_window_whichever_player_draws_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _room = the_room_to_itself();
 
     for (mpv, ffplay_event, engine) in [
         (true, true, VideoEngine::Mpv),
@@ -86,9 +84,7 @@ fn a_film_stands_in_the_pins_own_window_whichever_player_draws_it() {
 /// `MediaType::draws_in_a_window_of_its_own`).
 #[test]
 fn a_hosted_film_leaves_nothing_for_a_drag_to_park() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_own = pin_is_its_own_window();
     let path = Path::new("a-film.mkv");
@@ -127,9 +123,7 @@ fn a_hosted_film_leaves_nothing_for_a_drag_to_park() {
 /// host (see `MediaType::draws_in_a_window_of_its_own`).
 #[test]
 fn a_pins_film_is_drawn_in_its_host_whichever_route_it_is_drawn_by_now() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_own = pin_is_its_own_window();
 
@@ -181,9 +175,7 @@ fn a_pins_film_is_drawn_in_its_host_whichever_route_it_is_drawn_by_now() {
 /// `pin_should_stand_in_its_own_window`).
 #[test]
 fn a_known_kind_is_not_re_read_from_the_path() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _room = the_room_to_itself();
 
     assert!(
         pin_should_stand_in_its_own_window(Some(MediaType::StaticImage), Path::new("a.svg")),
@@ -238,9 +230,7 @@ fn a_placeholder_pin_stands_where_its_files_route_says() {
 /// host like any film, so its pin is still the pin's own window.
 #[test]
 fn a_failed_film_a_player_draws_stands_in_the_pins_own_window() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _room = the_room_to_itself();
 
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
@@ -260,9 +250,7 @@ fn a_failed_film_a_player_draws_stands_in_the_pins_own_window() {
 /// card keeps the pin's window and never a film host, and its Space stays the card's own toggle.
 #[test]
 fn a_pinned_ffplay_film_stands_in_the_pins_own_window() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_own = pin_is_its_own_window();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
@@ -343,9 +331,7 @@ fn a_pinned_ffplay_film_stands_in_the_pins_own_window() {
 /// front wrote that down, and the show's own line is what says this is the road that was read.
 #[test]
 fn a_pin_that_arrives_is_never_asked_for_the_foreground() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _room = the_room_to_itself();
 
     let film = super::pin_film_host_window::StandingFilm::new();
     let before = pin_always_on_top();
