@@ -440,7 +440,17 @@ pub fn is_preview_window(handle: isize) -> bool {
         return true;
     }
 
-    pin_real_window::real_pin_window().is_some_and(|hwnd| hwnd.0 as isize == handle)
+    if pin_real_window::real_pin_window().is_some_and(|hwnd| hwnd.0 as isize == handle) {
+        return true;
+    }
+
+    // **The pin's film host draws the pin too.** A film pin's picture stands in a window of this
+    // app's that owns the pin's chrome (see `pin_film_host`), and the host answers the hit test over
+    // the band by handing the press to the chrome under it — so the window under the pointer there
+    // is the host, and read as somebody else's window a press on a pin's own picture would be a press
+    // on the desktop (see `pin_drag::pressed_the_preview`, `click_is_over_a_listing` and
+    // `hover_facts`). The hover's host is not asked: it is no pin's window, and it is not this one.
+    pin_film_host::film_host().is_some_and(|host| host.0 as isize == handle)
 }
 
 pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
