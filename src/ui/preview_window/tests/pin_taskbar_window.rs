@@ -16,12 +16,13 @@ use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GdiFlush, GetDC,
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    IsIconic, IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, SetWindowPos, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOPMOST, ICON_BIG, SC_RESTORE, SWP_NOACTIVATE,
-    SW_MINIMIZE, SW_RESTORE, SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_GETICON,
-    WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CAPTION, WS_EX_APPWINDOW,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    CreateWindowExW, DestroyWindow, GetClientRect, GetForegroundWindow, GetWindow,
+    GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow, IsWindowVisible, RegisterClassExW,
+    SendMessageW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOPMOST,
+    ICON_BIG, SC_RESTORE, SWP_NOACTIVATE, SW_MINIMIZE, SW_RESTORE, SW_SHOWNOACTIVATE, WA_ACTIVE,
+    WINDOW_EX_STYLE, WM_ACTIVATE, WM_GETICON, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW,
+    WS_CAPTION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MINIMIZEBOX, WS_POPUP,
+    WS_SYSMENU,
 };
 
 /// Register the class the stand-in is made from, once for the run.
@@ -590,21 +591,25 @@ unsafe fn stands_over(above: HWND, below: HWND) -> bool {
     false
 }
 
-/// **A host's taskbar button hands the keyboard to the pin.** With `Pin Mode → Always On Top` off the
-/// pair's button belongs to the film host — the window the Shell lists for a pin whose chrome the host
-/// owns — and the host is disabled so that a press on the band reaches the pin. What a click on that
-/// button delivers is therefore an activation of a window no key can be typed into, and it is answered
-/// for the pin: the host's procedure asks `pin_take_focus` for the pin's window, exactly as a press on
-/// the pin does.
+/// **A host's taskbar button puts the caret in the pin and leaves the foreground on the host.** With
+/// `Pin Mode → Always On Top` off the pair's button belongs to the film host — the window the Shell
+/// lists for a pin whose chrome the host owns — and the host is an ordinary window the Shell
+/// activates, so what a click on that button delivers is an activation of it. It is answered for the
+/// pin: the host's procedure asks for the pin's window to be made focusable and given the caret.
 ///
-/// **The entry point is the host's own procedure and not a restore.** A disabled top-level window is
-/// still a window the Shell can activate — the activation delivers `WM_ACTIVATE` and `WM_SETFOCUS` to
-/// it, which is what makes the window's own answer the whole of the fix — and a pin that is up and not
-/// minimized is a window with nothing to restore. The `WM_SETFOCUS` half is answered too, as the belt
-/// to that brace: a focus that lands on the host after the activation is a keyboard the pin has not got.
+/// **And the foreground is not taken.** Handing it to the pin would put the Shell back where a
+/// disabled host had it: the button's window would no longer be the foreground window, so the next
+/// press of that button could not minimize it — the toggle would be dead again. The caret is all the
+/// pin needs for its own keys (see `pin_take_the_caret`).
+///
+/// **The entry point is the host's own procedure and not a restore.** The activation delivers
+/// `WM_ACTIVATE` and `WM_SETFOCUS` to the enabled host, which is what makes the window's own answer
+/// the whole of the fix — and a pin that is up and not minimized is a window with nothing to restore.
+/// The `WM_SETFOCUS` half is answered too, as the belt to that brace: a focus that lands on the host
+/// after the activation is a caret the pin has not got.
 ///
 /// The ask itself is read back through the seam a press is asked through, so the test does not make it
-/// on the user's desktop; the entry point is then the real host, disabled as the app makes it, and the
+/// on the user's desktop; the entry point is then the real host, enabled as the app makes it, and the
 /// keyboard is measured where Windows puts it — in the pin's own window of this test's.
 #[test]
 fn a_host_activation_hands_the_keyboard_to_the_pin() {
@@ -623,20 +628,23 @@ fn a_host_activation_hands_the_keyboard_to_the_pin() {
     let host = pin_film_host::film_host().expect("the film's host");
     let app_window = WS_EX_APPWINDOW.0 as isize;
 
-    // With the setting off the host is the window that wears the button, and it is the disabled window
-    // the band's picture has to be (see the module note).
+    // With the setting off the host is the window that wears the button, and it is an ordinary
+    // window the Shell can activate and put down — the presses are the hit test's (see
+    // `answer_a_host`).
     assert_ne!(
         unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) } & app_window,
         0,
         "the host is the window the Shell lists for the pair, so the taskbar button is its own"
     );
     assert!(
-        !unsafe { IsWindowEnabled(host).as_bool() },
-        "and it is disabled, because a press on the band has to reach the pin"
+        unsafe { IsWindowEnabled(host).as_bool() },
+        "and it is enabled: a disabled window is one the Shell can neither activate nor minimize, \
+         which is the bug a click on its button had"
     );
 
     // What the host's answer asks of the pin, through the seam a press is asked through: the window
-    // made focusable, the foreground, the caret — and nothing else.
+    // made focusable and the caret — and **not** the foreground, which stays on the host whose button
+    // the user pressed.
     let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
     assert!(
         unsafe {
@@ -654,18 +662,19 @@ fn a_host_activation_hands_the_keyboard_to_the_pin() {
         recorder.calls(),
         vec![
             PinWindowCall::SetFocusable { focusable: true },
-            PinWindowCall::SetForeground,
             PinWindowCall::SetFocus,
         ],
-        "and it is the press's own three asks, in the press's own order"
+        "the caret only: the press's own first and last asks, and the foreground left where the \
+         Shell put it"
     );
     assert_eq!(
         recorder.handed_the_keyboard_to(),
-        vec![film.pin_hwnd.0 as isize],
-        "the keyboard is handed to the pin's window, which is the window the button asked for"
+        Vec::<isize>::new(),
+        "so no `SetForegroundWindow` is asked for a window whose button the user pressed"
     );
 
-    // The `WM_SETFOCUS` brace answers the same way, and an activation that is not one asks nothing.
+    // The `WM_SETFOCUS` brace answers the same way — the caret, and no foreground — and an
+    // activation that is not one asks nothing.
     let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
     assert!(
         unsafe {
@@ -680,9 +689,12 @@ fn a_host_activation_hands_the_keyboard_to_the_pin() {
         "a focus that lands on the host is answered for the pin as well"
     );
     assert_eq!(
-        recorder.handed_the_keyboard_to(),
-        vec![film.pin_hwnd.0 as isize],
-        "so the caret does not stay on a window no key can be typed into"
+        recorder.calls(),
+        vec![
+            PinWindowCall::SetFocusable { focusable: true },
+            PinWindowCall::SetFocus,
+        ],
+        "so the caret does not stay on the host, and the foreground is not asked for either"
     );
 
     let recorder = RecordedPinWindow::new(film.pin_hwnd.0 as isize);
@@ -720,8 +732,8 @@ fn a_host_activation_hands_the_keyboard_to_the_pin() {
     );
     assert!(recorder.calls().is_empty());
 
-    // **The real entry point**: the host's own procedure, with the host disabled as the app makes it.
-    // What the keyboard does is measured where Windows puts it, and the pin is the window it is in.
+    // **The real entry point**: the host's own procedure, on the host as the app makes it. What the
+    // keyboard does is measured where Windows puts it, and the pin is the window it is in.
     let _ = take_pin_command();
     unsafe {
         SendMessageW(host, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0));
@@ -729,7 +741,13 @@ fn a_host_activation_hands_the_keyboard_to_the_pin() {
     assert_eq!(
         unsafe { GetFocus() },
         film.pin_hwnd,
-        "a click on the host's button leaves the caret in the pin, not on a disabled window"
+        "a click on the host's button leaves the caret in the pin"
+    );
+    assert_ne!(
+        unsafe { GetForegroundWindow() },
+        film.pin_hwnd,
+        "and the pin's own window is not made the foreground: a click on the pair's button has to \
+         leave it on the window the button belongs to, or the next click cannot minimize it"
     );
     assert!(
         pin_holds_a_keyboard(),
@@ -3020,8 +3038,9 @@ fn the_hosts_button_is_a_window_the_shell_has_a_system_menu_for() {
              to be drawn around the film"
         );
         assert!(
-            !unsafe { IsWindowEnabled(host).as_bool() },
-            "and it is still disabled, so a press on the band still reaches the pin"
+            unsafe { IsWindowEnabled(host).as_bool() },
+            "and it is an ordinary enabled window, so the Shell can activate it and put it down: the \
+             presses are kept for the pin by the host's hit test rather than by `WS_DISABLED`"
         );
         assert_ne!(
             the_icon(host),
@@ -3062,8 +3081,9 @@ fn the_hosts_button_is_a_window_the_shell_has_a_system_menu_for() {
             "with no caption drawn around the film"
         );
         assert!(
-            !unsafe { IsWindowEnabled(hover.host).as_bool() },
-            "while the host it was is still the disabled window the press falls through"
+            unsafe { IsWindowEnabled(hover.host).as_bool() },
+            "and the host it was is an ordinary window now, enabled like the host the pin makes: a \
+             disabled window is one the Shell can neither activate nor put down"
         );
         assert_ne!(
             the_icon(hover.host),

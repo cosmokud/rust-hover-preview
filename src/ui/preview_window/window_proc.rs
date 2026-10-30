@@ -2,6 +2,7 @@
 //! taken, and what each of them means before it reaches the tick.
 
 use super::*;
+use super::pin_trace::note_pin_trace;
 
 pub(super) unsafe fn reset_preview_after_display_change(hwnd: HWND) {
     let _ = ShowWindow(hwnd, SW_HIDE);
@@ -325,6 +326,21 @@ pub(super) unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
+            // **A minimize of this window is the pair being put down, where this window is the pair's
+            // second one.** A film pin's chrome is unowned and not a tool window, so the Shell
+            // sometimes lists it beside its film host and a real click has been seen deactivating and
+            // re-activating it. Whichever window of the pair the Shell puts down, the pin's state and
+            // the collapse have to be the same, so the command is queued and `DefWindowProcW` is not
+            // reached: a bare minimize here would take the window down behind a pin that still
+            // believes it is up (see `pin_film_host::the_shell_put_the_chrome_down`).
+            if pin_film_host::the_shell_put_the_chrome_down(msg, wparam) {
+                note_pin_trace!(
+                    "pin decision the shell's minimize of the chrome: the taskbar minimize is queued"
+                );
+                ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+                return LRESULT(0);
+            }
+
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_SIZE => {
@@ -332,6 +348,19 @@ pub(super) unsafe extern "system" fn window_proc(
             // The gate and the ask are one implementation shared with the film host that owns the pin's
             // chrome on the other road a pin is put away as a window (see `the_pin_came_back`).
             the_pin_came_back(hwnd, msg, wparam);
+
+            // **And the size a minimize reports is the same put-away the command above is**, for the
+            // same reason: the Shell may be putting this window down rather than the host it is owned
+            // by, and a pin whose chrome went down believing it was up is a pin that answers no
+            // minimize and holds everything a collapse holds back (see
+            // `pin_film_host::the_shell_put_the_chrome_down`).
+            if pin_film_host::the_shell_put_the_chrome_down(msg, wparam) {
+                note_pin_trace!(
+                    "pin decision the shell's minimize of the chrome: the taskbar minimize is queued"
+                );
+                ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+                return LRESULT(0);
+            }
 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }

@@ -1,6 +1,6 @@
-//! The window a pinned mpv film is drawn in: a disabled child of the pin's own window, standing in
-//! the band the picture is seen through, hidden for a park and shown again after it, and going down
-//! with the pin it was made for.
+//! The window a pinned mpv film is drawn in: an enabled window of the desktop's that owns the pin's
+//! own window, standing in the band the picture is seen through, hidden for a park and shown again
+//! after it, and going down with the pin it was made for.
 //!
 //! Beside it, the chrome it buries: the caption and the transport are painted into the pin's own
 //! layered surface, which a child composites over, so the strips of chrome live in windows of
@@ -16,10 +16,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
     GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SC_MINIMIZE,
-    SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, SW_SHOWNOACTIVATE, WA_ACTIVE,
-    WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ERASEBKGND, WM_SIZE, WM_SYSCOMMAND, WS_CHILD,
-    WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
+    SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, SW_SHOWNOACTIVATE,
+    WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ERASEBKGND, WM_NCHITTEST, WM_SIZE,
+    WM_SYSCOMMAND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -529,8 +530,8 @@ fn the_top_level_roads_leave_a_hosted_player_alone() {
         "a player drawn into the pin's own host is told nothing about a band of the desktop's"
     );
 
-    // The style list is the top-level player's: a child of a disabled host takes no press and
-    // needs none of it.
+    // The style list is the top-level player's: a hosted player's window stands inside the pin's own
+    // and takes no press of its own, so it needs none of it.
     assert_eq!(
         player_ex_style_for(0),
         0,
@@ -2198,9 +2199,9 @@ fn a_film_without_a_host_carries_its_chrome_in_the_strips() {
 }
 
 /// Only a really hovered pin shows its chrome: the geometric question is asked first, and then
-/// the window under the pointer — the host and the strips are disabled, so `WindowFromPoint`
-/// skips them and the pin's own window comes back wherever the pointer is genuinely over the
-/// pin (see `refresh_pin_chrome`).
+/// the window under the pointer — the strips are disabled, so `WindowFromPoint` skips them, while the
+/// pin's own window comes back wherever the pointer is genuinely over the pin, and the film host is
+/// read as the pin's own (see `refresh_pin_chrome` and `pin_chrome_occluded`).
 #[test]
 fn a_hover_over_the_pin_itself_asks_its_chrome_back() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -4625,10 +4626,7 @@ fn a_film_host_brought_back_is_the_pin_and_its_film_coming_back() {
     );
 
     // What the button Windows draws for the host does when it is clicked: the Shell restores the window
-    // it holds, and nothing of this app's was pressed for it. It is a `ShowWindow` and not an
-    // `SC_RESTORE`, because a host is a *disabled* window — the press on the picture belongs to the pin
-    // — and the system command route restores and activates, which is nothing a disabled window is
-    // given. What arrives either way is the size the gate reads.
+    // it holds, and nothing of this app's was pressed for it. What arrives is the size the gate reads.
     unsafe {
         let _ = ShowWindow(host, SW_RESTORE);
     }
@@ -4709,6 +4707,231 @@ fn the_shells_minimize_of_a_films_host_puts_the_pin_away_in_the_taskbar() {
         take_pin_command(),
         Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
         "the size a minimize reports is the same ask"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **The pin's host is an ordinary, enabled window**, whether a take-up made it for the pin or a
+/// hover's was promoted into the pin: a disabled window is skipped by `WindowFromPoint`, but it is
+/// also a window the Shell can neither activate nor minimize, and this is the window the pair's
+/// taskbar button belongs to (see `create` and `promote_the_hover_film_host`).
+///
+/// The fault this is a regression test for: a real click on that button delivered nothing at all to
+/// the disabled host, and the Shell re-activated the pin's chrome — the host's owner — instead, so
+/// the button could only ever deactivate and re-activate the app.
+#[test]
+fn a_pins_host_is_enabled_after_a_take_up_and_after_a_promotion() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+
+    // The host a take-up makes for the pin.
+    {
+        let film = StandingFilm::new();
+        pin_stands_in_its_own_window(true);
+        // Safety: the pin and its host are this test's own, put back by the stand's drop.
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        let host = pin_film_host::film_host().expect("the film's host");
+        assert!(
+            unsafe { IsWindowEnabled(host).as_bool() },
+            "the host a take-up makes is enabled: the Shell has to be able to activate it and put \
+             it down, because the pair's taskbar button is its own"
+        );
+    }
+
+    // And a hover's host, which is made disabled and enabled as it becomes the pin's.
+    {
+        let film = StandingFilm::new();
+        let path = PathBuf::from("a-film.mkv");
+        let hover = unsafe { HostedHover::up(&film, &path, 4.0) };
+        assert!(
+            !unsafe { IsWindowEnabled(hover.host).as_bool() },
+            "a hover's host is disabled on the hover's road, where a press on the picture is the \
+             hover's press and no button of the pair's is worn there"
+        );
+        pin_stands_in_its_own_window(true);
+        // Safety: the take-up is on the hover this test stood, and both are put back by the drops.
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        assert_eq!(
+            pin_film_host::film_host(),
+            Some(hover.host),
+            "the hover's host is the pin's host now"
+        );
+        assert!(
+            unsafe { IsWindowEnabled(hover.host).as_bool() },
+            "and the promotion enables it, because it is the window the pair's button is worn by \
+             from here"
+        );
+    }
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **A press on the picture is kept for the pin by the hit test**, which is the job `WS_DISABLED`
+/// used to do here: the host answers `WM_NCHITTEST` with `HTTRANSPARENT`, the documented answer for
+/// "the window under this one, in this thread", and the pin's chrome stands under the host (see
+/// `answer_a_host`).
+///
+/// A hover's host and a window that is not the pin's answer nothing at all: a hover's host is nobody's
+/// button and no pin's picture, and the default answer is the one a window of the desktop's gives.
+///
+/// **And the host is the pin for the app's own questions.** The window under the pointer over the
+/// band is this one now, so `is_preview_window` has to say it is a window of this app's that draws
+/// the pin — otherwise a press on a pin's own picture reads as a press on the desktop (see
+/// `is_preview_window`).
+#[test]
+fn a_press_on_the_band_is_kept_for_the_pin_by_the_hit_test() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, put back by the stand's drop.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+    let hover = unsafe {
+        hover_film_host::take_up_the_hover_film_host((NOWHERE, NOWHERE, NOWHERE + 64, NOWHERE + 48))
+    }
+    .expect("the hover's host");
+
+    let hit_test = |hwnd: HWND| unsafe {
+        pin_film_host::answer_a_host(hwnd, WM_NCHITTEST, WPARAM(0), LPARAM(0))
+    };
+    assert_eq!(
+        hit_test(host),
+        Some(LRESULT(HTTRANSPARENT as isize)),
+        "the pin's host hands the press to the window under it — the pin's chrome — so the band is \
+         still dragged by its film"
+    );
+    assert_eq!(
+        hit_test(hover),
+        None,
+        "a hover's host is no pin's picture, so its presses are nobody's and its own road is the \
+         disabled window's"
+    );
+    assert_eq!(
+        hit_test(HWND(0x3000 as *mut _)),
+        None,
+        "and a window that is not the pin's host answers nothing of the pin's"
+    );
+
+    // Through the window's own procedure, which is the road a real press is hit-tested on.
+    assert_eq!(
+        unsafe { SendMessageW(host, WM_NCHITTEST, WPARAM(0), LPARAM(0)) },
+        LRESULT(HTTRANSPARENT as isize),
+        "the answer is the procedure's, not the helper's"
+    );
+
+    // **And the band is the pin for the app's own questions**, whatever `WindowFromPoint` answers
+    // there: the host is a window of this app's that draws the pin (see `is_preview_window`).
+    assert!(
+        is_preview_window(host.0 as isize),
+        "a press on the band's picture is a press on the pin, for the drag, the hook and the hover"
+    );
+    assert!(
+        is_preview_window(film.pin_hwnd.0 as isize),
+        "beside the pin's own window, which is what a pin with no host is"
+    );
+    assert!(
+        !is_preview_window(hover.0 as isize),
+        "and not the hover's host, which is nobody's pin and no window of a pin's"
+    );
+
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+}
+
+/// **The Shell's own minimize of the pin's chrome is the same put-away as one of its host.** A film
+/// pin's chrome is unowned and not a tool window, so the Shell sometimes lists it beside the host,
+/// and a real click has been seen deactivating and re-activating it: whichever window of the pair
+/// the Shell puts down, the pin's state and the collapse have to be the same (see `window_proc`'s
+/// `WM_SYSCOMMAND` and `WM_SIZE` arms).
+///
+/// **And a pin with no host keeps the old answer**, which is what the chrome would otherwise lose: a
+/// window that is not part of a pair is put down by the default procedure, with the desktop.
+#[test]
+fn a_pin_whose_chrome_is_the_pairs_button_is_put_away_by_the_shells_minimize() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let before = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, put back by the stand's drop.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let _ = pin_film_host::film_host().expect("the film's host");
+    let _ = take_pin_command();
+
+    // The command the Shell sends the window it lists for the pair, here arriving at the chrome.
+    unsafe {
+        SendMessageW(
+            film.pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_MINIMIZE as usize),
+            LPARAM(0),
+        )
+    };
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        "the Shell's minimize of the chrome is the pin's own road into the taskbar"
+    );
+    assert!(
+        !unsafe { IsIconic(film.pin_hwnd) }.as_bool() && !pin_is_collapsed(),
+        "and the window is left standing for the app's collapse, with the state that says the pin \
+         is away, rather than the default answer putting it down behind the pin"
+    );
+
+    // And the size a minimize reports, which is what a `ShowWindow(SW_MINIMIZE)` delivers.
+    unsafe {
+        SendMessageW(
+            film.pin_hwnd,
+            WM_SIZE,
+            WPARAM(SIZE_MINIMIZED as usize),
+            LPARAM(0),
+        )
+    };
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        "the size a minimize reports is the same ask"
+    );
+
+    // **A pin with no film host is no pair**, so the same command is the window's own again: the
+    // default procedure minimizes it, and the pin's state is not asked for anything.
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+    unsafe {
+        SendMessageW(
+            film.pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_MINIMIZE as usize),
+            LPARAM(0),
+        )
+    };
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "with no host there is no button of the pair's, so nothing of the pin's is asked"
+    );
+    assert!(
+        unsafe { IsIconic(film.pin_hwnd).as_bool() },
+        "and the Shell's command reaches the default procedure, which is where a window minimizes"
     );
 
     if let Ok(mut config) = CONFIG.lock() {
@@ -4932,8 +5155,10 @@ fn a_message_the_host_is_handed_is_written_down_with_its_decision() {
     }
     assert!(
         lines.iter().any(|line| line
-            == "film host decision an activation of the host: the pin takes the keyboard"),
-        "and the decision the activation was answered with is the handover: {lines:?}"
+            == "film host decision an activation of the host: the pin takes the caret, the foreground \
+                is left on the host"),
+        "and the decision the activation was answered with is the caret's, with the foreground left \
+         on the window whose button was pressed: {lines:?}"
     );
 
     pin_trace::clear_noted();

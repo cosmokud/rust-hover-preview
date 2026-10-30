@@ -108,6 +108,39 @@ pub(super) unsafe fn pin_take_focus(hwnd: HWND, window: &dyn PinWindow) {
     take_keyboard(behind, pin_is_focused());
 }
 
+/// Give the pin the **caret** without taking the foreground: what an activation of the pair's film
+/// host asks for (see `pin_film_host::answer_an_activation_of_the_host`).
+///
+/// **The foreground stays where the Shell put it, and that is the point.** With `Pin Mode → Always On
+/// Top` off the pair's taskbar button belongs to the film host, and the host is an ordinary window the
+/// Shell activates and puts down: a click on that button makes the host the foreground window, and a
+/// second click minimizes it, which is the toggle (see `pin_film_host::the_shell_put_the_host_down`).
+/// Handing the foreground to the pin is what would break that — the button's window would no longer be
+/// the foreground window, so the Shell's second click could not put it down, which is exactly what a
+/// disabled host left behind.
+///
+/// **And the caret is all the pin needs.** `GetFocus()` is the pin's window, so a key Windows routes
+/// to the window it is in arrives at the pin's own `WM_KEYDOWN`. The low-level key hook is the other
+/// half of it: it runs in a callback that cannot ask a caret of another thread and asks the foreground
+/// window instead (see `key_input::pin_owns_caret`, which is handed `GetForegroundWindow`), so it sees
+/// the host rather than the pin and passes the key on — which is what leaves it to the window procedure
+/// that has the caret.
+///
+/// The claim is written by the same question a press writes it with, on the answer rather than on the
+/// asking (see `pin_take_focus`). **The window recorded as "behind" is this app's own host** — the
+/// window the Shell activated — and a hand-back gives it nothing: `pin_lifecycle::the_window_behind`
+/// refuses a window of this app's own and resolves the ordinary window behind the pin instead.
+pub(super) unsafe fn pin_take_the_caret(hwnd: HWND, window: &dyn PinWindow) {
+    if !pinned() {
+        return;
+    }
+
+    window.set_focusable(hwnd.0 as isize, true);
+    window.set_focus(hwnd.0 as isize);
+
+    take_keyboard(GetForegroundWindow().0 as isize, pin_is_focused());
+}
+
 /// Hand the keyboard back, from the pin having lost it: the user has clicked into another window,
 /// or the pin is on its way down.
 ///
