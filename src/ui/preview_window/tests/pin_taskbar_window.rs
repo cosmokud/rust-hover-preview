@@ -1153,28 +1153,20 @@ fn a_pin_minimized_into_the_taskbar_is_pictured_before_its_windows_go() {
 
     // The window the pin is drawn by — mpv's, for the user's setting — standing in the pin's band and
     // on the screen, which is what the collapse finds it as (see `keep_the_pin_for_the_taskbar`).
+    //
+    // **On the screen and not drawn of anything**, which is the pair the two roads here ask for in
+    // opposite directions: the collapse finds it by `IsWindowVisible` (see `mirror_source`), and
+    // nothing of it is read, so it is a window of the suite's own rather than one the user is shown
+    // (see `a_window_of_the_suite`).
+    // Safety: the window is this test's own, and it is destroyed below.
     let player = unsafe {
-        CreateWindowExW(
+        a_window_of_the_suite(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!(""),
             WS_POPUP,
-            0,
-            0,
-            320,
-            240,
-            None,
-            None,
-            None,
-            None,
+            (0, 0, 320, 240),
         )
-        .expect("a player's window")
     };
-    // Safety: the window is this test's own, and it is asked to be on the screen: a player's window is
-    // a picture of the pin while it is showing, and the collapse takes the picture before it hides it.
-    unsafe {
-        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
-    }
     VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
     let player_box = unsafe { the_client_box(player) };
 
