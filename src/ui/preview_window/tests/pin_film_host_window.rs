@@ -323,7 +323,8 @@ fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
         };
         // SAFETY: both windows are this test's own, and both are destroyed below.
         unsafe {
-            let parent = a_window_of_the_suite_kept_back(
+            let parent = a_window_of_the_suite_kept_back_in(
+                hinstance.into(),
                 WINDOW_EX_STYLE::default(),
                 ERASE_PROBE_CLASS,
                 style,
@@ -465,6 +466,10 @@ fn a_hovers_own_host_is_erased_black_with_a_pins_frame_in_hand() {
     unsafe { pin_film_host::take_down_the_pin_film_host() };
     let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 64, 48)) }
         .expect("the hover's host");
+    // The take-up places the host on the desktop, so it is made composited-as-nothing here: a host an
+    // earlier test left on screen is a black rectangle of the app's over the user's desk (see
+    // `keep_a_window_of_the_suite_unseen`).
+    unsafe { keep_a_window_of_the_suite_unseen(host) };
 
     let mut client = RECT::default();
     assert!(
@@ -938,8 +943,12 @@ fn a_hover_that_cannot_be_adopted_falls_back_to_one_pinned_launch() {
     // **A hover the pin cannot take up**: the host holds its player, and that player has no source,
     // which is a film whose window is not up yet (see `the_hover_player_is_drawing`).
     let hovered = 0x7FFF_FFFB;
-    unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 320, 180)) }
+    let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 320, 180)) }
         .expect("the hover's host");
+    // Placed on the desktop by the take-up, and made composited-as-nothing for the reason
+    // `a_hovers_own_host_is_erased_black_with_a_pins_frame_in_hand` gives (see
+    // `keep_a_window_of_the_suite_unseen`).
+    unsafe { keep_a_window_of_the_suite_unseen(host) };
     hover_film_host::note_hover_film_host_player(hovered, &path);
     VIDEO_PID.store(hovered, Ordering::SeqCst);
     assert!(

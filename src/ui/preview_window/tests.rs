@@ -12,7 +12,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 // What a window of the suite's own is made of and made unseen with: see `a_window_of_the_suite`.
 use windows::Win32::Foundation::HINSTANCE;
 use windows::Win32::UI::WindowsAndMessaging::{
-    SetLayeredWindowAttributes, LWA_ALPHA, WINDOW_EX_STYLE, WINDOW_STYLE,
+    DestroyWindow, GetLayeredWindowAttributes, SetLayeredWindowAttributes,
+    LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, WINDOW_EX_STYLE, WINDOW_STYLE,
 };
 
 /// A display to place on: 1000 by 800 at its top-left corner.
@@ -432,12 +433,18 @@ fn dragged_overlay(
 /// caret out of whatever they are typing in.
 ///
 /// So it is layered at no alpha: `WS_EX_LAYERED` with a whole-window alpha of 0 is a window the
-/// compositor draws as nothing, and nothing else about it is any different — `IsWindowVisible`
-/// answers yes, it stands where it was put in the z-order, `WindowFromPoint` finds it over what is
-/// under it, and its visible region is the real one it is erased and clipped within, which is what
-/// the tests about the host's fill ask of it. `WS_EX_NOACTIVATE` is what keeps the caret where the
-/// user left it: nothing shown here is ever activated. `WS_EX_TOOLWINDOW` is what keeps a run of the
-/// suite from leaving a taskbar button and an Alt+Tab entry behind it.
+/// compositor draws as nothing, and the rest of it is a window of the desktop's like any other —
+/// `IsWindowVisible` answers yes, it stands where it was put in the z-order, and its visible region
+/// is the real one it is erased and clipped within, which is what the tests about the host's fill ask
+/// of it. `WS_EX_NOACTIVATE` is what keeps the caret where the user left it: nothing shown here is
+/// ever activated. `WS_EX_TOOLWINDOW` is what keeps a run of the suite from leaving a taskbar button
+/// and an Alt+Tab entry behind it.
+///
+/// **What it does not do is answer the hit test.** Measured: a layered window at alpha 0 is skipped
+/// by `WindowFromPoint`, which answers with whatever stands behind it — so a window that has to be
+/// the one under the pointer cannot be drawn at nothing, and the one test that asks the desktop that
+/// question gives the app's own menu window a single step of alpha instead (see
+/// `a_standing_menu` in `pin_menu`). Nothing else here is asked which window a press would reach.
 ///
 /// **`WS_VISIBLE` at create time is the one thing that must not happen**, because a window created
 /// visible is activated wherever it stands — that, and not the box it is put at, is what takes the
@@ -448,9 +455,10 @@ fn dragged_overlay(
 /// own is registered with the module's instance; `a_window_of_the_suite_of` is the same window in an
 /// instance a caller registered its class with.
 ///
-/// `WS_EX_LAYERED` on a `WS_CHILD` window is legal here because the executable's manifest declares
-/// the Windows this app supports, which is what turns the pre-Win8 refusal of the pair off (see
-/// `build.rs`, and `pin_film_host`, which relies on the same declaration for the same pair).
+/// **Layering a window of the desktop's is a plain road on any Windows this app runs on**, and the
+/// manifest is what makes it one: declaring the Windows the app supports is what turns the pre-Win8
+/// semantics off, and one of those is that a window may not be layered at all (see `build.rs`, and
+/// `pin_film_host`, which relies on the same declaration for the layered child it makes).
 pub(super) unsafe fn a_window_of_the_suite(
     extra: WINDOW_EX_STYLE,
     class: PCWSTR,
@@ -490,9 +498,9 @@ pub(super) unsafe fn a_window_of_the_suite_of(
 }
 
 /// The same window before it is shown: what a test keeps back for a road that shows it itself — the
-/// tick that finds a player drawing, the place a park's window is put back at — so that whenever it
-/// does appear it is already a window nothing of it is drawn of and nothing of the user's is
-/// activated.
+/// placement that puts a player's window back in its band, the tick that finds a player drawing — so
+/// that whenever it does appear it is already a window nothing of it is drawn of and nothing of the
+/// user's is activated.
 pub(super) unsafe fn a_window_of_the_suite_kept_back(
     extra: WINDOW_EX_STYLE,
     class: PCWSTR,
@@ -513,11 +521,15 @@ pub(super) unsafe fn a_window_of_the_suite_kept_back(
     }
 }
 
-/// The three of them: made hidden, made unseen, and left for the caller to show. `WS_POPUP` is added
+/// The same window of the suite's own, kept back and made in an instance of a caller's own — the erase
+/// probe registers a class with `lpfnWndProc` of its own and makes its windows in the instance it
+/// registered it with (see `a_window_of_the_suite_of`).
+///
+/// The three together: made hidden, made unseen, and left for the caller to show. `WS_POPUP` is added
 /// to the style because every window of the suite's own is a window of the desktop's rather than a
 /// child of another — a child cannot activate, and a child of a window here is a window a test makes
 /// itself, with `WS_CHILD` named where it does.
-unsafe fn a_window_of_the_suite_kept_back_in(
+pub(super) unsafe fn a_window_of_the_suite_kept_back_in(
     hinstance: HINSTANCE,
     extra: WINDOW_EX_STYLE,
     class: PCWSTR,
@@ -572,6 +584,61 @@ pub(super) unsafe fn keep_a_window_of_the_suite_unseen(hwnd: HWND) {
 /// taken from (see `a_window_of_the_suite`).
 pub(super) unsafe fn show_a_window_of_the_suite(hwnd: HWND) {
     let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+}
+
+/// **The road the suite's windows are made by, read back off one of them**: on the desktop and
+/// visible to the window manager, drawn as nothing, and wearing the two bits that keep it out of
+/// the user's taskbar and out of their keyboard.
+///
+/// What the other tests here hold to is what the app does with a window; this holds the window the
+/// suite hands them to what the user is owed, because the two shapes that break that — a create in
+/// `WS_VISIBLE`, a show that activates — are what `tests/no_window_reaches_the_desktop.rs` reads the
+/// source for, and a scan of the source cannot ask a window what it turned out to be.
+#[test]
+fn a_window_of_the_suite_is_on_the_desktop_and_drawn_as_nothing() {
+    let box_ = (40, 40, 360, 220);
+    // SAFETY: a window of this test's own, destroyed below.
+    let hwnd = unsafe {
+        a_window_of_the_suite(WINDOW_EX_STYLE::default(), w!("STATIC"), WS_POPUP, box_)
+    };
+
+    assert!(
+        unsafe { IsWindowVisible(hwnd) }.as_bool(),
+        "a window the desktop is asked about is on the desktop: `IsWindowVisible` answers yes"
+    );
+
+    let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    for bit in [WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW] {
+        assert_ne!(
+            ex & bit.0 as isize,
+            0,
+            "the window wears {bit:?}, which is one of the three that keep it out of the user's \
+             sight, their keyboard and their taskbar"
+        );
+    }
+
+    let mut colour = COLORREF(0);
+    let mut alpha = 255u8;
+    let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+    // SAFETY: the window is this test's own and layered, which is what the call asks of it.
+    unsafe { GetLayeredWindowAttributes(hwnd, Some(&mut colour), Some(&mut alpha), Some(&mut flags)) }
+        .expect("a layered window of the suite's own answers its own attributes");
+    assert_eq!(alpha, 0, "and is drawn at no alpha, which is the whole of why it is unseen");
+    assert_ne!(
+        flags.0 & LWA_ALPHA.0,
+        0,
+        "by a whole-window alpha rather than a colour key: a colour key leaves every pixel that is \
+         not the key drawn"
+    );
+
+    assert_ne!(
+        unsafe { GetForegroundWindow() },
+        hwnd,
+        "and showing it took nothing: the user's own window is still the one with the keyboard"
+    );
+
+    // SAFETY: the window is this test's own.
+    unsafe { DestroyWindow(hwnd) }.expect("the window of the suite's own goes");
 }
 
 mod audio_bands;
