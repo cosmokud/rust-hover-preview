@@ -1,0 +1,8 @@
+# cargo-nextest's own settings, read only by `cargo nextest run`: nextest is not a dependency
+# of this repository and nothing here installs it, so the suite still runs with plain cargo.
+#
+# The suite makes real windows, so a window test that waits on a desktop which never answers
+# would otherwise wait for ever. Half a minute is many times the slowest test's own time, and
+# two periods is the point at which the run is ended rather than reported on again.
+[profile.default]
+slow-timeout = { period = "30s", terminate-after = 2 }
