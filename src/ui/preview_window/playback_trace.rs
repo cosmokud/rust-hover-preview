@@ -416,6 +416,14 @@ pub(super) fn watch_the_engine(pid: u32, volume: u32) {
         return;
     }
 
+    // **And the other half of the same question, which is the machine's rather than the player's**:
+    // whether Windows has a session for this pid at all, what state it is in, and the mixer's own
+    // slider beside the level this line reports (see `audio_session`). Both threads are begun here,
+    // at the launch, because a line read only after a fault has no working film to be read against —
+    // and a captured run's silent film and the twelve beside it it agreed with answered every one of
+    // the six questions below identically.
+    super::audio_session::watch_the_mixer(pid);
+
     let _ = std::thread::Builder::new()
         .name("playback-engine".to_string())
         .spawn(move || {
