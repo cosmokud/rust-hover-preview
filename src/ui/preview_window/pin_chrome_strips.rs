@@ -14,11 +14,10 @@
 //! it stands over the film while the popup is open.
 //!
 //! **What they carry, and when.** Their surfaces are what the pin paints — the caption's strip, the
-//! transport's, the volume popup's footprint, and the band the card warning a damaged file is
-//! drawn over, taken as they were painted (see `CHROME_SURFACE`, `TRANSPORT_SURFACE`,
-//! `VOLUME_SURFACE` and `CARD_SURFACE`) — and each strip is on the screen while the chrome state
-//! asks for it, on every road. They belong to the pin's window rather than to any host: made with
-//! it, they stand wherever the pin's band is, whatever is drawing in it.
+//! transport's, and the volume popup's footprint, taken as they were painted (see `CHROME_SURFACE`,
+//! `TRANSPORT_SURFACE` and `VOLUME_SURFACE`) — and each strip is on the screen while the chrome
+//! state asks for it, on every road. They belong to the pin's window rather than to any host: made
+//! with it, they stand wherever the pin's band is, whatever is drawing in it.
 //!
 //! **Why they take no input.** They are made disabled, and a disabled child is skipped by
 //! `WindowFromPoint`, so a press on the chrome keeps landing on the pin and being answered by its
@@ -69,7 +68,6 @@ unsafe extern "system" fn the_default_answer(
 static CAPTION_STRIP: AtomicIsize = AtomicIsize::new(0);
 static TRANSPORT_STRIP: AtomicIsize = AtomicIsize::new(0);
 static VOLUME_STRIP: AtomicIsize = AtomicIsize::new(0);
-static CARD_STRIP: AtomicIsize = AtomicIsize::new(0);
 static STRIP_CLASS_REGISTERED: Once = Once::new();
 
 pub(super) fn caption_strip() -> Option<HWND> {
@@ -87,11 +85,6 @@ pub(super) fn volume_strip() -> Option<HWND> {
     (hwnd != 0).then_some(HWND(hwnd as *mut _))
 }
 
-pub(super) fn card_strip() -> Option<HWND> {
-    let hwnd = CARD_STRIP.load(Ordering::SeqCst);
-    (hwnd != 0).then_some(HWND(hwnd as *mut _))
-}
-
 /// What a strip is carried by, read out of the pin in one look: the box the strips are placed at,
 /// and whether each strip is the chrome the pin is painting now. It is the same read the paint
 /// makes (`pinned_paint`), so what a strip is shown at is what the chrome is drawn at, and what a
@@ -105,12 +98,6 @@ struct TheStripsState {
     bar: bool,
     /// The footprint the volume popup is drawn in, or nothing while it is closed.
     volume: Option<RECT>,
-    /// The band the card warning a damaged file is drawn over, or nothing while no card is up.
-    ///
-    /// It is the band rather than the card's own panel because the card dims the picture under it:
-    /// what is carried over the film is the scrim and the panel together, and the scrim is the
-    /// whole of what the pin has left for its media.
-    card: Option<RECT>,
 }
 
 fn the_strips_state() -> Option<TheStripsState> {
@@ -132,18 +119,6 @@ fn the_strips_state() -> Option<TheStripsState> {
     });
     let volume = volume.flatten();
 
-    // The card, over the band the pin has left for its media — asked of the same function the
-    // paint asks for those rows, so that the strip stands on the picture the card was painted
-    // over (see `pinned_band_rows` and `paint_corruption_card`).
-    let (band_top, band_height) =
-        pinned_band_rows(height, caption_height, transport_height, pin.overlay);
-    let card = pin.corruption.coverage().is_some().then(|| RECT {
-        left: 0,
-        top: band_top,
-        right: width,
-        bottom: band_top + band_height.max(1),
-    });
-
     Some(TheStripsState {
         width,
         height,
@@ -152,7 +127,6 @@ fn the_strips_state() -> Option<TheStripsState> {
         caption,
         bar,
         volume,
-        card,
     })
 }
 
@@ -238,32 +212,18 @@ pub(super) unsafe fn take_the_strips_up(parent: HWND) {
             VOLUME_STRIP.store(strip.0 as isize, Ordering::SeqCst);
         }
     }
-    if !card_strip().is_some_and(|strip| unsafe { IsWindow(strip) }.as_bool()) {
-        if let Some(strip) = make(w!("card strip")) {
-            CARD_STRIP.store(strip.0 as isize, Ordering::SeqCst);
-        }
-    }
 }
 
 /// Put the strips back over the host a take-up has just made: making it puts it on top of them,
 /// and the chrome stands over the film rather than under it (see `pin_film_host`).
 ///
-/// The caption first, the transport after it, the volume popup after that, and the card last — which
-/// is the order the take-up made them in: the card stands nearest the top, the popup under it, the
-/// transport under that, the caption under those, and the host under them all.
-///
-/// **The card is over the popup and not the other way round** because it is the one mark that is
-/// about the whole file rather than about a control: a popup dragged onto the middle of a warning
-/// would be the pin's own chrome talking over the answer the player gave.
+/// The caption first, the transport after it, and the volume popup last — which is the order the
+/// take-up made them in: the popup stands nearest the top, the transport under it, and the caption
+/// under that.
 pub(super) unsafe fn raise_the_chrome_strips_over_the_host() {
-    for strip in [
-        caption_strip(),
-        transport_strip(),
-        volume_strip(),
-        card_strip(),
-    ]
-    .into_iter()
-    .flatten()
+    for strip in [caption_strip(), transport_strip(), volume_strip()]
+        .into_iter()
+        .flatten()
     {
         if unsafe { IsWindow(strip) }.as_bool() {
             let _ = SetWindowPos(
@@ -298,13 +258,9 @@ pub(super) unsafe fn take_the_strips_down() {
     if let Some(volume) = volume_strip() {
         let _ = DestroyWindow(volume);
     }
-    if let Some(strip) = card_strip() {
-        let _ = DestroyWindow(strip);
-    }
     CAPTION_STRIP.store(0, Ordering::SeqCst);
     TRANSPORT_STRIP.store(0, Ordering::SeqCst);
     VOLUME_STRIP.store(0, Ordering::SeqCst);
-    CARD_STRIP.store(0, Ordering::SeqCst);
 }
 
 /// Put the strips where the chrome is painted: the caption across the window's first rows and
@@ -363,20 +319,6 @@ pub(super) unsafe fn place_the_chrome_strips() {
                 volume.top + row,
                 (volume.right - volume.left).max(1),
                 (volume.bottom - volume.top).max(1),
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-        }
-    }
-
-    if let Some(card) = state.card {
-        if let Some(strip) = card_strip() {
-            let _ = SetWindowPos(
-                strip,
-                HWND::default(),
-                card.left,
-                card.top + row,
-                (card.right - card.left).max(1),
-                (card.bottom - card.top).max(1),
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
@@ -484,12 +426,9 @@ pub(super) unsafe fn sync_the_chrome_strips() {
     // resize answers them on the paint it is painted on rather than on the place after it.
     place_the_chrome_strips();
 
-    let (Some(caption), Some(transport), Some(volume), Some(card)) = (
-        caption_strip(),
-        transport_strip(),
-        volume_strip(),
-        card_strip(),
-    ) else {
+    let (Some(caption), Some(transport), Some(volume)) =
+        (caption_strip(), transport_strip(), volume_strip())
+    else {
         return;
     };
 
@@ -499,7 +438,6 @@ pub(super) unsafe fn sync_the_chrome_strips() {
         let _ = unsafe { ShowWindow(caption, SW_HIDE) };
         let _ = unsafe { ShowWindow(transport, SW_HIDE) };
         let _ = unsafe { ShowWindow(volume, SW_HIDE) };
-        let _ = unsafe { ShowWindow(card, SW_HIDE) };
         return;
     };
 
@@ -543,24 +481,6 @@ pub(super) unsafe fn sync_the_chrome_strips() {
                 volume_wanted,
                 state.volume.is_some(),
             );
-        }
-    });
-
-    // The card, over the band the film is in: the surface the paint drew it on is the band's own
-    // box, so the strip carries it whole and the film is seen through the scrim around the panel.
-    let card_wanted = state
-        .card
-        .map(|rect| {
-            (
-                (rect.right - rect.left).max(1) as u32,
-                (rect.bottom - rect.top).max(1) as u32,
-            )
-        })
-        .unwrap_or((1, 1));
-    CARD_SURFACE.with(|cell| {
-        let surface = cell.borrow();
-        unsafe {
-            set_the_strip_at(card, surface.as_ref(), card_wanted, state.card.is_some());
         }
     });
 }

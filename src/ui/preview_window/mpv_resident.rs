@@ -275,6 +275,9 @@ fn begun(signature: LaunchSignature, volume: u32, audio_off: bool) -> Option<Res
         // layered to keep it off the screen, and a layered window cannot have a flip-model one.
         false,
         !signature.behind_the_host,
+        // The resident is a player like any other, so its command line is the one an ordinary
+        // launch builds unless a trace asks for the two log flags (see `playback_trace::asked`).
+        playback_trace::asked(),
     );
     args.remove(0);
     // The two that make it a resident rather than a player: no file to play, and a window to draw

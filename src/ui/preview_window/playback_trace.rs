@@ -22,13 +22,15 @@
 //! `%TEMP%\rhp-playback-trace.log` — the same shape `RHP_PIN_TRACE` has (see `pin_trace`), a file of
 //! its own because the question is a different one and a run that asks it should not have to read a
 //! pin's road to answer it. A run without the variable builds no line at all and spawns no thread.
+//! **The file is the run's own**: its first line makes it over, so what a session is read for is what
+//! that session did rather than what every run before it left behind (see `write`).
 //!
 //! **The engine's answers are read on a thread of their own, never on the preview loop.** A player
 //! that has just been begun has no pipe yet (mpv makes one some tens of milliseconds into the start,
 //! measured at 40 ms warm and 211 ms cold), and waiting for one is a wait no tick may pay (see
 //! `mpv_ipc::get_property_within`, which is bounded per question and only ever called from here).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
 use std::time::Duration;
@@ -60,17 +62,43 @@ pub(super) fn wanted() -> bool {
     asked() || cfg!(test)
 }
 
-/// Write one timestamped line to `%TEMP%\rhp-playback-trace.log`, appended and flushed so a run that
-/// ends badly leaves what it wrote.
+/// The file a run writes its lines to: `%TEMP%\rhp-playback-trace.log`.
+fn the_log_file() -> PathBuf {
+    std::env::temp_dir().join("rhp-playback-trace.log")
+}
+
+/// Whether this process has made its log yet: the first line of a run makes the file afresh, and
+/// every later line appends to it (see `write_to`).
+static STARTED: Once = Once::new();
+
+/// Write one timestamped line to `%TEMP%\rhp-playback-trace.log`, and flush it so a run that ends
+/// badly leaves what it wrote.
+///
+/// **The first line of a process makes the file afresh, and every later one appends to it.** A log
+/// that only ever appended would be a pile of every run there has ever been: a line from yesterday's
+/// launch beside today's is a line a reader cannot tell apart from this run's, and the question the
+/// trace answers is about one run. A second process — a second run — starts the file over, which is
+/// the rule `pin_trace` keeps.
 pub(super) fn write(line: &str) {
+    write_to(&the_log_file(), &STARTED, line);
+}
+
+/// The write itself, with the file and the run's own latch passed in so that a test can watch a fresh
+/// start without a second process (see `STARTED`).
+fn write_to(path: &Path, started: &Once, line: &str) {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| format!("{}.{:03}", elapsed.as_secs(), elapsed.subsec_millis()))
         .unwrap_or_else(|_| "-".to_string());
+    // Truncating once, under the latch, is what keeps two threads' first lines from each making the
+    // file over: every line after it appends.
+    started.call_once(|| {
+        let _ = std::fs::File::create(path);
+    });
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(std::env::temp_dir().join("rhp-playback-trace.log"))
+        .open(path)
     {
         use std::io::Write;
         let _ = writeln!(file, "{stamp} {line}");
@@ -561,5 +589,48 @@ mod tests {
             "one line per launch, and the form is the one the arguments are built from"
         );
         clear_noted();
+    }
+
+    /// **A run's log is the run's own.** Two lines written by one process both land; a fresh start
+    /// makes the file over rather than appending to what the last run left behind, and every line is
+    /// flushed as it is written so a run that ends badly still leaves what it said.
+    #[test]
+    fn a_run_keeps_its_own_lines_and_a_fresh_start_makes_the_file_over() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-playback-trace");
+        let _ = std::fs::remove_dir_all(&folder);
+        let _ = std::fs::create_dir_all(&folder);
+        let path = folder.join("rhp-playback-trace.log");
+
+        // The timestamp a line opens with, so what is left is the line itself.
+        let the_lines = || -> Vec<String> {
+            std::fs::read_to_string(&path)
+                .unwrap_or_default()
+                .lines()
+                .map(|line| {
+                    line.split_once(' ')
+                        .map_or("", |(_, line)| line)
+                        .to_string()
+                })
+                .collect()
+        };
+
+        let a_run = Once::new();
+        write_to(&path, &a_run, "first line");
+        write_to(&path, &a_run, "second line");
+        assert_eq!(
+            the_lines(),
+            vec!["first line", "second line"],
+            "two lines written by one process are two lines in its log"
+        );
+
+        let a_fresh_start = Once::new();
+        write_to(&path, &a_fresh_start, "third line");
+        assert_eq!(
+            the_lines(),
+            vec!["third line"],
+            "a new run makes the log over: the last run's lines are not this run's"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }

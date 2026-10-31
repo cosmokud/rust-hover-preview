@@ -207,6 +207,12 @@ impl AudioForm {
 /// thread of its own (see `spawn_gain_scan`). What that first half leaves for a later hand is
 /// `mpv_launched_without_audio`, which the launch records beside the pipe as well (see
 /// `mpv_ipc::set_volume`).
+///
+/// **`traced` is the one thing the playback trace adds to a launch**, and it is passed in rather
+/// than read here for the reason every other switch is: an ordinary launch builds exactly the
+/// command line this app had before there was a trace — no `--terminal`, no `--msg-level` — and a
+/// run that asks for the trace gets the two flags that make the player's own log readable (see
+/// `playback_trace::asked`).
 #[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 pub(super) fn mpv_args(
     path: &Path,
@@ -224,6 +230,7 @@ pub(super) fn mpv_args(
     ipc: &str,
     flip: bool,
     ontop: bool,
+    traced: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         // Read before the configuration and before any file the user has: the app's own command
@@ -231,19 +238,22 @@ pub(super) fn mpv_args(
         // turn on an OSC or a mouse binding for a preview that is meant to have neither.
         path.to_string_lossy().into_owned(),
         "--no-config".to_string(),
-        // **The two flags that make the player's own log readable, which is the only way a damaged
-        // file is noticed at all.** `--terminal=yes` asks mpv to write its log lines whether or not
-        // it has a console to write them on, and on Windows that is the standard *output*: measured
-        // on mpv 0.41 with both streams redirected, a missing file printed `[file] Cannot open
-        // file '…': Invalid argument` into the standard output (134 bytes) and nothing into the
-        // standard error (0 bytes), with `--terminal=yes` and with the default alike — which is why
-        // the pipe this app drains is the standard output (see `player_logs`). `all=warn` is the
-        // level those lines are written at and the ceiling on how many of them a player produces:
-        // `info` is a line per track, per filter and per device, and none of it is about the file's
-        // health.
-        "--terminal=yes".to_string(),
-        "--msg-level=all=warn".to_string(),
     ];
+
+    // **The two flags that make the player's own log readable, and only where a trace asks for
+    // them.** `--terminal=yes` asks mpv to write its log lines whether or not it has a console to
+    // write them on, and on Windows that is the standard *output*: measured on mpv 0.41 with both
+    // streams redirected, a missing file printed `[file] Cannot open file '…': Invalid argument`
+    // into the standard output (134 bytes) and nothing into the standard error (0 bytes), with
+    // `--terminal=yes` and with the default alike — which is why the pipe a traced launch drains is
+    // the standard output (see `player_logs`). `all=warn` is the level those lines are written at
+    // and the ceiling on how many of them a player produces: `info` is a line per track, per filter
+    // and per device, and none of it is about a device that would not open. An ordinary launch is
+    // given neither flag, which is the command line this app had before there was a trace.
+    if traced {
+        args.push("--terminal=yes".to_string());
+        args.push("--msg-level=all=warn".to_string());
+    }
 
     // The mouse: mpv's own bindings are what a hover overlay must not have, and they survive
     // `--input-conf` on their own — see `MPV_PAUSE_BINDING`, which is where both flags are
@@ -1619,6 +1629,9 @@ mod tests {
         );
     }
 
+    /// **The command line the spec settles on, and the command line this app had before there was a
+    /// playback trace** — the two are the same list, which is the acceptance for an untraced run: no
+    /// `--terminal`, no `--msg-level`, and nothing else that a trace would have added.
     #[test]
     fn the_mpv_route_is_launched_with_the_command_line_the_spec_settles_on() {
         assert_eq!(
@@ -1637,13 +1650,12 @@ mod tests {
                 Some(Path::new("scratch/mpv-input.conf")),
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "films/episode.mkv",
                 "--no-config",
-                "--terminal=yes",
-                "--msg-level=all=warn",
                 "--no-input-default-bindings",
                 "--input-conf=scratch/mpv-input.conf",
                 "--no-osc",
@@ -1664,7 +1676,55 @@ mod tests {
             "the film, then the configuration off, the mouse off, the chrome off, the order it is\
              held up in, the box, the video output being measured, the three Direct3D options \
              and the level — the output is named at all only as a measurement, and no \
-             `--start` is asked for at the beginning of a file (see `mpv_args`)"
+             `--start` is asked for at the beginning of a file (see `mpv_args`). This is the\
+             argv of a run without `RHP_PLAYBACK_TRACE`, byte for byte: the two flags a traced\
+             launch adds are the whole of what the trace changes about a command line"
+        );
+    }
+
+    /// **The whole of what a trace adds to a launch is the two flags that make the player's own log
+    /// readable**, and they are the same argv in the same order with those two lines inserted. The
+    /// untraced list is asserted above, in full, so the pair pins both halves: a run that does not
+    /// ask for the trace pays one cached atomic and hands its player exactly what it always did.
+    #[test]
+    fn a_traced_launch_is_the_untraced_command_line_plus_the_two_log_flags() {
+        let launch = |traced| {
+            mpv_args(
+                Path::new("films/episode.mkv"),
+                10,
+                20,
+                640,
+                360,
+                0.0,
+                false,
+                80,
+                None,
+                true,
+                true,
+                Some(Path::new("scratch/mpv-input.conf")),
+                IPC,
+                false,
+                true,
+                traced,
+            )
+        };
+
+        let untraced = launch(false);
+        assert!(
+            !untraced
+                .iter()
+                .any(|arg| arg.starts_with("--terminal") || arg.starts_with("--msg-level")),
+            "an untraced launch is given neither flag: {untraced:?}"
+        );
+
+        let mut traced = untraced.clone();
+        traced.insert(2, "--terminal=yes".to_string());
+        traced.insert(3, "--msg-level=all=warn".to_string());
+        assert_eq!(
+            launch(true),
+            traced,
+            "a traced launch is the untraced command line with the two log flags after \
+             `--no-config`, and nothing else"
         );
     }
 
@@ -1690,6 +1750,7 @@ mod tests {
             None,
             IPC,
             true,
+            false,
             false,
         );
         assert!(
@@ -1761,6 +1822,7 @@ mod tests {
             IPC,
             false,
             true,
+            false,
         );
         assert!(
             args.iter().any(|arg| arg == "--window-dragging=no"),
@@ -1792,13 +1854,12 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
                 "--no-config",
-                "--terminal=yes",
-                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -1841,13 +1902,12 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
                 "--no-config",
-                "--terminal=yes",
-                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -1889,13 +1949,12 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
                 "--no-config",
-                "--terminal=yes",
-                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -1946,13 +2005,12 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
                 "--no-config",
-                "--terminal=yes",
-                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -1993,13 +2051,12 @@ mod tests {
                 None,
                 IPC,
             false,
-            true
+            true,
+            false,
             ),
             [
                 "a.mkv",
                 "--no-config",
-                "--terminal=yes",
-                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -2044,6 +2101,7 @@ mod tests {
             IPC,
             false,
             true,
+            false,
         );
         assert!(
             held.contains(&"--start=12.500".to_string()),
@@ -2076,6 +2134,7 @@ mod tests {
             IPC,
             false,
             true,
+            false,
         );
         assert!(
             !playing
@@ -2116,13 +2175,12 @@ mod tests {
                     None,
                     IPC,
                     false,
-                    true
+                    true,
+                    false,
                 ),
                 [
                     "a.mkv",
                     "--no-config",
-                    "--terminal=yes",
-                    "--msg-level=all=warn",
                     "--no-osc",
                     "--no-border",
                     "--window-dragging=no",
@@ -2160,7 +2218,8 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             )
             .contains(&"--geometry=640x360+0+0".to_string()),
             "a box at the primary display's own origin is passed as it stands"
@@ -2210,13 +2269,12 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
                 "--no-config",
-                "--terminal=yes",
-                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -2280,13 +2338,12 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
                 "--no-config",
-                "--terminal=yes",
-                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",

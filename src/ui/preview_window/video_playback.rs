@@ -967,12 +967,6 @@ fn start_mpv_video_playback(
     // `mpv_ipc`).
     let ipc = mpv_ipc::next_pipe_name();
 
-    // What this player's own log lines are read as: one latch, made before the process is, and
-    // read by the pin this file's window is taken up with (see `player_logs` and
-    // `CorruptionCard`). A hover's player carries one too, because a pin adopts the hover's player
-    // rather than beginning one of its own.
-    let logs = player_logs::a_watch();
-
     // **The box is named on the scale of the display mpv's window is created on, which is the
     // primary's** — that is the size Windows scales to the display the film is moved to, and
     // naming it there is the whole of what makes the window the box rather than twice it (see
@@ -1087,6 +1081,10 @@ fn start_mpv_video_playback(
     // asked the same thing**: the front a pin asks for is its own window's, on a press, and a player
     // that activates itself takes the front off the listing the click was made in (see
     // `pin_lifecycle::a_hand_back_goes_to`).
+    // **A traced launch is the only one given the player's own log and a stream to write it on**,
+    // and an ordinary one is exactly the launch this app has always made: `null` on every stream, no
+    // thread, and no terminal flags in the argv (see `playback_trace` and `video_launch::mpv_args`).
+    let traced = playback_trace::asked();
     let mut args = video_launch::mpv_args(
         path,
         launch_x,
@@ -1103,6 +1101,7 @@ fn start_mpv_video_playback(
         &ipc,
         thumbnail_flip,
         !behind_the_host,
+        traced,
     );
     if must_not_activate {
         if let Some(switch) = video_launch::hover_focus_switch(video_launch::the_focus_on_support())
@@ -1118,7 +1117,7 @@ fn start_mpv_video_playback(
     // repeats `all=warn` so that it stands whether mpv reads a second `--msg-level` as replacing the
     // first or as adding to it — and a run without the trace is handed the flag `mpv_args` wrote and
     // no second one at all.
-    if playback_trace::asked() {
+    if traced {
         args.push("--msg-level=all=warn,ao=info,af=info".to_string());
     }
 
@@ -1126,12 +1125,16 @@ fn start_mpv_video_playback(
     command
         .args(args)
         .stdin(Stdio::null())
-        // **The player's own log lines, and the only stream of its three that carries any** (see
+        // **The player's own log lines, and only where a trace asks for them** (see
         // `video_launch::mpv_args`, where `--terminal=yes` is argued for and the measurement that
         // puts them on the standard output is written down). A pipe nobody empties would block the
         // player on a full buffer, so the draining thread begins with the player below (see
-        // `player_logs`).
-        .stdout(player_logs::a_stream_to_drain())
+        // `player_logs`). An untraced launch is given a null stream and no thread at all.
+        .stdout(if traced {
+            player_logs::a_stream_to_drain()
+        } else {
+            Stdio::null()
+        })
         .stderr(Stdio::null());
 
     // **A pin that steps from one film to the next holds the topmost band for the swap.** The
@@ -1185,16 +1188,14 @@ fn start_mpv_video_playback(
         video_launch::mpv_launched_without_audio(volume),
     );
 
-    // **And the pipe its own log is read off is emptied from here on**, on a thread that ends with
-    // the player (see `player_logs`): what the player says is matched against this launch's watch
-    // and nothing else of it is kept. The watch is remembered under the player *before* the first
-    // byte is read, so a pin taken up on this file finds it whichever side of the take-up that byte
-    // lands on — and the take-up itself waits for nothing (see `PinnedPreview::corruption`). A
-    // traced run keeps the lines themselves as well, which is where an audio device that would not
-    // open says so (see `playback_trace`).
-    player_logs::remember(child.id(), path, &logs);
-    if let Some(stream) = child.take_log_stream() {
-        player_logs::drain_a_player_log(stream, logs, child.id());
+    // **And the pipe its own log is read off is emptied from here on, where a trace asked for
+    // one**, on a thread that ends with the player (see `player_logs`): what the player says about
+    // an audio device that would not open is the half of a silent film only it can describe (see
+    // `playback_trace`). An untraced launch has no pipe to empty and begins no thread.
+    if traced {
+        if let Some(stream) = child.take_log_stream() {
+            player_logs::drain_a_player_log(stream, child.id());
+        }
     }
 
     // **And what the player itself did with the sound, where a trace asks for it.** The launch's line

@@ -1242,6 +1242,7 @@ mod tests {
         let name = next_pipe_name();
         let args = video_launch::mpv_args(
             &picture, 0, 0, 320, 240, 0.0, false, 0, None, false, false, None, &name, false, true,
+            false,
         );
         let audio_file = format!("--audio-file={}", soundtrack.to_string_lossy());
         let started = engine_processes::hidden_command(&program)
