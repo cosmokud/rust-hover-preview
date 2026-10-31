@@ -705,6 +705,26 @@ pub(super) struct FindState {
     pub(super) click_run: Option<(Instant, (i32, i32), u8)>,
     /// Whether the caret is drawn at this moment, and when its blink turns over (see `CaretBlink`).
     pub(super) blink: text_find_field::CaretBlink,
+    /// Which surface the keyboard is aimed at, which is what a `Ctrl`+`C` under the bar copies from
+    /// (see `FindFocus` and `text_find::copy_target`).
+    pub(super) focused: FindFocus,
+}
+
+/// The two surfaces a pinned page with a find bar over it has, and which of them was focused last.
+///
+/// **Focus follows the hand, and the bar opens with the field focused.** A click in the query is the
+/// field, a click in the page under the bar is the page — that is a selection made in the page, and
+/// it is made whether or not a bar is up — and `Ctrl`+`F` over either is the bar asking for its
+/// field. What it decides is which selection a `Ctrl`+`C` copies: a reader who selected a word in
+/// the page and then clicked into the query to search for it is copying the query, and one who typed
+/// a query and then clicked into the page is copying the page.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(super) enum FindFocus {
+    /// The bar's query.
+    #[default]
+    Field,
+    /// The page under the bar.
+    Page,
 }
 
 /// A step button of the find bar held down: which one it is, the way it steps, and when the next step

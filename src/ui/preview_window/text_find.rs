@@ -176,6 +176,10 @@ fn press_the_field(placed: &FindBarPlacement, x: i32, y: i32) {
         return;
     };
 
+    // A hand on the query is the field focused, and a `Ctrl`+`C` after it copies the query (see
+    // `FindFocus`).
+    find.focused = FindFocus::Field;
+
     let at = pin_chrome::query_index_at(
         &placed.card,
         find.field.text(),
@@ -445,6 +449,8 @@ pub(super) fn open_text_find() {
         else {
             return;
         };
+
+        find.focused = FindFocus::Field;
 
         if find.open {
             find.field.select_all();
@@ -871,12 +877,64 @@ fn the_caret_turned() -> bool {
     find.blink.advance(Instant::now(), caret_blink())
 }
 
+/// What a `Ctrl`+`C` under the bar copies: one surface's selection or the other's.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(super) enum CopyTarget {
+    /// The query's own selection, which is the text as it stands in the field.
+    Field(String),
+    /// The page's selection, copied the way `Ctrl`+`C` copies it with no bar up (see
+    /// `copy_text_preview`).
+    Page,
+}
+
+/// The surface a `Ctrl`+`C` under the bar copies from: the one that was focused last, if it has
+/// something selected.
+///
+/// **A bar being up is not a claim on the clipboard, and neither is a caret in it.** The field is
+/// focused by opening the bar and by a press in the query; the page is focused by a press or a drag
+/// in it, which is a selection made in the page whether the bar is up or not. So the reader who
+/// selected in the page and then clicked into the query to search it copies the query, and the one
+/// who typed a query and then clicked into the page to pick the match by hand copies the page — even
+/// though both surfaces have a selection at that moment.
+///
+/// A surface with nothing selected is not a claim either: the copy falls back to the other one's
+/// selection, which is what the chord has always done with the query's selection empty.
+pub(super) fn copy_target(
+    focused: FindFocus,
+    field_text: String,
+    page_has_a_selection: bool,
+) -> CopyTarget {
+    match focused {
+        FindFocus::Field if field_text.is_empty() => CopyTarget::Page,
+        FindFocus::Field => CopyTarget::Field(field_text),
+        FindFocus::Page if !page_has_a_selection => CopyTarget::Field(field_text),
+        FindFocus::Page => CopyTarget::Page,
+    }
+}
+
+/// What the bar's own road decided a batch of keys gives the clipboard, and without touching it: the
+/// text `settle` would write and whether it would be the page's own copy instead.
+///
+/// A test of which surface a `Ctrl`+`C` copies may not write the machine's clipboard, and the
+/// decision is the whole of what is being asked (see `copy_target` and the `FindEdit::Copy` arm of
+/// `take_settled`).
+#[cfg(test)]
+pub(super) fn the_copy_a_batch_decided_for_a_test() -> Option<(Option<String>, bool)> {
+    let settled = take_settled()?;
+    Some((settled.copy, settled.copy_page))
+}
+
 /// Take the bar's edits out of the page and apply the ones that need no document: the field's own
 /// edits, its selection and its undo stack, the two switches, and a close — while a paste and a copy
 /// are held for the tick, which is the one that may take the clipboard (see `settle`).
 fn take_settled() -> Option<Settled> {
     let mut media = CURRENT_MEDIA.lock().ok()?;
     let state = media.as_mut()?.text_state.as_mut()?;
+    // Read before the bar's own state is borrowed: which of the two selections a copy is the
+    // reader's is a question about both (see `copy_target`).
+    let page_has_a_selection = state
+        .selection
+        .is_some_and(|selection| !selection.is_empty());
     let find = &mut state.find;
 
     if find.pending.is_empty() {
@@ -912,16 +970,20 @@ fn take_settled() -> Option<Settled> {
             }
             FindEdit::SelectAll => find.field.select_all(),
             FindEdit::Copy => {
-                // **A copy is the field's only while the field has something selected.** With nothing
-                // selected in the query, the `Ctrl`+`C` was aimed at the page the reader has just
-                // selected in — a bar being up is not a claim on the clipboard, and a bar that
-                // swallowed the chord would be a copy they asked for and did not get (see
-                // `copy_text_preview`).
-                let text = find.field.selected_text();
-                if text.is_empty() {
-                    settled.copy_page = true;
-                } else {
-                    settled.copy = Some(text);
+                // The surface the reader was last in takes the chord, and one with nothing selected
+                // gives it back to the other — a bar being up is not a claim on the clipboard (see
+                // `copy_target`).
+                match copy_target(
+                    find.focused,
+                    find.field.selected_text(),
+                    page_has_a_selection,
+                ) {
+                    CopyTarget::Field(text) => {
+                        if !text.is_empty() {
+                            settled.copy = Some(text);
+                        }
+                    }
+                    CopyTarget::Page => settled.copy_page = true,
                 }
             }
             FindEdit::Cut => {

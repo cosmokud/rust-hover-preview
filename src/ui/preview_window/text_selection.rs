@@ -34,6 +34,11 @@ pub(super) fn begin_text_selection(x: i32, y: i32) -> bool {
     state.click_run = Some((now, (x, y), run));
     state.drag_pointer = Some((x, y));
 
+    // A press in the page is the page focused, whether or not a find bar is up over it: a `Ctrl`+`C`
+    // after it copies what the reader selected here rather than a query they left selected in the bar
+    // (see `FindFocus`).
+    state.find.focused = FindFocus::Page;
+
     // What a double click takes is kept for as long as the drag that follows it runs: the word
     // under the hand is what that drag is grown from, and it is grown by whole runs of characters
     // rather than by the one the hand has reached, so the first small move of a hand still on the
@@ -109,6 +114,10 @@ pub(super) fn extend_text_selection(x: i32, y: i32) -> Option<bool> {
     if !state.selecting {
         return Some(false);
     }
+
+    // A drag in the page is the page focused, for the reason the press that began it was (see
+    // `begin_text_selection`).
+    state.find.focused = FindFocus::Page;
 
     // Where the pointer is is remembered on every move of a drag, whether or not the caret moves
     // with it: a drag carried past the edge of the box is one the page has to follow, and a page
