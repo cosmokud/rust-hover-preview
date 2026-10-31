@@ -486,6 +486,32 @@ pub(super) fn typed_character(wparam: usize) -> Option<char> {
     char::from_u32(wparam as u32).filter(|character| !character.is_control())
 }
 
+/// The modifiers a key was pressed under, read where the press is taken rather than inside the hook.
+///
+/// **A `WH_KEYBOARD_LL` callback may not ask the keyboard.** It runs in the OS input path, where every
+/// keystroke on the machine waits for it to return, so `GetAsyncKeyState` belongs to the road that
+/// reads the press — the window procedure at a message, the tick for a command the hook swallowed —
+/// and the edit is queued for the tick either way (see `key_edit_with` and `take_hooked_key_with`).
+/// What that costs is a hand that leaves `Shift` between the press and the tick: the move is read with
+/// the modifiers the hands are on when the batch is drained, which is the reading `Ctrl`+`A` has
+/// always been given.
+#[derive(Clone, Copy, Default, Debug)]
+pub(super) struct Modifiers {
+    pub(super) shift: bool,
+    pub(super) control: bool,
+}
+
+impl Modifiers {
+    /// The two keys as they stand now, asked of the same two polls `text_selection` has always made
+    /// for a `Ctrl` chord and a `Shift`+click.
+    pub(super) fn polled() -> Self {
+        Self {
+            shift: text_selection::shift_is_down(),
+            control: text_selection::control_is_down(),
+        }
+    }
+}
+
 /// What one key pressed on the pin's own window asks of a bar that is up, or nothing for a key the
 /// bar only swallows (see `window_proc`).
 ///
@@ -503,8 +529,14 @@ pub(super) fn typed_character(wparam: usize) -> Option<char> {
 /// underlines in Office, so a reader who presses it has asked for nothing this field owns; emptying
 /// the query is `Esc`'s (see `FindEdit::Close`).
 pub(super) fn key_edit(vk: i32) -> Option<FindEdit> {
-    let control = text_selection::control_is_down();
-    let shift = text_selection::shift_is_down();
+    key_edit_with(vk, Modifiers::polled())
+}
+
+/// `key_edit` with the modifiers the key was pressed under, named by the caller rather than polled
+/// here so that both roads a key can take — a message and the hook's command — are read the same way,
+/// and so that a test can ask about `Ctrl`+`←` without holding `Ctrl` down (see `Modifiers`).
+pub(super) fn key_edit_with(vk: i32, held: Modifiers) -> Option<FindEdit> {
+    let Modifiers { shift, control } = held;
 
     if vk == VK_ESCAPE.0 as i32 {
         return Some(FindEdit::ClearOrClose);
@@ -580,17 +612,48 @@ pub(super) fn key_edit(vk: i32) -> Option<FindEdit> {
 /// inert under a query, and letting one of them through would turn the page or walk the folder out
 /// from under a hand that is typing.
 ///
-/// The two arrows are read as the page keys the pin's table calls them — `PageBack` and `PageOn` —
-/// because that table is the hook's and is deliberately not changed for a bar: `VK_UP` and `VK_PRIOR`
-/// are one command there, and so are `VK_DOWN` and `VK_NEXT`, so a page key steps the matches as the
-/// arrow of the same direction does. What the bar will not do is turn the page, which is the page
-/// key's own work.
-pub(super) fn take_hooked_key(command: PinCommand) -> bool {
+/// **The four keys the caret moves on arrive here and nowhere else.** `VK_LEFT`, `VK_RIGHT`,
+/// `VK_HOME` and `VK_END` are in the pin's own table (`key_input::PIN_KEY_COMMANDS`), and the hook
+/// swallows them whenever the pin holds the caret — which, `Ctrl`+`F` being a pin-only key, is
+/// exactly when a bar is up. A swallowed key never becomes a message, so `key_edit`'s arms for those
+/// four keys answer them only on a road that is not this one, and reading them as the caret moves
+/// they mean here is what makes `←`/`→`/`Home`/`End` work at all under a query.
+///
+/// `VK_UP`/`VK_PRIOR` and `VK_DOWN`/`VK_NEXT` are one command each in that table, so a page key steps
+/// the matches as the arrow of the same direction does; `F3` steps them too. What the bar will not do
+/// is turn the page, which is the page keys' own work.
+///
+/// **That table is deliberately not changed for a bar**, and the price is two things. The page keys
+/// cannot be told from the arrows here, so `PgUp`/`PgDn` step the matches rather than the page — which
+/// is what a find bar's up and down are for and all the bar would ask of them anyway. And the
+/// modifiers are read on the tick rather than at the press, because the hook thread cannot ask the
+/// keyboard or take a lock to find out whether a bar is up (see `Modifiers`). The table is the pin's
+/// arrangement for every pin there is; a second table keyed on a bar is state the callback would have
+/// to be told on every tick, for a difference no reader would see.
+pub(super) fn take_hooked_key_with(command: PinCommand, held: Modifiers) -> bool {
     if !is_open() {
         return false;
     }
 
     match command {
+        PinCommand::Previous => note(FindEdit::Move(
+            if held.control {
+                text_find_field::Motion::WordLeft
+            } else {
+                text_find_field::Motion::CharacterLeft
+            },
+            held.shift,
+        )),
+        PinCommand::Next => note(FindEdit::Move(
+            if held.control {
+                text_find_field::Motion::WordRight
+            } else {
+                text_find_field::Motion::CharacterRight
+            },
+            held.shift,
+        )),
+        PinCommand::PageTop => note(FindEdit::Move(text_find_field::Motion::Home, held.shift)),
+        PinCommand::PageBottom => note(FindEdit::Move(text_find_field::Motion::End, held.shift)),
         PinCommand::PageBack => note(FindEdit::Step(-1)),
         PinCommand::PageOn | PinCommand::FindNext => note(FindEdit::Step(1)),
         PinCommand::Close => note(FindEdit::ClearOrClose),
@@ -622,6 +685,51 @@ struct Settled {
     paste: bool,
 }
 
+/// What the card over the page draws of the bar, as one value: the query, where the caret and the
+/// other end of its selection stand, the two switches, and how many places were found and which of
+/// them the reader is on.
+///
+/// **A batch of edits that leaves every one of these as it was is a batch with nothing to draw**, and
+/// that is what keeps a key that moved nothing from repainting: a band repaint copies the whole page
+/// frame under the card (see `settle`). The caret's blink is not in here, because it is the tick's
+/// own question rather than an edit's (see `the_caret_turned`).
+#[derive(PartialEq, Eq)]
+struct Drawn {
+    open: bool,
+    query: String,
+    caret: usize,
+    anchor: usize,
+    case_sensitive: bool,
+    whole_word: bool,
+    count: usize,
+    current: Option<usize>,
+}
+
+/// The bar as the card draws it now, or nothing while the pin holds no page at all (see `Drawn`).
+fn as_drawn() -> Option<Drawn> {
+    let media = CURRENT_MEDIA.lock().ok()?;
+    let find = &media.as_ref()?.text_state.as_ref()?.find;
+
+    Some(Drawn {
+        open: find.open,
+        query: find.field.text().to_string(),
+        caret: find.field.caret(),
+        anchor: find.field.anchor(),
+        case_sensitive: find.case_sensitive,
+        whole_word: find.whole_word,
+        count: find.matches.len(),
+        current: find.current,
+    })
+}
+
+/// How many settled batches have asked for the band to be drawn again.
+///
+/// It is kept for the one thing about a repaint a window cannot tell a test: that a key which moved
+/// nothing drew nothing. A count rather than a flag because a test asks what one batch added, and a
+/// batch that repaints is a batch that asked at all — whichever of the two painters answered it (see
+/// `settle`).
+pub(super) static BAR_PAINTS: AtomicU64 = AtomicU64::new(0);
+
 /// Run everything the bar was told since the last tick: type or delete, flip a switch, step through
 /// the matches, close — and then search the document again where the query or a switch changed,
 /// take the page to the match the reader is on, and paint what changed.
@@ -640,6 +748,9 @@ pub(super) unsafe fn settle(hwnd: HWND) {
     // makes, and the loop keeps the cadence it has (see `step_the_hold`).
     step_the_hold(Instant::now());
 
+    // What the card draws before the batch is applied, so that the tail of this can tell a batch that
+    // drew something from one that only queued an edit (see `Drawn`).
+    let before = as_drawn();
     let Some(mut settled) = take_settled() else {
         // Nothing was said to the bar, so the only thing of its own that can have changed is the
         // caret's blink: a bar that is up and holding text asks for a repaint twice a blink, and one
@@ -723,6 +834,19 @@ pub(super) unsafe fn settle(hwnd: HWND) {
         }
     }
 
+    // **A batch that changed nothing the card draws owes no paint.** A `←` at the start of a query, a
+    // `Shift`+`←` with the selection already at it, a `Backspace` with nothing before the caret: each
+    // is an edit the road queues like any other, and a band repaint copies the whole page frame under
+    // the card. Asked after the search and the step rather than before, so a re-search that found the
+    // same places and a step that landed on the match it started from are the same answer — and asked
+    // of the caret's blink never, because that is the tick's own question where no edit is in hand
+    // (see `the_caret_turned`).
+    if as_drawn() == before {
+        return;
+    }
+
+    BAR_PAINTS.fetch_add(1, Ordering::Relaxed);
+
     // The page is taken to the match when it is not already showing it, and the frame that comes
     // back carries the highlights either way: a step inside the box is a repaint, one outside it is a
     // scroll (see `show_found_in_text_preview`).
@@ -792,6 +916,7 @@ fn take_settled() -> Option<Settled> {
         paste: false,
     };
     let before = find.field.text().to_string();
+    let ends_before = (find.field.caret(), find.field.anchor());
 
     for edit in std::mem::take(&mut find.pending) {
         match edit {
@@ -875,9 +1000,13 @@ fn take_settled() -> Option<Settled> {
         }
     }
 
-    // Every edit leaves the caret solid for a blink, which is what a reader typing looks at (see
-    // `CaretBlink::restart`).
-    find.blink.restart(Instant::now(), caret_blink());
+    // Every edit that changed the field leaves the caret solid for a blink, which is what a reader
+    // typing looks at (see `CaretBlink::restart`). An edit that changed nothing leaves the blink where
+    // it was: a restart is drawing a solid caret, and a batch that draws nothing must not leave the
+    // field's blink lit while the screen still shows the phase it was in (see `settle`).
+    if (find.field.caret(), find.field.anchor()) != ends_before || find.field.text() != before {
+        find.blink.restart(Instant::now(), caret_blink());
+    }
 
     settled.query = find.field.text().to_string();
     // A change to the query is the search running again, however it was made: a typed character, a
