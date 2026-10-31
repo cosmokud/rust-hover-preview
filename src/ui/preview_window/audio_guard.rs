@@ -256,7 +256,15 @@ const SPENT: Spent = Spent {
 enum Report {
     /// The six answers an mpv gave, and what the machine's own look at its session came to (see
     /// `playback_trace::ask_the_engine` and `audio_session::look_and_cure`).
-    Answers { answers: EngineAnswers, seen: Seen },
+    ///
+    /// **The look is boxed because a traced one carries a session's whole identity and the sessions
+    /// beside it** (see `audio_session::Seen`), which is several strings and a list against the six
+    /// answers' own — and this slot is held under a lock between a probe and a tick, so what it costs to
+    /// hold is a line rather than an allocation per read.
+    Answers {
+        answers: EngineAnswers,
+        seen: Box<Seen>,
+    },
     /// A line FFmpeg's player wrote that is one of its audio failures (see `AUDIO_FAILURES`).
     Spoke,
 }
@@ -533,7 +541,13 @@ fn spawn_probe_after(pid: u32, wait: Duration) {
                 note_playback_trace!("{line}");
             }
 
-            report(pid, Report::Answers { answers, seen });
+            report(
+                pid,
+                Report::Answers {
+                    answers,
+                    seen: Box::new(seen),
+                },
+            );
         });
 }
 
@@ -991,7 +1005,7 @@ mod tests {
     fn a_report(answers: EngineAnswers) -> Report {
         Report::Answers {
             answers,
-            seen: Seen::Absent,
+            seen: Box::new(Seen::Absent),
         }
     }
 
@@ -1000,11 +1014,7 @@ mod tests {
     fn a_muted_report(answers: EngineAnswers, cure: Cure) -> Report {
         Report::Answers {
             answers,
-            seen: Seen::There {
-                mixer: Some(1.0),
-                mute: Some(true),
-                cure,
-            },
+            seen: Box::new(Seen::there(Some(1.0), Some(true), cure)),
         }
     }
 
@@ -1760,11 +1770,7 @@ mod tests {
             mute: Some(false),
         };
 
-        let muted = Seen::There {
-            mixer: Some(1.0),
-            mute: Some(true),
-            cure: Cure::Refused,
-        };
+        let muted = Seen::there(Some(1.0), Some(true), Cure::Refused);
         assert_eq!(
             a_read_back(23724, 4, 100, &heard, &muted),
             "audio read-back pid 23724 read 4 asked 100 volume 100 mute no aid 1 audio-device auto \
@@ -1773,11 +1779,7 @@ mod tests {
             "the second mute switch: every answer on the player's pipe says the film has its sound"
         );
 
-        let turned_down = Seen::There {
-            mixer: Some(0.0),
-            mute: Some(true),
-            cure: Cure::TurnedDown,
-        };
+        let turned_down = Seen::there(Some(0.0), Some(true), Cure::TurnedDown);
         assert_eq!(
             a_read_back(23724, 5, 100, &heard, &turned_down),
             "audio read-back pid 23724 read 5 asked 100 volume 100 mute no aid 1 audio-device auto \
@@ -1788,11 +1790,7 @@ mod tests {
 
         // And a session whose mute the cure took off is a film that has its sound: the write is the
         // whole of what was wrong with it.
-        let cured = Seen::There {
-            mixer: Some(1.0),
-            mute: Some(true),
-            cure: Cure::Unmuted,
-        };
+        let cured = Seen::there(Some(1.0), Some(true), Cure::Unmuted);
         assert!(
             a_read_back(23724, 6, 100, &heard, &cured)
                 .ends_with("verdict heard session mixer 1.000 mute yes cured"),

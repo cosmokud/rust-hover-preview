@@ -1315,7 +1315,16 @@ default `--softvol=no` means the level this app gave it is applied by the driver
 `volume` nor the slider is that number. **The line states its own gaps**: `-` for a value the OS would not give, `unknown`
 for a state with no word, `refused` for an interface that would not be had (say `IChannelAudioVolume`), `none` for a
 session with no channel, and `session refused` with the part of the walk that failed — a silent probe would read as
-`session none`, which is a finding about the player rather than about this question. **And the run it was built to describe
+`session none`, which is a finding about the player rather than about this question. **Who a session is, and who stood
+beside it, is on the same line**: `session-id` and `instance-id` are `GetSessionIdentifier` and
+`GetSessionInstanceIdentifier` entire — the two strings Windows keys its remembered per-app volume and mute by, and the
+reason two sessions of one `mpv.exe` can be remembered differently — with the image the pid really runs beside them,
+and `neighbours` naming the sessions the endpoints listed beside the player's: their pid, image, state, mute and
+slider, the first eight of them with the count of what there was (`neighbours 8 of 14`), and **`dead` on a session
+whose process has ended** — the carrier this was added for, a lingering muted session a new one inherits from, and never
+dropped from the list. A cure's own line carries the same identity and neighbours, so a victim and a clean film are
+compared field for field inside one run. None of it is read where no trace asked for it: a guarded look on a run nobody
+is diagnosing walks exactly the walk it always did. **And the run it was built to describe
 proved a fault it now cures**: of eighteen players in one captured run, two had a session whose mute switch was on at
 `mixer 1.000` with its channels at `1.000 1.000`, under a player that reported `volume 94 mute no` — two mute switches,
 and the player can see only its own. So a **guarded** player's session is looked at for every read the guard already makes
@@ -1438,7 +1447,7 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/video_playback.rs` | both launches: where a film is born (the desktop, at its own size, borderless) and which host keeps it |
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
 | `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it — the level asked for beside the level it is at — both players' own lines, and a kill's confirmation |
-| `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), the executable its identifier names, the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none — and the one write this app makes to the OS: a muted session's `SetMute(false)` under a guarded player at a slider that is up |
+| `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), who it is — both identifiers whole, the image the pid runs, and the sessions the endpoints listed beside it, each with `dead` on one whose process has ended — the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none — and the one write this app makes to the OS: a muted session's `SetMute(false)` under a guarded player at a slider that is up |
 | `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict with the machine's own answer folded into it (`session-muted` being the fourth road), the in-place rungs and the one relaunch, the hover's in-place-only road, the sparse watch of a pin's player that was heard, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |

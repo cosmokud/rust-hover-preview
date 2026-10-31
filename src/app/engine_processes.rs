@@ -716,6 +716,24 @@ pub fn terminate_verified(pid: u32, image: &str, created: Option<u64>) -> bool {
     }
 }
 
+/// The executable a process is running, by its whole path, where that can be read.
+///
+/// **The path as Windows gives it and not its last element**, because the one caller reads it
+/// beside a session identifier to say what that identifier's image really is: a name alone
+/// cannot be told from another build's, and the identifier's own copy of the path is the
+/// machine's device spelling of it rather than a path anybody can look at (see
+/// `ui::preview_window::audio_session`). Nothing but a traced line is ever given it, so an
+/// untraced run opens no handle here at all.
+pub fn image_path_of(pid: u32) -> Option<String> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let image = image_path(process);
+        let _ = CloseHandle(process);
+
+        image
+    }
+}
+
 /// Whether a process is still running, by id. One that cannot be opened is one that
 /// is gone.
 pub fn is_running(pid: u32) -> bool {
@@ -789,6 +807,22 @@ pub fn children_of(parent: u32) -> Vec<u32> {
         .filter(|(_, found_parent, _)| *found_parent == parent)
         .map(|(pid, _, _)| pid)
         .collect()
+}
+
+/// Every process the machine is running, by id, in one snapshot — `None` where the machine
+/// would not list them.
+///
+/// **A snapshot rather than `is_running` per id**, because the ids asked about here are the pids a
+/// mixer's audio sessions were listed under rather than this app's own engines: a process this app
+/// may not open a handle to is not a process that has ended, and a session written as dead by an
+/// access refusal would be a finding invented by the reader. A tool-help snapshot lists what is
+/// running whatever a handle to it would have answered, and a machine always has processes, so an
+/// empty list is the machine's own refusal and is said as nothing rather than as every process on
+/// it having ended.
+pub fn running() -> Option<Vec<u32>> {
+    let running: Vec<u32> = every_process().into_iter().map(|(pid, _, _)| pid).collect();
+
+    (!running.is_empty()).then_some(running)
 }
 
 /// Every process on the machine, each with the process that started it and the image it is running.
@@ -923,6 +957,34 @@ mod tests {
         assert!(process_matches(pid, created));
         assert!(!process_matches(pid, created + 1), "a different process");
         assert_eq!(creation_time_self(), created);
+    }
+
+    /// The two answers a session is read against: the image a pid is running, whole, and the set of
+    /// processes still there — the second one holding the first one's pid, since this process is one
+    /// of them.
+    #[test]
+    fn knows_this_processes_image_and_the_processes_still_running() {
+        let pid = std::process::id();
+        let image = image_path_of(pid).expect("this process's own image");
+
+        assert_eq!(
+            file_name(&image),
+            file_name(
+                &std::env::current_exe()
+                    .expect("this process's own path")
+                    .to_string_lossy()
+            ),
+            "the whole path of the image this process is running"
+        );
+        assert!(
+            running().is_some_and(|running| running.contains(&pid)),
+            "a snapshot of every process on the machine, this one among them"
+        );
+        assert_eq!(
+            image_path_of(0),
+            None,
+            "an id no process holds has no image"
+        );
     }
 
     /// The one thing that makes an id from a file safe to act on: a process that is
