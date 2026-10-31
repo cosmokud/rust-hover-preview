@@ -318,7 +318,18 @@ pub(super) unsafe fn publish_pointer_hold(hwnd: HWND) {
     // rather than the media is what keeps the hold from outliving the spinner it was
     // published for: a hold left standing over a document is a preview the pointer can
     // never close, because the pointer arriving at it is exactly what the hold refuses.
-    if !IsWindowVisible(hwnd).as_bool() {
+    //
+    // **And the window that is asked is the one the media is drawn in, which a pin makes a
+    // different window from the handle here.** A pin that stands in a window of its own has put
+    // the preview's window down (see `take_up_pinned_window`), and the handle the loop's
+    // heartbeat carries is that preview's: it answers "nothing of ours is on the screen" for the
+    // whole life of the pin, so every heartbeat withdrew the hold — the regions, the scroll's own
+    // answer and the size's — and a notch over a pinned page belonged to Explorer while the
+    // scrollbar, which is a mouse message to the pin's own window, still dragged. What is on
+    // screen is the window the pin stands in, which is the same question
+    // `hover_facts::cursor_preview_hover` already had to learn to ask (see `pinned_window`).
+    let drawn_in = if pinned() { pinned_window() } else { hwnd };
+    if !IsWindowVisible(drawn_in).as_bool() {
         clear_pointer_hold();
         return;
     }

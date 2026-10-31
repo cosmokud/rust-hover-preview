@@ -294,6 +294,12 @@ pub fn run_preview_window() {
         // measured against: a release is written in seconds, and the loop is the one thing here that
         // knows how long its own last tick was (see `step_pin_zoom`).
         let mut last_zoom_frame = Instant::now();
+        // The wheel's own travel a page has been given that has not come to a whole notch yet. A
+        // high-resolution wheel — a precision touchpad, a smooth-scrolling mouse — reports less than
+        // a notch per message, and the count is drained as it arrives; what is truncated away here
+        // would be most of that wheel's travel, so the remainder is carried into the tick after it
+        // (see `WHEEL_DELTA` and the zoom road's own `notch_step`).
+        let mut text_scroll_carry = 0i32;
         // A walk a pin's own caption button stepped, held for as long as the walk has files
         // left to offer rather than for the length of the tick that started it: a file the pin
         // cannot be shown is stepped over rather than stopped at, and the file after it is
@@ -2184,10 +2190,17 @@ pub fn run_preview_window() {
             // the ticks here. Rotating the wheel forward scrolls back towards the
             // start of the document, which is the opposite of the sign the
             // message carries.
+            //
+            // The count is in the wheel's own units — 120 to a notch — and what has not come to a
+            // whole notch stays in `text_scroll_carry` for the tick after it, because a truncated
+            // count is most of a high-resolution wheel's travel thrown away (see `notch_step` for
+            // the same bargain made on the zoom road below).
             let scroll_delta = wheel_input::take_text_scroll_delta();
             if scroll_delta != 0 {
-                let notches = (scroll_delta / WHEEL_DELTA) as i64;
+                text_scroll_carry += scroll_delta;
+                let notches = (text_scroll_carry / WHEEL_DELTA) as i64;
                 if notches != 0 {
+                    text_scroll_carry -= notches as i32 * WHEEL_DELTA;
                     let lines = -notches * TEXT_SCROLL_LINES_PER_NOTCH;
                     if let Some(first_line) = text_scroll_target(lines) {
                         scroll_text_preview(hwnd, first_line);

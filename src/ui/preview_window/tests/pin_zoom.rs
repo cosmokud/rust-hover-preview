@@ -5,9 +5,9 @@ use super::*;
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetWindowRect, IsIconic, SendMessageW, ShowWindow, HC_ACTION,
-    MSLLHOOKSTRUCT, SC_MINIMIZE, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_MOUSEWHEEL,
-    WM_SYSCOMMAND, WS_POPUP,
+    CreateWindowExW, DestroyWindow, GetWindowRect, IsIconic, IsWindowVisible, SendMessageW,
+    ShowWindow, HC_ACTION, MSLLHOOKSTRUCT, SC_MINIMIZE, SW_HIDE, SW_SHOWNOACTIVATE,
+    WINDOW_EX_STYLE, WM_MOUSEWHEEL, WM_SYSCOMMAND, WS_POPUP,
 };
 
 /// The room every one of these zooms is measured in: a display of 1000 by 800 at the origin, which is
@@ -1871,6 +1871,126 @@ another
 /// Where this file's windows stand: no display is there, so a run of the suite is no window of the
 /// user's and no place the hand can land in.
 const NOWHERE: i32 = -32000;
+
+/// A page pin holds the wheel through the window the page is drawn in, which is the pin's own — not
+/// through the hover's window, which the take-up has put down and which is the handle the loop's own
+/// heartbeat carries.
+///
+/// **The fault this is a regression test for.** A page stands in a window of its own (see
+/// `pin_should_stand_in_its_own_window`), and the take-up hides the preview's window behind it (see
+/// `take_up_pinned_window`). `publish_pointer_hold` asked whether the handle it was handed was on
+/// screen, and for the whole life of the pin that window was not: every `POINTER_HOLD_HEARTBEAT_MS`
+/// withdrew the hold — `TEXT_PREVIEW_SCROLLABLE`, the regions and `TEXT_PREVIEW_HOLDING` with it — so
+/// `text_scroll_keep_alive_try` answered nothing and the wheel hook left every notch to Explorer. The
+/// page never moved under a wheel and a `Ctrl` and a wheel never resized it, while the scrollbar still
+/// dragged, because a drag is a mouse message to the pin's own window and asks no region at all.
+#[test]
+fn a_pinned_page_takes_the_wheel_though_the_hover_window_is_down() {
+    let _room = the_room_to_itself();
+    // The pointer's own state is one set for the whole process, and every part of it is published here.
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+
+    let previous_own = pin_is_its_own_window();
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_regions = POINTER_HOLD_REGIONS
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take());
+    let previous_anchor = TEXT_SCROLL_ANCHOR
+        .lock()
+        .ok()
+        .and_then(|mut anchor| anchor.take());
+    let previous_holding = TEXT_PREVIEW_HOLDING.swap(false, Ordering::AcqRel);
+    let previous_scrollable = TEXT_PREVIEW_SCROLLABLE.swap(false, Ordering::AcqRel);
+
+    // The pin: a page standing in a window of its own, on the screen and not activated, which is where
+    // a pin the user took up stands.
+    let box_ = (100, 100, 500, 700);
+    stand_pin(Some(overlay_pin(box_, PinChrome::always())));
+    pin_stands_in_its_own_window(true);
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    // The hover's window, which the take-up put down: a window of the suite's own that is never shown,
+    // and the handle a tick of the loop hands the hold.
+    let preview = unsafe {
+        a_window_of_the_suite_kept_back(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        )
+    };
+    PREVIEW_HWND.store(preview.0 as isize, Ordering::SeqCst);
+
+    // A page longer than the box it is drawn in, so there is a scroll for the wheel to take.
+    let folder = std::env::temp_dir().join("rust-hover-preview-pinned-page-wheel");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a-page-longer-than-its-box.txt");
+    let written: String = (0..200).map(|line| format!("line {line}\n")).collect();
+    std::fs::write(&path, written).expect("a written page");
+    let Some(page) = load_text_preview(&path, 400, 560, 96, current_text_options()) else {
+        panic!("a page of text was not loaded")
+    };
+    assert!(
+        page.text_state
+            .as_ref()
+            .map(|state| state.can_scroll())
+            .unwrap_or(false),
+        "the page runs past the box it was loaded in, so the wheel has somewhere to take it"
+    );
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+
+    assert!(
+        !unsafe { IsWindowVisible(preview) }.as_bool(),
+        "the hover's window is down, which is what a pin standing in its own window leaves it"
+    );
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool(),
+        "and the pin's own window is the one on the screen"
+    );
+
+    // Safety: both windows are this test's own, and what is published is a region about them.
+    unsafe { publish_pointer_hold(preview) };
+
+    assert_eq!(
+        text_scroll_keep_alive_try(),
+        Some(box_),
+        "the pin's own window is the box the page is drawn in, and so the box the wheel has to be \
+         inside of: asked of the hover's window, which is down, the hold is withdrawn and every notch \
+         over a pinned page is Explorer's"
+    );
+
+    // Safety: both windows are this test's own, and every global written here is put back.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        put_away_a_window_of_the_suite(preview);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    if let Ok(mut anchor) = TEXT_SCROLL_ANCHOR.lock() {
+        *anchor = previous_anchor;
+    }
+    if let Ok(mut held) = POINTER_HOLD_REGIONS.lock() {
+        *held = previous_regions;
+    }
+    TEXT_PREVIEW_HOLDING.store(previous_holding, Ordering::Release);
+    TEXT_PREVIEW_SCROLLABLE.store(previous_scrollable, Ordering::Release);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+}
 
 /// The screen box a window is standing at, as the desktop has it rather than as this app meant it.
 ///
