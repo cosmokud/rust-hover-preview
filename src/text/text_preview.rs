@@ -19,7 +19,7 @@ mod layout;
 mod markdown;
 mod source;
 
-pub use document::{find_next, text_of};
+pub use document::{find_all, find_next, text_of};
 pub use frame::{
     extend_word_selection, line_in, measure, position_in, render_scrolled, word_in, FrameLine,
     ScrollBar, Selection, TextPreviewOptions,

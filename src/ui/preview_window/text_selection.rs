@@ -75,8 +75,9 @@ pub(super) fn anchor_for_press(
 
 /// Whether either Shift is held, asked the way Ctrl+C and Ctrl+A are rather than from a message:
 /// a pinned preview is never sent its own keystrokes, so a modifier is a question about the
-/// keyboard at the moment of the press (see `text_preview_copy_requested`).
-fn shift_is_down() -> bool {
+/// keyboard at the moment of the press (see `text_preview_copy_requested`). A find bar's
+/// `Shift`+`Enter` asks the same question of the same keyboard (see `text_find::key_edit`).
+pub(super) fn shift_is_down() -> bool {
     unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000 != 0 }
 }
 
@@ -258,6 +259,13 @@ pub(super) unsafe fn copy_text_preview(hwnd: HWND) -> bool {
 /// user is in is skipped for the same reason, since a chord read from the keyboard is
 /// otherwise a chord pressed in whatever window is in front (see `pin_is_focused`).
 pub(super) fn text_preview_copy_requested() -> bool {
+    // A find bar that is up owns the keyboard: a `Ctrl`+`C` typed into a query is not a copy of the
+    // page's selection, and the selection it would copy is the one the bar has covered (see
+    // `text_find`).
+    if text_find::is_open() {
+        return false;
+    }
+
     if !has_text_selection() {
         return false;
     }
@@ -285,6 +293,12 @@ pub(super) fn text_preview_copy_requested() -> bool {
 /// Ctrl+A pressed in another window is otherwise read as one meant for a pin standing behind it
 /// (see `pin_is_focused`).
 pub(super) fn pinned_select_all_requested() -> bool {
+    // And the same for a find bar that is up: `Ctrl`+`A` under a query is a key the bar swallowed
+    // whole, not a request for the page behind it (see `text_find`).
+    if text_find::is_open() {
+        return false;
+    }
+
     if !pin_is_focused() || !has_text_document() {
         return false;
     }
@@ -327,22 +341,22 @@ const FIND_LEAD_LINES: usize = 2;
 /// The reader asked for the occurrence after this one, and a page that jumped back to the top of the
 /// document for nothing would be a find that lost their place.
 pub(super) unsafe fn find_next_in_text_preview(hwnd: HWND) {
-    let Some((path, options, selection, first_line, visible, max_first_line)) =
-        CURRENT_MEDIA.lock().ok().and_then(|media| {
-            media.as_ref().and_then(|media| {
-                media.text_state.as_ref().map(|state| {
-                    (
-                        state.path.clone(),
-                        state.options,
-                        state.selection,
-                        state.first_line,
-                        state.visible_lines,
-                        state.max_first_line(),
-                    )
-                })
-            })
+    // A find bar that is up is the find this asks: the reader is stepping through the query they
+    // typed, and the selection the page holds is their own rather than the search's — so the step
+    // is the bar's, and the page's selection is left exactly as it is (see `text_find`).
+    if text_find::is_open() {
+        text_find::note(FindEdit::Step(1));
+        return;
+    }
+
+    let Some((path, options, selection)) = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media.as_ref().and_then(|media| {
+            media
+                .text_state
+                .as_ref()
+                .map(|state| (state.path.clone(), state.options, state.selection))
         })
-    else {
+    }) else {
         return;
     };
 
@@ -361,8 +375,34 @@ pub(super) unsafe fn find_next_in_text_preview(hwnd: HWND) {
         }
     }
 
-    // A page that is already showing the line stays where it is: the page does not move for a find
-    // that landed on it, and what moved is the selection.
+    show_found_in_text_preview(hwnd, found);
+}
+
+/// Take the page to a place that has been found and draw it there: the one road both finds take once
+/// they have a place — `F3` and `Find Next` from the page's own selection, and a step through a find
+/// bar's query (see `text_find::settle`).
+///
+/// A page that is already showing the line stays where it is: the page does not move for a find that
+/// landed on it, and what moved is the match. Answers whether it asked for a paint, so that a caller
+/// with nothing else to draw can leave the card over the page alone.
+pub(super) unsafe fn show_found_in_text_preview(
+    hwnd: HWND,
+    found: text_preview::Selection,
+) -> bool {
+    let Some((first_line, visible, max_first_line)) = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media.as_ref().and_then(|media| {
+            media.text_state.as_ref().map(|state| {
+                (
+                    state.first_line,
+                    state.visible_lines,
+                    state.max_first_line(),
+                )
+            })
+        })
+    }) else {
+        return false;
+    };
+
     if (first_line..first_line + visible).contains(&found.anchor.0) {
         repaint_text_preview(hwnd);
     } else {
@@ -372,6 +412,8 @@ pub(super) unsafe fn find_next_in_text_preview(hwnd: HWND) {
         let line = found.anchor.0.saturating_sub(lead).min(max_first_line);
         scroll_text_preview(hwnd, line);
     }
+
+    true
 }
 
 /// Show the preview's context menu at a point in window coordinates and act on

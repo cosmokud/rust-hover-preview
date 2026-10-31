@@ -504,7 +504,6 @@ pub fn find_next(
 /// **A needle that spans a wrapped line is not found**, which is the same limit [`find_next`] has
 /// and for the same reason: the lines are searched one at a time, and a wrapped line is still one
 /// line of the document however many of the frame's rows it takes.
-#[cfg_attr(not(test), allow(dead_code))] // asked by the find bar, which is not wired to it yet
 pub fn find_all(
     path: &Path,
     options: TextPreviewOptions,

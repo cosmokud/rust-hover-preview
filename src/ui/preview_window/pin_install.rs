@@ -1664,6 +1664,13 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
 /// `step_pinned_text_size` and `redraw_pinned_page`). The rest of the state — the lines, the
 /// scrollbar, what can be reached — belongs to the box the new media was laid out in.
 ///
+/// **What is deliberately not carried is the find bar.** A match is a place in the document that was
+/// searched, and the next file of a walk is another document: a bar standing over it at a query it
+/// never searched would say the reader had found something in a file they had not read yet. So the
+/// bar goes with the file it was opened on — the state the new media arrives with has it closed, at
+/// no query and no matches — and only a box change, which is the same document laid out again, keeps
+/// it (see `FindState` and `relayout_text_for_the_box`).
+///
 /// It takes the lock itself and is called *before* the one above is taken, for the reason the
 /// deadlock in `pin_media_is_alive` is written down as: a lock this thread already holds is not a
 /// lock it can wait for.
