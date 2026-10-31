@@ -191,6 +191,52 @@ pub(super) struct CachedDocument {
     pub(super) key: DocKey,
     pub(super) doc: TextDoc,
     windows: Mutex<WindowCache>,
+    /// Every line of the document as it is drawn, built once and kept: the text a caret moves
+    /// against and a search reads.
+    drawn: Mutex<Option<Arc<Vec<String>>>>,
+}
+
+impl CachedDocument {
+    /// Every line of the document as it is drawn, built once and kept.
+    ///
+    /// **Nothing past what a page can reach is walked.** A preview can only scroll `scrollable_lines`
+    /// of a file (`MAX_DOC_LINES`), so the rest is a document no frame can show — walking it would be
+    /// styling a million lines of a log to move a caret over the first two thousand of them, which is
+    /// what made an arrow key cost a whole file.
+    ///
+    /// **A document nothing renders is its own lines**, and they are sliced out of the text the parse
+    /// already holds: styling decides the colour of a span and never its text, so a plain file's lines
+    /// are one slice each rather than a document through the highlighter. Only a producer that draws
+    /// lines of its own — rendered Markdown, whose paragraphs are its lines — is walked, and that one
+    /// is walked once.
+    fn drawn_text(&self, options: TextPreviewOptions) -> Arc<Vec<String>> {
+        if let Ok(held) = self.drawn.lock() {
+            if let Some(drawn) = held.as_ref() {
+                return Arc::clone(drawn);
+            }
+        }
+
+        let total = self.doc.scrollable_lines();
+        let mut lines: Vec<String> = Vec::with_capacity(total);
+        if self.doc.rendered_lines.is_none() {
+            for index in 0..total {
+                lines.push(self.doc.line(index).to_string());
+            }
+        } else if total > 0 {
+            if let Some(theme) = text_theme::loaded(options.theme) {
+                walk_drawn_lines(self, theme, 0, total - 1, |_, text| {
+                    lines.push(text);
+                    true
+                });
+            }
+        }
+
+        let drawn = Arc::new(lines);
+        if let Ok(mut held) = self.drawn.lock() {
+            *held = Some(Arc::clone(&drawn));
+        }
+        drawn
+    }
 }
 
 thread_local! {
@@ -281,6 +327,7 @@ pub(super) fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<C
         key: key.clone(),
         doc: build_document(path, options)?,
         windows: Mutex::new(WindowCache::default()),
+        drawn: Mutex::new(None),
     });
 
     if let Ok(mut cache) = DOCUMENTS.lock() {
@@ -335,17 +382,6 @@ fn walk_drawn_lines(
     }
 }
 
-/// The drawn line `index` is drawn as, or nothing where the document has no such line.
-fn drawn_line(document: &CachedDocument, theme: &LoadedTheme, index: usize) -> Option<String> {
-    let mut text = None;
-    walk_drawn_lines(document, theme, index, index, |_, line| {
-        text = Some(line);
-        false
-    });
-
-    text
-}
-
 /// A place in a document a caret can be: a document line and a character of that line, which is
 /// the shape `Selection`'s two ends already have. Named here because a caret move is a question
 /// about the document rather than about the frame, and the page that asks it has a selection to
@@ -354,30 +390,19 @@ pub type Place = (usize, usize);
 
 /// Every drawn line of `path`, as it is drawn: what a caret move is measured against, because a
 /// line too long for the box is one document line however many rows it takes, and a move that
-/// counted rows would be a move through text the document does not have.
+/// counted rows would be a move through text the document does not have — and what a search reads,
+/// because a query is found where the frame draws it (see `find_all`).
 ///
-/// This reads the whole document rather than the screenful, which is what makes `Ctrl`+`End` and a
-/// search's own line numbers the document's rather than the frame's — and it is why it is asked
-/// once per key press rather than per painted line.
-pub fn drawn_lines(path: &Path, options: TextPreviewOptions) -> Vec<String> {
-    let Some(document) = document(path, options) else {
-        return Vec::new();
-    };
-    let Some(theme) = text_theme::loaded(options.theme) else {
-        return Vec::new();
-    };
-
-    let total = document.doc.total_lines();
-    if total == 0 {
-        return Vec::new();
+/// It is built once per document and kept (`CachedDocument::drawn_text`), because the two things that
+/// ask for it ask constantly: a caret is moved a key at a time and a query is searched a character at
+/// a time, and styling a document for either would be a page of text through the highlighter per
+/// keystroke. A handle rather than the lines themselves, so the caller that only reads them pays
+/// nothing to ask.
+pub fn drawn_lines(path: &Path, options: TextPreviewOptions) -> Arc<Vec<String>> {
+    match document(path, options) {
+        Some(document) => document.drawn_text(options),
+        None => Arc::new(Vec::new()),
     }
-
-    let mut lines = Vec::with_capacity(total);
-    walk_drawn_lines(&document, theme, 0, total - 1, |_, text| {
-        lines.push(text);
-        true
-    });
-    lines
 }
 
 /// What a selection takes out of the document of `path`: the lines it covers as they are drawn,
@@ -388,25 +413,23 @@ pub fn drawn_lines(path: &Path, options: TextPreviewOptions) -> Vec<String> {
 /// reaching past the frame reaches past it here too, and a rendered Markdown document gives the
 /// text it was rendered to rather than the source it was rendered from (see `Selection`).
 ///
-/// `shortcut:` a copy styles every line it covers, one window at a time, so copying a document far
-/// larger than a frame costs the styling of everything between its ends; upgrade if that is ever
-/// asked of files where it is felt, by reading the source text directly for the producers whose
-/// drawn lines are the file's own.
+/// `shortcut:` a copy slices the lines the page is drawn from, so it is the text a document already
+/// holds rather than a second read of it; upgrade only if a copy is ever asked to span a document
+/// further than a page can scroll (see `drawn_lines` and `MAX_DOC_LINES`).
 pub fn text_of(path: &Path, options: TextPreviewOptions, selection: Selection) -> Option<String> {
-    let document = document(path, options)?;
-    let theme = text_theme::loaded(options.theme)?;
+    let lines = drawn_lines(path, options);
+    if lines.is_empty() {
+        return None;
+    }
 
-    Some(text_of_document(&document, theme, selection))
+    Some(text_of_lines(&lines, selection))
 }
 
-/// The lines `selection` covers, taken from the styled windows the frame is drawn from.
-fn text_of_document(
-    document: &CachedDocument,
-    theme: &LoadedTheme,
-    selection: Selection,
-) -> String {
+/// The lines `selection` covers, taken from the lines the page is drawn from rather than styled
+/// again: a copy is a reader asking for text they can already see (see `drawn_lines`).
+fn text_of_lines(lines: &[String], selection: Selection) -> String {
     let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
-    let last = document.doc.total_lines().saturating_sub(1);
+    let last = lines.len().saturating_sub(1);
     let start_line = start_line.min(last);
     // A selection that ends past the last line takes to the end of it. What ends a line selection
     // is the break at the end of the line, and a file whose last line has no break after it has
@@ -419,7 +442,10 @@ fn text_of_document(
     };
 
     let mut taken: Vec<String> = Vec::new();
-    walk_drawn_lines(document, theme, start_line, end_line, |index, text| {
+    for index in start_line..=end_line {
+        let Some(text) = lines.get(index) else {
+            continue;
+        };
         let from = if index == start_line { start_char } else { 0 };
         let to = if index == end_line {
             end_char
@@ -432,8 +458,7 @@ fn text_of_document(
                 .take(to.saturating_sub(from))
                 .collect(),
         );
-        true
-    });
+    }
 
     taken.join("\r\n")
 }
@@ -454,10 +479,8 @@ pub fn find_next(
     options: TextPreviewOptions,
     selection: Selection,
 ) -> Option<Selection> {
-    let document = document(path, options)?;
-    let theme = text_theme::loaded(options.theme)?;
-    let doc = &document.doc;
-    let total = doc.total_lines();
+    let lines = drawn_lines(path, options);
+    let total = lines.len();
     if total == 0 {
         return None;
     }
@@ -469,7 +492,8 @@ pub fn find_next(
     } else {
         usize::MAX
     };
-    let needle: Vec<char> = drawn_line(&document, theme, start_line)?
+    let needle: Vec<char> = lines
+        .get(start_line)?
         .chars()
         .skip(start_char)
         .take(to.saturating_sub(start_char))
@@ -481,35 +505,30 @@ pub fn find_next(
     // The character the search picks the document up at: just past the occurrence the selection
     // already names, so a wrap around the start line does not find it a second time.
     let resumed_at = start_char + needle.len();
-    let mut found = None;
 
-    walk_drawn_lines(&document, theme, start_line, total - 1, |index, text| {
-        let from = if index == start_line { resumed_at } else { 0 };
-        match find_in(&text, from, usize::MAX, &needle) {
-            Some(at) => {
-                found = Some((index, at));
-                false
-            }
-            None => true,
-        }
-    });
-
-    if found.is_none() {
-        walk_drawn_lines(&document, theme, 0, start_line, |index, text| {
-            let to = if index == start_line {
+    // The document is read in two passes over lines already in hand — from just past the selection
+    // to its end, and then from its beginning back to where the search started — because styling a
+    // document again to read its text is the cost the lines are kept to avoid (see `drawn_lines`).
+    let search = |from_line: usize, to_line: usize, resumed: usize, stopped: usize| {
+        for index in from_line..=to_line {
+            let Some(text) = lines.get(index) else {
+                continue;
+            };
+            let from = if index == resumed { resumed_at } else { 0 };
+            let to = if index == stopped {
                 start_char
             } else {
                 usize::MAX
             };
-            match find_in(&text, 0, to, &needle) {
-                Some(at) => {
-                    found = Some((index, at));
-                    false
-                }
-                None => true,
+            if let Some(at) = find_in(text, from, to, &needle) {
+                return Some((index, at));
             }
-        });
-    }
+        }
+        None
+    };
+
+    let found = search(start_line, total - 1, start_line, usize::MAX)
+        .or_else(|| search(0, start_line, usize::MAX, start_line));
 
     let (line, at) = found?;
     Some(Selection {
@@ -550,20 +569,10 @@ pub fn find_all(
         return Vec::new();
     }
 
-    let Some(document) = document(path, options) else {
-        return Vec::new();
-    };
-    let Some(theme) = text_theme::loaded(options.theme) else {
-        return Vec::new();
-    };
-
-    let total = document.doc.total_lines();
-    if total == 0 {
-        return Vec::new();
-    }
+    let lines = drawn_lines(path, options);
 
     let mut found = Vec::new();
-    walk_drawn_lines(&document, theme, 0, total - 1, |index, text| {
+    for (index, text) in lines.iter().enumerate() {
         let characters: Vec<char> = text.chars().collect();
         let mut from = 0usize;
 
@@ -576,9 +585,7 @@ pub fn find_all(
             // three.
             from = at + needle.len();
         }
-
-        true
-    });
+    }
 
     found
 }

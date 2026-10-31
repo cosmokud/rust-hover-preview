@@ -988,3 +988,44 @@ fn a_move_that_is_not_vertical_puts_the_goal_column_down() {
          aims from there rather than from the column a previous run began at"
     );
 }
+
+/// A document's lines are kept, bounded and uncoloured: a page can only scroll `MAX_DOC_LINES` of a
+/// file, so nothing past that is read, and a file nothing renders is sliced out of the text the parse
+/// already holds rather than taken through the highlighter.
+///
+/// Both halves are the whole of what makes a caret's arrow cheap: without the bound a press on a long
+/// log styled the file past the lines it could ever show, and without the plain road every press of
+/// every arrow was a document through syntect (see `drawn_lines`).
+#[test]
+fn the_lines_a_caret_reads_are_bounded_and_are_the_files_own() {
+    let reach = crate::text::text_preview::document::MAX_DOC_LINES;
+    let root = scratch("drawn");
+    let path = root.join("a-long-page.txt");
+    let text: String = (0..(reach + 500))
+        .map(|line| format!("line {line}\n"))
+        .collect();
+    fs::write(&path, &text).expect("a written page");
+
+    let options = TextPreviewOptions {
+        theme: TextTheme::Dark,
+        markdown_mode: MarkdownMode::Source,
+        font_scale_percent: 100,
+        full_mode: true,
+    };
+    let lines = drawn_lines(&path, options);
+
+    assert_eq!(
+        lines.len(),
+        reach,
+        "a page reads the lines it can reach and no more: the rest is a document no frame can show"
+    );
+    assert_eq!(
+        lines[0], "line 0",
+        "and a file nothing renders is its own lines, taken whole"
+    );
+    assert_eq!(
+        lines[reach - 1],
+        format!("line {}", reach - 1),
+        "to the last line it reaches"
+    );
+}

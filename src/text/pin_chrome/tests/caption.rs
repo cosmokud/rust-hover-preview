@@ -1164,3 +1164,61 @@ fn a_name_stops_at_the_pill_and_is_only_given_up_where_the_pill_takes_its_room()
          pill's room it is giving up"
     );
 }
+
+/// The pill's ring closes at both ends: a run of text drawn on the caption's own surface is drawn with
+/// an opaque background over the whole of its box, so a run whose box reached the pill's edge painted
+/// that background over the ring's right cap and left the pill cut off where the words stop (see
+/// `page_marks::paint_read_only_pill`).
+///
+/// Measured as ink rather than as a picture: the last pixel of the middle row is the ring, which is the
+/// accent over the wash, so it is nearer the accent than the wash is. A run's background there would be
+/// the wash itself, and the pill would read as open at that end.
+#[test]
+fn the_pills_ring_closes_at_the_end_the_words_stop_at() {
+    let palette = ChromePalette {
+        background: [30, 32, 40],
+        foreground: [220, 220, 220],
+        accent: [80, 170, 240],
+        dark: true,
+    };
+
+    for dpi in [96u32, 144] {
+        let scale = dpi as f32 / 96.0;
+        let (width, height) = ((600.0 * scale) as u32, (30.0 * scale) as u32);
+        let surface = DibSurface::create(width, height).expect("a surface");
+        let buttons = button_boxes(width as i32, height as i32, dpi, true);
+        let title_right = buttons
+            .iter()
+            .map(|button| button.rect.left)
+            .min()
+            .unwrap_or(width as i32);
+        let box_ =
+            page_marks::read_only_pill_box(&surface, width as i32, height as i32, title_right, dpi);
+        page_marks::paint_read_only_pill(&surface, &palette, box_, dpi);
+
+        let middle = (box_.top + box_.bottom) / 2;
+        // The surface is the desktop's own byte order, so a pixel is read back the way it was
+        // written: blue first.
+        let at = |x: i32, y: i32| {
+            let index = (y as usize * width as usize + x as usize) * 4;
+            let pixels = surface.pixels();
+            [pixels[index + 2], pixels[index + 1], pixels[index]]
+        };
+        let wash = text_paint::blend(palette.background, palette.accent, 0.14);
+        let distance = |colour: [u8; 3], from: [u8; 3]| {
+            let mut total = 0i32;
+            for channel in 0..3 {
+                let gap = colour[channel] as i32 - from[channel] as i32;
+                total += gap * gap;
+            }
+            total
+        };
+
+        let edge = at(box_.right - 1, middle);
+        assert!(
+            distance(edge, palette.accent) < distance(edge, wash),
+            "the pill's rightmost pixel at {dpi} dpi is the ring rather than the wash a run's \
+             background leaves: it was {edge:?}"
+        );
+    }
+}
