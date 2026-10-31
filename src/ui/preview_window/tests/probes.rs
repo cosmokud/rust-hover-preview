@@ -799,8 +799,6 @@ fn window_box_on_screen(hwnd: HWND) -> ScreenRegion {
 /// mpv gate missed — because a window that is hidden still carries the box this asserts.
 #[test]
 fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
-    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
-
     let _room = the_room_to_itself();
     let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
 
@@ -874,7 +872,7 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
 
     finish_pin_drag(hwnd, &window);
 
-    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    unsafe { put_away_a_window_of_the_suite(player) };
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
     stand_mpv_in(None);
@@ -901,8 +899,6 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
 /// raised state is read back off the machine with `window_holds_the_topmost_band`.
 #[test]
 fn a_resize_drag_bands_the_pin_at_its_two_ends_and_not_on_a_step_between_them() {
-    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
-
     let _room = the_room_to_itself();
     let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
 
@@ -1019,7 +1015,7 @@ fn a_resize_drag_bands_the_pin_at_its_two_ends_and_not_on_a_step_between_them() 
     if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
         *request = None;
     }
-    unsafe { DestroyWindow(pin_window).expect("the stand-in window let go of") };
+    unsafe { put_away_a_window_of_the_suite(pin_window) };
     PIN_BAND_HELD.store(previous_band, Ordering::SeqCst);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = always_on_top;
@@ -1046,8 +1042,6 @@ fn a_resize_drag_bands_the_pin_at_its_two_ends_and_not_on_a_step_between_them() 
 /// zero, so no player's process is looked for and nothing of this machine's is styled.
 #[test]
 fn only_an_mpv_players_window_is_placed_with_the_pins_chrome_up() {
-    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
-
     let _room = the_room_to_itself();
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
@@ -1102,8 +1096,8 @@ fn only_an_mpv_players_window_is_placed_with_the_pins_chrome_up() {
     );
 
     unsafe {
-        DestroyWindow(mpv_player).expect("the stand-in window let go of");
-        DestroyWindow(ffplay_player).expect("the stand-in window let go of");
+        put_away_a_window_of_the_suite(mpv_player);
+        put_away_a_window_of_the_suite(ffplay_player);
     }
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
@@ -1125,8 +1119,6 @@ fn only_an_mpv_players_window_is_placed_with_the_pins_chrome_up() {
 /// `cargo test --lib a_players_window_that_is_not_on_screen_is_put_back_in_the_band`
 #[test]
 fn a_players_window_that_is_not_on_screen_is_put_back_in_the_band() {
-    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
-
     let _room = the_room_to_itself();
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
@@ -1181,7 +1173,7 @@ fn a_players_window_that_is_not_on_screen_is_put_back_in_the_band() {
         "a window that is on screen is not moved by a hold-off"
     );
 
-    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    unsafe { put_away_a_window_of_the_suite(player) };
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
     stand_pin(previous_pin);
@@ -1199,7 +1191,7 @@ fn a_players_window_that_is_not_on_screen_is_put_back_in_the_band() {
 /// `hide_pinned_windows`).
 #[test]
 fn a_collapsed_pin_places_no_players_window() {
-    use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, ShowWindow, SW_HIDE};
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
 
     let _room = the_room_to_itself();
 
@@ -1258,7 +1250,7 @@ fn a_collapsed_pin_places_no_players_window() {
         "a drag's move carries nothing while the pin is collapsed"
     );
 
-    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    unsafe { put_away_a_window_of_the_suite(player) };
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
@@ -1284,9 +1276,7 @@ fn is_click_through(hwnd: HWND) -> bool {
 /// because the hide is a fact about the bubble and not about a player's window.
 #[test]
 fn a_collapsed_pin_takes_a_players_window_off_the_screen() {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        DestroyWindow, ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
 
     let _room = the_room_to_itself();
 
@@ -1335,7 +1325,7 @@ fn a_collapsed_pin_takes_a_players_window_off_the_screen() {
 
     unsafe {
         let _ = ShowWindow(player, SW_HIDE);
-        DestroyWindow(player).expect("the stand-in window let go of");
+        put_away_a_window_of_the_suite(player);
     }
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
@@ -1499,8 +1489,6 @@ fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
 /// created without it, which is what makes the four assertions mean anything.
 #[test]
 fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re_assert() {
-    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
-
     let _room = the_room_to_itself();
     let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
 
@@ -1590,7 +1578,7 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
 
     finish_pin_drag(hwnd, &window);
 
-    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    unsafe { put_away_a_window_of_the_suite(player) };
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
     stand_mpv_in(None);
@@ -1856,8 +1844,6 @@ fn a_pinned_mpv_film_is_placed_by_a_tick_a_drag_and_a_monitor_pass() {
 /// over anything.
 #[test]
 fn a_pinned_players_placement_puts_the_pin_back_over_it() {
-    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
-
     let _room = the_room_to_itself();
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
@@ -1990,7 +1976,7 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
         "and nothing was placed, so nothing was put back over the panel either"
     );
 
-    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    unsafe { put_away_a_window_of_the_suite(player) };
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
     stand_pin(previous_pin);
@@ -2016,7 +2002,7 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
 /// `cargo test --lib the_player_stands_over_the_pin_only_while_it_is_raised_over_it`
 #[test]
 fn the_player_stands_over_the_pin_only_while_it_is_raised_over_it() {
-    use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, ShowWindow, SW_HIDE};
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
 
     let _room = the_room_to_itself();
 
@@ -2102,8 +2088,8 @@ fn the_player_stands_over_the_pin_only_while_it_is_raised_over_it() {
     );
 
     unsafe {
-        let _ = DestroyWindow(player);
-        let _ = DestroyWindow(pin);
+        put_away_a_window_of_the_suite(player);
+        put_away_a_window_of_the_suite(pin);
     }
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
 }

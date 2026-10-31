@@ -218,7 +218,7 @@ fn a_button_the_shell_has_taken_away_comes_back_on_the_tick() {
 
     // Safety: the bubble's window is this test's own and the stand-in is the app's own.
     unsafe {
-        let _ = DestroyWindow(bubble);
+        put_away_a_window_of_the_suite(bubble);
     }
     PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
     forget_the_stand_in();
@@ -326,7 +326,7 @@ fn the_picture_of_a_pin_put_away_into_a_bubble_is_the_bubble() {
     // Safety: the window is this test's own and the stand-in is the app's own; both are let go of,
     // and the handles the app holds are put back as they were.
     unsafe {
-        let _ = DestroyWindow(bubble);
+        put_away_a_window_of_the_suite(bubble);
     }
     PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
     stand_pin(previous_pin);
@@ -1094,7 +1094,7 @@ fn a_pin_put_away_keeps_the_picture_its_collapse_took() {
     // app holds are put back as they were.
     unsafe {
         let _ = DestroyWindow(player);
-        let _ = DestroyWindow(bubble);
+        put_away_a_window_of_the_suite(bubble);
     }
     VIDEO_HWND.store(previous_video, Ordering::SeqCst);
     PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
@@ -1193,7 +1193,7 @@ fn a_pin_minimized_into_the_taskbar_is_pictured_before_its_windows_go() {
     // Safety: the window is this test's own and the stand-in is the app's own; the handles the app
     // holds are put back as they were.
     unsafe {
-        let _ = DestroyWindow(player);
+        put_away_a_window_of_the_suite(player);
     }
     VIDEO_HWND.store(previous_video, Ordering::SeqCst);
     forget_the_stand_in();
@@ -1970,7 +1970,7 @@ fn a_film_host_moved_from_the_bubble_into_the_taskbar_comes_back_with_its_film()
 
     // Safety: the source is this test's own window.
     unsafe {
-        let _ = DestroyWindow(source);
+        put_away_a_window_of_the_suite(source);
     }
 }
 
@@ -2023,7 +2023,7 @@ fn a_film_host_restored_before_its_films_hide_has_landed_brings_the_film_back() 
 
     // Safety: the source is this test's own window.
     unsafe {
-        let _ = DestroyWindow(source);
+        put_away_a_window_of_the_suite(source);
     }
 }
 
@@ -2112,7 +2112,7 @@ fn a_film_host_still_iconic_when_its_pin_is_restored_comes_back_up_with_its_film
 
     // Safety: the source is this test's own window.
     unsafe {
-        let _ = DestroyWindow(source);
+        put_away_a_window_of_the_suite(source);
     }
 }
 
@@ -3049,7 +3049,7 @@ fn the_pairs_taskbar_button_is_the_settings() {
     // The film draws, and the tick shows the host: the button goes with the window the Shell lists.
     let pid = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(pid);
-    let _picture = unsafe { super::pin_film_host_window::a_source_of_the_host(host) };
+    let picture = unsafe { super::pin_film_host_window::a_source_of_the_host(host) };
     unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
     assert!(
         wears_a_button(host),
@@ -3119,6 +3119,7 @@ fn the_pairs_taskbar_button_is_the_settings() {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = previous;
     }
+    unsafe { put_away_a_window_of_the_suite(picture) };
 }
 
 /// **A pair promoted out of a hover asks for no button while the setting says the pin is on top**,
