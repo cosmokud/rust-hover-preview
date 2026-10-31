@@ -1417,3 +1417,152 @@ fn a_press_in_the_field_places_the_caret_and_a_double_press_takes_its_word() {
     );
     assert!(text_find::release());
 }
+
+/// Which surface the reader was last in, as the page holds it.
+fn focus_now() -> Option<FindFocus> {
+    CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.text_state.as_ref())
+            .map(|state| state.find.focused)
+    })
+}
+
+/// Whether the page under the bar has something selected in it.
+fn the_page_has_a_selection() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .and_then(|state| state.selection)
+                .map(|selection| !selection.is_empty())
+        })
+        .unwrap_or(false)
+}
+
+/// What a `Ctrl`+`C` would copy now: the text it would put on the clipboard, or that it is the page's
+/// own copy. The machine's clipboard is not written — the decision is what is being read (see
+/// `text_find::the_copy_a_batch_decided_for_a_test`).
+fn a_copy_now() -> (Option<String>, bool) {
+    text_find::note(FindEdit::Copy);
+    text_find::the_copy_a_batch_decided_for_a_test().expect("a copy is a batch of one")
+}
+
+/// A page with a selection of its own and a bar with a query selected in it, so that a `Ctrl`+`C`
+/// has two selections to choose between. The page is selected first, which is the order a reader
+/// selecting a word to search for takes.
+fn a_page_and_a_query_both_selected(name: &str) {
+    a_page_with_two_needles(name);
+
+    begin_text_selection(20, 10);
+    unsafe { select_all_text_preview(a_pin_window()) };
+    assert!(
+        the_page_has_a_selection(),
+        "the page has a selection to be copied"
+    );
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+    text_find::note(FindEdit::SelectAll);
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        focus_now(),
+        Some(FindFocus::Field),
+        "opening the bar focuses its query"
+    );
+}
+
+/// A `Ctrl`+`C` under a find bar copies from the surface the reader was last in.
+///
+/// A bar being up is not a claim on the clipboard: it is a claim only while the reader is in it. The
+/// query's selection wins while the query is where they were, and the page's wins once they have
+/// clicked into the page — and with the focused surface holding nothing, the other one's selection is
+/// copied, which is the fallback the chord has always had.
+#[test]
+fn a_copy_under_the_bar_is_the_surface_the_reader_was_last_in() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_and_a_query_both_selected("a-bar-copy-field.txt");
+
+    // The reader typed a query, selected part of it, and has not left the bar: the query is what
+    // they are copying, though the page under it still holds a selection of its own.
+    assert_eq!(
+        a_copy_now(),
+        (Some("needle".to_string()), false),
+        "the query's selection is copied while the query is what the reader was last in"
+    );
+
+    // And a reader who typed a query, selected part of it, and then clicked into the page to pick a
+    // match by hand — the page is where they were last, and its selection is the one they mean.
+    assert!(begin_text_selection(20, 10));
+    assert!(
+        extend_text_selection(120, 20).is_some(),
+        "the press is a drag in the page, which is a selection made there"
+    );
+    assert_eq!(
+        focus_now(),
+        Some(FindFocus::Page),
+        "a press or a drag in the page focuses the page"
+    );
+    assert!(
+        the_page_has_a_selection(),
+        "and the page has a selection to copy"
+    );
+    assert_eq!(
+        a_copy_now(),
+        (None, true),
+        "the page's own copy is the chord's once the page is what the reader was last in, though the \
+         query still holds a selection"
+    );
+
+    // And a query the reader is in with nothing selected copies the page: the fallback this has
+    // always had, so a selection made in the page is never a copy they asked for and did not get.
+    // `Ctrl`+`F` focuses the query and selects the whole of it, and an arrow then collapses that
+    // selection to a caret — which is a query the reader is in with nothing selected in it.
+    text_find::open_text_find();
+    assert_eq!(focus_now(), Some(FindFocus::Field));
+    text_find::note(FindEdit::Move(
+        text_find_field::Motion::CharacterRight,
+        false,
+    ));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        (bar_now().1.as_str(), a_copy_now()),
+        ("needle", (None, true)),
+        "a query with nothing selected gives the chord back to the page"
+    );
+}
+
+/// A `Ctrl`+`C` with a query typed but no selection in it is the page's, which is the fallback the
+/// chord has always had: a bar being up is not a claim on the clipboard (see `copy_target`).
+#[test]
+fn a_copy_with_nothing_selected_in_the_query_is_the_page_s() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-copy-page-only.txt");
+
+    // A selection in the page, and the bar opened over it: the query is empty, so it selects nothing.
+    begin_text_selection(20, 10);
+    unsafe { select_all_text_preview(a_pin_window()) };
+    text_find::open_text_find();
+    assert_eq!(focus_now(), Some(FindFocus::Field));
+
+    assert_eq!(
+        a_copy_now(),
+        (None, true),
+        "an empty query has nothing to copy, so the page's selection is the chord's"
+    );
+
+    // And a query typed but not selected is the same answer: a caret is not a selection.
+    type_into_the_bar("needle");
+    assert_eq!(
+        a_copy_now(),
+        (None, true),
+        "typing moves the caret and selects nothing, so the page is still what is copied"
+    );
+}
