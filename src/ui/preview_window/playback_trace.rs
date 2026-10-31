@@ -27,6 +27,13 @@
 //! second word: `asked 100 volume 0` is a film this app gave a level to and a player that is not at
 //! it (see `Verdict::Silent`).
 //!
+//! **And a fourth, which the player's pipe cannot reach either**: the same film with every one of those
+//! answers sound and its Windows audio session muted — `volume 94 mute no` on the player and
+//! `mixer 1.000 mute yes` on the session the OS keeps for it. Two mute switches, and the player can only
+//! see its own; a captured run had two of eighteen players in it. The session is asked by the other
+//! half of this trace (see `audio_session`), and a read where the player is heard and the session is
+//! muted is `Verdict::SessionMuted`.
+//!
 //! **Nothing here runs unless the variable is set**, and what it writes goes to
 //! `%TEMP%\rhp-playback-trace.log` — the same shape `RHP_PIN_TRACE` has (see `pin_trace`), a file of
 //! its own because the question is a different one and a run that asks it should not have to read a
@@ -181,6 +188,13 @@ pub(super) enum Verdict {
     /// the one every other answer calls sound — an output that is open, params that are present, and
     /// nothing coming out of it (see `EngineAnswers::told_to_be_quiet`).
     Silent,
+    /// **A player whose own answers all say the film has its sound and whose Windows audio session is
+    /// muted**: `mixer 1.000 mute yes` on the session's own `ISimpleAudioVolume` under an engine that
+    /// reports `volume 94 mute no` — two mute switches, and this is the half the player cannot see.
+    /// The fourth road to a silent film, the one a captured run proved (two players of eighteen), and
+    /// the only one whose cure is not written to the player at all: the mute is taken off the session
+    /// (see `audio_session::look_and_cure`, which is where a read is given this verdict).
+    SessionMuted,
     /// The player answered nothing in the time it was given, which says nothing about its sound.
     Unanswered,
 }
@@ -302,6 +316,10 @@ impl EngineAnswers {
         match self.verdict(asked) {
             Verdict::Unanswered | Verdict::NoDevice => true,
             Verdict::NoTrack | Verdict::Heard | Verdict::Silent => false,
+            // A player whose own answers are sound answers nothing more about them: what is muted is
+            // the session, and asking the player again is not what finds it (see
+            // `audio_session::look_and_cure`).
+            Verdict::SessionMuted => false,
         }
     }
 }
@@ -315,12 +333,17 @@ impl EngineAnswers {
 ///
 /// **`silent` is the verdict that reads as sound everywhere else**: a track, an output and params, with
 /// the player's own level at nothing or its mute on (see `Verdict::Silent`).
+///
+/// **`session-muted` is that same shape one layer out** — the player unmuted and Windows' own session for
+/// it muted — and the three are written apart so that a log names which of them happened: `silent` is the
+/// player, `session-muted` is the machine, and `no-device` is neither having been reached at all.
 pub(super) fn the_verdict_word(verdict: Verdict) -> &'static str {
     match verdict {
         Verdict::NoTrack => "no-track",
         Verdict::NoDevice => "no-device",
         Verdict::Heard => "heard",
         Verdict::Silent => "silent",
+        Verdict::SessionMuted => "session-muted",
         Verdict::Unanswered => "unanswered",
     }
 }

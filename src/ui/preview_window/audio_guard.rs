@@ -10,6 +10,26 @@
 //! (`playback_trace::Verdict`), and then *does* something about it, which is the whole of what the
 //! trace is not for.
 //!
+//! **The fourth road is not the player's at all, and it is asked at the same read.** A captured run
+//! proved it: two players of eighteen had a Windows audio session that was **muted** while mpv reported
+//! `volume 94 mute no` — two switches, and the player can see only its own — with that session's slider
+//! at `mixer 1.000` and its channels at `1.000 1.000`, so nothing a hand had moved was down. So every
+//! read this guard makes asks the machine as well as the player (`audio_session::look_and_cure`), on
+//! the same probe thread and straight after the six engine questions, and the answer comes back folded
+//! into the verdict: a player whose own answers are sound and whose session is still muted is
+//! `Verdict::SessionMuted`, and the mute is taken off there and then — **whether or not
+//! `RHP_PLAYBACK_TRACE` is set**, because the trace is the recorder and this is the fix. **No rung of
+//! this ladder is written for it**: the ladder's writes are the player's, and a player whose own
+//! answers are sound has nothing wrong with it.
+//!
+//! **And a session muted with its slider at nothing is left exactly as it is**: that is a hand in
+//! Windows' own mixer, and putting it back would overwrite a deliberate setting — so it is written down
+//! (`session turned down … left alone`) and the film plays on as the user left it. The mute switch is
+//! taken as this app's business and the slider as the user's, which is the whole of the line the cure
+//! draws (see `audio_session`). **FFmpeg's player is given no look**: its ladder is a line on its own
+//! stream and it has no read-back to hang one on, so what a traced run writes about its session stays a
+//! line and nothing more (see `audio_session::watch_the_mixer`).
+//!
 //! **The ladder, each rung taken at most once, and each rung entered on what the read-back said:**
 //!
 //! 1. `aid` is `no` or absent — a track asked back for with `set_property aid auto`, which is the
@@ -83,6 +103,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use super::audio_session::Seen;
 use super::playback_trace::note_playback_trace;
 use super::playback_trace::{EngineAnswers, Verdict};
 use super::video_launch::{AudioForm, Engine};
@@ -233,8 +254,9 @@ const SPENT: Spent = Spent {
 
 /// What a player has said, and no tick has read yet.
 enum Report {
-    /// The six answers an mpv gave (see `playback_trace::ask_the_engine`).
-    Answers(EngineAnswers),
+    /// The six answers an mpv gave, and what the machine's own look at its session came to (see
+    /// `playback_trace::ask_the_engine` and `audio_session::look_and_cure`).
+    Answers { answers: EngineAnswers, seen: Seen },
     /// A line FFmpeg's player wrote that is one of its audio failures (see `AUDIO_FAILURES`).
     Spoke,
 }
@@ -266,6 +288,11 @@ enum Step {
 enum Finish {
     /// The player was heard: the line a healthy film's ladder ends on.
     Heard,
+    /// **A player whose own answers are sound and whose session is still muted**: a hand at the mixer's
+    /// slider, or a mute the mixer would not take off. There is nothing left to do to the player — the
+    /// session's own line was written where it was found (see `Verdict::SessionMuted`) — so this is the
+    /// end of the ladder, and it says which of the two it ended on rather than reading as sound.
+    SessionMuted,
     /// Nothing left to try, and the six answers the last read gave — `None` for the player whose
     /// only answer was a line on its own stream.
     GaveUp(Option<EngineAnswers>),
@@ -489,22 +516,41 @@ fn spawn_probe_after(pid: u32, wait: Duration) {
         .name("audio-guard".to_string())
         .spawn(move || {
             std::thread::sleep(wait);
-            if !still_watched(pid) {
+            let Some(asked) = still_watched(pid) else {
                 return;
+            };
+            let answers = super::playback_trace::ask_the_engine(pid);
+
+            // **And the machine, on this same thread and straight after the player**. The session
+            // Windows has for this pid is looked at here, at no other time and for no player that is
+            // not this guard's — the read-back is the one cadence either of them has, so a looked-at
+            // session costs a walk of the mixer per read and nothing else (see `audio_session`). The
+            // look is made whether or not the trace is asked for, because the trace is the recorder
+            // and the cure is the fix; what it came to goes back with the answers, so the tick reads
+            // one report rather than two.
+            let seen = super::audio_session::look_and_cure(pid, asked);
+            if let Some(line) = super::audio_session::a_cure_line(pid, &seen) {
+                note_playback_trace!("{line}");
             }
-            report(
-                pid,
-                Report::Answers(super::playback_trace::ask_the_engine(pid)),
-            );
+
+            report(pid, Report::Answers { answers, seen });
         });
 }
 
-/// Whether the guard still stands for this player (see `spawn_probe_after`).
-fn still_watched(pid: u32) -> bool {
+/// The level the guard is still holding this player to, where this player is still the one it guards
+/// (see `spawn_probe_after`).
+///
+/// **The level comes back with the answer**, because it is the half of the session rule that says a
+/// launch begun without audio is never cured: a serve re-arms this guard for the same pid at the level
+/// of its new file, so a probe that carried the level it was begun at would heal a silence the setting
+/// chose (see `audio_session::the_warrant`).
+fn still_watched(pid: u32) -> Option<u32> {
     GUARD
         .lock()
-        .map(|slot| slot.as_ref().is_some_and(|guard| guard.pid == pid))
-        .unwrap_or(false)
+        .ok()?
+        .as_ref()
+        .filter(|guard| guard.pid == pid)
+        .map(|guard| guard.volume)
 }
 
 /// The wait before a watched player's `watch`th read after it was heard (see `WATCHES`).
@@ -607,15 +653,23 @@ pub(super) fn tick(may_begin_again: bool) -> Option<PathBuf> {
     if !guard.wants_again {
         if let Some(report) = guard.report.take() {
             guard.reads = guard.reads.saturating_add(1);
-            let (step, answers) = the_step_of_a_read(guard, report);
-            match step {
+            let read = the_step_of_a_read(guard, report);
+            match read.step {
                 // **Heard is no longer where a player is let go from.** A film that has its sound is
                 // watched for as long as it plays, so that one which loses it later is not silent and
                 // unremarked; the player a spent ladder began is the exception, and is given its one
                 // read and nothing else (see `keeps_watching`).
                 Step::Nothing if guard.keeps_watching() => arm_a_watch(guard),
-                Step::Nothing => finish = Some(Finish::Heard),
-                Step::GiveUp => finish = Some(Finish::GaveUp(answers)),
+                // **And a player that was not heard is not ended as if it was**: a session still muted
+                // under sound answers is the fourth road, and its end says so (see `Finish`).
+                Step::Nothing => {
+                    finish = Some(if read.verdict == Some(Verdict::SessionMuted) {
+                        Finish::SessionMuted
+                    } else {
+                        Finish::Heard
+                    })
+                }
+                Step::GiveUp => finish = Some(Finish::GaveUp(read.answers)),
                 Step::AskAgain => {
                     guard.spend.asked_again = true;
                     note_playback_trace!("audio step ask-again pid {}", guard.pid);
@@ -673,6 +727,7 @@ pub(super) fn tick(may_begin_again: bool) -> Option<PathBuf> {
     if let Some(finish) = &finish {
         match finish {
             Finish::Heard => note_playback_trace!("audio guard heard pid {pid}"),
+            Finish::SessionMuted => note_playback_trace!("audio guard session-muted pid {pid}"),
             Finish::GaveUp(answers) => {
                 note_playback_trace!("{}", a_give_up(guard, answers.as_ref()));
             }
@@ -704,15 +759,29 @@ pub(super) fn tick(may_begin_again: bool) -> Option<PathBuf> {
     }
 }
 
-/// What one report comes to, with the line the read-back is written as.
+/// What one read comes to: the rung it earns, the verdict it was read as, and the answers an ending is
+/// written from.
 ///
-/// **The answers come back out beside the step**, because the last rung is written down whole: a tick
-/// that reaches `GiveUp` has the very read that reached it to write (see `a_give_up`), and the player
-/// with no pipe hands none back.
-fn the_step_of_a_read(guard: &mut Guard, report: Report) -> (Step, Option<EngineAnswers>) {
+/// **The verdict comes back with the step** because the two ends of a ladder are not one word: a player
+/// whose own answers are sound and whose Windows session is muted is not a player that was heard, and
+/// an end-of-ladder line that said so would be the one lie this module could print (see `Finish`). The
+/// answers come back beside it for the same kind of reason — a tick that reaches `GiveUp` has the very
+/// read that reached it to write (see `a_give_up`), and the player with no pipe hands none back.
+struct AStep {
+    step: Step,
+    /// What the read was read as, and `None` for a player that answered nothing this app can read.
+    verdict: Option<Verdict>,
+    answers: Option<EngineAnswers>,
+}
+
+/// What one report comes to, with the line the read-back is written as.
+fn the_step_of_a_read(guard: &mut Guard, report: Report) -> AStep {
     match (guard.engine, report) {
-        (Engine::Mpv, Report::Answers(answers)) => {
-            let verdict = answers.verdict(guard.volume);
+        (Engine::Mpv, Report::Answers { answers, seen }) => {
+            // **The machine's own answer is folded into the player's**, which is the whole of the fourth
+            // road: a player that is heard and a session that is muted is `session-muted`, and one
+            // whose mute the look took off is heard (see `Seen::the_verdict_of`).
+            let verdict = seen.the_verdict_of(answers.verdict(guard.volume));
             // **A player that was heard and is not any more climbs the in-place rungs once more**, and
             // only those (see `re_opened`).
             if a_late_failure(guard.heard, verdict) {
@@ -725,7 +794,7 @@ fn the_step_of_a_read(guard: &mut Guard, report: Report) -> (Step, Option<Engine
             if !(guard.heard && verdict == Verdict::Heard) {
                 note_playback_trace!(
                     "{}",
-                    a_read_back(guard.pid, guard.reads, guard.volume, &answers)
+                    a_read_back(guard.pid, guard.reads, guard.volume, &answers, &seen)
                 );
             }
             guard.heard = verdict == Verdict::Heard;
@@ -739,20 +808,33 @@ fn the_step_of_a_read(guard: &mut Guard, report: Report) -> (Step, Option<Engine
             if step == Step::AskAgain && verdict == Verdict::NoDevice && opening {
                 guard.spend.opening = true;
             }
-            (step, Some(answers))
+            AStep {
+                step,
+                verdict: Some(verdict),
+                answers: Some(answers),
+            }
         }
         (Engine::Ffplay, Report::Spoke) => {
             note_playback_trace!("audio guard spoke pid {} read {}", guard.pid, guard.reads);
-            (the_step_of_a_signature(guard.spend), None)
+            AStep {
+                step: the_step_of_a_signature(guard.spend),
+                verdict: None,
+                answers: None,
+            }
         }
         // An answer one player gives and the other does not: nothing is known, so nothing is done.
-        _ => (Step::Nothing, None),
+        _ => AStep {
+            step: Step::Nothing,
+            verdict: None,
+            answers: None,
+        },
     }
 }
 
 /// The line one read-back is written as: the level the launch asked for, the six properties the player
-/// reported, and what they come to — the trace's own `engine truth` line with this ladder's numbering on
-/// it, because a film watched by the guard is read per rung rather than once.
+/// reported, what they come to, and the machine's own answer beside them — the trace's own `engine truth`
+/// line with this ladder's numbering on it, because a film watched by the guard is read per rung rather
+/// than once.
 ///
 /// **`asked` is the launch's level and `volume` the player's own**, the two words the third road is read
 /// by: a player reporting 0 or `mute yes` on a launch that asked for 100 is a film that is open and was
@@ -761,17 +843,24 @@ fn the_step_of_a_read(guard: &mut Guard, report: Report) -> (Step, Option<Engine
 /// playing through `null` is a different fault from one asked for a device it was given. Both are
 /// written as `-` where a player answered nothing, which is how a build without the property has always
 /// read.
-fn a_read_back(pid: u32, read: u8, asked: u32, answers: &EngineAnswers) -> String {
+///
+/// **The last two words are the machine's, and they are what tells the four silences apart on one line**
+/// (see `audio_session::the_session_word`): `verdict silent` is the player's own `volume 0` or its own
+/// `mute yes`, `verdict session-muted` with `session mixer 1.000 mute yes` is Windows silencing a player
+/// that reports itself unmuted, `verdict no-device` is a device that never opened, and `session mixer
+/// 0.000 mute yes left-alone` is a hand on the mixer's own slider, which nothing here touches.
+fn a_read_back(pid: u32, read: u8, asked: u32, answers: &EngineAnswers, seen: &Seen) -> String {
     format!(
         "audio read-back pid {pid} read {read} asked {asked} volume {} mute {} aid {} \
-         audio-device {} current-ao {} audio-out-params {} verdict {}",
+         audio-device {} current-ao {} audio-out-params {} verdict {} {}",
         super::playback_trace::the_level_word(answers.volume),
         super::playback_trace::the_flag_word(answers.mute),
         answers.aid.as_deref().unwrap_or("-"),
         answers.audio_device.as_deref().unwrap_or("-"),
         answers.current_ao.as_deref().unwrap_or("-"),
         answers.audio_out_params.as_deref().unwrap_or("-"),
-        super::playback_trace::the_verdict_word(answers.verdict(asked)),
+        super::playback_trace::the_verdict_word(seen.the_verdict_of(answers.verdict(asked))),
+        super::audio_session::the_session_word(seen),
     )
 }
 
@@ -854,9 +943,15 @@ fn re_opened(spend: Spent) -> Spent {
 /// the two things its player already has, so the level is what is asserted rather than a track or a
 /// device asked for again (see `Verdict::Silent`). A player still quiet after that is one new player on
 /// a pin's road — and nothing at all on a hover's, whose rungs stop where `Road` says.
+///
+/// **`SessionMuted` asks for nothing at all**, and that is the whole of its rung: the player's own
+/// answers are sound, so a track, a device or a level asserted again would be three writes to a film
+/// that is not what is muted. The mute was taken off the session where the read was made, or left
+/// where a hand put it (see `audio_session::look_and_cure`), and a pin's film goes on being watched, so
+/// a mute that lands again is taken off again.
 fn the_step(verdict: Verdict, spend: Spent, opening: bool, road: Road) -> Step {
     match verdict {
-        Verdict::Heard => Step::Nothing,
+        Verdict::Heard | Verdict::SessionMuted => Step::Nothing,
         Verdict::Unanswered if !spend.asked_again => Step::AskAgain,
         Verdict::Unanswered => Step::GiveUp,
         Verdict::NoTrack if !spend.track => Step::AskForATrack,
@@ -882,11 +977,35 @@ fn the_step_of_a_signature(spend: Spent) -> Step {
 
 #[cfg(test)]
 mod tests {
+    use super::super::audio_session::Cure;
     use super::*;
 
     /// A file named as a film is, for the rules that turn on which one is being shown.
     fn a_film() -> PathBuf {
         PathBuf::from("a-film.mkv")
+    }
+
+    /// What a tick is handed when the player's answers are all there is to know: a look that found no
+    /// session says nothing about a mute, so the read is the player's own (see
+    /// `Seen::the_verdict_of`).
+    fn a_report(answers: EngineAnswers) -> Report {
+        Report::Answers {
+            answers,
+            seen: Seen::Absent,
+        }
+    }
+
+    /// The same read with a muted session, and the mute the mixer would not take off beside it — the
+    /// fourth road as a tick sees it when the cure failed.
+    fn a_muted_report(answers: EngineAnswers, cure: Cure) -> Report {
+        Report::Answers {
+            answers,
+            seen: Seen::There {
+                mixer: Some(1.0),
+                mute: Some(true),
+                cure,
+            },
+        }
     }
 
     /// A guard on the player of [`a_film`], for the rules that are asked of one read rather than of
@@ -1321,7 +1440,7 @@ mod tests {
 
         clear_noted();
         assert_eq!(
-            the_step_of_a_read(&mut guard, Report::Answers(heard.clone())).0,
+            the_step_of_a_read(&mut guard, a_report(heard.clone())).step,
             Step::Nothing
         );
         let first = noted_lines();
@@ -1331,7 +1450,7 @@ mod tests {
         for _ in 0..3 {
             guard.reads = guard.reads.saturating_add(1);
             assert_eq!(
-                the_step_of_a_read(&mut guard, Report::Answers(heard.clone())).0,
+                the_step_of_a_read(&mut guard, a_report(heard.clone())).step,
                 Step::Nothing
             );
         }
@@ -1350,7 +1469,7 @@ mod tests {
             ..heard
         };
         assert_eq!(
-            the_step_of_a_read(&mut guard, Report::Answers(silent.clone())).0,
+            the_step_of_a_read(&mut guard, a_report(silent.clone())).step,
             Step::AskAgain,
             "a driver named with nothing playing is read once more before it is written to"
         );
@@ -1360,7 +1479,7 @@ mod tests {
 
         guard.reads = guard.reads.saturating_add(1);
         assert_eq!(
-            the_step_of_a_read(&mut guard, Report::Answers(silent)).0,
+            the_step_of_a_read(&mut guard, a_report(silent)).step,
             Step::AskForADevice,
             "a second read of that shape climbs the device rung"
         );
@@ -1368,6 +1487,122 @@ mod tests {
             noted_lines().len(),
             3,
             "and a read taken inside the ladder's own pass is written too"
+        );
+    }
+
+    /// **The fourth silence asks nothing of the player.** A session muted under a player whose every
+    /// answer is sound is a film the ladder has no rung for: a track, a device and a level are the three
+    /// things that player already has, and what is muted is the machine's session rather than the
+    /// player. So the rung is none on either road and with every rung spent — the cure is the session's
+    /// own, and it was taken where the read was made (see `audio_session::look_and_cure`).
+    #[test]
+    fn a_session_muted_under_a_heard_player_asks_nothing_of_the_player() {
+        assert_eq!(
+            the_step(Verdict::SessionMuted, Spent::default(), false, Road::Pin),
+            Step::Nothing,
+            "a track, a device and a level are what this player has: nothing here is its fault"
+        );
+        assert_eq!(
+            the_step(Verdict::SessionMuted, Spent::default(), false, Road::Hover),
+            Step::Nothing
+        );
+        assert_eq!(
+            the_step(Verdict::SessionMuted, SPENT, false, Road::Pin),
+            Step::Nothing,
+            "and a player begun in place of another is not asked for a rung either"
+        );
+
+        // Which is what a tick sees: the read is written, the player is not written to, and a film
+        // nothing can hear is not counted as heard.
+        use super::super::playback_trace::{clear_noted, noted_lines};
+
+        let heard = EngineAnswers {
+            aid: Some("1".to_string()),
+            audio_device: Some("auto".to_string()),
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+            volume: Some(100.0),
+            mute: Some(false),
+        };
+        let mut guard = a_guard(Engine::Mpv, Spent::default());
+        guard.reads = 2;
+
+        clear_noted();
+        let read = the_step_of_a_read(&mut guard, a_muted_report(heard, Cure::Refused));
+        assert_eq!(read.step, Step::Nothing);
+        let wrote = noted_lines();
+        assert_eq!(
+            wrote.len(),
+            1,
+            "the read that found the mute is written: {}",
+            wrote.join(" | ")
+        );
+        assert!(wrote[0].contains("verdict session-muted"));
+        assert!(wrote[0].contains("session mixer 1.000 mute yes cure-failed"));
+        assert!(
+            !guard.heard,
+            "a film nothing can hear is not counted as heard, so the next read is written too"
+        );
+        assert_eq!(
+            guard.spend,
+            Spent::default(),
+            "not one rung is spent on a fault that is not the player's"
+        );
+    }
+
+    /// **A mute that lands after the film was heard is written and still watched.** The schedule reads a
+    /// heard player at +2 s, +4 s, +8 s and then every ten, and a session muted under it is the one way a
+    /// film goes silent with no word anywhere else — so a read that finds it is a verdict that moved, and
+    /// the player stays under the schedule, because a mute that lands again is cured again.
+    ///
+    /// **And a mute the mixer took off writes nothing here**, which is why the cure is written where it is
+    /// made rather than on this line: the read comes back `heard`, and a film that stays heard writes the
+    /// one read-back its ladder opened with (see `audio_session::a_cure_line`).
+    #[test]
+    fn a_mute_that_lands_after_the_player_was_heard_is_written_and_still_watched() {
+        use super::super::playback_trace::{clear_noted, noted_lines};
+
+        let heard = EngineAnswers {
+            aid: Some("1".to_string()),
+            audio_device: Some("auto".to_string()),
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+            volume: Some(100.0),
+            mute: Some(false),
+        };
+        let mut guard = a_guard(Engine::Mpv, Spent::default());
+        guard.reads = 3;
+        guard.watches = 1;
+        guard.heard = true;
+
+        clear_noted();
+        let read = the_step_of_a_read(&mut guard, a_muted_report(heard.clone(), Cure::Refused));
+        assert_eq!(read.step, Step::Nothing);
+        assert_eq!(read.verdict, Some(Verdict::SessionMuted));
+        assert!(
+            guard.keeps_watching(),
+            "the film goes on being read, so a mute that lands again is taken off again"
+        );
+        let wrote = noted_lines();
+        assert_eq!(
+            wrote.len(),
+            1,
+            "a verdict that moved is written: {}",
+            wrote.join(" | ")
+        );
+        assert!(wrote[0].contains("verdict session-muted"));
+
+        guard.heard = true;
+        clear_noted();
+        let read = the_step_of_a_read(&mut guard, a_muted_report(heard, Cure::Unmuted));
+        assert_eq!(
+            read.verdict,
+            Some(Verdict::Heard),
+            "a mute taken off is a film with its sound again"
+        );
+        assert!(
+            noted_lines().is_empty(),
+            "and the cure line is the only thing a cured film writes"
         );
     }
 
@@ -1468,9 +1703,10 @@ mod tests {
     }
 
     /// **What a read-back is read as**: the level the launch asked for, the six answers the player gave
-    /// named as the trace names them, and the verdict they come to — so a field log carries the whole of
-    /// the ladder's evidence: the level asked for beside the level the player is at, the device that was
-    /// asked for beside the driver that answered it, and `-` where a player said nothing to either.
+    /// named as the trace names them, the verdict they come to, and the machine's own answer beside them
+    /// — so a field log carries the whole of the ladder's evidence: the level asked for beside the level
+    /// the player is at, the device that was asked for beside the driver that answered it, and `-` where
+    /// a player said nothing to either.
     #[test]
     fn a_read_back_is_the_players_own_answers_and_the_verdict_they_come_to() {
         let answers = EngineAnswers {
@@ -1482,9 +1718,9 @@ mod tests {
             mute: Some(false),
         };
         assert_eq!(
-            a_read_back(7, 1, 100, &answers),
+            a_read_back(7, 1, 100, &answers, &Seen::Absent),
             "audio read-back pid 7 read 1 asked 100 volume 100 mute no aid 1 audio-device auto \
-             current-ao wasapi audio-out-params {\"samplerate\":48000} verdict heard"
+             current-ao wasapi audio-out-params {\"samplerate\":48000} verdict heard session none"
         );
 
         // And the third road, as the read-back writes it: a player at nothing on a launch that asked for
@@ -1494,17 +1730,73 @@ mod tests {
             ..answers
         };
         assert_eq!(
-            a_read_back(7, 2, 100, &quiet),
+            a_read_back(7, 2, 100, &quiet, &Seen::Absent),
             "audio read-back pid 7 read 2 asked 100 volume 0 mute no aid 1 audio-device auto \
-             current-ao wasapi audio-out-params {\"samplerate\":48000} verdict silent"
+             current-ao wasapi audio-out-params {\"samplerate\":48000} verdict silent session none"
         );
 
         let silent = EngineAnswers::default();
         assert_eq!(
-            a_read_back(9, 2, 40, &silent),
+            a_read_back(9, 2, 40, &silent, &Seen::Absent),
             "audio read-back pid 9 read 2 asked 40 volume - mute - aid - audio-device - current-ao - \
-             audio-out-params - verdict unanswered",
+             audio-out-params - verdict unanswered session none",
             "a player that said nothing is written as nothing said rather than as a guess"
+        );
+    }
+
+    /// **The four silences are four words on one line, and none of them can be read as another.** A
+    /// player at nothing is `silent`; a player with a device it could not open is `no-device`; a player
+    /// whose every answer is sound and whose Windows session is muted is `session-muted`, with the
+    /// mixer's own slider and switch beside it; and a session muted by a hand, with its slider down, is
+    /// written as left alone rather than as this app's failure.
+    #[test]
+    fn a_read_back_names_which_of_the_four_silences_it_found() {
+        let heard = EngineAnswers {
+            aid: Some("1".to_string()),
+            audio_device: Some("auto".to_string()),
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+            volume: Some(100.0),
+            mute: Some(false),
+        };
+
+        let muted = Seen::There {
+            mixer: Some(1.0),
+            mute: Some(true),
+            cure: Cure::Refused,
+        };
+        assert_eq!(
+            a_read_back(23724, 4, 100, &heard, &muted),
+            "audio read-back pid 23724 read 4 asked 100 volume 100 mute no aid 1 audio-device auto \
+             current-ao wasapi audio-out-params {\"samplerate\":48000} verdict session-muted \
+             session mixer 1.000 mute yes cure-failed",
+            "the second mute switch: every answer on the player's pipe says the film has its sound"
+        );
+
+        let turned_down = Seen::There {
+            mixer: Some(0.0),
+            mute: Some(true),
+            cure: Cure::TurnedDown,
+        };
+        assert_eq!(
+            a_read_back(23724, 5, 100, &heard, &turned_down),
+            "audio read-back pid 23724 read 5 asked 100 volume 100 mute no aid 1 audio-device auto \
+             current-ao wasapi audio-out-params {\"samplerate\":48000} verdict session-muted \
+             session mixer 0.000 mute yes left-alone",
+            "a hand on the mixer's own slider is written down and not restored"
+        );
+
+        // And a session whose mute the cure took off is a film that has its sound: the write is the
+        // whole of what was wrong with it.
+        let cured = Seen::There {
+            mixer: Some(1.0),
+            mute: Some(true),
+            cure: Cure::Unmuted,
+        };
+        assert!(
+            a_read_back(23724, 6, 100, &heard, &cured)
+                .ends_with("verdict heard session mixer 1.000 mute yes cured"),
+            "a mute taken off is heard, and the line still says what it was found at"
         );
     }
 
@@ -1556,19 +1848,18 @@ mod tests {
                 ..Spent::default()
             },
         );
-        let (step, answers) =
-            the_step_of_a_read(&mut mpv, Report::Answers(EngineAnswers::default()));
-        assert_eq!(step, Step::GiveUp);
+        let read = the_step_of_a_read(&mut mpv, a_report(EngineAnswers::default()));
+        assert_eq!(read.step, Step::GiveUp);
         assert!(
-            answers.is_some(),
+            read.answers.is_some(),
             "an mpv that is given up on hands back the read it was given up on"
         );
 
         let mut ffplay = a_guard(Engine::Ffplay, SPENT);
-        let (step, answers) = the_step_of_a_read(&mut ffplay, Report::Spoke);
-        assert_eq!(step, Step::GiveUp);
+        let read = the_step_of_a_read(&mut ffplay, Report::Spoke);
+        assert_eq!(read.step, Step::GiveUp);
         assert!(
-            answers.is_none(),
+            read.answers.is_none(),
             "FFmpeg's player answers nothing this app can read, so there is nothing to hand back"
         );
     }

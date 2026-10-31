@@ -1315,16 +1315,27 @@ default `--softvol=no` means the level this app gave it is applied by the driver
 `volume` nor the slider is that number. **The line states its own gaps**: `-` for a value the OS would not give, `unknown`
 for a state with no word, `refused` for an interface that would not be had (say `IChannelAudioVolume`), `none` for a
 session with no channel, and `session refused` with the part of the walk that failed — a silent probe would read as
-`session none`, which is a finding about the player rather than about this question. **It is a reader and never a cure**:
-no session is set, no mute is taken off and `IAudioEndpointVolume` is not touched, because changing what the user's
-mixer says would destroy the evidence. **COM is taken on that thread's own apartment** (`COINIT_MULTITHREADED`, given
+`session none`, which is a finding about the player rather than about this question. **And the run it was built to describe
+proved a fault it now cures**: of eighteen players in one captured run, two had a session whose mute switch was on at
+`mixer 1.000` with its channels at `1.000 1.000`, under a player that reported `volume 94 mute no` — two mute switches,
+and the player can see only its own. So a **guarded** player's session is looked at for every read the guard already makes
+(`audio_session::look_and_cure`, on the guard's probe thread and straight after the engine ask), and a mute found on is
+taken off with one write — `ISimpleAudioVolume::SetMute(false)` — **whether or not `RHP_PLAYBACK_TRACE` is set**, because
+the trace is the recorder and the cure is the fix. **Nothing else is ever set**: not the master volume, not a per-channel
+volume, not `IAudioEndpointVolume`. **A session muted with its slider at nothing is a hand in Windows' own mixer**, so it
+is written down and left as it is (`session turned down … left alone`), because putting it back would overwrite a
+deliberate setting; and a mute the mixer refused, or a walk that could not be made, is written as a failure rather than
+swallowed (`session unmute failed …`). **COM is taken on that thread's own apartment** (`COINIT_MULTITHREADED`, given
 back at the end) and nowhere near the preview loop, which holds one for the engines that draw into it; the wait for a
-player's session to exist and every call after it are on the thread, bounded the way the pipe reads are. Unset, no
-thread is spawned, no apartment is taken and no COM is called.
+player's session to exist and every call after it are on the thread, bounded the way the pipe reads are. Unset, the
+trace spawns no thread and writes no line of its own; a player this app did not begin and is not guarding is never looked
+at at all.
 
 **Healing a film's sound.** The trace describes the roads to a silent film; `audio_guard` walks back down them. It asks
-the same six questions (`aid`, `audio-device`, `current-ao`, `audio-out-params`, `volume`, `mute`) and reads the same
-verdict out of them, then climbs a ladder, each rung taken at most once: a track asked back for with
+the same six questions (`aid`, `audio-device`, `current-ao`, `audio-out-params`, `volume`, `mute`), **and the machine's
+own look at that pid's session beside them**, and reads one verdict out of the two — a player whose every answer is sound
+and whose session is still muted is `session-muted`, the fourth road, and one whose mute the look took off is `heard`
+(see `audio_session`). Then it climbs a ladder, each rung taken at most once: a track asked back for with
 `set_property aid auto` — the launch's own road, healed; `audio-device` handed its own `auto`, which is mpv reloading its
 audio output, so a device refused while the film was starting gets one more attempt at it; the level the launch asked
 for asserted again with the player's own `mute` taken off beside it, which is the cure for a verdict of `silent` — a
@@ -1335,8 +1346,15 @@ alone: a verdict that never arrived is not a film without sound, so it is not a 
 named with nothing playing through it** — `current-ao wasapi` and no `audio-out-params`, which a captured run read 548 ms
 after its launch and which is a player still opening its output as readily as a film that lost it — so that shape is read
 once more and the device cure is written on its second consecutive read; `aid=no` and a driver of `null` are answers,
-and each takes its rung on the first read. **Every read that moves the verdict writes a line** (`audio guard`,
-`audio read-back`, `audio step`), so a field log carries the ladder's whole evidence even where it healed silently. **A
+and each takes its rung on the first read. **A `session-muted` read climbs nothing**: the player's answers are the ones a
+working film gives, so a track, a device or a level asserted again would be writes to a film that is not what is muted,
+and the cure was the session's and was taken where the read was made. **Every read that moves the verdict writes a line**
+(`audio guard`, `audio read-back`, `audio step`), so a field log carries the ladder's whole evidence even where it healed
+silently: the session clause is the last word on the read-back, and a read that was `session-muted` is a verdict that
+moved, so a mute that lands after the film was heard is written where it is found. **A read that came back `heard` because
+a mute was taken off writes no read-back at all**, which is why the cure has a line of its own
+(`session unmuted pid … mixer 1.000 was mute`) — a cure nobody wrote down is one nobody can tell from a fault that never
+happened, and a cure the mixer refused is written as `session unmute failed …` rather than swallowed. **A
 ladder that ends is written once, and its last rung is written whole**: one `audio gave up` line carrying the launch's
 form and the level it asked for, the six answers of the read that reached it (`-` for the player with no pipe), and the
 verdict they come to — because a film nothing could cure is the case a log is read from with no reproducer behind it
@@ -1364,8 +1382,11 @@ than argued about. Unset, the resident road is the run, byte for byte.
 
 **A film that was heard is watched, because it can lose its sound later.** `Heard` is not where a pin's guard ends: the
 player is kept under a sparse schedule of read-backs — +2 s, +4 s, +8 s, then one every ~10 s for as long as it lives —
-sampled on the probe thread and decided on the tick, so a film whose endpoint is taken away hours in still says so. A
-hover is on no schedule at all: it is short-lived and its per-serve reads are the whole of what there is to know. A read
+sampled on the probe thread and decided on the tick, so a film whose endpoint is taken away hours in still says so. **And
+every one of those reads asks the machine as well as the player**, so a session muted a minute into a film is caught,
+written and taken off — a mute that lands after the first second is exactly the shape that used to leave no trace
+anywhere at all. A hover is on no schedule at all: it is short-lived and its per-serve reads are the whole of what there
+is to know. A read
 that is heard again writes nothing at all: the line is written where the verdict moved, so a healthy film's log is the
 one line it opened with. A late failure climbs the three in-place rungs once more (`aid`, then `audio-device`, then the
 level) and may take the relaunch **at most once in a player's whole life**, not once per episode — a device that is
@@ -1417,8 +1438,8 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/video_playback.rs` | both launches: where a film is born (the desktop, at its own size, borderless) and which host keeps it |
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
 | `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it — the level asked for beside the level it is at — both players' own lines, and a kill's confirmation |
-| `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), the executable its identifier names, the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none |
-| `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict, the in-place rungs and the one relaunch, the hover's in-place-only road, the sparse watch of a pin's player that was heard, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
+| `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), the executable its identifier names, the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none — and the one write this app makes to the OS: a muted session's `SetMute(false)` under a guarded player at a slider that is up |
+| `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict with the machine's own answer folded into it (`session-muted` being the fourth road), the in-place rungs and the one relaunch, the hover's in-place-only road, the sparse watch of a pin's player that was heard, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |
 
