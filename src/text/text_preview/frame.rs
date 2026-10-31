@@ -63,6 +63,11 @@ pub struct FrameLine {
     pub top: i32,
     pub height: i32,
     pub runs: Vec<FrameRun>,
+    /// Left edge of the column this line's text is drawn in: where the line's own text begins, past
+    /// the gutter the page keeps for its numbers and past the indent the line carries. It is where a
+    /// place on a line with no run to measure stands, which is what a caret at the start of an empty
+    /// line is (see `x_within_line`).
+    pub left: i32,
     /// The document line this painted line belongs to, and the character of that
     /// line its first run starts at: what a point on the frame is turned back into,
     /// and what a selection is measured against (see `Selection`).
@@ -225,7 +230,10 @@ fn x_within_line(line: &FrameLine, offset: usize) -> (i32, i32) {
         before += count;
     }
 
-    // Past the last run: the end of the line, at the right edge of the run before it.
+    // Past the last run: the end of the line, at the right edge of the run before it. A line with no
+    // run at all is a line with nothing to stand after, so the place is the left edge of the column
+    // its text is drawn in rather than the frame's — an empty line is inside the text, not beside the
+    // numbers (see `FrameLine::left`).
     match line.runs.last() {
         Some(run) => (
             run.x + run.width,
@@ -233,7 +241,7 @@ fn x_within_line(line: &FrameLine, offset: usize) -> (i32, i32) {
                 .round()
                 .max(1.0) as i32,
         ),
-        None => (0, 1),
+        None => (line.left, 1),
     }
 }
 
@@ -727,6 +735,7 @@ fn render_scrolled_from(
         .map(|line| FrameLine {
             top: line.top,
             height: line.height,
+            left: line.left,
             source: line.source,
             runs: line
                 .runs

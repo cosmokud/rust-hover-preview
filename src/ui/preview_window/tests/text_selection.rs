@@ -29,6 +29,7 @@ impl TextPagePutBack {
             lines: vec![text_preview::FrameLine {
                 top: 0,
                 height: 20,
+                left: 0,
                 runs: Vec::new(),
                 source: (0, 0),
             }],
@@ -126,6 +127,7 @@ fn put_painted_line(text: &str) {
             state.lines = vec![text_preview::FrameLine {
                 top: 0,
                 height: 20,
+                left: 0,
                 runs: vec![text_preview::FrameRun {
                     x: 0,
                     width: text.chars().count() as i32 * 10,

@@ -98,6 +98,7 @@ fn a_line(text: &str) -> Vec<FrameLine> {
     vec![FrameLine {
         top: 0,
         height: 20,
+        left: 0,
         runs: vec![FrameRun {
             x: 0,
             width: text.chars().count() as i32 * 10,
@@ -292,6 +293,7 @@ fn a_third_press_takes_the_whole_of_the_line_under_the_hand() {
     let painted = |top: i32, text: &str, source: (usize, usize)| FrameLine {
         top,
         height: 20,
+        left: 0,
         runs: vec![FrameRun {
             x: 0,
             width: text.chars().count() as i32 * 10,
@@ -1223,6 +1225,75 @@ fn the_caret_of_a_pinned_page_stands_on_the_glyph_it_precedes_at_any_scale() {
         gaps[0] > 0 && gaps[1] > gaps[0] && gaps[2] > gaps[1],
         "the room between the numbers and the text is the display's own gap: {gaps:?}"
     );
+}
+
+/// A caret on an empty line stands where that line's text would begin, not at the frame's edge.
+///
+/// An empty line is a painted line with no run on it, so there is nothing on it for a place to be
+/// measured against — and the place is the left edge of the column the text is drawn in, past the
+/// numbers the page keeps beside it, rather than the frame's own edge, which is inside the numbers
+/// (see `x_within_line` and `FrameLine::left`). It is the same answer at a display scale, where the
+/// gutter is wider than the number standing in it (see `gutter_width`).
+#[test]
+fn a_caret_on_an_empty_line_stands_at_the_text_column_and_never_on_the_numbers() {
+    let dir = scratch("gutter-empty-line");
+    let source = dir.join("empty-lines.txt");
+    fs::write(&source, "21 the line above\n\n\n22 the line below\n").expect("a page to draw");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+
+    for dpi in [96u32, 144] {
+        let frame =
+            render_scrolled(&source, 0, 400, 300, dpi, options, None, None).expect("a page");
+        let background = frame_pixel(&frame, frame.width - 1, frame.height - 1);
+
+        // The column the text is drawn in, said by a line that has some on it.
+        let text_column = frame.lines[0].runs[0].x;
+        assert!(
+            text_column > 0,
+            "the page keeps a column for its numbers before the text begins"
+        );
+
+        // Lines 1 and 2 of the file are the empty ones: painted, numbered, and with no run at all.
+        let empty: Vec<&FrameLine> = frame
+            .lines
+            .iter()
+            .filter(|line| line.source.0 == 1 || line.source.0 == 2)
+            .collect();
+        assert_eq!(
+            empty.len(),
+            2,
+            "an empty line still takes a line of the page"
+        );
+
+        for line in empty {
+            assert!(
+                line.runs.is_empty(),
+                "an empty line has nothing on it to measure a place against"
+            );
+
+            let caret = caret_rect(&frame.lines, (line.source.0, 0)).expect("a caret on the line");
+            assert_eq!(
+                caret.left, text_column,
+                "at {dpi} dpi a caret on an empty line stands where the line's text would begin"
+            );
+
+            // The line's number is drawn in the gutter beside it, and the caret is past all of it:
+            // no part of the bar is laid over the numbers.
+            let number_ink_right = (line.top..line.top + line.height)
+                .flat_map(|y| (0..text_column).map(move |x| (x, y)))
+                .filter(|(x, y)| frame_pixel(&frame, *x as u32, *y as u32) != background)
+                .map(|(x, _)| x)
+                .max();
+            assert!(
+                number_ink_right.is_some_and(|number| caret.left > number),
+                "at {dpi} dpi the caret stands clear of the number drawn beside it"
+            );
+        }
+    }
 }
 
 /// A copy of a pinned page is the document's text and never the numbers drawn beside it.
