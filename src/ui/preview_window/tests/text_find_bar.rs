@@ -551,6 +551,68 @@ fn a_key_that_moved_nothing_asks_for_no_repaint() {
     assert_eq!(paints(), before + 2, "a move that moved is drawn");
 }
 
+/// The repaint gate follows the field's own state and not the scroll a paint derives from it: on a
+/// query too wide for its field a caret move that scrolls the run is drawn, and a key that moved
+/// nothing is not — even though two different carets can rest at the same scroll (see
+/// `text_find::Drawn` and `pin_chrome::query_run`).
+#[test]
+fn a_caret_move_that_scrolls_a_long_query_is_drawn_and_one_that_moved_nothing_is_not() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-scrolled-query.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar(
+        "a query too long for the card's own field, so that its own beginning is cut away",
+    );
+
+    let paints = || text_find::BAR_PAINTS.load(Ordering::Relaxed);
+    let plain = text_find::Modifiers::default();
+    let press = |vk: u16| {
+        let edit = text_find::key_edit_with(vk as i32, plain)
+            .expect("a key the field's one table answers");
+        text_find::note(edit);
+        unsafe { text_find::settle(a_pin_window()) };
+    };
+
+    // `Home` off the end of the query is a move that scrolls the run to show its beginning, and what
+    // the card draws changed: the run is not where it was.
+    let before = paints();
+    press(VK_HOME.0);
+    assert_eq!(
+        caret_now(),
+        (0, 0),
+        "the caret is at the start of the query"
+    );
+    assert_eq!(
+        paints(),
+        before + 1,
+        "a move that scrolled the run to its beginning is drawn"
+    );
+
+    // `Home` again moved nothing the card draws, so it draws nothing.
+    press(VK_HOME.0);
+    assert_eq!(
+        paints(),
+        before + 1,
+        "Home at the start of a long query repainted nothing"
+    );
+
+    // And `End` scrolls the run back to the caret's own end, which is drawn again.
+    press(VK_END.0);
+    assert_eq!(
+        caret_now().0,
+        bar_now().1.len(),
+        "the caret is back at the end"
+    );
+    assert_eq!(
+        paints(),
+        before + 2,
+        "a move that scrolled the run back is drawn"
+    );
+}
+
 /// What one key lands as on the one road a focused pin gives the bar: the window procedure's
 /// `WM_KEYDOWN` arm reads the key with `key_edit_with`, and where the key types a character the
 /// `WM_CHAR` that follows it — which exists only because nothing swallowed the key-down — types that

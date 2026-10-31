@@ -291,10 +291,10 @@ fn the_step_mark_is_wider_than_it_is_tall_and_closes_on_an_apex_on_a_pixel() {
     assert!(wide > tall, "and is still a chevron at 150%");
 }
 
-/// The caret is placed where the query was really drawn. A query wider than its field is drawn from
-/// the right, so a caret counted from the field's left edge is nowhere near the text — the fault this
-/// asks after — and a caret placed after the text's own end stands at the field's right instead (see
-/// `paint_find_bar`).
+/// The caret is placed where the query was really drawn. A query wider than its field is scrolled by
+/// the caret, so a caret counted from the field's left edge is nowhere near the text — the fault this
+/// asks after — and a caret placed after the text's own end stands a margin inside the field's right
+/// edge rather than on it (see `query_run` and `paint_find_bar`).
 #[test]
 fn the_caret_stands_after_the_last_character_of_a_query_too_long_for_its_field() {
     let query = "the needle that is far too long for a field of this card to hold in its row";
@@ -324,8 +324,12 @@ fn the_caret_stands_after_the_last_character_of_a_query_too_long_for_its_field()
     let mut columns: Vec<i32> = lit.iter().map(|(x, _)| *x).collect();
     columns.dedup();
     assert!(
-        columns.contains(&card.query.right),
-        "the caret is at the end of the text, at the field's right edge"
+        columns.contains(&(card.query.right - text_paint::scaled(FIND_BAR_CARET_MARGIN, 1.0))),
+        "the caret is at the end of the text, a margin inside the field's right edge"
+    );
+    assert!(
+        !columns.contains(&card.query.right),
+        "and never on the field's own last column, which is the count's side of it"
     );
     assert!(
         !columns.contains(&card.query.left),
@@ -446,9 +450,12 @@ fn a_press_names_a_place_in_the_query_from_the_column_it_is_drawn_at() {
     // A short query starts at the field's left edge, so the left edge is its beginning and the right
     // edge is past its end.
     let short = "needle";
-    assert_eq!(query_index_at(&card, short, card.query.left, 96), 0);
     assert_eq!(
-        query_index_at(&card, short, card.query.right - 1, 96),
+        query_index_at(&card, short, short.len(), card.query.left, 96),
+        0
+    );
+    assert_eq!(
+        query_index_at(&card, short, short.len(), card.query.right - 1, 96),
         short.len(),
         "a point past the end of the run is the caret after its last character"
     );
@@ -456,7 +463,7 @@ fn a_press_names_a_place_in_the_query_from_the_column_it_is_drawn_at() {
     // The same query with a character outside the basic plane in it: the place is a byte index, so
     // the caret after `😀` is four bytes into the query rather than one.
     assert_eq!(
-        query_index_at(&card, "a😀b", card.query.right - 1, 96),
+        query_index_at(&card, "a😀b", "a😀b".len(), card.query.right - 1, 96),
         "a😀b".len()
     );
 
@@ -474,10 +481,10 @@ fn a_press_names_a_place_in_the_query_from_the_column_it_is_drawn_at() {
         query_origin(&card, measured) < card.query.left,
         "the run begins to the left of the field it is cut by"
     );
-    let at_left = query_index_at(&card, long, card.query.left, 96);
+    let at_left = query_index_at(&card, long, long.len(), card.query.left, 96);
     assert!(at_left > 0, "the field's left edge is inside the run");
     assert_eq!(
-        query_index_at(&card, long, card.query.right, 96),
+        query_index_at(&card, long, long.len(), card.query.right, 96),
         long.len(),
         "and its right edge is the end of the query"
     );
@@ -548,5 +555,284 @@ fn a_selection_is_washed_in_the_field_and_the_caret_obeys_its_blink() {
         lit_pixels(&unlit.0),
         0,
         "and the unlit half of the blink draws no caret at all"
+    );
+}
+
+/// The pixels of the query's own row that are outside the field, as `(x, y)`: what a run drawn wider
+/// than its field — or a wash or a caret welded past its edge — would ink over the card's padding
+/// (see `paint_find_bar`).
+fn strays_on_the_query_row(buffer: &[u8], plain: &[u8], card: FindBar) -> Vec<(i32, i32)> {
+    (card.query.top..card.query.bottom)
+        .flat_map(|y| {
+            (card.panel.left..card.query.left)
+                .chain(card.query.right..card.panel.right)
+                .map(move |x| (x, y))
+        })
+        .filter(|(x, y)| pixel_at(buffer, 400, *x, *y) != pixel_at(plain, 400, *x, *y))
+        .collect()
+}
+
+/// A query too wide for its field scrolls under its caret, and the field is what cuts it: at `Home`
+/// the run's beginning is what the reader sees, a margin inside the field with the caret before its
+/// first character; at `End` the run's end, a margin inside the other edge; and a caret whose own
+/// column the field already shows leaves the run exactly where it rests. In none of the three does a
+/// glyph reach the card's padding beside the field (`query_run`, `paint_find_bar`).
+#[test]
+fn a_long_query_scrolls_under_its_caret_and_is_cut_at_the_field() {
+    const LONG: &str =
+        "WWW the same word runs on far past the width of this card's own field and keeps going";
+    // The card with no query at all, and the same `1/3` count: every pixel a long query changes
+    // outside the field is a pixel that differs from this card, and the count is not one of them.
+    let (plain, card) = painted_card(&card_state("", Some(0), 3), 96);
+    let accent = palette().accent;
+    let accent_column = [accent[2], accent[1], accent[0], 255];
+    let margin = text_paint::scaled(FIND_BAR_CARET_MARGIN, 1.0);
+
+    let inked = |buffer: &[u8], x: i32| {
+        (card.query.top..card.query.bottom)
+            .any(|y| pixel_at(buffer, 400, x, y) != pixel_at(&plain, 400, x, y))
+    };
+    let caret_columns = |buffer: &[u8]| -> Vec<i32> {
+        (card.query.left..card.query.right)
+            .filter(|x| {
+                (card.query.top..card.query.bottom)
+                    .any(|y| pixel_at(buffer, 400, *x, y) == accent_column)
+            })
+            .collect()
+    };
+
+    // `Home` on a query typed to its end: the caret's own character is off the field where the run
+    // rests, so the run scrolls to show the beginning of the query.
+    let home = painted_card(
+        &FindBarPaint {
+            caret: 0,
+            anchor: 0,
+            ..card_state(LONG, Some(0), 3)
+        },
+        96,
+    );
+    assert_eq!(
+        strays_on_the_query_row(&home.0, &plain, card),
+        Vec::new(),
+        "the beginning the field has no room for is cut at its edge, not drawn over the padding"
+    );
+    assert_eq!(
+        caret_columns(&home.0),
+        vec![card.query.left + margin],
+        "the caret at Home stands a margin inside the field"
+    );
+    assert!(
+        (card.query.left + margin + 1..card.query.left + margin + 12).any(|x| inked(&home.0, x)),
+        "with the query's first character drawn beside it"
+    );
+
+    // `End`, where a reader typing has the caret: the run's own end stays on the field, a margin
+    // inside its right edge, and it is the run's beginning that is cut.
+    let end = painted_card(&card_state(LONG, Some(0), 3), 96);
+    assert_eq!(
+        strays_on_the_query_row(&end.0, &plain, card),
+        Vec::new(),
+        "a run that overflows the field is cut at its right edge too"
+    );
+    assert_eq!(
+        caret_columns(&end.0),
+        vec![card.query.right - margin],
+        "the caret at End keeps a margin from the field's right edge"
+    );
+    assert!(
+        (card.query.left..card.query.left + 8).any(|x| inked(&end.0, x)),
+        "and the run is drawn up to the field's left edge"
+    );
+
+    // A caret whose column the field already shows leaves the run where it rests: the text under the
+    // reader does not shuffle for an arrow key they can see the caret move on.
+    let surface = DibSurface::create(
+        (card.panel.right - card.panel.left) as u32,
+        (card.panel.bottom - card.panel.top) as u32,
+    )
+    .expect("a surface");
+    let columns = measure_run(&surface, &caption_style(palette().foreground), LONG, 1.0);
+    let measured = columns.last().copied().unwrap_or(0);
+    assert!(
+        measured > card.query.right - card.query.left,
+        "the query is wider than its field"
+    );
+    let rest = query_origin(&card, measured);
+    let in_view: Vec<usize> = (0..=LONG.chars().count())
+        .filter(|index| {
+            let at = rest + columns[*index];
+            at > card.query.left + 3 * margin && at < card.query.right - 3 * margin
+        })
+        .collect();
+    assert!(
+        in_view.len() > 2,
+        "the field shows a stretch of the run at rest"
+    );
+    for index in [in_view[0], in_view[in_view.len() - 1]] {
+        assert_eq!(
+            query_run(&card, columns.clone(), index, 96).origin,
+            rest,
+            "a caret already in view does not move the run"
+        );
+    }
+
+    let painted = |index: usize| {
+        let at = LONG
+            .char_indices()
+            .nth(index)
+            .map_or(LONG.len(), |(at, _)| at);
+        painted_card(
+            &FindBarPaint {
+                caret: at,
+                anchor: at,
+                ..card_state(LONG, Some(0), 3)
+            },
+            96,
+        )
+    };
+    let column = |buffer: &[u8]| -> Vec<[u8; 4]> {
+        (card.query.top..card.query.bottom)
+            .map(|y| pixel_at(buffer, 400, card.query.left, y))
+            .collect()
+    };
+    let first_caret = painted(in_view[0]);
+    let last_caret = painted(in_view[in_view.len() - 1]);
+    assert_eq!(
+        column(&first_caret.0),
+        column(&last_caret.0),
+        "the run is drawn from the column it rested at, whichever of its characters the caret is on"
+    );
+    for painted in [&first_caret, &last_caret] {
+        assert_eq!(
+            strays_on_the_query_row(&painted.0, &plain, card),
+            Vec::new(),
+            "and is still cut at the field"
+        );
+    }
+
+    // The margin is the display's like every other metric of the card, and the cut is the field's at
+    // any scale (see `find_bar_layout`).
+    let (plain_200, card_200) = painted_card(&card_state("", Some(0), 3), 192);
+    let home_200 = painted_card(
+        &FindBarPaint {
+            caret: 0,
+            anchor: 0,
+            ..card_state(LONG, Some(0), 3)
+        },
+        192,
+    );
+    let caret_200: Vec<i32> = (card_200.query.left..card_200.query.right)
+        .filter(|x| {
+            (card_200.query.top..card_200.query.bottom)
+                .any(|y| pixel_at(&home_200.0, 400, *x, y) == accent_column)
+        })
+        .collect();
+    assert_eq!(
+        caret_200.first().copied(),
+        Some(card_200.query.left + text_paint::scaled(FIND_BAR_CARET_MARGIN, 2.0)),
+        "the margin is the display's: twice as wide at 200%"
+    );
+    assert_eq!(
+        strays_on_the_query_row(&home_200.0, &plain_200, card_200),
+        Vec::new(),
+        "and the field still cuts the run at 200%"
+    );
+}
+
+/// A press on a scrolled run is answered from the column the caret left the run at: the first
+/// character the field shows is the one a press on it names — not the query's first, which the field
+/// has cut — and the field's own last column names the character drawn under it (`query_run`,
+/// `query_index_at`).
+#[test]
+fn a_press_on_a_scrolled_run_names_the_character_under_the_pointer() {
+    let card = find_bar_layout(400, 300, 0, 96);
+    let long =
+        "When the same word runs on far past the width of this card's own field it keeps going";
+    let surface = DibSurface::create(
+        (card.panel.right - card.panel.left) as u32,
+        (card.panel.bottom - card.panel.top) as u32,
+    )
+    .expect("a surface");
+    let columns = measure_run(&surface, &caption_style(palette().foreground), long, 1.0);
+    let byte_at = |index: usize| {
+        long.char_indices()
+            .nth(index)
+            .map_or(long.len(), |(at, _)| at)
+    };
+
+    // The caret at the end of the run, where a reader typing a long query has it, so the run is
+    // scrolled to its end and its beginning is what the field cut away.
+    let typed = query_run(&card, columns.clone(), long.chars().count(), 96);
+    assert!(
+        typed.origin < card.query.left,
+        "the run begins off the field"
+    );
+    let first = (1..columns.len())
+        .find(|index| typed.origin + columns[*index] > card.query.left)
+        .expect("a character the field shows");
+    assert!(
+        first > 0,
+        "the field's first character is not the query's first"
+    );
+    assert_eq!(
+        query_index_at(&card, long, long.len(), typed.origin + columns[first], 96),
+        byte_at(first),
+        "a press on the first character the field shows names that character"
+    );
+
+    // The caret at the run's beginning: the run is scrolled to show its start, so the field's own last
+    // column still has a character under it.
+    let home = query_run(&card, columns.clone(), 0, 96);
+    assert!(
+        home.origin > card.query.left,
+        "the run's beginning is inside the field at Home"
+    );
+    let at = card.query.right - 1 - home.origin;
+    let under = (1..columns.len())
+        .find(|index| columns[index - 1] <= at && at < columns[*index])
+        .expect("a character under the field's last column");
+    let named = query_index_at(&card, long, 0, card.query.right - 1, 96);
+    assert!(
+        named == byte_at(under - 1) || named == byte_at(under),
+        "a press on the field's last column names the character drawn under it"
+    );
+    assert_ne!(named, long.len(), "which is not the end of the query");
+}
+
+/// `Ctrl`+`A` on a query too wide for its field washes the part of the run the field holds and nothing
+/// beyond it: a wash as wide as the run would run over the card's padding and, sealed as wide as the
+/// run, carry a band of another colour across the panel (see `paint_find_bar`).
+#[test]
+fn select_all_on_a_long_query_washes_only_the_part_of_the_run_the_field_holds() {
+    const LONG: &str =
+        "WWW the same word runs on far past the width of this card's own field and keeps going";
+    let (plain, card) = painted_card(&card_state("", Some(0), 3), 96);
+    // The same query with nothing selected, and the same caret at its end: the wash is then the only
+    // difference between the two cards.
+    let unselected = painted_card(&card_state(LONG, Some(0), 3), 96);
+    let all = painted_card(
+        &FindBarPaint {
+            anchor: 0,
+            ..card_state(LONG, Some(0), 3)
+        },
+        96,
+    );
+
+    let washed = |x: i32| {
+        (card.query.top..card.query.bottom)
+            .any(|y| pixel_at(&all.0, 400, x, y) != pixel_at(&unselected.0, 400, x, y))
+    };
+    assert!(
+        washed(card.query.left + 1),
+        "the wash reaches the field's left edge, where the run is cut"
+    );
+    assert!(
+        washed(card.query.right - 3 * text_paint::scaled(FIND_BAR_CARET_MARGIN, 1.0)),
+        "and the columns up to the run's own end"
+    );
+    assert_eq!(
+        strays_on_the_query_row(&all.0, &plain, card),
+        Vec::new(),
+        "and no column of it is the card's padding"
     );
 }
