@@ -147,6 +147,18 @@ pub(super) fn mpv_args(
         // turn on an OSC or a mouse binding for a preview that is meant to have neither.
         path.to_string_lossy().into_owned(),
         "--no-config".to_string(),
+        // **The two flags that make the player's own log readable, which is the only way a damaged
+        // file is noticed at all.** `--terminal=yes` asks mpv to write its log lines whether or not
+        // it has a console to write them on, and on Windows that is the standard *output*: measured
+        // on mpv 0.41 with both streams redirected, a missing file printed `[file] Cannot open
+        // file '…': Invalid argument` into the standard output (134 bytes) and nothing into the
+        // standard error (0 bytes), with `--terminal=yes` and with the default alike — which is why
+        // the pipe this app drains is the standard output (see `player_logs`). `all=warn` is the
+        // level those lines are written at and the ceiling on how many of them a player produces:
+        // `info` is a line per track, per filter and per device, and none of it is about the file's
+        // health.
+        "--terminal=yes".to_string(),
+        "--msg-level=all=warn".to_string(),
     ];
 
     // The mouse: mpv's own bindings are what a hover overlay must not have, and they survive
@@ -1543,6 +1555,8 @@ mod tests {
             [
                 "films/episode.mkv",
                 "--no-config",
+                "--terminal=yes",
+                "--msg-level=all=warn",
                 "--no-input-default-bindings",
                 "--input-conf=scratch/mpv-input.conf",
                 "--no-osc",
@@ -1696,6 +1710,8 @@ mod tests {
             [
                 "a.mkv",
                 "--no-config",
+                "--terminal=yes",
+                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -1743,6 +1759,8 @@ mod tests {
             [
                 "a.mkv",
                 "--no-config",
+                "--terminal=yes",
+                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -1789,6 +1807,8 @@ mod tests {
             [
                 "a.mkv",
                 "--no-config",
+                "--terminal=yes",
+                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -1844,6 +1864,8 @@ mod tests {
             [
                 "a.mkv",
                 "--no-config",
+                "--terminal=yes",
+                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -1889,6 +1911,8 @@ mod tests {
             [
                 "a.mkv",
                 "--no-config",
+                "--terminal=yes",
+                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -2010,6 +2034,8 @@ mod tests {
                 [
                     "a.mkv",
                     "--no-config",
+                    "--terminal=yes",
+                    "--msg-level=all=warn",
                     "--no-osc",
                     "--no-border",
                     "--window-dragging=no",
@@ -2102,6 +2128,8 @@ mod tests {
             [
                 "a.mkv",
                 "--no-config",
+                "--terminal=yes",
+                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
@@ -2170,6 +2198,8 @@ mod tests {
             [
                 "a.mkv",
                 "--no-config",
+                "--terminal=yes",
+                "--msg-level=all=warn",
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",

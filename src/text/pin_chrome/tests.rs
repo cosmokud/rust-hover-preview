@@ -57,5 +57,6 @@ fn zoom(buffer: &[u8], width: u32, height: u32, factor: u32) -> (Vec<u8>, u32, u
 
 mod bubble;
 mod caption;
+mod corruption_card;
 mod menu;
 mod transport;

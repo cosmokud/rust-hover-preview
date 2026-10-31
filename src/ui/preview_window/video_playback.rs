@@ -230,6 +230,22 @@ impl PlayerProcess {
         }
     }
 
+    /// The pipe the player's own log lines arrive on, where a real player was begun with one.
+    ///
+    /// It is handed over once and read by a thread of its own (see `player_logs`), which is the
+    /// only reader the pipe has: a player whose log nobody empties is a player blocked on a full
+    /// buffer. A noted player — the test seam's — has no process and so no pipe, and a hover's
+    /// resident serves its files in turn rather than one being begun for each.
+    pub(super) fn take_log_stream(&mut self) -> Option<std::process::ChildStdout> {
+        match self {
+            Self::Started(child) => child.stdout.take(),
+            #[cfg(not(test))]
+            Self::Served(_) => None,
+            #[cfg(test)]
+            Self::Noted(_) => None,
+        }
+    }
+
     /// End the player, where there is one to end.
     pub(super) fn kill(&mut self) -> std::io::Result<()> {
         match self {
@@ -842,6 +858,12 @@ fn start_mpv_video_playback(
     // `mpv_ipc`).
     let ipc = mpv_ipc::next_pipe_name();
 
+    // What this player's own log lines are read as: one latch, made before the process is, and
+    // read by the pin this file's window is taken up with (see `player_logs` and
+    // `CorruptionCard`). A hover's player carries one too, because a pin adopts the hover's player
+    // rather than beginning one of its own.
+    let logs = player_logs::a_watch();
+
     // **The box is named on the scale of the display mpv's window is created on, which is the
     // primary's** — that is the size Windows scales to the display the film is moved to, and
     // naming it there is the whole of what makes the window the box rather than twice it (see
@@ -979,7 +1001,12 @@ fn start_mpv_video_playback(
     command
         .args(args)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        // **The player's own log lines, and the only stream of its three that carries any** (see
+        // `video_launch::mpv_args`, where `--terminal=yes` is argued for and the measurement that
+        // puts them on the standard output is written down). A pipe nobody empties would block the
+        // player on a full buffer, so the draining thread begins with the player below (see
+        // `player_logs`).
+        .stdout(player_logs::a_stream_to_drain())
         .stderr(Stdio::null());
 
     // **A pin that steps from one film to the next holds the topmost band for the swap.** The
@@ -995,7 +1022,7 @@ fn start_mpv_video_playback(
         unsafe { pin_lifecycle::hold_the_band_for_the_step() };
     }
 
-    let child = match spawn_player(&mut command) {
+    let mut child = match spawn_player(&mut command) {
         Some(child) => child,
         None => {
             // A player that never came up is no picture to take the band over: the hold is over
@@ -1032,6 +1059,16 @@ fn start_mpv_video_playback(
         &ipc,
         video_launch::mpv_launched_without_audio(volume),
     );
+
+    // **And the pipe its own log is read off is emptied from here on**, on a thread that ends with
+    // the player (see `player_logs`): what the player says is matched against this launch's watch
+    // and nothing else of it is kept. The watch is remembered under the player *before* the first
+    // byte is read, so a pin taken up on this file finds it whichever side of the take-up that byte
+    // lands on — and the take-up itself waits for nothing (see `PinnedPreview::corruption`).
+    player_logs::remember(child.id(), path, &logs);
+    if let Some(stream) = child.take_log_stream() {
+        player_logs::drain_a_player_log(stream, logs);
+    }
 
     // **A player begun for a pin is told the pin's own answer about the topmost band before it has
     // drawn anything.** `--ontop` is the launch's flag for a hover's window, and a pin that does
