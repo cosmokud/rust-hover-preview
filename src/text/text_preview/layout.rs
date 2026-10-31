@@ -55,6 +55,11 @@ pub(super) struct LaidLine {
     pub(super) runs: Vec<LaidRun>,
     pub(super) top: i32,
     pub(super) height: i32,
+    /// Where this line's own text begins: the left edge of the column it is drawn in, past the
+    /// numbers and past the indent the line carries. A line with nothing on it has no run to be
+    /// measured against, and a caret standing at the start of one is a mark on this edge rather
+    /// than on the frame's (see `FrameLine::left`).
+    pub(super) left: i32,
     block: LineBlock,
     /// The document line this one drawn line belongs to, and the character of that line its
     /// first run starts at: what a point on the frame is turned back into, and what a selection
@@ -241,6 +246,7 @@ pub(super) fn layout(
                 }],
                 top: body.y,
                 height: note_height,
+                left: padding + gutter,
                 block: LineBlock::Plain,
                 // The note stands where the lines it hides begin, so a press on it is a press on
                 // the line under it rather than on nothing at all — and it is not that line, so it
@@ -417,6 +423,7 @@ fn lay_out_body(
                     runs,
                     top: y,
                     height,
+                    left: text_left(line, metrics, left),
                     block: line.block,
                     source: (index, source_char),
                     own_line: true,
@@ -474,13 +481,28 @@ fn visual_lines_of(
     right: i32,
     max_lines: usize,
 ) -> Vec<(usize, Vec<LaidRun>)> {
-    let indent = left + metrics.indent(line.indent);
     let text_right = match line.block {
         LineBlock::Quote => right - metrics.quote_bar - 4,
         _ => right,
     };
 
-    wrap_line(line, indent, text_right, max_lines, metrics)
+    wrap_line(
+        line,
+        text_left(line, metrics, left),
+        text_right,
+        max_lines,
+        metrics,
+    )
+}
+
+/// Where a document line's own text begins inside the column kept for it: the indent the line
+/// carries shifts the whole of it, so an indented line starts further right than the column does.
+///
+/// Both the runs of a line and the edge a caret on an empty line stands on are worked out here, so
+/// that a line with nothing to measure still begins where the same line with something on it would
+/// (see `LaidLine::left`).
+fn text_left(line: &DocLine, metrics: &TextMetrics, left: i32) -> i32 {
+    left + metrics.indent(line.indent)
 }
 
 /// A word or the spaces between words, carrying the style it was colored with.
