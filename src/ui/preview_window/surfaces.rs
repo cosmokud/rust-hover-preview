@@ -82,6 +82,12 @@ thread_local! {
     /// each of them is one made and thrown away on every repaint of either. It is cleared
     /// before each use, for the reason the tooltip's is.
     pub(super) static MENU_WINDOW_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+    /// The membrane a pinned page's find bar is written on, for the reason the tooltip's is: its
+    /// query, its count and its two switch names are measured and drawn through GDI, which needs a
+    /// device context of its own. It is the card's own size rather than the window's, because the card
+    /// is all that is carried off it, and it is cleared before each use for the reason the tooltip's
+    /// is.
+    pub(super) static FIND_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
 }
 
 /// The pixels the desktop is showing in a screen rectangle, or nothing where there is no picture to

@@ -16,16 +16,18 @@
 //! exception is GDI, which knows nothing of an alpha channel: what it draws leaves the alpha
 //! byte at zero, so a caption is closed by handing every pixel its coverage back.
 //!
-//! The chrome lives in five files below: `transport` for the bar a playing file is driven and
+//! The chrome lives in six files below: `transport` for the bar a playing file is driven and
 //! drawn from, `caption` for the strip above it, `bubble` for the two panels that float over
-//! the media rather than standing in it, `menu` for the panel a card's right-click opens, and
-//! `primitives` for the palette and the shapes, marks and text runs the other four are drawn
+//! the media rather than standing in it, `menu` for the panel a card's right-click opens,
+//! `find_bar` for the card a page's find bar floats in, and
+//! `primitives` for the palette and the shapes, marks and text runs the other five are drawn
 //! from. What is left in this file is the way in: every
 //! name the rest of the tree reaches as `pin_chrome::`, and the imports the tests beside it read
-//! the four through.
+//! the five through.
 
 mod bubble;
 mod caption;
+mod find_bar;
 mod menu;
 mod primitives;
 mod transport;
@@ -38,6 +40,7 @@ pub(crate) use caption::{
     button_at, button_boxes, caption_fits, measure_caption_text, paint_caption, Caption,
     CaptionButton,
 };
+pub(crate) use find_bar::{find_bar_layout, paint_find_bar, FindBar, FindBarPaint, FindBarPart};
 pub(crate) use menu::{
     menu_flyout_from_menu, menu_flyout_gap_holds, menu_popup_from_point, menu_popup_shifted,
     menu_row_at, paint_menu_popup, MenuArrow, MenuMark, MenuPopup, MenuRow, MENU_SHADOW_PIXELS,

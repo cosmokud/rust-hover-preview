@@ -64,7 +64,8 @@ fn draws_pages_of_text() {
         };
 
         let (width, height) = measure(path, 1_920, 1_200, 96, options).expect("a measured page");
-        let frame = render_scrolled(path, 0, width, height, 96, options, None).expect("a page");
+        let frame =
+            render_scrolled(path, 0, width, height, 96, options, None, None).expect("a page");
 
         assert!(frame.width > 0 && frame.height > 0, "{name}");
         assert!(
@@ -117,7 +118,7 @@ fn a_wrapped_line_says_which_characters_each_of_its_parts_holds() {
     let long: String = (0..60).map(|n| format!("{n:02} ")).collect();
     fs::write(&source, format!("{long}\nsecond\n")).expect("a written page");
 
-    let frame = render_scrolled(&source, 0, 140, 200, 96, options(), None).expect("a page");
+    let frame = render_scrolled(&source, 0, 140, 200, 96, options(), None, None).expect("a page");
 
     let wrapped: Vec<&FrameLine> = frame
         .lines
@@ -215,7 +216,7 @@ fn a_copy_is_the_text_the_document_has() {
 
     // The box this is copied out of does not hold the whole page: what a copy takes is the
     // document's, not the frame's.
-    let frame = render_scrolled(&source, 0, 120, 40, 96, options(), None).expect("a page");
+    let frame = render_scrolled(&source, 0, 120, 40, 96, options(), None, None).expect("a page");
     assert!(
         frame.visible_lines < 3,
         "the box shows less of the page than the page has, so the copy above came from the document"
@@ -671,6 +672,59 @@ fn frame_pixel(frame: &TextFrame, x: u32, y: u32) -> [u8; 4] {
     [pixel[0], pixel[1], pixel[2], pixel[3]]
 }
 
+/// A find's places are drawn into the frame rather than over it: the page without a find is not the
+/// page with one, every place the query was found is marked, and the one the reader is on is drawn
+/// apart from the rest — which is what lets the count be read off the page as well as off the card
+/// (see `FindHighlights` and `paint`).
+#[test]
+fn a_find_highlights_every_place_and_the_current_one_apart() {
+    let dir = scratch("find-highlight");
+    let source = dir.join("highlight.txt");
+    fs::write(&source, "needle here\nnothing\nneedle again\n").expect("a written page");
+
+    let at = |line: usize, from: usize| Selection {
+        anchor: (line, from),
+        caret: (line, from + 6),
+    };
+    let matches = vec![at(0, 0), at(2, 2)];
+    let render = |find: Option<FindHighlights>| {
+        render_scrolled(&source, 0, 320, 160, 96, options(), None, find).expect("a page")
+    };
+
+    let plain = render(None);
+    let first = render(Some(FindHighlights {
+        matches: matches.clone(),
+        current: Some(0),
+    }));
+    let second = render(Some(FindHighlights {
+        matches,
+        current: Some(1),
+    }));
+    let nothing = render(Some(FindHighlights::default()));
+
+    let differing = |a: &TextFrame, b: &TextFrame| {
+        a.pixels
+            .iter()
+            .zip(&b.pixels)
+            .filter(|(a, b)| a != b)
+            .count()
+    };
+
+    assert!(
+        differing(&plain, &first) > 0,
+        "the page with a find on it is not the page without one"
+    );
+    assert!(
+        differing(&first, &second) > 0,
+        "which match is current is drawn on the page"
+    );
+    assert_eq!(
+        differing(&plain, &nothing),
+        0,
+        "and a find that found nothing is the page exactly as it was"
+    );
+}
+
 /// A pinned page of a file drawn through a syntax definition keeps a column down its left for the
 /// document's own line numbers; the same file hovered does not, and neither does a page of prose,
 /// because a line of code is cited by its number where prose is read rather than cited (see
@@ -694,7 +748,7 @@ fn a_pinned_page_of_code_keeps_a_column_for_its_line_numbers() {
     };
 
     let text_column = |path: &Path, options: TextPreviewOptions| {
-        render_scrolled(path, 0, 400, 300, 96, options, None)
+        render_scrolled(path, 0, 400, 300, 96, options, None, None)
             .expect("a page")
             .lines
             .first()
@@ -727,7 +781,7 @@ fn a_wrapped_line_is_numbered_once() {
         full_mode: true,
         ..options()
     };
-    let frame = render_scrolled(&source, 0, 200, 400, 96, options, None).expect("a page");
+    let frame = render_scrolled(&source, 0, 200, 400, 96, options, None, None).expect("a page");
 
     let column = frame
         .lines

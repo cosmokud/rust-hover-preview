@@ -430,6 +430,12 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // wait is not allowed to cost the window (see `paint_pin_spinner`).
     paint_pin_spinner(out, width.max(1) as u32, band_top, band_height as i32);
 
+    // The find bar over a pinned page: a card floating over the page's top-right corner, drawn into
+    // the band's own pixels. There is no hosted window under a page of text for it to stand over,
+    // which is the whole of how it differs from the volume popup's road (see `pin_chrome_strips` and
+    // `text_find::find_bar`).
+    paint_pin_find_bar(out, width, &paint);
+
     // The chrome, for the strips to carry: each strip whole, or not painted at all, which is what
     // makes a picture whose chrome has gone a picture and nothing else — and the two are asked
     // about one at a time, so a hand at one end of a window does not bring out what is at the
@@ -789,6 +795,11 @@ pub(super) struct PinnedPaint {
     /// than recomputed at the paint, so that the panel drawn is the panel a press is answered
     /// against (see `pinned_volume_geometry`).
     pub(super) volume_popup: Option<pin_chrome::VolumePopup>,
+    /// The find bar over a pinned page: where its card is and what it says, or nothing while it is
+    /// down or the pin holds anything but a page. It is asked the same way and for the same reason as
+    /// the volume popup — the card drawn is the card a press is answered against (see
+    /// `text_find::find_bar`).
+    pub(super) find_bar: Option<text_find::FindBarPlacement>,
     /// Whether the bar's controls do anything for the engine playing this file (see
     /// `PinnedPreview::transport_live`).
     pub(super) transport_live: bool,
@@ -863,6 +874,7 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             transport: pin.transport,
             volume: pin.volume,
             volume_popup: None,
+            find_bar: None,
             transport_live: pin.transport_live,
         }
     };
@@ -872,6 +884,11 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
     // while it is up — and because a panel placed from the pin's own numbers is the same panel
     // every press and every drag is answered against (see `pinned_volume_geometry`).
     paint.volume_popup = pinned_volume_geometry();
+
+    // The find bar over a pinned page, asked the same way and for the same reason: it is placed from
+    // the window's bands and the page's own box, so the card painted is the card a press answers (see
+    // `text_find::find_bar`).
+    paint.find_bar = text_find::find_bar();
 
     // Where the bar is drawn: where the pointer has dragged it while a drag is going, and
     // where the file really is otherwise (see `PinTransport`).
@@ -1363,6 +1380,64 @@ pub(super) fn sample_bilinear(
 ///
 /// `out` must be the window's own premultiplied surface, of at least `width * height` pixels,
 /// and `width`/`height` that surface's own size. Nothing else is dereferenced.
+/// Paint the find bar over a pinned page, wherever the paint says it is (see `text_find::find_bar`).
+///
+/// The card's panel and its three marks are put down straight into the window's own pixels, because
+/// that is what they are: a card over the page, with the page behind it. The text is not, because GDI
+/// needs a device context — it is drawn onto a surface of the card's own size and carried across (see
+/// `pin_chrome::paint_find_bar`), the road the caption's tooltip takes.
+///
+/// A pin that holds no page, or a page whose bar is down, has nothing here and this is one answer of
+/// `None`: nothing is allocated and nothing is drawn.
+pub(super) fn paint_pin_find_bar(out: &mut [u8], width: i32, paint: &PinnedPaint) {
+    let (Some(placed), Some(palette)) = (
+        paint.find_bar.as_ref(),
+        pin_chrome::ChromePalette::current(),
+    ) else {
+        return;
+    };
+
+    let card = &placed.card;
+    let wanted = (
+        (card.panel.right - card.panel.left).max(1) as u32,
+        (card.panel.bottom - card.panel.top).max(1) as u32,
+    );
+    FIND_SURFACE.with(|cell| {
+        let mut surface = cell.borrow_mut();
+        if surface
+            .as_ref()
+            .map(|surface| (surface.width, surface.height))
+            != Some(wanted)
+        {
+            *surface = DibSurface::create(wanted.0, wanted.1);
+        }
+        let Some(surface) = surface.as_ref() else {
+            return;
+        };
+
+        // The surface is blanked before it is used rather than left as the last query left it: what is
+        // carried off it is decided by the alpha byte GDI leaves behind, and a run left opaque from
+        // the last paint is a run drawn twice (see `TOOLTIP_SURFACE`).
+        let blanked = unsafe {
+            std::slice::from_raw_parts_mut(
+                surface.bits(),
+                surface.width as usize * surface.height as usize * 4,
+            )
+        };
+        blanked.fill(0);
+
+        pin_chrome::paint_find_bar(
+            out,
+            width,
+            &palette,
+            card,
+            &placed.state,
+            surface,
+            paint.dpi,
+        );
+    });
+}
+
 pub(super) unsafe fn paint_pin_tooltip(
     out: &mut [u8],
     width: i32,

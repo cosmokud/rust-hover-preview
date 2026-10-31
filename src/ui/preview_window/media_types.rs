@@ -679,18 +679,27 @@ pub(super) enum FindEdit {
     Deleted,
     /// The reader stepped forward or back through the matches, wrapping at either end.
     Step(i32),
-    /// The case switch flipped, and the search is to run again under it. Queued by the card's own
-    /// switch, which is drawn with the card (see `pin_chrome::paint_find_bar`).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The case switch flipped, and the search is to run again under it (see `text_find::press`).
     ToggleCase,
     /// The whole-word switch flipped, and the search is to run again under it.
-    #[cfg_attr(not(test), allow(dead_code))]
     ToggleWholeWord,
     /// The bar was opened over a query it already held: nothing changed, and the document is to be
     /// searched for that query again from the line the reader is on.
     SearchAgain,
     /// The bar is to be put away, with the page left exactly where it is.
     Close,
+}
+
+impl FindState {
+    /// What a frame is to draw of the bar: every place its query was found, and which of them the
+    /// reader is on — or nothing while the bar is down, or while the query was found nowhere, which is
+    /// a page with no highlights on it (see `text_preview::FindHighlights`).
+    pub(super) fn highlights(&self) -> Option<text_preview::FindHighlights> {
+        (self.open && !self.matches.is_empty()).then(|| text_preview::FindHighlights {
+            matches: self.matches.clone(),
+            current: self.current,
+        })
+    }
 }
 
 impl TextPreviewState {

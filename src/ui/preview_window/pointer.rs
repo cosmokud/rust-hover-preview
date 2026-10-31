@@ -625,17 +625,22 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
 
     // What is selected is kept exactly as it is: a selection is a place in the document, so the
     // frame that comes back draws the same text somewhere else rather than the selection having
-    // to be moved to where the text went (see `Selection`).
-    let selection = CURRENT_MEDIA.lock().ok().and_then(|media| {
+    // to be moved to where the text went (see `Selection`). A find bar's places are taken out beside
+    // it and drawn into the same frame, because a highlight is a place in the document too and one
+    // painted over the frame afterwards would cover a selection the reader made (see
+    // `FindHighlights`).
+    let Some((selection, find)) = CURRENT_MEDIA.lock().ok().and_then(|media| {
         media
             .as_ref()
             .and_then(|media| media.text_state.as_ref())
-            .and_then(|state| state.selection)
-    });
+            .map(|state| (state.selection, state.find.highlights()))
+    }) else {
+        return;
+    };
 
-    let Some(frame) =
-        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
-    else {
+    let Some(frame) = text_preview::render_scrolled(
+        &path, first_line, width, height, dpi, options, selection, find,
+    ) else {
         return;
     };
 
@@ -691,7 +696,7 @@ pub(super) fn relayout_text_for_the_box(content: ScreenRegion) {
     // Read out of the media, so the lock is not held while the page is laid out and painted — and
     // answered with nothing at all where the pin is showing a page of another kind, or no page at
     // all, which is what keeps a resize of every other kind the paint it has always been.
-    let Some((path, options, dpi, drawn, first_line, selection)) =
+    let Some((path, options, dpi, drawn, first_line, selection, find)) =
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media
                 .as_ref()
@@ -705,6 +710,7 @@ pub(super) fn relayout_text_for_the_box(content: ScreenRegion) {
                         (state.width, state.height),
                         state.first_line,
                         state.selection,
+                        state.find.highlights(),
                     )
                 })
         })
@@ -718,9 +724,12 @@ pub(super) fn relayout_text_for_the_box(content: ScreenRegion) {
         return;
     }
 
-    let Some(frame) =
-        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
-    else {
+    // A find bar that is up stays up across the box: its matches are places in the document, so the
+    // page laid out again draws the same places on the same lines, wherever the new width wraps them
+    // (see `FindState`).
+    let Some(frame) = text_preview::render_scrolled(
+        &path, first_line, width, height, dpi, options, selection, find,
+    ) else {
         return;
     };
 
@@ -900,7 +909,7 @@ pub(super) unsafe fn redraw_pinned_page(hwnd: HWND, font_scale: Option<u32>) {
         return;
     }
 
-    let Some((path, before, dpi, width, height, first_line, selection)) =
+    let Some((path, before, dpi, width, height, first_line, selection, find)) =
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media.as_ref().and_then(|media| {
                 media.text_state.as_ref().map(|state| {
@@ -912,6 +921,7 @@ pub(super) unsafe fn redraw_pinned_page(hwnd: HWND, font_scale: Option<u32>) {
                         state.height,
                         state.first_line,
                         state.selection,
+                        state.find.highlights(),
                     )
                 })
             })
@@ -934,10 +944,12 @@ pub(super) unsafe fn redraw_pinned_page(hwnd: HWND, font_scale: Option<u32>) {
     }
 
     // Nothing is laid out while the lock is held: the render is a screenful of text, and the lock is
-    // the one a paint takes (see `scroll_text_preview`).
-    let Some(frame) =
-        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
-    else {
+    // the one a paint takes (see `scroll_text_preview`). The find bar's places are drawn with it: a
+    // page redrawn at another size or theme is the same document, and its search is not thrown away
+    // by a repaint (see `FindHighlights`).
+    let Some(frame) = text_preview::render_scrolled(
+        &path, first_line, width, height, dpi, options, selection, find,
+    ) else {
         return;
     };
 
@@ -971,7 +983,7 @@ pub(super) unsafe fn redraw_pinned_page(hwnd: HWND, font_scale: Option<u32>) {
 /// one costs a re-render of the window that is on screen — a screenful of lines,
 /// all of which are cached after the first pass.
 pub(super) unsafe fn repaint_text_preview(hwnd: HWND) {
-    let Some((path, options, dpi, width, height, first_line, selection)) =
+    let Some((path, options, dpi, width, height, first_line, selection, find)) =
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media.as_ref().and_then(|media| {
                 media.text_state.as_ref().map(|state| {
@@ -983,6 +995,7 @@ pub(super) unsafe fn repaint_text_preview(hwnd: HWND) {
                         state.height,
                         state.first_line,
                         state.selection,
+                        state.find.highlights(),
                     )
                 })
             })
@@ -991,9 +1004,9 @@ pub(super) unsafe fn repaint_text_preview(hwnd: HWND) {
         return;
     };
 
-    let Some(frame) =
-        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
-    else {
+    let Some(frame) = text_preview::render_scrolled(
+        &path, first_line, width, height, dpi, options, selection, find,
+    ) else {
         return;
     };
 

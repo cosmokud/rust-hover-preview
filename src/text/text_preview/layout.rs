@@ -12,7 +12,7 @@
 //! painted lines a pointer or a selection is measured against.
 
 use super::document::{styled_window, CachedDocument, DocLine, LineBlock};
-use super::frame::{ScrollBar, Selection};
+use super::frame::{FindHighlights, ScrollBar, Selection};
 use crate::text::text_paint::{
     blend, fill_rect, plain_style, rgb, scaled, DibSurface, RunPainter, TextMetrics, TextStyle,
     BODY_LEVEL, SIZE_LEVELS,
@@ -723,6 +723,16 @@ pub fn scroll_line_at_track_y(
 
 // ------------------------------------------------------------------ painting
 
+/// Which of the marks over a run a piece of it belongs to, in the order they are drawn over one
+/// another where two of them meet: a place a search found, the one the reader is on, and the
+/// selection they made for themselves.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RunMark {
+    Find,
+    Current,
+    Selection,
+}
+
 /// The part of a run a selection covers, as character offsets within the run, or
 /// `None` when it does not touch it.
 ///
@@ -776,6 +786,7 @@ pub(super) unsafe fn paint(
     metrics: &TextMetrics,
     scrollbar: Option<&ScrollBar>,
     selection: Option<Selection>,
+    find: Option<&FindHighlights>,
 ) {
     let width = surface.width as i32;
     let page = rgb(theme.background());
@@ -790,6 +801,19 @@ pub(super) unsafe fn paint(
         .unwrap_or_else(|| blend(page, rgb(theme.foreground()), 0.25));
     let highlight_foreground = theme.theme().settings.selection_foreground.map(rgb);
     let selection = selection.filter(|selection| !selection.is_empty());
+
+    // A find's places are drawn in the theme's find highlight where it has one, and in a shade of
+    // the page where it does not. Every other place the query was found is a wash of that colour;
+    // the one the reader is on is the colour itself, which is what tells the count's current match
+    // from the rest of the page (see `FindHighlights`).
+    let find_color = theme
+        .theme()
+        .settings
+        .find_highlight
+        .map(rgb)
+        .unwrap_or_else(|| blend(page, rgb(theme.foreground()), 0.30));
+    let find_background = blend(page, find_color, 0.55);
+    let find_foreground = theme.theme().settings.find_highlight_foreground.map(rgb);
 
     fill_rect(
         surface,
@@ -872,9 +896,33 @@ pub(super) unsafe fn paint(
 
         for run in &line.runs {
             let run_characters = run.text.chars().count();
-            let selected_part = selection.and_then(|selection| {
+
+            // The marks over this run, in the characters the run itself counts: the reader's own
+            // selection, and every place a find found, with the current one told from the rest. The
+            // search's places do not overlap each other — `find_all` walks past each one it takes —
+            // so the only overlap a run can carry is a find under the selection, and the selection
+            // wins it (see `RunMark`).
+            let mut marks: Vec<(usize, usize, RunMark)> = Vec::new();
+            if let Some(part) = selection.and_then(|selection| {
                 selected_part(line.source, run_start, run_characters, selection)
-            });
+            }) {
+                marks.push((part.0, part.1, RunMark::Selection));
+            }
+            if let Some(find) = find {
+                for (index, at) in find.matches.iter().enumerate() {
+                    if let Some((from, to)) =
+                        selected_part(line.source, run_start, run_characters, *at)
+                    {
+                        let mark = if find.current == Some(index) {
+                            RunMark::Current
+                        } else {
+                            RunMark::Find
+                        };
+                        marks.push((from, to, mark));
+                    }
+                }
+            }
+
             run_start += run_characters;
 
             if run.text.is_empty() {
@@ -894,62 +942,72 @@ pub(super) unsafe fn paint(
                 bottom: line.top + line.height,
             };
 
-            match selected_part {
-                Some((from, to)) => {
-                    // The selected part is painted over its own highlight, so the
-                    // run is drawn in up to three pieces: the text before it as
-                    // usual, the selection without touching its background, and the
-                    // text after it as usual.
-                    let characters: Vec<char> = run.text.chars().collect();
-                    let advance = run.width as f32 / characters.len() as f32;
-                    let piece = |start: usize, end: usize| {
-                        characters[start..end].iter().collect::<String>()
-                    };
-
-                    painter.draw(
-                        &piece(0, from),
-                        rect.left,
-                        rect,
-                        &run.style,
-                        run.style.foreground,
-                        run_background,
-                    );
-
-                    let highlight_rect = RECT {
-                        left: run.x + (from as f32 * advance).round() as i32,
-                        right: run.x + (to as f32 * advance).round() as i32,
-                        ..rect
-                    };
-                    painter.draw(
-                        &piece(from, to),
-                        highlight_rect.left,
-                        highlight_rect,
-                        &run.style,
-                        highlight_foreground.unwrap_or(run.style.foreground),
-                        highlight,
-                    );
-
-                    let tail_x = run.x + (to as f32 * advance).round() as i32;
-                    painter.draw(
-                        &piece(to, characters.len()),
-                        tail_x,
-                        RECT {
-                            left: tail_x,
-                            ..rect
-                        },
-                        &run.style,
-                        run.style.foreground,
-                        run_background,
-                    );
-                }
-                None => painter.draw(
+            if marks.is_empty() {
+                painter.draw(
                     &run.text,
                     rect.left,
                     rect,
                     &run.style,
                     run.style.foreground,
                     run_background,
-                ),
+                );
+                continue;
+            }
+
+            // The run is drawn in the pieces the marks cut it into, each with the colour of the
+            // highest mark that covers it: the text before a mark as usual, the mark without
+            // touching its background, and the text after it as usual.
+            let characters: Vec<char> = run.text.chars().collect();
+            let advance = run.width as f32 / characters.len().max(1) as f32;
+            let mut edges = vec![0usize, run_characters];
+            for (from, to, _) in &marks {
+                edges.push(*from);
+                edges.push(*to);
+            }
+            edges.sort_unstable();
+            edges.dedup();
+
+            for pair in edges.windows(2) {
+                let (start, end) = (pair[0], pair[1]);
+                if start >= end {
+                    continue;
+                }
+
+                let mark = marks
+                    .iter()
+                    .filter(|(from, to, _)| *from <= start && *to >= end)
+                    .map(|(_, _, mark)| *mark)
+                    .max();
+                let (foreground, background) = match mark {
+                    Some(RunMark::Selection) => (
+                        highlight_foreground.unwrap_or(run.style.foreground),
+                        highlight,
+                    ),
+                    Some(RunMark::Current) => {
+                        (find_foreground.unwrap_or(run.style.foreground), find_color)
+                    }
+                    Some(RunMark::Find) => (
+                        find_foreground.unwrap_or(run.style.foreground),
+                        find_background,
+                    ),
+                    None => (run.style.foreground, run_background),
+                };
+
+                let piece: String = characters[start..end].iter().collect();
+                let left = run.x + (start as f32 * advance).round() as i32;
+                let right = run.x + (end as f32 * advance).round() as i32;
+                painter.draw(
+                    &piece,
+                    left,
+                    RECT {
+                        left,
+                        right,
+                        ..rect
+                    },
+                    &run.style,
+                    foreground,
+                    background,
+                );
             }
         }
     }

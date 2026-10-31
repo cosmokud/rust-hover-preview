@@ -972,8 +972,9 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
   journey+preview regions published per tick. The page is also the one media a pin's own keyboard reaches:
   `Up`/`Down`/`PageUp`/`PageDown`/`Home`/`End` work it a screenful at a time
   (`PinCommand::PageBack/PageOn/PageTop/PageBottom`, asked where the file in the window is known, the folder still
-  walking for anything else), `F3` takes it to the next place the selection appears (`find_next`: exact, case-sensitive,
-  from just after the selection, wrapping to end where it began), and `Ctrl` and a wheel steps the page's own size
+  walking for anything else), `F3`, and the page's **Find Next** row, take it to the next place the selection appears
+  (`find_next`: exact, case-sensitive, from just after the selection, wrapping to end where it began) — or, while a find
+  bar is up, to the next place that bar's query appears — and `Ctrl` and a wheel steps the page's own size
   through the tray's list (`PIN_TEXT_SIZE_DELTA`) — a size the pin carries across a resize and a walk and gives up when
   it closes. A page of code — a syntax syntect found — keeps a line-number column as wide as the widest number the
   document can show. A selection, the word a double press takes and the place a copy is cut from are document places
@@ -982,6 +983,17 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
   lines a tick toward where it left. A box change lays the page out again for the box it has reached, at the reader's
   own size and at the place and selection they were at (`relayout_text_for_the_box`), ahead of the window being put up
   around it; only a page takes that road — every other kind is sampled into the new box.
+
+  **A find bar floats over the page** (`text_find`, `pin_chrome::find_bar`): `Ctrl+F`, or the **Find** row above
+  **Find Next** in the page's own menu, opens a card at the page's top-right corner with the query, a solid caret,
+  `current/total`, `Aa`/`W` switches and `↑ ↓ ✕`. Every keystroke searches the document as it is drawn (`find_all`:
+  document order, non-overlapping, the two switches read as the search it runs under), every match is painted into the
+  frame with the current one distinct (`FindHighlights`, drawn under the reader's own selection), and a match off screen
+  takes the page to it the way `F3` takes it to a selection. `Enter`/`↓`/`F3` step on and `Shift`+`Enter`/`↑` back,
+  wrapping at both ends; a new query starts at the first match at or after the line the reader was on. While the bar is
+  up it owns the keyboard — the page's own keys and the polled `Ctrl+A`/`Ctrl+C` are inert — and `Esc` puts it away with
+  the page left where it is. The query outlives the bar while the matches do not; a box change keeps both, because a
+  match is a place in the document rather than a row of the frame; another file keeps neither (`keep_text_place`).
 
 A pinned text file is a full text preview, not a picture of one: it scrolls, selects, copies, and wraps to the pin's current width, and the frames it re-renders are cached. `Refresh` after a config change works by replaying the _recorded_ hover rather than asking Explorer again, because the pin is the only thing that knows what it is showing.
 

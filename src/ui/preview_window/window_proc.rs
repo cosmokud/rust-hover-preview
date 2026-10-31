@@ -466,6 +466,13 @@ pub(super) unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
+            // A find bar that is up is the first thing a hand on the page can land on: the card floats
+            // over the page's top-right corner, so a press inside it is the card's rather than the
+            // page's, and nothing under it was what the hand meant (see `text_find::press`).
+            if text_find::press(x, y) {
+                return LRESULT(0);
+            }
+
             // A press on the scrollbar starts a drag from where it landed, so the
             // thumb follows the pointer from the first click. Anywhere else, a
             // press on a text preview starts a selection. What the media's own handlers are

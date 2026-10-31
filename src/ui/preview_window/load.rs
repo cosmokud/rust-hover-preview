@@ -590,7 +590,7 @@ pub(super) fn load_text_preview(
     dpi: u32,
     options: TextPreviewOptions,
 ) -> Option<MediaData> {
-    let frame = text_preview::render_scrolled(path, 0, width, height, dpi, options, None)?;
+    let frame = text_preview::render_scrolled(path, 0, width, height, dpi, options, None, None)?;
 
     // Any text preview in full mode keeps its state, scrollable or not: the
     // pointer rests on it, its text can be selected, and a document that happens to
