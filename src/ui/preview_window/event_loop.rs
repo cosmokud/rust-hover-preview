@@ -1217,20 +1217,7 @@ pub fn run_preview_window() {
                 let _ = pin_ask_keyboard_back(hwnd);
             }
 
-            // Advance animation frames if needed
-            //
-            // **And the card that warns a damaged file is one of the things that is drawn rather
-            // than stand still.** A pinned film mpv draws is a picture of somebody else's, so the
-            // loop has nothing of its own to animate while it plays and sits in the slow band —
-            // which would be three frames of a fade that is meant to be smooth, and a card that
-            // never came down. Asked here, before the media look, because it is a question about
-            // the pin and not about the frame: it answers true for the length of the card's one run
-            // and false ever after (see `CorruptionCard::is_animating`).
-            let corruption_card = pinned()
-                && pin_state()
-                    .and_then(|pinned| pinned.pin().map(|pin| pin.corruption.is_animating()))
-                    .unwrap_or(false);
-            let mut needs_repaint = corruption_card;
+            let mut needs_repaint = false;
             // Whether this tick takes a full look at the media behind the preview: a
             // swap, a load, a wait or a player forces one, a dynamic hint keeps the fast
             // cadence, and a static hint still re-checks twice a second so late streaming
@@ -4662,7 +4649,7 @@ pub fn run_preview_window() {
                 let travelling = pin_zoom_in_flight();
                 let wait_ms = wait_before_the_next_tick(
                     false,
-                    media_dynamic_hint || tick_has_wait || travelling || corruption_card,
+                    media_dynamic_hint || tick_has_wait || travelling,
                     pinned(),
                 );
                 // And a travel is paced by the compositor rather than by that wait, because what its

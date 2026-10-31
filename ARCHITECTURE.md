@@ -600,25 +600,6 @@ can be clicked. As a last resort, a pinned window whose thread stops turning alt
 player, browser and bubble included, rather than left as a window that cannot be closed: a pin you can lose is a better
 answer than an app that has to be restarted.
 
-- Damaged film: `engines::corruption_log` (signature table, `CorruptionWatch` latch, `CorruptionCard` run) +
-  `player_logs` (a player's own log off a pipe of its own) → `PinnedPreview::corruption` → `paint_corruption_card`
-  → the card strip. A film that is *corrupt* rather than merely unplayable plays — silently, or looping two frames
-  after a seek — and nothing this app decodes can be asked why: the only thing on the machine that says so is the
-  player's own log. mpv is launched with `--terminal=yes --msg-level=all=warn`, which on Windows writes those lines to
-  its standard **output** (measured: the standard error carries nothing at all), so that pipe is the one drained — on a
-  thread of its own that starts with the player and ends at its end of file, keeping one capped line and no more. A hard
-  line (a container that will not open, a codec that will not start, an EBML parse that fails) trips the latch alone; a
-  soft one (a per-frame decode error, a non-monotonic stamp) needs two. The latch is per player and read by the pin
-  taken up on it, under *both* the id and the file it was begun for — so a step to the next file cannot inherit the last
-  one's card — and it is monotonic, so nothing has to be reset when a pin is rebuilt. The card is one run per file: a
-  scrim over the media band with the panel "This video file may be corrupted" / "playback errors detected" on it,
-  150 ms in, 3 s held, 500 ms out (`corruption_log::card_coverage`). It cannot be painted into the pin's own layered
-  surface, because a hosted film composites over it: it is carried by a strip of its own at the band's box, which is the
-  road the caption and the volume popup take (`pin_chrome_strips`). The loop draws it in the frame band for its 3.65 s
-  and drops back to the slow one after (`CorruptionCard::is_animating`). Hover previews never draw it, and ffplay is not
-  wired at all: its launch asks FFmpeg to ignore what it decodes (`-err_detect ignore_err`, `+discardcorrupt`) and a film
-  it recovered from prints nothing a card could be earned by (measured: an escape sequence, no line).
-
 A swap fits the new file to the window's own longest side (`PinnedPreview::bound`), so a portrait pin followed by a
 widescreen file is not walked down a size at a time — and the window is kept where the hand put it, rather than being
 placed back beside the cursor. A second video is a swap that is _held_ while the new film reaches the screen, so the

@@ -25,7 +25,6 @@ fn playing_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
 /// the kind.
 fn banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
     PinnedPreview {
-        corruption: CorruptionCard::none(),
         path: PathBuf::from("ws-k-chrome-nav.mkv"),
         content,
         bound: Some(400),

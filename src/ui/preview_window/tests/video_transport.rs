@@ -72,7 +72,6 @@ fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() 
 
     for (paused_at, wanted) in cases {
         stand_pin(Some(PinnedPreview {
-            corruption: CorruptionCard::none(),
             path: path.clone(),
             bound: Some(320),
             content: (0, 0, 320, 240),

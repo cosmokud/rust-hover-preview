@@ -1,5 +1,4 @@
 pub(crate) mod calibre_render;
-pub(crate) mod corruption_log;
 pub(crate) mod document_cache;
 pub(crate) mod imagemagick_render;
 pub(crate) mod libreoffice_render;
