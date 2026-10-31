@@ -17,6 +17,12 @@
 //! this app's own text in this app's own pixels, and every place in it is a byte index the field
 //! keeps and this card turns into a column (see `text_find_field`).
 //!
+//! **A query too long for the field scrolls under the caret, and the field is what cuts it.** The
+//! scroll is worked out from the caret as the paint measures the run, rather than stored (see
+//! `query_run`), so nothing about it can go stale; and the run, the wash under its selection and the
+//! caret are all clipped to the field's box — a character half outside it is cut at its edge rather
+//! than drawn over the card's padding (see `paint_find_bar`).
+//!
 //! **The caret blinks, and only the tick turns it.** A page of text is not on the frame cadence, so a
 //! caret that asked for a paint of its own would put one there; instead the blink is the field's own
 //! clock, asked on the ticks a pin already takes, and this paint is handed the lit half it is in (see
@@ -71,6 +77,12 @@ const FIND_BAR_ON_WASH: f32 = 0.24;
 /// selection in the query reads as the selection under it (see `layout::paint` and its
 /// `blend(page, foreground, 0.25)`).
 const FIND_BAR_SELECTION_WASH: f32 = 0.25;
+
+/// The room the caret keeps from the field's edge once a query too wide for the field has scrolled to
+/// keep it in view, in the pixels a display's scale multiplies: enough that the caret is never flush
+/// against an edge, and no more — every pixel of it is a pixel of the query the field could have
+/// shown instead.
+pub(super) const FIND_BAR_CARET_MARGIN: i32 = 2;
 
 /// Where a find bar is, in the window's own coordinates: the card, the row a query is typed into, the
 /// count at its right end, and the five controls under it.
@@ -281,10 +293,62 @@ thread_local! {
 }
 
 /// Where the query is drawn from, given how wide it is: the field's left edge where it fits, and its
-/// right edge less the run where it does not. A query too long for its row keeps its end — the end a
-/// reader is typing at — on the card, and its beginning is what is cut.
+/// right edge less the run where it does not. A query too long for its row rests with its end — the
+/// end a reader is typing at — on the field, and its beginning is what is cut (see `query_run`, which
+/// is where the caret scrolls it to from here).
 pub(super) fn query_origin(bar: &FindBar, measured: i32) -> i32 {
     (bar.query.right - measured).min(bar.query.left)
+}
+
+/// Where a query's characters are drawn in its field: the columns they end at, and the column the run
+/// begins at, both in the window's coordinates.
+///
+/// One answer rather than two, because a press has to name the character a paint put under the
+/// pointer: `paint_find_bar` and `query_index_at` both read this, so a field that has scrolled is
+/// pressed where it is drawn rather than a field's width away from the hand (see `query_run`).
+pub(super) struct QueryRun {
+    /// The run's prefix widths, beginning with a zero — so `columns[k]` ends character `k` — and the
+    /// run's whole width last.
+    pub(super) columns: Vec<i32>,
+    /// The column, in the window's coordinates, the first character begins at.
+    pub(super) origin: i32,
+}
+
+/// The run a query is drawn as in a field with the caret at `caret`, a character index.
+///
+/// **The scroll is derived from the caret and stored nowhere**, so a resize, a paste that replaces the
+/// query and an undo can none of them leave the field looking at a column the text has left. A query
+/// that fits never scrolls: there is nothing to bring into the field, and a margin taken from a run
+/// the reader can see whole would cut its beginning to show them air.
+///
+/// Past that, the rule every single-line field follows. The run rests where `query_origin` puts it, and
+/// while the caret's own column is inside the field it stays exactly there — a caret moving about
+/// inside the part of the query the reader can see does not shuffle the text under it. Once the caret
+/// is past either edge the run moves the least it can to put the caret back inside, a margin clear of
+/// the edge, so that a caret typing at the end of a long query is a character the reader sees land
+/// rather than one drawn on the field's last column.
+pub(super) fn query_run(bar: &FindBar, columns: Vec<i32>, caret: usize, dpi: u32) -> QueryRun {
+    let measured = columns.last().copied().unwrap_or(0);
+    let rest = query_origin(bar, measured);
+    if measured <= bar.query.right - bar.query.left {
+        return QueryRun {
+            columns,
+            origin: rest,
+        };
+    }
+
+    let caret_column = columns.get(caret).copied().unwrap_or(measured);
+    let margin = text_paint::scaled(FIND_BAR_CARET_MARGIN, dpi as f32 / 96.0).max(1);
+    let settled = rest + caret_column;
+    let origin = if settled < bar.query.left + margin {
+        bar.query.left + margin - caret_column
+    } else if settled > bar.query.right - margin {
+        bar.query.right - margin - caret_column
+    } else {
+        rest
+    };
+
+    QueryRun { columns, origin }
 }
 
 /// The byte index in `query` a point names: the character boundary nearest the point, measured from
@@ -293,14 +357,18 @@ pub(super) fn query_origin(bar: &FindBar, measured: i32) -> i32 {
 /// A press between two letters means the boundary between them, so a point on a character's left
 /// half puts the caret before it and one on its right half after it. The index is a byte index on a
 /// character boundary, which is what the field's caret is (see `text_find_field::Field`).
-pub(crate) fn query_index_at(bar: &FindBar, query: &str, x: i32, dpi: u32) -> usize {
+///
+/// `caret` is where the field's caret stands, which is what scrolls a query too wide for its row: a
+/// press is answered against the run that caret left on the field, not against one right-aligned from
+/// a field that has scrolled somewhere else (see `query_run`).
+pub(crate) fn query_index_at(bar: &FindBar, query: &str, caret: usize, x: i32, dpi: u32) -> usize {
     if query.is_empty() {
         return 0;
     }
 
     let columns = query_columns(query, dpi);
-    let origin = query_origin(bar, columns.last().copied().unwrap_or(0));
-    let character = index_at_column(&columns, origin, x);
+    let run = query_run(bar, columns, char_index(query, caret), dpi);
+    let character = index_at_column(&run.columns, run.origin, x);
 
     query
         .char_indices()
@@ -542,6 +610,17 @@ pub(crate) fn paint_find_bar(
         right: rect.right - bar.panel.left,
         bottom: rect.bottom - bar.panel.top,
     };
+    // **The field is the limit on everything the query draws.** A character the run has scrolled half
+    // outside the field is cut at its edge rather than drawn over the card's padding, and the box that
+    // is sealed and carried across is this clipped one and not the run's whole width: a box as wide as
+    // the run would seal the columns the field never showed and carry them over its own panel as a band
+    // of another colour (see `seal_text` and `carry_text_across`).
+    let in_the_field = |rect: RECT| RECT {
+        left: rect.left.max(bar.query.left),
+        top: rect.top.max(bar.query.top),
+        right: rect.right.min(bar.query.right),
+        bottom: rect.bottom.min(bar.query.bottom),
+    };
     let mut painter = text_paint::RunPainter::new(surface, scale);
     // The window-coordinate boxes the runs really fill, so that what is sealed and carried across is
     // the run's own box and not a button's whole width: a sealed pixel the run never reached would be
@@ -550,18 +629,14 @@ pub(crate) fn paint_find_bar(
 
     // The query, as the columns its characters end at: measured once, and read by everything that has
     // to place something in the run — the wash under a selection, the pieces the run is drawn in, and
-    // the caret. A query wider than the room it has is drawn from the right, so the end of a long
-    // query — the end a reader is typing at — is what stays on the card and its beginning is what is
-    // cut. The place it really starts at is kept, because a press and the caret are placed where the
-    // text is rather than where the field begins (see `query_origin`).
+    // the caret. A query wider than the room it has is scrolled by the caret and cut at the field: the
+    // two ends of the selection are counted in characters of the run rather than in its bytes, and the
+    // column the run begins at comes from the caret alone (see `query_run`).
     let columns = if state.query.is_empty() {
         vec![0]
     } else {
         measure_run(surface, &style, &state.query, scale)
     };
-    let measured = columns.last().copied().unwrap_or(0);
-    let origin = query_origin(bar, measured);
-    let line_top = centered_top(bar.query);
 
     // The two ends of the selection, in characters of the run rather than in its bytes: a column is
     // one character wide here, and a character outside the basic plane is one column as well as one
@@ -571,27 +646,24 @@ pub(crate) fn paint_find_bar(
     let anchor = char_index(&state.query, state.anchor).min(characters);
     let selected = (anchor != caret).then(|| (anchor.min(caret), anchor.max(caret)));
 
+    let QueryRun { columns, origin } = query_run(bar, columns, caret, dpi);
+    let measured = columns.last().copied().unwrap_or(0);
+    let line_top = centered_top(bar.query);
+
     // A selection is washed in the field the way the page washes its own. It is put down in the
     // window's pixels before the runs are carried across, so that a glyph over it is composited over
     // the wash rather than over the panel; the pieces below then draw their own boxes in the same
     // wash, which keeps what is carried across the run's own colour.
     let wash = text_paint::blend(panel_color, palette.foreground, FIND_BAR_SELECTION_WASH);
     if let Some((from, to)) = selected {
-        let left = (origin + columns[from]).clamp(bar.query.left, bar.query.right);
-        let right = (origin + columns[to]).clamp(bar.query.left, bar.query.right);
-        if right > left {
-            fill_box(
-                buffer,
-                width,
-                RECT {
-                    left,
-                    top: line_top,
-                    right,
-                    bottom: line_top + cell,
-                },
-                wash,
-                1.0,
-            );
+        let box_ = in_the_field(RECT {
+            left: origin + columns[from],
+            top: line_top,
+            right: origin + columns[to],
+            bottom: line_top + cell,
+        });
+        if box_.right > box_.left {
+            fill_box(buffer, width, box_, wash, 1.0);
         }
     }
 
@@ -616,13 +688,18 @@ pub(crate) fn paint_find_bar(
 
             let text: String = pieces[from..to].iter().collect();
             let left = origin + columns[from];
-            let right = origin + columns[to];
-            let box_ = RECT {
+            // The piece is drawn from its own column, which for a scrolled run can be off the field:
+            // the text's origin stays there so the characters in view are the ones the columns named,
+            // and the clipped box is what cuts the ones the field has no room for.
+            let box_ = in_the_field(RECT {
                 left,
                 top: line_top,
-                right,
+                right: origin + columns[to],
                 bottom: line_top + cell,
-            };
+            });
+            if box_.right <= box_.left {
+                continue;
+            }
             let background = match selected {
                 Some((start, end)) if start <= from && to <= end => wash,
                 _ => panel_color,
@@ -702,10 +779,10 @@ pub(crate) fn paint_find_bar(
 
     carry_text_across(surface, buffer, width, bar.panel);
 
-    // The caret: one column at the place in the run the caret is at, placed where the query was
-    // really drawn rather than off the field's left edge — a long query is right-aligned, and a caret
-    // counted from the left of the field is a caret nowhere near the text. With a selection it stands
-    // at the focus end of it, which is where the next character typed will land.
+    // The caret: one column at the place in the run the caret is at, placed where the query was really
+    // drawn rather than off the field's left edge — a long query is scrolled to keep this column in
+    // view, and a caret counted from the left of the field is a caret nowhere near the text. With a
+    // selection it stands at the focus end of it, which is where the next character typed will land.
     //
     // It is the text's own line and not the row's: `cell` is the run's height and `line_top` its top,
     // so the column spans that box, inset a pixel at either end so that it sits inside the line rather
@@ -714,24 +791,28 @@ pub(crate) fn paint_find_bar(
     // blinks rather than putting a static page on the frame cadence for ever.
     //
     // It is put down after the runs have been carried across and not before: a run's box is carried as
-    // whole pixels, so a caret painted under one is a column of panel colour again.
+    // whole pixels, so a caret painted under one is a column of panel colour again. And it is a column
+    // of the field: the field's own last column is the furthest right it may stand, so a caret at the
+    // end of a run exactly as wide as its row is inside the row rather than over the count beside it.
     if state.caret_lit {
         let caret_width = text_paint::scaled(1, scale).max(1);
         let inset = text_paint::scaled(1, scale).max(1);
         let caret_x = (origin + columns.get(caret).copied().unwrap_or(measured))
-            .clamp(bar.query.left, bar.query.right);
-        fill_box(
-            buffer,
-            width,
-            RECT {
-                left: caret_x,
-                top: line_top + inset,
-                right: caret_x + caret_width,
-                bottom: (line_top + cell - inset).max(line_top + inset + 1),
-            },
-            palette.accent,
-            1.0,
-        );
+            .min(bar.query.right - caret_width);
+        if caret_x >= bar.query.left {
+            fill_box(
+                buffer,
+                width,
+                RECT {
+                    left: caret_x,
+                    top: line_top + inset,
+                    right: caret_x + caret_width,
+                    bottom: (line_top + cell - inset).max(line_top + inset + 1),
+                },
+                palette.accent,
+                1.0,
+            );
+        }
     }
 }
 

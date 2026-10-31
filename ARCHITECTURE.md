@@ -1001,10 +1001,14 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
   step on and `Shift`+`Enter`/`↑`/`PgUp` back, wrapping at both ends and never moving the query; a new query starts at
   the first
   match at or after the line the reader was on. A press in the field places the caret at the character under the pointer
-  — measured from the column the query is really drawn at, so a right-aligned query too long for its row is pressed
-  where it is, not a field's width away — a double press takes the word by the page's own run rule, and the caret blinks
+  — measured from the column the query is really drawn at, so a query too long for its row is pressed where it is
+  scrolled to, not a field's width away — a double press takes the word by the page's own run rule, and the caret blinks
   at `GetCaretBlinkTime`'s pace on the ticks a pin already takes, solid from every edit, with the selection washed the
-  way the page washes its own. A repaint is asked for a changed query, caret, selection, hover or blink and never for a
+  way the page washes its own. A query too wide for the field scrolls under the caret: the scroll is worked out from
+  the caret as the run is measured rather than stored, so a resize, a paste or an undo cannot leave it stale, the run
+  rests where it always did while the caret's column is inside the field and moves just enough to keep it there, a
+  margin clear of either edge, and the run, its wash and the caret are all clipped to the field rather than drawn over
+  the card's padding. A repaint is asked for a changed query, caret, selection, hover or blink and never for a
   mouse move that changed nothing. While the bar is up it owns the keyboard, and the keyboard hook stands down for the
   whole of it: a swallowed key never becomes the `WM_CHAR` a field types from, so every key arrives as a message and the
   bar's one table reads it — the page's own keys and the polled `Ctrl+A`/`Ctrl+C` are inert — and `Esc` empties a query

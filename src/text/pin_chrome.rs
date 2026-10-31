@@ -59,9 +59,14 @@ use crate::text::text_paint::{self, DibSurface};
 #[cfg(test)]
 use caption::{fit_title, longest_prefix_that_fits, paint_glyph, CaptionButtonBox, BUTTON_PIXELS};
 #[cfg(test)]
-use find_bar::{index_at_column, query_origin, step_mark_legs, step_mark_shape};
+use find_bar::{
+    index_at_column, query_origin, query_run, step_mark_legs, step_mark_shape,
+    FIND_BAR_CARET_MARGIN,
+};
 #[cfg(test)]
-use primitives::{caption_style, clock_text, draw_chevron, measure_text, GLYPH_PIXELS};
+use primitives::{
+    caption_style, clock_text, draw_chevron, measure_run, measure_text, GLYPH_PIXELS,
+};
 #[cfg(test)]
 use transport::{
     draw_pause_glyph, draw_play_glyph, draw_track_step, size_in, transport_layout,

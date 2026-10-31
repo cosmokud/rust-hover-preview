@@ -155,8 +155,8 @@ pub(super) fn press(x: i32, y: i32) -> bool {
 /// `Shift` is held.
 ///
 /// **The place is measured from the column the query is really drawn at.** A query wider than its
-/// field is drawn from the right, so a press turned into a place from the field's left edge would
-/// land a field's width away from the character the hand is on (see `pin_chrome::query_index_at`).
+/// field is scrolled to keep its caret in view, so a press turned into a place from the field's left
+/// edge would land away from the character the hand is on (see `pin_chrome::query_index_at`).
 ///
 /// The double click is read rather than delivered: the pin's window class is not registered with
 /// `CS_DBLCLKS`, so a second press is a second `WM_LBUTTONDOWN` and two presses are one gesture by
@@ -176,7 +176,13 @@ fn press_the_field(placed: &FindBarPlacement, x: i32, y: i32) {
         return;
     };
 
-    let at = pin_chrome::query_index_at(&placed.card, find.field.text(), x, placed.dpi);
+    let at = pin_chrome::query_index_at(
+        &placed.card,
+        find.field.text(),
+        find.field.caret(),
+        x,
+        placed.dpi,
+    );
     let run = find
         .click_run
         .filter(|(then, was, _)| within_double_click(*then, *was, now, (x, y)))
@@ -224,7 +230,13 @@ pub(super) fn drag(x: i32) -> bool {
         return false;
     };
 
-    let at = pin_chrome::query_index_at(&placed.card, find.field.text(), x, placed.dpi);
+    let at = pin_chrome::query_index_at(
+        &placed.card,
+        find.field.text(),
+        find.field.caret(),
+        x,
+        placed.dpi,
+    );
     let changed = find.field.place_caret_changed(at, true);
     if changed {
         find.blink.restart(Instant::now(), caret_blink());
