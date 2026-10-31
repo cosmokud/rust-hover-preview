@@ -1346,10 +1346,10 @@ own look at that pid's session beside them**, and reads one verdict out of the t
 and whose session is still muted is `session-muted`, the fourth road, and one whose mute the look took off is `heard`
 (see `audio_session`). Then it climbs a ladder, each rung taken at most once: a track asked back for with
 `set_property aid auto` — the launch's own road, healed; `audio-device` handed its own `auto`, which is mpv reloading its
-audio output, so a device refused while the film was starting gets one more attempt at it; the level the launch asked
-for asserted again with the player's own `mute` taken off beside it, which is the cure for a verdict of `silent` — a
-track selected, an output open and a player told to be quiet; and, if none of those was heard, **one** new player at the
-second and the pause the old one had, read once, and then the ladder ends. Each rung is entered on what the read-back
+audio output, so a device refused while the film was starting gets one more attempt at it; the level this app last
+asked that player for asserted again with the player's own `mute` taken off beside it, which is the cure for a verdict of
+`silent` — a track selected, an output open and a player told to be quiet; and, if none of those was heard, **one** new
+player at the second and the pause the old one had, read once, and then the ladder ends. Each rung is entered on what the read-back
 said and never on a write having landed, and a player that answered nothing is asked once more and then left entirely
 alone: a verdict that never arrived is not a film without sound, so it is not a player to begin again. **So is a driver
 named with nothing playing through it** — `current-ao wasapi` and no `audio-out-params`, which a captured run read 548 ms
@@ -1379,6 +1379,19 @@ leaves behind is not a hover's to consume. A film the level itself gave no track
 and FFmpeg's player is guarded on a pin's road only — its ladder has no in-place rung at all, so a hover's guard on it
 could only ever give up. **A pin that takes a hover's player over gets the pin's road** — the same process and the same
 reads, with the rungs a hover stops short of from that moment (`audio_guard::a_pin_took_it_over`).
+
+**The level a `silent` player is taken back up to is the level this app last asked for, not the one the film began at**
+(`audio_guard::the_level_moved`). A hand moves the level while the film plays, and mpv keeps its track at `volume 0`, so
+a pin dragged to the bottom of its knob answers exactly as a film something else silenced does — and the launch's level
+put back over that hand is the bug this closes. A level of nothing is the silence the setting chose, which the verdict
+already exempts, so no rung fires; a level moved to 60 makes the level rung assert 60. **The roads call the seam, and
+`mpv_ipc::set_volume` does not**: the guard's own rung writes through that function with its lock held, so a seam inside
+it would be the guard feeding its own record — a level it wrote taken for a level a hand had moved, on a lock it already
+holds. So a write the guard makes moves nothing, and the app's own writes move it where each of them landed: the pin's
+knob and the wheel and press behind it, the release's re-assertion and a row moved in the tray (which is the knob's road,
+`pin_chrome_layout::set_the_pin_players_level`), and a pin taking a hover's player over at the pin's own level
+(`pin_playback::adopt_the_hovered_film_in_the_host`). A hover's per-serve level needs no second write: the serve's caller
+arms the guard with that very level the moment the serve returns, so the arming is the record.
 
 **The resident can be taken out of a run without a rebuild, which is the one A/B this fault needs.** A hover's film is
 loaded on the one mpv kept warm between hovers unless `RHP_NO_RESIDENT` is in the environment — presence is enough, and
@@ -1448,7 +1461,7 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
 | `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it — the level asked for beside the level it is at — both players' own lines, and a kill's confirmation |
 | `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), who it is — both identifiers whole, the image the pid runs, and the sessions the endpoints listed beside it, each with `dead` on one whose process has ended — the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none — and the one write this app makes to the OS: a muted session's `SetMute(false)` under a guarded player at a slider that is up |
-| `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict with the machine's own answer folded into it (`session-muted` being the fourth road), the in-place rungs and the one relaunch, the hover's in-place-only road, the sparse watch of a pin's player that was heard, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
+| `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict with the machine's own answer folded into it (`session-muted` being the fourth road), the in-place rungs and the one relaunch, the level it stands for being the one this app last asked for, the hover's in-place-only road, the sparse watch of a pin's player that was heard, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |
 
