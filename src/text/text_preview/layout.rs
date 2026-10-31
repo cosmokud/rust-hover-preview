@@ -779,6 +779,7 @@ fn selected_part(
 /// fills the box and the pieces GDI leaves alone (the space a line that stops
 /// before the edge did not use, the gaps between blocks) are already the right
 /// color.
+#[allow(clippy::too_many_arguments)] // The box, the options and the rows a moved page leaves to paint are one frame.
 pub(super) unsafe fn paint(
     surface: &DibSurface,
     laid_out: &LaidOut,
@@ -787,10 +788,11 @@ pub(super) unsafe fn paint(
     scrollbar: Option<&ScrollBar>,
     selection: Option<Selection>,
     find: Option<&FindHighlights>,
+    damage: Option<(i32, i32)>,
 ) {
     let width = surface.width as i32;
     let page = rgb(theme.background());
-    let band = blend(page, rgb(theme.foreground()), 0.08);
+    let band_color = blend(page, rgb(theme.foreground()), 0.08);
     // A selection is drawn with the theme's own highlight where it has one, and
     // with a shade of the page where it does not.
     let highlight = theme
@@ -815,8 +817,28 @@ pub(super) unsafe fn paint(
     let find_background = blend(page, find_color, 0.55);
     let find_foreground = theme.theme().settings.find_highlight_foreground.map(rgb);
 
-    fill_rect(
-        surface,
+    // A paint of a band of the frame is a paint of a page moved under the reader: the rows outside it
+    // are the ones already on screen, shifted (see `PaintedFrame`). The band clamps every fill and
+    // clips the text, so nothing this paints can reach them.
+    let band = damage.map(|(top, bottom)| RECT {
+        left: 0,
+        top,
+        right: width,
+        bottom,
+    });
+    let fill = |rect: RECT, color: [u8; 3]| {
+        let rect = match band {
+            Some(band) => RECT {
+                top: rect.top.max(band.top),
+                bottom: rect.bottom.min(band.bottom),
+                ..rect
+            },
+            None => rect,
+        };
+        fill_rect(surface, rect, color);
+    };
+
+    fill(
         RECT {
             left: 0,
             top: 0,
@@ -826,22 +848,32 @@ pub(super) unsafe fn paint(
         page,
     );
 
-    for line in &laid_out.lines {
+    // The rows that are not in the band are already on screen, so their runs are not asked of GDI at
+    // all (see `PaintedFrame`).
+    //
+    // **They are skipped rather than clipped**, and that is not the same thing: GDI draws text
+    // inside a clip region with its antialiasing turned down, so a band clipped out of a page is a
+    // band whose glyphs are a little lighter than the same glyphs painted with no clip — a page that
+    // shimmers where the band meets the rows the shift kept. A run's own rectangle is the room it was
+    // given, which is the row it is in, so nothing of a run in the band reaches outside it.
+    let in_the_band = |line: &LaidLine| match band {
+        Some(band) => line.top + line.height > band.top && line.top < band.bottom,
+        None => true,
+    };
+    for line in laid_out.lines.iter().filter(|line| in_the_band(line)) {
         match line.block {
-            LineBlock::Code => fill_rect(
-                surface,
+            LineBlock::Code => fill(
                 RECT {
                     left: 0,
                     top: line.top,
                     right: width,
                     bottom: line.top + line.height,
                 },
-                band,
+                band_color,
             ),
             LineBlock::Quote => {
                 let bar = theme.style_for_scopes(&["markup.quote"]).foreground;
-                fill_rect(
-                    surface,
+                fill(
                     RECT {
                         left: 0,
                         top: line.top,
@@ -867,7 +899,7 @@ pub(super) unsafe fn paint(
         let mut style = plain_style(BODY_LEVEL);
         style.foreground = blend(rgb(theme.foreground()), rgb(theme.background()), 0.45);
 
-        for line in &laid_out.lines {
+        for line in laid_out.lines.iter().filter(|line| in_the_band(line)) {
             if !line.own_line || line.source.1 != 0 {
                 continue;
             }
@@ -891,7 +923,7 @@ pub(super) unsafe fn paint(
         }
     }
 
-    for line in &laid_out.lines {
+    for line in laid_out.lines.iter().filter(|line| in_the_band(line)) {
         let mut run_start = 0usize;
 
         for run in &line.runs {
@@ -931,7 +963,7 @@ pub(super) unsafe fn paint(
 
             let run_background = match (run.style.background, line.block) {
                 (Some(color), _) => color,
-                (None, LineBlock::Code) => band,
+                (None, LineBlock::Code) => band_color,
                 (None, _) => page,
             };
 
@@ -1017,7 +1049,9 @@ pub(super) unsafe fn paint(
     drop(painter);
 
     // The scrollbar goes last so it sits above everything, including a line that
-    // ran to the right edge.
+    // ran to the right edge. It is filled whole and not through `fill`: its thumb is the one thing
+    // about a page that moves *without* the text moving, so it is not in the band a shifted frame
+    // leaves to paint (see `the_shift_of`).
     if let Some(scrollbar) = scrollbar {
         let (left, top, right, bottom) = scrollbar.track;
         fill_rect(

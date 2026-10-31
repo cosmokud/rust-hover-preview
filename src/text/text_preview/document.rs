@@ -21,6 +21,8 @@ use once_cell::sync::Lazy;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use syntect::easy::HighlightLines;
@@ -305,6 +307,8 @@ pub(super) struct Span {
 /// its theme are unchanged.
 pub(super) fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<CachedDocument>> {
     let metadata = std::fs::metadata(path).ok()?;
+    #[cfg(test)]
+    DOCUMENT_STATS.fetch_add(1, Ordering::Relaxed);
     let key = DocKey {
         path: path.to_path_buf(),
         modified: metadata.modified().ok(),
@@ -398,8 +402,69 @@ pub type Place = (usize, usize);
 /// a time, and styling a document for either would be a page of text through the highlighter per
 /// keystroke. A handle rather than the lines themselves, so the caller that only reads them pays
 /// nothing to ask.
+#[cfg(test)]
 pub fn drawn_lines(path: &Path, options: TextPreviewOptions) -> Arc<Vec<String>> {
     match document(path, options) {
+        Some(document) => document.drawn_text(options),
+        None => Arc::new(Vec::new()),
+    }
+}
+
+/// How many times a document has been looked for on the disk, which is the one cost a key press on
+/// a page already on screen must not pay (see `document_held`).
+///
+/// Counted rather than measured because the count is what a test can assert: a move that reads the
+/// lines of the page's own document has no business asking the file system whether the file is
+/// still the one it read, and the difference between a page that asks and one that does not is a
+/// number that does not depend on how fast the disk is.
+#[cfg(test)]
+static DOCUMENT_STATS: AtomicU64 = AtomicU64::new(0);
+
+/// The number of times the disk has been asked about a document (see `DOCUMENT_STATS`).
+#[cfg(test)]
+pub(crate) fn document_stat_count() -> u64 {
+    DOCUMENT_STATS.load(Ordering::Relaxed)
+}
+
+/// The document `path` was last read as, without asking the disk whether it has changed since.
+///
+/// **A page on screen already has its document in hand**: it was read to draw the page, and every
+/// question a reader asks of that page — a caret moved a line, a search typed a character, a
+/// selection copied — is a question about the document as it is drawn. Asking the file system first
+/// was a stat per key press, and a held arrow is a press every repeat: a trip out of the process for
+/// an answer the cache already holds. A file that changes under a page is noticed the next time a
+/// page is *put up*, which is where `document`'s stat is paid and where a stale document would
+/// first be seen (see `render_scrolled` and `drawn_lines_held`).
+///
+/// The key is the path, the mode and the theme — everything that makes it a different document —
+/// and not the file's size or time, which are what the stat was for.
+pub(super) fn document_held(
+    path: &Path,
+    options: TextPreviewOptions,
+) -> Option<Arc<CachedDocument>> {
+    let theme_generation = match options.theme {
+        TextTheme::Custom(_) => text_theme::generation(),
+        _ => 0,
+    };
+
+    let cache = DOCUMENTS.lock().ok()?;
+    cache
+        .iter()
+        .rev()
+        .find(|(key, _)| {
+            key.path == path
+                && key.theme == options.theme
+                && key.theme_generation == theme_generation
+                && key.markdown_mode == options.markdown_mode
+        })
+        .map(|(_, document)| Arc::clone(document))
+}
+
+/// Lines the page is drawn from, read of the document the page was drawn from rather than of the
+/// disk (see `document_held`). The stat is paid only where the cache holds nothing, which is a page
+/// that has not been drawn yet rather than one a reader is moving through.
+pub fn drawn_lines_held(path: &Path, options: TextPreviewOptions) -> Arc<Vec<String>> {
+    match document_held(path, options).or_else(|| document(path, options)) {
         Some(document) => document.drawn_text(options),
         None => Arc::new(Vec::new()),
     }
@@ -417,7 +482,7 @@ pub fn drawn_lines(path: &Path, options: TextPreviewOptions) -> Arc<Vec<String>>
 /// holds rather than a second read of it; upgrade only if a copy is ever asked to span a document
 /// further than a page can scroll (see `drawn_lines` and `MAX_DOC_LINES`).
 pub fn text_of(path: &Path, options: TextPreviewOptions, selection: Selection) -> Option<String> {
-    let lines = drawn_lines(path, options);
+    let lines = drawn_lines_held(path, options);
     if lines.is_empty() {
         return None;
     }
@@ -479,7 +544,7 @@ pub fn find_next(
     options: TextPreviewOptions,
     selection: Selection,
 ) -> Option<Selection> {
-    let lines = drawn_lines(path, options);
+    let lines = drawn_lines_held(path, options);
     let total = lines.len();
     if total == 0 {
         return None;
@@ -569,7 +634,7 @@ pub fn find_all(
         return Vec::new();
     }
 
-    let lines = drawn_lines(path, options);
+    let lines = drawn_lines_held(path, options);
 
     let mut found = Vec::new();
     for (index, text) in lines.iter().enumerate() {

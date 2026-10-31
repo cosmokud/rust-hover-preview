@@ -21,12 +21,18 @@ mod markdown;
 mod source;
 
 pub use caret::{moved, Motion};
-pub use document::{drawn_lines, find_all, find_next, text_of, Place};
+#[cfg(test)]
+pub(crate) use document::document_stat_count;
+#[cfg(test)]
+pub use document::drawn_lines;
+pub use document::{drawn_lines_held, find_all, find_next, text_of, Place};
 pub use frame::{
     caret_rect, extend_word_selection, is_word_character, line_in, measure, position_in,
-    render_scrolled, run_at, word_in, FindHighlights, FrameLine, ScrollBar, Selection, TextCaret,
-    TextPreviewOptions,
+    render_scrolled, render_scrolled_held, run_at, word_in, FindHighlights, FrameLine,
+    PaintedFrame, ScrollBar, Selection, TextCaret, TextPreviewOptions,
 };
+#[cfg(test)]
+pub(crate) use frame::{frame_render_count, shifted_frame_count};
 // A run is what a line is made of, and it is named only by the tests that build lines of their
 // own rather than painting a document.
 #[cfg(test)]

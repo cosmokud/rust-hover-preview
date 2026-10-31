@@ -300,13 +300,14 @@ use displays::RecordedDisplays;
 use displays::{dpi_at, work_area_at, Displays, DESKTOPS};
 
 use pin_window::{
-    ask_pin, end_pin, give_the_keyboard_back, install, pin_state, release_keyboard, take_keyboard,
-    take_pin_command, PinHide, PinWindow, Reason, WM_PIN_RELEASE_POINTER,
+    ask_pin, end_pin, give_the_keyboard_back, install, pin_state, release_keyboard,
+    return_pin_commands, take_keyboard, take_pin_commands, PinHide, PinWindow, Reason,
+    WM_PIN_RELEASE_POINTER,
 };
 #[cfg(test)]
 use pin_window::{
-    pin_holds_a_keyboard, stand_pin, stand_pin_walk, take_pin_for_a_test, PinWindowCall,
-    RecordedPinWindow,
+    pin_holds_a_keyboard, stand_pin, stand_pin_walk, take_pin_command, take_pin_for_a_test,
+    PinWindowCall, RecordedPinWindow,
 };
 
 // What the rest of the crate asks for by name.

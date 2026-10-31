@@ -7,7 +7,7 @@
 //! it. What is underneath them — the document ([`super::document`]) and the box
 //! it is laid out in ([`super::layout`]) — is asked for here, not owned.
 
-use super::document::document;
+use super::document::{document, document_held};
 use super::layout::{layout, paint, scrollbar_geometry};
 use crate::config::config::{MarkdownMode, TextTheme};
 use crate::text::text_paint::{DibSurface, TextMetrics};
@@ -447,6 +447,28 @@ pub fn extend_word_selection(lines: &[FrameLine], word: Selection, x: i32, y: i3
     }
 }
 
+/// How many screenfuls have been laid out and painted, which is the work a key press on a page
+/// must not cause once the page is on screen and the caret is already on it (see `render_scrolled`).
+#[cfg(test)]
+static FRAME_RENDERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The number of screenfuls painted (see `FRAME_RENDERS`).
+#[cfg(test)]
+pub(crate) fn frame_render_count() -> u64 {
+    FRAME_RENDERS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// How many screenfuls were the frame already on screen moved rather than painted afresh (see
+/// `PaintedFrame`), which is the half of a scroll's cost a test can see without a clock.
+#[cfg(test)]
+static SHIFTED_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The number of frames shifted rather than painted (see `SHIFTED_FRAMES`).
+#[cfg(test)]
+pub(crate) fn shifted_frame_count() -> u64 {
+    SHIFTED_FRAMES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The size the preview of `path` wants inside `max_width` x `max_height`.
 ///
 /// The box hugs the content — a two-line file gets a two-line window — and is
@@ -518,7 +540,94 @@ pub fn render_scrolled(
         return None;
     }
 
-    let document = document(path, options)?;
+    render_scrolled_from(
+        document(path, options)?,
+        None,
+        first_line,
+        width,
+        height,
+        dpi,
+        options,
+        selection,
+        find,
+    )
+}
+
+/// The same frame for a page that is already on screen, drawn of the document that drew it rather
+/// than of a fresh look at the file (see `document_held`).
+///
+/// A page scrolled a line, a caret moved and a selection dragged all lay the page out again in the
+/// same box, and every one of them used to ask the disk first: an arrow at the bottom of a viewport
+/// is a scroll, and a held arrow is one every repeat. The document is the page's own either way —
+/// what the stat could say about a file that changed is said by the next page put up (see
+/// `render_scrolled`).
+#[allow(clippy::too_many_arguments)] // The box, the options and the two things drawn over the page are one frame.
+pub fn render_scrolled_held(
+    previous: Option<PaintedFrame<'_>>,
+    path: &Path,
+    first_line: usize,
+    width: u32,
+    height: u32,
+    dpi: u32,
+    options: TextPreviewOptions,
+    selection: Option<Selection>,
+    find: Option<FindHighlights>,
+) -> Option<TextFrame> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    render_scrolled_from(
+        document_held(path, options).or_else(|| document(path, options))?,
+        previous,
+        first_line,
+        width,
+        height,
+        dpi,
+        options,
+        selection,
+        find,
+    )
+}
+
+/// A frame already on screen: the pixels and the painted lines it was drawn with, which is what a
+/// page scrolled a line or two is moved from rather than laid out and painted again.
+///
+/// It is a borrow of what is already on screen rather than another copy of it — a screenful is a
+/// megabyte and a half — and it is handed to `render_scrolled_held` by the one caller that has the
+/// page in hand (see `scroll_text_preview`).
+pub struct PaintedFrame<'a> {
+    /// The frame as it was drawn, as `TextFrame::pixels` was: BGRA, `width * height * 4` bytes.
+    pub pixels: &'a [u8],
+    pub width: u32,
+    pub height: u32,
+    /// The document line the frame starts at, and the lines it painted: a frame asked for at another
+    /// place is the same frame moved, and the lines are how far.
+    pub first_line: usize,
+    pub lines: &'a [FrameLine],
+    /// The two things painted *into* a frame that its lines do not carry. A page whose selection or
+    /// search has changed since the frame was drawn is a page painted with something else, and its
+    /// pixels are not the rows a move would take with it.
+    pub selection: Option<Selection>,
+    pub find: Option<FindHighlights>,
+}
+
+/// The layout and the paint of a frame whose document is already in hand, for the two callers above
+/// to differ only in which document they hand it.
+#[allow(clippy::too_many_arguments)] // The box, the options and the two things drawn over the page are one frame.
+fn render_scrolled_from(
+    document: std::sync::Arc<super::document::CachedDocument>,
+    previous: Option<PaintedFrame<'_>>,
+    first_line: usize,
+    width: u32,
+    height: u32,
+    dpi: u32,
+    options: TextPreviewOptions,
+    selection: Option<Selection>,
+    find: Option<FindHighlights>,
+) -> Option<TextFrame> {
+    #[cfg(test)]
+    FRAME_RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let theme = text_theme::loaded(options.theme)?;
 
     let surface = DibSurface::create(width, height)?;
@@ -565,6 +674,40 @@ pub fn render_scrolled(
         None
     };
 
+    // A page moved under the reader by a line or two is the frame already on screen with its rows
+    // shifted, and only the rows that came in from an edge painted — a selection moved by a caret
+    // held down is the commonest thing a pinned page does, and laying the whole screenful out and
+    // painting every run of it again is 4.5 ms of the 6.9 a press cost (see `PaintedFrame` and
+    // `MOST_ROWS_A_FRAME_IS_SHIFTED`).
+    let painted_on_screen = previous.as_ref().map(|previous| PaintedFrame {
+        pixels: previous.pixels,
+        width: previous.width,
+        height: previous.height,
+        first_line: previous.first_line,
+        lines: previous.lines,
+        selection: previous.selection,
+        find: previous.find.clone(),
+    });
+    let shifted = painted_on_screen.and_then(|previous| {
+        the_shift_of(previous, &laid_out, selection, find.as_ref(), width, height)
+    });
+
+    let damage = match shifted {
+        Some((moved, content_top, content_bottom, damage)) => {
+            #[cfg(test)]
+            SHIFTED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            copy_the_rows_on_screen(
+                &surface,
+                previous.as_ref()?.pixels,
+                moved,
+                content_top,
+                content_bottom,
+            );
+            Some(damage)
+        }
+        None => None,
+    };
+
     unsafe {
         paint(
             &surface,
@@ -574,6 +717,7 @@ pub fn render_scrolled(
             scrollbar.as_ref(),
             selection,
             find.as_ref(),
+            damage,
         );
     }
 
@@ -608,4 +752,169 @@ pub fn render_scrolled(
     };
 
     Some(frame)
+}
+
+/// How far a frame may be moved under the reader and still be the frame already on screen, in rows.
+///
+/// A caret that has reached the edge of the page scrolls it by a line or three, and a wheel notch a
+/// few more: past this the whole screenful is painted, which is also the answer when the page is not
+/// the same page at all. The bound is what keeps a shift a band rather than the frame — a hundred
+/// rows of a tall page is still a paint of the rows that came in and nothing more.
+const MOST_ROWS_A_FRAME_IS_SHIFTED: i32 = 120;
+
+/// How far the frame already on screen has to move to be the frame just laid out, and the band of
+/// rows that is left to paint once it has: `(rows moved, (top, bottom))`.
+///
+/// `None` is the answer for every page that is not the one on screen moved: another box, another
+/// selection or search, a line whose runs are not the ones that were painted, or a move too far for
+/// the two frames to share anything worth keeping. Every line the two frames share has to agree to
+/// the row — the same runs, the same height and the same distance from where it was — or the pixels
+/// are not the pixels this layout would paint and the whole screenful is painted instead.
+fn the_shift_of(
+    previous: PaintedFrame<'_>,
+    laid_out: &super::layout::LaidOut,
+    selection: Option<Selection>,
+    find: Option<&FindHighlights>,
+    width: u32,
+    height: u32,
+) -> Option<(i32, i32, i32, (i32, i32))> {
+    if previous.width != width || previous.height != height {
+        return None;
+    }
+    if previous.pixels.len() != width as usize * height as usize * 4 {
+        return None;
+    }
+    if previous.selection != selection || previous.find.as_ref() != find {
+        return None;
+    }
+
+    // A source that names two painted rows is not a source a row can be found by, and a rendered
+    // document is the one producer that can make one: the pairs are the document's own, and the
+    // frame's rows are the renderer's.
+    if has_a_repeated_source(previous.lines) || has_a_repeated_source_in(&laid_out.lines) {
+        return None;
+    }
+
+    let mut moved = None;
+    let mut shared = 0usize;
+    for line in &laid_out.lines {
+        let Some(old) = previous.lines.iter().find(|old| old.source == line.source) else {
+            continue;
+        };
+
+        if old.height != line.height || !the_same_runs(&old.runs, &line.runs) {
+            return None;
+        }
+
+        let step = line.top - old.top;
+        if moved.is_some_and(|moved| moved != step) {
+            return None;
+        }
+        moved = Some(step);
+        shared += 1;
+    }
+
+    let moved = moved?;
+    // **The rows above and below the text stand still**, and the text is scrolled between them: the
+    // page is read through its margin rather than dragged with it, and a frame short enough to leave
+    // room at the bottom leaves the same room after a scroll. So the two frames have to agree about
+    // both, and a page whose margin or whose room at the bottom has changed is painted again.
+    let content_top = laid_out.lines.first().map(|line| line.top)?;
+    let content_bottom = laid_out.lines.last().map(|line| line.top + line.height)?;
+    let previous_top = previous.lines.first().map(|line| line.top)?;
+    let previous_bottom = previous.lines.last().map(|line| line.top + line.height)?;
+    if content_top != previous_top || content_bottom != previous_bottom {
+        return None;
+    }
+
+    // A frame that has not moved is a frame painted again for something other than a scroll, and that
+    // something may be anything: it is painted rather than kept.
+    if shared == 0 || moved == 0 || moved.abs() > MOST_ROWS_A_FRAME_IS_SHIFTED {
+        return None;
+    }
+    if moved >= content_bottom - content_top || moved <= content_top - content_bottom {
+        return None;
+    }
+
+    // Which rows are the ones that came in: the band an edge of the frame gave up, which is also
+    // where the page's own margin is on that side.
+    let damage = if moved > 0 {
+        (0, content_top + moved)
+    } else {
+        (content_bottom + moved, height as i32)
+    };
+
+    Some((moved, content_top, content_bottom, damage))
+}
+
+fn has_a_repeated_source(lines: &[FrameLine]) -> bool {
+    lines.iter().enumerate().any(|(index, line)| {
+        lines[..index]
+            .iter()
+            .any(|earlier| earlier.source == line.source)
+    })
+}
+
+fn has_a_repeated_source_in(lines: &[super::layout::LaidLine]) -> bool {
+    lines.iter().enumerate().any(|(index, line)| {
+        lines[..index]
+            .iter()
+            .any(|earlier| earlier.source == line.source)
+    })
+}
+
+/// Whether two painted rows carry the same text in the same places: what makes a row of the frame on
+/// screen the row this layout would paint.
+fn the_same_runs(old: &[FrameRun], new: &[super::layout::LaidRun]) -> bool {
+    old.len() == new.len()
+        && old
+            .iter()
+            .zip(new)
+            .all(|(old, new)| old.x == new.x && old.width == new.width && old.text == new.text)
+}
+
+/// Move the rows of the frame already on screen into the surface just made, by `moved` rows, leaving
+/// the band an edge gave up as whatever the surface was made with.
+///
+/// The margin above the first line is the one part of the frame a scroll does not move: the page is
+/// read through it rather than dragged with it, so those rows are copied as they stand and the text
+/// under them is what moves (see `the_shift_of`).
+fn copy_the_rows_on_screen(
+    surface: &DibSurface,
+    previous: &[u8],
+    moved: i32,
+    content_top: i32,
+    content_bottom: i32,
+) {
+    let width = surface.width as usize;
+    let height = surface.height as i32;
+    let stride = width * 4;
+    let rows = content_bottom - content_top - moved.abs();
+    if rows <= 0 {
+        return;
+    }
+
+    let destination =
+        unsafe { std::slice::from_raw_parts_mut(surface.bits(), stride * height as usize) };
+    let mut copy = |from: i32, to: i32, rows: i32| {
+        for row in 0..rows {
+            let source = (from + row) as usize * stride;
+            let destination_row = (to + row) as usize * stride;
+            destination[destination_row..destination_row + stride]
+                .copy_from_slice(&previous[source..source + stride]);
+        }
+    };
+
+    // Where the rows that survive come from and go to: the frame's text moves towards the edge it is
+    // being scrolled towards, so a page scrolled on has its old rows move up under the reader.
+    let (source_first, destination_first) = if moved >= 0 {
+        (content_top, content_top + moved)
+    } else {
+        (content_top - moved, content_top)
+    };
+
+    // The margin above the text and the room below it, which are the same rows on both frames.
+    copy(0, 0, content_top);
+    copy(content_bottom, content_bottom, height - content_bottom);
+    copy(source_first, destination_first, rows);
 }

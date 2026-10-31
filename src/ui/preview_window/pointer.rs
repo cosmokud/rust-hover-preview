@@ -597,22 +597,37 @@ fn text_region_try() -> Option<(i32, i32, i32, i32)> {
 /// styled, the window it is drawn in does not move, and a document that is
 /// scrolled through costs a window of highlighting per step rather than a
 /// re-read.
+///
+/// **And a page moved by a line or two is the frame already on screen, shifted.** A held arrow's
+/// press is mostly a page scrolled a line, and laying a screenful out and painting every run of it
+/// again cost 4.5 ms of the 6.9 a press took — the frame that is on screen is the same frame, and the
+/// rows that came in from an edge are the only ones not already painted (see `PaintedFrame`).
 pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
     // Taken out of the media so the lock is not held while the lines are styled
-    // and painted.
-    let Some((path, options, dpi, width, height, current)) =
+    // and painted — the frame on screen as well, as a handle rather than a copy: a screenful is a
+    // megabyte and a half.
+    let Some((path, options, dpi, width, height, current, painted)) =
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media.as_ref().and_then(|media| {
-                media.text_state.as_ref().map(|scroll| {
+                let scroll = media.text_state.as_ref()?;
+                let painted = media.current_frame().cloned().map(|frame| {
                     (
-                        scroll.path.clone(),
-                        scroll.options,
-                        scroll.dpi,
-                        scroll.width,
-                        scroll.height,
+                        frame,
                         scroll.first_line,
+                        scroll.lines.clone(),
+                        scroll.selection,
+                        scroll.find.highlights(),
                     )
-                })
+                });
+                Some((
+                    scroll.path.clone(),
+                    scroll.options,
+                    scroll.dpi,
+                    scroll.width,
+                    scroll.height,
+                    scroll.first_line,
+                    painted,
+                ))
             })
         })
     else {
@@ -638,8 +653,34 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
         return;
     };
 
-    let Some(frame) = text_preview::render_scrolled(
-        &path, first_line, width, height, dpi, options, selection, find,
+    // An empty selection is no selection — `paint` reads it that way — so it is said that way here
+    // too, and a page whose caret was put down without a drag is a page with nothing painted into it.
+    let selection = selection.filter(|selection| !selection.is_empty());
+
+    // What was painted into the frame on screen besides its text, which is only nothing: a page with
+    // a selection or a search painted into it is a page whose pixels are not the ones the layout would
+    // paint elsewhere, and it is drawn again rather than shifted (see `PaintedFrame`).
+    let painted = match painted.as_ref() {
+        Some((frame, first_line, lines, selection, find))
+            if selection.is_none_or(|selection| selection.is_empty()) && find.is_none() =>
+        {
+            Some(text_preview::PaintedFrame {
+                pixels: &frame.pixels,
+                width: frame.width,
+                height: frame.height,
+                first_line: *first_line,
+                lines,
+                selection: None,
+                find: None,
+            })
+        }
+        _ => None,
+    };
+
+    // Held: the page being scrolled is drawn from the document that drew it, so a line moved by a
+    // caret or a notch is not a look at the file (see `render_scrolled_held`).
+    let Some(frame) = text_preview::render_scrolled_held(
+        painted, &path, first_line, width, height, dpi, options, selection, find,
     ) else {
         return;
     };
@@ -974,8 +1015,10 @@ pub(super) unsafe fn repaint_text_preview(hwnd: HWND) {
         return;
     };
 
-    let Some(frame) = text_preview::render_scrolled(
-        &path, first_line, width, height, dpi, options, selection, find,
+    // Held, for the reason `scroll_text_preview` is: a selection painted into the page is a page
+    // drawn again from the text it already has, not a look at the file (see `render_scrolled_held`).
+    let Some(frame) = text_preview::render_scrolled_held(
+        None, &path, first_line, width, height, dpi, options, selection, find,
     ) else {
         return;
     };

@@ -655,11 +655,17 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // surfaces — the bitmap carries none of it (see `pin_chrome_strips`): asked here because the
     // chrome's own show and hide is answered on this paint everywhere else (see `PinChrome`).
     pin_chrome_strips::sync_the_chrome_strips();
+    PIN_PAINTS.fetch_add(1, Ordering::Relaxed);
     pin_resize_probe::note_the_paint(started);
 
     // As in `render_layered_preview_at`: the hold is the tick's to publish, because a publish
     // per painted frame is what made the 500 ms throttle suppress nothing.
 }
+
+/// How many times a pinned window has finished a paint, and the one number a probe has to watch to
+/// know a frame reached the screen: `UpdateLayeredWindow` is the last thing a paint does, so a count
+/// that moved is a press that is on the display (see `pin_text_caret_lag_probe`).
+pub(super) static PIN_PAINTS: AtomicU64 = AtomicU64::new(0);
 
 /// Whether a resize's paint asks the surface for the row of slack it paints with.
 ///

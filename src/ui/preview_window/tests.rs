@@ -996,6 +996,7 @@ mod placement;
 mod probes;
 mod resident;
 mod text_find_bar;
+mod text_page_presses;
 mod text_selection;
 mod video_engine;
 mod video_hold;

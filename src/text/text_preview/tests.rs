@@ -1029,3 +1029,111 @@ fn the_lines_a_caret_reads_are_bounded_and_are_the_files_own() {
         "to the last line it reaches"
     );
 }
+
+/// A page moved under the reader is the page the frame after it would have been painted as: the
+/// frame already on screen with its rows shifted, and only the rows that came in from an edge
+/// painted (see `PaintedFrame`).
+///
+/// Every pixel is compared, not just the lines: a band that is one row short leaves the page above it
+/// a row of the page before, and a scrollbar's thumb is the one thing about a page that moves
+/// *without* the text moving, so a shifted frame owes it painted too.
+#[test]
+fn a_page_scrolled_is_the_page_the_frame_after_it_would_have_painted() {
+    let dir = scratch("shifted");
+    let path = dir.join("scrolled.txt");
+    let text: String = (0..400)
+        .map(|line| format!("    let value_{line} = compute({line}) * 3;\n"))
+        .collect();
+    fs::write(&path, &text).expect("a page to scroll");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+    let (width, height) = (240, 200);
+
+    fn painted(frame: &TextFrame) -> PaintedFrame<'_> {
+        PaintedFrame {
+            pixels: &frame.pixels,
+            width: frame.width,
+            height: frame.height,
+            first_line: frame.first_line,
+            lines: &frame.lines,
+            selection: None,
+            find: None,
+        }
+    }
+
+    // Down the page, and back up it: a shift either way is the same rows moved towards the edge the
+    // page is going.
+    for (from, to) in [(0usize, 1usize), (0, 3), (3, 1)] {
+        let before = render_scrolled(&path, from, width, height, 96, options, None, None)
+            .expect("a page at the place it is scrolled from");
+
+        let shifted_before = shifted_frame_count();
+        let shifted = render_scrolled_held(
+            Some(painted(&before)),
+            &path,
+            to,
+            width,
+            height,
+            96,
+            options,
+            None,
+            None,
+        )
+        .expect("the page moved");
+        let fresh = render_scrolled(&path, to, width, height, 96, options, None, None)
+            .expect("the page painted afresh");
+
+        assert!(
+            shifted_frame_count() > shifted_before,
+            "the frame on screen was moved rather than painted again, {from} to {to}"
+        );
+        assert_eq!(
+            shifted.lines, fresh.lines,
+            "the rows land where the page after it puts them, {from} to {to}"
+        );
+        assert_eq!(
+            shifted.scrollbar, fresh.scrollbar,
+            "the thumb is drawn where the page after it draws it, {from} to {to}"
+        );
+        assert_eq!(
+            shifted.pixels, fresh.pixels,
+            "and every pixel is the pixel that page would have been painted, {from} to {to}"
+        );
+    }
+
+    // A page painted with something else in it is not a page that can be moved: a selection is a wash
+    // laid under the text, and the pixels of a page without one are not the pixels of a page with it.
+    let plain = render_scrolled(&path, 0, width, height, 96, options, None, None).expect("a page");
+    let selected = Selection {
+        anchor: (0, 0),
+        caret: (2, 8),
+    };
+    let shifted_before = shifted_frame_count();
+    let shifted = render_scrolled_held(
+        Some(painted(&plain)),
+        &path,
+        1,
+        width,
+        height,
+        96,
+        options,
+        Some(selected),
+        None,
+    )
+    .expect("a page with a selection on it");
+    let fresh = render_scrolled(&path, 1, width, height, 96, options, Some(selected), None)
+        .expect("the page painted afresh");
+
+    assert_eq!(
+        shifted_frame_count(),
+        shifted_before,
+        "a page whose selection has changed is painted rather than moved"
+    );
+    assert_eq!(
+        shifted.pixels, fresh.pixels,
+        "and it is the page it would have been painted as"
+    );
+}
