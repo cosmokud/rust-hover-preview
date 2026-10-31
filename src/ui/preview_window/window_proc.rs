@@ -470,6 +470,13 @@ pub(super) unsafe extern "system" fn window_proc(
             // over the page's top-right corner, so a press inside it is the card's rather than the
             // page's, and nothing under it was what the hand meant (see `text_find::press`).
             if text_find::press(x, y) {
+                // A press on one of the card's controls is held until it is let go of, and the pointer
+                // is taken for as long as that lasts: a hand that slides off the card still lets go of
+                // the button it pressed, rather than leaving it lit under a pointer that is somewhere
+                // else (see `text_find::release`).
+                if text_find::a_control_is_held() {
+                    let _ = SetCapture(hwnd);
+                }
                 return LRESULT(0);
             }
 
@@ -506,6 +513,16 @@ pub(super) unsafe extern "system" fn window_proc(
         }
         WM_LBUTTONUP => {
             let (x, y) = message_point(lparam);
+            // A press the find bar's card answered is released here, before the pin's own arms: the
+            // card owns the press from the moment it takes it, and a chevron held down stops where it
+            // got to. The capture the press took is given back here rather than left to the arm below,
+            // which this answer returns before — the same `GetCapture` guard, for the same reason (see
+            // `release_pin_capture`).
+            if text_find::release() {
+                release_pin_capture(hwnd);
+                render_layered_preview(hwnd);
+                return LRESULT(0);
+            }
             if pinned() && pinned_release(hwnd, x, y, &Win32PinWindow) {
                 return LRESULT(0);
             }
@@ -525,6 +542,13 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         windows::Win32::UI::WindowsAndMessaging::WM_CAPTURECHANGED => {
+            // A press the find bar's card took is over when the pointer is taken away from this window:
+            // a chevron that never sees its release would step for as long as the bar is up, and the
+            // card would draw a button held under a hand that is no longer on it (see
+            // `text_find::release`).
+            if text_find::release() {
+                render_layered_preview(hwnd);
+            }
             // Whatever a pinned window was doing with the pointer is over: a capture lost to
             // another window is a drag that is not coming back, and one this app released itself
             // is its own road's to finish (see `pin_capture_lost`).

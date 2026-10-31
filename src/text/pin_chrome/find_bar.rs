@@ -14,10 +14,14 @@
 //! The card says what the reader typed and nothing else: the query with a solid caret after it, the
 //! count of the place they are on, the two switches and the three commands. A caret that blinked would
 //! put a static page on the frame cadence for as long as the bar was up, so it is drawn solid.
+//!
+//! **A control is a button and is drawn as one.** The pointer over one of the five washes its own box,
+//! a press washes it further and inks its mark with the accent, and the two chevrons are the buttons a
+//! hand holds down rather than presses once (see `FindBarPaint` and `text_find`).
 
 use super::primitives::{
     caption_style, draw_cross, fill_box, fill_round_rect, measure_text, stroke_round_rect,
-    stroke_segment, surface_pixels, ChromePalette, GLYPH_PIXELS, GLYPH_STROKE_PIXELS,
+    stroke_segment, surface_pixels, ChromePalette,
 };
 use crate::text::text_paint::{self, DibSurface};
 use windows::Win32::Foundation::RECT;
@@ -35,6 +39,24 @@ const FIND_BAR_COUNT_WIDTH: i32 = 44;
 /// commands — two groups a hand reaches for for different reasons.
 const FIND_BAR_GAP: i32 = 2;
 const FIND_BAR_GROUP_GAP: i32 = 9;
+
+/// The card's marks, in the pixels a display's scale multiplies: a chevron nine across and five tall,
+/// which is what makes it read as a chevron rather than as a narrow `v`, and a stroke uniform in every
+/// direction rather than the caption's diagonals — those are narrowed by the root of two so that a
+/// walk of whole columns comes out at their weight, and a mark drawn with `stroke_segment` has no walk
+/// to answer to. The close cross takes a span of its own beside them, so that it weighs what the two
+/// chevrons do rather than half again as much.
+const FIND_BAR_CHEVRON_WIDTH: i32 = 9;
+const FIND_BAR_CHEVRON_HEIGHT: i32 = 5;
+const FIND_BAR_CLOSE_SPAN: i32 = 8;
+const FIND_BAR_MARK_STROKE: f32 = 1.6;
+
+/// How far a control's box is washed toward the card's own text while the pointer is on it, and how
+/// much further while it is held: the two washes a caption's button takes in the same two states (see
+/// `caption::paint_button`), and the wash a switch that is on carries under both of them.
+const FIND_BAR_HOVER_WASH: f32 = 0.10;
+const FIND_BAR_PRESSED_WASH: f32 = 0.18;
+const FIND_BAR_ON_WASH: f32 = 0.24;
 
 /// Where a find bar is, in the window's own coordinates: the card, the row a query is typed into, the
 /// count at its right end, and the five controls under it.
@@ -93,6 +115,11 @@ impl FindBar {
 /// under its lock and the lock is let go of before anything is drawn (see `PinnedPaint`).
 pub(crate) struct FindBarPaint {
     pub(crate) query: String,
+    /// The control the pointer is over, and the one a press is holding: what a control's box is washed
+    /// for, and what the two chevrons step from while they are held (see `text_find::hover` and
+    /// `text_find::press`).
+    pub(crate) hovered: Option<FindBarPart>,
+    pub(crate) pressed: Option<FindBarPart>,
     /// The match the reader is on, or nothing while the query is empty or found nowhere — which is
     /// the `0/0` a count reads as.
     pub(crate) current: Option<usize>,
@@ -239,7 +266,7 @@ pub(crate) fn paint_find_bar(
     let scale = dpi as f32 / 96.0;
     let radius = (FIND_BAR_RADIUS * scale).max(1.0);
     let shadow = text_paint::scaled(FIND_BAR_SHADOW as i32, scale);
-    let stroke = (GLYPH_STROKE_PIXELS * scale).max(1.0);
+    let stroke = (FIND_BAR_MARK_STROKE * scale).max(1.0);
     let panel_color = palette.hover(0.05);
 
     // The shadow, the panel, and a hairline around it: a flat panel rather than a shaded one, because
@@ -282,10 +309,43 @@ pub(crate) fn paint_find_bar(
 
     // A switch that is on is a button held down: the same wash and the same accent ink a caption's
     // button uses for the state it is in, so that `Aa` on and `Aa` off are told apart at a glance.
-    for (rect, on) in [
-        (bar.case, state.case_sensitive),
-        (bar.whole_word, state.whole_word),
+    //
+    // The pointer's own two states are washed over that wash rather than instead of it, in this order,
+    // and `washed` below is the same order applied to a colour — the two have to agree, because the run
+    // of a switch's name is written against the colour its box was washed to and carried across as
+    // whole pixels (see `carry_text_across`).
+    let toward = if palette.dark {
+        [255, 255, 255]
+    } else {
+        [0, 0, 0]
+    };
+    let washed = |part: FindBarPart, on: bool| {
+        let mut face = panel_color;
+        if on {
+            face = text_paint::blend(face, palette.accent, FIND_BAR_ON_WASH);
+        }
+        if state.pressed == Some(part) {
+            face = text_paint::blend(face, toward, FIND_BAR_PRESSED_WASH);
+        } else if state.hovered == Some(part) {
+            face = text_paint::blend(face, toward, FIND_BAR_HOVER_WASH);
+        }
+        face
+    };
+
+    let switched = |part: FindBarPart| match part {
+        FindBarPart::Case => state.case_sensitive,
+        FindBarPart::WholeWord => state.whole_word,
+        _ => false,
+    };
+
+    for (rect, part) in [
+        (bar.case, FindBarPart::Case),
+        (bar.whole_word, FindBarPart::WholeWord),
+        (bar.previous, FindBarPart::Previous),
+        (bar.next, FindBarPart::Next),
+        (bar.close, FindBarPart::Close),
     ] {
+        let on = switched(part);
         if on {
             fill_round_rect(
                 buffer,
@@ -294,15 +354,43 @@ pub(crate) fn paint_find_bar(
                 (radius * 0.5).max(1.0),
                 palette.accent,
                 palette.accent,
-                0.24,
+                FIND_BAR_ON_WASH,
+            );
+        }
+        let amount = if state.pressed == Some(part) {
+            Some(FIND_BAR_PRESSED_WASH)
+        } else if state.hovered == Some(part) {
+            Some(FIND_BAR_HOVER_WASH)
+        } else {
+            None
+        };
+        if let Some(amount) = amount {
+            fill_round_rect(
+                buffer,
+                width,
+                rect,
+                (radius * 0.5).max(1.0),
+                toward,
+                toward,
+                amount,
             );
         }
     }
 
-    let glyph = text_paint::scaled(GLYPH_PIXELS as i32, scale).max(6);
-    let ink = palette.foreground;
+    // A control whose press is held, or a switch that is on, carries the accent: the ink is what says
+    // which button was pressed rather than merely that a pointer is over the row.
+    let ink_of = |part: FindBarPart| {
+        if switched(part) || state.pressed == Some(part) {
+            palette.accent
+        } else {
+            palette.foreground
+        }
+    };
 
-    for (rect, pointing_up) in [(bar.previous, true), (bar.next, false)] {
+    for (rect, part, pointing_up) in [
+        (bar.previous, FindBarPart::Previous, true),
+        (bar.next, FindBarPart::Next, false),
+    ] {
         let center_x = (rect.left + rect.right) / 2;
         let center_y = (rect.top + rect.bottom) / 2;
         draw_step_mark(
@@ -310,9 +398,8 @@ pub(crate) fn paint_find_bar(
             width,
             center_x,
             center_y,
-            glyph,
-            stroke,
-            ink,
+            scale,
+            ink_of(part),
             pointing_up,
         );
     }
@@ -324,9 +411,9 @@ pub(crate) fn paint_find_bar(
         width,
         close_center_x,
         close_center_y,
-        glyph,
+        text_paint::scaled(FIND_BAR_CLOSE_SPAN, scale).max(4),
         stroke,
-        ink,
+        ink_of(FindBarPart::Close),
     );
 
     // The text: the query, its caret, the count and the two switch names. Drawn on the caller's
@@ -352,16 +439,22 @@ pub(crate) fn paint_find_bar(
     // a blank one carried over the panel as black.
     let mut boxes: Vec<RECT> = Vec::new();
 
-    // The query is drawn from the right where it is wider than the room it has, so the caret after the
-    // last character is on the card and the beginning of a long query is what is cut — the end is
-    // where a reader is typing.
+    // The query is drawn from the right where it is wider than the room it has, so the end of a long
+    // query — the end a reader is typing at — is what stays on the card and its beginning is what is
+    // cut. The place it really starts at is kept, because the caret is drawn where the text is rather
+    // than where the field begins (see the caret below).
+    let measured = if state.query.is_empty() {
+        0
+    } else {
+        measure_text(surface, &style, &state.query, scale)
+    };
+    let origin = (bar.query.right - measured).min(bar.query.left);
+    let line_top = centered_top(bar.query);
+
     if !state.query.is_empty() {
-        let measured = measure_text(surface, &style, &state.query, scale);
-        let origin = (bar.query.right - measured).min(bar.query.left);
-        let top = centered_top(bar.query);
         let box_ = RECT {
-            top,
-            bottom: top + cell,
+            top: line_top,
+            bottom: line_top + cell,
             ..bar.query
         };
         painter.draw(
@@ -374,29 +467,6 @@ pub(crate) fn paint_find_bar(
         );
         boxes.push(box_);
     }
-
-    // The caret is solid and non-blinking: it is one column at the end of what was typed, and it is
-    // drawn into the panel rather than onto the text's surface so that its colour is the panel's ink
-    // and not a run's background.
-    let typed = if state.query.is_empty() {
-        0
-    } else {
-        measure_text(surface, &style, &state.query, scale)
-    };
-    let caret_x = (bar.query.left + typed).min(bar.query.right);
-    let caret = text_paint::scaled(1, scale).max(1);
-    fill_box(
-        buffer,
-        width,
-        RECT {
-            left: caret_x,
-            top: bar.query.top + (cell / 4).max(1),
-            right: caret_x + caret,
-            bottom: bar.query.bottom - (cell / 4).max(1),
-        },
-        palette.foreground,
-        0.9,
-    );
 
     let count = if state.total == 0 {
         "0/0".to_string()
@@ -426,9 +496,9 @@ pub(crate) fn paint_find_bar(
     );
     boxes.push(count_box);
 
-    for (rect, text, on) in [
-        (bar.case, "Aa", state.case_sensitive),
-        (bar.whole_word, "W", state.whole_word),
+    for (rect, text, part) in [
+        (bar.case, "Aa", FindBarPart::Case),
+        (bar.whole_word, "W", FindBarPart::WholeWord),
     ] {
         let measured = measure_text(surface, &style, text, scale);
         let left = rect.left + ((rect.right - rect.left - measured) / 2).max(0);
@@ -444,12 +514,8 @@ pub(crate) fn paint_find_bar(
             left - bar.panel.left,
             on_the_surface(box_),
             &style,
-            if on {
-                palette.accent
-            } else {
-                palette.foreground
-            },
-            panel_color,
+            ink_of(part),
+            washed(part, switched(part)),
         );
         boxes.push(box_);
     }
@@ -464,42 +530,99 @@ pub(crate) fn paint_find_bar(
     }
 
     carry_text_across(surface, buffer, width, bar.panel);
+
+    // The caret: one column at the end of what was typed, placed where the query was really drawn
+    // rather than off the field's left edge — a long query is right-aligned, and a caret counted from
+    // the left of the field is a caret nowhere near the text.
+    //
+    // It is the text's own line and not the row's: `cell` is the run's height and `line_top` its top,
+    // so the column spans that box, inset a pixel at either end so that it sits inside the line rather
+    // than on its edges. It is drawn solid, at full coverage and in the accent: a page is not on the
+    // frame cadence, and a caret that blinked would put it there for as long as the bar was up.
+    //
+    // It is put down after the runs have been carried across and not before: a run's box is carried as
+    // whole pixels, so a caret painted under one is a column of panel colour again.
+    let caret = text_paint::scaled(1, scale).max(1);
+    let inset = text_paint::scaled(1, scale).max(1);
+    let caret_x = (origin + measured).clamp(bar.query.left, bar.query.right);
+    fill_box(
+        buffer,
+        width,
+        RECT {
+            left: caret_x,
+            top: line_top + inset,
+            right: caret_x + caret,
+            bottom: (line_top + cell - inset).max(line_top + inset + 1),
+        },
+        palette.accent,
+        1.0,
+    );
 }
 
-/// One chevron pointing up or down, the mark the two step buttons carry: two arms closing on the row
-/// the mark points at, drawn as strokes for the reason the caption's sideways chevrons are (see
+/// One chevron pointing up or down, the mark the two step buttons carry: two arms closing on the one
+/// apex the mark points at, drawn as strokes for the reason the caption's sideways chevrons are (see
 /// `draw_chevron`).
-#[allow(clippy::too_many_arguments)] // Which way it points is a fact about the mark, not a drawing flag.
 fn draw_step_mark(
     buffer: &mut [u8],
     width: i32,
     center_x: i32,
     center_y: i32,
-    span: i32,
-    thickness: f32,
+    scale: f32,
     color: [u8; 3],
     pointing_up: bool,
 ) {
-    let edge = (thickness * std::f32::consts::FRAC_1_SQRT_2).max(1.0);
-    let half = span as f32 / 2.0;
-    let (middle_x, middle_y) = (center_x as f32 + 0.5, center_y as f32 + 0.5);
-    let point = if pointing_up { -half } else { half };
-    let stop = edge / 2.0;
+    let (mark_width, mark_height) = step_mark_shape(scale);
+    // One width in every direction rather than the caption's diagonals, which are narrowed by the root
+    // of two so that a walk of columns comes out at their weight: there is no walk here, and a mark
+    // drawn with `stroke_segment` is the width it is asked for.
+    let thickness = (FIND_BAR_MARK_STROKE * scale).max(1.0);
 
-    for side in [-1.0, 1.0] {
-        stroke_segment(
-            buffer,
-            width,
-            (middle_x + side * half, middle_y - point),
-            (
-                middle_x,
-                middle_y + point + if pointing_up { stop } else { -stop },
-            ),
-            edge,
-            color,
-            1.0,
-        );
+    for (far, apex) in step_mark_legs(center_x, center_y, mark_width, mark_height, pointing_up) {
+        // The two legs meet at one point: the stroke rounds that shared end into a join and the two
+        // free ends into caps, which is the whole of what a chevron needs (see `stroke_segment`).
+        stroke_segment(buffer, width, far, apex, thickness, color, 1.0);
     }
+}
+
+/// How big a step mark is at `scale`: as wide as it is asked for, and a whole even number of pixels
+/// tall.
+///
+/// Even is what keeps the apex on a pixel centre: an odd height that had its box centred on the button
+/// would put the apex on a boundary between two pixels, where the join is drawn as two half-lit ones.
+pub(super) fn step_mark_shape(scale: f32) -> (i32, i32) {
+    let width = text_paint::scaled(FIND_BAR_CHEVRON_WIDTH, scale).max(6);
+    let height = text_paint::scaled(FIND_BAR_CHEVRON_HEIGHT, scale).max(2);
+    (width, ((height + 1) / 2) * 2)
+}
+
+/// The two legs a step mark is drawn from, as `(free end, apex)` pairs, for a mark `width` across and
+/// `height` tall.
+///
+/// The apex is on a pixel centre, and the free ends are a whole number of pixels above or below it, so
+/// the join and both caps land on the same grid rather than each of them a half pixel off it. The
+/// mark's box is centred on the button's own middle and not its legs' middle: the chevron's mass sits
+/// nearer its apex, so a mark centred by its ends is a mark that reads as hanging off the middle of
+/// the button it is in.
+pub(super) fn step_mark_legs(
+    center_x: i32,
+    center_y: i32,
+    width: i32,
+    height: i32,
+    pointing_up: bool,
+) -> [((f32, f32), (f32, f32)); 2] {
+    let (middle_x, middle_y) = (center_x as f32 + 0.5, center_y as f32 + 0.5);
+    let half = width as f32 / 2.0;
+    let reach = height as f32 / 2.0;
+    let (apex_y, far_y) = if pointing_up {
+        (middle_y - reach, middle_y + reach)
+    } else {
+        (middle_y + reach, middle_y - reach)
+    };
+
+    [
+        ((middle_x - half, far_y), (middle_x, apex_y)),
+        ((middle_x + half, far_y), (middle_x, apex_y)),
+    ]
 }
 
 /// Give the alpha byte back to a box GDI drew text over, so that what is carried across is the run

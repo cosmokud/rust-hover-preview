@@ -668,6 +668,23 @@ pub(super) struct FindState {
     /// order it arrived for the tick that can run the search it asks for: a window procedure may not
     /// style a document, and a low-level hook may not take a lock at all (see `text_find::settle`).
     pub(super) pending: Vec<FindEdit>,
+    /// The card's control the pointer is over and the one a press is holding, which is what draws a
+    /// button lit and stepped in (see `text_find::hover` and `text_find::press`).
+    pub(super) hovered: Option<pin_chrome::FindBarPart>,
+    pub(super) pressed: Option<pin_chrome::FindBarPart>,
+    /// The repeat a chevron held down owes, or nothing while none is held (see `Hold`).
+    pub(super) hold: Option<Hold>,
+}
+
+/// A step button of the find bar held down: which one it is, the way it steps, and when the next step
+/// is due.
+///
+/// The press itself is a step of its own, so this is only ever the one after it: a hand that lets go
+/// inside the delay has stepped once, and one that stays has stepped again on the tick that comes
+/// after it (see `text_find::settle` and `text_find::release`).
+pub(super) struct Hold {
+    pub(super) delta: i32,
+    pub(super) due: Instant,
 }
 
 /// One thing a find bar was told, in the order it was told it (see `FindState::pending`).

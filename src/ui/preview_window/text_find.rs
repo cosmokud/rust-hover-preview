@@ -20,6 +20,15 @@
 
 use super::*;
 
+/// How long a chevron is held before it starts stepping on its own, and how often it steps after that:
+/// the delay and the rate a key held at Windows' own default repeat is given, because a hand kept on a
+/// chevron is asking for what a hand kept on a key asks for.
+pub(super) const HOLD_DELAY_MS: u64 = 350;
+pub(super) const HOLD_REPEAT_MS: u64 = 90;
+/// How many steps one tick may make up after a stall. The repeat is a cadence and not a budget: a tick
+/// that arrived a second late owes a hand the step it missed, not a walk through half the page.
+const HOLD_CATCH_UP: usize = 3;
+
 /// Whether the bar is up over the page on screen.
 pub(super) fn is_open() -> bool {
     CURRENT_MEDIA
@@ -48,9 +57,15 @@ pub(super) struct FindBarPlacement {
 /// Where the bar is and what it says, or nothing while it is down or the pin holds something other
 /// than a page (see `FindBarPlacement`).
 pub(super) fn find_bar() -> Option<FindBarPlacement> {
+    let pinned = pin_state()?;
+    find_bar_over(pinned.pin()?)
+}
+
+/// The card over a pin already in hand, asked of the pin itself rather than through `pin_state`: the
+/// tick holds that lock while it decides what the pin's chrome owes, and the same lock asked twice is a
+/// window that stops answering (see `refresh_pin_chrome`).
+fn find_bar_over(pin: &PinnedPreview) -> Option<FindBarPlacement> {
     let (page_top, dpi) = {
-        let pinned = pin_state()?;
-        let pin = pinned.pin()?;
         if pin.collapsed {
             return None;
         }
@@ -80,6 +95,8 @@ pub(super) fn find_bar() -> Option<FindBarPlacement> {
             total: find.matches.len(),
             case_sensitive: find.case_sensitive,
             whole_word: find.whole_word,
+            hovered: find.hovered,
+            pressed: find.pressed,
         },
     })
 }
@@ -92,6 +109,9 @@ pub(super) fn find_bar() -> Option<FindBarPlacement> {
 /// and there is no caret in the query for a press to place. What a control asks for is queued like a
 /// key's, for the same reason: the search styles the document and the tick is what may take that work
 /// (see `settle`).
+///
+/// A press on a control is also a button held, which the card draws and, on the two chevrons, steps
+/// on while it lasts (see `take_the_press` and `step_the_hold`).
 pub(super) fn press(x: i32, y: i32) -> bool {
     let Some(placed) = find_bar() else {
         return false;
@@ -100,7 +120,10 @@ pub(super) fn press(x: i32, y: i32) -> bool {
         return false;
     }
 
-    match placed.card.part_at(x, y) {
+    let part = placed.card.part_at(x, y);
+    take_the_press(part);
+
+    match part {
         Some(pin_chrome::FindBarPart::Case) => note(FindEdit::ToggleCase),
         Some(pin_chrome::FindBarPart::WholeWord) => note(FindEdit::ToggleWholeWord),
         Some(pin_chrome::FindBarPart::Previous) => note(FindEdit::Step(-1)),
@@ -110,6 +133,166 @@ pub(super) fn press(x: i32, y: i32) -> bool {
     }
 
     true
+}
+
+/// Where the pointer is on the card, asked on every move a pin is sent: the control under it is drawn
+/// lit, and answers whether the card changed.
+///
+/// **Only a control coming lit or going out is worth a repaint.** A repaint of this pin is a band that
+/// copies the whole page frame, so a move that stays on the one control — or that is anywhere off the
+/// card at all — changes nothing that is drawn and repaints nothing. The answer is what
+/// `pinned_mouse_move` and the tick's chrome refresh repaint on (see `pinned_mouse_move`).
+pub(super) fn hover(x: i32, y: i32) -> bool {
+    let Some(pinned) = pin_state() else {
+        return false;
+    };
+    match pinned.pin() {
+        Some(pin) => hover_over(pin, x, y),
+        None => false,
+    }
+}
+
+/// The same question of a pin already in hand, for the tick that holds the pin's lock (see
+/// `find_bar_over`).
+pub(super) fn hover_over(pin: &PinnedPreview, x: i32, y: i32) -> bool {
+    let Some(placed) = find_bar_over(pin) else {
+        return false;
+    };
+    let part = placed.card.part_at(x, y);
+
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+    let Some(find) = media
+        .as_mut()
+        .and_then(|media| media.text_state.as_mut())
+        .map(|state| &mut state.find)
+    else {
+        return false;
+    };
+    if find.hovered == part {
+        return false;
+    }
+
+    find.hovered = part;
+    true
+}
+
+/// Whether the card is holding a press, which is what says the pointer is to be kept until the release
+/// comes back to this window rather than to whatever the hand has slid onto (see `window_proc`).
+pub(super) fn a_control_is_held() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| state.find.pressed.is_some())
+        })
+        .unwrap_or(false)
+}
+
+/// A release of a press the card took: the control it lit is let go of, and a chevron held down stops
+/// where it got to. Answers whether the card was holding a press, which is what makes the release the
+/// card's rather than the page's (see `window_proc`).
+pub(super) fn release() -> bool {
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+    let Some(find) = media
+        .as_mut()
+        .and_then(|media| media.text_state.as_mut())
+        .map(|state| &mut state.find)
+    else {
+        return false;
+    };
+
+    let held = find.pressed.take().is_some();
+    let stepping = find.hold.take().is_some();
+    held || stepping
+}
+
+/// Take a press on one of the card's controls: the part is drawn under the hand until the release
+/// comes back, and the two chevrons arm the repeat a hand expects of a button it keeps down. `Aa`, `W`
+/// and the cross are one-shot and arm nothing.
+///
+/// The press has already written its own step down (see `press`), so what is armed here is only the
+/// next one: the hold is the tick's question, and the wake is so that the loop is not asleep on a wait
+/// longer than the delay (see `wake_preview_loop` and `step_the_hold`).
+fn take_the_press(part: Option<pin_chrome::FindBarPart>) {
+    let mut repeating = false;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(find) = media
+            .as_mut()
+            .and_then(|media| media.text_state.as_mut())
+            .map(|state| &mut state.find)
+            .filter(|find| find.open)
+        {
+            find.pressed = part;
+            find.hold = match part {
+                Some(
+                    held @ (pin_chrome::FindBarPart::Previous | pin_chrome::FindBarPart::Next),
+                ) => {
+                    repeating = true;
+                    Some(Hold {
+                        delta: if held == pin_chrome::FindBarPart::Previous {
+                            -1
+                        } else {
+                            1
+                        },
+                        due: Instant::now() + Duration::from_millis(HOLD_DELAY_MS),
+                    })
+                }
+                _ => None,
+            };
+        }
+    }
+
+    if repeating {
+        wake_preview_loop();
+    }
+}
+
+/// Step a chevron that is still held: nothing before the delay, and once per interval after it.
+///
+/// The tick asks this before it settles what the bar was told, so a repeat is the same `FindEdit::Step`
+/// a key or the press wrote down, and it takes the same road to the page. `now` is passed rather than
+/// read so that the tests can hold a chevron on a clock of their own; the only caller is the tick, and
+/// the loop's own wait is the granularity of the repeat rather than a rate of its own — a step that
+/// comes due is a step the next wake makes, so a pin of a static page is left waking at
+/// `STATIC_PIN_WAIT_MS` (see `settle`).
+pub(super) fn step_the_hold(now: Instant) {
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return;
+    };
+    let Some(find) = media
+        .as_mut()
+        .and_then(|media| media.text_state.as_mut())
+        .map(|state| &mut state.find)
+    else {
+        return;
+    };
+    let Some(hold) = find.hold.as_ref() else {
+        return;
+    };
+
+    let (delta, mut due) = (hold.delta, hold.due);
+    let mut steps = 0;
+    while due <= now && steps < HOLD_CATCH_UP {
+        find.pending.push(FindEdit::Step(delta));
+        due += Duration::from_millis(HOLD_REPEAT_MS);
+        steps += 1;
+    }
+    // A tick that comes round after a stall catches up on the steps it owes and no more: the cadence
+    // starts again at the next interval rather than bursting through the ones that were missed.
+    if due <= now {
+        due = now + Duration::from_millis(HOLD_REPEAT_MS);
+    }
+
+    if let Some(hold) = find.hold.as_mut() {
+        hold.due = due;
+    }
 }
 
 /// Open the bar over the pinned page on screen, or ask the same search of a bar that is already
@@ -272,6 +455,11 @@ struct Settled {
 /// when it comes back: a walk onto another file while a query was being searched is a page whose
 /// matches are not this one's, and its state went with the file (see `keep_text_place`).
 pub(super) unsafe fn settle(hwnd: HWND) {
+    // A chevron held down steps on this tick's clock before what it steps is settled: the wait is the
+    // granularity of the repeat, so a step that has come due is a step the wake that brought this tick
+    // makes, and the loop keeps the cadence it has (see `step_the_hold`).
+    step_the_hold(Instant::now());
+
     let Some(settled) = take_settled() else {
         return;
     };
@@ -392,6 +580,11 @@ fn take_settled() -> Option<Settled> {
                 find.open = false;
                 find.matches.clear();
                 find.current = None;
+                // A bar that is away has no button under a hand and no chevron still stepping: a
+                // close from a key leaves neither, and the page under a pointer that is still down
+                // is the page's from here (see `take_the_press` and `release`).
+                find.pressed = None;
+                find.hold = None;
                 settled.closed = true;
                 settled.open = false;
                 // Nothing after a close is read: a key pressed after the bar went away is a key for
