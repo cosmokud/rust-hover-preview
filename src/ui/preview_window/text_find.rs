@@ -652,6 +652,10 @@ struct Settled {
     /// took out. The clipboard is opened on the tick's window rather than under this lock, because
     /// the writer asks this module's own lock before it writes (see `text_selection::copy_text_preview`).
     copy: Option<String>,
+    /// Whether the page's own selection is to go on the clipboard: a `Ctrl`+`C` over a bar whose query
+    /// has nothing selected is the reader copying what they selected in the page, which is the page's
+    /// copy and not the field's (see the `FindEdit::Copy` arm of `settle`).
+    copy_page: bool,
     /// Whether the clipboard is to be read and pasted into the field: the read happens on the tick
     /// too, for the same reason, and the field is written once its text is in hand (see `settle`).
     paste: bool,
@@ -737,6 +741,11 @@ pub(super) unsafe fn settle(hwnd: HWND) {
     // followed by `Esc` puts the query on the clipboard before the bar it was cut in goes away.
     if let Some(text) = settled.copy.take() {
         text_selection::write_clipboard_text(hwnd, &text);
+    }
+    if settled.copy_page {
+        // The page's own copy, asked of the page: it takes what is selected in the document and puts
+        // that on the clipboard, which is the same road `Ctrl`+`C` takes with no bar up.
+        copy_text_preview(hwnd);
     }
 
     if settled.closed {
@@ -885,6 +894,7 @@ fn take_settled() -> Option<Settled> {
         case_sensitive: false,
         whole_word: false,
         copy: None,
+        copy_page: false,
         paste: false,
     };
     let before = find.field.text().to_string();
@@ -902,8 +912,15 @@ fn take_settled() -> Option<Settled> {
             }
             FindEdit::SelectAll => find.field.select_all(),
             FindEdit::Copy => {
+                // **A copy is the field's only while the field has something selected.** With nothing
+                // selected in the query, the `Ctrl`+`C` was aimed at the page the reader has just
+                // selected in — a bar being up is not a claim on the clipboard, and a bar that
+                // swallowed the chord would be a copy they asked for and did not get (see
+                // `copy_text_preview`).
                 let text = find.field.selected_text();
-                if !text.is_empty() {
+                if text.is_empty() {
+                    settled.copy_page = true;
+                } else {
                     settled.copy = Some(text);
                 }
             }

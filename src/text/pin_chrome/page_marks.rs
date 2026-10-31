@@ -207,13 +207,18 @@ pub(super) fn paint_read_only_pill(
     let top = ((box_.bottom - box_.top - cell) / 2 + box_.top).max(box_.top);
     let style = caption_style(palette.accent);
     let mut painter = text_paint::RunPainter::new(surface, scale);
+    // **The run's box stops at the pill's own padding, not at its edge.** A run is drawn with an
+    // opaque background over the whole of its box rather than over its glyphs alone (see
+    // `paint_tooltip`), so a box reaching the edge paints that background over the ring's right cap
+    // and leaves the pill cut off where the words stop — which is exactly what a run drawn to
+    // `box_.right` did.
     painter.draw(
         READ_ONLY_WORDS,
         words_left,
         RECT {
             left: words_left,
             top,
-            right: box_.right,
+            right: (box_.right - padding).max(words_left + 1),
             bottom: (top + cell).min(box_.bottom),
         },
         &style,
