@@ -4,7 +4,8 @@
 //! **The two roads to a silent film are one page over** (see `playback_trace`): a launch that handed
 //! its player a level and a player that never opened a device from it look identical from this side
 //! of the process boundary, and the difference is only ever read off the player — `aid` for a track,
-//! `current-ao` and `audio-out-params` for an output. So this module asks the same three questions
+//! `current-ao` and `audio-out-params` for an output, and `audio-device` for the one that was asked
+//! for. So this module asks the same four questions
 //! the trace asks, reads the same verdict out of them (`playback_trace::Verdict`), and then *does*
 //! something about it, which is the whole of what the trace is not for.
 //!
@@ -15,7 +16,12 @@
 //!    track is no session in Windows' Volume Mixer (see `video_launch::AudioForm`).
 //! 2. no output opened from the track that is selected — `set_property audio-device auto`, which
 //!    mpv answers by reloading its audio output, so a device that was refused while the film was
-//!    starting gets one more attempt at it.
+//!    starting gets one more attempt at it. **It is written on the second read of that shape, not on
+//!    the first**: a driver named on `current-ao` with no `audio-out-params` beside it is also exactly
+//!    what a player half a second into its start looks like (see
+//!    `EngineAnswers::a_driver_with_no_params`), and an output reinitialised under a player that was
+//!    about to open it is the guard's own fault rather than the film's. `aid=no`, and a driver of
+//!    `null`, are answers and not a player mid-open, so each takes its rung on the first read.
 //! 3. neither heard — **one** new player, with the arguments, the second and the pause the one it
 //!    replaces had, and one read of that player. Then the ladder ends.
 //!
@@ -31,6 +37,18 @@
 //! `player_logs::drain_a_players_errors`), and a line matching [`AUDIO_FAILURES`] in a launch this
 //! guard stands behind is one player begun again. Not two, and never for a line it did not see. A
 //! launch it does not stand behind is given `null` and no thread, the way every ordinary launch is.
+//!
+//! **A film that was heard is not a film that will always be heard, so the guard no longer ends where
+//! the ladder does.** A player whose sound came up is kept under a sparse schedule of read-backs —
+//! +2 s, +4 s, +8 s, then one every ~10 s for as long as the player lives (see `WATCHES`) — because an
+//! endpoint lost after a film started leaves no line anywhere else, and until now only the first
+//! second of a film's life was ever sampled. A read that is heard again writes nothing at all: the
+//! line is written where the verdict moved, so a healthy film's log is the one line it opened with.
+//! A late failure climbs the two in-place rungs once more — `aid`, then `audio-device` — and may take
+//! the relaunch **at most once in a player's whole life**, not once per episode (see `re_opened`): a
+//! device that is genuinely gone must never be begun again for, every ten seconds, for ever. The
+//! sampling ends with the player: a probe that cannot reach this guard's player reports nothing and
+//! schedules nothing, and `a_player_ended` is the half that needs no probe to have been woken at all.
 //!
 //! **The loop never waits, and nothing here runs on it.** A player that has only just been begun has
 //! no pipe yet, and waiting for one is a wait no tick may pay (see `mpv_ipc::get_property_within`,
@@ -53,6 +71,22 @@ use super::video_launch::Engine;
 /// the guard itself. It is the same wait the trace gives a launch for the same reason, and a little
 /// longer — the trace is describing a film, and this is deciding what to do to one.
 const AUDIO_SETTLING: Duration = Duration::from_millis(500);
+
+/// How long a player that was heard is left alone before its sound is read again: the first three
+/// reads of the sparse schedule the module note describes.
+///
+/// **Sparse on purpose.** A film's first second is where its sound is decided, so the first three
+/// watches are close enough to catch a device that came up and then fell away with the launch; after
+/// that, one read every [`WATCH_AFTER`] is enough to notice an endpoint a later player took, and few
+/// enough that a pin left playing overnight costs a handful of pipes rather than a busy loop.
+const WATCHES: [Duration; 3] = [
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+];
+
+/// The wait every watch after the three above is given.
+const WATCH_AFTER: Duration = Duration::from_secs(10);
 
 /// The lines FFmpeg's player writes when it could not open a sound device, and nothing else.
 ///
@@ -96,6 +130,11 @@ struct Spent {
     /// The one second read a player that answered nothing is given: a pipe still being made is not a
     /// film without sound, and it is not a film to begin again either.
     asked_again: bool,
+    /// The second read a player that named a driver with nothing playing through it is given, which
+    /// is the shape a player still opening its output has as readily as a silent film does: the
+    /// output is not reloaded under a player that may be about to open it (see
+    /// `EngineAnswers::a_driver_with_no_params`).
+    opening: bool,
     /// `aid` asked back for.
     track: bool,
     /// `audio-device` handed `auto`.
@@ -109,6 +148,7 @@ struct Spent {
 /// that a film with no device at all is not begun again for ever (see `the_rebirth_of`).
 const SPENT: Spent = Spent {
     asked_again: true,
+    opening: true,
     track: true,
     device: true,
     again: true,
@@ -116,7 +156,7 @@ const SPENT: Spent = Spent {
 
 /// What a player has said, and no tick has read yet.
 enum Report {
-    /// The three answers an mpv gave (see `playback_trace::ask_the_engine`).
+    /// The four answers an mpv gave (see `playback_trace::ask_the_engine`).
     Answers(EngineAnswers),
     /// A line FFmpeg's player wrote that is one of its audio failures (see `AUDIO_FAILURES`).
     Spoke,
@@ -127,7 +167,7 @@ enum Report {
 enum Step {
     /// Heard, so there is nothing left to do — or a report this guard has nothing to say about.
     Nothing,
-    /// Ask the player the same three questions once more, and write no property at all.
+    /// Ask the player the same four questions once more, and write no property at all.
     AskAgain,
     /// `aid` back to `auto`: the launch's own road.
     AskForATrack,
@@ -158,6 +198,22 @@ struct Guard {
     /// How many read-backs this player has had: what the trace lines are numbered by, so a run of
     /// them reads in the order they happened.
     reads: u8,
+    /// How many of the sparse watches a player that was heard is kept under have been begun: what the
+    /// wait before the next one is read from (see `the_wait_before_a_watch`).
+    watches: u8,
+    /// Whether the last read of this player was heard — what keeps a film that stays heard from
+    /// writing a line every ten seconds for the whole of its length, and what makes a read that is no
+    /// longer heard a late failure (see `a_late_failure`).
+    heard: bool,
+}
+
+impl Guard {
+    /// Whether this player is watched after it was heard: mpv's, and not the one a spent ladder began
+    /// in place of another — that player is given its one read and nothing more, so a film whose
+    /// device is genuinely gone is not climbed for again and again.
+    fn keeps_watching(&self) -> bool {
+        self.engine == Engine::Mpv && self.spend != SPENT
+    }
 }
 
 /// **One guard, because there is one player on screen.** Every road that begins a film for a pin
@@ -196,6 +252,8 @@ pub(super) fn arm(pid: u32, path: &Path, volume: u32, engine: Engine, for_a_hove
         report: None,
         wants_again: false,
         reads: 0,
+        watches: 0,
+        heard: false,
     });
     drop(slot);
 
@@ -235,15 +293,56 @@ fn the_spend_of(recorded: Option<&Path>, path: &Path) -> Spent {
 /// where the tick finds it (see `report`); the wait is the settling above plus the patience one
 /// question is offered a pipe that is not there yet.
 fn spawn_probe(pid: u32) {
+    spawn_probe_after(pid, AUDIO_SETTLING);
+}
+
+/// The same probe after a wait of its own, which is where the sparse schedule a heard player is
+/// watched on sleeps — on this thread, and on no tick (see `the_wait_before_a_watch`).
+///
+/// **A probe whose player is no longer this guard's asks nothing at all**: a thread that was asleep
+/// when the film ended wakes to a guard that has been cleared (see `a_player_ended`) and reads no pipe
+/// for a process that is not there. Nothing is retried, and nothing further is scheduled — the tick
+/// that would have armed the next watch never sees a report to arm it from.
+fn spawn_probe_after(pid: u32, wait: Duration) {
     let _ = std::thread::Builder::new()
         .name("audio-guard".to_string())
         .spawn(move || {
-            std::thread::sleep(AUDIO_SETTLING);
+            std::thread::sleep(wait);
+            if !still_watched(pid) {
+                return;
+            }
             report(
                 pid,
                 Report::Answers(super::playback_trace::ask_the_engine(pid)),
             );
         });
+}
+
+/// Whether the guard still stands for this player (see `spawn_probe_after`).
+fn still_watched(pid: u32) -> bool {
+    GUARD
+        .lock()
+        .map(|slot| slot.as_ref().is_some_and(|guard| guard.pid == pid))
+        .unwrap_or(false)
+}
+
+/// The wait before a watched player's `watch`th read after it was heard (see `WATCHES`).
+fn the_wait_before_a_watch(watch: u8) -> Duration {
+    WATCHES.get(watch as usize).copied().unwrap_or(WATCH_AFTER)
+}
+
+/// Begin the next read of a player that was heard: one thread asleep for the schedule's next wait, and
+/// whatever it leaves behind for the tick (see `spawn_probe_after`).
+///
+/// **The first of these is the whole of what a healthy film ever writes**: the schedule repeats until
+/// the player ends, and a line per read would be a line every ten seconds for the length of a film.
+fn arm_a_watch(guard: &mut Guard) {
+    if guard.watches == 0 {
+        note_playback_trace!("audio guard heard pid {} watching", guard.pid);
+    }
+    let wait = the_wait_before_a_watch(guard.watches);
+    guard.watches = guard.watches.saturating_add(1);
+    spawn_probe_after(guard.pid, wait);
 }
 
 /// Note what a player said, where the guard is that player's, and answer whether it was.
@@ -306,6 +405,11 @@ pub(super) fn tick(may_begin_again: bool) -> Option<PathBuf> {
         if let Some(report) = guard.report.take() {
             guard.reads = guard.reads.saturating_add(1);
             match the_step_of_a_read(guard, report) {
+                // **Heard is no longer where a player is let go from.** A film that has its sound is
+                // watched for as long as it plays, so that one which loses it later is not silent and
+                // unremarked; the player a spent ladder began is the exception, and is given its one
+                // read and nothing else (see `keeps_watching`).
+                Step::Nothing if guard.keeps_watching() => arm_a_watch(guard),
                 Step::Nothing => finish = Some("heard"),
                 Step::GiveUp => finish = Some("gave up"),
                 Step::AskAgain => {
@@ -373,14 +477,34 @@ pub(super) fn tick(may_begin_again: bool) -> Option<PathBuf> {
 }
 
 /// What one report comes to, with the line the read-back is written as.
-///
-/// **The line is written before the step is taken**, so that a run reads what the player said against
-/// what was then done about it even where the step itself is what fails.
 fn the_step_of_a_read(guard: &mut Guard, report: Report) -> Step {
     match (guard.engine, report) {
         (Engine::Mpv, Report::Answers(answers)) => {
-            note_playback_trace!("{}", a_read_back(guard.pid, guard.reads, &answers));
-            the_step(answers.verdict(), guard.spend)
+            let verdict = answers.verdict();
+            // **A player that was heard and is not any more climbs the in-place rungs once more**, and
+            // only those (see `re_opened`).
+            if a_late_failure(guard.heard, verdict) {
+                guard.spend = re_opened(guard.spend);
+            }
+            // **The line is written where the verdict moved**, so a film that stays heard writes
+            // nothing at all after its first read-back (see the module note). It is written before
+            // the step is taken either way, so that a run reads what the player said against what was
+            // then done about it even where the step itself is what fails.
+            if !(guard.heard && verdict == Verdict::Heard) {
+                note_playback_trace!("{}", a_read_back(guard.pid, guard.reads, &answers));
+            }
+            guard.heard = verdict == Verdict::Heard;
+
+            let opening = answers.a_driver_with_no_params();
+            let step = the_step(verdict, guard.spend, opening);
+            // The second look a player still opening its output is given is this read's own rung, and
+            // is spent here rather than in the tick, which cannot tell one second look from the other.
+            // An `Unanswered` read that also names a driver spends only the other one: nothing was
+            // learned about its track, so nothing is known about its output either.
+            if step == Step::AskAgain && verdict == Verdict::NoDevice && opening {
+                guard.spend.opening = true;
+            }
+            step
         }
         (Engine::Ffplay, Report::Spoke) => {
             note_playback_trace!("audio guard spoke pid {} read {}", guard.pid, guard.reads);
@@ -391,17 +515,43 @@ fn the_step_of_a_read(guard: &mut Guard, report: Report) -> Step {
     }
 }
 
-/// The line one read-back is written as: the three properties the player reported, and what they come
+/// The line one read-back is written as: the four properties the player reported, and what they come
 /// to — the trace's own `engine truth` line with this ladder's numbering on it, because a film watched
 /// by the guard is read per rung rather than once.
+///
+/// **`audio-device` is the device that was asked for and `current-ao` the driver that opened**, so the
+/// line says both halves of what the cure is about: a player asked for `auto` and playing through
+/// `null` is a different fault from one asked for a device it was given. Both are written as `-`
+/// where a player answered nothing, which is how a build without the property has always read.
 fn a_read_back(pid: u32, read: u8, answers: &EngineAnswers) -> String {
     format!(
-        "audio read-back pid {pid} read {read} aid {} current-ao {} audio-out-params {} verdict {}",
+        "audio read-back pid {pid} read {read} aid {} audio-device {} current-ao {} \
+         audio-out-params {} verdict {}",
         answers.aid.as_deref().unwrap_or("-"),
+        answers.audio_device.as_deref().unwrap_or("-"),
         answers.current_ao.as_deref().unwrap_or("-"),
         answers.audio_out_params.as_deref().unwrap_or("-"),
         super::playback_trace::the_verdict_word(answers.verdict()),
     )
+}
+
+/// Whether one read is a player that was heard and is not any more: the one thing that re-opens the
+/// ladder's in-place rungs, and the only way a film that began with its sound can climb it at all.
+fn a_late_failure(heard: bool, verdict: Verdict) -> bool {
+    heard && verdict != Verdict::Heard
+}
+
+/// **What a late failure hands back, and what it never does.** The track and the device are open once
+/// more on a player that has gone silent after being heard — an endpoint taken away is worth the two
+/// writes it took the first time — and the last rung is *not* handed back with them: the relaunch is
+/// the once-in-a-player's-life rung, so a film whose device is genuinely gone keeps its picture and
+/// stops being climbed for (see `the_step`).
+fn re_opened(spend: Spent) -> Spent {
+    Spent {
+        track: false,
+        device: false,
+        ..spend
+    }
 }
 
 /// **The ladder's decisions, and nothing else** — what a read-back asks for next, out of the rungs
@@ -412,12 +562,19 @@ fn a_read_back(pid: u32, read: u8, answers: &EngineAnswers) -> String {
 /// track with no output from it escalates past the track, because asking for a track it already has
 /// is a property written for nothing. And both cures spent with neither heard is the last rung — one
 /// new player — after which there is nothing left to say.
-fn the_step(verdict: Verdict, spend: Spent) -> Step {
+///
+/// `opening` is the shape of a read that named a real driver on `current-ao` with no
+/// `audio-out-params` beside it (see `EngineAnswers::a_driver_with_no_params`): the one read that is
+/// both a silent film and a player mid-open, and the reason the device cure is written on its second
+/// reading. `aid=no` and a `null` driver are answers, so each of those takes its rung on the first
+/// read, exactly as it always did.
+fn the_step(verdict: Verdict, spend: Spent, opening: bool) -> Step {
     match verdict {
         Verdict::Heard => Step::Nothing,
         Verdict::Unanswered if !spend.asked_again => Step::AskAgain,
         Verdict::Unanswered => Step::GiveUp,
         Verdict::NoTrack if !spend.track => Step::AskForATrack,
+        Verdict::NoDevice if opening && !spend.opening => Step::AskAgain,
         Verdict::NoTrack | Verdict::NoDevice if !spend.device => Step::AskForADevice,
         _ if spend.again => Step::GiveUp,
         _ => Step::BeginAgain,
@@ -443,6 +600,22 @@ mod tests {
         PathBuf::from("a-film.mkv")
     }
 
+    /// A guard on the player of [`a_film`], for the rules that are asked of one read rather than of
+    /// the slot the guard lives in.
+    fn a_guard(engine: Engine, spend: Spent) -> Guard {
+        Guard {
+            pid: 7,
+            path: a_film(),
+            engine,
+            spend,
+            report: None,
+            wants_again: false,
+            reads: 0,
+            watches: 0,
+            heard: false,
+        }
+    }
+
     /// **Which launch is watched at all**: a pin's own film, and one begun at a level. A hover, a
     /// sound and a film the launch itself gave no track are none of the guard's business.
     #[test]
@@ -466,13 +639,13 @@ mod tests {
         let fresh = Spent::default();
 
         assert_eq!(
-            the_step(Verdict::Heard, fresh),
+            the_step(Verdict::Heard, fresh, false),
             Step::Nothing,
             "a film that was heard is left entirely alone"
         );
-        assert_eq!(the_step(Verdict::NoTrack, fresh), Step::AskForATrack);
+        assert_eq!(the_step(Verdict::NoTrack, fresh, false), Step::AskForATrack);
         assert_eq!(
-            the_step(Verdict::NoDevice, fresh),
+            the_step(Verdict::NoDevice, fresh, false),
             Step::AskForADevice,
             "a track is selected and has no output: the track is already the one it wants"
         );
@@ -482,12 +655,12 @@ mod tests {
             ..fresh
         };
         assert_eq!(
-            the_step(Verdict::NoTrack, track_asked),
+            the_step(Verdict::NoTrack, track_asked, false),
             Step::AskForADevice,
             "a track asked for and still not selected leaves the device as the next thing to try"
         );
         assert_eq!(
-            the_step(Verdict::NoDevice, track_asked),
+            the_step(Verdict::NoDevice, track_asked, false),
             Step::AskForADevice
         );
 
@@ -497,16 +670,226 @@ mod tests {
             ..fresh
         };
         assert_eq!(
-            the_step(Verdict::NoDevice, both_cures),
+            the_step(Verdict::NoDevice, both_cures, false),
             Step::BeginAgain,
             "both cures spent and no sound: one new player, and it is the last rung"
         );
-        assert_eq!(the_step(Verdict::NoTrack, both_cures), Step::BeginAgain);
+        assert_eq!(
+            the_step(Verdict::NoTrack, both_cures, false),
+            Step::BeginAgain
+        );
 
         assert_eq!(
-            the_step(Verdict::NoDevice, SPENT),
+            the_step(Verdict::NoDevice, SPENT, false),
             Step::GiveUp,
             "a player begun in place of one that had its relaunch gets no second one"
+        );
+    }
+
+    /// **A driver named with nothing playing through it is read twice before anything is written to
+    /// it.** That read is `no-device` to the verdict and a player half a second into its start to the
+    /// eye — the shape a captured run had 548 ms after its launch — so the first one earns the same
+    /// spare read a player that answered nothing does, and only a second consecutive one of that shape
+    /// earns `audio-device=auto`. A `null` driver, and no track at all, are answers rather than a
+    /// player mid-open: each takes its rung on the first read, exactly as it always did.
+    #[test]
+    fn a_driver_named_with_nothing_playing_is_read_once_more_before_the_device_is_asked_for() {
+        let fresh = Spent::default();
+
+        assert_eq!(
+            the_step(Verdict::NoDevice, fresh, true),
+            Step::AskAgain,
+            "one read of that shape is not yet a film that lost its device"
+        );
+        assert_eq!(
+            the_step(
+                Verdict::NoDevice,
+                Spent {
+                    opening: true,
+                    ..fresh
+                },
+                true
+            ),
+            Step::AskForADevice,
+            "a second consecutive read of it is what earns the write"
+        );
+
+        assert_eq!(
+            the_step(Verdict::NoDevice, fresh, false),
+            Step::AskForADevice,
+            "a null driver, or a driver that answered nothing, is a device that failed on the first \
+             read"
+        );
+        assert_eq!(
+            the_step(Verdict::NoTrack, fresh, true),
+            Step::AskForATrack,
+            "no track outranks the driver's shape: that rung is the launch's own road"
+        );
+    }
+
+    /// **A film that was heard and has gone silent climbs the ladder once more, and never its last
+    /// rung twice**: the track and the device are handed back, the relaunch is not — a player whose
+    /// device is genuinely gone keeps its picture, however many episodes it has.
+    #[test]
+    fn a_late_failure_climbs_the_in_place_rungs_again_and_never_the_relaunch_again() {
+        let whole = Spent {
+            asked_again: true,
+            track: true,
+            device: true,
+            ..Spent::default()
+        };
+
+        let again = re_opened(whole);
+        assert!(
+            !again.track && !again.device,
+            "both in-place rungs are handed back"
+        );
+        assert!(
+            !again.again,
+            "and the relaunch is the player's one, not the episode's"
+        );
+        assert_eq!(the_step(Verdict::NoTrack, again, false), Step::AskForATrack);
+        assert_eq!(
+            the_step(Verdict::NoDevice, again, false),
+            Step::AskForADevice
+        );
+
+        // The rung taken and the player still silent is one new player, because this one has never had
+        // its relaunch. A film that has is given nothing, however many episodes it goes through.
+        assert_eq!(
+            the_step(
+                Verdict::NoDevice,
+                Spent {
+                    device: true,
+                    ..again
+                },
+                false
+            ),
+            Step::BeginAgain
+        );
+        let spent_it = re_opened(Spent {
+            again: true,
+            ..whole
+        });
+        assert_eq!(
+            the_step(
+                Verdict::NoDevice,
+                Spent {
+                    device: true,
+                    ..spent_it
+                },
+                false
+            ),
+            Step::GiveUp,
+            "a device that is genuinely gone must never be begun again for"
+        );
+
+        assert!(a_late_failure(true, Verdict::NoDevice));
+        assert!(a_late_failure(true, Verdict::NoTrack));
+        assert!(!a_late_failure(true, Verdict::Heard));
+        assert!(
+            !a_late_failure(false, Verdict::NoDevice),
+            "a film that was never heard is on the ladder's first pass, not a late failure"
+        );
+    }
+
+    /// **The watch of a heard player is sparse, and a spent player has none**: +2 s, +4 s, +8 s, then
+    /// one every ten — and the player a spent ladder began has its one read and no schedule behind it.
+    #[test]
+    fn a_watch_is_sparse_and_a_spent_player_has_none() {
+        let waits = (0..6).map(the_wait_before_a_watch).collect::<Vec<_>>();
+        assert_eq!(
+            waits,
+            vec![
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(8),
+                Duration::from_secs(10),
+                Duration::from_secs(10),
+                Duration::from_secs(10),
+            ],
+            "the schedule settles into ten seconds and never asks for a tighter read than that"
+        );
+
+        assert!(
+            a_guard(Engine::Mpv, Spent::default()).keeps_watching(),
+            "mpv's player is watched once it has been heard"
+        );
+        assert!(
+            !a_guard(Engine::Mpv, SPENT).keeps_watching(),
+            "the player begun by a spent ladder is given its one read and nothing more"
+        );
+        assert!(
+            !a_guard(Engine::Ffplay, Spent::default()).keeps_watching(),
+            "FFmpeg's player has no pipe to be watched down"
+        );
+    }
+
+    /// **A healthy film writes one line about its sound, not one every ten seconds**: the read-back is
+    /// written where the verdict moved, so a player that is heard again says nothing — and a verdict
+    /// that does move, later in the film's life, is written with the rung it then earns.
+    #[test]
+    fn a_heard_player_writes_no_line_while_it_stays_heard() {
+        use super::super::playback_trace::{clear_noted, noted_lines};
+
+        let heard = EngineAnswers {
+            aid: Some("1".to_string()),
+            audio_device: Some("auto".to_string()),
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+        };
+        let mut guard = a_guard(Engine::Mpv, Spent::default());
+        guard.reads = 1;
+
+        clear_noted();
+        assert_eq!(
+            the_step_of_a_read(&mut guard, Report::Answers(heard.clone())),
+            Step::Nothing
+        );
+        let first = noted_lines();
+        assert_eq!(first.len(), 1, "the read that was heard is the one line");
+        assert!(first[0].contains("verdict heard"));
+
+        for _ in 0..3 {
+            guard.reads = guard.reads.saturating_add(1);
+            assert_eq!(
+                the_step_of_a_read(&mut guard, Report::Answers(heard.clone())),
+                Step::Nothing
+            );
+        }
+        assert_eq!(
+            noted_lines(),
+            first,
+            "a film that stays heard writes nothing after its first line"
+        );
+
+        // And the read that finds it silent is written, with the rung it earns. Its shape is a driver
+        // named with nothing playing through it, so the first read of it is the spare one and the
+        // second is the write (see `the_step`).
+        guard.reads = guard.reads.saturating_add(1);
+        let silent = EngineAnswers {
+            audio_out_params: None,
+            ..heard
+        };
+        assert_eq!(
+            the_step_of_a_read(&mut guard, Report::Answers(silent.clone())),
+            Step::AskAgain,
+            "a driver named with nothing playing is read once more before it is written to"
+        );
+        let late = noted_lines();
+        assert_eq!(late.len(), 2, "a verdict that moves is written down");
+        assert!(late[1].contains("verdict no-device"));
+
+        guard.reads = guard.reads.saturating_add(1);
+        assert_eq!(
+            the_step_of_a_read(&mut guard, Report::Answers(silent)),
+            Step::AskForADevice,
+            "a second read of that shape climbs the device rung"
+        );
+        assert_eq!(
+            noted_lines().len(),
+            3,
+            "and a read taken inside the ladder's own pass is written too"
         );
     }
 
@@ -515,19 +898,20 @@ mod tests {
     #[test]
     fn a_player_that_says_nothing_is_asked_once_more_and_never_begun_again() {
         let fresh = Spent::default();
-        assert_eq!(the_step(Verdict::Unanswered, fresh), Step::AskAgain);
+        assert_eq!(the_step(Verdict::Unanswered, fresh, false), Step::AskAgain);
         assert_eq!(
             the_step(
                 Verdict::Unanswered,
                 Spent {
                     asked_again: true,
                     ..fresh
-                }
+                },
+                false
             ),
             Step::GiveUp
         );
         assert_eq!(
-            the_step(Verdict::Unanswered, SPENT),
+            the_step(Verdict::Unanswered, SPENT, false),
             Step::GiveUp,
             "and a player begun in place of another is given no second look at all"
         );
@@ -601,26 +985,28 @@ mod tests {
         }
     }
 
-    /// **What a read-back is read as**: the three answers the player gave, named as the trace names
-    /// them, so a field log carries the whole of the ladder's evidence.
+    /// **What a read-back is read as**: the four answers the player gave, named as the trace names
+    /// them, so a field log carries the whole of the ladder's evidence — the device that was asked for
+    /// beside the driver that answered it, and `-` where a player said nothing to either.
     #[test]
     fn a_read_back_is_the_players_own_answers_and_the_verdict_they_come_to() {
         let answers = EngineAnswers {
             aid: Some("1".to_string()),
+            audio_device: Some("auto".to_string()),
             current_ao: Some("wasapi".to_string()),
             audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
         };
         assert_eq!(
             a_read_back(7, 1, &answers),
-            "audio read-back pid 7 read 1 aid 1 current-ao wasapi audio-out-params \
-             {\"samplerate\":48000} verdict heard"
+            "audio read-back pid 7 read 1 aid 1 audio-device auto current-ao wasapi \
+             audio-out-params {\"samplerate\":48000} verdict heard"
         );
 
         let silent = EngineAnswers::default();
         assert_eq!(
             a_read_back(9, 2, &silent),
-            "audio read-back pid 9 read 2 aid - current-ao - audio-out-params - verdict \
-             unanswered",
+            "audio read-back pid 9 read 2 aid - audio-device - current-ao - audio-out-params - \
+             verdict unanswered",
             "a player that said nothing is written as nothing said rather than as a guess"
         );
     }
