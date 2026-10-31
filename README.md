@@ -792,5 +792,3 @@ Rust Hover Preview is local-first: previews work without an internet connection,
 MIT. See [LICENSE](LICENSE).
 
 The app is built out of other people's code as much as its own — the Windows bindings, the image decoders, the syntax highlighter, the archive readers, the browser bindings — and each of those carries its own licence, with the notices MIT and BSD ask to be reproduced. [THIRD-PARTY.md](THIRD-PARTY.md) lists every dependency grouped by licence, with the copyright holders beside it, and the full texts are in [`LICENSES/`](LICENSES). Both are generated from the dependency tree rather than kept by hand; `generate-attribution.ps1` refreshes them.
-
-RAR archives are handled through the official UnRAR sources compiled in by `unrar_sys`: that code is free to use for reading RAR archives, but it may not be used to build a RAR-compatible archiver or to recreate the RAR compression algorithm. See `THIRD-PARTY.md` (`LicenseRef-UnRAR`).
