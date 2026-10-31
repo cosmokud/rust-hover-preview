@@ -687,24 +687,11 @@ pub fn run_preview_window() {
                 // and would otherwise have reached FFmpeg rather than this app. The commands are
                 // the same ones the pin's own window procedure queues, so they go on the same
                 // queue: a walk of the folder is a walk of the folder whether the arrow arrived as
-                // a message to this window or was swallowed before it could become one.
-                // The modifiers a hooked command was pressed with are read here rather than in the
-                // hook, which runs in the OS input path and may not ask the keyboard or take a lock
-                // (see `text_find::Modifiers`). Read once for the batch, and only where a press is
-                // in hand: the two polls are owed nothing by a tick no key was taken on.
-                let taken = crate::shell::key_input::take_pin_key_presses();
-                let held = (!taken.is_empty())
-                    .then(text_find::Modifiers::polled)
-                    .unwrap_or_default();
-                for press in taken {
+                // a message to this window or was swallowed before it could become one. A find
+                // bar's keys never arrive here — the hook stands down for one, and the bar reads
+                // them where they land (see `key_input::publish_find_bar_up`).
+                for press in crate::shell::key_input::take_pin_key_presses() {
                     if let Some(command) = hook_pin_key_command(press) {
-                        // A find bar that is up is the one owner of the keys, whether they arrive at
-                        // the pin's window or are taken by the hook first: the bar reads the pin's
-                        // own commands as steps through its query and as moves of its caret, and
-                        // swallows the rest (see `text_find::take_hooked_key_with`).
-                        if text_find::take_hooked_key_with(command, held) {
-                            continue;
-                        }
                         ask_pin(command);
                     }
                 }
@@ -911,6 +898,14 @@ pub fn run_preview_window() {
                 // search may style the document from its first line and a scroll may paint it (see
                 // `text_find::settle`).
                 text_find::settle(hwnd);
+
+                // Whether a bar is up over the pin's page is told to the hook here, after the bar
+                // has been opened or settled, rather than with the windows above: a `Ctrl`+`F`
+                // arrives on this tick, and a hook told a tick later swallows the first character
+                // typed into the field — which is the whole of what a swallowed key costs a text
+                // field, whose characters are the `WM_CHAR` `TranslateMessage` only makes from a
+                // key-down nothing swallowed (see `key_input::publish_find_bar_up`).
+                crate::shell::key_input::publish_find_bar_up(pinned() && text_find::is_open());
 
                 // A window dragged by an edge owes its media a layout at the box it ended up
                 // with: the window procedure owns the drag and asks for it here, because the

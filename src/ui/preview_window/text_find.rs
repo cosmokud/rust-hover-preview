@@ -11,8 +11,13 @@
 //! **A key is queued rather than searched for where it lands.** The message that brings a character
 //! is delivered in the window procedure, where the input queue is waiting on it, and a search styles
 //! the document from its first line; so the bar's edits are written down in the page's state and run
-//! by the tick that may take the lock (see `settle`). The keyboard hook's commands travel the same
-//! road for a different reason of their own: a low-level callback may not take a lock at all.
+//! by the tick that may take the lock (see `settle`).
+//!
+//! **A message is the only road a key has while the bar is up.** The keyboard hook stands down from
+//! the pin's keys for as long as a bar is up (see `key_input::publish_find_bar_up`), because a key it
+//! swallowed would never become the `WM_CHAR` a text field types from — and `key_edit_with` below is
+//! the one table that reads what a key that does arrive means. A second table keyed on the hook's
+//! commands is what let a `Space` and a `T` be eaten before they could become characters.
 //!
 //! Nothing here paints the bar: what the frame draws of the matches that are on screen is
 //! `text_preview`'s, and the card over it is the chrome's (see `FindHighlights` and
@@ -486,15 +491,15 @@ pub(super) fn typed_character(wparam: usize) -> Option<char> {
     char::from_u32(wparam as u32).filter(|character| !character.is_control())
 }
 
-/// The modifiers a key was pressed under, read where the press is taken rather than inside the hook.
+/// The modifiers a key was pressed under, named by the caller rather than read here so that a test can
+/// ask about `Ctrl`+`←` without holding `Ctrl` down.
 ///
-/// **A `WH_KEYBOARD_LL` callback may not ask the keyboard.** It runs in the OS input path, where every
-/// keystroke on the machine waits for it to return, so `GetAsyncKeyState` belongs to the road that
-/// reads the press — the window procedure at a message, the tick for a command the hook swallowed —
-/// and the edit is queued for the tick either way (see `key_edit_with` and `take_hooked_key_with`).
-/// What that costs is a hand that leaves `Shift` between the press and the tick: the move is read with
-/// the modifiers the hands are on when the batch is drained, which is the reading `Ctrl`+`A` has
-/// always been given.
+/// **A `WM_KEYDOWN` carries none of them, and the message road is where they are asked.** A
+/// `WH_KEYBOARD_LL` callback may not ask the keyboard — it runs in the OS input path, where every
+/// keystroke on the machine waits for it to return — so the press is read where it is delivered, at
+/// the window procedure's message, and the edit it means is queued for the tick from there (see
+/// `key_edit_with`). That is the same reading `Ctrl`+`A` and a `Shift`+click have always been given
+/// (see `text_selection::shift_is_down`).
 #[derive(Clone, Copy, Default, Debug)]
 pub(super) struct Modifiers {
     pub(super) shift: bool,
@@ -513,17 +518,14 @@ impl Modifiers {
 }
 
 /// What one key pressed on the pin's own window asks of a bar that is up, or nothing for a key the
-/// bar only swallows (see `window_proc`).
+/// bar only swallows (see `window_proc`). It is the window's entry to the table below, with the
+/// modifiers read off the keyboard of now, which is the only place that can answer them: a message
+/// carries none (see `Modifiers`).
 ///
 /// **A key that would type a character is not here.** A letter reaches the field as `WM_CHAR`, where
 /// `TranslateMessage` has already turned it into one, and the same is true of every control the
 /// keyboard delivers as a character: a `Ctrl` chord arrives both as a key and as a control character,
 /// and it is answered here so that `typed_character` can drop the character (see `typed_character`).
-///
-/// `Enter` and the down arrow step on and `Shift`+`Enter` and the up arrow step back, which is the
-/// order every find bar a reader has used before this one has. The page's own keys — the two page
-/// keys, its two ends and a Space — ask nothing here and are swallowed above, and `F3` asks for the
-/// same step its own key always has, over the bar's query rather than over the page's selection.
 ///
 /// **`Ctrl`+`U` is deliberately not a key here.** It clears a line in a browser's view source and
 /// underlines in Office, so a reader who presses it has asked for nothing this field owns; emptying
@@ -532,9 +534,26 @@ pub(super) fn key_edit(vk: i32) -> Option<FindEdit> {
     key_edit_with(vk, Modifiers::polled())
 }
 
-/// `key_edit` with the modifiers the key was pressed under, named by the caller rather than polled
-/// here so that both roads a key can take — a message and the hook's command — are read the same way,
-/// and so that a test can ask about `Ctrl`+`←` without holding `Ctrl` down (see `Modifiers`).
+/// What one key means to a bar that is up: `←`/`→` move the caret (`Ctrl` by a word, `Shift`
+/// extending), `Home`/`End` take the ends of the query (`Shift` extending), `↑`/`PgUp` and
+/// `↓`/`PgDn` step the matches, `Enter`/`Shift`+`Enter` step on and back, `F3` steps on, `Esc`
+/// clears the query or closes the bar, `Backspace`/`Delete` delete (`Ctrl` by a word), and `Tab` is
+/// inert.
+///
+/// **This is the only table that reads a key, and a message is its only road.** The keyboard hook
+/// stands down for the whole of a bar's life (see `key_input::publish_find_bar_up`), so every one of
+/// these arrives at the pin's window and is read here; the table keyed on the hook's own commands
+/// that used to shadow it is what let a `Space` and a `T` rot unnoticed — the two keys a query
+/// cannot be written without, and the two the hook ate before a character could exist.
+///
+/// The order is the one every find bar a reader has used before this one has: `Enter` and the down
+/// arrow step on, `Shift`+`Enter` and the up arrow step back, and both wrap at the ends. The page
+/// keys step the matches rather than turning the page, which is what a find bar's up and down are
+/// for; a key the field does not name is swallowed before it can reach the page's own table (see
+/// `window_proc`).
+///
+/// `key_edit_with` is named for its modifiers so a test can ask about `Ctrl`+`←` without holding
+/// `Ctrl` down; `key_edit` is the window's call, and it polls them (see `Modifiers`).
 pub(super) fn key_edit_with(vk: i32, held: Modifiers) -> Option<FindEdit> {
     let Modifiers { shift, control } = held;
 
@@ -546,13 +565,13 @@ pub(super) fn key_edit_with(vk: i32, held: Modifiers) -> Option<FindEdit> {
         return Some(FindEdit::Step(if shift { -1 } else { 1 }));
     }
 
-    // The two arrows and `F3` step the matches whether or not `Ctrl` is down: they are the find's
-    // own keys, and the bar must not stop stepping the moment a hand rests on `Ctrl`.
-    if vk == VK_DOWN.0 as i32 || vk == VK_F3.0 as i32 {
+    // The two arrows, the two page keys and `F3` step the matches whether or not `Ctrl` is down: they
+    // are the find's own keys, and the bar must not stop stepping the moment a hand rests on `Ctrl`.
+    if vk == VK_DOWN.0 as i32 || vk == VK_NEXT.0 as i32 || vk == VK_F3.0 as i32 {
         return Some(FindEdit::Step(1));
     }
 
-    if vk == VK_UP.0 as i32 {
+    if vk == VK_UP.0 as i32 || vk == VK_PRIOR.0 as i32 {
         return Some(FindEdit::Step(-1));
     }
 
@@ -602,65 +621,6 @@ pub(super) fn key_edit_with(vk: i32, held: Modifiers) -> Option<FindEdit> {
         v if v == VK_END.0 as i32 => Some(FindEdit::Move(text_find_field::Motion::End, shift)),
         _ => None,
     }
-}
-
-/// Answer one command the keyboard hook took while the page had the keys, where a bar is up.
-/// Answers whether the bar took it.
-///
-/// The bar owns **every** key while it is up, so a command it does not name is still a command it
-/// swallows: the pin's walk, its two page keys, its two ends, a Space and a subtitle step are all
-/// inert under a query, and letting one of them through would turn the page or walk the folder out
-/// from under a hand that is typing.
-///
-/// **The four keys the caret moves on arrive here and nowhere else.** `VK_LEFT`, `VK_RIGHT`,
-/// `VK_HOME` and `VK_END` are in the pin's own table (`key_input::PIN_KEY_COMMANDS`), and the hook
-/// swallows them whenever the pin holds the caret — which, `Ctrl`+`F` being a pin-only key, is
-/// exactly when a bar is up. A swallowed key never becomes a message, so `key_edit`'s arms for those
-/// four keys answer them only on a road that is not this one, and reading them as the caret moves
-/// they mean here is what makes `←`/`→`/`Home`/`End` work at all under a query.
-///
-/// `VK_UP`/`VK_PRIOR` and `VK_DOWN`/`VK_NEXT` are one command each in that table, so a page key steps
-/// the matches as the arrow of the same direction does; `F3` steps them too. What the bar will not do
-/// is turn the page, which is the page keys' own work.
-///
-/// **That table is deliberately not changed for a bar**, and the price is two things. The page keys
-/// cannot be told from the arrows here, so `PgUp`/`PgDn` step the matches rather than the page — which
-/// is what a find bar's up and down are for and all the bar would ask of them anyway. And the
-/// modifiers are read on the tick rather than at the press, because the hook thread cannot ask the
-/// keyboard or take a lock to find out whether a bar is up (see `Modifiers`). The table is the pin's
-/// arrangement for every pin there is; a second table keyed on a bar is state the callback would have
-/// to be told on every tick, for a difference no reader would see.
-pub(super) fn take_hooked_key_with(command: PinCommand, held: Modifiers) -> bool {
-    if !is_open() {
-        return false;
-    }
-
-    match command {
-        PinCommand::Previous => note(FindEdit::Move(
-            if held.control {
-                text_find_field::Motion::WordLeft
-            } else {
-                text_find_field::Motion::CharacterLeft
-            },
-            held.shift,
-        )),
-        PinCommand::Next => note(FindEdit::Move(
-            if held.control {
-                text_find_field::Motion::WordRight
-            } else {
-                text_find_field::Motion::CharacterRight
-            },
-            held.shift,
-        )),
-        PinCommand::PageTop => note(FindEdit::Move(text_find_field::Motion::Home, held.shift)),
-        PinCommand::PageBottom => note(FindEdit::Move(text_find_field::Motion::End, held.shift)),
-        PinCommand::PageBack => note(FindEdit::Step(-1)),
-        PinCommand::PageOn | PinCommand::FindNext => note(FindEdit::Step(1)),
-        PinCommand::Close => note(FindEdit::ClearOrClose),
-        _ => {}
-    }
-
-    true
 }
 
 /// What the bar has been asked since the tick last looked, taken out of the page in one go so that a

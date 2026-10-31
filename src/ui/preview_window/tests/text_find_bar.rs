@@ -7,6 +7,9 @@
 
 use super::text_selection::{a_page_of, PinPutBack};
 use super::*;
+// The two keys a bar's field could not hold while the keyboard hook swallowed them: the letter `t`,
+// which a film answers as a subtitle step, and the `Tab` a field swallows rather than tabs with.
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_T, VK_TAB};
 
 /// A page of a test's own, put where the bar answers against it. The media slot is put back by the
 /// guards the tests take beside it (see `TextPagePutBack` and `PinPutBack`).
@@ -77,6 +80,19 @@ fn caret_now() -> (usize, usize) {
                 .map(|state| (state.find.field.caret(), state.find.field.anchor()))
         })
         .expect("a pinned page keeps a find bar")
+}
+
+/// Clear whatever the bar was last asked, so that what a helper reads next is this key's alone.
+fn clear_the_queue() {
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(find) = media
+            .as_mut()
+            .and_then(|media| media.text_state.as_mut())
+            .map(|state| &mut state.find)
+        {
+            find.pending.clear();
+        }
+    }
 }
 
 /// Type a run of characters into the bar, searching after each one the way the tick does, and settle
@@ -317,12 +333,13 @@ fn the_two_switches_search_again_under_their_own_answer() {
     );
 }
 
-/// The keys a bar names are the bar's, and the ones it does not are swallowed rather than handed to
-/// the page: the pin's walk, a Space and a subtitle step are all inert under a query, while the two
-/// page keys — one command each with the arrow of the same direction — step the matches and the four
-/// keys a caret moves on move it (see `text_find::take_hooked_key_with` and `key_edit_with`).
+/// **The bar is the one owner of the pin's keys, and the pin's own walk never sees them.** With a bar
+/// up the keyboard hook stands down and every key reaches the pin's window as a message, which is
+/// what hands it to the field: `←`/`→` move the caret rather than walking the folder, `PgUp`/`PgDn`
+/// step the matches rather than turning the page, and a `Space`, a `T` and a `Tab` ask nothing at all
+/// (see `text_find::key_edit_with`). A bar that is away leaves every one of them to the pin.
 #[test]
-fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
+fn the_bars_keys_are_not_the_pins_while_it_is_up() {
     let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     stand_pin(Some(PinnedPreview::for_test()));
@@ -331,175 +348,66 @@ fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
     text_find::open_text_find();
     type_into_the_bar("needle");
 
+    // One key through the window's own procedure, answering what the pin was asked for. Nothing is
+    // queued for the pin while the bar is up, so `None` is the arm the bar returned on.
+    let press = |vk: u16| {
+        take_pin_command();
+        unsafe { window_proc(a_pin_window(), WM_KEYDOWN, WPARAM(vk as usize), LPARAM(0)) };
+        unsafe { text_find::settle(a_pin_window()) };
+        take_pin_command()
+    };
+
+    assert_eq!(caret_now(), (6, 6), "the caret is after the query typed");
     let (_, query, count, current, ..) = bar_now();
     let standing = (query, count, current, first_line_now());
 
-    for command in [
-        PinCommand::Previous,
-        PinCommand::Next,
-        PinCommand::PageTop,
-        PinCommand::PageBottom,
-        PinCommand::TogglePlayback,
-        PinCommand::NextSubtitle,
-    ] {
-        assert!(
-            text_find::take_hooked_key_with(command, text_find::Modifiers::default()),
-            "{command:?} is a key the bar swallowed whole"
-        );
-    }
-    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        press(VK_LEFT.0),
+        None,
+        "the left arrow walks no folder under a query"
+    );
+    assert_eq!(caret_now(), (5, 5), "it moves the caret inside the query");
+    assert_eq!(press(VK_RIGHT.0), None);
+    assert_eq!(caret_now(), (6, 6), "and the right arrow moves it back");
 
+    // The page keys step the matches rather than the page, and the caret stays where it was.
+    assert_eq!(press(VK_PRIOR.0), None);
+    assert_eq!(
+        bar_now().3,
+        Some(1),
+        "`PgUp` steps the matches back, wrapping to the last"
+    );
+    assert_eq!(press(VK_NEXT.0), None);
+    assert_eq!(bar_now().3, Some(0), "and `PgDn` steps them on again");
+
+    // A Space, a subtitle step and a `Tab` are inert: they are characters a query does not type here,
+    // and none of them is the pin's while the bar is up.
+    for vk in [VK_SPACE.0, VK_T.0, VK_TAB.0] {
+        assert_eq!(press(vk), None, "{vk:#06x} is nobody's key under a query");
+    }
     let (_, query, count, current, ..) = bar_now();
     assert_eq!(
         (query, count, current, first_line_now()),
         standing,
-        "nothing the page answers moved under the query: not its place, not its matches"
+        "and nothing the page answers moved under the query: not its place, not its matches"
     );
 
-    // The two arrows step the matches, as the page keys they share a command with do.
-    assert!(text_find::take_hooked_key_with(
-        PinCommand::PageOn,
-        text_find::Modifiers::default()
-    ));
-    unsafe { text_find::settle(a_pin_window()) };
-    assert_eq!(
-        bar_now().3,
-        Some(1),
-        "the down arrow steps to the next match"
-    );
-
-    assert!(text_find::take_hooked_key_with(
-        PinCommand::PageBack,
-        text_find::Modifiers::default()
-    ));
-    unsafe { text_find::settle(a_pin_window()) };
-    assert_eq!(
-        bar_now().3,
-        Some(0),
-        "and the up arrow back to the one before it"
-    );
-
-    // And the keys a message would bring rather than the hook: `Esc`, the return, the backspace,
-    // the two arrows, the two ends, the two delete keys and `F3` are named; the page keys and a
-    // Space are only swallowed.
-    assert_eq!(
-        text_find::key_edit(VK_ESCAPE.0 as i32),
-        Some(FindEdit::ClearOrClose)
-    );
-    assert_eq!(
-        text_find::key_edit(VK_DOWN.0 as i32),
-        Some(FindEdit::Step(1))
-    );
-    assert_eq!(
-        text_find::key_edit(VK_UP.0 as i32),
-        Some(FindEdit::Step(-1))
-    );
-    assert_eq!(
-        text_find::key_edit(VK_BACK.0 as i32),
-        Some(FindEdit::Backspace)
-    );
-    assert_eq!(text_find::key_edit(VK_F3.0 as i32), Some(FindEdit::Step(1)));
-    assert!(
-        matches!(
-            text_find::key_edit(VK_RETURN.0 as i32),
-            Some(FindEdit::Step(_))
-        ),
-        "a return steps, one way or the other under Shift"
-    );
-    for (vk, motion) in [
-        (VK_LEFT, text_find_field::Motion::CharacterLeft),
-        (VK_RIGHT, text_find_field::Motion::CharacterRight),
-        (VK_HOME, text_find_field::Motion::Home),
-        (VK_END, text_find_field::Motion::End),
-    ] {
-        assert_eq!(
-            text_find::key_edit(vk.0 as i32),
-            Some(FindEdit::Move(motion, false)),
-            "{vk:?} moves the caret inside the query on any road that is not the hook's"
-        );
-    }
-    for vk in [VK_PRIOR, VK_NEXT, VK_SPACE] {
-        assert_eq!(
-            text_find::key_edit(vk.0 as i32),
-            None,
-            "{vk:?} is a page key the bar only swallows"
-        );
-    }
-
-    // A bar that is away leaves the pin's keys to the pin.
+    // A bar that is away leaves the pin's keys to the pin, which is the gate on the other side.
     text_find::note(FindEdit::Close);
     unsafe { text_find::settle(a_pin_window()) };
-    assert!(!text_find::take_hooked_key_with(
-        PinCommand::PageOn,
-        text_find::Modifiers::default()
-    ));
-}
-
-/// The road a key pressed on a focused pin takes to the find bar's queue.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Road {
-    /// Swallowed by the keyboard hook and delivered as a `PinCommand` — the only road a key in
-    /// `key_input::PIN_KEY_COMMANDS` has, because a swallowed key never becomes a message.
-    Hook,
-    /// Delivered to the pin's window procedure as `WM_KEYDOWN`.
-    Key,
-    /// Delivered as `WM_CHAR`, where `TranslateMessage` has already made it a character.
-    Character,
-}
-
-/// What the bar queues for a command the hook took, read out of the queue the road writes rather than
-/// out of the model: the hook counts a number, and the edit it lands as is the bar's to name (see
-/// `text_find::take_hooked_key_with`).
-fn the_bar_takes(command: PinCommand, held: text_find::Modifiers) -> Option<FindEdit> {
-    if let Ok(mut media) = CURRENT_MEDIA.lock() {
-        if let Some(find) = media
-            .as_mut()
-            .and_then(|media| media.text_state.as_mut())
-            .map(|state| &mut state.find)
-        {
-            find.pending.clear();
-        }
-    }
-
-    assert!(
-        text_find::take_hooked_key_with(command, held),
-        "{command:?} is a key the bar swallowed whole"
+    assert_eq!(
+        press(VK_RIGHT.0),
+        Some(PinCommand::Next),
+        "with the bar away the right arrow is the pin's walk again"
     );
-
-    CURRENT_MEDIA.lock().ok().and_then(|media| {
-        media
-            .as_ref()
-            .and_then(|media| media.text_state.as_ref())
-            .and_then(|state| state.find.pending.first().copied())
-    })
 }
 
-/// The edit a key lands as, and the road it took to land as one, by the roads a real pin gives it:
-/// the hook's command where the hook's table names the key, the window's own `key_edit_with` where it
-/// does not, and `typed_character` for a key that types one.
-fn the_road_a_key_takes(vk: u16, held: text_find::Modifiers) -> (Road, Option<FindEdit>) {
-    if let Some(command) = crate::shell::key_input::pin_key_command(vk as i32) {
-        let command =
-            hook_pin_key_command(command).expect("the hook's table names a pin's command");
-        return (Road::Hook, the_bar_takes(command, held));
-    }
-
-    if let Some(edit) = text_find::key_edit_with(vk as i32, held) {
-        return (Road::Key, Some(edit));
-    }
-
-    (
-        Road::Character,
-        text_find::typed_character(vk as usize).map(FindEdit::Typed),
-    )
-}
-
-/// The road the caret's keys take on a real pin: **the keyboard hook swallows them, and a swallowed
-/// key never becomes a message**, so the bar is the only thing that can read them — as the commands
-/// the hook counted (see `text_find::take_hooked_key_with`). `Shift` extends from the caret, `Ctrl`
-/// moves by a word, and a page key still steps the matches without touching the caret.
+/// The caret's keys on the one road a focused pin gives the bar: a `WM_KEYDOWN` read by the window's
+/// own `key_edit_with`, with no second copy of them anywhere. `Shift` extends from the caret, `Ctrl`
+/// moves by a word, and a page key steps the matches without touching the caret (see
+/// `text_find::key_edit_with` and `window_proc`).
 #[test]
-fn the_caret_keys_the_hook_swallows_move_the_caret_under_a_query() {
+fn the_caret_keys_move_the_caret_under_a_query() {
     let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     stand_pin(Some(PinnedPreview::for_test()));
@@ -511,38 +419,40 @@ fn the_caret_keys_the_hook_swallows_move_the_caret_under_a_query() {
     let (_, query, count, ..) = bar_now();
     assert_eq!(caret_now(), (6, 6), "the caret is after the query typed");
 
-    let command = |command, held| {
-        assert!(
-            text_find::take_hooked_key_with(command, held),
-            "{command:?} is a key the bar swallowed whole"
-        );
+    let plain = text_find::Modifiers::default();
+    let shift = text_find::Modifiers {
+        shift: true,
+        control: false,
+    };
+    let control = text_find::Modifiers {
+        shift: false,
+        control: true,
+    };
+    let press = |vk: u16, held| {
+        let edit =
+            text_find::key_edit_with(vk as i32, held).expect("a key the field's one table answers");
+        text_find::note(edit);
         unsafe { text_find::settle(a_pin_window()) };
     };
 
-    // One character either way, by the commands `VK_LEFT`/`VK_RIGHT` count.
-    command(PinCommand::Previous, text_find::Modifiers::default());
+    // One character either way.
+    press(VK_LEFT.0, plain);
     assert_eq!(
         caret_now(),
         (5, 5),
         "`←` moves the caret one character back"
     );
-    command(PinCommand::Next, text_find::Modifiers::default());
+    press(VK_RIGHT.0, plain);
     assert_eq!(caret_now(), (6, 6), "`→` moves it forward again");
 
-    // The two ends, by the commands `VK_HOME`/`VK_END` count.
-    command(PinCommand::PageTop, text_find::Modifiers::default());
+    // The two ends.
+    press(VK_HOME.0, plain);
     assert_eq!(caret_now(), (0, 0), "`Home` puts the caret at the start");
-    command(PinCommand::PageBottom, text_find::Modifiers::default());
+    press(VK_END.0, plain);
     assert_eq!(caret_now(), (6, 6), "`End` puts it at the end");
 
     // `Shift` extends rather than collapses, and moves no text.
-    command(
-        PinCommand::Previous,
-        text_find::Modifiers {
-            shift: true,
-            control: false,
-        },
-    );
+    press(VK_LEFT.0, shift);
     assert_eq!(
         caret_now(),
         (5, 6),
@@ -551,34 +461,22 @@ fn the_caret_keys_the_hook_swallows_move_the_caret_under_a_query() {
     assert_eq!(bar_now().1, query, "and the query's text is left alone");
 
     // `Ctrl` moves by a word.
-    command(
-        PinCommand::Previous,
-        text_find::Modifiers {
-            shift: false,
-            control: true,
-        },
-    );
+    press(VK_LEFT.0, control);
     assert_eq!(
         caret_now(),
         (0, 0),
         "`Ctrl`+`←` goes to the start of the word"
     );
-    command(
-        PinCommand::Next,
-        text_find::Modifiers {
-            shift: false,
-            control: true,
-        },
-    );
+    press(VK_RIGHT.0, control);
     assert_eq!(caret_now(), (6, 6), "`Ctrl`+`→` goes to the end of it");
 
     // The page keys step the matches and leave the caret where they found it.
     let (caret, anchor) = caret_now();
-    command(PinCommand::PageOn, text_find::Modifiers::default());
+    press(VK_NEXT.0, plain);
     assert_eq!(bar_now().3, Some(1), "the next match is the reader's");
     assert_eq!((caret, anchor), caret_now(), "and the caret did not move");
     assert_eq!(bar_now().2, count, "over the places the same query found");
-    command(PinCommand::PageBack, text_find::Modifiers::default());
+    press(VK_PRIOR.0, plain);
     assert_eq!(
         bar_now().3,
         Some(0),
@@ -605,14 +503,17 @@ fn a_key_that_moved_nothing_asks_for_no_repaint() {
     type_into_the_bar("needle");
 
     let paints = || text_find::BAR_PAINTS.load(Ordering::Relaxed);
+    let plain = text_find::Modifiers::default();
+    let press = |vk: u16, held| {
+        let edit =
+            text_find::key_edit_with(vk as i32, held).expect("a key the field's one table answers");
+        text_find::note(edit);
+        unsafe { text_find::settle(a_pin_window()) };
+    };
 
     // `Home` from the end of the query is a move, and a move asks for the band once.
     let before = paints();
-    assert!(text_find::take_hooked_key_with(
-        PinCommand::PageTop,
-        text_find::Modifiers::default()
-    ));
-    unsafe { text_find::settle(a_pin_window()) };
+    press(VK_HOME.0, plain);
     assert_eq!(
         caret_now(),
         (0, 0),
@@ -626,41 +527,80 @@ fn a_key_that_moved_nothing_asks_for_no_repaint() {
 
     // `Home` again, `←` where there is nothing to the left, and a `Shift`+`Home` whose selection is
     // already at the start: three edits the road queues and none of them a change the card can draw.
-    for (command, held) in [
-        (PinCommand::PageTop, text_find::Modifiers::default()),
-        (PinCommand::Previous, text_find::Modifiers::default()),
-        (
-            PinCommand::PageTop,
-            text_find::Modifiers {
-                shift: true,
-                control: false,
-            },
-        ),
+    let shift = text_find::Modifiers {
+        shift: true,
+        control: false,
+    };
+    for (vk, held, name) in [
+        (VK_HOME.0, plain, "Home"),
+        (VK_LEFT.0, plain, "←"),
+        (VK_HOME.0, shift, "Shift+Home"),
     ] {
-        assert!(text_find::take_hooked_key_with(command, held));
-        unsafe { text_find::settle(a_pin_window()) };
-        assert_eq!(caret_now(), (0, 0), "{command:?} moved nothing");
+        press(vk, held);
+        assert_eq!(caret_now(), (0, 0), "{name} moved nothing");
         assert_eq!(
             paints(),
             before + 1,
-            "{command:?} at the start of the query repainted nothing"
+            "{name} at the start of the query repainted nothing"
         );
     }
 
     // And a move after them is drawn, so the gate is the change and not the road.
-    assert!(text_find::take_hooked_key_with(
-        PinCommand::Next,
-        text_find::Modifiers::default()
-    ));
-    unsafe { text_find::settle(a_pin_window()) };
+    press(VK_RIGHT.0, plain);
     assert_eq!(caret_now(), (1, 1));
     assert_eq!(paints(), before + 2, "a move that moved is drawn");
 }
 
-/// **Every key the field needs is delivered while the bar is up**, by the road a focused pin really
-/// gives it. This is the test the caret's keys needed: the model's own tests pass whatever the road
-/// does, because they call `move_caret` themselves, and a key the hook swallows is a key nothing else
-/// ever sees (see `text_find::take_hooked_key_with` and `text_find::key_edit_with`).
+/// What one key lands as on the one road a focused pin gives the bar: the window procedure's
+/// `WM_KEYDOWN` arm reads the key with `key_edit_with`, and where the key types a character the
+/// `WM_CHAR` that follows it — which exists only because nothing swallowed the key-down — types that
+/// character (see `window_proc` and `text_find::key_edit_with`). Answers the one edit the bar was
+/// queued, or nothing for a key it only swallows.
+fn the_window_is_handed(
+    vk: u16,
+    held: text_find::Modifiers,
+    typed: Option<char>,
+) -> Option<FindEdit> {
+    clear_the_queue();
+
+    let key = text_find::key_edit_with(vk as i32, held);
+    if let Some(edit) = key {
+        text_find::note(edit);
+    }
+
+    // A key that types a character answers nothing as a key. The character is the `WM_CHAR` road,
+    // and a key-down that also queued an edit would type it twice.
+    assert!(
+        typed.is_none() || key.is_none(),
+        "{vk:#06x} types a character and must not also be a key the field answers"
+    );
+    if let Some(character) = typed {
+        text_find::note(FindEdit::Typed(character));
+    }
+
+    let queued: Vec<FindEdit> = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| state.find.pending.clone())
+        })
+        .unwrap_or_default();
+    assert!(
+        queued.len() <= 1,
+        "{vk:#06x} under {held:?} asked the bar for {queued:?}"
+    );
+    queued.first().copied()
+}
+
+/// **Every key the field needs reaches it by the one road a focused pin gives it**, and the table is
+/// the point: each row is a key, the modifiers it is pressed under, the character `TranslateMessage`
+/// makes of it where it types one, and the edit it must land as. A key that disappears between the
+/// keyboard and the field — as `Space` and `T` did while the hook still swallowed them — fails its
+/// row, and a key added to the hook's pin-key table without the bar standing down fails at the hook
+/// (see `key_input::a_find_bar_that_is_up_passes_on_every_key_the_pin_answers`).
 #[test]
 fn every_key_the_field_needs_reaches_it_by_the_road_a_pin_gives_it() {
     let _room = the_room_to_itself();
@@ -691,128 +631,100 @@ fn every_key_the_field_needs_reaches_it_by_the_road_a_pin_gives_it() {
     let home = text_find_field::Motion::Home;
     let end = text_find_field::Motion::End;
 
-    let rows: &[(u16, text_find::Modifiers, Road, Option<FindEdit>)] = &[
-        // The caret's keys: the hook's, and the hook is the only road they have while a pin holds
-        // the caret.
-        (
-            VK_LEFT.0,
-            plain,
-            Road::Hook,
-            Some(FindEdit::Move(left, false)),
-        ),
-        (
-            VK_LEFT.0,
-            shift,
-            Road::Hook,
-            Some(FindEdit::Move(left, true)),
-        ),
+    // The key, the modifiers, the character it types where it types one, and the edit it lands as.
+    let rows: &[(u16, text_find::Modifiers, Option<char>, Option<FindEdit>)] = &[
+        // The caret's keys.
+        (VK_LEFT.0, plain, None, Some(FindEdit::Move(left, false))),
+        (VK_LEFT.0, shift, None, Some(FindEdit::Move(left, true))),
         (
             VK_LEFT.0,
             control,
-            Road::Hook,
+            None,
             Some(FindEdit::Move(word_left, false)),
         ),
-        (
-            VK_LEFT.0,
-            both,
-            Road::Hook,
-            Some(FindEdit::Move(word_left, true)),
-        ),
-        (
-            VK_RIGHT.0,
-            plain,
-            Road::Hook,
-            Some(FindEdit::Move(right, false)),
-        ),
-        (
-            VK_RIGHT.0,
-            shift,
-            Road::Hook,
-            Some(FindEdit::Move(right, true)),
-        ),
+        (VK_LEFT.0, both, None, Some(FindEdit::Move(word_left, true))),
+        (VK_RIGHT.0, plain, None, Some(FindEdit::Move(right, false))),
+        (VK_RIGHT.0, shift, None, Some(FindEdit::Move(right, true))),
         (
             VK_RIGHT.0,
             control,
-            Road::Hook,
+            None,
             Some(FindEdit::Move(word_right, false)),
         ),
-        (
-            VK_HOME.0,
-            plain,
-            Road::Hook,
-            Some(FindEdit::Move(home, false)),
-        ),
-        (
-            VK_HOME.0,
-            shift,
-            Road::Hook,
-            Some(FindEdit::Move(home, true)),
-        ),
-        (
-            VK_HOME.0,
-            control,
-            Road::Hook,
-            Some(FindEdit::Move(home, false)),
-        ),
-        (
-            VK_END.0,
-            plain,
-            Road::Hook,
-            Some(FindEdit::Move(end, false)),
-        ),
-        (VK_END.0, shift, Road::Hook, Some(FindEdit::Move(end, true))),
-        // The matches: the page keys step them under any modifier, and `F3` is the same step.
-        (VK_UP.0, plain, Road::Hook, Some(FindEdit::Step(-1))),
-        (VK_PRIOR.0, plain, Road::Hook, Some(FindEdit::Step(-1))),
-        (VK_DOWN.0, plain, Road::Hook, Some(FindEdit::Step(1))),
-        (VK_DOWN.0, control, Road::Hook, Some(FindEdit::Step(1))),
-        (VK_NEXT.0, plain, Road::Hook, Some(FindEdit::Step(1))),
-        (VK_F3.0, plain, Road::Hook, Some(FindEdit::Step(1))),
-        (VK_ESCAPE.0, plain, Road::Hook, Some(FindEdit::ClearOrClose)),
-        // The edits a message brings.
-        (VK_BACK.0, plain, Road::Key, Some(FindEdit::Backspace)),
-        (
-            VK_BACK.0,
-            control,
-            Road::Key,
-            Some(FindEdit::DeleteWordLeft),
-        ),
-        (VK_DELETE.0, plain, Road::Key, Some(FindEdit::DeleteForward)),
-        (
-            VK_DELETE.0,
-            control,
-            Road::Key,
-            Some(FindEdit::DeleteWordRight),
-        ),
-        (VK_RETURN.0, plain, Road::Key, Some(FindEdit::Step(1))),
-        (VK_RETURN.0, shift, Road::Key, Some(FindEdit::Step(-1))),
-        (VK_A.0, control, Road::Key, Some(FindEdit::SelectAll)),
-        (VK_C.0, control, Road::Key, Some(FindEdit::Copy)),
-        (VK_X.0, control, Road::Key, Some(FindEdit::Cut)),
-        (VK_V.0, control, Road::Key, Some(FindEdit::Paste)),
-        (VK_Z.0, control, Road::Key, Some(FindEdit::Undo)),
-        (VK_Z.0, both, Road::Key, Some(FindEdit::Redo)),
-        (VK_Y.0, control, Road::Key, Some(FindEdit::Redo)),
-        // And a character, which is the one thing the keyboard delivers as text.
-        (
-            b'a' as u16,
-            plain,
-            Road::Character,
-            Some(FindEdit::Typed('a')),
-        ),
+        (VK_HOME.0, plain, None, Some(FindEdit::Move(home, false))),
+        (VK_HOME.0, shift, None, Some(FindEdit::Move(home, true))),
+        (VK_HOME.0, control, None, Some(FindEdit::Move(home, false))),
+        (VK_END.0, plain, None, Some(FindEdit::Move(end, false))),
+        (VK_END.0, shift, None, Some(FindEdit::Move(end, true))),
+        // The matches: the arrows, the page keys and `F3` step them.
+        (VK_UP.0, plain, None, Some(FindEdit::Step(-1))),
+        (VK_PRIOR.0, plain, None, Some(FindEdit::Step(-1))),
+        (VK_DOWN.0, plain, None, Some(FindEdit::Step(1))),
+        (VK_DOWN.0, control, None, Some(FindEdit::Step(1))),
+        (VK_NEXT.0, plain, None, Some(FindEdit::Step(1))),
+        (VK_F3.0, plain, None, Some(FindEdit::Step(1))),
+        (VK_RETURN.0, plain, None, Some(FindEdit::Step(1))),
+        (VK_RETURN.0, shift, None, Some(FindEdit::Step(-1))),
+        (VK_ESCAPE.0, plain, None, Some(FindEdit::ClearOrClose)),
+        // The edits, which are the field's own keys.
+        (VK_BACK.0, plain, None, Some(FindEdit::Backspace)),
+        (VK_BACK.0, control, None, Some(FindEdit::DeleteWordLeft)),
+        (VK_DELETE.0, plain, None, Some(FindEdit::DeleteForward)),
+        (VK_DELETE.0, control, None, Some(FindEdit::DeleteWordRight)),
+        (VK_A.0, control, None, Some(FindEdit::SelectAll)),
+        (VK_C.0, control, None, Some(FindEdit::Copy)),
+        (VK_X.0, control, None, Some(FindEdit::Cut)),
+        (VK_V.0, control, None, Some(FindEdit::Paste)),
+        (VK_Z.0, control, None, Some(FindEdit::Undo)),
+        (VK_Z.0, both, None, Some(FindEdit::Redo)),
+        (VK_Y.0, control, None, Some(FindEdit::Redo)),
+        // And the characters: a letter, a space, and both cases of the `t` a query was unable to
+        // hold while the hook ate its key-down. Each arrives as `WM_CHAR`, never as its key.
+        (b'a' as u16, plain, Some('a'), Some(FindEdit::Typed('a'))),
+        (VK_SPACE.0, plain, Some(' '), Some(FindEdit::Typed(' '))),
+        (VK_T.0, plain, Some('t'), Some(FindEdit::Typed('t'))),
+        (VK_T.0, shift, Some('T'), Some(FindEdit::Typed('T'))),
+        // And the one key the field only swallows.
+        (VK_TAB.0, plain, None, None),
     ];
 
-    for (vk, held, road, lands) in rows {
-        let (taken, edit) = the_road_a_key_takes(*vk, *held);
+    for (vk, held, typed, lands) in rows {
         assert_eq!(
-            taken, *road,
-            "{vk:#06x} under {held:?} takes the road a focused pin gives it"
-        );
-        assert_eq!(
-            edit, *lands,
-            "{vk:#06x} under {held:?} lands as the field's own edit"
+            the_window_is_handed(*vk, *held, *typed),
+            *lands,
+            "{vk:#06x} under {held:?} must reach the field as {lands:?}"
         );
     }
+
+    // And the query really holds them: a space and both cases of `t` are handed to the window's own
+    // procedure as the key-down and the `WM_CHAR` that follows it, which is the pair
+    // `TranslateMessage` makes of a key nothing swallowed.
+    clear_the_queue();
+    unsafe { text_find::settle(a_pin_window()) };
+    let query_was = bar_now().1;
+    assert_eq!(query_was, "needle");
+    for (vk, character) in [(VK_SPACE.0, ' '), (VK_T.0, 't'), (VK_T.0, 'T')] {
+        let answered =
+            unsafe { window_proc(a_pin_window(), WM_KEYDOWN, WPARAM(vk as usize), LPARAM(0)) };
+        assert_eq!(
+            answered.0, 0,
+            "{vk:#06x} is the bar's, and the bar swallows it after the field has read it"
+        );
+        unsafe {
+            window_proc(
+                a_pin_window(),
+                WM_CHAR,
+                WPARAM(character as usize),
+                LPARAM(0),
+            )
+        };
+    }
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        bar_now().1,
+        format!("{query_was} tT"),
+        "a space and both cases of `t` are typed into the query"
+    );
 }
 
 /// A character is the bar's when it is a printable one and nothing else: the two half-characters of a
