@@ -43,11 +43,17 @@
 //!    `EngineAnswers::a_driver_with_no_params`), and an output reinitialised under a player that was
 //!    about to open it is the guard's own fault rather than the film's. `aid=no`, and a driver of
 //!    `null`, are answers and not a player mid-open, so each takes its rung on the first read.
-//! 3. neither heard, and the player says it is open — **the level the launch asked for asserted again**,
-//!    with the player's own `mute` taken off beside it (`Verdict::Silent`): a track selected, an
-//!    output open, and a player told to be quiet is a film that every other answer calls sound. The
-//!    level itself is written by the one function that owns it (`mpv_ipc::set_volume`), so a player
-//!    the launch gave no track to has it asked back for by the same line.
+//! 3. neither heard, and the player says it is open — **the level this app last asked this player
+//!    for asserted again**, with the player's own `mute` taken off beside it (`Verdict::Silent`): a
+//!    track selected, an output open, and a player told to be quiet is a film that every other answer
+//!    calls sound. The level itself is written by the one function that owns it (`mpv_ipc::set_volume`),
+//!    so a player the launch gave no track to has it asked back for by the same line.
+//!
+//! **The level is the one that was last *asked* for, not the one the film began at** (see
+//! `the_level_moved`), because a hand moves it while the film plays and a level dragged to nothing is
+//! not a film to cure: mpv keeps the track at `volume 0`, so a pin silenced by hand reads exactly as
+//! one something else silenced, and the launch's level put back over the hand is the bug this seam
+//! closes. A level of nothing is the silence the setting chose, which the verdict already exempts.
 //! 4. neither heard — **one** new player, with the arguments, the second and the pause the one it
 //!    replaces had, and one read of that player. Then the ladder ends.
 //!
@@ -65,7 +71,7 @@
 //! as it lives (see `WATCHES`).
 //!
 //! **Nothing here fights the film.** No pause is toggled, no seek is asked, and the only level written
-//! is the one the launch already asked for, put back on a player that had been silenced under it — and
+//! is the one this app last asked the player for, put back on a player silenced under it — and
 //! a film held by the handover's own pause is *begun again held* rather than resumed: the only things
 //! this module writes are the audio properties, and the only player it begins is a replacement at the
 //! second the pin's clock already says (see
@@ -317,9 +323,11 @@ struct Guard {
     engine: Engine,
     /// Which road armed it, because the two roads end differently (see `Road`).
     road: Road,
-    /// The level the launch asked for, which is what a `Silent` player is taken back up to — and not
-    /// the level the player reports, which is the fact the verdict was read from (see
-    /// `playback_trace::EngineAnswers::told_to_be_quiet`).
+    /// **The level this app last asked this player for**: the launch's to begin with, and then
+    /// whatever a hand moved it to (see `the_level_moved`). It is what a `Silent` player is taken back
+    /// up to, and it is the level the verdict is read against — a level of nothing being the silence
+    /// the setting chose rather than a film to cure — and it is not the level the player reports, which
+    /// is the fact the verdict was read from (see `playback_trace::EngineAnswers::told_to_be_quiet`).
     volume: u32,
     /// **What the launch gave this player, in the words the launch line writes it in**: `aid=no` or
     /// `-an`, or the level with the gain measured for the file folded into it (see
@@ -632,6 +640,38 @@ pub(super) fn a_pin_took_it_over(pid: u32) {
     if guard.road == Road::Hover {
         guard.a_pin_took_it_over();
         note_playback_trace!("audio guard a pin took it over pid {pid}");
+    }
+}
+
+/// **The level this app has just asked a player for, where that player is the one this guard holds.**
+/// The guard stands for what was last *asked* of the player rather than for what its launch began it
+/// at, because a hand moves the level while the film plays — and a level moved to nothing is the half
+/// of that the guard has to know about (see `Verdict::Silent`).
+///
+/// **A player dragged to `volume 0` keeps its track**, which is why the read is the one this exists
+/// for: `mpv_ipc::set_volume` deliberately leaves the decoder alone, so a film a hand has taken down
+/// to silence answers `volume 0` with a track, an output and params — indistinguishable, to a ladder
+/// that still believes the launch's level, from a film something else silenced. Ten seconds later the
+/// level rung would write the launch's level back over the hand. With the record moved here, that
+/// read is the silence the setting asked for and no rung fires; and a level moved to 60 makes the
+/// level rung assert 60 rather than the 40 the film began at.
+///
+/// **The roads call this, not `mpv_ipc::set_volume`**, and the difference is the loop not closing on
+/// itself. The guard's own `AskForALevel` writes through that function with this guard's lock held
+/// (see `tick`), so a seam inside it would be the guard feeding itself: a level it wrote recorded as a
+/// level a hand had moved, taken while the lock it already holds is taken again. So a write the guard
+/// makes moves nothing, and only the app's own writes do — where each of them landed, which is the
+/// rule `PinVolume::playing_at` keeps beside it: a level no player took is still owed to the next one,
+/// and the player behind the bar is still at the level the guard already holds.
+///
+/// Nothing is written about the move: every read-back already carries the level it is read against
+/// (`asked`), and a drag is a hundred moves a second, so a line per move would bury the ladder.
+pub(super) fn the_level_moved(pid: u32, level: u32) {
+    let Ok(mut slot) = GUARD.lock() else {
+        return;
+    };
+    if let Some(guard) = slot.as_mut().filter(|guard| guard.pid == pid) {
+        guard.volume = level;
     }
 }
 
@@ -992,7 +1032,35 @@ fn the_step_of_a_signature(spend: Spent) -> Step {
 #[cfg(test)]
 mod tests {
     use super::super::audio_session::Cure;
+    use super::super::tests::the_room_to_itself;
     use super::*;
+
+    /// A player with a track, an output and its params, reporting `volume` from `mute` off — the shape
+    /// every one of the three silences shares, which is why the level it reports is what tells them
+    /// apart.
+    fn a_player_at(volume: f64) -> EngineAnswers {
+        EngineAnswers {
+            aid: Some("1".to_string()),
+            audio_device: Some("auto".to_string()),
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+            volume: Some(volume),
+            mute: Some(false),
+        }
+    }
+
+    /// Arm the one guard the suite has for a player of a test's own, at the level its launch asked for.
+    ///
+    /// **The slot rather than a guard in hand**, because the level a hand moves is a fact about the
+    /// player this app is watching and not about a value passed down a call: `the_level_moved` is the
+    /// only way in, and it answers only for the pid it holds (see `GUARD`). Each test is given a pid of
+    /// its own so that a probe thread of one cannot report into the guard of another.
+    fn arm_the_slot(pid: u32, level: u32) {
+        let guard = the_guard_a_launch_arms(pid, &a_film(), level, None, Engine::Mpv, Road::Pin);
+        if let Ok(mut slot) = GUARD.lock() {
+            *slot = Some(guard);
+        }
+    }
 
     /// A file named as a film is, for the rules that turn on which one is being shown.
     fn a_film() -> PathBuf {
@@ -1860,5 +1928,145 @@ mod tests {
             read.answers.is_none(),
             "FFmpeg's player answers nothing this app can read, so there is nothing to hand back"
         );
+    }
+
+    /// **A player dragged to `volume 0` is not a film something else silenced.** mpv keeps the track
+    /// when it is told a level of nothing, so a pin a hand has taken to the bottom of its knob answers
+    /// with a track, an output and its params at `volume 0` — the read the `Silent` rule was written
+    /// for, and the one that used to bring the launch's level back over the hand ten seconds later.
+    /// With the level moved, that read is the silence the setting chose (`mpv_launched_without_audio`),
+    /// so no rung is taken and nothing is written to the player at all.
+    #[test]
+    fn a_level_moved_to_nothing_is_not_a_player_that_was_silenced() {
+        use super::super::mpv_ipc::{clear_noted, noted_lines};
+
+        let _room = the_room_to_itself();
+        arm_the_slot(7, 40);
+
+        // The hand goes to the bottom of the knob and it goes there exactly: `volume 0`, and the
+        // track left standing behind it (see `mpv_ipc::set_volume`).
+        the_level_moved(7, 0);
+        assert_eq!(
+            still_watched(7),
+            Some(0),
+            "the guard stands for the level this app last asked the player for"
+        );
+
+        clear_noted();
+        assert!(report(7, a_report(a_player_at(0.0))));
+        assert_eq!(tick(true), None);
+        assert_eq!(
+            still_watched(7),
+            Some(0),
+            "the read is the verdict of a launch that asked for no audio, so there was no rung to take \
+             and the guard is still armed at what the hand set"
+        );
+        assert_eq!(
+            noted_lines(),
+            Vec::<String>::new(),
+            "and not one level was written over the hand that put it at nothing"
+        );
+        a_player_ended(7);
+    }
+
+    /// **A level moved after the launch is the level a `Silent` player is taken to**: the ladder's third
+    /// rung asserts what this app last asked the player for, so a film moved to 60 and silenced under
+    /// that is brought back to 60 rather than to the 40 its launch began at.
+    #[test]
+    fn a_level_moved_after_the_launch_is_what_a_silent_player_is_taken_to() {
+        use super::super::mpv_ipc::{clear_noted, forget_pipe, noted_lines, remember_pipe};
+
+        let _room = the_room_to_itself();
+        arm_the_slot(8, 40);
+        remember_pipe(8, "a-guarded-pipe", false);
+
+        the_level_moved(8, 60);
+        clear_noted();
+        assert!(report(8, a_report(a_player_at(0.0))));
+        assert_eq!(tick(false), None);
+        assert_eq!(
+            noted_lines(),
+            vec![
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","volume",60],"async":true}"#
+                ),
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","mute",false],"async":true}"#
+                ),
+            ],
+            "the level the film was moved to, and the player's own mute taken off beside it — not the \
+             40 the launch began at"
+        );
+
+        forget_pipe(8);
+        a_player_ended(8);
+    }
+
+    /// **Another player's level is not this guard's to hold**: a level moved on a pid the guard is not
+    /// armed for changes nothing, and the read it does hold is still the read it always was.
+    #[test]
+    fn a_level_moved_on_a_player_the_guard_does_not_hold_changes_nothing() {
+        let _room = the_room_to_itself();
+        arm_the_slot(9, 40);
+
+        the_level_moved(10, 0);
+        assert_eq!(
+            still_watched(9),
+            Some(40),
+            "the guard is armed for 9, so a level moved on 10 is none of its business"
+        );
+        assert_eq!(
+            still_watched(10),
+            None,
+            "and no guard was made for the player nothing armed"
+        );
+
+        let Ok(mut slot) = GUARD.lock() else {
+            return;
+        };
+        let guard = slot
+            .as_mut()
+            .expect("the guard is still armed for its own pid");
+        assert_eq!(
+            the_step_of_a_read(guard, a_report(a_player_at(0.0))).step,
+            Step::AskForALevel,
+            "a silent read on the pid the guard does hold is still the film it was, at the level it \
+             was begun at"
+        );
+        drop(slot);
+        a_player_ended(9);
+    }
+
+    /// **A level the guard writes is not a hand**, which is where the seam sits: the level rung writes
+    /// through `mpv_ipc::set_volume`, and a seam inside that function would be the guard feeding its
+    /// own record — on the lock it already holds (see `the_level_moved`). So the record stays where the
+    /// hand left it, whatever the ladder writes.
+    #[test]
+    fn the_guards_own_writes_do_not_move_the_level_it_holds() {
+        use super::super::mpv_ipc::{forget_pipe, remember_pipe};
+
+        let _room = the_room_to_itself();
+        arm_the_slot(11, 40);
+        remember_pipe(11, "a-guarded-pipe", false);
+
+        assert!(super::super::mpv_ipc::set_volume(11, 30));
+        assert_eq!(
+            still_watched(11),
+            Some(40),
+            "the level rung's own write is not a level a hand moved"
+        );
+
+        assert!(report(11, a_report(a_player_at(0.0))));
+        assert_eq!(tick(false), None);
+        assert_eq!(
+            still_watched(11),
+            Some(40),
+            "and a rung taken on a silent read leaves the record where it was"
+        );
+
+        forget_pipe(11);
+        a_player_ended(11);
     }
 }

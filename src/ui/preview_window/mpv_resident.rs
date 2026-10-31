@@ -429,7 +429,11 @@ pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<S
         Some(within) => mpv_ipc::load_file_within(pid, path, within),
         None => mpv_ipc::load_file(pid, path),
     };
+    // **The guard's record of this level is the arming that follows the serve, and not a second write
+    // here** (see `audio_guard::the_level_moved`): the caller arms the guard with this very level the
+    // moment this returns, so a call of its own would be one fact written twice.
     let asked = offered && mpv_ipc::set_volume(pid, volume);
+
     // A file is not held where the last one was left: a hover shows its film playing, from its
     // beginning, which is what `loadfile ... replace` and this one ask say together.
     let asked = asked && mpv_ipc::set_paused(pid, false);

@@ -1140,8 +1140,17 @@ pub(super) fn adopt_the_hovered_film_in_the_host(host: HWND) -> bool {
     }
 
     // This also asks `aid` back where the hover was begun muted and the pin has a level to hear.
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
     let volume = pinned_volume_level();
-    mpv_ipc::set_volume(VIDEO_PID.load(Ordering::SeqCst), volume);
+    let told = mpv_ipc::set_volume(pid, volume);
+    if told {
+        // **The pin's level is a level this app asked a running player for**, so the guard's record
+        // of it moves too: the player is the hover's own and is watched on the pin's road from the
+        // take-up on, so a level the pin gave it is the level a `silent` read is taken back up to —
+        // and a level of nothing is the silence the hand chose rather than a film to cure (see
+        // `audio_guard::the_level_moved`).
+        audio_guard::the_level_moved(pid, volume);
+    }
     with_pin(|pin| pin.volume.playing_at = volume);
 
     true
