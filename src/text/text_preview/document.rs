@@ -11,7 +11,7 @@
 //! the Markdown renderer in [`super::markdown`], or plain and ANSI text read by
 //! [`super::source`].
 
-use super::frame::{Selection, TextPreviewOptions};
+use super::frame::{is_word_character, Selection, TextPreviewOptions};
 use super::markdown::{rendered_line_count, window_markdown};
 use super::source::{push_ansi_spans, read_source, strip_rtf, AnsiPalette};
 use crate::config::config::{MarkdownMode, TextTheme};
@@ -598,13 +598,6 @@ fn word_boundaries_hold(characters: &[char], at: usize, needle: &[char]) -> bool
 /// character's case folding.
 fn same_character(found: char, wanted: char, case_sensitive: bool) -> bool {
     found == wanted || (!case_sensitive && found.to_lowercase().eq(wanted.to_lowercase()))
-}
-
-/// Whether a character is part of a word for a whole-word search: letters, digits and the underscore,
-/// which is exactly the run `run_kind` in `frame` calls a word — so a double click and a whole-word
-/// find take the same characters to be one.
-fn is_word_character(character: char) -> bool {
-    character.is_alphanumeric() || character == '_'
 }
 
 /// Where `needle` sits in one drawn line, between the two character bounds, if it does.

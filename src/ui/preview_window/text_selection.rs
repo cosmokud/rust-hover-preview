@@ -81,6 +81,14 @@ pub(super) fn shift_is_down() -> bool {
     unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000 != 0 }
 }
 
+/// Whether either Ctrl is held, asked the same way Shift is. The find bar's field reads it for the
+/// chords it owns — `Ctrl`+`A`, `C`, `X`, `V`, `Z`, `Y` and the two word-wise caret moves and
+/// deletes — because a modifier is polled rather than carried by the message that brings the key
+/// (see `text_find::key_edit`).
+pub(super) fn control_is_down() -> bool {
+    unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0 }
+}
+
 /// Move the end of a selection to a point. Answers whether a drag is running, so
 /// the caller knows whether it is the one holding the capture.
 pub(super) fn extend_text_selection(x: i32, y: i32) -> Option<bool> {
@@ -219,6 +227,19 @@ pub(super) unsafe fn copy_text_preview(hwnd: HWND) -> bool {
         return false;
     };
 
+    write_clipboard_text(hwnd, &text)
+}
+
+/// Put a run of text on the clipboard, answering whether it was taken.
+///
+/// **The one clipboard writer this window has.** A copy of the page's selection and a copy or a cut
+/// in a find bar's query are the same act on the same clipboard, and a second writer would be a
+/// second place for the global block's ownership to be got wrong: the clipboard owns the block once
+/// `SetClipboardData` takes it, and only the failure paths may free it.
+///
+/// The clipboard is owned by one window at a time, so this opens it, hands over a movable block of
+/// UTF-16, and closes it again; a failure at any step leaves the previous clipboard contents alone.
+pub(super) unsafe fn write_clipboard_text(hwnd: HWND, text: &str) -> bool {
     if OpenClipboard(hwnd).is_err() {
         return false;
     }
@@ -247,6 +268,38 @@ pub(super) unsafe fn copy_text_preview(hwnd: HWND) -> bool {
 
     let _ = CloseClipboard();
     copied
+}
+
+/// What the clipboard holds, as text, or nothing where it holds none.
+///
+/// This is the thin half of the find bar's paste: it opens the clipboard, takes the Unicode text in
+/// it and closes it again, and what it hands back is the clipboard's text as it stands — a block of
+/// several lines, a byte-order mark and all. Turning that into one line a query can hold is
+/// `text_find_field::sanitize_pasted`, which is pure and asked by its own tests; a clipboard cannot
+/// be mocked without the test becoming a test of the mock, so this door is left untested and as
+/// small as it can be.
+pub(super) unsafe fn clipboard_text(hwnd: HWND) -> Option<String> {
+    if IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_err() || OpenClipboard(hwnd).is_err()
+    {
+        return None;
+    }
+
+    let mut text = None;
+    if let Ok(block) = GetClipboardData(CF_UNICODETEXT.0 as u32) {
+        let block = HGLOBAL(block.0);
+        let units = GlobalLock(block) as *const u16;
+        if !units.is_null() {
+            let mut length = 0usize;
+            while *units.add(length) != 0 {
+                length += 1;
+            }
+            text = String::from_utf16(std::slice::from_raw_parts(units, length)).ok();
+            let _ = GlobalUnlock(block);
+        }
+    }
+
+    let _ = CloseClipboard();
+    text
 }
 
 /// Ask for Ctrl+C to copy the preview's selection.

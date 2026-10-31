@@ -40,7 +40,9 @@ pub(crate) use caption::{
     button_at, button_boxes, caption_fits, measure_caption_text, paint_caption, Caption,
     CaptionButton,
 };
-pub(crate) use find_bar::{find_bar_layout, paint_find_bar, FindBar, FindBarPaint, FindBarPart};
+pub(crate) use find_bar::{
+    find_bar_layout, paint_find_bar, query_index_at, FindBar, FindBarPaint, FindBarPart,
+};
 pub(crate) use menu::{
     menu_flyout_from_menu, menu_flyout_gap_holds, menu_popup_from_point, menu_popup_shifted,
     menu_row_at, paint_menu_popup, MenuArrow, MenuMark, MenuPopup, MenuRow, MENU_SHADOW_PIXELS,
@@ -57,7 +59,7 @@ use crate::text::text_paint::{self, DibSurface};
 #[cfg(test)]
 use caption::{fit_title, longest_prefix_that_fits, paint_glyph, CaptionButtonBox, BUTTON_PIXELS};
 #[cfg(test)]
-use find_bar::{step_mark_legs, step_mark_shape};
+use find_bar::{index_at_column, query_origin, step_mark_legs, step_mark_shape};
 #[cfg(test)]
 use primitives::{caption_style, clock_text, draw_chevron, measure_text, GLYPH_PIXELS};
 #[cfg(test)]

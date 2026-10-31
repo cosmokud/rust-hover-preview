@@ -11,19 +11,27 @@
 //! `text_paint::scaled` pixels, so the card at 150% is the card rather than a small one in a large
 //! corner.
 //!
-//! The card says what the reader typed and nothing else: the query with a solid caret after it, the
-//! count of the place they are on, the two switches and the three commands. A caret that blinked would
-//! put a static page on the frame cadence for as long as the bar was up, so it is drawn solid.
+//! The card says what the reader typed and nothing else: the query as a field — its characters, the
+//! washed selection between two of them and the caret at the focus end — the count of the place they
+//! are on, the two switches and the three commands. Nothing is a Windows edit control: the query is
+//! this app's own text in this app's own pixels, and every place in it is a byte index the field
+//! keeps and this card turns into a column (see `text_find_field`).
+//!
+//! **The caret blinks, and only the tick turns it.** A page of text is not on the frame cadence, so a
+//! caret that asked for a paint of its own would put one there; instead the blink is the field's own
+//! clock, asked on the ticks a pin already takes, and this paint is handed the lit half it is in (see
+//! `FindBarPaint::caret_lit` and `text_find::settle`).
 //!
 //! **A control is a button and is drawn as one.** The pointer over one of the five washes its own box,
 //! a press washes it further and inks its mark with the accent, and the two chevrons are the buttons a
 //! hand holds down rather than presses once (see `FindBarPaint` and `text_find`).
 
 use super::primitives::{
-    caption_style, draw_cross, fill_box, fill_round_rect, measure_text, stroke_round_rect,
-    stroke_segment, surface_pixels, ChromePalette,
+    caption_style, draw_cross, fill_box, fill_round_rect, measure_run, measure_text,
+    stroke_round_rect, stroke_segment, surface_pixels, ChromePalette,
 };
 use crate::text::text_paint::{self, DibSurface};
+use std::cell::RefCell;
 use windows::Win32::Foundation::RECT;
 
 /// The card's size and the room its rows are given, in the pixels a display's scale multiplies.
@@ -57,6 +65,12 @@ const FIND_BAR_MARK_STROKE: f32 = 1.6;
 const FIND_BAR_HOVER_WASH: f32 = 0.10;
 const FIND_BAR_PRESSED_WASH: f32 = 0.18;
 const FIND_BAR_ON_WASH: f32 = 0.24;
+
+/// How far the field's selected characters are washed toward the card's text: the same shade the
+/// page itself washes its selection with where its theme names no selection colour of its own, so a
+/// selection in the query reads as the selection under it (see `layout::paint` and its
+/// `blend(page, foreground, 0.25)`).
+const FIND_BAR_SELECTION_WASH: f32 = 0.25;
 
 /// Where a find bar is, in the window's own coordinates: the card, the row a query is typed into, the
 /// count at its right end, and the five controls under it.
@@ -107,6 +121,12 @@ impl FindBar {
     pub(crate) fn holds(&self, x: i32, y: i32) -> bool {
         inside(self.panel, x, y)
     }
+
+    /// Whether a point is in the row the query is drawn in, which is where a press places the caret
+    /// rather than asking nothing of the bar (see `text_find::press_the_field`).
+    pub(crate) fn holds_query(&self, x: i32, y: i32) -> bool {
+        inside(self.query, x, y)
+    }
 }
 
 /// What the card says: the query, the count of the place the reader is on, and the two switches.
@@ -115,6 +135,15 @@ impl FindBar {
 /// under its lock and the lock is let go of before anything is drawn (see `PinnedPaint`).
 pub(crate) struct FindBarPaint {
     pub(crate) query: String,
+    /// The caret's place and the other end of the selection, in byte indices of `query` on character
+    /// boundaries. `anchor` equal to `caret` is a caret with nothing selected; anything else is a
+    /// selection drawn washed between the two, with the caret at `caret` whichever end that is (see
+    /// `text_find_field::Field`).
+    pub(crate) caret: usize,
+    pub(crate) anchor: usize,
+    /// Whether the caret is drawn at this moment, which is the blink the field's own clock turns
+    /// over: solid from every edit, and off for half of each blink after it (see `CaretBlink`).
+    pub(crate) caret_lit: bool,
     /// The control the pointer is over, and the one a press is holding: what a control's box is washed
     /// for, and what the two chevrons step from while they are held (see `text_find::hover` and
     /// `text_find::press`).
@@ -240,6 +269,86 @@ pub(crate) fn find_bar_layout(width: i32, height: i32, top: i32, dpi: u32) -> Fi
 /// two buttons that meet share an edge rather than a column.
 fn inside(rect: RECT, x: i32, y: i32) -> bool {
     x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+}
+
+thread_local! {
+    /// A one-pixel surface the query's own columns are measured on, kept for the life of the thread:
+    /// a press, every move of the drag after it and every blink of the caret ask the same question,
+    /// and a surface — with the font selected into it — made per message would be the field's cost
+    /// for the one thing it draws. It is not the card's own surface, because a press arrives before
+    /// any paint of the bar it is a press on.
+    static MEASURE_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+}
+
+/// Where the query is drawn from, given how wide it is: the field's left edge where it fits, and its
+/// right edge less the run where it does not. A query too long for its row keeps its end — the end a
+/// reader is typing at — on the card, and its beginning is what is cut.
+pub(super) fn query_origin(bar: &FindBar, measured: i32) -> i32 {
+    (bar.query.right - measured).min(bar.query.left)
+}
+
+/// The byte index in `query` a point names: the character boundary nearest the point, measured from
+/// the column the query is really drawn at rather than from the field's left edge.
+///
+/// A press between two letters means the boundary between them, so a point on a character's left
+/// half puts the caret before it and one on its right half after it. The index is a byte index on a
+/// character boundary, which is what the field's caret is (see `text_find_field::Field`).
+pub(crate) fn query_index_at(bar: &FindBar, query: &str, x: i32, dpi: u32) -> usize {
+    if query.is_empty() {
+        return 0;
+    }
+
+    let columns = query_columns(query, dpi);
+    let origin = query_origin(bar, columns.last().copied().unwrap_or(0));
+    let character = index_at_column(&columns, origin, x);
+
+    query
+        .char_indices()
+        .nth(character)
+        .map_or(query.len(), |(at, _)| at)
+}
+
+/// The columns a query's characters end at, measured on the kept surface at the display's scale.
+///
+/// The style's colours are the card's own, but only its metrics are read: a font's extents do not
+/// depend on the ink it is asked for, and the palette is not read here because a press can arrive
+/// while the theme is being reloaded and a place in a query is not worth waiting for one.
+fn query_columns(query: &str, dpi: u32) -> Vec<i32> {
+    MEASURE_SURFACE.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if cell.is_none() {
+            *cell = DibSurface::create(1, 1);
+        }
+
+        cell.as_ref().map_or_else(
+            || vec![0],
+            |surface| measure_run(surface, &caption_style([0, 0, 0]), query, dpi as f32 / 96.0),
+        )
+    })
+}
+
+/// The place in a run a column names: the boundary nearest the point, given the column the run is
+/// drawn from and the width of every character before it.
+///
+/// `columns` is the run's own prefix widths, beginning with a zero: `columns[k]` is the width of the
+/// first `k` characters, and its last element is the run's whole width. The origin is passed rather
+/// than assumed to be the field's left edge, because a query too long for its row is drawn from the
+/// right (see `query_origin`).
+pub(super) fn index_at_column(columns: &[i32], origin: i32, x: i32) -> usize {
+    let at = x - origin;
+    if at <= 0 || columns.len() < 2 {
+        return 0;
+    }
+
+    for index in 1..columns.len() {
+        let (left, right) = (columns[index - 1], columns[index]);
+        if at < right {
+            let before = (at - left) * 2 < right - left;
+            return if before { index - 1 } else { index };
+        }
+    }
+
+    columns.len() - 1
 }
 
 /// Paint the card: its panel and hairline, the two switches where they are on, the three marks, the
@@ -439,33 +548,95 @@ pub(crate) fn paint_find_bar(
     // a blank one carried over the panel as black.
     let mut boxes: Vec<RECT> = Vec::new();
 
-    // The query is drawn from the right where it is wider than the room it has, so the end of a long
+    // The query, as the columns its characters end at: measured once, and read by everything that has
+    // to place something in the run — the wash under a selection, the pieces the run is drawn in, and
+    // the caret. A query wider than the room it has is drawn from the right, so the end of a long
     // query — the end a reader is typing at — is what stays on the card and its beginning is what is
-    // cut. The place it really starts at is kept, because the caret is drawn where the text is rather
-    // than where the field begins (see the caret below).
-    let measured = if state.query.is_empty() {
-        0
+    // cut. The place it really starts at is kept, because a press and the caret are placed where the
+    // text is rather than where the field begins (see `query_origin`).
+    let columns = if state.query.is_empty() {
+        vec![0]
     } else {
-        measure_text(surface, &style, &state.query, scale)
+        measure_run(surface, &style, &state.query, scale)
     };
-    let origin = (bar.query.right - measured).min(bar.query.left);
+    let measured = columns.last().copied().unwrap_or(0);
+    let origin = query_origin(bar, measured);
     let line_top = centered_top(bar.query);
 
+    // The two ends of the selection, in characters of the run rather than in its bytes: a column is
+    // one character wide here, and a character outside the basic plane is one column as well as one
+    // `char` (see `measure_run`).
+    let characters = state.query.chars().count();
+    let caret = char_index(&state.query, state.caret).min(characters);
+    let anchor = char_index(&state.query, state.anchor).min(characters);
+    let selected = (anchor != caret).then(|| (anchor.min(caret), anchor.max(caret)));
+
+    // A selection is washed in the field the way the page washes its own. It is put down in the
+    // window's pixels before the runs are carried across, so that a glyph over it is composited over
+    // the wash rather than over the panel; the pieces below then draw their own boxes in the same
+    // wash, which keeps what is carried across the run's own colour.
+    let wash = text_paint::blend(panel_color, palette.foreground, FIND_BAR_SELECTION_WASH);
+    if let Some((from, to)) = selected {
+        let left = (origin + columns[from]).clamp(bar.query.left, bar.query.right);
+        let right = (origin + columns[to]).clamp(bar.query.left, bar.query.right);
+        if right > left {
+            fill_box(
+                buffer,
+                width,
+                RECT {
+                    left,
+                    top: line_top,
+                    right,
+                    bottom: line_top + cell,
+                },
+                wash,
+                1.0,
+            );
+        }
+    }
+
+    // The run is drawn in the pieces the selection cuts it into, each at its own column and over its
+    // own background: a selected piece's background is the wash, so the run and its selection cannot
+    // disagree about where one ends and the other begins.
     if !state.query.is_empty() {
-        let box_ = RECT {
-            top: line_top,
-            bottom: line_top + cell,
-            ..bar.query
-        };
-        painter.draw(
-            &state.query,
-            origin - bar.panel.left,
-            on_the_surface(box_),
-            &style,
-            palette.foreground,
-            panel_color,
-        );
-        boxes.push(box_);
+        let pieces: Vec<char> = state.query.chars().collect();
+        let mut edges = vec![0usize, characters];
+        if let Some((from, to)) = selected {
+            edges.push(from);
+            edges.push(to);
+        }
+        edges.sort_unstable();
+        edges.dedup();
+
+        for pair in edges.windows(2) {
+            let (from, to) = (pair[0], pair[1]);
+            if from >= to {
+                continue;
+            }
+
+            let text: String = pieces[from..to].iter().collect();
+            let left = origin + columns[from];
+            let right = origin + columns[to];
+            let box_ = RECT {
+                left,
+                top: line_top,
+                right,
+                bottom: line_top + cell,
+            };
+            let background = match selected {
+                Some((start, end)) if start <= from && to <= end => wash,
+                _ => panel_color,
+            };
+            painter.draw(
+                &text,
+                left - bar.panel.left,
+                on_the_surface(box_),
+                &style,
+                palette.foreground,
+                background,
+            );
+            boxes.push(box_);
+        }
     }
 
     let count = if state.total == 0 {
@@ -531,32 +702,44 @@ pub(crate) fn paint_find_bar(
 
     carry_text_across(surface, buffer, width, bar.panel);
 
-    // The caret: one column at the end of what was typed, placed where the query was really drawn
-    // rather than off the field's left edge — a long query is right-aligned, and a caret counted from
-    // the left of the field is a caret nowhere near the text.
+    // The caret: one column at the place in the run the caret is at, placed where the query was
+    // really drawn rather than off the field's left edge — a long query is right-aligned, and a caret
+    // counted from the left of the field is a caret nowhere near the text. With a selection it stands
+    // at the focus end of it, which is where the next character typed will land.
     //
     // It is the text's own line and not the row's: `cell` is the run's height and `line_top` its top,
     // so the column spans that box, inset a pixel at either end so that it sits inside the line rather
-    // than on its edges. It is drawn solid, at full coverage and in the accent: a page is not on the
-    // frame cadence, and a caret that blinked would put it there for as long as the bar was up.
+    // than on its edges. It is drawn solid, at full coverage and in the accent, while its blink is on:
+    // the field is the one caret a pinned page has, and it blinks at the rate the system's own caret
+    // blinks rather than putting a static page on the frame cadence for ever.
     //
     // It is put down after the runs have been carried across and not before: a run's box is carried as
     // whole pixels, so a caret painted under one is a column of panel colour again.
-    let caret = text_paint::scaled(1, scale).max(1);
-    let inset = text_paint::scaled(1, scale).max(1);
-    let caret_x = (origin + measured).clamp(bar.query.left, bar.query.right);
-    fill_box(
-        buffer,
-        width,
-        RECT {
-            left: caret_x,
-            top: line_top + inset,
-            right: caret_x + caret,
-            bottom: (line_top + cell - inset).max(line_top + inset + 1),
-        },
-        palette.accent,
-        1.0,
-    );
+    if state.caret_lit {
+        let caret_width = text_paint::scaled(1, scale).max(1);
+        let inset = text_paint::scaled(1, scale).max(1);
+        let caret_x = (origin + columns.get(caret).copied().unwrap_or(measured))
+            .clamp(bar.query.left, bar.query.right);
+        fill_box(
+            buffer,
+            width,
+            RECT {
+                left: caret_x,
+                top: line_top + inset,
+                right: caret_x + caret_width,
+                bottom: (line_top + cell - inset).max(line_top + inset + 1),
+            },
+            palette.accent,
+            1.0,
+        );
+    }
+}
+
+/// The character index of a byte index: a caret is a place in a UTF-8 string, and a column is a place
+/// among its characters, so a paint or a press walks the one to name the other. A byte index that has
+/// somehow landed inside a character is read as the boundary before it rather than panicking.
+fn char_index(text: &str, byte: usize) -> usize {
+    text.char_indices().take_while(|(at, _)| *at < byte).count()
 }
 
 /// One chevron pointing up or down, the mark the two step buttons carry: two arms closing on the one

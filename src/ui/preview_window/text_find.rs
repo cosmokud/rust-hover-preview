@@ -52,6 +52,9 @@ pub(super) fn is_open() -> bool {
 pub(super) struct FindBarPlacement {
     pub(super) card: pin_chrome::FindBar,
     pub(super) state: pin_chrome::FindBarPaint,
+    /// The scale the card is drawn at: what a press is turned into a place in the query by, because
+    /// the query's own columns are measured in the same pixels its glyphs are drawn in.
+    pub(super) dpi: u32,
 }
 
 /// Where the bar is and what it says, or nothing while it is down or the pin holds something other
@@ -90,7 +93,10 @@ fn find_bar_over(pin: &PinnedPreview) -> Option<FindBarPlacement> {
     Some(FindBarPlacement {
         card: pin_chrome::find_bar_layout(state.width as i32, state.height as i32, page_top, dpi),
         state: pin_chrome::FindBarPaint {
-            query: find.query.clone(),
+            query: find.field.text().to_string(),
+            caret: find.field.caret(),
+            anchor: find.field.anchor(),
+            caret_lit: find.blink.lit(),
             current: find.current,
             total: find.matches.len(),
             case_sensitive: find.case_sensitive,
@@ -98,20 +104,23 @@ fn find_bar_over(pin: &PinnedPreview) -> Option<FindBarPlacement> {
             hovered: find.hovered,
             pressed: find.pressed,
         },
+        dpi,
     })
 }
 
 /// A press on the find bar over the page, answering whether it landed on the card, and what the card
 /// was asked of it.
 ///
-/// A press on the card's own face — the query's row, the gaps between its controls — is the bar's as
-/// well as one on a control: the card floats over the text, so nothing under it is what the hand meant,
-/// and there is no caret in the query for a press to place. What a control asks for is queued like a
-/// key's, for the same reason: the search styles the document and the tick is what may take that work
-/// (see `settle`).
+/// A press on the card's own face — the row the query is drawn in, the gaps between its controls —
+/// is the bar's as well as one on a control: the card floats over the text, so nothing under it is
+/// what the hand meant. A press in the query places the caret, which is the whole of what makes the
+/// field a field rather than a picture of one (see `press_the_field`); a press on the rest of the
+/// face asks nothing. What a control asks for is queued like a key's, for the same reason: the
+/// search styles the document and the tick is what may take that work (see `settle`).
 ///
-/// A press on a control is also a button held, which the card draws and, on the two chevrons, steps
-/// on while it lasts (see `take_the_press` and `step_the_hold`).
+/// A press is also a hand on a button, which the card draws and, on the two chevrons, steps on while
+/// it lasts (see `take_the_press` and `step_the_hold`), and a press in the query is a drag until
+/// the release comes (see `drag`).
 pub(super) fn press(x: i32, y: i32) -> bool {
     let Some(placed) = find_bar() else {
         return false;
@@ -129,10 +138,112 @@ pub(super) fn press(x: i32, y: i32) -> bool {
         Some(pin_chrome::FindBarPart::Previous) => note(FindEdit::Step(-1)),
         Some(pin_chrome::FindBarPart::Next) => note(FindEdit::Step(1)),
         Some(pin_chrome::FindBarPart::Close) => note(FindEdit::Close),
+        None if placed.card.holds_query(x, y) => press_the_field(&placed, x, y),
         None => {}
     }
 
     true
+}
+
+/// A press in the query: the caret at the character under the pointer, the word under it where the
+/// presses have run together into a double click, or the selection grown from its old anchor where
+/// `Shift` is held.
+///
+/// **The place is measured from the column the query is really drawn at.** A query wider than its
+/// field is drawn from the right, so a press turned into a place from the field's left edge would
+/// land a field's width away from the character the hand is on (see `pin_chrome::query_index_at`).
+///
+/// The double click is read rather than delivered: the pin's window class is not registered with
+/// `CS_DBLCLKS`, so a second press is a second `WM_LBUTTONDOWN` and two presses are one gesture by
+/// the time and the box Windows counts them in — the same road a double press on the page takes
+/// (see `begin_text_selection`).
+fn press_the_field(placed: &FindBarPlacement, x: i32, y: i32) {
+    let now = Instant::now();
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return;
+    };
+    let Some(find) = media
+        .as_mut()
+        .and_then(|media| media.text_state.as_mut())
+        .map(|state| &mut state.find)
+        .filter(|find| find.open)
+    else {
+        return;
+    };
+
+    let at = pin_chrome::query_index_at(&placed.card, find.field.text(), x, placed.dpi);
+    let run = find
+        .click_run
+        .filter(|(then, was, _)| within_double_click(*then, *was, now, (x, y)))
+        .map_or(1, |(_, _, presses)| presses.saturating_add(1));
+    find.click_run = Some((now, (x, y), run));
+
+    match (run, text_selection::shift_is_down()) {
+        // A second press takes the word the pointer is on, by the page's own run rule: letters,
+        // digits and the underscore are one run, and a mark is its own (see
+        // `text_preview::run_at`). A third press is the same word again rather than a whole line —
+        // the query is one line, so there is no line above it to take.
+        (2.., _) => {
+            let (start, end) = find.field.word_at(at);
+            find.field.place_caret(start, false);
+            find.field.place_caret(end, true);
+        }
+        (_, true) => find.field.place_caret(at, true),
+        (_, false) => find.field.place_caret(at, false),
+    }
+
+    find.dragging = true;
+    find.blink.restart(now, caret_blink());
+}
+
+/// Carry a press in the field on: the selection grows to the place under the pointer, and answers
+/// whether the card changed, which is what a move repaints on.
+///
+/// Nothing is repainted for a move that stays inside the character the selection already ends on: a
+/// drag is many messages a second and most of them do not move the caret at all (see
+/// `pinned_mouse_move`, which repaints on the same rule).
+pub(super) fn drag(x: i32) -> bool {
+    let Some(placed) = find_bar() else {
+        return false;
+    };
+
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+    let Some(find) = media
+        .as_mut()
+        .and_then(|media| media.text_state.as_mut())
+        .map(|state| &mut state.find)
+        .filter(|find| find.open && find.dragging)
+    else {
+        return false;
+    };
+
+    let at = pin_chrome::query_index_at(&placed.card, find.field.text(), x, placed.dpi);
+    let changed = find.field.place_caret_changed(at, true);
+    if changed {
+        find.blink.restart(Instant::now(), caret_blink());
+    }
+    changed
+}
+
+/// How long the caret is drawn before it blinks the other way: the system's own caret rate where it
+/// has one, so that the field blinks at the pace the reader's own text fields do.
+///
+/// `GetCaretBlinkTime` answers zero where a caret is not to blink at all and `u32::MAX` where it
+/// could not be asked; both are a caret this field still draws, at the ordinary Windows pace.
+pub(super) fn caret_blink() -> Duration {
+    const ORDINARY_BLINK_MS: u64 = 530;
+
+    let asked = unsafe { GetCaretBlinkTime() };
+    let millis = u64::from(asked);
+    let fallback = if millis == 0 || asked == u32::MAX {
+        ORDINARY_BLINK_MS
+    } else {
+        millis
+    };
+
+    Duration::from_millis(fallback.max(1))
 }
 
 /// Where the pointer is on the card, asked on every move a pin is sent: the control under it is drawn
@@ -178,8 +289,9 @@ pub(super) fn hover_over(pin: &PinnedPreview, x: i32, y: i32) -> bool {
     true
 }
 
-/// Whether the card is holding a press, which is what says the pointer is to be kept until the release
-/// comes back to this window rather than to whatever the hand has slid onto (see `window_proc`).
+/// Whether the card is holding a press — a control under a hand, or the field being dragged — which
+/// is what says the pointer is to be kept until the release comes back to this window rather than
+/// to whatever the hand has slid onto (see `window_proc`).
 pub(super) fn a_control_is_held() -> bool {
     CURRENT_MEDIA
         .lock()
@@ -188,14 +300,14 @@ pub(super) fn a_control_is_held() -> bool {
             media
                 .as_ref()
                 .and_then(|media| media.text_state.as_ref())
-                .map(|state| state.find.pressed.is_some())
+                .map(|state| state.find.pressed.is_some() || state.find.dragging)
         })
         .unwrap_or(false)
 }
 
-/// A release of a press the card took: the control it lit is let go of, and a chevron held down stops
-/// where it got to. Answers whether the card was holding a press, which is what makes the release the
-/// card's rather than the page's (see `window_proc`).
+/// A release of a press the card took: the control it lit is let go of, a drag in the field stops
+/// where it got to, and a chevron held down stops stepping. Answers whether the card was holding a
+/// press, which is what makes the release the card's rather than the page's (see `window_proc`).
 pub(super) fn release() -> bool {
     let Ok(mut media) = CURRENT_MEDIA.lock() else {
         return false;
@@ -209,8 +321,9 @@ pub(super) fn release() -> bool {
     };
 
     let held = find.pressed.take().is_some();
+    let dragging = std::mem::replace(&mut find.dragging, false);
     let stepping = find.hold.take().is_some();
-    held || stepping
+    held || dragging || stepping
 }
 
 /// Take a press on one of the card's controls: the part is drawn under the hand until the release
@@ -297,12 +410,15 @@ pub(super) fn step_the_hold(now: Instant) {
 
 /// Open the bar over the pinned page on screen, or ask the same search of a bar that is already
 /// open: `Ctrl`+`F` over a bar that holds a query refocuses it rather than throwing the query away,
-/// because the reader who reaches for the key again is reaching for the bar they were just in.
+/// because the reader who reaches for the key again is reaching for the bar they were just in — and
+/// it selects the whole query, the way the browser they are used to does, so that the next character
+/// typed replaces it rather than appending to it (see `text_find_field::Field::select_all`).
 ///
 /// The caret has nowhere to move to — the bar's query is its only field, so being up is being
-/// focused — and the query is searched again from the line the reader is on either way, because a
-/// bar closed and opened again comes back at the query it was left with rather than at its matches
-/// (see `FindState`).
+/// focused — and the query is searched again from the line the reader is on when the bar was away,
+/// because a bar closed and opened again comes back at the query it was left with rather than at its
+/// matches (see `FindState`). A bar that was already up has nothing to search again: its query has
+/// not changed, and the reader asked for the field rather than for the document.
 pub(super) fn open_text_find() {
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         let Some(find) = media
@@ -313,8 +429,14 @@ pub(super) fn open_text_find() {
             return;
         };
 
-        find.open = true;
-        find.pending.push(FindEdit::SearchAgain);
+        if find.open {
+            find.field.select_all();
+        } else {
+            find.open = true;
+            find.field.select_all();
+            find.pending.push(FindEdit::SearchAgain);
+        }
+        find.blink.restart(Instant::now(), caret_blink());
     }
 }
 
@@ -367,27 +489,33 @@ pub(super) fn typed_character(wparam: usize) -> Option<char> {
 /// What one key pressed on the pin's own window asks of a bar that is up, or nothing for a key the
 /// bar only swallows (see `window_proc`).
 ///
+/// **A key that would type a character is not here.** A letter reaches the field as `WM_CHAR`, where
+/// `TranslateMessage` has already turned it into one, and the same is true of every control the
+/// keyboard delivers as a character: a `Ctrl` chord arrives both as a key and as a control character,
+/// and it is answered here so that `typed_character` can drop the character (see `typed_character`).
+///
 /// `Enter` and the down arrow step on and `Shift`+`Enter` and the up arrow step back, which is the
 /// order every find bar a reader has used before this one has. The page's own keys — the two page
 /// keys, its two ends and a Space — ask nothing here and are swallowed above, and `F3` asks for the
 /// same step its own key always has, over the bar's query rather than over the page's selection.
+///
+/// **`Ctrl`+`U` is deliberately not a key here.** It clears a line in a browser's view source and
+/// underlines in Office, so a reader who presses it has asked for nothing this field owns; emptying
+/// the query is `Esc`'s (see `FindEdit::Close`).
 pub(super) fn key_edit(vk: i32) -> Option<FindEdit> {
+    let control = text_selection::control_is_down();
+    let shift = text_selection::shift_is_down();
+
     if vk == VK_ESCAPE.0 as i32 {
-        return Some(FindEdit::Close);
+        return Some(FindEdit::ClearOrClose);
     }
 
     if vk == VK_RETURN.0 as i32 {
-        return Some(FindEdit::Step(if text_selection::shift_is_down() {
-            -1
-        } else {
-            1
-        }));
+        return Some(FindEdit::Step(if shift { -1 } else { 1 }));
     }
 
-    if vk == VK_BACK.0 as i32 {
-        return Some(FindEdit::Deleted);
-    }
-
+    // The two arrows and `F3` step the matches whether or not `Ctrl` is down: they are the find's
+    // own keys, and the bar must not stop stepping the moment a hand rests on `Ctrl`.
     if vk == VK_DOWN.0 as i32 || vk == VK_F3.0 as i32 {
         return Some(FindEdit::Step(1));
     }
@@ -396,7 +524,52 @@ pub(super) fn key_edit(vk: i32) -> Option<FindEdit> {
         return Some(FindEdit::Step(-1));
     }
 
-    None
+    if control {
+        return match vk {
+            v if v == VK_A.0 as i32 => Some(FindEdit::SelectAll),
+            v if v == VK_C.0 as i32 => Some(FindEdit::Copy),
+            v if v == VK_X.0 as i32 => Some(FindEdit::Cut),
+            v if v == VK_V.0 as i32 => Some(FindEdit::Paste),
+            // The two undo chords: `Ctrl`+`Z` puts the last edit back, `Ctrl`+`Y` and
+            // `Ctrl`+`Shift`+`Z` put back what an undo took away — the pair Windows' own text
+            // fields answer.
+            v if v == VK_Z.0 as i32 => Some(if shift {
+                FindEdit::Redo
+            } else {
+                FindEdit::Undo
+            }),
+            v if v == VK_Y.0 as i32 => Some(FindEdit::Redo),
+            v if v == VK_LEFT.0 as i32 => {
+                Some(FindEdit::Move(text_find_field::Motion::WordLeft, shift))
+            }
+            v if v == VK_RIGHT.0 as i32 => {
+                Some(FindEdit::Move(text_find_field::Motion::WordRight, shift))
+            }
+            v if v == VK_HOME.0 as i32 => {
+                Some(FindEdit::Move(text_find_field::Motion::Home, shift))
+            }
+            v if v == VK_END.0 as i32 => Some(FindEdit::Move(text_find_field::Motion::End, shift)),
+            v if v == VK_BACK.0 as i32 => Some(FindEdit::DeleteWordLeft),
+            v if v == VK_DELETE.0 as i32 => Some(FindEdit::DeleteWordRight),
+            _ => None,
+        };
+    }
+
+    match vk {
+        v if v == VK_BACK.0 as i32 => Some(FindEdit::Backspace),
+        v if v == VK_DELETE.0 as i32 => Some(FindEdit::DeleteForward),
+        v if v == VK_LEFT.0 as i32 => Some(FindEdit::Move(
+            text_find_field::Motion::CharacterLeft,
+            shift,
+        )),
+        v if v == VK_RIGHT.0 as i32 => Some(FindEdit::Move(
+            text_find_field::Motion::CharacterRight,
+            shift,
+        )),
+        v if v == VK_HOME.0 as i32 => Some(FindEdit::Move(text_find_field::Motion::Home, shift)),
+        v if v == VK_END.0 as i32 => Some(FindEdit::Move(text_find_field::Motion::End, shift)),
+        _ => None,
+    }
 }
 
 /// Answer one command the keyboard hook took while the page had the keys, where a bar is up.
@@ -420,7 +593,7 @@ pub(super) fn take_hooked_key(command: PinCommand) -> bool {
     match command {
         PinCommand::PageBack => note(FindEdit::Step(-1)),
         PinCommand::PageOn | PinCommand::FindNext => note(FindEdit::Step(1)),
-        PinCommand::Close => note(FindEdit::Close),
+        PinCommand::Close => note(FindEdit::ClearOrClose),
         _ => {}
     }
 
@@ -440,6 +613,13 @@ struct Settled {
     query: String,
     case_sensitive: bool,
     whole_word: bool,
+    /// Text to put on the clipboard once the page's lock is back: a copy's selection, or what a cut
+    /// took out. The clipboard is opened on the tick's window rather than under this lock, because
+    /// the writer asks this module's own lock before it writes (see `text_selection::copy_text_preview`).
+    copy: Option<String>,
+    /// Whether the clipboard is to be read and pasted into the field: the read happens on the tick
+    /// too, for the same reason, and the field is written once its text is in hand (see `settle`).
+    paste: bool,
 }
 
 /// Run everything the bar was told since the last tick: type or delete, flip a switch, step through
@@ -460,9 +640,21 @@ pub(super) unsafe fn settle(hwnd: HWND) {
     // makes, and the loop keeps the cadence it has (see `step_the_hold`).
     step_the_hold(Instant::now());
 
-    let Some(settled) = take_settled() else {
+    let Some(mut settled) = take_settled() else {
+        // Nothing was said to the bar, so the only thing of its own that can have changed is the
+        // caret's blink: a bar that is up and holding text asks for a repaint twice a blink, and one
+        // that is down asks for nothing at all (see `CaretBlink`).
+        if the_caret_turned() {
+            render_layered_preview(hwnd);
+        }
         return;
     };
+
+    // A copy is the clipboard's whether or not the bar survives the same batch of keys: a cut
+    // followed by `Esc` puts the query on the clipboard before the bar it was cut in goes away.
+    if let Some(text) = settled.copy.take() {
+        text_selection::write_clipboard_text(hwnd, &text);
+    }
 
     if settled.closed {
         // The page does not move: a close is the highlights going, and what was found is kept by
@@ -473,6 +665,29 @@ pub(super) unsafe fn settle(hwnd: HWND) {
 
     if !settled.open {
         return;
+    }
+
+    // The clipboard is read and written here rather than under the page's lock, and before the
+    // search below, because a paste is a change to the query the search is about to read.
+    if settled.paste {
+        if let Some(pasted) = text_selection::clipboard_text(hwnd) {
+            if let Ok(mut media) = CURRENT_MEDIA.lock() {
+                if let Some(find) = media
+                    .as_mut()
+                    .and_then(|media| media.text_state.as_mut())
+                    .map(|state| &mut state.find)
+                    .filter(|find| find.open)
+                {
+                    let before = find.field.text().to_string();
+                    find.field.paste(&pasted);
+                    if find.field.text() != before {
+                        find.blink.restart(Instant::now(), caret_blink());
+                        settled.query = find.field.text().to_string();
+                        settled.search = true;
+                    }
+                }
+            }
+        }
     }
 
     if settled.search {
@@ -532,9 +747,28 @@ pub(super) unsafe fn settle(hwnd: HWND) {
     }
 }
 
-/// Take the bar's edits out of the page and apply the ones that need no document: a typed character,
-/// a backspace and the two switches change the query the search will read, and a step is kept for
-/// after the search has replaced the matches it counts through.
+/// Whether the caret's blink turned over on this tick. Asked only when the bar said nothing, so that
+/// a tick with an edit in hand answers the edit's solid caret rather than a blink that arrives in the
+/// same turn as it.
+fn the_caret_turned() -> bool {
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+    let Some(find) = media
+        .as_mut()
+        .and_then(|media| media.text_state.as_mut())
+        .map(|state| &mut state.find)
+        .filter(|find| find.open)
+    else {
+        return false;
+    };
+
+    find.blink.advance(Instant::now(), caret_blink())
+}
+
+/// Take the bar's edits out of the page and apply the ones that need no document: the field's own
+/// edits, its selection and its undo stack, the two switches, and a close — while a paste and a copy
+/// are held for the tick, which is the one that may take the clipboard (see `settle`).
 fn take_settled() -> Option<Settled> {
     let mut media = CURRENT_MEDIA.lock().ok()?;
     let state = media.as_mut()?.text_state.as_mut()?;
@@ -554,17 +788,40 @@ fn take_settled() -> Option<Settled> {
         query: String::new(),
         case_sensitive: false,
         whole_word: false,
+        copy: None,
+        paste: false,
     };
+    let before = find.field.text().to_string();
 
     for edit in std::mem::take(&mut find.pending) {
         match edit {
-            FindEdit::Typed(character) => {
-                find.query.push(character);
-                settled.search = true;
+            FindEdit::Typed(character) => find.field.insert(character),
+            FindEdit::Backspace => find.field.backspace(),
+            FindEdit::DeleteForward => find.field.delete(),
+            FindEdit::DeleteWordLeft => find.field.delete_word_left(),
+            FindEdit::DeleteWordRight => find.field.delete_word_right(),
+            FindEdit::Move(motion, extend) => {
+                find.field.move_caret(motion, extend);
             }
-            FindEdit::Deleted => {
-                find.query.pop();
-                settled.search = true;
+            FindEdit::SelectAll => find.field.select_all(),
+            FindEdit::Copy => {
+                let text = find.field.selected_text();
+                if !text.is_empty() {
+                    settled.copy = Some(text);
+                }
+            }
+            FindEdit::Cut => {
+                let text = find.field.cut();
+                if !text.is_empty() {
+                    settled.copy = Some(text);
+                }
+            }
+            FindEdit::Paste => settled.paste = true,
+            FindEdit::Undo => {
+                find.field.undo();
+            }
+            FindEdit::Redo => {
+                find.field.redo();
             }
             FindEdit::ToggleCase => {
                 find.case_sensitive = !find.case_sensitive;
@@ -576,15 +833,39 @@ fn take_settled() -> Option<Settled> {
             }
             FindEdit::SearchAgain => settled.search = true,
             FindEdit::Step(delta) => settled.step += delta,
+            FindEdit::ClearOrClose => {
+                // `Esc` is the field's clear first and the bar's close second: a query with text is
+                // emptied and left standing, and a query already empty is the bar going away. One
+                // key does both in turn rather than two keys doing one each, which is what makes it
+                // the clearing key a reader reaches for without closing what they were in.
+                if !find.field.text().is_empty() {
+                    find.field.clear();
+                    continue;
+                }
+
+                find.open = false;
+                find.matches.clear();
+                find.current = None;
+                find.pressed = None;
+                find.hold = None;
+                find.dragging = false;
+                find.click_run = None;
+                settled.closed = true;
+                settled.open = false;
+                break;
+            }
             FindEdit::Close => {
                 find.open = false;
                 find.matches.clear();
                 find.current = None;
-                // A bar that is away has no button under a hand and no chevron still stepping: a
-                // close from a key leaves neither, and the page under a pointer that is still down
-                // is the page's from here (see `take_the_press` and `release`).
+                // A bar that is away has no button under a hand, no chevron still stepping and no
+                // drag still growing a selection: a close from a key leaves none of them, and the
+                // page under a pointer that is still down is the page's from here (see
+                // `take_the_press` and `release`).
                 find.pressed = None;
                 find.hold = None;
+                find.dragging = false;
+                find.click_run = None;
                 settled.closed = true;
                 settled.open = false;
                 // Nothing after a close is read: a key pressed after the bar went away is a key for
@@ -594,7 +875,17 @@ fn take_settled() -> Option<Settled> {
         }
     }
 
-    settled.query = find.query.clone();
+    // Every edit leaves the caret solid for a blink, which is what a reader typing looks at (see
+    // `CaretBlink::restart`).
+    find.blink.restart(Instant::now(), caret_blink());
+
+    settled.query = find.field.text().to_string();
+    // A change to the query is the search running again, however it was made: a typed character, a
+    // deleted selection, an undo, a paste the tick applies next to this. A caret move and a select
+    // all change nothing the document is searched for.
+    if settled.query != before {
+        settled.search = true;
+    }
     settled.case_sensitive = find.case_sensitive;
     settled.whole_word = find.whole_word;
     settled.open = find.open;
