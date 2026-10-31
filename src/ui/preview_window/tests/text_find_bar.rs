@@ -64,6 +64,21 @@ fn first_line_now() -> usize {
         .expect("a pinned page keeps its place")
 }
 
+/// Where the caret and the other end of its selection stand in the query, which is what a move and an
+/// extension are read off (see `text_find_field::Field::caret` and `anchor`).
+fn caret_now() -> (usize, usize) {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| (state.find.field.caret(), state.find.field.anchor()))
+        })
+        .expect("a pinned page keeps a find bar")
+}
+
 /// Type a run of characters into the bar, searching after each one the way the tick does, and settle
 /// whatever the last one asked for.
 fn type_into_the_bar(text: &str) {
@@ -303,9 +318,9 @@ fn the_two_switches_search_again_under_their_own_answer() {
 }
 
 /// The keys a bar names are the bar's, and the ones it does not are swallowed rather than handed to
-/// the page: the page keys, the page's two ends, a Space, a subtitle step and the pin's own walk are
-/// all inert under a query, while the two arrows step the matches (see `text_find::take_hooked_key`
-/// and `key_edit`).
+/// the page: the pin's walk, a Space and a subtitle step are all inert under a query, while the two
+/// page keys — one command each with the arrow of the same direction — step the matches and the four
+/// keys a caret moves on move it (see `text_find::take_hooked_key_with` and `key_edit_with`).
 #[test]
 fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
     let _room = the_room_to_itself();
@@ -328,7 +343,7 @@ fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
         PinCommand::NextSubtitle,
     ] {
         assert!(
-            text_find::take_hooked_key(command),
+            text_find::take_hooked_key_with(command, text_find::Modifiers::default()),
             "{command:?} is a key the bar swallowed whole"
         );
     }
@@ -341,8 +356,11 @@ fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
         "nothing the page answers moved under the query: not its place, not its matches"
     );
 
-    // The two arrows are the bar's, as the page keys of their direction.
-    assert!(text_find::take_hooked_key(PinCommand::PageOn));
+    // The two arrows step the matches, as the page keys they share a command with do.
+    assert!(text_find::take_hooked_key_with(
+        PinCommand::PageOn,
+        text_find::Modifiers::default()
+    ));
     unsafe { text_find::settle(a_pin_window()) };
     assert_eq!(
         bar_now().3,
@@ -350,7 +368,10 @@ fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
         "the down arrow steps to the next match"
     );
 
-    assert!(text_find::take_hooked_key(PinCommand::PageBack));
+    assert!(text_find::take_hooked_key_with(
+        PinCommand::PageBack,
+        text_find::Modifiers::default()
+    ));
     unsafe { text_find::settle(a_pin_window()) };
     assert_eq!(
         bar_now().3,
@@ -394,7 +415,7 @@ fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
         assert_eq!(
             text_find::key_edit(vk.0 as i32),
             Some(FindEdit::Move(motion, false)),
-            "{vk:?} moves the caret inside the query"
+            "{vk:?} moves the caret inside the query on any road that is not the hook's"
         );
     }
     for vk in [VK_PRIOR, VK_NEXT, VK_SPACE] {
@@ -408,7 +429,390 @@ fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
     // A bar that is away leaves the pin's keys to the pin.
     text_find::note(FindEdit::Close);
     unsafe { text_find::settle(a_pin_window()) };
-    assert!(!text_find::take_hooked_key(PinCommand::PageOn));
+    assert!(!text_find::take_hooked_key_with(
+        PinCommand::PageOn,
+        text_find::Modifiers::default()
+    ));
+}
+
+/// The road a key pressed on a focused pin takes to the find bar's queue.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Road {
+    /// Swallowed by the keyboard hook and delivered as a `PinCommand` — the only road a key in
+    /// `key_input::PIN_KEY_COMMANDS` has, because a swallowed key never becomes a message.
+    Hook,
+    /// Delivered to the pin's window procedure as `WM_KEYDOWN`.
+    Key,
+    /// Delivered as `WM_CHAR`, where `TranslateMessage` has already made it a character.
+    Character,
+}
+
+/// What the bar queues for a command the hook took, read out of the queue the road writes rather than
+/// out of the model: the hook counts a number, and the edit it lands as is the bar's to name (see
+/// `text_find::take_hooked_key_with`).
+fn the_bar_takes(command: PinCommand, held: text_find::Modifiers) -> Option<FindEdit> {
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(find) = media
+            .as_mut()
+            .and_then(|media| media.text_state.as_mut())
+            .map(|state| &mut state.find)
+        {
+            find.pending.clear();
+        }
+    }
+
+    assert!(
+        text_find::take_hooked_key_with(command, held),
+        "{command:?} is a key the bar swallowed whole"
+    );
+
+    CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.text_state.as_ref())
+            .and_then(|state| state.find.pending.first().copied())
+    })
+}
+
+/// The edit a key lands as, and the road it took to land as one, by the roads a real pin gives it:
+/// the hook's command where the hook's table names the key, the window's own `key_edit_with` where it
+/// does not, and `typed_character` for a key that types one.
+fn the_road_a_key_takes(vk: u16, held: text_find::Modifiers) -> (Road, Option<FindEdit>) {
+    if let Some(command) = crate::shell::key_input::pin_key_command(vk as i32) {
+        let command =
+            hook_pin_key_command(command).expect("the hook's table names a pin's command");
+        return (Road::Hook, the_bar_takes(command, held));
+    }
+
+    if let Some(edit) = text_find::key_edit_with(vk as i32, held) {
+        return (Road::Key, Some(edit));
+    }
+
+    (
+        Road::Character,
+        text_find::typed_character(vk as usize).map(FindEdit::Typed),
+    )
+}
+
+/// The road the caret's keys take on a real pin: **the keyboard hook swallows them, and a swallowed
+/// key never becomes a message**, so the bar is the only thing that can read them — as the commands
+/// the hook counted (see `text_find::take_hooked_key_with`). `Shift` extends from the caret, `Ctrl`
+/// moves by a word, and a page key still steps the matches without touching the caret.
+#[test]
+fn the_caret_keys_the_hook_swallows_move_the_caret_under_a_query() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-caret-keys.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+
+    let (_, query, count, ..) = bar_now();
+    assert_eq!(caret_now(), (6, 6), "the caret is after the query typed");
+
+    let command = |command, held| {
+        assert!(
+            text_find::take_hooked_key_with(command, held),
+            "{command:?} is a key the bar swallowed whole"
+        );
+        unsafe { text_find::settle(a_pin_window()) };
+    };
+
+    // One character either way, by the commands `VK_LEFT`/`VK_RIGHT` count.
+    command(PinCommand::Previous, text_find::Modifiers::default());
+    assert_eq!(
+        caret_now(),
+        (5, 5),
+        "`←` moves the caret one character back"
+    );
+    command(PinCommand::Next, text_find::Modifiers::default());
+    assert_eq!(caret_now(), (6, 6), "`→` moves it forward again");
+
+    // The two ends, by the commands `VK_HOME`/`VK_END` count.
+    command(PinCommand::PageTop, text_find::Modifiers::default());
+    assert_eq!(caret_now(), (0, 0), "`Home` puts the caret at the start");
+    command(PinCommand::PageBottom, text_find::Modifiers::default());
+    assert_eq!(caret_now(), (6, 6), "`End` puts it at the end");
+
+    // `Shift` extends rather than collapses, and moves no text.
+    command(
+        PinCommand::Previous,
+        text_find::Modifiers {
+            shift: true,
+            control: false,
+        },
+    );
+    assert_eq!(
+        caret_now(),
+        (5, 6),
+        "`Shift`+`←` grows the selection back from the caret"
+    );
+    assert_eq!(bar_now().1, query, "and the query's text is left alone");
+
+    // `Ctrl` moves by a word.
+    command(
+        PinCommand::Previous,
+        text_find::Modifiers {
+            shift: false,
+            control: true,
+        },
+    );
+    assert_eq!(
+        caret_now(),
+        (0, 0),
+        "`Ctrl`+`←` goes to the start of the word"
+    );
+    command(
+        PinCommand::Next,
+        text_find::Modifiers {
+            shift: false,
+            control: true,
+        },
+    );
+    assert_eq!(caret_now(), (6, 6), "`Ctrl`+`→` goes to the end of it");
+
+    // The page keys step the matches and leave the caret where they found it.
+    let (caret, anchor) = caret_now();
+    command(PinCommand::PageOn, text_find::Modifiers::default());
+    assert_eq!(bar_now().3, Some(1), "the next match is the reader's");
+    assert_eq!((caret, anchor), caret_now(), "and the caret did not move");
+    assert_eq!(bar_now().2, count, "over the places the same query found");
+    command(PinCommand::PageBack, text_find::Modifiers::default());
+    assert_eq!(
+        bar_now().3,
+        Some(0),
+        "and the page key back steps them back"
+    );
+    assert_eq!(
+        (caret, anchor),
+        caret_now(),
+        "with the caret still where it was"
+    );
+}
+
+/// A key that moved nothing draws nothing: `←` at the start of a query is an edit the road queues
+/// like any other, and a repaint of this band copies the whole page frame under the card (see
+/// `text_find::settle` and `text_find::BAR_PAINTS`).
+#[test]
+fn a_key_that_moved_nothing_asks_for_no_repaint() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-no-op-key.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+
+    let paints = || text_find::BAR_PAINTS.load(Ordering::Relaxed);
+
+    // `Home` from the end of the query is a move, and a move asks for the band once.
+    let before = paints();
+    assert!(text_find::take_hooked_key_with(
+        PinCommand::PageTop,
+        text_find::Modifiers::default()
+    ));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        caret_now(),
+        (0, 0),
+        "the caret is at the start of the query"
+    );
+    assert_eq!(
+        paints(),
+        before + 1,
+        "a move that moved asked for the band again"
+    );
+
+    // `Home` again, `←` where there is nothing to the left, and a `Shift`+`Home` whose selection is
+    // already at the start: three edits the road queues and none of them a change the card can draw.
+    for (command, held) in [
+        (PinCommand::PageTop, text_find::Modifiers::default()),
+        (PinCommand::Previous, text_find::Modifiers::default()),
+        (
+            PinCommand::PageTop,
+            text_find::Modifiers {
+                shift: true,
+                control: false,
+            },
+        ),
+    ] {
+        assert!(text_find::take_hooked_key_with(command, held));
+        unsafe { text_find::settle(a_pin_window()) };
+        assert_eq!(caret_now(), (0, 0), "{command:?} moved nothing");
+        assert_eq!(
+            paints(),
+            before + 1,
+            "{command:?} at the start of the query repainted nothing"
+        );
+    }
+
+    // And a move after them is drawn, so the gate is the change and not the road.
+    assert!(text_find::take_hooked_key_with(
+        PinCommand::Next,
+        text_find::Modifiers::default()
+    ));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(caret_now(), (1, 1));
+    assert_eq!(paints(), before + 2, "a move that moved is drawn");
+}
+
+/// **Every key the field needs is delivered while the bar is up**, by the road a focused pin really
+/// gives it. This is the test the caret's keys needed: the model's own tests pass whatever the road
+/// does, because they call `move_caret` themselves, and a key the hook swallows is a key nothing else
+/// ever sees (see `text_find::take_hooked_key_with` and `text_find::key_edit_with`).
+#[test]
+fn every_key_the_field_needs_reaches_it_by_the_road_a_pin_gives_it() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-every-key.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+
+    let plain = text_find::Modifiers::default();
+    let shift = text_find::Modifiers {
+        shift: true,
+        control: false,
+    };
+    let control = text_find::Modifiers {
+        shift: false,
+        control: true,
+    };
+    let both = text_find::Modifiers {
+        shift: true,
+        control: true,
+    };
+    let left = text_find_field::Motion::CharacterLeft;
+    let right = text_find_field::Motion::CharacterRight;
+    let word_left = text_find_field::Motion::WordLeft;
+    let word_right = text_find_field::Motion::WordRight;
+    let home = text_find_field::Motion::Home;
+    let end = text_find_field::Motion::End;
+
+    let rows: &[(u16, text_find::Modifiers, Road, Option<FindEdit>)] = &[
+        // The caret's keys: the hook's, and the hook is the only road they have while a pin holds
+        // the caret.
+        (
+            VK_LEFT.0,
+            plain,
+            Road::Hook,
+            Some(FindEdit::Move(left, false)),
+        ),
+        (
+            VK_LEFT.0,
+            shift,
+            Road::Hook,
+            Some(FindEdit::Move(left, true)),
+        ),
+        (
+            VK_LEFT.0,
+            control,
+            Road::Hook,
+            Some(FindEdit::Move(word_left, false)),
+        ),
+        (
+            VK_LEFT.0,
+            both,
+            Road::Hook,
+            Some(FindEdit::Move(word_left, true)),
+        ),
+        (
+            VK_RIGHT.0,
+            plain,
+            Road::Hook,
+            Some(FindEdit::Move(right, false)),
+        ),
+        (
+            VK_RIGHT.0,
+            shift,
+            Road::Hook,
+            Some(FindEdit::Move(right, true)),
+        ),
+        (
+            VK_RIGHT.0,
+            control,
+            Road::Hook,
+            Some(FindEdit::Move(word_right, false)),
+        ),
+        (
+            VK_HOME.0,
+            plain,
+            Road::Hook,
+            Some(FindEdit::Move(home, false)),
+        ),
+        (
+            VK_HOME.0,
+            shift,
+            Road::Hook,
+            Some(FindEdit::Move(home, true)),
+        ),
+        (
+            VK_HOME.0,
+            control,
+            Road::Hook,
+            Some(FindEdit::Move(home, false)),
+        ),
+        (
+            VK_END.0,
+            plain,
+            Road::Hook,
+            Some(FindEdit::Move(end, false)),
+        ),
+        (VK_END.0, shift, Road::Hook, Some(FindEdit::Move(end, true))),
+        // The matches: the page keys step them under any modifier, and `F3` is the same step.
+        (VK_UP.0, plain, Road::Hook, Some(FindEdit::Step(-1))),
+        (VK_PRIOR.0, plain, Road::Hook, Some(FindEdit::Step(-1))),
+        (VK_DOWN.0, plain, Road::Hook, Some(FindEdit::Step(1))),
+        (VK_DOWN.0, control, Road::Hook, Some(FindEdit::Step(1))),
+        (VK_NEXT.0, plain, Road::Hook, Some(FindEdit::Step(1))),
+        (VK_F3.0, plain, Road::Hook, Some(FindEdit::Step(1))),
+        (VK_ESCAPE.0, plain, Road::Hook, Some(FindEdit::ClearOrClose)),
+        // The edits a message brings.
+        (VK_BACK.0, plain, Road::Key, Some(FindEdit::Backspace)),
+        (
+            VK_BACK.0,
+            control,
+            Road::Key,
+            Some(FindEdit::DeleteWordLeft),
+        ),
+        (VK_DELETE.0, plain, Road::Key, Some(FindEdit::DeleteForward)),
+        (
+            VK_DELETE.0,
+            control,
+            Road::Key,
+            Some(FindEdit::DeleteWordRight),
+        ),
+        (VK_RETURN.0, plain, Road::Key, Some(FindEdit::Step(1))),
+        (VK_RETURN.0, shift, Road::Key, Some(FindEdit::Step(-1))),
+        (VK_A.0, control, Road::Key, Some(FindEdit::SelectAll)),
+        (VK_C.0, control, Road::Key, Some(FindEdit::Copy)),
+        (VK_X.0, control, Road::Key, Some(FindEdit::Cut)),
+        (VK_V.0, control, Road::Key, Some(FindEdit::Paste)),
+        (VK_Z.0, control, Road::Key, Some(FindEdit::Undo)),
+        (VK_Z.0, both, Road::Key, Some(FindEdit::Redo)),
+        (VK_Y.0, control, Road::Key, Some(FindEdit::Redo)),
+        // And a character, which is the one thing the keyboard delivers as text.
+        (
+            b'a' as u16,
+            plain,
+            Road::Character,
+            Some(FindEdit::Typed('a')),
+        ),
+    ];
+
+    for (vk, held, road, lands) in rows {
+        let (taken, edit) = the_road_a_key_takes(*vk, *held);
+        assert_eq!(
+            taken, *road,
+            "{vk:#06x} under {held:?} takes the road a focused pin gives it"
+        );
+        assert_eq!(
+            edit, *lands,
+            "{vk:#06x} under {held:?} lands as the field's own edit"
+        );
+    }
 }
 
 /// A character is the bar's when it is a printable one and nothing else: the two half-characters of a

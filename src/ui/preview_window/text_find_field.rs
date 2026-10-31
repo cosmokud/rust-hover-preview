@@ -159,14 +159,17 @@ impl Field {
             Motion::Home => 0,
             Motion::End => self.text.len(),
         };
-        let changed = (to, extend) != (self.caret, self.anchor != self.caret);
+        // The two ends after the move against the two ends before it, rather than the place against the
+        // flag: a `Shift`+`←` with the selection already at the start of the query names `extend` and
+        // lands where it stood, which is a move that moved nothing.
+        let before = (self.caret, self.anchor);
 
         if !extend {
             self.anchor = to;
         }
         self.caret = to;
         self.typing = false;
-        changed
+        (self.caret, self.anchor) != before
     }
 
     /// Type a character at the caret, replacing what is selected.
