@@ -984,16 +984,31 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
   own size and at the place and selection they were at (`relayout_text_for_the_box`), ahead of the window being put up
   around it; only a page takes that road — every other kind is sampled into the new box.
 
-  **A find bar floats over the page** (`text_find`, `pin_chrome::find_bar`): `Ctrl+F`, or the **Find** row above
-  **Find Next** in the page's own menu, opens a card at the page's top-right corner with the query, a solid caret,
-  `current/total`, `Aa`/`W` switches and `↑ ↓ ✕`. Every keystroke searches the document as it is drawn (`find_all`:
-  document order, non-overlapping, the two switches read as the search it runs under), every match is painted into the
-  frame with the current one distinct (`FindHighlights`, drawn under the reader's own selection), and a match off screen
-  takes the page to it the way `F3` takes it to a selection. `Enter`/`↓`/`F3` step on and `Shift`+`Enter`/`↑` back,
-  wrapping at both ends; a new query starts at the first match at or after the line the reader was on. While the bar is
-  up it owns the keyboard — the page's own keys and the polled `Ctrl+A`/`Ctrl+C` are inert — and `Esc` puts it away with
-  the page left where it is. The query outlives the bar while the matches do not; a box change keeps both, because a
-  match is a place in the document rather than a row of the frame; another file keeps neither (`keep_text_place`).
+  **A find bar floats over the page** (`text_find`, `text_find_field`, `pin_chrome::find_bar`): `Ctrl+F`, or the
+  **Find** row above **Find Next** in the page's own menu, opens a card at the page's top-right corner with the query,
+  `current/total`, `Aa`/`W` switches and `↑ ↓ ✕`. The query is a real single-line field rather than an append-only box
+  (`text_find_field::Field`): the caret and both ends of a selection are byte indices on character boundaries, typing
+  lands at the caret and replaces a selection, `Backspace`/`Delete` take a character or the selection and `Ctrl`
+  +`Backspace`/`Delete` a word, the arrows and `Home`/`End` move the caret (word-wise under `Ctrl`), and `Shift` with
+  any of them grows the selection the way `Shift`+click and a drag in the field do. `Ctrl+A`, `C`, `X` and `V` are the
+  field's, pasting the clipboard as one line — breaks as spaces, controls and a byte-order mark dropped, runs of space
+  collapsed, capped in characters (`sanitize_pasted`, pure and tested, over a thin untested `OpenClipboard` read), and
+  the copy writer is the page's own. `Ctrl+Z` undoes and `Ctrl+Y`/`Ctrl+Shift+Z` redoes, over whole-field snapshots
+  with a run of typing coalesced into one; `Ctrl+U` is deliberately not bound. Every keystroke searches the document as
+  it is drawn (`find_all`: document order, non-overlapping, the two switches read as the search it runs under), every
+  match is painted into the frame with the current one distinct (`FindHighlights`, drawn under the reader's own
+  selection), and a match off screen takes the page to it the way `F3` takes it to a selection. `Enter`/`↓`/`F3` step
+  on and `Shift`+`Enter`/`↑` back, wrapping at both ends and never moving the query; a new query starts at the first
+  match at or after the line the reader was on. A press in the field places the caret at the character under the pointer
+  — measured from the column the query is really drawn at, so a right-aligned query too long for its row is pressed
+  where it is, not a field's width away — a double press takes the word by the page's own run rule, and the caret blinks
+  at `GetCaretBlinkTime`'s pace on the ticks a pin already takes, solid from every edit, with the selection washed the
+  way the page washes its own. A repaint is asked for a changed query, caret, selection, hover or blink and never for a
+  mouse move that changed nothing. While the bar is up it owns the keyboard — the page's own keys and the polled
+  `Ctrl+A`/`Ctrl+C` are inert — and `Esc` empties a query that has text before it puts the bar away, with the page left
+  where it is either way. The query outlives the bar while the matches do not; `Ctrl+F` over an open bar selects the
+  query it finds rather than appending to it; a box change keeps both, because a match is a place in the document
+  rather than a row of the frame; another file keeps neither (`keep_text_place`).
 
 A pinned text file is a full text preview, not a picture of one: it scrolls, selects, copies, and wraps to the pin's current width, and the frames it re-renders are cached. `Refresh` after a config change works by replaying the _recorded_ hover rather than asking Explorer again, because the pin is the only thing that knows what it is showing.
 
