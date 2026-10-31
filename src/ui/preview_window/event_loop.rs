@@ -899,6 +899,18 @@ pub fn run_preview_window() {
                 // `text_find::settle`).
                 text_find::settle(hwnd);
 
+                // The page's caret moves take the same road for the same reason: a key that asked for
+                // one wrote it down where it landed, and this is the tick that may read the document
+                // it moves through and paint the frame it is drawn in (see `text_caret::settle`).
+                text_caret::settle(hwnd);
+
+                // And the caret's blink, which is the one thing about a page that changes with
+                // nothing else having happened: a page holding a caret is painted twice a blink, and
+                // one holding none asks for nothing at all (see `CaretBlink`).
+                if text_caret::the_caret_turned() {
+                    render_layered_preview(hwnd);
+                }
+
                 // Whether a bar is up over the pin's page is told to the hook here, after the bar
                 // has been opened or settled, rather than with the windows above: a `Ctrl`+`F`
                 // arrives on this tick, and a hook told a tick later swallows the first character

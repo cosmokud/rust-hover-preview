@@ -757,36 +757,6 @@ pub(super) fn relayout_text_for_the_box(content: ScreenRegion) {
     }
 }
 
-/// The line one of the pin's own page keys asks the page on screen to be taken to, or nothing at
-/// all when the pin holds no page — which is what tells an up arrow meant for the page from one
-/// meant for the folder (see `pin_command_request`).
-///
-/// The page is asked for its own numbers rather than told where it is: what a screenful is is the
-/// box the page is drawn in, and where its ends are is what it can reach (see
-/// `TextPreviewState::page_lines`). Nothing is drawn here: the line is handed back to the tick that
-/// answered the key, which draws it the way it draws the wheel's own scroll.
-pub(super) fn text_scroll_line(command: PinCommand) -> Option<usize> {
-    // What the last paint said was on screen is asked before the media is, and it is the whole
-    // answer to whether there is a page: a pin whose page is being replaced this tick is still a pin
-    // holding one — and a page whose turn of the page walked the folder would be the up arrow the
-    // page took with it coming out as another file.
-    if !TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
-        return None;
-    }
-
-    let media = CURRENT_MEDIA.lock().ok()?;
-    let state = media.as_ref().and_then(|media| media.text_state.as_ref())?;
-
-    let step = state.page_lines();
-    match command {
-        PinCommand::PageBack => Some(state.scrolled_by(-step)),
-        PinCommand::PageOn => Some(state.scrolled_by(step)),
-        PinCommand::PageTop => Some(0),
-        PinCommand::PageBottom => Some(state.max_first_line()),
-        _ => None,
-    }
-}
-
 /// Lines a tick of a selection drag carried past the edge of the box moves the page: a screenful
 /// every two seconds at the tick the preview loop runs at, which is a speed a hand can stop.
 const TEXT_DRAG_LINES_PER_TICK: i64 = 3;

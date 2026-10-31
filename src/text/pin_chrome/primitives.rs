@@ -486,6 +486,46 @@ fn point_in_polygon(point: (f32, f32), points: &[(f32, f32)]) -> bool {
     inside
 }
 
+/// The upper half of a ring: the shackle of a read-only pill's padlock (see `page_marks`).
+///
+/// It is the band `fill_ring` draws, cut at the horizontal through its center and drawn only above
+/// it, with a ramp at the two ends so that a half ring ends on the line rather than in a stair step.
+/// A whole ring is a button; half of one standing on a box is a lock.
+pub(super) fn stroke_top_arc(
+    buffer: &mut [u8],
+    width: i32,
+    center: (f32, f32),
+    radius: f32,
+    thickness: f32,
+    color: [u8; 3],
+    coverage: f32,
+) {
+    let half = (thickness / 2.0).max(0.5);
+    let reach = radius + half + 1.0;
+    let left = (center.0 - reach).floor() as i32;
+    let right = (center.0 + reach).ceil() as i32;
+    let top = (center.1 - reach).floor() as i32;
+    let bottom = center.1.floor() as i32;
+
+    for y in top..=bottom {
+        for x in left..=right {
+            let dx = x as f32 + 0.5 - center.0;
+            let dy = y as f32 + 0.5 - center.1;
+            let distance = (dx * dx + dy * dy).sqrt();
+            let radial = (half + 0.5 - (distance - radius).abs()).clamp(0.0, 1.0);
+            if radial <= 0.0 {
+                continue;
+            }
+
+            // The two ends, faded over the last pixel above the line the half ring stands on.
+            let end = (-dy / half).clamp(0.0, 1.0);
+            if end > 0.0 {
+                put(buffer, width, x, y, color, coverage * radial * end);
+            }
+        }
+    }
+}
+
 /// One band of a circle, drawn as the pixels a given distance from a center and within the spread
 /// of angles a speaker's sound is drawn in: the two arcs a volume button carries.
 pub(super) fn stroke_arc(

@@ -13,16 +13,19 @@
 //! and theme, so a second hover, a theme switch or a repaint costs a layout
 //! instead of a parse.
 
+mod caret;
 mod document;
 mod frame;
 mod layout;
 mod markdown;
 mod source;
 
-pub use document::{find_all, find_next, text_of};
+pub use caret::{moved, Motion};
+pub use document::{drawn_lines, find_all, find_next, text_of, Place};
 pub use frame::{
-    extend_word_selection, is_word_character, line_in, measure, position_in, render_scrolled,
-    run_at, word_in, FindHighlights, FrameLine, ScrollBar, Selection, TextPreviewOptions,
+    caret_rect, extend_word_selection, is_word_character, line_in, measure, position_in,
+    render_scrolled, run_at, word_in, FindHighlights, FrameLine, ScrollBar, Selection, TextCaret,
+    TextPreviewOptions,
 };
 // A run is what a line is made of, and it is named only by the tests that build lines of their
 // own rather than painting a document.

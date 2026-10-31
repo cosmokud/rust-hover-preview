@@ -13,6 +13,7 @@
 //! bar rather than on this (`CaptionStrip`). What a button says is not drawn here at all: a tooltip
 //! is a panel over the media below the strip, and the window owns where it goes (see `bubble`).
 
+use super::page_marks::{READ_ONLY_PILL_GAP_PIXELS, READ_ONLY_PILL_PIXELS};
 use super::primitives::{
     caption_style, draw_chevron, draw_cross, draw_open_with, draw_open_with_list, draw_pin_top,
     fill_box, measure_text, stroke_box, surface_pixels, ChromePalette, GLYPH_PIXELS,
@@ -109,10 +110,18 @@ const NAV_BUTTONS: [CaptionButton; 4] = [
 ];
 
 /// What a caption is drawn from: the name of what is pinned, whether it is maximized, whether it
-/// offers a maximize at all, and which button the pointer is on, if any.
+/// offers a maximize at all, which button the pointer is on, and whether the window is a page of
+/// text that cannot be written to.
 pub(crate) struct Caption<'a> {
     pub(crate) title: &'a str,
     pub(crate) maximized: bool,
+    /// Whether this pin is a page of text, which is the one kind whose caption says **Read only**.
+    ///
+    /// It is the kind rather than a setting: the page is a view of a file, so there is nothing a
+    /// reader could type into it and nothing a `Ctrl`+`X` could cut, and a caption that said so is
+    /// what tells a window that ignores a keystroke from one that has stopped answering (see
+    /// `page_marks`).
+    pub(crate) read_only: bool,
     /// Whether this pin has a maximum to go to. A sound's card does not: the card is its own
     /// size, so there is no larger box to give it and the button would be one that does nothing
     /// (see `pin_frame`).
@@ -267,6 +276,28 @@ pub(crate) fn title_room(width: i32, dpi: u32, maximizable: bool) -> i32 {
     right - 2 * text_paint::scaled(TITLE_PADDING_PIXELS as i32, dpi as f32 / 96.0)
 }
 
+/// The width the words of the **Read only** pill take at a display's scale, as a stand-in for the
+/// measurement the pill itself is drawn at: `read_only_pill_width` asks a font, and the room a name
+/// has is asked where no font may be made (see `title_room_beside_pill`).
+pub(super) const READ_ONLY_PILL_WORDS_PIXELS: f32 = 52.0;
+
+/// The same room for a caption that carries the **Read only** pill: the pill's own width and the gap
+/// it keeps off the name come out of what the name has left, because a name is cut before a pill is
+/// given up and a pill is never drawn under a name.
+///
+/// It is written in logical pixels for the reason `TITLE_MIN_PIXELS` is: this is asked on the road a
+/// press takes as well as on a paint, and a measurement here would be a font created for every
+/// pointer move across a caption. What it is for is a width the name may have, and no name that
+/// matters turns on this much.
+pub(crate) fn title_room_beside_pill(width: i32, dpi: u32, maximizable: bool) -> i32 {
+    let scale = dpi as f32 / 96.0;
+    let pill = text_paint::scaled(READ_ONLY_PILL_PIXELS as i32, scale)
+        + 2 * text_paint::scaled(READ_ONLY_PILL_GAP_PIXELS as i32, scale)
+        + text_paint::scaled(READ_ONLY_PILL_WORDS_PIXELS as i32, scale);
+
+    title_room(width, dpi, maximizable) - pill
+}
+
 /// Whether a caption of this width is a command bar that can be shown without cutting anything, which
 /// is a question asked of two roads at once: the strip is drawn on one, and a press is answered on the
 /// other (see `pinned_paint` and `pinned_caption_geometry`).
@@ -295,6 +326,17 @@ pub(crate) fn title_fits(width: i32, dpi: u32, maximizable: bool) -> bool {
     let least = text_paint::scaled(TITLE_MIN_PIXELS as i32, scale);
 
     title_room(width, dpi, maximizable) >= least
+}
+
+/// The same question for a caption carrying the **Read only** pill: a name and a pill together, at the
+/// room the pill leaves. A caption too narrow for the two keeps the name and gives the pill up — the
+/// pill is what the strip is saying about the file, and a strip that cannot say the file's name has
+/// nothing for the pill to be about.
+pub(super) fn title_fits_beside_pill(width: i32, dpi: u32, maximizable: bool) -> bool {
+    let scale = dpi as f32 / 96.0;
+    let least = text_paint::scaled(TITLE_MIN_PIXELS as i32, scale);
+
+    title_room_beside_pill(width, dpi, maximizable) >= least
 }
 
 /// Paint a caption into a surface the size of the strip: the bar, the three buttons with
@@ -376,15 +418,40 @@ pub(crate) fn paint_caption(
         .min()
         .unwrap_or(width);
 
+    // The **Read only** pill stands at the right end of the title area, immediately left of the
+    // buttons: it is the last thing the strip says before the buttons begin, and it is drawn before
+    // the name so that the name's own room can stop short of it (see `paint_title`).
+    //
+    // A caption too narrow for both keeps the name and gives the pill up: the pill is something the
+    // strip is saying about the file, and a strip with no room to say what the file is has nothing
+    // for the pill to be about.
+    let pill = caption
+        .read_only
+        .then(|| super::page_marks::read_only_pill_box(surface, width, height, title_right, dpi))
+        .filter(|box_| {
+            box_.right - box_.left > 0 && title_fits_beside_pill(width, dpi, caption.maximizable)
+        });
+    if let Some(box_) = pill {
+        super::page_marks::paint_read_only_pill(surface, palette, box_, dpi);
+    }
+
     // A name is only said where there is room to say one: a caption cut down to an ellipsis and a
     // character is a strip saying that a file has a name rather than saying what it is, and what the
     // room it would take up is for at that width is the buttons beside it (see `title_fits`).
-    let title = if title_fits(width, dpi, caption.maximizable) {
-        caption.title
-    } else {
-        ""
+    //
+    // **The room asked for is the room the name actually has**, which is the pill's smaller one only
+    // where a pill was drawn: a name given up against a pill that is not there is a caption that
+    // stopped saying what the file is for a mark nothing is making (see `title_fits_beside_pill`).
+    let name_right = match pill {
+        Some(box_) => box_.left,
+        None => title_right,
     };
-    paint_title(surface, palette, title, title_right, scale);
+    let name_fits = match pill {
+        Some(_) => title_fits_beside_pill(width, dpi, caption.maximizable),
+        None => title_fits(width, dpi, caption.maximizable),
+    };
+    let title = if name_fits { caption.title } else { "" };
+    paint_title(surface, palette, title, name_right, scale);
 
     // The tooltip is not drawn here: it is a panel of its own hanging below the strip, over
     // the media, and is the window's own business to place (see `tooltip_layout`). All this
@@ -412,6 +479,7 @@ pub(crate) fn paint_caption(
             dpi,
             title: caption.title.to_string(),
             maximized: caption.maximized,
+            read_only: caption.read_only,
             maximizable: caption.maximizable,
             always_on_top: caption.always_on_top,
             hovered: caption.hovered,
@@ -441,6 +509,7 @@ struct CaptionStrip {
     dpi: u32,
     title: String,
     maximized: bool,
+    read_only: bool,
     maximizable: bool,
     always_on_top: bool,
     hovered: Option<CaptionButton>,
@@ -475,6 +544,7 @@ impl CaptionStrip {
             && self.dpi == dpi
             && self.title == caption.title
             && self.maximized == caption.maximized
+            && self.read_only == caption.read_only
             && self.maximizable == caption.maximizable
             && self.always_on_top == caption.always_on_top
             && self.hovered == caption.hovered

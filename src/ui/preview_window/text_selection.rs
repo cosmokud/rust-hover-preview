@@ -51,6 +51,15 @@ pub(super) fn begin_text_selection(x: i32, y: i32) -> bool {
             caret: at,
         },
     });
+    // And the press puts the page's caret down where the selection left it, which is the mark that
+    // blinks between presses and the column the next vertical move aims from. It is written here
+    // rather than by a road of its own because the media lock is already in this hand and is not one
+    // this thread may wait for twice (see `text_caret`).
+    if let Some(selection) = state.selection {
+        state.caret = Some(selection.caret);
+        state.caret_goal = None;
+        state.caret_blink.restart(now, text_find::caret_blink());
+    }
     state.word_drag = word;
     // Every press but the third arms a drag, a double click's included, and the word above is what
     // that one is the drag of. The third takes a line, which is whole already: arming a drag there

@@ -969,10 +969,18 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
 
 - Text pin = full mode (`current_text_options`): scroll/select/clipboard (`Ctrl+C/A`, menu), scrollbar (`bar_row` shared
   geometry), wrap-to-width + pull-back + end rule, `text_cache_mb` frames, `Refresh` rebuilds from recorded hover;
-  journey+preview regions published per tick. The page is also the one media a pin's own keyboard reaches:
-  `Up`/`Down`/`PageUp`/`PageDown`/`Home`/`End` work it a screenful at a time
-  (`PinCommand::PageBack/PageOn/PageTop/PageBottom`, asked where the file in the window is known, the folder still
-  walking for anything else), `F3`, and the page's **Find Next** row, take it to the next place the selection appears
+  journey+preview regions published per tick. **The page is a read-only editor rather than a scroll box, and it is the
+  one media a pin's own keyboard reaches**: `↑`/`↓` move a caret a line at a time with the column kept over the short
+  lines in between, `←`/`→` a character across the ends of lines, `Ctrl`+arrows a word by the page's own run rule,
+  `Home`/`End` the line's two ends and `Ctrl`+`Home`/`End` the document's, `PgUp`/`PgDn` a screenful
+  (`PinCommand::CaretUp/CaretDown/Previous/Next/PageTop/PageBottom/PageBack/PageOn`, asked where the file in the window
+  is known, the folder still walking for anything else), `Shift` grows the selection and a bare move collapses it, and the
+  page scrolls **only** to keep the caret on it (`text_preview::moved` for the arithmetic, `text_caret` for the keys — a
+  key writes its move down and the tick that may read the document makes it, because a window procedure may not). Nothing
+  that writes reaches the document: a typed character, `Backspace`, `Delete` and `Ctrl`+`X`/`Ctrl`+`V` all change nothing,
+  since a cut that cannot cut is worse than a chord that does nothing, while `Ctrl`+`A`/`C` still read it. The caret
+  blinks at the pace the system names while the page holds one. `F3`, and the page's **Find Next** row, take it to the
+  next place the selection appears
   (`find_next`: exact, case-sensitive, from just after the selection, wrapping to end where it began) — or, while a find
   bar is up, to the next place that bar's query appears — and `Ctrl` and a wheel steps the page's own size
   through the tray's list (`PIN_TEXT_SIZE_DELTA`) — a size the pin carries across a resize and a walk and gives up when
@@ -983,6 +991,13 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
   lines a tick toward where it left. A box change lays the page out again for the box it has reached, at the reader's
   own size and at the place and selection they were at (`relayout_text_for_the_box`), ahead of the window being put up
   around it; only a page takes that road — every other kind is sampled into the new box.
+
+  **The caption says the page is read only** (`Caption::read_only`, `pin_chrome::page_marks`): a pill at the right end of
+  the title area, immediately left of the buttons, carrying a hand-drawn padlock and the words `Read only` — a mark built
+  from the chrome's own primitives, so it scales and antialiases with the rest of the strip rather than being a glyph
+  borrowed from a font. A caption too narrow for the two keeps the name and gives the pill up, the name's own room is
+  measured against the room it actually has (a caption without a pill does not give its name up for one), and whether the
+  pill is there is part of the strip's cache key — a page's caption repainted as a picture's would otherwise keep it.
 
   **A find bar floats over the page** (`text_find`, `text_find_field`, `pin_chrome::find_bar`): `Ctrl+F`, or the
   **Find** row above **Find Next** in the page's own menu, opens a card at the page's top-right corner with the query,

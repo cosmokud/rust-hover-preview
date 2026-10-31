@@ -625,6 +625,25 @@ pub(super) struct TextPreviewState {
     /// extending it.
     pub(super) selection: Option<text_preview::Selection>,
     pub(super) selecting: bool,
+    /// Where the page's caret stands, and the column a vertical move is aimed at.
+    ///
+    /// The page is a document the reader moves through rather than a box they scroll, so the caret
+    /// is the page's own mark and outlives a key that did not move it. `caret` is `None` until a key
+    /// or a press has put one down: a page that has just been drawn has no caret to blink, which is
+    /// what keeps a pinned page from looking like a field nobody has clicked into. `goal` is the
+    /// column the last vertical move aimed at, dropped by every move that is not one — a `←` after a
+    /// `↓` over a short line is a caret the reader put somewhere, and the next `↓` aims from there
+    /// (see `text_preview::Motion::is_vertical`).
+    pub(super) caret: Option<text_preview::Place>,
+    pub(super) caret_goal: Option<usize>,
+    /// The caret's blink: whether it is drawn this half of its phase and when that turns over. A
+    /// caret goes solid on every move and on a selection, and only a phase change asks for a repaint
+    /// (see `text_find_field::CaretBlink`).
+    pub(super) caret_blink: text_find_field::CaretBlink,
+    /// The caret moves the page was told while the message that brought them was being delivered,
+    /// in the order they were pressed: a window procedure may not read a document and may not paint
+    /// one, so the move is written down here and run by the tick (see `text_caret::settle`).
+    pub(super) pending_caret: Vec<text_caret::CaretMove>,
     /// The word a double press took, kept for as long as the drag that followed it runs: a drag is
     /// grown by whole runs of characters while this is set, and by the character under the hand
     /// otherwise (see `begin_text_selection` and `extend_word_selection`).
@@ -765,13 +784,32 @@ impl TextPreviewState {
         (self.first_line as i64 + lines).clamp(0, self.max_first_line() as i64) as usize
     }
 
-    /// A screenful of the page: the document lines the box shows, less one, so that the line the
-    /// reader was on when a page turned is still on it (see `scrolled_by`).
+    /// The line the page is to be scrolled to so that `caret` is on screen, or `None` where it
+    /// already is.
     ///
-    /// `shortcut:` a screenful is counted in document lines, so a page of wrapped lines carries
-    /// more than a boxful of them; upgrade by measuring the painted lines the frame holds.
-    pub(super) fn page_lines(&self) -> i64 {
-        self.visible_lines.saturating_sub(1).max(1) as i64
+    /// **The page moves only to keep the caret in view.** A move that lands inside the screenful
+    /// draws no scroll at all, and one that leaves it takes the page just far enough that the caret
+    /// is a couple of lines clear of the edge — the same lead a find gives the line it found (see
+    /// `FIND_LEAD_LINES`), and the same rule a text editor's own caret keeps. Without the lead a
+    /// caret walked down the page would sit on the very last row, which is a line the reader cannot
+    /// see what comes after.
+    pub(super) fn scroll_to_show(&self, caret: text_preview::Place) -> Option<usize> {
+        let lead = 2usize.min(self.visible_lines.saturating_sub(1));
+        let line = caret.0;
+
+        if line < self.first_line {
+            return Some(line.saturating_sub(lead).min(self.max_first_line()));
+        }
+
+        // The last line the frame shows is one before its first plus the lines it holds: a caret on
+        // the row past that is a caret the reader cannot see.
+        let last = self.first_line + self.visible_lines.saturating_sub(1);
+        if line > last {
+            let wanted = line + lead + 1 - self.visible_lines;
+            return Some(wanted.min(self.max_first_line()));
+        }
+
+        None
     }
 
     pub(super) fn can_scroll(&self) -> bool {

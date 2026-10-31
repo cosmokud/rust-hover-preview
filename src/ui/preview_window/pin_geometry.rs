@@ -578,35 +578,62 @@ pub(super) unsafe fn pin_command_request(
             reset_pinned_size(request);
             None
         }
-        Some(PinCommand::Previous) => step_pinned_file(-1, wait, anchor),
-        Some(PinCommand::Next) => step_pinned_file(1, wait, anchor),
-        // An up arrow, a down arrow, and the two page keys are the page's own where the pin holds
-        // one, and the walk they have always been where it does not: which of the two a key is is
-        // the file in the window's answer, read here rather than where the key was mapped (see
-        // `pinned_key_command` and `text_scroll_line`).
-        Some(command @ (PinCommand::PageBack | PinCommand::PageOn)) => {
-            match text_scroll_line(command) {
-                Some(line) => {
-                    scroll_text_preview(hwnd, line);
-                    None
-                }
-                None => {
-                    let step = if matches!(command, PinCommand::PageBack) {
+        Some(PinCommand::Previous) => {
+            // The page's caret where the pin holds one, and the walk the arrows have always been
+            // where it does not: which of the two a key is is the file in the window's answer, read
+            // here rather than where the key was mapped (see `text_caret::command_move`).
+            match text_caret::command_move(PinCommand::Previous) {
+                Some(()) => None,
+                None => step_pinned_file(-1, wait, anchor),
+            }
+        }
+        Some(PinCommand::Next) => match text_caret::command_move(PinCommand::Next) {
+            Some(()) => None,
+            None => step_pinned_file(1, wait, anchor),
+        },
+        // An up arrow and a down arrow are the same answer one line at a time: the page's caret where
+        // the pin holds one, and the walk where it does not.
+        //
+        // The caret's own moves are queued rather than made here for the same reason a find bar's
+        // edits are: this is the tick that may take the page's lock, but a move styles a document
+        // and paints a frame, and that is the work a tick of its own owns (see
+        // `text_caret::settle`).
+        Some(command @ (PinCommand::CaretUp | PinCommand::CaretDown)) => {
+            match text_caret::command_move(command) {
+                Some(()) => None,
+                None => step_pinned_file(
+                    if matches!(command, PinCommand::CaretUp) {
                         -1
                     } else {
                         1
-                    };
-                    step_pinned_file(step, wait, anchor)
-                }
+                    },
+                    wait,
+                    anchor,
+                ),
             }
         }
-        // And the two ends of the page, which are nothing at all to a pin that holds no page: a
-        // picture has no beginning to go back to, so `Home` is swallowed rather than answered by a
-        // walk the user did not ask for.
-        Some(command @ (PinCommand::PageTop | PinCommand::PageBottom)) => {
-            if let Some(line) = text_scroll_line(command) {
-                scroll_text_preview(hwnd, line);
+        // And the two page keys, which are a screenful of the caret's where the pin holds a page and
+        // the same walk where it does not.
+        Some(command @ (PinCommand::PageBack | PinCommand::PageOn)) => {
+            match text_caret::command_move(command) {
+                Some(()) => None,
+                None => step_pinned_file(
+                    if matches!(command, PinCommand::PageBack) {
+                        -1
+                    } else {
+                        1
+                    },
+                    wait,
+                    anchor,
+                ),
             }
+        }
+        // And the two ends, which are the line's where the page holds a caret and nothing at all to
+        // a pin that holds no page: a picture has no beginning to go back to, so `Home` is swallowed
+        // rather than answered by a walk the user did not ask for. `Ctrl` makes them the document's,
+        // which is the same question asked of the frame's end rather than the line's.
+        Some(command @ (PinCommand::PageTop | PinCommand::PageBottom)) => {
+            let _ = text_caret::command_move(command);
             None
         }
         // A find is the page's own as well: it looks for what the page has selected in the document

@@ -13,6 +13,7 @@ use crate::config::config::{MarkdownMode, TextTheme};
 use crate::text::text_paint::{DibSurface, TextMetrics};
 use crate::text::text_theme;
 use std::path::Path;
+use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC};
 
 /// The options a preview is built with. They are passed in rather than read from
@@ -98,6 +99,25 @@ impl Selection {
     }
 }
 
+/// Where the caret of a page of text is drawn, when it is drawn at all: the character a vertical
+/// bar stands before, and which of its two phases the blink is in.
+///
+/// **It is a mark over the composed frame rather than a part of it.** A selection is painted into
+/// the frame because it is a colour laid under the text, but a caret is a mark laid *over* a
+/// character — one that has to go away again every half second, and a frame that was drawn again
+/// for each phase would restyle and repaint a screenful of text twice a second. So the caret's
+/// place travels beside the frame and the compositor draws the bar (see `paint_text_caret`), and
+/// only a phase change asks for a repaint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextCaret {
+    /// The document place the bar stands before, as `Selection`'s two ends are measured: the bar is
+    /// drawn at the left edge of that character, and at the right edge of the line where the place
+    /// is the line's end.
+    pub at: (usize, usize),
+    /// Whether the bar is drawn this half of the blink.
+    pub lit: bool,
+}
+
 /// Every place a find bar's query was found in the document, and which of them the reader is on:
 /// what a frame highlights over the page, under the selection the reader made for themselves.
 ///
@@ -132,6 +152,89 @@ pub struct TextFrame {
     pub scrollbar: Option<ScrollBar>,
     /// The painted lines, in frame coordinates.
     pub lines: Vec<FrameLine>,
+}
+
+/// Where the bar for `caret` stands among painted lines, in frame coordinates, or nothing where the
+/// place is not one of the lines the frame drew.
+///
+/// The place is a document one, and a frame draws a screenful of a document — so a caret scrolled
+/// off the top or the bottom is a caret with nothing to draw, which is what a bar drawn at the
+/// frame's edge would get wrong. A wrapped line is asked for the painted part its own characters
+/// fall in, so a caret past the first row of a long line is drawn on the row it is on and not at the
+/// start of the line (see `FrameLine::source`).
+///
+/// The bar's height is the painted line's, and its width is the advance of the character it stands
+/// before — which is the run's own width divided by its characters, the same estimate `point_in_line`
+/// measures a press with.
+pub fn caret_rect(lines: &[FrameLine], caret: (usize, usize)) -> Option<RECT> {
+    let (line, character) = caret;
+    let painted = lines
+        .iter()
+        .filter(|painted| painted.source.0 == line)
+        .find(|painted| {
+            let start = painted.source.1;
+            let end = start + painted_text_characters(painted);
+            character >= start && character < end
+        })
+        .or_else(|| {
+            // The end of a line is the place past its last character, which is a place no run
+            // holds: it is drawn at the right edge of the last run the line has.
+            lines
+                .iter()
+                .filter(|painted| painted.source.0 == line)
+                .max_by_key(|painted| painted.source.1)
+                .filter(|painted| painted.source.1 + painted_text_characters(painted) == character)
+        })?;
+
+    let (x, advance) = x_within_line(painted, character.saturating_sub(painted.source.1));
+
+    Some(RECT {
+        left: x,
+        top: painted.top,
+        right: x + advance.max(1),
+        bottom: painted.top + painted.height,
+    })
+}
+
+/// How many characters one painted line shows, which is what tells a wrapped line's first row from
+/// its second (see `FrameLine::source`).
+fn painted_text_characters(line: &FrameLine) -> usize {
+    line.runs.iter().map(|run| run.text.chars().count()).sum()
+}
+
+/// The left edge of character `offset` of a painted line, and the width of the character there —
+/// which is the next character's width at the end of the line, so a bar at the end of a run is as
+/// wide as the text it stands after rather than as wide as whatever is drawn beside it.
+fn x_within_line(line: &FrameLine, offset: usize) -> (i32, i32) {
+    let mut before = 0usize;
+
+    for run in &line.runs {
+        let count = run.text.chars().count();
+        if count == 0 {
+            continue;
+        }
+        let advance = (run.width as f32 / count as f32).max(1.0);
+
+        if offset < before + count {
+            let within = offset - before;
+            return (
+                run.x + (within as f32 * advance).round() as i32,
+                advance.round().max(1.0) as i32,
+            );
+        }
+        before += count;
+    }
+
+    // Past the last run: the end of the line, at the right edge of the run before it.
+    match line.runs.last() {
+        Some(run) => (
+            run.x + run.width,
+            (run.width as f32 / run.text.chars().count().max(1) as f32)
+                .round()
+                .max(1.0) as i32,
+        ),
+        None => (0, 1),
+    }
 }
 
 /// The line of painted text nearest a point, by its middle.

@@ -609,6 +609,12 @@ pub(super) fn load_text_preview(
         lines: frame.lines,
         selection: None,
         selecting: false,
+        // A page that has just been drawn has no caret: the first key or press puts one down, and a
+        // bar blinking in a window nobody has worked in would be a field nobody has clicked into.
+        caret: None,
+        caret_goal: None,
+        caret_blink: text_find_field::CaretBlink::default(),
+        pending_caret: Vec::new(),
         word_drag: None,
         click_run: None,
         drag_pointer: None,

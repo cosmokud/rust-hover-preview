@@ -870,3 +870,121 @@ fn a_window_kept_for_a_short_document_answers_a_request_longer_than_it() {
         asked.lines.len()
     );
 }
+
+/// The page is a document, so its caret moves the way a document's does: a line at a time with the
+/// column kept over the short lines in between, a character at a time across the ends of lines, a run
+/// at a time by the page's own run rule, and the two pairs of ends — the line's and the document's
+/// (see `Motion` and `moved`).
+fn page_of(lines: &[&str]) -> Vec<String> {
+    lines.iter().map(|line| line.to_string()).collect()
+}
+
+#[test]
+fn a_vertical_move_keeps_the_column_over_a_short_line() {
+    let page = page_of(&["abcdefgh", "ab", "abcdefgh"]);
+
+    let (short, goal) = moved(&page, (0, 6), Motion::Down, None);
+    assert_eq!(
+        short,
+        (1, 2),
+        "a line too short for the column takes the caret to its own end"
+    );
+    assert_eq!(goal, Some(6), "and the column it was aiming at is kept");
+
+    let (long, _) = moved(&page, short, Motion::Down, goal);
+    assert_eq!(
+        long,
+        (2, 6),
+        "the line below is long enough for the column again, which is the whole of what a goal \
+         column is for: `↓` over a short line and `↓` again must not walk the caret to the margin"
+    );
+}
+
+#[test]
+fn a_character_move_crosses_the_end_of_a_line() {
+    let page = page_of(&["one", "two"]);
+
+    assert_eq!(
+        moved(&page, (0, 3), Motion::Right, None),
+        ((1, 0), None),
+        "the character after a line's last is the first of the line below"
+    );
+    assert_eq!(
+        moved(&page, (1, 0), Motion::Left, None),
+        ((0, 3), None),
+        "and the one before a line's first is the last of the line above"
+    );
+    assert_eq!(
+        moved(&page, (0, 0), Motion::Left, None),
+        ((0, 0), None),
+        "the beginning of the document is as far back as the caret goes"
+    );
+    assert_eq!(
+        moved(&page, (1, 3), Motion::Right, None),
+        ((1, 3), None),
+        "and its end as far on"
+    );
+}
+
+#[test]
+fn the_two_pairs_of_ends_are_the_line_s_and_the_document_s() {
+    let page = page_of(&["one", "two", "three"]);
+
+    assert_eq!(moved(&page, (1, 2), Motion::LineStart, None).0, (1, 0));
+    assert_eq!(moved(&page, (1, 0), Motion::LineEnd, None).0, (1, 3));
+    assert_eq!(
+        moved(&page, (1, 2), Motion::DocumentStart, None).0,
+        (0, 0),
+        "the document's beginning is the line's begin where the line is the first"
+    );
+    assert_eq!(
+        moved(&page, (1, 2), Motion::DocumentEnd, None).0,
+        (2, 5),
+        "and its end is the end of the last line, not the line past it"
+    );
+}
+
+#[test]
+fn a_screenful_keeps_the_column_over_the_lines_it_passes() {
+    let page: Vec<String> = (0..30)
+        .map(|line| format!("line {line:02} of thirty"))
+        .collect();
+
+    let (turned, goal) = moved(&page, (0, 6), Motion::ScreenDown(20), None);
+    assert_eq!(turned, (20, 6), "a page turned lands twenty lines on");
+    assert_eq!(goal, Some(6), "at the column it was standing in");
+
+    assert_eq!(
+        moved(&page, turned, Motion::ScreenUp(20), goal).0,
+        (0, 6),
+        "and a page back is where the page was turned from"
+    );
+}
+
+#[test]
+fn a_move_past_either_end_leaves_the_caret_where_it_is() {
+    let page = page_of(&["one", "two"]);
+
+    assert_eq!(
+        moved(&page, (0, 1), Motion::Up, None),
+        ((0, 1), Some(1)),
+        "an up arrow on the first line has nowhere to go"
+    );
+    assert_eq!(
+        moved(&page, (1, 1), Motion::Down, None),
+        ((1, 1), Some(1)),
+        "and a down arrow on the last"
+    );
+}
+
+#[test]
+fn a_move_that_is_not_vertical_puts_the_goal_column_down() {
+    let page = page_of(&["abcdefgh", "ab", "abcdefgh"]);
+
+    assert_eq!(
+        moved(&page, (0, 6), Motion::Right, Some(6)),
+        ((0, 7), None),
+        "a character move leaves the caret where the reader put it, so the next vertical move \
+         aims from there rather than from the column a previous run began at"
+    );
+}
