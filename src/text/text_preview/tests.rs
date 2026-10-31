@@ -1,6 +1,7 @@
 use super::frame::TextFrame;
 use super::*;
 use crate::config::config::{MarkdownMode, TextTheme};
+use crate::text::text_paint::luminance;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -725,6 +726,94 @@ fn a_find_highlights_every_place_and_the_current_one_apart() {
         0,
         "and a find that found nothing is the page exactly as it was"
     );
+}
+
+/// **A find's mark is stronger than the selection band, and its glyphs survive it** — in both the
+/// bundled themes. Neither theme names a selection or a find colour, so both are derived from the
+/// page; a find that was only a slightly different wash of the same page read as part of the text
+/// (see `paint` and `find_ink`).
+#[test]
+fn a_find_stands_out_from_the_selection_and_keeps_its_glyphs_readable() {
+    let dir = scratch("find-strength");
+    let source = dir.join("strength.txt");
+    fs::write(&source, "needle here\nneedle again\n").expect("a written page");
+
+    let at = |line: usize| Selection {
+        anchor: (line, 0),
+        caret: (line, 6),
+    };
+
+    // The band drawn across the first six characters of `line`: the most common pixel of the region
+    // is the band, and the furthest pixel from it is the ink laid over it.
+    let band = |frame: &TextFrame, line: usize| {
+        let line = frame
+            .lines
+            .iter()
+            .find(|painted| painted.source.0 == line)
+            .expect("a painted line");
+        let run = line.runs.first().expect("a run of text");
+        let characters = run.text.chars().count() as i32;
+        let right = run.x + 6 * run.width / characters.max(1);
+
+        let mut counts: std::collections::HashMap<[u8; 4], usize> =
+            std::collections::HashMap::new();
+        for y in line.top..line.top + line.height {
+            for x in run.x..right {
+                *counts
+                    .entry(frame_pixel(frame, x as u32, y as u32))
+                    .or_default() += 1;
+            }
+        }
+        let mut pixels: Vec<([u8; 4], usize)> = counts.into_iter().collect();
+        pixels.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        let grey = |pixel: [u8; 4]| luminance([pixel[2], pixel[1], pixel[0]]);
+        let background = grey(pixels[0].0);
+        let ink = pixels
+            .iter()
+            .map(|(pixel, _)| (grey(*pixel) - background).abs())
+            .max_by(f32::total_cmp)
+            .expect("a pixel");
+
+        (background, ink)
+    };
+
+    for theme in [TextTheme::Light, TextTheme::Dark] {
+        let options = TextPreviewOptions { theme, ..options() };
+        let render = |selection, find| {
+            render_scrolled(&source, 0, 320, 160, 96, options, selection, find).expect("a page")
+        };
+        let searched = FindHighlights {
+            matches: vec![at(0), at(1)],
+            current: Some(1),
+        };
+
+        let selection = render(Some(at(0)), None);
+        let marks = render(None, Some(searched));
+        let plain = render(None, None);
+        let page = band(&plain, 0).0;
+        let (selection_band, _) = band(&selection, 0);
+        let (found_band, found_ink) = band(&marks, 0);
+        let (current_band, current_ink) = band(&marks, 1);
+
+        assert!(
+            (found_band - selection_band).abs() >= 0.10,
+            "{theme:?}: a find's band is a real step away from the selection's, not the same wash"
+        );
+        assert!(
+            (current_band - found_band).abs() >= 0.03,
+            "{theme:?}: the current match is the colour itself, the rest are a wash of it"
+        );
+        assert!(
+            (current_band - page).abs() > (found_band - page).abs(),
+            "{theme:?}: the current match is drawn opaque rather than mixed towards the page"
+        );
+        for (kind, ink) in [("find", found_ink), ("current", current_ink)] {
+            assert!(
+                ink >= 0.20,
+                "{theme:?}: the glyphs on a {kind} mark stand clear of the band they are drawn on"
+            );
+        }
+    }
 }
 
 /// **A pinned page keeps a column down its left for its own line numbers, and a hover does not** —
