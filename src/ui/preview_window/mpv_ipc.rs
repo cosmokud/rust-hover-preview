@@ -313,10 +313,7 @@ pub(super) fn set_volume(pid: u32, level: u32) -> bool {
     }
 
     if level > 0 && held.audio_off {
-        if !write(
-            pid,
-            r#"{"command":["set_property","aid","auto"],"async":true}"#.to_string() + "\n",
-        ) {
+        if !ask_for_a_track(pid) {
             return false;
         }
         // The ask landed, so the player has its track: the fact moves with it, which is what keeps
@@ -329,6 +326,37 @@ pub(super) fn set_volume(pid: u32, level: u32) -> bool {
     }
 
     true
+}
+
+/// Ask mpv to select a track for the file it is playing again — `aid` back to `auto`, which is the
+/// selection a launch with audio leaves the property at, since this app names no track of its own.
+///
+/// **It is the cure for a player that has no track at all**, and there are two roads to one: a launch
+/// whose level resolved to nothing gave the player `--aid=no` rather than `--volume=0` (see
+/// `video_launch::mpv_args`), and a pin that begins a film silent records that beside its pipe so
+/// that the first level above nothing asks the track back for (see `set_volume`). The second road is
+/// a player this app can see is silent — and the first is not, which is what the playback guard is
+/// for: it asks the same question of a player that was begun with a level and has no track anyway
+/// (see `audio_guard`).
+///
+pub(super) fn ask_for_a_track(pid: u32) -> bool {
+    write(
+        pid,
+        r#"{"command":["set_property","aid","auto"],"async":true}"#.to_string() + "\n",
+    )
+}
+
+/// Ask mpv to open an audio output again, by handing `audio-device` its own `auto` back.
+///
+/// **A runtime write of `audio-device` is an audio output reinitialised**, which is what makes this a
+/// cure rather than a restatement: a device that was refused while the film was starting — another
+/// player holding it, a driver that had not come up — is asked for once more, on a player that is
+/// already drawing, with nothing of its picture or its clock moved (see `audio_guard`).
+pub(super) fn ask_for_an_audio_device(pid: u32) -> bool {
+    write(
+        pid,
+        r#"{"command":["set_property","audio-device","auto"],"async":true}"#.to_string() + "\n",
+    )
 }
 
 /// Take mpv to a second of its file.

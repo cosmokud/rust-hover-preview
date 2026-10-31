@@ -986,6 +986,18 @@ pub fn run_preview_window() {
             // exactly that reason (see `settle_video_retirement`).
             settle_video_retirement();
 
+            // **A pinned film begun at a level and playing with no sound is healed here**, on the tick
+            // rather than on the thread that read the player: the ladder's last rung is a player begun
+            // again, and everything that touches — the pin's picture, its clock, its transport — is this
+            // loop's (see `audio_guard`). A rung decided on a tick with a swap still held is kept for a
+            // tick without one: a picture changing hands is not a player to be begun under it.
+            if let Some(film) = audio_guard::tick(pin_swap_hold.is_none()) {
+                // shortcut: a player that declines the relaunch — the pin walked off the film between the
+                // read and this tick — spends the ladder's last rung on nothing and the film stays silent;
+                // upgrade to asking the pin's own state before the rung is recorded.
+                let _ = pin_playback::begin_the_pinned_film_again_for_its_sound(&film);
+            }
+
             // **And the two settles that were only asked of a pin are asked of every tick**, for the
             // reason the retirement above is: each has a "the pin is gone" half that nothing on a
             // tick after the pin would ever reach, so a pin closed in the middle of the thing they

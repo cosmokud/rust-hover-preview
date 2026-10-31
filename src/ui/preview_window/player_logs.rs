@@ -14,22 +14,26 @@
 //! bytes) and nothing into `stderr` (0 bytes), twice over. The same pipe is live rather than
 //! flushed at exit: a player writing its status line grew the piped file from 297 bytes to 365
 //! between the second and the fifth second of a run that was still going. ffplay's own errors do
-//! reach `stderr`, which is why its launch is given a stream to write them on where a trace asks
-//! for it (see `drain_a_players_errors`).
+//! reach `stderr`, which is why every launch of it is given that stream to write on and a thread to
+//! empty it (see `drain_a_players_errors`).
 //!
-//! **Nothing here runs unless `RHP_PLAYBACK_TRACE` asks for it.** An ordinary launch is given a null
-//! stream and no thread is spawned at all: the pipe and the drain are what a traced run pays for,
-//! and what it pays for is a player that can never be blocked by its own writing.
+//! **MPV's log is what runs only where `RHP_PLAYBACK_TRACE` asks for it**: an ordinary launch of that
+//! player writes nothing anywhere and no thread is spawned for it. **FFmpeg's player is the exception,
+//! and it is one for a reason rather than an oversight**: its sound is the one thing it can only say
+//! on that stream, so its stream is always piped and always read (see `audio_guard`), and only the
+//! *trace* of its lines is gated behind the variable. Either way the thread is what the pipe costs, and
+//! what it buys is a player that can never be blocked by its own writing.
 //!
 //! **The thread is the whole of the contract with the player.** A pipe nobody reads fills, and a
 //! player blocked on a full pipe stops playing; so the drain starts with the player, reads in chunks,
 //! keeps no more than one line, and ends when the pipe closes with the process. Nothing here is on
 //! the UI thread, and nothing here holds a lock the paint wants.
 //!
-//! **FFmpeg's player has a drain of its own, and it is the same shape.** Its errors are thrown away
-//! entirely — `-loglevel quiet` into a null stream — on an ordinary launch, so a start that found no
-//! audio device is a start nothing anywhere says anything about (see `drain_a_players_errors` and
-//! `playback_trace`).
+//! **FFmpeg's player has a drain of its own, and it is the same shape.** Its errors were thrown away
+//! entirely — `-loglevel quiet` into a null stream — so a start that found no audio device was a start
+//! nothing anywhere said anything about. Every launch of it is drained now, and the level it is
+//! started at is what decides whether there is anything to read (see `drain_a_players_errors`,
+//! `playback_trace` and `audio_guard`).
 
 use super::*;
 
@@ -59,26 +63,38 @@ pub(super) fn drain_a_player_log(stream: std::process::ChildStdout, pid: u32) {
             lines_of(stream, |line| {
                 playback_trace::a_players_line(pid, "mpv log", line);
             });
+            // The end of the stream is the end of the player, which is the end of anything watching
+            // it (see `audio_guard::a_player_ended`).
+            audio_guard::a_player_ended(pid);
         });
 }
 
 /// Read a player's own error stream to its end on a thread of its own, writing every line into the
-/// playback trace and keeping none of it here.
+/// playback trace and keeping none of it here — except the lines that are a sound device's failure,
+/// which are what a pin's film is begun again for (see `audio_guard::a_players_line`).
 ///
 /// **FFmpeg's player says everything it has to say on the standard error, and this app used to throw
 /// it away** — the launch runs it at `-loglevel quiet` with the stream `null`, so a start that found
-/// no audio device left no trace anywhere at all (see `playback_trace`). A traced launch is given a
-/// level that prints and this pipe instead, and the thread is the same contract the log's drain keeps:
-/// the pipe has one reader from the moment the player exists, so the player can never be blocked by
-/// its own writing. The child stays windowless: `engine_processes::hidden_command` starts it with
-/// `CREATE_NO_WINDOW`, so a redirected stream is a pipe and never a console.
+/// no audio device left no trace anywhere at all (see `playback_trace`). **Every** launch pipes it
+/// now, and the level a launch is given is what decides whether the player writes anything into it:
+/// a film the playback guard stands behind is played at a level that prints, because a failure the
+/// player reports on a stream nobody reads is the same silent film with one more reason nobody knows.
+/// The thread is the same contract the log's drain keeps: the pipe has one reader from the moment the
+/// player exists, so the player can never be blocked by its own writing — and that contract is why the
+/// pipe is emptied on every launch and not only on a traced one. The child stays windowless:
+/// `engine_processes::hidden_command` starts it with `CREATE_NO_WINDOW`, so a redirected stream is a
+/// pipe and never a console.
 pub(super) fn drain_a_players_errors(stream: std::process::ChildStderr, pid: u32) {
     let _ = std::thread::Builder::new()
         .name("player-errors".to_string())
         .spawn(move || {
             lines_of(stream, |line| {
                 playback_trace::a_players_line(pid, "ffplay stderr", line);
+                audio_guard::a_players_line(pid, line);
             });
+            // The end of the stream is the end of the player, which is the end of anything watching
+            // it (see `audio_guard::a_player_ended`).
+            audio_guard::a_player_ended(pid);
         });
 }
 

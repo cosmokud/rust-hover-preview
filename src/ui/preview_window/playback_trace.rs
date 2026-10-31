@@ -221,8 +221,9 @@ impl EngineAnswers {
     }
 }
 
-/// The word a verdict is written as, which is what a run is read for.
-fn the_verdict_word(verdict: Verdict) -> &'static str {
+/// The word a verdict is written as, which is what a run is read for — the trace's own `engine truth`
+/// line and the playback guard's read-backs are both written in it (see `audio_guard`).
+pub(super) fn the_verdict_word(verdict: Verdict) -> &'static str {
     match verdict {
         Verdict::NoTrack => "no-track",
         Verdict::NoDevice => "no-device",
@@ -314,8 +315,10 @@ pub(super) fn watch_the_engine(pid: u32, volume: u32) {
         });
 }
 
-/// The three questions, each bounded (see `mpv_ipc::get_property_within`).
-fn ask_the_engine(pid: u32) -> EngineAnswers {
+/// The three questions, each bounded (see `mpv_ipc::get_property_within`), and the one place they are
+/// asked: the trace reads them once to describe a launch, and the guard reads them again after each
+/// rung of its ladder (see `audio_guard`).
+pub(super) fn ask_the_engine(pid: u32) -> EngineAnswers {
     EngineAnswers {
         aid: super::mpv_ipc::get_property_within(pid, "aid", AN_ANSWER_WAIT),
         ao: super::mpv_ipc::get_property_within(pid, "ao", AN_ANSWER_WAIT),

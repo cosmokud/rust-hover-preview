@@ -89,6 +89,7 @@
 
 mod animated;
 mod audio_engine;
+mod audio_guard;
 mod audio_meter;
 mod bubble_stream;
 mod dimensions;

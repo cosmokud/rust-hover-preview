@@ -1289,6 +1289,33 @@ from the track it had (the player says so, and FFmpeg's player only says anythin
 is otherwise `-loglevel quiet` into a null stream). Unset, nothing is written, no thread is spawned and both launches
 build the command lines they always did (`playback_trace`).
 
+**Healing a film's sound.** The trace describes the two roads to a silent film; `audio_guard` walks back down them. It
+asks the same three questions (`aid`, `ao`, `audio-out-params`) and reads the same verdict out of them, then climbs a
+ladder of three rungs, each taken at most once: a track asked back for with `set_property aid auto` — the launch's own
+road, healed; `audio-device` handed its own `auto`, which is mpv reloading its audio output, so a device refused while
+the film was starting gets one more attempt at it; and, if neither was heard, **one** new player at the second and the
+pause the old one had, read once, and then the ladder ends. Each rung is entered on what the read-back said and never on
+a write having landed, and a player that answered nothing is asked once more and then left entirely alone: a verdict that
+never arrived is not a film without sound, so it is not a player to begin again. The guard is armed once per launched
+player, and only for a pin's own film begun at a level — a hover, a sound, and a film the level itself gave no track are
+none of its business. Every rung writes a line (`audio guard`, `audio read-back`, `audio step`), so a field log carries
+the ladder's whole evidence even where it healed silently.
+
+**mpv has a pipe, and FFmpeg's player does not**, so the second one's ladder is one rung. Every ffplay launch is piped
+on the standard error and drained — a pipe nobody empties blocks the child, so the pipe is only ever there with its
+reader — and a launch the guard stands behind is played at a level that prints whether or not the trace is on, because
+`-loglevel quiet` would suppress the one line that can say a device never opened. A match against four strict
+fragments (`Could not open audio device`, `Failed to initialize the SDL audio`, `Failed to initialize audio`,
+`Could not initialize audio`) begins that player again once; an ordinary warning is not a signature, and a line the
+stream never carried is not one either.
+
+**Nothing here waits on the preview loop.** A player that has only just been begun has no pipe yet, so a thread asks
+and leaves the answer where the tick finds it, and the tick is what writes and decides. Its last rung is the pin's own
+swap path (`pin_playback::begin_the_pinned_film_again_for_its_sound` → `restart_pinned_player`), so the picture is kept
+exactly as a seek keeps it; the guard itself never pauses, seeks or moves a level, and a film the handover left held is
+begun again held. The rung waits for a tick with no swap and no handover in flight, because a picture changing hands is
+not a player to be begun under it.
+
 **What this means for another player engine.** The road is engine-agnostic, and both players this app has are on it: it
 needs a player that draws into a window of its own, whose picture size is known before anything else asks it for a box
 (so the source can be placed at it), and that is happy to render at that size while the pin is any size — the Shell does
@@ -1312,6 +1339,7 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/video_playback.rs` | both launches: where a film is born (the desktop, at its own size, borderless) and which host keeps it |
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
 | `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it, both players' own lines, and a kill's confirmation |
+| `src/ui/preview_window/audio_guard.rs` | the ladder a pinned film's sound is healed by: the read-back's verdict, the three rungs, and the one relaunch; the strict signature list FFmpeg's player is read against |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |
 
