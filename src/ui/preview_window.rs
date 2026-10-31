@@ -134,6 +134,7 @@ mod pin_walk;
 mod pin_window;
 mod pin_zoom;
 mod pixels;
+mod playback_trace;
 mod player_logs;
 mod pointer;
 mod preview_scale;
@@ -239,7 +240,7 @@ use std::time::{Duration, Instant, SystemTime};
 use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
-    WAIT_TIMEOUT, WPARAM,
+    WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{
@@ -353,6 +354,23 @@ pub(crate) fn note_a_trace_line(line: &str) {
     }
     #[cfg(test)]
     pin_trace::note_a_line_for_a_test(line.to_string());
+}
+
+/// Whether `RHP_PLAYBACK_TRACE` asks for a launch's sound to be written out — asked by the one module
+/// outside this one that ends a process, so that a run without the variable pays a read of an atomic
+/// and builds no line at all (see `playback_trace`).
+pub(crate) fn playback_trace_asked() -> bool {
+    playback_trace::asked()
+}
+
+/// Write one line of that log from outside this module: the kill `app::engine_processes` makes of a
+/// process it verified, which is one of the two roads a player is ended by.
+pub(crate) fn note_a_playback_trace_line(line: &str) {
+    if playback_trace::asked() {
+        playback_trace::write(line);
+    }
+    #[cfg(test)]
+    playback_trace::note_a_line_for_a_test(line.to_string());
 }
 pub(crate) use requests::is_preview_window;
 pub(crate) use requests::notify_magick_ready;

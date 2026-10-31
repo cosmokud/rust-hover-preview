@@ -25,6 +25,10 @@
 //! was begun for, and the table is a short one: a pin is taken up within a second of the player that
 //! shows its file, so a handful of entries covers every road (see `watch_of`, which is only ever
 //! asked about the player a pin was just taken up on).
+//!
+//! **FFmpeg's player has a drain of its own, and it is the same shape.** Its errors were thrown away
+//! entirely — `-loglevel quiet` into a null stream — so a start that found no audio device was a start
+//! nothing anywhere said anything about (see `drain_a_players_errors` and `playback_trace`).
 
 use super::*;
 use crate::engines::corruption_log::CorruptionWatch;
@@ -46,7 +50,8 @@ pub(super) fn a_watch() -> Arc<CorruptionWatch> {
 ///
 /// It is `piped` rather than inherited for the reason every other stream a player is given is
 /// `null`: a preview must not write into a console it does not own, and nothing of the player's is
-/// to reach a window of this app's.
+/// to reach a window of this app's. It is the same stream a traced FFmpeg launch gives its own
+/// errors, because the reason is the same one (see `drain_a_players_errors`).
 pub(super) fn a_stream_to_drain() -> Stdio {
     Stdio::piped()
 }
@@ -83,24 +88,68 @@ pub(super) fn remember(pid: u32, path: &Path, watch: &Arc<CorruptionWatch>) {
     });
 }
 
-/// Read a player's log to its end on a thread of its own, matching every line and keeping none.
+/// Read a player's log to its end on a thread of its own, matching every line and keeping none —
+/// except where `RHP_PLAYBACK_TRACE` asks for the lines themselves, which is the one road a device
+/// that would not open tells anyone about here (see `playback_trace`).
 ///
 /// The thread is the pipe's only reader from the moment the player exists, which is what says a
 /// player can never be blocked by its own logging; it ends at the pipe's end of file, which is the
 /// process ending.
-pub(super) fn drain_a_player_log(stream: std::process::ChildStdout, watch: Arc<CorruptionWatch>) {
+pub(super) fn drain_a_player_log(
+    stream: std::process::ChildStdout,
+    watch: Arc<CorruptionWatch>,
+    pid: u32,
+) {
     let _ = std::thread::Builder::new()
         .name("player-log".to_string())
-        .spawn(move || follow(stream, &watch));
+        .spawn(move || {
+            lines_of(stream, |line| {
+                watch.observe(line);
+                playback_trace::a_players_line(pid, "mpv log", line);
+            });
+        });
+}
+
+/// Read a player's own error stream to its end on a thread of its own, writing every line into the
+/// playback trace and keeping none of it here.
+///
+/// **FFmpeg's player says everything it has to say on the standard error, and this app used to throw
+/// it away** — the launch runs it at `-loglevel quiet` with the stream `null`, so a start that found
+/// no audio device left no trace anywhere at all (see `playback_trace`). A traced launch is given a
+/// level that prints and this pipe instead, and the thread is the same contract the log's drain keeps:
+/// the pipe has one reader from the moment the player exists, so the player can never be blocked by
+/// its own writing. The child stays windowless: `engine_processes::hidden_command` starts it with
+/// `CREATE_NO_WINDOW`, so a redirected stream is a pipe and never a console.
+pub(super) fn drain_a_players_errors(stream: std::process::ChildStderr, pid: u32) {
+    let _ = std::thread::Builder::new()
+        .name("player-errors".to_string())
+        .spawn(move || {
+            lines_of(stream, |line| {
+                playback_trace::a_players_line(pid, "ffplay stderr", line);
+            });
+        });
 }
 
 /// Match every complete line of `reader` against `watch` until it ends.
 ///
-/// The lines are handed over where they lie: no lowercased copy, no `String` per line, and a line
-/// longer than `LONGEST_LINE` is dropped whole rather than grown. A line ending in the `\r\n` a
-/// Windows player writes is trimmed of its `\r` first, so a signature at the end of a line is not
-/// lost to it.
-fn follow(mut reader: impl std::io::Read, watch: &CorruptionWatch) {
+/// The reader the log's own tests are written against, so that the line ends they assert about are
+/// the ones `lines_of` really takes rather than ones a copy of it takes.
+#[cfg(test)]
+fn follow(reader: impl std::io::Read, watch: &CorruptionWatch) {
+    lines_of(reader, |line| {
+        watch.observe(line);
+    });
+}
+
+/// Hand every complete line of `reader` to `on_line` until the stream ends.
+///
+/// **The one shape every reader of a player's own writing has**, which is why it is one function: what
+/// the lines are read for differs — a latch matched against a file's health, a line written into the
+/// playback trace — and what a line *is* must not. The lines are handed over where they lie: no
+/// lowercased copy, no `String` per line, and a line longer than `LONGEST_LINE` is dropped whole
+/// rather than grown. A line ending in the `\r\n` a Windows player writes is trimmed of its `\r`
+/// first, so a signature at the end of a line is not lost to it.
+fn lines_of(mut reader: impl std::io::Read, mut on_line: impl FnMut(&str)) {
     let mut chunk = [0u8; 4096];
     let mut line: Vec<u8> = Vec::with_capacity(LONGEST_LINE);
     let mut over_long = false;
@@ -130,7 +179,7 @@ fn follow(mut reader: impl std::io::Read, watch: &CorruptionWatch) {
                     line.pop();
                 }
                 if let Ok(line) = std::str::from_utf8(&line) {
-                    watch.observe(line);
+                    on_line(line);
                 }
             }
 
