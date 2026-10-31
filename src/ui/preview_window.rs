@@ -134,6 +134,7 @@ mod pin_walk;
 mod pin_window;
 mod pin_zoom;
 mod pixels;
+mod player_logs;
 mod pointer;
 mod preview_scale;
 mod requests;
@@ -173,6 +174,10 @@ use crate::config::config::{
 };
 use crate::engines::calibre_render;
 use crate::engines::imagemagick_render;
+// What a damaged file's card is, the latch behind it and the card's own run: three answers the
+// paint, the tick that drives it and the pipe that trips it all read rather than compute (see
+// `engines::corruption_log`).
+pub(crate) use crate::engines::corruption_log::CorruptionCard;
 use crate::engines::libreoffice_render;
 use crate::engines::office_render;
 use crate::engines::peazip_render;

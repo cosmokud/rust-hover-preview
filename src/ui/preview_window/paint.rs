@@ -598,6 +598,13 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         }
     }
 
+    // The card warning that this file's own player has said it may be damaged. It is drawn into a
+    // surface of its own rather than into this one, and the strip after this paint is what carries
+    // it over the picture — a hosted film composites over the pin's layered surface, so a card
+    // painted here would be a card under the film (see `pin_chrome_strips` and
+    // `paint_corruption_card`).
+    paint_corruption_card(width, band_height as i32, &paint);
+
     // The caption's tooltip, floated over the media below the strip — which is where it is
     // because a name like "Open With Adobe Photoshop" is wider than the buttons it describes,
     // and a tooltip drawn inside the strip would cover them for as long as it was up (see
@@ -795,6 +802,14 @@ pub(super) struct PinnedPaint {
     pub(super) playing: bool,
     pub(super) position: Option<f64>,
     pub(super) duration: Option<f64>,
+    /// How much of the card warning this file may be damaged is on screen this paint, or nothing
+    /// while there is no card to draw — the player has not accused the file, or the card's one run
+    /// is over (see `CorruptionCard::coverage`).
+    ///
+    /// It is a number rather than a flag because a card that blinked on and off would be a mark the
+    /// eye reads as a fault of its own: the three beats of its run are the paint's, and the tick
+    /// that asks for the next frame is asked the same question (see `is_animating`).
+    pub(super) corruption: Option<f32>,
 }
 
 /// A repaint's one tooltip, taken out of the pin as a value: which button is saying it and what
@@ -864,6 +879,7 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             volume: pin.volume,
             volume_popup: None,
             transport_live: pin.transport_live,
+            corruption: pin.corruption.coverage(),
         }
     };
 
@@ -1346,6 +1362,55 @@ pub(super) fn sample_bilinear(
     }
 
     sample
+}
+
+/// Draw the card that warns a pinned window's file may be damaged, into the surface its strip
+/// carries over the film.
+///
+/// It is beside `paint_pin_tooltip` for the reason that one is beside the caption: a panel over
+/// the media needs a surface of its own and a device context to measure and draw a line of text
+/// on, which the window's own layered surface has none of. What makes this one a strip rather than
+/// a panel painted into the window is the film: a hosted film composites *over* the pin's layered
+/// surface, so a card painted into it is a card nobody sees (see `pin_chrome_strips`).
+///
+/// Nothing is made here for a pin that has no card to draw — the surface is built only where
+/// `paint.corruption` says there is one this frame, so a film nothing has accused costs one
+/// `None`.
+pub(super) fn paint_corruption_card(width: i32, band_height: i32, paint: &PinnedPaint) {
+    let Some(coverage) = paint.corruption else {
+        return;
+    };
+    let Some(palette) = pin_chrome::ChromePalette::current() else {
+        return;
+    };
+
+    let wanted = (width.max(1) as u32, band_height.max(1) as u32);
+    CARD_SURFACE.with(|cell| {
+        let mut surface = cell.borrow_mut();
+        if surface
+            .as_ref()
+            .map(|surface| (surface.width, surface.height))
+            != Some(wanted)
+        {
+            *surface = DibSurface::create(wanted.0, wanted.1);
+        }
+        let Some(surface) = surface.as_ref() else {
+            return;
+        };
+
+        // Blanked before it is drawn on, like the tooltip's: what the strip carries is these
+        // pixels and the transparency around them, and a card left from the last frame would be
+        // a second one drawn under this one.
+        let blanked = unsafe {
+            std::slice::from_raw_parts_mut(
+                surface.bits(),
+                surface.width as usize * surface.height as usize * 4,
+            )
+        };
+        blanked.fill(0);
+
+        pin_chrome::paint_corruption_card(surface, &palette, coverage, paint.dpi);
+    });
 }
 
 /// Draw the name of a pinned window's caption button over its media, if it has one to say.

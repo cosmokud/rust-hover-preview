@@ -26,6 +26,7 @@
 
 mod bubble;
 mod caption;
+mod corruption_card;
 mod menu;
 mod primitives;
 mod transport;
@@ -38,6 +39,7 @@ pub(crate) use caption::{
     button_at, button_boxes, caption_fits, measure_caption_text, paint_caption, Caption,
     CaptionButton,
 };
+pub(crate) use corruption_card::paint_corruption_card;
 pub(crate) use menu::{
     menu_flyout_from_menu, menu_flyout_gap_holds, menu_popup_from_point, menu_popup_shifted,
     menu_row_at, paint_menu_popup, MenuArrow, MenuMark, MenuPopup, MenuRow, MENU_SHADOW_PIXELS,

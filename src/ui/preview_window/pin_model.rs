@@ -582,6 +582,15 @@ pub(super) struct PinnedPreview {
     /// The card's own menu: whether its panel is up, and
     /// whether the Seek row's flyout is (see `PinMenu`).
     pub(super) menu: PinMenu,
+    /// What this file is owed if its own player says it is damaged: the latch of the player showing
+    /// it, and the clock of the one run a warning card is drawn for (see `CorruptionCard`).
+    ///
+    /// **It is built with the pin and dropped with it**, which is the whole of how a step to another
+    /// file forgets the last one's card. There is nothing to reset because there is nothing that
+    /// outlives the file: the pin holding this value is rebuilt whole for every file it shows (see
+    /// `take_up_pinned_window`), and what it is built from is the player of *that* file (see
+    /// `player_logs::watch_of`, which answers nothing for a player begun for another one).
+    pub(super) corruption: CorruptionCard,
 }
 
 #[cfg(test)]
@@ -621,6 +630,7 @@ impl PinnedPreview {
             audio_pressed: None,
             audio_window_buttons: false,
             menu: PinMenu::default(),
+            corruption: CorruptionCard::none(),
         }
     }
 }

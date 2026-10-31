@@ -1197,6 +1197,20 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
     ask_pin_open_with(path.to_path_buf());
 
     PinnedPreview {
+        // The card this file is owed if its own player says it is damaged, read off the player
+        // that shows it: the pin is taken up on that player, so the latch it holds is *this*
+        // file's latch and no other's — a step to another file builds another pin, holding the
+        // watch of the player begun for that one (see `CorruptionCard` and
+        // `player_logs::watch_of`, which answers nothing for a player begun for a different
+        // file).
+        //
+        // Nothing here waits, reads or scans: the watch was made empty before the player
+        // existed, and what has been written into it by now is whatever its pipe said as the
+        // film opened.
+        corruption: CorruptionCard::watching(player_logs::watch_of(
+            VIDEO_PID.load(Ordering::SeqCst),
+            path,
+        )),
         path: path.to_path_buf(),
         content,
         // A pin taken up over another one keeps the bound the window has:

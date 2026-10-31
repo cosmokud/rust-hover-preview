@@ -16,6 +16,7 @@ use super::pin_input::take_relayout_request;
 /// about a caption button would otherwise be about the three a window has of its own.
 fn wide_banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
     PinnedPreview {
+        corruption: CorruptionCard::none(),
         path: PathBuf::from("ws-l-take-up.mkv"),
         content,
         bound: Some(400),
