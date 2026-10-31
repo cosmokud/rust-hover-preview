@@ -4082,10 +4082,13 @@ pub fn run_preview_window() {
                         }
                         // A page is the one kind a box is *laid out* for rather than scaled into, so
                         // the box it has just been given is the box it is drawn for now — ahead of the
-                        // window being put up around it, and ahead of the answer the load above will
-                        // bring. It is the kind that answers that, and it answers for no other, which
-                        // leaves every other kind drawn into the new box from the frame in hand (see
-                        // `relayout_text_for_the_box`).
+                        // window being put up around it. It is the kind that answers that, and it
+                        // answers for no other, which leaves every other kind drawn into the new box
+                        // from the frame in hand (see `relayout_text_for_the_box`).
+                        //
+                        // And it is the whole of what this box asks of a page: no read is owed one
+                        // behind it, because a read begins at the document's first line and would
+                        // land over the line this has just drawn (see `relayout_pinned_media`).
                         relayout_text_for_the_box(content);
                         show_pinned_window(hwnd);
                         place_pinned_siblings();
