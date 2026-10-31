@@ -182,7 +182,12 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         })
         .unwrap_or(false);
 
-    if changed || transport_changed || audio_changed {
+    // And the find bar's card over a pinned page, which lights the control under the pointer the way
+    // a caption lights its own. It answers whether the card changed rather than whether the pointer
+    // moved, because a repaint here is a band that copies the whole page frame (see `text_find::hover`).
+    let find_changed = text_find::hover(x, y);
+
+    if changed || transport_changed || audio_changed || find_changed {
         render_layered_preview(hwnd);
     }
 }

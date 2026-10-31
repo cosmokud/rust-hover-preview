@@ -584,6 +584,198 @@ fn a_press_on_the_card_answers_its_own_controls() {
     );
 }
 
+/// Whether the bar is holding a repeat: the press's own step is written down before the hold is armed,
+/// so this is only ever the one after it (see `Hold`).
+fn repeating() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| state.find.hold.is_some())
+        })
+        .unwrap_or(false)
+}
+
+/// Forty lines with a needle on two of them, in a box tall enough to hold the card over it: the card
+/// is laid out only on a page whose corner has room for its two rows (see `find_bar_layout`).
+fn a_tall_page_with_two_needles(name: &str) {
+    let text: String = (0..40)
+        .map(|n| {
+            format!(
+                "line {n}{}
+",
+                if n == 5 || n == 19 {
+                    " needle here"
+                } else {
+                    ""
+                }
+            )
+        })
+        .collect();
+
+    put_page(&text, name, 240, 140);
+}
+
+/// The middle of one of the card's boxes, in the window's own coordinates.
+fn middle_of(rect: RECT) -> (i32, i32) {
+    ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)
+}
+
+/// The two chevrons are buttons a hand holds down rather than presses once: the press is a step of its
+/// own, and the hold steps again on the tick's clock — first after a delay and then once an interval —
+/// until the button is let go of (see `text_find::press` and `text_find::step_the_hold`).
+#[test]
+fn a_held_chevron_steps_once_at_the_press_and_then_on_the_ticks_clock() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_tall_page_with_two_needles("a-bar-held.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+    assert_eq!(
+        bar_now().3,
+        Some(0),
+        "the reader starts on the first of the two needles"
+    );
+
+    let card = text_find::find_bar()
+        .expect("the card the bar is drawn in")
+        .card;
+    let pressed = Instant::now();
+    let (x, y) = middle_of(card.next);
+    assert!(text_find::press(x, y), "a press on the arrow is the card's");
+    assert!(repeating(), "and a chevron pressed arms the hold behind it");
+
+    // The press is a step of its own: the tick that settles it is the only thing that has to run.
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(bar_now().3, Some(1), "the press itself steps once");
+
+    // Nothing more before the delay is up: a hand that lets go inside it has stepped once.
+    text_find::step_the_hold(pressed + Duration::from_millis(text_find::HOLD_DELAY_MS - 1));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        bar_now().3,
+        Some(1),
+        "and the hold steps nothing before its delay"
+    );
+
+    // Then one step per interval.
+    text_find::step_the_hold(pressed + Duration::from_millis(text_find::HOLD_DELAY_MS + 20));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        bar_now().3,
+        Some(0),
+        "the first repeat comes a delay after the press"
+    );
+
+    text_find::step_the_hold(pressed + Duration::from_millis(text_find::HOLD_DELAY_MS + 40));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        bar_now().3,
+        Some(0),
+        "and the next one an interval after that, not on every tick"
+    );
+
+    text_find::step_the_hold(
+        pressed + Duration::from_millis(text_find::HOLD_DELAY_MS + text_find::HOLD_REPEAT_MS + 20),
+    );
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        bar_now().3,
+        Some(1),
+        "one interval further on, one step more"
+    );
+}
+
+/// A release stops the hold where it got to, and so does the key that puts the bar away: a chevron is
+/// stepping only while it is held (see `text_find::release` and `text_find::step_the_hold`).
+#[test]
+fn a_release_or_an_escape_stops_a_held_chevron() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_tall_page_with_two_needles("a-bar-let-go-of.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+
+    let card = text_find::find_bar()
+        .expect("the card the bar is drawn in")
+        .card;
+    let pressed = Instant::now();
+    let (x, y) = middle_of(card.next);
+    assert!(text_find::press(x, y));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(bar_now().3, Some(1), "the press stepped once");
+
+    assert!(text_find::release(), "the card was holding that press");
+    assert!(!repeating(), "and the release let the hold go with it");
+    text_find::step_the_hold(pressed + Duration::from_millis(text_find::HOLD_DELAY_MS + 400));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        bar_now().3,
+        Some(1),
+        "a chevron that is no longer held steps no further"
+    );
+
+    // The two arrows are a held button's; the key that puts the bar away is not.
+    assert!(text_find::press(x, y));
+    assert!(repeating(), "a press arms the hold again");
+    assert_eq!(
+        text_find::key_edit(VK_ESCAPE.0 as i32),
+        Some(FindEdit::Close)
+    );
+    text_find::note(FindEdit::Close);
+    unsafe { text_find::settle(a_pin_window()) };
+    assert!(!bar_now().0, "Escape puts the bar away");
+    assert!(!repeating(), "and the hold goes with it");
+}
+
+/// The switches and the cross are one-shot: a press on `Aa` turns it and a press on the cross puts the
+/// bar away, and neither keeps stepping the matches while it is held (see `text_find::press`).
+#[test]
+fn the_switches_and_the_cross_are_one_shot_and_arm_no_hold() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_tall_page_with_two_needles("a-bar-one-shot.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+
+    let card = text_find::find_bar()
+        .expect("the card the bar is drawn in")
+        .card;
+    let held = Instant::now() + Duration::from_millis(text_find::HOLD_DELAY_MS + 1000);
+    let current = bar_now().3;
+
+    for rect in [card.case, card.whole_word] {
+        let (x, y) = middle_of(rect);
+        assert!(text_find::press(x, y));
+        assert!(!repeating(), "a switch pressed arms no hold");
+        text_find::step_the_hold(held);
+        unsafe { text_find::settle(a_pin_window()) };
+        text_find::release();
+    }
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        bar_now().3,
+        current,
+        "neither switch walks the matches however long it was held"
+    );
+
+    let (x, y) = middle_of(card.close);
+    assert!(text_find::press(x, y));
+    assert!(!repeating(), "and the cross arms none either");
+    text_find::step_the_hold(held);
+    unsafe { text_find::settle(a_pin_window()) };
+    assert!(!bar_now().0, "the cross puts the bar away");
+}
+
 /// A box change keeps the bar: the page is the same document laid out again, so its query is still
 /// searched for, its places are still the document's places, and the card is still over it — only the
 /// page under the card is wrapped at another width (see `relayout_text_for_the_box` and `FindState`).

@@ -512,7 +512,18 @@ pub(super) fn refresh_pin_chrome(
         .and(pin.hovered);
     let spoken = pin.tooltip.refresh(spoken, now);
 
-    spoken || shown || closed || card || menu
+    // And the find bar's card over a pinned page, which is a card over a media band the same way a
+    // sound's is: the pointer that has left the pin sends it no more moves, and a control left lit
+    // under a pointer that is somewhere else is exactly what a caption refuses to let happen to its
+    // own. It is asked of the pin in hand rather than through `text_find::hover`, which asks for this
+    // lock again (see `text_find::hover_over`).
+    let window = pin.window_box();
+    let find = cursor
+        .filter(|(x, y)| *x >= window.0 && *x < window.2 && *y >= window.1 && *y < window.3)
+        .map(|(x, y)| text_find::hover_over(pin, x - window.0, y - window.1))
+        .unwrap_or_else(|| text_find::hover_over(pin, -1, -1));
+
+    spoken || shown || closed || card || menu || find
 }
 
 /// The card's own control the pointer is on, asked of the cursor's place on the screen rather than
