@@ -4,9 +4,9 @@
 //! **The two roads to a silent film are one page over** (see `playback_trace`): a launch that handed
 //! its player a level and a player that never opened a device from it look identical from this side
 //! of the process boundary, and the difference is only ever read off the player — `aid` for a track,
-//! `ao` and `audio-out-params` for an output. So this module asks the same three questions the trace
-//! asks, reads the same verdict out of them (`playback_trace::Verdict`), and then *does* something
-//! about it, which is the whole of what the trace is not for.
+//! `current-ao` and `audio-out-params` for an output. So this module asks the same three questions
+//! the trace asks, reads the same verdict out of them (`playback_trace::Verdict`), and then *does*
+//! something about it, which is the whole of what the trace is not for.
 //!
 //! **The ladder, each rung taken at most once, and each rung entered on what the read-back said:**
 //!
@@ -396,9 +396,9 @@ fn the_step_of_a_read(guard: &mut Guard, report: Report) -> Step {
 /// by the guard is read per rung rather than once.
 fn a_read_back(pid: u32, read: u8, answers: &EngineAnswers) -> String {
     format!(
-        "audio read-back pid {pid} read {read} aid {} ao {} audio-out-params {} verdict {}",
+        "audio read-back pid {pid} read {read} aid {} current-ao {} audio-out-params {} verdict {}",
         answers.aid.as_deref().unwrap_or("-"),
-        answers.ao.as_deref().unwrap_or("-"),
+        answers.current_ao.as_deref().unwrap_or("-"),
         answers.audio_out_params.as_deref().unwrap_or("-"),
         super::playback_trace::the_verdict_word(answers.verdict()),
     )
@@ -607,19 +607,20 @@ mod tests {
     fn a_read_back_is_the_players_own_answers_and_the_verdict_they_come_to() {
         let answers = EngineAnswers {
             aid: Some("1".to_string()),
-            ao: Some("wasapi".to_string()),
+            current_ao: Some("wasapi".to_string()),
             audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
         };
         assert_eq!(
             a_read_back(7, 1, &answers),
-            "audio read-back pid 7 read 1 aid 1 ao wasapi audio-out-params \
+            "audio read-back pid 7 read 1 aid 1 current-ao wasapi audio-out-params \
              {\"samplerate\":48000} verdict heard"
         );
 
         let silent = EngineAnswers::default();
         assert_eq!(
             a_read_back(9, 2, &silent),
-            "audio read-back pid 9 read 2 aid - ao - audio-out-params - verdict unanswered",
+            "audio read-back pid 9 read 2 aid - current-ao - audio-out-params - verdict \
+             unanswered",
             "a player that said nothing is written as nothing said rather than as a guess"
         );
     }
