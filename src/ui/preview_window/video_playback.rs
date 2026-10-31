@@ -603,7 +603,7 @@ fn start_video_playback_where(
     );
 
     if route == VideoRoute::Mpv {
-        return start_mpv_video_playback(
+        let player = start_mpv_video_playback(
             path,
             x,
             y,
@@ -617,7 +617,20 @@ fn start_video_playback_where(
             kind,
             for_a_hover,
             must_not_activate,
+        )?;
+
+        // **A pin's film begun at a level is watched until it has a sound** (see `audio_guard`). The
+        // launch is the one moment a guard is armed, so a player is watched once and a player this
+        // app did not begin is nobody's to heal: a hover's film, a served hover and a film the level
+        // gave no track are all left exactly as they were.
+        audio_guard::arm(
+            player.id(),
+            path,
+            volume,
+            video_launch::Engine::Mpv,
+            for_a_hover,
         );
+        return Some(player);
     }
 
     // Use ffplay for video playback - borderless, positioned at preview location
@@ -824,12 +837,11 @@ fn start_video_playback_where(
     let height_arg = asked_height.to_string();
     let left_arg = x.to_string();
     let top_arg = y.to_string();
-    // **A traced launch is given a log level that prints and a pipe to print into**, and an ordinary
-    // one gets exactly what it always had: `-loglevel quiet` into a null stream. FFmpeg's player is
-    // the one engine here whose start leaves no trace at all otherwise — a start that finds no audio
-    // device says so on its own error stream, and a stream nobody reads is a film that plays silently
-    // with nothing anywhere to say why (see `player_logs::drain_a_players_errors` and
-    // `playback_trace`).
+    // **Every launch is given a log level that prints when it has something worth hearing, and a pipe
+    // to print into on all of them.** FFmpeg's player is the one engine here whose start leaves no
+    // trace at all otherwise — a start that finds no audio device says so on its own error stream, and
+    // a stream nobody reads is a film that plays silently with nothing anywhere to say why (see
+    // `player_logs::drain_a_players_errors` and `playback_trace`).
     //
     // **`warning` rather than `info`, which is a measurement of the stream rather than a preference:**
     // `info` turns on FFmpeg's status line, and that line is one stream of `\r`-updated text with no
@@ -837,10 +849,23 @@ fn start_video_playback_where(
     // keeps and is dropped, and the device's own sentence would be dropped with it. A warning and an
     // error both survive this level, and both end in a newline.
     //
+    // **A film the guard stands behind is played at that level whether or not a trace is running**, and
+    // that is the whole of what makes its one cure reachable: FFmpeg's player has no pipe and can be
+    // told nothing, so the only thing that can say its sound never opened is a line on this stream —
+    // and `-loglevel quiet`, which an ordinary launch used to be given, prints no line at all (see
+    // `audio_guard`). What an ordinary hover keeps is the quiet level it always had.
+    //
     // The child stays windowless either way: `engine_processes::hidden_command` starts it with
-    // `CREATE_NO_WINDOW`, so a redirected stream is a pipe and never a console.
+    // `CREATE_NO_WINDOW`, so a redirected stream is a pipe and never a console. And a pipe is only safe
+    // because it is always drained: the drain below begins with the player on every launch, which is
+    // the half a stream that was piped and not read would block the player on.
     let traced = playback_trace::asked();
-    let log_level = if traced { "warning" } else { "quiet" };
+    let guarded = audio_guard::guarded(for_a_hover, volume);
+    let log_level = if traced || guarded {
+        "warning"
+    } else {
+        "quiet"
+    };
     let cmd = cmd.args([
         "-err_detect",
         "ignore_err", // Ignore header/stream errors
@@ -866,11 +891,9 @@ fn start_video_playback_where(
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(if traced {
-            player_logs::a_stream_to_drain()
-        } else {
-            Stdio::null()
-        });
+        // **Piped on every launch, and drained on every launch** (see `player_logs`): a stream that is
+        // read only on some runs is a player that blocks on a full pipe on the others.
+        .stderr(player_logs::a_stream_to_drain());
 
     // The seek is written after the input file rather than before it, which is the whole of why it
     // is written here and not above: a seek written before the input makes the `subtitles` filter
@@ -885,10 +908,20 @@ fn start_video_playback_where(
     // **The pipe the player's own errors arrive on is emptied from here on**, on a thread that ends
     // with the player — the same contract the mpv route's log drain keeps, and for the same reason: a
     // pipe nobody reads fills, and a player blocked on a full pipe stops playing (see `player_logs`).
+    // The drain is what lets a device that would not open be noticed at all, and it is begun before the
+    // player is booked in below: a line written in the first millisecond of a run must land in a pipe
+    // that already has its reader (see `audio_guard`).
     if let Some(ref mut player) = child {
         if let Some(stream) = player.take_error_stream() {
             player_logs::drain_a_players_errors(stream, player.id());
         }
+        audio_guard::arm(
+            player.id(),
+            path,
+            volume,
+            video_launch::Engine::Ffplay,
+            for_a_hover,
+        );
     }
 
     // After spawning, try to set WS_EX_NOACTIVATE on the player's window

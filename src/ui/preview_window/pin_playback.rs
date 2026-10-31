@@ -157,11 +157,12 @@ pub(super) fn take_the_last_restart_reason() -> Option<RestartReason> {
 
 /// Why a player is begun again, which is the one thing every relaunch says out loud.
 ///
-/// The set is exactly the user actions that need a new player on a route with no IPC: a seek, a
-/// level, a subtitle track, the end of a file, and the engine that cannot take an instruction any
-/// other way. **There is no gesture reason and no resize reason, and that is the rule rather than
-/// an omission**: a press, a move, a drag and a resize leave the player running, because the film
-/// is a thumbnail of a source window the gesture does not move (see `pin_film_thumbnail`).
+/// The set is exactly the actions that need a new player on a route with no IPC: a seek, a level, a
+/// subtitle track, the end of a file, the engine that cannot take an instruction any other way, and the
+/// one fault this app heals for itself — a film with no sound at all (see `audio_guard`). **There is no
+/// gesture reason and no resize reason, and that is the rule rather than an omission**: a press, a
+/// move, a drag and a resize leave the player running, because the film is a thumbnail of a source
+/// window the gesture does not move (see `pin_film_thumbnail`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum RestartReason {
     Seek,
@@ -169,6 +170,9 @@ pub(super) enum RestartReason {
     Subtitle,
     End,
     Engine,
+    /// A player begun again because the film it was playing had no sound at all, and could not be
+    /// given one where it stood (see `audio_guard`).
+    Sound,
 }
 
 impl RestartReason {
@@ -180,6 +184,7 @@ impl RestartReason {
             RestartReason::Subtitle => "subtitle",
             RestartReason::End => "end",
             RestartReason::Engine => "engine",
+            RestartReason::Sound => "sound",
         }
     }
 
@@ -191,6 +196,7 @@ impl RestartReason {
             RestartReason::Subtitle => 3,
             RestartReason::End => 4,
             RestartReason::Engine => 5,
+            RestartReason::Sound => 6,
         }
     }
 
@@ -201,6 +207,7 @@ impl RestartReason {
             3 => Some(RestartReason::Subtitle),
             4 => Some(RestartReason::End),
             5 => Some(RestartReason::Engine),
+            6 => Some(RestartReason::Sound),
             _ => None,
         }
     }
@@ -241,6 +248,49 @@ pub(super) fn restart_pinned_player(
     reason: RestartReason,
 ) {
     relaunch_pinned_player(path, content, seconds, holding, false, reason);
+}
+
+/// Begin the pin's film again because it has no sound at all, at the end of the ladder
+/// `audio_guard` climbs.
+///
+/// **It is the relaunch a seek already is, and not a handover of its own.** The player being replaced
+/// keeps the picture on screen until the one begun in its place has taken it over, exactly as every
+/// other relaunch here does (see `relaunch_pinned_player`), because the film that has no sound is a
+/// film that is *playing* — the picture is the whole of what must not be lost, and the one rung left
+/// after the two audio properties is this.
+///
+/// **And nothing is fought.** No pause is toggled, no second is asked for, no level is moved: the
+/// replacement is begun at the second the pin's own clock already says and in the state the pin's
+/// transport already holds, so a film the handover left paused is begun again paused and a film the
+/// user was watching is begun again playing, both at the frame it was at (see `PinTransport::begun`).
+///
+/// It answers whether a player really was begun, because the ladder spends its last rung on this and
+/// a pin that has walked off the film — or a picture already changing hands — is a player that must
+/// not be replaced for a sound that is not on screen any more.
+pub(super) fn begin_the_pinned_film_again_for_its_sound(path: &Path) -> bool {
+    let Some((showing, content, transport, _)) = pinned_playback_state() else {
+        return false;
+    };
+    // The pin has walked off the film the guard was armed for: the player that is up belongs to
+    // another file, and beginning it again would be a picture replaced for this one's silence.
+    if showing != path {
+        return false;
+    }
+    // A picture changing hands is the pin's own business and is asked for its own reasons; a player
+    // begun again under a handover is one the host has not been given yet (see
+    // `pin_film_thumbnail::a_handover_is_pending_for`).
+    if pin_film_thumbnail::a_handover_is_pending_for(VIDEO_PID.load(Ordering::Acquire)) {
+        return false;
+    }
+
+    restart_pinned_player(
+        &showing,
+        content,
+        pinned_playhead().unwrap_or(0.0),
+        transport.paused_at.is_some(),
+        RestartReason::Sound,
+    );
+    true
 }
 
 /// Begin the pin's player on the very frame the hover is showing, and hold that hover there until
