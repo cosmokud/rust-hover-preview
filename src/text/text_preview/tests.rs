@@ -1,3 +1,4 @@
+use super::document::find_all;
 use super::frame::TextFrame;
 use super::*;
 use crate::config::config::{MarkdownMode, TextTheme};
@@ -500,6 +501,166 @@ fn a_find_walks_the_document_from_just_after_what_is_selected() {
         ),
         None,
         "and `amma`, which the document writes once, has no next one"
+    );
+}
+
+/// A search lists every place the query is found, in the order the document is read, and it is the
+/// query that is looked for rather than a selection: nothing found is an empty list rather than a
+/// page that has moved, and an empty query is nothing to look for (see `find_all`).
+#[test]
+fn a_search_lists_every_place_the_query_is_found() {
+    let dir = scratch("find-all");
+    let source = dir.join("find-all.txt");
+    fs::write(&source, "alpha beta\ngamma alpha\ndelta alpha\nepsilon\n").expect("a written page");
+
+    let alpha = |line: usize, from: usize| Selection {
+        anchor: (line, from),
+        caret: (line, from + 5),
+    };
+
+    assert_eq!(
+        find_all(&source, options(), "alpha", true, false),
+        vec![alpha(0, 0), alpha(1, 6), alpha(2, 6)],
+        "every occurrence, in the order the document is read"
+    );
+    assert_eq!(
+        find_all(&source, options(), "omega", true, false),
+        Vec::new(),
+        "a query the document does not hold is nowhere to be found"
+    );
+    assert_eq!(
+        find_all(&source, options(), "", true, false),
+        Vec::new(),
+        "and an empty query is nothing to look for"
+    );
+}
+
+/// Whether a search minds case is one of the bar's two switches, and the document is searched as it
+/// is written either way: the same query finds one occurrence with the switch on and all of them
+/// with it off (see `find_all`).
+#[test]
+fn a_case_blind_search_matches_a_query_in_any_case() {
+    let dir = scratch("find-all-case");
+    let source = dir.join("case.txt");
+    fs::write(&source, "Alpha alpha ALPHA\n").expect("a written page");
+
+    assert_eq!(
+        find_all(&source, options(), "alpha", true, false).len(),
+        1,
+        "a search that minds case finds the one occurrence written as asked"
+    );
+    assert_eq!(
+        find_all(&source, options(), "alpha", false, false).len(),
+        3,
+        "and one that does not finds all three"
+    );
+    assert_eq!(
+        find_all(&source, options(), "ALPHA", false, false).len(),
+        3,
+        "whichever case the query itself is written in"
+    );
+}
+
+/// A whole-word search takes only the occurrences that stand as words: `cat` in `concat` and inside
+/// a `cat_cat` run is not one, while the same query before a full stop is (see `find_all`).
+#[test]
+fn a_whole_word_search_takes_only_the_words() {
+    let dir = scratch("find-all-word");
+    let source = dir.join("words.txt");
+    fs::write(&source, "cat concat cat_cat cat.\n").expect("a written page");
+
+    assert_eq!(
+        find_all(&source, options(), "cat", true, false).len(),
+        5,
+        "every occurrence of the letters, wherever they stand"
+    );
+    assert_eq!(
+        find_all(&source, options(), "cat", true, true),
+        vec![
+            Selection {
+                anchor: (0, 0),
+                caret: (0, 3),
+            },
+            Selection {
+                anchor: (0, 19),
+                caret: (0, 22),
+            },
+        ],
+        "the word alone and the one a full stop ends, and not the three inside longer runs"
+    );
+}
+
+/// A query made of punctuation ends in no word character, so a whole-word search asks for no
+/// boundary at that end and finds it wherever it stands — `->` is found inside `a->b` as well as on
+/// its own (see `find_all` and `word_boundaries_hold`).
+#[test]
+fn a_whole_word_search_of_punctuation_asks_for_no_boundary_of_its_own() {
+    let dir = scratch("find-all-punctuation");
+    let source = dir.join("arrows.txt");
+    fs::write(&source, "a->b -> c\n").expect("a written page");
+
+    assert_eq!(
+        find_all(&source, options(), "->", true, true),
+        vec![
+            Selection {
+                anchor: (0, 1),
+                caret: (0, 3),
+            },
+            Selection {
+                anchor: (0, 5),
+                caret: (0, 7),
+            },
+        ],
+        "punctuation is not a word, so a query made of it looks for itself wherever it stands"
+    );
+}
+
+/// The search advances past each occurrence it finds rather than a character at a time, so two
+/// overlapping readings of the same run are one answer and not two (see `find_all`).
+#[test]
+fn a_search_advances_past_each_hit_rather_than_counting_it_twice() {
+    let dir = scratch("find-all-overlap");
+    let source = dir.join("runs.txt");
+    fs::write(&source, "aaaa\n").expect("a written page");
+
+    assert_eq!(
+        find_all(&source, options(), "aa", true, false),
+        vec![
+            Selection {
+                anchor: (0, 0),
+                caret: (0, 2),
+            },
+            Selection {
+                anchor: (0, 2),
+                caret: (0, 4),
+            },
+        ],
+        "`aaaa` holds two `aa`, not the three a character-by-character walk would find"
+    );
+}
+
+/// A search reads the document from its first line to its last and then stops: the occurrence on the
+/// last line is found, and the ones before it are not found a second time on the way round — a list
+/// of every place is not a walk that wraps (see `find_all`).
+#[test]
+fn a_search_reads_the_whole_document_and_never_wraps_into_its_first_hit_again() {
+    let dir = scratch("find-all-order");
+    let source = dir.join("order.txt");
+    fs::write(&source, "omega\nbeta\nomega\n").expect("a written page");
+
+    assert_eq!(
+        find_all(&source, options(), "omega", true, false),
+        vec![
+            Selection {
+                anchor: (0, 0),
+                caret: (0, 5),
+            },
+            Selection {
+                anchor: (2, 0),
+                caret: (2, 5),
+            },
+        ],
+        "the last line is read, and the first is not read again after it"
     );
 }
 
