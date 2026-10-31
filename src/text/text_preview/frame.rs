@@ -200,13 +200,49 @@ enum RunKind {
 }
 
 fn run_kind(character: char) -> RunKind {
-    if character.is_alphanumeric() || character == '_' {
+    if is_word_character(character) {
         RunKind::Word
     } else if character.is_whitespace() {
         RunKind::Space
     } else {
         RunKind::Other
     }
+}
+
+/// Whether a character is part of a word: letters, digits and the underscore, which is exactly the
+/// run `run_kind` calls a word — so a double click, a whole-word search and `Ctrl`+arrow over a
+/// find bar's query all take the same characters to be one (see `crate::text::text_preview::document`
+/// and `run_at`).
+pub fn is_word_character(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+/// The run of characters a double click at `at` takes, in byte indices: the rule `word_in` reads
+/// over painted lines, asked of one string that is not laid out as lines at all — the find bar's
+/// query. A gap is a run of its own and every mark is a run of its own, so a double click on `->`
+/// takes the whole of it and not just one of its marks.
+///
+/// `at` is a byte index on a character boundary; one past the end of the text takes nothing.
+pub fn run_at(text: &str, at: usize) -> (usize, usize) {
+    let Some(character) = text.get(at..).and_then(|tail| tail.chars().next()) else {
+        return (text.len(), text.len());
+    };
+
+    let kind = run_kind(character);
+    let start = text[..at]
+        .char_indices()
+        .rev()
+        .take_while(|(_, before)| run_kind(*before) == kind)
+        .last()
+        .map_or(at, |(before, _)| before);
+    let end = text[at..]
+        .char_indices()
+        .take_while(|(_, after)| run_kind(*after) == kind)
+        .map(|(after, character)| at + after + character.len_utf8())
+        .last()
+        .unwrap_or(at);
+
+    (start, end)
 }
 
 /// The word a point on painted lines is in, as the range a double click selects: the run of the

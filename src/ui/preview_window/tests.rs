@@ -965,6 +965,7 @@ fn a_window_of_the_suite_is_on_the_desktop_and_drawn_as_nothing() {
 mod audio_bands;
 mod cache;
 mod engine_probes;
+mod find_field;
 mod hover;
 mod hover_film_host_window;
 mod layout;

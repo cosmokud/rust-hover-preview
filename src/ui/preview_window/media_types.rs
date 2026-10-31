@@ -655,7 +655,11 @@ pub(super) struct TextPreviewState {
 pub(super) struct FindState {
     /// Whether the bar is up and owns the keyboard.
     pub(super) open: bool,
-    pub(super) query: String,
+    /// The query, the caret in it and the selection between the caret and its anchor, with the
+    /// undo and redo the field keeps: every edit is written down in the field rather than in a
+    /// bare string, because an append-only box is not a text field a hand can correct (see
+    /// `text_find_field`).
+    pub(super) field: text_find_field::Field,
     /// Whether the search minds case, and whether it takes only whole words. Both are off as the
     /// bar opens, which is the ordinary find every reader expects.
     pub(super) case_sensitive: bool,
@@ -674,6 +678,14 @@ pub(super) struct FindState {
     pub(super) pressed: Option<pin_chrome::FindBarPart>,
     /// The repeat a chevron held down owes, or nothing while none is held (see `Hold`).
     pub(super) hold: Option<Hold>,
+    /// Whether a press in the field is being dragged, which is what keeps the pointer captured until
+    /// the release and what grows the selection while the hand moves (see `text_find::drag`).
+    pub(super) dragging: bool,
+    /// When and where the pointer last pressed in the field, and how many presses of that place have
+    /// run together: the second one takes the word under the pointer (see `text_find::press`).
+    pub(super) click_run: Option<(Instant, (i32, i32), u8)>,
+    /// Whether the caret is drawn at this moment, and when its blink turns over (see `CaretBlink`).
+    pub(super) blink: text_find_field::CaretBlink,
 }
 
 /// A step button of the find bar held down: which one it is, the way it steps, and when the next step
@@ -690,10 +702,30 @@ pub(super) struct Hold {
 /// One thing a find bar was told, in the order it was told it (see `FindState::pending`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum FindEdit {
-    /// A character typed into the query.
+    /// A character typed into the query at the caret, replacing whatever is selected.
     Typed(char),
-    /// The character before the caret taken back out of it.
-    Deleted,
+    /// The selection, or the character before the caret, taken back out of the query.
+    Backspace,
+    /// The selection, or the character after the caret, taken out of the query.
+    DeleteForward,
+    /// The selection, or the word before the caret, taken out of the query.
+    DeleteWordLeft,
+    /// The selection, or the word after the caret, taken out of the query.
+    DeleteWordRight,
+    /// The caret moved, extending the selection rather than collapsing it where the flag is set.
+    Move(text_find_field::Motion, bool),
+    /// The whole query selected: `Ctrl`+`A`, and `Ctrl`+`F` over a bar that is already up.
+    SelectAll,
+    /// The selection put on the clipboard, which is `Ctrl`+`C` and nothing where nothing is selected.
+    Copy,
+    /// The selection put on the clipboard and taken out of the query: `Ctrl`+`X`.
+    Cut,
+    /// The clipboard pasted at the caret: `Ctrl`+`V`, one line of it (see `sanitize_pasted`).
+    Paste,
+    /// The last edit put back: `Ctrl`+`Z`.
+    Undo,
+    /// The edit an undo took away put back: `Ctrl`+`Y` and `Ctrl`+`Shift`+`Z`.
+    Redo,
     /// The reader stepped forward or back through the matches, wrapping at either end.
     Step(i32),
     /// The case switch flipped, and the search is to run again under it (see `text_find::press`).
@@ -703,7 +735,11 @@ pub(super) enum FindEdit {
     /// The bar was opened over a query it already held: nothing changed, and the document is to be
     /// searched for that query again from the line the reader is on.
     SearchAgain,
-    /// The bar is to be put away, with the page left exactly where it is.
+    /// `Esc`: a query with text is emptied and the bar left standing, and a query already empty is
+    /// the bar going away (see `text_find::settle`).
+    ClearOrClose,
+    /// The bar is to be put away outright, with the page left exactly where it is: the cross, and
+    /// nothing `Esc` does to a query that still has something in it.
     Close,
 }
 

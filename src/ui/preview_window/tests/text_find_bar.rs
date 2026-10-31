@@ -39,7 +39,7 @@ fn bar_now() -> (bool, String, usize, Option<usize>, bool, bool) {
                 .map(|state| {
                     (
                         state.find.open,
-                        state.find.query.clone(),
+                        state.find.field.text().to_string(),
                         state.find.matches.len(),
                         state.find.current,
                         state.find.case_sensitive,
@@ -138,8 +138,8 @@ fn a_query_is_typed_into_the_bar_and_every_keystroke_finds_it() {
         "a query found nowhere has no current match"
     );
 
-    text_find::note(FindEdit::Deleted);
-    text_find::note(FindEdit::Deleted);
+    text_find::note(FindEdit::Backspace);
+    text_find::note(FindEdit::Backspace);
     unsafe { text_find::settle(a_pin_window()) };
     let (_, query, count, ..) = bar_now();
     assert_eq!(query, "need");
@@ -359,10 +359,11 @@ fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
     );
 
     // And the keys a message would bring rather than the hook: `Esc`, the return, the backspace,
-    // the two arrows and `F3` are named; the page keys and the page's ends are only swallowed.
+    // the two arrows, the two ends, the two delete keys and `F3` are named; the page keys and a
+    // Space are only swallowed.
     assert_eq!(
         text_find::key_edit(VK_ESCAPE.0 as i32),
-        Some(FindEdit::Close)
+        Some(FindEdit::ClearOrClose)
     );
     assert_eq!(
         text_find::key_edit(VK_DOWN.0 as i32),
@@ -374,7 +375,7 @@ fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
     );
     assert_eq!(
         text_find::key_edit(VK_BACK.0 as i32),
-        Some(FindEdit::Deleted)
+        Some(FindEdit::Backspace)
     );
     assert_eq!(text_find::key_edit(VK_F3.0 as i32), Some(FindEdit::Step(1)));
     assert!(
@@ -384,9 +385,19 @@ fn the_page_keys_and_the_pins_walk_are_inert_while_the_bar_is_up() {
         ),
         "a return steps, one way or the other under Shift"
     );
-    for vk in [
-        VK_PRIOR, VK_NEXT, VK_HOME, VK_END, VK_SPACE, VK_LEFT, VK_RIGHT,
+    for (vk, motion) in [
+        (VK_LEFT, text_find_field::Motion::CharacterLeft),
+        (VK_RIGHT, text_find_field::Motion::CharacterRight),
+        (VK_HOME, text_find_field::Motion::Home),
+        (VK_END, text_find_field::Motion::End),
     ] {
+        assert_eq!(
+            text_find::key_edit(vk.0 as i32),
+            Some(FindEdit::Move(motion, false)),
+            "{vk:?} moves the caret inside the query"
+        );
+    }
+    for vk in [VK_PRIOR, VK_NEXT, VK_SPACE] {
         assert_eq!(
             text_find::key_edit(vk.0 as i32),
             None,
@@ -495,7 +506,11 @@ fn another_file_does_not_inherit_the_bar_a_page_was_searched_with() {
         !state.find.open,
         "the next file's page has no bar standing over it"
     );
-    assert_eq!(state.find.query, "", "and no query it never searched");
+    assert_eq!(
+        state.find.field.text(),
+        "",
+        "and no query it never searched"
+    );
     assert!(
         state.find.matches.is_empty(),
         "and no places in a document it is not showing"
@@ -727,12 +742,23 @@ fn a_release_or_an_escape_stops_a_held_chevron() {
     assert!(repeating(), "a press arms the hold again");
     assert_eq!(
         text_find::key_edit(VK_ESCAPE.0 as i32),
-        Some(FindEdit::Close)
+        Some(FindEdit::ClearOrClose)
     );
-    text_find::note(FindEdit::Close);
+    // The first `Esc` empties the query the bar is holding, and the second puts the bar away (see
+    // `FindEdit::ClearOrClose`).
+    text_find::note(FindEdit::ClearOrClose);
     unsafe { text_find::settle(a_pin_window()) };
-    assert!(!bar_now().0, "Escape puts the bar away");
-    assert!(!repeating(), "and the hold goes with it");
+    assert!(bar_now().0, "Escape on a query with text leaves the bar up");
+    assert_eq!(bar_now().1, "", "and empties the query");
+    assert!(
+        repeating(),
+        "while the button the hand is still on goes on stepping"
+    );
+
+    text_find::note(FindEdit::ClearOrClose);
+    unsafe { text_find::settle(a_pin_window()) };
+    assert!(!bar_now().0, "and an Escape on an empty query puts it away");
+    assert!(!repeating(), "the hold goes with the bar");
 }
 
 /// The switches and the cross are one-shot: a press on `Aa` turns it and a press on the cross puts the
@@ -819,4 +845,197 @@ fn a_box_change_keeps_the_bar_and_the_places_it_found() {
             .is_some_and(|(width, height, drawn)| width == 180 && height == 120 && drawn),
         "the page is laid out for the new box and the frame is drawn with the places on it"
     );
+}
+
+/// `Esc` is the field's clearing key first and the bar's closing key second: a query with text is
+/// emptied and the bar left standing over a page with no highlights on it, and the same key on an
+/// empty query is the bar going away (see `FindEdit::ClearOrClose` and `text_find::settle`).
+#[test]
+fn escape_empties_the_query_before_it_closes_the_bar() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-escape.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+    assert_eq!(bar_now().2, 2, "the query is found twice");
+
+    let esc = text_find::key_edit(VK_ESCAPE.0 as i32);
+    assert_eq!(
+        esc,
+        Some(FindEdit::ClearOrClose),
+        "Escape is the bar's own key"
+    );
+    text_find::note(FindEdit::ClearOrClose);
+    unsafe { text_find::settle(a_pin_window()) };
+
+    let (open, query, count, current, ..) = bar_now();
+    assert!(open, "the bar is still up over the page");
+    assert_eq!(query, "", "and the query it was holding is gone");
+    assert_eq!(
+        (count, current),
+        (0, None),
+        "with nothing left to highlight"
+    );
+
+    text_find::note(FindEdit::ClearOrClose);
+    unsafe { text_find::settle(a_pin_window()) };
+    assert!(
+        !bar_now().0,
+        "and Escape on an empty query puts the bar away"
+    );
+}
+
+/// `Ctrl`+`F` over a bar that is already up selects the whole query instead of appending to it: the
+/// next character typed replaces what is there, which is the find field a reader has used before
+/// (see `text_find::open_text_find` and `Field::select_all`).
+#[test]
+fn a_ctrl_f_over_an_open_bar_selects_the_query_rather_than_appending_to_it() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-found-again.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+
+    text_find::open_text_find();
+    unsafe { text_find::settle(a_pin_window()) };
+    let (selected, text) = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| {
+                    (
+                        state.find.field.selection(),
+                        state.find.field.text().to_string(),
+                    )
+                })
+        })
+        .expect("a pinned page keeps a find bar");
+    assert_eq!(text, "needle", "the query is the one it already held");
+    assert_eq!(
+        selected,
+        Some((0, 6)),
+        "and the whole of it is selected for what is typed next"
+    );
+
+    text_find::note(FindEdit::Typed('x'));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(bar_now().1, "x", "so the next character replaces it");
+}
+
+/// The keys that step the matches keep stepping them with the field under the caret: `↓`, `Enter`
+/// and `F3` go on and `↑` comes back, and none of them moves the caret or the query (see
+/// `text_find::key_edit`).
+#[test]
+fn the_result_keys_still_step_with_the_field_in_hand() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-field-steps.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+    assert_eq!(
+        bar_now().3,
+        Some(0),
+        "the reader starts on the first needle"
+    );
+
+    for (vk, step, expected) in [
+        (VK_DOWN, 1, Some(1)),
+        (VK_F3, 1, Some(0)),
+        (VK_RETURN, 1, Some(1)),
+        (VK_UP, -1, Some(0)),
+    ] {
+        assert_eq!(
+            text_find::key_edit(vk.0 as i32),
+            Some(FindEdit::Step(step)),
+            "{vk:?} is a step through the matches"
+        );
+        text_find::note(FindEdit::Step(step));
+        unsafe { text_find::settle(a_pin_window()) };
+        assert_eq!(bar_now().3, expected, "{vk:?} stepped to {expected:?}");
+    }
+
+    let (open, query, ..) = bar_now();
+    assert!(open, "the bar is still up through all of it");
+    assert_eq!(query, "needle", "and the query is untouched");
+}
+
+/// A press in the query places the caret, a drag from it selects, and a second press of the same
+/// place takes the word under the pointer — the page's own press menu, over the field (see
+/// `text_find::press_the_field` and `text_find::drag`).
+#[test]
+fn a_press_in_the_field_places_the_caret_and_a_double_press_takes_its_word() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    // A page with room for the card: a bar laid out over a corner too short for it draws nothing,
+    // and a card with nothing drawn has no field to press.
+    a_tall_page_with_two_needles("a-bar-field-pressed.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("one two");
+
+    let field_now = || {
+        CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| {
+                media
+                    .as_ref()
+                    .and_then(|media| media.text_state.as_ref())
+                    .map(|state| (state.find.field.caret(), state.find.field.selection()))
+            })
+            .expect("a pinned page keeps a find bar")
+    };
+
+    let card = text_find::find_bar()
+        .expect("the card the bar is drawn in")
+        .card;
+    let (left, y) = (card.query.left, middle_of(card.query).1);
+
+    assert!(text_find::press(left, y), "the query's row is the card's");
+    assert_eq!(
+        field_now().0,
+        0,
+        "a press at the field's left edge is its beginning"
+    );
+    assert!(
+        text_find::a_control_is_held(),
+        "and it takes the pointer for the drag that may follow"
+    );
+    assert!(
+        !text_find::drag(card.query.left - 20),
+        "a drag that stays on the same character moves nothing"
+    );
+    assert_eq!(field_now(), (0, None));
+    assert!(text_find::release(), "the release ends the drag");
+
+    // A drag from the beginning past the end selects the whole query, and the pointer is free again.
+    assert!(text_find::press(left, y));
+    assert!(
+        text_find::drag(card.query.right + 20),
+        "a drag to another place grows the selection"
+    );
+    assert_eq!(field_now().1, Some((0, 7)), "the whole query is selected");
+    assert!(text_find::release());
+    assert!(!text_find::a_control_is_held());
+
+    // Two presses of the same place are one double press by the time and box Windows counts them
+    // in, and the second takes the word the caret landed in.
+    assert!(text_find::press(left, y));
+    assert!(text_find::press(left, y));
+    assert_eq!(
+        field_now().1,
+        Some((0, 3)),
+        "the word under the pointer, whole"
+    );
+    assert!(text_find::release());
 }

@@ -15,6 +15,11 @@ fn palette() -> ChromePalette {
 fn card_state(query: &str, current: Option<usize>, total: usize) -> FindBarPaint {
     FindBarPaint {
         query: query.to_string(),
+        // A query that has just been typed: the caret after its last character and nothing selected,
+        // which is the state the caret's own placement is asked about.
+        caret: query.len(),
+        anchor: query.len(),
+        caret_lit: true,
         hovered: None,
         pressed: None,
         current,
@@ -412,5 +417,136 @@ fn the_control_under_the_pointer_is_washed_and_a_press_is_washed_further() {
     assert!(
         hovered_pixel[0] > hovered_pixel[2],
         "while the accent's wash reads through the pointer's"
+    );
+}
+
+/// A press in the query names a place, and the place is counted from the column the text is really
+/// drawn at: a short query begins at the field's left edge, and one too wide for its row begins to
+/// the left of it, so a press at the field's own right edge is the end of the query in both cases
+/// and a press at its left edge is not the beginning of a query that has been cut (`query_origin`,
+/// `query_index_at`).
+#[test]
+fn a_press_names_a_place_in_the_query_from_the_column_it_is_drawn_at() {
+    let card = find_bar_layout(400, 300, 0, 96);
+
+    // The boundary nearest the point: a point on a character's left half is before it and one on its
+    // right half after it, which is the same rule for a real run and for these columns.
+    let columns = [0, 10, 20, 30];
+    assert_eq!(index_at_column(&columns, 100, 99), 0, "before the run");
+    assert_eq!(
+        index_at_column(&columns, 100, 104),
+        0,
+        "left half of the first"
+    );
+    assert_eq!(index_at_column(&columns, 100, 106), 1, "right half of it");
+    assert_eq!(index_at_column(&columns, 100, 124), 2);
+    assert_eq!(index_at_column(&columns, 100, 130), 3, "the run's end");
+    assert_eq!(index_at_column(&columns, 100, 400), 3, "and past it");
+
+    // A short query starts at the field's left edge, so the left edge is its beginning and the right
+    // edge is past its end.
+    let short = "needle";
+    assert_eq!(query_index_at(&card, short, card.query.left, 96), 0);
+    assert_eq!(
+        query_index_at(&card, short, card.query.right - 1, 96),
+        short.len(),
+        "a point past the end of the run is the caret after its last character"
+    );
+
+    // The same query with a character outside the basic plane in it: the place is a byte index, so
+    // the caret after `😀` is four bytes into the query rather than one.
+    assert_eq!(
+        query_index_at(&card, "a😀b", card.query.right - 1, 96),
+        "a😀b".len()
+    );
+
+    // Too wide for the field: the run is drawn from the right, so the field's own left edge is not
+    // where the text begins, and a press there is not the caret at the start of the query.
+    let long = "the needle that is far too long for a field of this card to hold in its row";
+    let surface = DibSurface::create(
+        (card.panel.right - card.panel.left) as u32,
+        (card.panel.bottom - card.panel.top) as u32,
+    )
+    .expect("a surface");
+    let measured = measure_text(&surface, &caption_style(palette().foreground), long, 1.0);
+    assert!(measured > card.query.right - card.query.left);
+    assert!(
+        query_origin(&card, measured) < card.query.left,
+        "the run begins to the left of the field it is cut by"
+    );
+    let at_left = query_index_at(&card, long, card.query.left, 96);
+    assert!(at_left > 0, "the field's left edge is inside the run");
+    assert_eq!(
+        query_index_at(&card, long, card.query.right, 96),
+        long.len(),
+        "and its right edge is the end of the query"
+    );
+}
+
+/// The field's two additions to the card are drawn as the page draws them: a selection is washed
+/// between its two ends, and a caret in the off half of its blink draws no column at all — so a
+/// repaint that changed only the blink is a card a pixel test can tell apart (see `paint_find_bar`).
+#[test]
+fn a_selection_is_washed_in_the_field_and_the_caret_obeys_its_blink() {
+    let plain = painted_card(&card_state("needle", Some(0), 2), 96);
+
+    let selected = painted_card(
+        &FindBarPaint {
+            anchor: 0,
+            caret: 3,
+            ..card_state("needle", Some(0), 2)
+        },
+        96,
+    );
+    assert_ne!(
+        plain.0, selected.0,
+        "a selection is drawn rather than left as the card's own face"
+    );
+
+    // The wash is inside the field's own row, and the card beside the field is left exactly as it
+    // was: a selection drawn past the field would be a wash over the count.
+    let at = (
+        plain.1.query.left + 1,
+        (plain.1.query.top + plain.1.query.bottom) / 2,
+    );
+    assert_ne!(
+        pixel_at(&plain.0, 400, at.0, at.1),
+        pixel_at(&selected.0, 400, at.0, at.1),
+        "the selected columns are washed"
+    );
+    let beside = (plain.1.panel.left + 1, at.1);
+    assert_eq!(
+        pixel_at(&plain.0, 400, beside.0, beside.1),
+        pixel_at(&selected.0, 400, beside.0, beside.1),
+        "and nothing outside the field is"
+    );
+
+    // The caret in the other half of its blink: the accent column is gone and everything else is
+    // the card as it was.
+    let unlit = painted_card(
+        &FindBarPaint {
+            caret_lit: false,
+            ..card_state("needle", Some(0), 2)
+        },
+        96,
+    );
+    let accent = palette().accent;
+    let lit_pixels = |buffer: &[u8]| {
+        let card = painted_card(&card_state("needle", Some(0), 2), 96).1;
+        (card.query.left..card.query.right)
+            .flat_map(|x| (card.query.top..card.query.bottom).map(move |y| (x, y)))
+            .filter(|(x, y)| {
+                pixel_at(buffer, 400, *x, *y) == [accent[2], accent[1], accent[0], 255]
+            })
+            .count()
+    };
+    assert!(
+        lit_pixels(&plain.0) > 0,
+        "the lit caret is an accent column"
+    );
+    assert_eq!(
+        lit_pixels(&unlit.0),
+        0,
+        "and the unlit half of the blink draws no caret at all"
     );
 }

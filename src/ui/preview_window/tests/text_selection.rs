@@ -782,7 +782,7 @@ a needle again
         media
             .as_ref()
             .and_then(|media| media.text_state.as_ref())
-            .map(|state| state.find.query.clone())
+            .map(|state| state.find.field.text().to_string())
     });
     assert_eq!(
         query.as_deref(),

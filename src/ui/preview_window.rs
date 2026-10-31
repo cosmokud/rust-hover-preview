@@ -146,6 +146,7 @@ mod still_probe;
 mod subtitle_files;
 mod surfaces;
 mod text_find;
+mod text_find_field;
 mod text_selection;
 mod tick;
 mod video_hw;
@@ -239,7 +240,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, GlobalFree, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
+    CloseHandle, GlobalFree, COLORREF, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
     WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::DwmFlush;
@@ -250,7 +251,8 @@ use windows::Win32::Graphics::Gdi::{
     MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
@@ -262,8 +264,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, GetDoubleClickTime, GetFocus, ReleaseCapture, SetCapture,
-    SetFocus, VK_A, VK_BACK, VK_C, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F, VK_F3, VK_HOME,
-    VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_UP,
+    SetFocus, VK_A, VK_BACK, VK_C, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F, VK_F3,
+    VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_UP, VK_V,
+    VK_X, VK_Y, VK_Z,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, ShellExecuteExW, ASSOCF_NONE, ASSOCSTR, ASSOCSTR_FRIENDLYAPPNAME,
@@ -271,11 +274,11 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    EnumWindows, FindWindowExW, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow,
-    GetSystemMetrics, GetTopWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
-    MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
+    EnumWindows, FindWindowExW, GetAncestor, GetCaretBlinkTime, GetClassNameW, GetCursorPos,
+    GetForegroundWindow, GetSystemMetrics, GetTopWindow, GetWindow, GetWindowLongPtrW,
+    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, LoadCursorW,
+    MoveWindow, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW,
+    SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
     TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GA_ROOT,
     GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
     IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG,

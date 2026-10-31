@@ -473,10 +473,15 @@ pub(super) unsafe extern "system" fn window_proc(
                 // A press on one of the card's controls is held until it is let go of, and the pointer
                 // is taken for as long as that lasts: a hand that slides off the card still lets go of
                 // the button it pressed, rather than leaving it lit under a pointer that is somewhere
-                // else (see `text_find::release`).
+                // else (see `text_find::release`). A press in the query is held for the same reason: a
+                // drag grows the selection and the release is what ends it (see `text_find::drag`).
                 if text_find::a_control_is_held() {
                     let _ = SetCapture(hwnd);
                 }
+                // A press in the query has moved the caret without asking for a search, so nothing
+                // else on this tick is going to paint it: the card is drawn again here rather than
+                // left showing the caret it had before the hand landed.
+                render_layered_preview(hwnd);
                 return LRESULT(0);
             }
 
@@ -500,6 +505,13 @@ pub(super) unsafe extern "system" fn window_proc(
             let (x, y) = message_point(lparam);
             if pinned() {
                 pinned_mouse_move(hwnd, x, y);
+            }
+            // A drag in the find bar's query is answered before the page's own selection, and only
+            // where the card really took the press: the selection grows to the place under the
+            // pointer, and the card is drawn again only where that place changed (see
+            // `text_find::drag`).
+            if text_find::drag(x) {
+                render_layered_preview(hwnd);
             }
             let (media_x, media_y) = media_point(x, y);
             if is_text_scroll_dragging() {
@@ -543,9 +555,9 @@ pub(super) unsafe extern "system" fn window_proc(
         }
         windows::Win32::UI::WindowsAndMessaging::WM_CAPTURECHANGED => {
             // A press the find bar's card took is over when the pointer is taken away from this window:
-            // a chevron that never sees its release would step for as long as the bar is up, and the
-            // card would draw a button held under a hand that is no longer on it (see
-            // `text_find::release`).
+            // a chevron that never sees its release would step for as long as the bar is up, a drag
+            // would go on growing a selection with nobody holding it, and the card would draw a button
+            // held under a hand that is no longer on it (see `text_find::release`).
             if text_find::release() {
                 render_layered_preview(hwnd);
             }
