@@ -31,6 +31,12 @@
 //! 4. neither heard — **one** new player, with the arguments, the second and the pause the one it
 //!    replaces had, and one read of that player. Then the ladder ends.
 //!
+//! **A ladder that ends is written once, and the last rung is the one written whole** (see
+//! `a_give_up`): a film that plays with no sound and that nothing could cure is the case there will be
+//! no reproducer for, so its ending carries the launch's form and the level it asked for, the six
+//! answers of the read that gave up, and the verdict they come to — one line with the whole of what is
+//! known about that player in it.
+//!
 //! **A hover's ladder is the in-place rungs and nothing else** (see `Road`): a hover is a film that
 //! comes and goes, its player is the resident's, and the wait a fresh player costs is the whole of
 //! what the resident exists to save — so a hover gives up where a pin begins a player again. **And it
@@ -79,7 +85,7 @@ use std::time::Duration;
 
 use super::playback_trace::note_playback_trace;
 use super::playback_trace::{EngineAnswers, Verdict};
-use super::video_launch::Engine;
+use super::video_launch::{AudioForm, Engine};
 
 /// How long a player is given before its sound is first read.
 ///
@@ -252,6 +258,19 @@ enum Step {
     GiveUp,
 }
 
+/// What a tick has decided the guard ends with, and the read that decided it.
+///
+/// **The last rung is the one ending written down whole**, so it carries the answers it was reached
+/// on: a film nothing could cure is the one case there will be no reproducer for, and the two words
+/// `gave up` on their own say nothing about which road ended there (see `a_give_up`).
+enum Finish {
+    /// The player was heard: the line a healthy film's ladder ends on.
+    Heard,
+    /// Nothing left to try, and the six answers the last read gave — `None` for the player whose
+    /// only answer was a line on its own stream.
+    GaveUp(Option<EngineAnswers>),
+}
+
 /// The one player under the guard: what it was begun at, what has been tried, and what it has said.
 struct Guard {
     /// The player this guard is armed for, which is the only one its reports are taken from.
@@ -267,6 +286,12 @@ struct Guard {
     /// the level the player reports, which is the fact the verdict was read from (see
     /// `playback_trace::EngineAnswers::told_to_be_quiet`).
     volume: u32,
+    /// **What the launch gave this player, in the words the launch line writes it in**: `aid=no` or
+    /// `-an`, or the level with the gain measured for the file folded into it (see
+    /// `video_launch::AudioForm`). It is read once, at the arming, where the level and the gain are
+    /// both in hand — so that the line a give-up writes says what was *asked* of the player rather
+    /// than what a later read guesses at (see `a_give_up`).
+    form: String,
     spend: Spent,
     /// What the thread last read, and no tick has acted on.
     report: Option<Report>,
@@ -330,13 +355,20 @@ static REBIRTH: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// before it reports to nothing (see `report`), and the pin's `REBIRTH` record — the one thing that is
 /// carried, and only from a relaunch to the player begun in its place — is not a hover's to spend (see
 /// `the_spend_for`).
-pub(super) fn arm(pid: u32, path: &Path, volume: u32, engine: Engine, for_a_hover: bool) {
+pub(super) fn arm(
+    pid: u32,
+    path: &Path,
+    volume: u32,
+    gain: Option<f64>,
+    engine: Engine,
+    for_a_hover: bool,
+) {
     if !guarded(engine, for_a_hover, volume) {
         return;
     }
 
     let road = if for_a_hover { Road::Hover } else { Road::Pin };
-    let guard = the_guard_a_launch_arms(pid, path, volume, engine, road);
+    let guard = the_guard_a_launch_arms(pid, path, volume, gain, engine, road);
     let spend = guard.spend;
     let Ok(mut slot) = GUARD.lock() else {
         return;
@@ -371,6 +403,7 @@ fn the_guard_a_launch_arms(
     pid: u32,
     path: &Path,
     volume: u32,
+    gain: Option<f64>,
     engine: Engine,
     road: Road,
 ) -> Guard {
@@ -380,6 +413,9 @@ fn the_guard_a_launch_arms(
         engine,
         road,
         volume,
+        // The same call the launch's own line is built from, so that a give-up cannot say the
+        // player was handed anything other than what it was handed (see `playback_trace::a_launch`).
+        form: AudioForm::of(volume, gain).word(engine),
         spend: the_spend_for(road, path),
         report: None,
         wants_again: false,
@@ -571,14 +607,15 @@ pub(super) fn tick(may_begin_again: bool) -> Option<PathBuf> {
     if !guard.wants_again {
         if let Some(report) = guard.report.take() {
             guard.reads = guard.reads.saturating_add(1);
-            match the_step_of_a_read(guard, report) {
+            let (step, answers) = the_step_of_a_read(guard, report);
+            match step {
                 // **Heard is no longer where a player is let go from.** A film that has its sound is
                 // watched for as long as it plays, so that one which loses it later is not silent and
                 // unremarked; the player a spent ladder began is the exception, and is given its one
                 // read and nothing else (see `keeps_watching`).
                 Step::Nothing if guard.keeps_watching() => arm_a_watch(guard),
-                Step::Nothing => finish = Some("heard"),
-                Step::GiveUp => finish = Some("gave up"),
+                Step::Nothing => finish = Some(Finish::Heard),
+                Step::GiveUp => finish = Some(Finish::GaveUp(answers)),
                 Step::AskAgain => {
                     guard.spend.asked_again = true;
                     note_playback_trace!("audio step ask-again pid {}", guard.pid);
@@ -630,8 +667,16 @@ pub(super) fn tick(may_begin_again: bool) -> Option<PathBuf> {
 
     let pid = guard.pid;
     let relaunch = (guard.wants_again && may_begin_again).then(|| guard.path.clone());
-    if let Some(word) = finish {
-        note_playback_trace!("audio guard {word} pid {pid}");
+    // **A ladder that ends is written once, and the last rung is the one written whole** (see
+    // `a_give_up`): a film nothing could cure leaves the one line a run without a reproducer is read
+    // from, and every other ending keeps the word it always had.
+    if let Some(finish) = &finish {
+        match finish {
+            Finish::Heard => note_playback_trace!("audio guard heard pid {pid}"),
+            Finish::GaveUp(answers) => {
+                note_playback_trace!("{}", a_give_up(guard, answers.as_ref()));
+            }
+        }
     }
 
     match relaunch {
@@ -660,7 +705,11 @@ pub(super) fn tick(may_begin_again: bool) -> Option<PathBuf> {
 }
 
 /// What one report comes to, with the line the read-back is written as.
-fn the_step_of_a_read(guard: &mut Guard, report: Report) -> Step {
+///
+/// **The answers come back out beside the step**, because the last rung is written down whole: a tick
+/// that reaches `GiveUp` has the very read that reached it to write (see `a_give_up`), and the player
+/// with no pipe hands none back.
+fn the_step_of_a_read(guard: &mut Guard, report: Report) -> (Step, Option<EngineAnswers>) {
     match (guard.engine, report) {
         (Engine::Mpv, Report::Answers(answers)) => {
             let verdict = answers.verdict(guard.volume);
@@ -690,14 +739,14 @@ fn the_step_of_a_read(guard: &mut Guard, report: Report) -> Step {
             if step == Step::AskAgain && verdict == Verdict::NoDevice && opening {
                 guard.spend.opening = true;
             }
-            step
+            (step, Some(answers))
         }
         (Engine::Ffplay, Report::Spoke) => {
             note_playback_trace!("audio guard spoke pid {} read {}", guard.pid, guard.reads);
-            the_step_of_a_signature(guard.spend)
+            (the_step_of_a_signature(guard.spend), None)
         }
         // An answer one player gives and the other does not: nothing is known, so nothing is done.
-        _ => Step::Nothing,
+        _ => (Step::Nothing, None),
     }
 }
 
@@ -723,6 +772,45 @@ fn a_read_back(pid: u32, read: u8, asked: u32, answers: &EngineAnswers) -> Strin
         answers.current_ao.as_deref().unwrap_or("-"),
         answers.audio_out_params.as_deref().unwrap_or("-"),
         super::playback_trace::the_verdict_word(answers.verdict(asked)),
+    )
+}
+
+/// **The one line a ladder that gave up leaves behind: everything known about the player**, in a single
+/// line, because a film that plays silently and that nothing could cure is the case there will be no
+/// reproducer for.
+///
+/// What it carries is the whole of what was asked and the whole of what was answered: the launch's form
+/// and the level it asked for (the form is the launch's own word for what the player was handed, see
+/// `video_launch::AudioForm`), the six properties the player reported — `aid`, `audio-device`,
+/// `current-ao`, `audio-out-params`, `volume` and `mute`, each `-` where it said nothing, which is how a
+/// build without the property has always read — and the verdict they come to beside them. **The engine
+/// with no pipe answers none of the six**: FFmpeg's player can only be read off its own stream, so its
+/// line says the form, the level and the one thing it did say — the failure it wrote, which is `spoke`
+/// (see `AUDIO_FAILURES`).
+///
+/// It is built from the answers rather than from a player, so a test can pin the shape of the one line a
+/// field log may have nothing else to say about.
+fn a_give_up(guard: &Guard, answers: Option<&EngineAnswers>) -> String {
+    let verdict = match answers {
+        Some(answers) => super::playback_trace::the_verdict_word(answers.verdict(guard.volume)),
+        None => "spoke",
+    };
+    let answered = |answer: Option<&str>| answer.unwrap_or("-").to_string();
+    format!(
+        "audio gave up pid {} engine {} road {} reads {} form {} asked {} aid {} \
+         audio-device {} current-ao {} audio-out-params {} volume {} mute {} verdict {verdict}",
+        guard.pid,
+        guard.engine.word(),
+        guard.road.word(),
+        guard.reads,
+        guard.form,
+        guard.volume,
+        answered(answers.and_then(|answers| answers.aid.as_deref())),
+        answered(answers.and_then(|answers| answers.audio_device.as_deref())),
+        answered(answers.and_then(|answers| answers.current_ao.as_deref())),
+        answered(answers.and_then(|answers| answers.audio_out_params.as_deref())),
+        super::playback_trace::the_level_word(answers.and_then(|answers| answers.volume)),
+        super::playback_trace::the_flag_word(answers.and_then(|answers| answers.mute)),
     )
 }
 
@@ -810,6 +898,7 @@ mod tests {
             engine,
             road: Road::Pin,
             volume: 40,
+            form: "volume=40 gain=none".to_string(),
             spend,
             report: None,
             wants_again: false,
@@ -1005,7 +1094,7 @@ mod tests {
     /// with the file before it.
     #[test]
     fn a_serve_arms_a_ladder_with_no_read_of_the_one_before_it() {
-        let guard = the_guard_a_launch_arms(7, &a_film(), 100, Engine::Mpv, Road::Hover);
+        let guard = the_guard_a_launch_arms(7, &a_film(), 100, None, Engine::Mpv, Road::Hover);
 
         assert_eq!(guard.reads, 0, "the episode's first read is its first");
         assert_eq!(guard.watches, 0, "a hover is on no schedule at all");
@@ -1232,7 +1321,7 @@ mod tests {
 
         clear_noted();
         assert_eq!(
-            the_step_of_a_read(&mut guard, Report::Answers(heard.clone())),
+            the_step_of_a_read(&mut guard, Report::Answers(heard.clone())).0,
             Step::Nothing
         );
         let first = noted_lines();
@@ -1242,7 +1331,7 @@ mod tests {
         for _ in 0..3 {
             guard.reads = guard.reads.saturating_add(1);
             assert_eq!(
-                the_step_of_a_read(&mut guard, Report::Answers(heard.clone())),
+                the_step_of_a_read(&mut guard, Report::Answers(heard.clone())).0,
                 Step::Nothing
             );
         }
@@ -1261,7 +1350,7 @@ mod tests {
             ..heard
         };
         assert_eq!(
-            the_step_of_a_read(&mut guard, Report::Answers(silent.clone())),
+            the_step_of_a_read(&mut guard, Report::Answers(silent.clone())).0,
             Step::AskAgain,
             "a driver named with nothing playing is read once more before it is written to"
         );
@@ -1271,7 +1360,7 @@ mod tests {
 
         guard.reads = guard.reads.saturating_add(1);
         assert_eq!(
-            the_step_of_a_read(&mut guard, Report::Answers(silent)),
+            the_step_of_a_read(&mut guard, Report::Answers(silent)).0,
             Step::AskForADevice,
             "a second read of that shape climbs the device rung"
         );
@@ -1416,6 +1505,71 @@ mod tests {
             "audio read-back pid 9 read 2 asked 40 volume - mute - aid - audio-device - current-ao - \
              audio-out-params - verdict unanswered",
             "a player that said nothing is written as nothing said rather than as a guess"
+        );
+    }
+
+    /// **The one line a ladder that gave up leaves behind**: everything that was asked of the player and
+    /// everything it answered, in a single line — the film nothing could cure is the case a field log is
+    /// read from with no reproducer behind it, so the post-mortem has to be whole. The player with no
+    /// pipe answers none of the six, and says so as `-` rather than by guessing.
+    #[test]
+    fn a_give_up_carries_the_whole_of_what_is_known_about_the_player() {
+        let answers = EngineAnswers {
+            aid: Some("1".to_string()),
+            audio_device: Some("auto".to_string()),
+            current_ao: Some("null".to_string()),
+            audio_out_params: None,
+            volume: Some(40.0),
+            mute: Some(false),
+        };
+        let mut guard = a_guard(Engine::Mpv, SPENT);
+        guard.reads = 3;
+        assert_eq!(
+            a_give_up(&guard, Some(&answers)),
+            "audio gave up pid 7 engine mpv road pin reads 3 form volume=40 gain=none asked 40 \
+             aid 1 audio-device auto current-ao null audio-out-params - volume 40 mute no verdict \
+             no-device",
+            "the form the launch gave it, the six properties the player reported and the verdict \
+             they come to, on the one line a run without a reproducer is read from"
+        );
+
+        // FFmpeg's player has no pipe to answer any of the six down: what it said is a line on its own
+        // stream, and the line names that rather than inventing answers.
+        let mut ffplay = a_guard(Engine::Ffplay, SPENT);
+        ffplay.form = "-an".to_string();
+        ffplay.reads = 1;
+        assert_eq!(
+            a_give_up(&ffplay, None),
+            "audio gave up pid 7 engine ffplay road pin reads 1 form -an asked 40 aid - \
+             audio-device - current-ao - audio-out-params - volume - mute - verdict spoke"
+        );
+    }
+
+    /// **The answers a give-up is written from are the ones the last rung was reached on**: the read
+    /// hands them back beside its step, and the player with no pipe hands back nothing (see `a_give_up`).
+    #[test]
+    fn the_last_rung_hands_back_the_read_that_reached_it() {
+        let mut mpv = a_guard(
+            Engine::Mpv,
+            Spent {
+                asked_again: true,
+                ..Spent::default()
+            },
+        );
+        let (step, answers) =
+            the_step_of_a_read(&mut mpv, Report::Answers(EngineAnswers::default()));
+        assert_eq!(step, Step::GiveUp);
+        assert!(
+            answers.is_some(),
+            "an mpv that is given up on hands back the read it was given up on"
+        );
+
+        let mut ffplay = a_guard(Engine::Ffplay, SPENT);
+        let (step, answers) = the_step_of_a_read(&mut ffplay, Report::Spoke);
+        assert_eq!(step, Step::GiveUp);
+        assert!(
+            answers.is_none(),
+            "FFmpeg's player answers nothing this app can read, so there is nothing to hand back"
         );
     }
 }

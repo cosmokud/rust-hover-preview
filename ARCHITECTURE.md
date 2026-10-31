@@ -1293,7 +1293,10 @@ the player no track at all (the launch line says so), a player that could not op
 player says so, and FFmpeg's player only says anything at all under this switch — its stderr is otherwise
 `-loglevel quiet` into a null stream), or that player told to be quiet (the level and the mute beside the level asked
 for). Unset, nothing is written and no thread is spawned; a launch that is neither traced nor guarded builds the command
-line it always did (`playback_trace`).
+line it always did (`playback_trace`). **A traced launch is read at a level that names a device**: `--msg-level=all=warn,ao=v,audio=v`
+— `all=warn` still the ceiling, and the two modules an audio output speaks through raised past it — because a device that
+refuses is reported at `ao` and `audio` verbosity and nowhere else, and `all=warn` above them is a run that plays
+silently with the state written down and no reason beside it (`video_launch::mpv_args`).
 
 **Healing a film's sound.** The trace describes the roads to a silent film; `audio_guard` walks back down them. It asks
 the same six questions (`aid`, `audio-device`, `current-ao`, `audio-out-params`, `volume`, `mute`) and reads the same
@@ -1309,7 +1312,11 @@ named with nothing playing through it** — `current-ao wasapi` and no `audio-ou
 after its launch and which is a player still opening its output as readily as a film that lost it — so that shape is read
 once more and the device cure is written on its second consecutive read; `aid=no` and a driver of `null` are answers,
 and each takes its rung on the first read. **Every read that moves the verdict writes a line** (`audio guard`,
-`audio read-back`, `audio step`), so a field log carries the ladder's whole evidence even where it healed silently.
+`audio read-back`, `audio step`), so a field log carries the ladder's whole evidence even where it healed silently. **A
+ladder that ends is written once, and its last rung is written whole**: one `audio gave up` line carrying the launch's
+form and the level it asked for, the six answers of the read that reached it (`-` for the player with no pipe), and the
+verdict they come to — because a film nothing could cure is the case a log is read from with no reproducer behind it
+(`audio_guard::a_give_up`).
 
 **The guard stands behind both roads, and a hover's ladder is the in-place rungs and nothing else.** A pin's film is
 cured where it stands, begun again once, and watched; a hover's — on a cold launch and on the resident's serve alike —
@@ -1336,9 +1343,12 @@ ladder began (the `REBIRTH` record, `SPENT`) is given its one read and no schedu
 
 **mpv has a pipe, and FFmpeg's player does not**, so the second one's ladder is one rung. An ffplay launch is piped
 on the standard error, and drained, on exactly the launches that have a use for a line — the trace, or a guard standing
-behind the film — because a pipe nobody empties blocks the child: the pipe is only ever there with its reader. A launch
-the guard stands behind is played at a level that prints whether or not the trace is on, because
-`-loglevel quiet` would suppress the one line that can say a device never opened. A match against four strict
+behind the film — because a pipe nobody empties blocks the child: the pipe is only ever there with its reader. A traced
+launch is played at `verbose` rather than `warning`, because SDL's own reason for refusing an endpoint is a `verbose`
+line, and `-nostats` is asked for beside it on exactly those launches: `verbose` otherwise turns on the status line —
+one `\r`-updated stream with no newline in it that would swallow the lines written after it (see `video_playback`). A
+launch a guard alone stands behind keeps `warning`, which is where its own cure is read from, and a run nobody asked for
+a trace of keeps the argv it had. A match against four strict
 fragments (`Could not open audio device`, `Failed to initialize the SDL audio`, `Failed to initialize audio`,
 `Could not initialize audio`) begins that player again once; an ordinary warning is not a signature, and a line the
 stream never carried is not one either.
@@ -1369,12 +1379,12 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/pin_film_thumbnail.rs` | the road: the one placement, the crop, the registration, the slide, the held-frame count, every trace line above |
 | `src/ui/preview_window/pin_film_host.rs` | the film host both engines' films are drawn through, and `promote_the_hover_film_host` |
 | `src/ui/preview_window/hover_film_host.rs` | the hover's host, which is the pin's after a take-up |
-| `src/ui/preview_window/video_launch.rs` | mpv's launch: no `--wid`, `--no-border`, `--geometry` at the source's place, the swapchain |
+| `src/ui/preview_window/video_launch.rs` | mpv's launch: no `--wid`, `--no-border`, `--geometry` at the source's place, the swapchain, and the level a traced run is read at |
 | `src/ui/preview_window/ffplay_window.rs` | the pass that finds a player's window, adopts it as a source, keeps it invisible and styles it |
 | `src/ui/preview_window/video_playback.rs` | both launches: where a film is born (the desktop, at its own size, borderless) and which host keeps it |
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
 | `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it — the level asked for beside the level it is at — both players' own lines, and a kill's confirmation |
-| `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict, the in-place rungs and the one relaunch, the hover's in-place-only road, and the sparse watch of a pin's player that was heard; the strict signature list FFmpeg's player is read against |
+| `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict, the in-place rungs and the one relaunch, the hover's in-place-only road, the sparse watch of a pin's player that was heard, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |
 

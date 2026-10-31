@@ -627,6 +627,7 @@ fn start_video_playback_where(
             player.id(),
             path,
             volume,
+            gain,
             video_launch::Engine::Mpv,
             for_a_hover,
         );
@@ -845,18 +846,31 @@ fn start_video_playback_where(
     // a film that plays silently with nothing anywhere to say why (see
     // `player_logs::drain_a_players_errors` and `playback_trace`).
     //
-    // **`warning` rather than `info`, which is a measurement of the stream rather than a preference:**
-    // `info` turns on FFmpeg's status line, and that line is one stream of `\r`-updated text with no
-    // `\n` in it at all — so what the drain reads would be one line that grows past the longest line it
-    // keeps and is dropped, and the device's own sentence would be dropped with it. A warning and an
-    // error both survive this level, and both end in a newline.
+    // **`verbose` where the trace asks for a level, because `warning` is not the level a device's own
+    // refusal is printed at**: SDL's reason for turning an endpoint down, and FFmpeg's for not
+    // initialising what it decoded a soundtrack into, are `verbose` lines — and that one sentence is the
+    // whole of what this stream exists for (see `audio_guard`, which matches it).
     //
-    // **A film the guard stands behind is played at that level whether or not a trace is running**, and
-    // that is the whole of what makes its one cure reachable: FFmpeg's player has no pipe and can be
-    // told nothing, so the only thing that can say its sound never opened is a line on this stream —
-    // and `-loglevel quiet`, which an ordinary launch is given, prints no line at all (see
-    // `audio_guard`). What an ordinary hover keeps is the quiet level and the null stream it always
-    // had.
+    // **And `-nostats` beside it, which is the measurement that makes the level safe rather than a
+    // preference.** `verbose` turns on FFmpeg's status line, and that line is one stream of
+    // `\r`-updated text with no `\n` in it at all: the drain splits on newlines, so it keeps growing
+    // that one line until it passes the longest it holds, and from there every line written after it
+    // is dropped with it — the device's own sentence included. Measured on the installed ffplay
+    // 9.0.2, a two-second run of a test pattern: 57 lone `\r` on the standard error at `verbose` and
+    // 56 at `info`, against none at all with `-nostats`, every diagnostic line surviving whole.
+    // `-stats` is an ffplay boolean option, so its negation is the switch that turns the one
+    // unterminated stream off without touching a level.
+    //
+    // **A launch a guard alone stands behind keeps `warning`, which is where its own cure is read
+    // from**: a warning and an error both end in a newline, the status line is an `info` line and is
+    // never reached at that level (measured: one stray `\r` and no status at all), and a run nobody
+    // asked for a trace of is handed the argv it had before — the wider level is the trace's, as the
+    // wider `--msg-level` is on the other route (see `video_launch::mpv_args`). **A film the guard
+    // stands behind is printed at all whether or not a trace is running**, and that is the whole of what
+    // makes its one cure reachable: FFmpeg's player has no pipe and can be told nothing, so the only
+    // thing that can say its sound never opened is a line on this stream — and `-loglevel quiet`, which
+    // an ordinary launch is given, prints no line at all (see `audio_guard`). What an ordinary hover
+    // keeps is the quiet level, the null stream and the argv it always had.
     //
     // The child stays windowless either way: `engine_processes::hidden_command` starts it with
     // `CREATE_NO_WINDOW`, so a redirected stream is a pipe and never a console. And the pipe is only
@@ -866,9 +880,14 @@ fn start_video_playback_where(
     let guarded = audio_guard::guarded(video_launch::Engine::Ffplay, for_a_hover, volume);
     // **The one answer both halves are taken from**, so that the stream and its reader cannot come
     // apart: a launch that keeps what a line carries is a launch whose stream is piped, and the drain
-    // below is begun on the same launches and no others.
+    // below is begun on the same launches and no others — and the level and its status switch are that
+    // decision's third half, kept in one place for the same reason.
     let drain_the_pipe = traced || guarded;
-    let log_level = if drain_the_pipe { "warning" } else { "quiet" };
+    let level: &[&str] = match (traced, guarded) {
+        (true, _) => &["-nostats", "-loglevel", "verbose"],
+        (false, true) => &["-loglevel", "warning"],
+        (false, false) => &["-loglevel", "quiet"],
+    };
     let cmd = cmd.args([
         "-err_detect",
         "ignore_err", // Ignore header/stream errors
@@ -888,9 +907,8 @@ fn start_video_playback_where(
             "-y",
             &height_arg,
             "-autoexit",
-            "-loglevel",
-            log_level,
         ])
+        .args(level)
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -930,6 +948,9 @@ fn start_video_playback_where(
             player.id(),
             path,
             volume,
+            // FFmpeg's player is given the same level, folded into its own `volume` filter, so the
+            // form a give-up writes is the one this launch handed it (see `video_launch::AudioForm`).
+            gain,
             video_launch::Engine::Ffplay,
             for_a_hover,
         );
@@ -1156,16 +1177,10 @@ fn start_mpv_video_playback(
         }
     }
 
-    // **A traced launch lets the audio output and the audio filter speak for themselves**, which is the
-    // half of a silent film only the player can describe: mpv prints `Could not open/initialize audio
-    // device -> no sound` and plays on without it, and that line is exactly what road two looks like
-    // from the inside (see `mpv_args`, whose own level is `all=warn`, and `playback_trace`). The flag
-    // repeats `all=warn` so that it stands whether mpv reads a second `--msg-level` as replacing the
-    // first or as adding to it — and a run without the trace is handed the flag `mpv_args` wrote and
-    // no second one at all.
-    if traced {
-        args.push("--msg-level=all=warn,ao=info,af=info".to_string());
-    }
+    // **The level a traced launch reads its player's own lines at came in with `mpv_args`'
+    // arguments** — `--msg-level=all=warn,ao=v,audio=v`, where the two widened modules are argued for
+    // (see `mpv_args`) — and it is written once: a second `--msg-level` here would only be a second
+    // spelling of one decision, and a run without the trace is handed neither.
 
     let mut command = engine_processes::hidden_command(program);
     command
