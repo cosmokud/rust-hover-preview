@@ -49,6 +49,7 @@
 //! - `paint` - how a media is composed into a window's bands.
 //! - `pointer` - what the pointer's own questions are answered from.
 //! - `text_selection` - a selection made in a text preview.
+//! - `text_find` - the find bar over a pinned page of text.
 //! - `message_utils` - the small helpers this window and the Explorer hook share.
 //! - `window_proc` - the window procedure, and the keys it answers.
 //! - `layout` - where a preview is put.
@@ -144,6 +145,7 @@ mod requests;
 mod still_probe;
 mod subtitle_files;
 mod surfaces;
+mod text_find;
 mod text_selection;
 mod tick;
 mod video_hw;
@@ -260,8 +262,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, GetDoubleClickTime, GetFocus, ReleaseCapture, SetCapture,
-    SetFocus, VK_A, VK_C, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F3, VK_HOME, VK_LEFT, VK_NEXT,
-    VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_UP,
+    SetFocus, VK_A, VK_BACK, VK_C, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F, VK_F3, VK_HOME,
+    VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, ShellExecuteExW, ASSOCF_NONE, ASSOCSTR, ASSOCSTR_FRIENDLYAPPNAME,

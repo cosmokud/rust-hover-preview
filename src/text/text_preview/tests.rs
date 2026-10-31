@@ -1,4 +1,3 @@
-use super::document::find_all;
 use super::frame::TextFrame;
 use super::*;
 use crate::config::config::{MarkdownMode, TextTheme};

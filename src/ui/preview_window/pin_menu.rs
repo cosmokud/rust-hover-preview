@@ -151,14 +151,19 @@ pub(super) struct PinMenuFlyout {
 }
 
 /// What a pinned page's own page of the menu offers above the window's rows: the whole frame
-/// selected, what is selected put on the clipboard, and the next place it appears — the same three
-/// commands a hover's own text menu holds the first two of (see `show_text_preview_menu`).
+/// selected, what is selected put on the clipboard, the find bar a query is typed into, and the next
+/// place a query or the selection appears — the first two of them a hover's own text menu holds too
+/// (see `show_text_preview_menu`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TextMenuRow {
     SelectAll,
     Copy,
-    /// The page taken to the next place what is selected appears in it, which is the one find a
-    /// window nobody may type in can offer: the selection is the query (see `find_next`).
+    /// The find bar opened over the page — or asked for again where it is already open, at the query
+    /// it was left with (see `text_find`).
+    Find,
+    /// The page taken to the next place a query appears in it, which is the bar's query where the bar
+    /// is up and what is selected where it is not: a window nobody may type in can still offer the
+    /// find a selection is (see `find_next`).
     FindNext,
     /// The rule between the page's own commands and the window's rows under them.
     Separator,
@@ -166,9 +171,10 @@ enum TextMenuRow {
 
 /// The rows a pinned page's own page of the menu holds, from the top of the panel down, above the
 /// rows the pin shares with the bubble.
-const TEXT_MENU_ROWS: [TextMenuRow; 4] = [
+const TEXT_MENU_ROWS: [TextMenuRow; 5] = [
     TextMenuRow::SelectAll,
     TextMenuRow::Copy,
+    TextMenuRow::Find,
     TextMenuRow::FindNext,
     TextMenuRow::Separator,
 ];
@@ -179,6 +185,7 @@ impl TextMenuRow {
         match self {
             TextMenuRow::SelectAll => "Select All",
             TextMenuRow::Copy => "Copy",
+            TextMenuRow::Find => "Find",
             TextMenuRow::FindNext => "Find Next",
             TextMenuRow::Separator => "",
         }
@@ -189,9 +196,10 @@ impl TextMenuRow {
     fn mark(self) -> pin_chrome::MenuMark {
         match self {
             TextMenuRow::Separator => pin_chrome::MenuMark::Separator,
-            TextMenuRow::SelectAll | TextMenuRow::Copy | TextMenuRow::FindNext => {
-                pin_chrome::MenuMark::None
-            }
+            TextMenuRow::SelectAll
+            | TextMenuRow::Copy
+            | TextMenuRow::Find
+            | TextMenuRow::FindNext => pin_chrome::MenuMark::None,
         }
     }
 }
@@ -216,6 +224,13 @@ unsafe fn text_menu_row_press(hwnd: HWND, row: TextMenuRow) -> bool {
         TextMenuRow::SelectAll => select_all_text_preview(hwnd),
         TextMenuRow::Copy => {
             copy_text_preview(hwnd);
+        }
+        // The bar is opened and searched at once rather than on the next tick: the row was chosen
+        // from a panel a press put up, and the search it starts is the same work `Find Next` below
+        // it has always done on the spot (see `text_find::settle`).
+        TextMenuRow::Find => {
+            text_find::open_text_find();
+            text_find::settle(hwnd);
         }
         TextMenuRow::FindNext => find_next_in_text_preview(hwnd),
         TextMenuRow::Separator => return true,

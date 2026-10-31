@@ -690,6 +690,13 @@ pub fn run_preview_window() {
                 // a message to this window or was swallowed before it could become one.
                 for taken in crate::shell::key_input::take_pin_key_presses() {
                     if let Some(command) = hook_pin_key_command(taken) {
+                        // A find bar that is up is the one owner of the keys, whether they arrive at
+                        // the pin's window or are taken by the hook first: the bar reads the pin's
+                        // own commands as steps through its query, and swallows the rest (see
+                        // `text_find::take_hooked_key`).
+                        if text_find::take_hooked_key(command) {
+                            continue;
+                        }
                         ask_pin(command);
                     }
                 }
@@ -881,6 +888,21 @@ pub fn run_preview_window() {
                 if pinned_select_all_requested() {
                     select_all_text_preview(hwnd);
                 }
+
+                // The find bar's own key, `Ctrl`+`F`, polled the same way and for the same reason:
+                // the chord is the keyboard's rather than a message a window nobody is in would
+                // ever be sent (see `pinned_find_requested`). A bar that is already up is asked
+                // for again rather than emptied, and its query is searched again from the line the
+                // reader is on.
+                if text_find::pinned_find_requested() {
+                    text_find::open_text_find();
+                }
+
+                // And what the bar was told since the last tick — a character, a backspace, a step,
+                // a switch, a close, or a `Find Next` the menu row asked for — is run here, where a
+                // search may style the document from its first line and a scroll may paint it (see
+                // `text_find::settle`).
+                text_find::settle(hwnd);
 
                 // A window dragged by an edge owes its media a layout at the box it ended up
                 // with: the window procedure owns the drag and asks for it here, because the

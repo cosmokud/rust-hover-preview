@@ -640,6 +640,57 @@ pub(super) struct TextPreviewState {
     /// one the page has to follow, and where the pointer is is the whole of what says so (see
     /// `text_drag_step`).
     pub(super) drag_pointer: Option<(i32, i32)>,
+    /// The find bar over the page: whether it is up, the query it holds, the two switches under it
+    /// and where that query was found (see `text_find`).
+    pub(super) find: FindState,
+}
+
+/// What a pinned page's find bar holds, and what has been asked of it since the tick last looked.
+///
+/// The query outlives the bar — a bar closed with `Esc` and opened again comes back at the query it
+/// was left with, and `Ctrl`+`F` over an open bar is a bar asked for rather than a query thrown
+/// away — while the matches do not: a bar that is not up draws no highlights, so closing it clears
+/// the places it had found and reopening searches for them again (see `text_find::settle`).
+#[derive(Default)]
+pub(super) struct FindState {
+    /// Whether the bar is up and owns the keyboard.
+    pub(super) open: bool,
+    pub(super) query: String,
+    /// Whether the search minds case, and whether it takes only whole words. Both are off as the
+    /// bar opens, which is the ordinary find every reader expects.
+    pub(super) case_sensitive: bool,
+    pub(super) whole_word: bool,
+    /// Every place the query is found, in document order, and which of them the reader is on. The
+    /// current one is an index into `matches`, and nothing while the query is empty or found nowhere.
+    pub(super) matches: Vec<text_preview::Selection>,
+    pub(super) current: Option<usize>,
+    /// What the bar was told while the message that brought it was being delivered, kept in the
+    /// order it arrived for the tick that can run the search it asks for: a window procedure may not
+    /// style a document, and a low-level hook may not take a lock at all (see `text_find::settle`).
+    pub(super) pending: Vec<FindEdit>,
+}
+
+/// One thing a find bar was told, in the order it was told it (see `FindState::pending`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FindEdit {
+    /// A character typed into the query.
+    Typed(char),
+    /// The character before the caret taken back out of it.
+    Deleted,
+    /// The reader stepped forward or back through the matches, wrapping at either end.
+    Step(i32),
+    /// The case switch flipped, and the search is to run again under it. Queued by the card's own
+    /// switch, which is drawn with the card (see `pin_chrome::paint_find_bar`).
+    #[cfg_attr(not(test), allow(dead_code))]
+    ToggleCase,
+    /// The whole-word switch flipped, and the search is to run again under it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    ToggleWholeWord,
+    /// The bar was opened over a query it already held: nothing changed, and the document is to be
+    /// searched for that query again from the line the reader is on.
+    SearchAgain,
+    /// The bar is to be put away, with the page left exactly where it is.
+    Close,
 }
 
 impl TextPreviewState {

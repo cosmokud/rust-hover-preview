@@ -292,6 +292,18 @@ pub(super) unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
+            // **A find bar that is up owns the keyboard.** A key it names is handed to the bar's
+            // queue — a return, a backspace, the two arrows, `Esc`, `F3` — and every other key is
+            // swallowed whole: the page's page keys, its two ends, a Space and the chords are all
+            // inert under a query, and none of them may reach the page's own table below or
+            // `DefWindowProcW`'s (see `text_find`).
+            if text_find::is_open() {
+                if let Some(edit) = text_find::key_edit(wparam.0 as i32) {
+                    text_find::note(edit);
+                }
+                return LRESULT(0);
+            }
+
             if let Some(command) = pinned_key_message_command(msg, wparam.0 as i32, lparam.0) {
                 ask_pin(command);
             }
@@ -386,6 +398,17 @@ pub(super) unsafe extern "system" fn window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_CHAR => {
+            // **A character is the find bar's while it is up.** It arrives here as one UTF-16 code
+            // unit because the loop translates the key before dispatching it, and the bar is the
+            // one caret a pinned page has (see `text_find::typed_character`). The page's own key
+            // table is below this arm, so nothing of a typed character reaches it.
+            if text_find::is_open() {
+                if let Some(character) = text_find::typed_character(wparam.0) {
+                    text_find::note(FindEdit::Typed(character));
+                }
+                return LRESULT(0);
+            }
+
             // The character a key press has already been answered as. It is swallowed for the
             // same reason the key-down is: the pin has had the keyboard, and what it does with a
             // key is decided there — a character left to the default procedure would beep for

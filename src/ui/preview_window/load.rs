@@ -612,6 +612,7 @@ pub(super) fn load_text_preview(
         word_drag: None,
         click_run: None,
         drag_pointer: None,
+        find: FindState::default(),
     });
 
     let frame = ImageFrame::new(frame.pixels, frame.width, frame.height, 0);
