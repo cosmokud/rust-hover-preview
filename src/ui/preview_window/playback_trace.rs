@@ -14,9 +14,11 @@
 //!   does the same on its own stream. Neither is anything this app can see.
 //!
 //! The first is a fact this app decided, so the launch line records it. The second is the player's,
-//! so it is read off the player: mpv's `aid` says whether a track is selected and `ao` and
-//! `audio-out-params` say whether an output was opened from it, and the pair is the discriminator —
-//! `aid=no` is the first road, `aid` a track with no output is the second (see `the_verdict`).
+//! so it is read off the player: mpv's `aid` says whether a track is selected and `current-ao` and
+//! `audio-out-params` say whether an output was opened from it — `current-ao` being the driver in use
+//! and not the `ao` option this app never passes (see `EngineAnswers::an_output_opened`) — and the
+//! pair is the discriminator: `aid=no` is the first road, `aid` a track with no output is the second
+//! (see `the_verdict`).
 //!
 //! **Nothing here runs unless the variable is set**, and what it writes goes to
 //! `%TEMP%\rhp-playback-trace.log` — the same shape `RHP_PIN_TRACE` has (see `pin_trace`), a file of
@@ -176,8 +178,8 @@ pub(super) enum Verdict {
 pub(super) struct EngineAnswers {
     /// `aid`: `no`, `auto`, or the track that was picked.
     pub(super) aid: Option<String>,
-    /// `ao`: the audio output driver mpv is playing through, where it has one.
-    pub(super) ao: Option<String>,
+    /// `current-ao`: the audio output driver mpv is playing through, where one was opened.
+    pub(super) current_ao: Option<String>,
     /// `audio-out-params`: the node of what that output is playing at, where there is one.
     pub(super) audio_out_params: Option<String>,
 }
@@ -185,12 +187,27 @@ pub(super) struct EngineAnswers {
 impl EngineAnswers {
     /// Whether an audio output was actually opened: a driver that is named, and not the `null` one
     /// mpv falls back to when there is no device to play through — a null output makes no session
-    /// either, and reading it as sound is the one way this trace could lie about road two.
+    /// either, and reading it as sound is the one way this trace could lie about road two — and the
+    /// params of what that driver is playing at.
+    ///
+    /// **The driver is asked for as `current-ao`, which is the driver in use; `ao` is the option, and
+    /// this app never passes one.** A captured run of the old question answered `ao []` on all
+    /// fifteen launches — the option's empty list, which is not the empty string — so every player
+    /// read as heard, the ones mpv had put on its `null` fallback included, and the guard could not
+    /// fire for the one failure it was built for. `null` reports `audio-out-params` as readily as a
+    /// real driver does, which is why the driver's own name and not the params is the discriminator.
+    ///
+    /// **A `current-ao` that answers nothing at all keeps the answer the params alone give.** A build
+    /// too old to have the property answers as a read that did not land does — nothing — and an
+    /// unanswerable question is not a device that failed: the ladder's last rung takes a picture off
+    /// the screen, so it must never fire on an unknown.
     pub(super) fn an_output_opened(&self) -> bool {
-        self.ao
-            .as_deref()
-            .is_some_and(|ao| !ao.is_empty() && ao != "null")
-            && self.audio_out_params.is_some()
+        match self.current_ao.as_deref() {
+            Some(driver) if !driver.is_empty() => {
+                driver != "null" && self.audio_out_params.is_some()
+            }
+            _ => self.audio_out_params.is_some(),
+        }
     }
 
     /// What these answers come to (see `Verdict`).
@@ -241,9 +258,10 @@ pub(super) fn the_verdict_word(verdict: Verdict) -> &'static str {
 pub(super) fn the_engine_truth(pid: u32, volume: u32, answers: &EngineAnswers) -> String {
     let said = |answer: &Option<String>| answer.clone().unwrap_or_else(|| "-".to_string());
     format!(
-        "engine truth mpv pid {pid} volume {volume} aid {} ao {} audio-out-params {} verdict {}",
+        "engine truth mpv pid {pid} volume {volume} aid {} current-ao {} audio-out-params {} \
+         verdict {}",
         said(&answers.aid),
-        said(&answers.ao),
+        said(&answers.current_ao),
         said(&answers.audio_out_params),
         the_verdict_word(answers.verdict()),
     )
@@ -318,10 +336,13 @@ pub(super) fn watch_the_engine(pid: u32, volume: u32) {
 /// The three questions, each bounded (see `mpv_ipc::get_property_within`), and the one place they are
 /// asked: the trace reads them once to describe a launch, and the guard reads them again after each
 /// rung of its ladder (see `audio_guard`).
+///
+/// The driver is `current-ao` and never `ao`: the second is the option, which no launch here sets, so
+/// it answers an empty list rather than a driver (see `EngineAnswers::an_output_opened`).
 pub(super) fn ask_the_engine(pid: u32) -> EngineAnswers {
     EngineAnswers {
         aid: super::mpv_ipc::get_property_within(pid, "aid", AN_ANSWER_WAIT),
-        ao: super::mpv_ipc::get_property_within(pid, "ao", AN_ANSWER_WAIT),
+        current_ao: super::mpv_ipc::get_property_within(pid, "current-ao", AN_ANSWER_WAIT),
         audio_out_params: super::mpv_ipc::get_property_within(
             pid,
             "audio-out-params",
@@ -446,11 +467,12 @@ mod tests {
     /// player with both is a film that was heard; and a player that answered nothing is no answer.
     #[test]
     fn the_engines_answers_are_read_as_the_road_a_silent_film_took() {
-        let answers = |aid: Option<&str>, ao: Option<&str>, params: Option<&str>| EngineAnswers {
-            aid: aid.map(str::to_string),
-            ao: ao.map(str::to_string),
-            audio_out_params: params.map(str::to_string),
-        };
+        let answers =
+            |aid: Option<&str>, current_ao: Option<&str>, params: Option<&str>| EngineAnswers {
+                aid: aid.map(str::to_string),
+                current_ao: current_ao.map(str::to_string),
+                audio_out_params: params.map(str::to_string),
+            };
 
         assert_eq!(answers(None, None, None).verdict(), Verdict::Unanswered);
         assert_eq!(
@@ -484,23 +506,116 @@ mod tests {
         );
     }
 
+    /// **The case that read as sound for as long as the driver was asked for as `ao`.** A player mpv
+    /// has put on its `null` fallback reports `audio-out-params` as readily as a real driver does, so
+    /// the params alone cannot tell the two apart and the driver's own name is the whole of the
+    /// discriminator. `ao` — the option, which this app never passes — answered the empty list `[]`
+    /// on every launch of a captured run, which is not the empty string, so this verdict was `Heard`
+    /// and the guard could not fire for the one failure it exists for.
+    #[test]
+    fn a_null_on_current_ao_is_the_device_even_with_the_params_beside_it() {
+        let answers = EngineAnswers {
+            aid: Some("1".to_string()),
+            current_ao: Some("null".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+        };
+
+        assert_eq!(answers.verdict(), Verdict::NoDevice);
+        assert!(
+            !answers.an_output_opened(),
+            "a null output makes no session, so nothing was heard"
+        );
+    }
+
+    /// And a driver that is not the fallback, with the params of what it is playing at, is a film that
+    /// was heard — the one verdict that ends the guard's ladder without touching the player.
+    #[test]
+    fn a_driver_on_current_ao_with_the_params_is_a_film_that_was_heard() {
+        let answers = EngineAnswers {
+            aid: Some("1".to_string()),
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+        };
+
+        assert_eq!(answers.verdict(), Verdict::Heard);
+    }
+
+    /// **A `current-ao` that answers nothing at all is not a device that failed.** A build too old to
+    /// have the property leaves the params to answer on their own, so an unanswerable question reads
+    /// `Heard` — because the ladder's last rung takes a picture off the screen, and a relaunch fired
+    /// on an unknown is worse than a silence this app could not have seen either way.
+    #[test]
+    fn a_current_ao_that_answers_nothing_at_all_is_read_by_the_params_alone() {
+        let answers = EngineAnswers {
+            aid: Some("1".to_string()),
+            current_ao: None,
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+        };
+
+        assert_eq!(answers.verdict(), Verdict::Heard);
+        assert!(
+            !answers.may_answer_differently(),
+            "a heard film is not asked about again"
+        );
+    }
+
+    /// The track outranks the driver whichever way the driver answers: `aid=no` is the launch's own
+    /// road, and an `aid` of `-` is a player that said nothing rather than one with no track.
+    #[test]
+    fn no_track_outranks_the_driver_and_no_answer_is_no_answer() {
+        let no_track_but_heard = EngineAnswers {
+            aid: Some("no".to_string()),
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+        };
+        assert_eq!(
+            no_track_but_heard.verdict(),
+            Verdict::NoTrack,
+            "a track the launch never gave the player is the launch's road, sound or no sound"
+        );
+
+        let no_answer_but_heard = EngineAnswers {
+            aid: None,
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+        };
+        assert_eq!(
+            no_answer_but_heard.verdict(),
+            Verdict::Unanswered,
+            "an `aid` of `-` says nothing about the sound, so nothing may be done about it"
+        );
+    }
+
     /// A player is asked again while an answer could still change, and never once it has one: a
     /// verdict taken from a device that is still opening is a road two the trace made up.
     #[test]
     fn a_player_that_answered_is_not_asked_again() {
-        let answers = |aid: Option<&str>, ao: Option<&str>| EngineAnswers {
-            aid: aid.map(str::to_string),
-            ao: ao.map(str::to_string),
-            audio_out_params: Some("{".to_string()),
-        };
+        let answers =
+            |aid: Option<&str>, current_ao: Option<&str>, params: Option<&str>| EngineAnswers {
+                aid: aid.map(str::to_string),
+                current_ao: current_ao.map(str::to_string),
+                audio_out_params: params.map(str::to_string),
+            };
+        let heard = Some(r#"{"samplerate":48000}"#);
 
-        assert!(answers(None, None).may_answer_differently(), "nothing yet");
         assert!(
-            answers(Some("1"), None).may_answer_differently(),
+            answers(None, None, None).may_answer_differently(),
+            "nothing yet"
+        );
+        assert!(
+            answers(Some("1"), None, None).may_answer_differently(),
             "a track whose output has not come up yet"
         );
-        assert!(!answers(Some("no"), None).may_answer_differently());
-        assert!(!answers(Some("1"), Some("wasapi")).may_answer_differently());
+        assert!(
+            answers(Some("1"), Some("null"), heard).may_answer_differently(),
+            "a fallback the device cure may still reload out of"
+        );
+        assert!(!answers(Some("no"), None, None).may_answer_differently());
+        assert!(!answers(Some("1"), Some("wasapi"), heard).may_answer_differently());
+        assert!(
+            !answers(Some("1"), None, heard).may_answer_differently(),
+            "a driver nothing can name with the params of an output beside it is heard"
+        );
     }
 
     /// **What a run is read for**: the launch line says the level and the form it was given, and the
@@ -524,18 +639,19 @@ mod tests {
 
         let answers = EngineAnswers {
             aid: Some("no".to_string()),
-            ao: None,
+            current_ao: None,
             audio_out_params: None,
         };
         assert_eq!(
             the_engine_truth(7, 0, &answers),
-            "engine truth mpv pid 7 volume 0 aid no ao - audio-out-params - verdict no-track"
+            "engine truth mpv pid 7 volume 0 aid no current-ao - audio-out-params - verdict \
+             no-track"
         );
 
         // And a device that would not open names itself, with the track it never played.
         let answers = EngineAnswers {
             aid: Some("1".to_string()),
-            ao: None,
+            current_ao: None,
             audio_out_params: None,
         };
         assert!(

@@ -1280,8 +1280,9 @@ is worth reading. The rectangles in the `thumbnail update` line are the whole di
 
 **Watching a film's sound.** `RHP_PLAYBACK_TRACE` (presence is enough) writes `%TEMP%\rhp-playback-trace.log`: one
 `launch` line per engine start (engine, kind, the level the launch resolved to, and the form that level was given the
-player in — `aid=no`/`-an` or `volume=N gain=…`), one `engine truth` line per mpv start (the `aid`, `ao` and
-`audio-out-params` the player itself reports, and the verdict they come to), every line either player writes on its own
+player in — `aid=no`/`-an` or `volume=N gain=…`), one `engine truth` line per mpv start (the `aid`, `current-ao` and
+`audio-out-params` the player itself reports, and the verdict they come to — the driver in use, not the `ao` option
+this app never passes, which answers an empty list rather than a driver), every line either player writes on its own
 stream, and a `kill` line per player ended with whether a zero-timeout wait confirmed the process gone. It answers one
 question that nothing else on the machine can: a film that plays with no sound and no entry in Windows' Volume Mixer is
 either a launch that gave the player no track at all (the launch line says so) or a player that could not open a device
@@ -1290,7 +1291,7 @@ is otherwise `-loglevel quiet` into a null stream). Unset, nothing is written an
 is neither traced nor guarded builds the command line it always did (`playback_trace`).
 
 **Healing a film's sound.** The trace describes the two roads to a silent film; `audio_guard` walks back down them. It
-asks the same three questions (`aid`, `ao`, `audio-out-params`) and reads the same verdict out of them, then climbs a
+asks the same three questions (`aid`, `current-ao`, `audio-out-params`) and reads the same verdict out of them, then climbs a
 ladder of three rungs, each taken at most once: a track asked back for with `set_property aid auto` — the launch's own
 road, healed; `audio-device` handed its own `auto`, which is mpv reloading its audio output, so a device refused while
 the film was starting gets one more attempt at it; and, if neither was heard, **one** new player at the second and the
