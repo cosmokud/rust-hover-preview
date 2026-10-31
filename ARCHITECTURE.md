@@ -997,16 +997,19 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
   with a run of typing coalesced into one; `Ctrl+U` is deliberately not bound. Every keystroke searches the document as
   it is drawn (`find_all`: document order, non-overlapping, the two switches read as the search it runs under), every
   match is painted into the frame with the current one distinct (`FindHighlights`, drawn under the reader's own
-  selection), and a match off screen takes the page to it the way `F3` takes it to a selection. `Enter`/`↓`/`F3` step
-  on and `Shift`+`Enter`/`↑` back, wrapping at both ends and never moving the query; a new query starts at the first
+  selection), and a match off screen takes the page to it the way `F3` takes it to a selection. `Enter`/`↓`/`PgDn`/`F3`
+  step on and `Shift`+`Enter`/`↑`/`PgUp` back, wrapping at both ends and never moving the query; a new query starts at
+  the first
   match at or after the line the reader was on. A press in the field places the caret at the character under the pointer
   — measured from the column the query is really drawn at, so a right-aligned query too long for its row is pressed
   where it is, not a field's width away — a double press takes the word by the page's own run rule, and the caret blinks
   at `GetCaretBlinkTime`'s pace on the ticks a pin already takes, solid from every edit, with the selection washed the
   way the page washes its own. A repaint is asked for a changed query, caret, selection, hover or blink and never for a
-  mouse move that changed nothing. While the bar is up it owns the keyboard — the page's own keys and the polled
-  `Ctrl+A`/`Ctrl+C` are inert — and `Esc` empties a query that has text before it puts the bar away, with the page left
-  where it is either way. The query outlives the bar while the matches do not; `Ctrl+F` over an open bar selects the
+  mouse move that changed nothing. While the bar is up it owns the keyboard, and the keyboard hook stands down for the
+  whole of it: a swallowed key never becomes the `WM_CHAR` a field types from, so every key arrives as a message and the
+  bar's one table reads it — the page's own keys and the polled `Ctrl+A`/`Ctrl+C` are inert — and `Esc` empties a query
+  that has text before it puts the bar away, with the page left where it is either way. The query outlives the bar
+  while the matches do not; `Ctrl+F` over an open bar selects the
   query it finds rather than appending to it; a box change keeps both, because a match is a place in the document
   rather than a row of the frame; another file keeps neither (`keep_text_place`).
 

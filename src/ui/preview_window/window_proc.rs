@@ -292,11 +292,15 @@ pub(super) unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
-            // **A find bar that is up owns the keyboard.** A key it names is handed to the bar's
-            // queue — a return, a backspace, the two arrows, `Esc`, `F3` — and every other key is
-            // swallowed whole: the page's page keys, its two ends, a Space and the chords are all
-            // inert under a query, and none of them may reach the page's own table below or
-            // `DefWindowProcW`'s (see `text_find`).
+            // **A find bar that is up owns the keyboard, and this arm is the only owner there is.**
+            // The keyboard hook stands down from the pin's keys for as long as a bar is up (see
+            // `key_input::publish_find_bar_up`), because a key it swallowed would never become the
+            // `WM_CHAR` of the arm below — the characters a query is typed from. So every key
+            // arrives here, and the bar's one table reads the ones it owns: a return, a backspace,
+            // the two arrows and the two page keys, the two ends, `Esc` and `F3` (see
+            // `text_find::key_edit_with`). Every other key is swallowed whole — a `Space`, a `T` and
+            // a `Tab` mean nothing to a query — and none of them may reach the page's own table
+            // below or `DefWindowProcW`'s.
             if text_find::is_open() {
                 if let Some(edit) = text_find::key_edit(wparam.0 as i32) {
                     text_find::note(edit);
