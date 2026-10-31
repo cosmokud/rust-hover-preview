@@ -984,8 +984,18 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
   (`find_next`: exact, case-sensitive, from just after the selection, wrapping to end where it began) — or, while a find
   bar is up, to the next place that bar's query appears — and `Ctrl` and a wheel steps the page's own size
   through the tray's list (`PIN_TEXT_SIZE_DELTA`) — a size the pin carries across a resize and a walk and gives up when
-  it closes. A page of code — a syntax syntect found — keeps a line-number column as wide as the widest number the
-  document can show. A selection, the word a double press takes and the place a copy is cut from are document places
+  it closes.
+
+  **A pinned page keeps a line-number column down its left, and a hover does not** — whatever the file is: source, prose,
+  a listing or a rendered document. The pin is the page a reader works in, where a line is referred to by its number; a
+  hover is something looked at on the way past, and the column is width the text does not have. It is as wide as the
+  widest number the page can reach (`gutter_width`, the document's own line numbers, `MAX_DOC_LINES` of them), so it does
+  not move as the page is scrolled from line 9 to line 10, and it is the layout's (`LaidOut::gutter`): the wrap width,
+  the runs' own `x`, the caret, a press turned back into a place and the wash a selection or a find lays are all measured
+  after it, so nothing of the text is drawn under it and a copy of the page (`text_of`, `drawn_lines`) names no number at
+  all. A wrapped line carries its number on its first painted row and none on the rest (`own_line`, `FrameLine::source`),
+  and the room between the numbers and the text is `text_paint::scaled`, so it grows with the display like every other
+  measurement. A selection, the word a double press takes and the place a copy is cut from are document places
   rather than frame places (`FrameLine::source`, `Selection` in document lines and characters), so a wrapped line copies
   whole, **Select All** means the page rather than the screenful, and a drag carried past the box takes the page three
   lines a tick toward where it left. A box change lays the page out again for the box it has reached, at the reader's

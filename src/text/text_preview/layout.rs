@@ -151,10 +151,13 @@ pub(super) fn layout(
         0
     };
 
-    // A pinned page of a file drawn through a syntax definition keeps a column for its own line
-    // numbers: a reader refers to a line of code by its number, where prose and NFO art are read
-    // rather than cited — and the column is width the text does not have.
-    let gutter = if full_mode && doc.wants_line_numbers() {
+    // **A pinned page keeps a column for its own line numbers, and a hover does not.** The pin is
+    // the page a reader works in — a caret, a selection, a find — and a line is referred to by its
+    // number there, whatever the file is: source, prose, a listing, a rendered document. A hover is
+    // something looked at on the way past, and a column of numbers down its left is width the text
+    // does not have. The column is as wide as the widest number the page can reach, so it does not
+    // move as the page is scrolled from line 9 to line 10 (see `gutter_width`).
+    let gutter = if full_mode {
         gutter_width(scrollable_lines, metrics)
     } else {
         0

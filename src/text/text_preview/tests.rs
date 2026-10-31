@@ -725,18 +725,44 @@ fn a_find_highlights_every_place_and_the_current_one_apart() {
     );
 }
 
-/// A pinned page of a file drawn through a syntax definition keeps a column down its left for the
-/// document's own line numbers; the same file hovered does not, and neither does a page of prose,
-/// because a line of code is cited by its number where prose is read rather than cited (see
-/// `gutter_width` and `wants_line_numbers`).
+/// **A pinned page keeps a column down its left for its own line numbers, and a hover does not** —
+/// whatever the file is: source, prose, or a document drawn from its Markdown. The pin is the page a
+/// reader works in, where a line is referred to by its number; a hover is something looked at on the
+/// way past (see `gutter_width` and the layout's gutter).
 #[test]
-fn a_pinned_page_of_code_keeps_a_column_for_its_line_numbers() {
+fn a_pinned_page_keeps_a_column_for_its_line_numbers_and_a_hover_does_not() {
     let dir = scratch("gutter");
     let source = dir.join("numbered.rs");
-    fs::write(&source, "fn main() {\n    let answer = 42;\n}\n").expect("a source file");
+    fs::write(
+        &source,
+        "fn main() {
+    let answer = 42;
+}
+",
+    )
+    .expect("a source file");
 
     let prose = dir.join("prose.txt");
-    fs::write(&prose, "a page of prose\nwith two lines\n").expect("a page of prose");
+    fs::write(
+        &prose,
+        "a page of prose
+with two lines
+",
+    )
+    .expect("a page of prose");
+
+    let document = dir.join("numbered.md");
+    fs::write(
+        &document,
+        "# Heading
+
+A paragraph, and a list:
+
+- one
+- two
+",
+    )
+    .expect("a rendered document");
 
     let pinned = TextPreviewOptions {
         full_mode: true,
@@ -756,15 +782,13 @@ fn a_pinned_page_of_code_keeps_a_column_for_its_line_numbers() {
             .expect("a painted line of text")
     };
 
-    assert!(
-        text_column(&source, pinned) > text_column(&source, hover),
-        "a pinned page of code keeps a column for its numbers that the same file hovered does not"
-    );
-    assert_eq!(
-        text_column(&prose, pinned),
-        text_column(&prose, hover),
-        "a page of prose is read rather than cited, so it is numbered no more than a hover is"
-    );
+    for path in [&source, &prose, &document] {
+        assert!(
+            text_column(path, pinned) > text_column(path, hover),
+            "a pinned page keeps a column for its numbers that the same file hovered does not: {}",
+            path.display()
+        );
+    }
 }
 
 /// A number is drawn once per document line rather than once per painted line: a line too long for
@@ -1135,5 +1159,188 @@ fn a_page_scrolled_is_the_page_the_frame_after_it_would_have_painted() {
     assert_eq!(
         shifted.pixels, fresh.pixels,
         "and it is the page it would have been painted as"
+    );
+}
+
+/// A pinned page's caret stands where the glyph it precedes is painted, at every display scale, and
+/// the room between the numbers and the text is the display's rather than a literal.
+///
+/// The gutter is the one part of a page whose arithmetic is pure geometry: the numbers are as wide as
+/// the widest number the page can reach, the gap between them and the text is that gap *at the
+/// display's own scale*, and the text — and so the caret that stands in it — begins after both. A
+/// number written for 100% is a caret that is right at 96 dpi and a few pixels off the glyph at 144,
+/// and nothing here fails at 96 (see `gutter_width` and `gutter_gap`).
+#[test]
+fn the_caret_of_a_pinned_page_stands_on_the_glyph_it_precedes_at_any_scale() {
+    let dir = scratch("gutter-dpi");
+    let source = dir.join("scaled.txt");
+    let text: String = (0..40)
+        .map(|line| format!("line {line} of a page drawn at every scale\n"))
+        .collect();
+    fs::write(&source, text).expect("a page to draw");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+
+    let room_between_the_numbers_and_the_text = |frame: &TextFrame| {
+        let first = frame.lines.first().expect("a painted line");
+        let text_column = first.runs.first().expect("a run of text").x;
+        let background = frame_pixel(frame, frame.width - 1, frame.height - 1);
+        let number_ink: Vec<i32> = (first.top..first.top + first.height)
+            .flat_map(|y| (0..text_column).map(move |x| (x, y)))
+            .filter(|(x, y)| frame_pixel(frame, *x as u32, *y as u32) != background)
+            .map(|(x, _)| x)
+            .collect();
+
+        let rightmost = number_ink.iter().copied().max().expect("a number's ink");
+        text_column - rightmost - 1
+    };
+
+    let mut gaps = Vec::new();
+    for dpi in [96u32, 144, 192] {
+        let frame =
+            render_scrolled(&source, 0, 400, 300, dpi, options, None, None).expect("a page");
+        let text_column = frame
+            .lines
+            .first()
+            .and_then(|line| line.runs.first().map(|run| run.x))
+            .expect("a painted line of text");
+
+        // The caret stands before character 0 of the first line, which is the left edge of the run
+        // the text starts in — the glyph's own column, not the frame's.
+        let caret = caret_rect(&frame.lines, (0, 0)).expect("a caret in the page");
+        assert_eq!(
+            caret.left, text_column,
+            "at {dpi} dpi the caret is where the text begins rather than where the numbers do"
+        );
+
+        gaps.push(room_between_the_numbers_and_the_text(&frame));
+    }
+
+    assert!(
+        gaps[0] > 0 && gaps[1] > gaps[0] && gaps[2] > gaps[1],
+        "the room between the numbers and the text is the display's own gap: {gaps:?}"
+    );
+}
+
+/// A copy of a pinned page is the document's text and never the numbers drawn beside it.
+///
+/// The gutter is painted into the frame and nothing else: the lines a selection is cut from are the
+/// document's own, so a reader who selects the whole page and copies it gets the file rather than the
+/// file with a column of numbers in front of every line (see `text_of` and `drawn_lines`).
+#[test]
+fn a_copy_of_a_pinned_page_is_the_text_and_never_its_numbers() {
+    let dir = scratch("gutter-copy");
+    let source = dir.join("copied.txt");
+    let text: String = (0..12)
+        .map(|line| format!("line {line} of a page with numbers\n"))
+        .collect();
+    fs::write(&source, &text).expect("a page to copy");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+    let frame = render_scrolled(&source, 0, 400, 300, 96, options, None, None).expect("a page");
+    let hovered = render_scrolled(
+        &source,
+        0,
+        400,
+        300,
+        96,
+        TextPreviewOptions {
+            full_mode: false,
+            ..options
+        },
+        None,
+        None,
+    )
+    .expect("the same page hovered");
+    assert!(
+        frame.lines[0].runs[0].x > hovered.lines[0].runs[0].x,
+        "the page keeps a column for its numbers, which is what makes the copy worth asking about"
+    );
+
+    let whole = Selection {
+        anchor: (0, 0),
+        caret: (usize::MAX, usize::MAX),
+    };
+    let copied = text_of(&source, options, whole).expect("the page's text");
+
+    // A copy joins the lines the way Windows does, so the lines are what is compared.
+    assert_eq!(
+        copied.lines().collect::<Vec<&str>>(),
+        text.lines().collect::<Vec<&str>>(),
+        "a copy is the file as it was read, not the page as it was drawn: no number is in it"
+    );
+}
+
+/// A find's marks are laid over the text and never over the numbers: the column the numbers stand in
+/// is the same page before and after a search, whatever the query found.
+#[test]
+fn a_find_is_drawn_over_the_text_and_never_over_the_numbers() {
+    let dir = scratch("gutter-find");
+    let source = dir.join("searched.txt");
+    fs::write(&source, "a first line\nneedle on this line\na third line\n")
+        .expect("a page to search");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+    let plain = render_scrolled(&source, 0, 400, 300, 96, options, None, None).expect("a page");
+    let found = render_scrolled(
+        &source,
+        0,
+        400,
+        300,
+        96,
+        options,
+        None,
+        Some(FindHighlights {
+            matches: vec![Selection {
+                anchor: (1, 0),
+                caret: (1, 6),
+            }],
+            current: Some(0),
+        }),
+    )
+    .expect("a page with its find on it");
+
+    let column = found.lines[1]
+        .runs
+        .first()
+        .map(|run| run.x)
+        .expect("the line's text");
+    assert!(
+        column > 0,
+        "the page keeps a column for its numbers before the text begins"
+    );
+
+    let mut marks_over_the_numbers = 0;
+    let mut marks_over_the_text = 0;
+    for y in found.lines[1].top..found.lines[1].top + found.lines[1].height {
+        for x in 0..found.width {
+            if frame_pixel(&plain, x, y as u32) == frame_pixel(&found, x, y as u32) {
+                continue;
+            }
+
+            if (x as i32) < column {
+                marks_over_the_numbers += 1;
+            } else {
+                marks_over_the_text += 1;
+            }
+        }
+    }
+
+    assert!(
+        marks_over_the_text > 0,
+        "the place the query was found is painted on the page"
+    );
+    assert_eq!(
+        marks_over_the_numbers, 0,
+        "and nothing of the mark reaches the numbers standing beside the text"
     );
 }
