@@ -1281,41 +1281,58 @@ is worth reading. The rectangles in the `thumbnail update` line are the whole di
 **Watching a film's sound.** `RHP_PLAYBACK_TRACE` (presence is enough) writes `%TEMP%\rhp-playback-trace.log`: one
 `launch` line per engine start (engine, kind, the level the launch resolved to, and the form that level was given the
 player in — `aid=no`/`-an` or `volume=N gain=…`), one `engine truth` line per mpv start (the `aid`, `audio-device`,
-`current-ao` and `audio-out-params` the player itself reports, and the verdict they come to — the device that was asked
-for beside the driver in use, and that driver rather than the `ao` option
-this app never passes, which answers an empty list rather than a driver), every line either player writes on its own
-stream, and a `kill` line per player ended with whether a zero-timeout wait confirmed the process gone. It answers one
-question that nothing else on the machine can: a film that plays with no sound and no entry in Windows' Volume Mixer is
-either a launch that gave the player no track at all (the launch line says so) or a player that could not open a device
-from the track it had (the player says so, and FFmpeg's player only says anything at all under this switch — its stderr
-is otherwise `-loglevel quiet` into a null stream). Unset, nothing is written and no thread is spawned; a launch that
-is neither traced nor guarded builds the command line it always did (`playback_trace`).
+`current-ao`, `audio-out-params`, `volume` and `mute` the player itself reports, and the verdict they come to — the device
+that was asked for beside the driver in use, and that driver rather than the `ao` option this app never passes, which
+answers an empty list rather than a driver), every line either player writes on its own stream, and a `kill` line per
+player ended with whether a zero-timeout wait confirmed the process gone. **The level the launch asked for and the level
+the player is at are two words on that line** — `asked 100` beside `volume 0 mute no` — because they are two facts: a
+player that says all of a track, a driver and params while its own level stands at nothing, or its own mute is on, is a
+film that plays with no sound and every one of those answers calls it sound. It answers one question that nothing else
+on the machine can: a film that plays with no sound and no entry in Windows' Volume Mixer is either a launch that gave
+the player no track at all (the launch line says so), a player that could not open a device from the track it had (the
+player says so, and FFmpeg's player only says anything at all under this switch — its stderr is otherwise
+`-loglevel quiet` into a null stream), or that player told to be quiet (the level and the mute beside the level asked
+for). Unset, nothing is written and no thread is spawned; a launch that is neither traced nor guarded builds the command
+line it always did (`playback_trace`).
 
-**Healing a film's sound.** The trace describes the two roads to a silent film; `audio_guard` walks back down them. It
-asks the same four questions (`aid`, `audio-device`, `current-ao`, `audio-out-params`) and reads the same verdict out of
-them, then climbs a ladder of three rungs, each taken at most once: a track asked back for with `set_property aid auto`
-— the launch's own road, healed; `audio-device` handed its own `auto`, which is mpv reloading its audio output, so a
-device refused while the film was starting gets one more attempt at it; and, if neither was heard, **one** new player at
-the second and the pause the old one had, read once, and then the ladder ends. Each rung is entered on what the read-back
+**Healing a film's sound.** The trace describes the roads to a silent film; `audio_guard` walks back down them. It asks
+the same six questions (`aid`, `audio-device`, `current-ao`, `audio-out-params`, `volume`, `mute`) and reads the same
+verdict out of them, then climbs a ladder, each rung taken at most once: a track asked back for with
+`set_property aid auto` — the launch's own road, healed; `audio-device` handed its own `auto`, which is mpv reloading its
+audio output, so a device refused while the film was starting gets one more attempt at it; the level the launch asked
+for asserted again with the player's own `mute` taken off beside it, which is the cure for a verdict of `silent` — a
+track selected, an output open and a player told to be quiet; and, if none of those was heard, **one** new player at the
+second and the pause the old one had, read once, and then the ladder ends. Each rung is entered on what the read-back
 said and never on a write having landed, and a player that answered nothing is asked once more and then left entirely
 alone: a verdict that never arrived is not a film without sound, so it is not a player to begin again. **So is a driver
 named with nothing playing through it** — `current-ao wasapi` and no `audio-out-params`, which a captured run read 548 ms
 after its launch and which is a player still opening its output as readily as a film that lost it — so that shape is read
 once more and the device cure is written on its second consecutive read; `aid=no` and a driver of `null` are answers,
-and each takes its rung on the first read. The guard is armed once per launched player, and only for a pin's own film
-begun at a level — a hover, a sound, and a film the level itself gave no track are none of its business. Every read that
-moves the verdict writes a line (`audio guard`, `audio read-back`, `audio step`), so a field log carries the ladder's
-whole evidence even where it healed silently.
+and each takes its rung on the first read. **Every read that moves the verdict writes a line** (`audio guard`,
+`audio read-back`, `audio step`), so a field log carries the ladder's whole evidence even where it healed silently.
 
-**A film that was heard is watched, because it can lose its sound later.** `Heard` is no longer where the guard ends: the
+**The guard stands behind both roads, and a hover's ladder is the in-place rungs and nothing else.** A pin's film is
+cured where it stands, begun again once, and watched; a hover's — on a cold launch and on the resident's serve alike —
+is cured where it stands and then left, because the resident is the one player where a stale audio decision lives
+longest (one process handed file after file, begun at whatever level the first hover had) and because a hover that
+began a player again would pay the very wait the resident exists to save. **A serve is a new episode of the same pid**,
+so it arms a ladder of its own: the file before it spent nothing of this one's, and the `REBIRTH` record a pin's relaunch
+leaves behind is not a hover's to consume. A film the level itself gave no track is nobody's business on either road,
+and FFmpeg's player is guarded on a pin's road only — its ladder has no in-place rung at all, so a hover's guard on it
+could only ever give up. **A pin that takes a hover's player over gets the pin's road** — the same process and the same
+reads, with the rungs a hover stops short of from that moment (`audio_guard::a_pin_took_it_over`).
+
+**A film that was heard is watched, because it can lose its sound later.** `Heard` is not where a pin's guard ends: the
 player is kept under a sparse schedule of read-backs — +2 s, +4 s, +8 s, then one every ~10 s for as long as it lives —
-sampled on the probe thread and decided on the tick, so a film whose endpoint is taken away hours in still says so. A read
-that is heard again writes nothing at all: the line is written where the verdict moved, so a healthy film's log is the one
-line it opened with. A late failure climbs the two in-place rungs once more (`aid`, then `audio-device`) and may take the
-relaunch **at most once in a player's whole life**, not once per episode — a device that is genuinely gone must never be
-begun again for, every ten seconds, forever. The sampling ends with the player: `a_player_ended` clears the guard, a probe
-that wakes to a guard that is not its own reads no pipe and reports nothing, and the player a spent ladder began (the
-`REBIRTH` record, `SPENT`) is given its one read and no schedule behind it.
+sampled on the probe thread and decided on the tick, so a film whose endpoint is taken away hours in still says so. A
+hover is on no schedule at all: it is short-lived and its per-serve reads are the whole of what there is to know. A read
+that is heard again writes nothing at all: the line is written where the verdict moved, so a healthy film's log is the
+one line it opened with. A late failure climbs the three in-place rungs once more (`aid`, then `audio-device`, then the
+level) and may take the relaunch **at most once in a player's whole life**, not once per episode — a device that is
+genuinely gone must never be begun again for, every ten seconds, forever. The sampling ends with the player:
+`a_player_ended` clears the guard (and a hover's serve is the end of its episode, whether the player is killed or left
+standing by), a probe that wakes to a guard that is not its own reads no pipe and reports nothing, and the player a spent
+ladder began (the `REBIRTH` record, `SPENT`) is given its one read and no schedule behind it.
 
 **mpv has a pipe, and FFmpeg's player does not**, so the second one's ladder is one rung. An ffplay launch is piped
 on the standard error, and drained, on exactly the launches that have a use for a line — the trace, or a guard standing
@@ -1329,9 +1346,10 @@ stream never carried is not one either.
 **Nothing here waits on the preview loop.** A player that has only just been begun has no pipe yet, so a thread asks
 and leaves the answer where the tick finds it, and the tick is what writes and decides. Its last rung is the pin's own
 swap path (`pin_playback::begin_the_pinned_film_again_for_its_sound` → `restart_pinned_player`), so the picture is kept
-exactly as a seek keeps it; the guard itself never pauses, seeks or moves a level, and a film the handover left held is
-begun again held. The rung waits for a tick with no swap and no handover in flight, because a picture changing hands is
-not a player to be begun under it.
+exactly as a seek keeps it. **The guard moves no picture and no clock**: no pause is toggled, no second is asked for, and
+the only level it ever writes is the one the launch already asked for, put back on a player that had been silenced
+under it — a film the handover left held is begun again held. The rung waits for a tick with no swap and no handover in
+flight, because a picture changing hands is not a player to be begun under it.
 
 **What this means for another player engine.** The road is engine-agnostic, and both players this app has are on it: it
 needs a player that draws into a window of its own, whose picture size is known before anything else asks it for a box
@@ -1355,8 +1373,8 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/ffplay_window.rs` | the pass that finds a player's window, adopts it as a source, keeps it invisible and styles it |
 | `src/ui/preview_window/video_playback.rs` | both launches: where a film is born (the desktop, at its own size, borderless) and which host keeps it |
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
-| `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it, both players' own lines, and a kill's confirmation |
-| `src/ui/preview_window/audio_guard.rs` | the ladder a pinned film's sound is healed by: the read-back's verdict, the three rungs, the one relaunch, and the sparse watch of a player that was heard; the strict signature list FFmpeg's player is read against |
+| `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it — the level asked for beside the level it is at — both players' own lines, and a kill's confirmation |
+| `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict, the in-place rungs and the one relaunch, the hover's in-place-only road, and the sparse watch of a pin's player that was heard; the strict signature list FFmpeg's player is read against |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |
 

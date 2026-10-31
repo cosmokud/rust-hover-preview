@@ -1732,6 +1732,11 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
     // `mpv_resident::a_pin_took_it_over`).
     mpv_resident::a_pin_took_it_over();
 
+    // **And a guard armed for the hover's film is the pin's from here too**, for the same reason and
+    // with the same pid: the reads already taken from the player stand, and the rungs a hover's ladder
+    // stops short of are a pin's to take (see `audio_guard::a_pin_took_it_over`).
+    audio_guard::a_pin_took_it_over(pid);
+
     // The pin's host from here, written before the roads that ask the host questions through the
     // pin's own lock can run: the player the hover began is the pin's own, and the frame it is
     // drawing is already on the screen — the hover had proved it.

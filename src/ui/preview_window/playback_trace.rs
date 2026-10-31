@@ -18,7 +18,14 @@
 //! `audio-out-params` say whether an output was opened from it — `current-ao` being the driver in use
 //! and not the `ao` option this app never passes (see `EngineAnswers::an_output_opened`) — and the
 //! pair is the discriminator: `aid=no` is the first road, `aid` a track with no output is the second
-//! (see `the_verdict`).
+//! (see `EngineAnswers::verdict`).
+//!
+//! **And there is a third road, which those two answers cannot see at all**: a player that has its
+//! track selected and its output open, and that was told to be quiet — its own `volume` at nothing, or
+//! its own `mute` on. Every other answer a player gives about a film like that says it has sound, so
+//! `volume` and `mute` are read beside them and the level the launch asked for is written with a
+//! second word: `asked 100 volume 0` is a film this app gave a level to and a player that is not at
+//! it (see `Verdict::Silent`).
 //!
 //! **Nothing here runs unless the variable is set**, and what it writes goes to
 //! `%TEMP%\rhp-playback-trace.log` — the same shape `RHP_PIN_TRACE` has (see `pin_trace`), a file of
@@ -169,11 +176,21 @@ pub(super) enum Verdict {
     NoDevice,
     /// A track and an output both: the film had audio when this was read.
     Heard,
+    /// **A track and an output both, and a player told to be quiet**: its own `volume` at nothing or
+    /// its own `mute` on, while the launch asked for a level. The third road to a silent film, and
+    /// the one every other answer calls sound — an output that is open, params that are present, and
+    /// nothing coming out of it (see `EngineAnswers::told_to_be_quiet`).
+    Silent,
     /// The player answered nothing in the time it was given, which says nothing about its sound.
     Unanswered,
 }
 
-/// The four answers a started mpv is asked for, and nothing where it said nothing to one of them.
+/// The six answers a started mpv is asked for, and nothing where it said nothing to one of them.
+///
+/// **Four are what the player did with a film's sound and two are the level it is at**, and the second
+/// pair is the player's own level rather than the level the launch resolved to: the two are different
+/// facts, are written with two different words on every line, and are the whole of the third road to a
+/// silent film (see `Verdict::Silent`).
 #[derive(Clone, Default, Debug)]
 pub(super) struct EngineAnswers {
     /// `aid`: `no`, `auto`, or the track that was picked.
@@ -188,6 +205,13 @@ pub(super) struct EngineAnswers {
     pub(super) current_ao: Option<String>,
     /// `audio-out-params`: the node of what that output is playing at, where there is one.
     pub(super) audio_out_params: Option<String>,
+    /// `volume`: **the level the player is playing at**, which is not the level the launch asked for.
+    /// A player handed `--volume=100` that answers 0 here was silenced by something else — a per-file
+    /// option on a resident, or a mute — and no other property on this pipe would say so.
+    pub(super) volume: Option<f64>,
+    /// `mute`: mpv's own mute, which silences a film at any level at all and leaves every other answer
+    /// saying the film has its sound.
+    pub(super) mute: Option<bool>,
 }
 
 impl EngineAnswers {
@@ -216,8 +240,25 @@ impl EngineAnswers {
         }
     }
 
-    /// What these answers come to (see `Verdict`).
-    pub(super) fn verdict(&self) -> Verdict {
+    /// **Whether the player has an output open and was told to be quiet**: its own `volume` at
+    /// nothing, or its own `mute` on. It is the third road to a silent film, and the one no other
+    /// answer on this pipe describes — a track, a driver and params all say the film has sound.
+    ///
+    /// **An answer this build cannot read is not silence.** A property an older mpv has no value for
+    /// answers nothing, and no cure is written on an unknown (see `an_output_opened`, which keeps the
+    /// same rule for the driver).
+    fn told_to_be_quiet(&self) -> bool {
+        self.volume.is_some_and(|level| level <= 0.0) || self.mute == Some(true)
+    }
+
+    /// What these answers come to, given the level the launch asked for (see `Verdict`).
+    ///
+    /// **`asked` is the launch's level and it belongs to this question**, because the player's own
+    /// level cannot be judged without it: a player at `volume 0` on a launch that asked for no audio
+    /// at all is a silence the setting chose, not a fault to heal — and
+    /// `mpv_launched_without_audio` is the same rule the launch's own form is built from, so the two
+    /// can never disagree about what "asked for no audio" means.
+    pub(super) fn verdict(&self, asked: u32) -> Verdict {
         let Some(aid) = self.aid.as_deref() else {
             return Verdict::Unanswered;
         };
@@ -226,11 +267,15 @@ impl EngineAnswers {
             return Verdict::NoTrack;
         }
 
-        if self.an_output_opened() {
-            Verdict::Heard
-        } else {
-            Verdict::NoDevice
+        if !self.an_output_opened() {
+            return Verdict::NoDevice;
         }
+
+        if !super::video_launch::mpv_launched_without_audio(asked) && self.told_to_be_quiet() {
+            return Verdict::Silent;
+        }
+
+        Verdict::Heard
     }
 
     /// **Whether these answers are the shape a player that is still opening its output has**: a real
@@ -253,10 +298,10 @@ impl EngineAnswers {
     /// Whether asking again could change the answer: a player that said nothing at all yet, or one
     /// whose output has not come up while a track is selected — a device opening, or a file whose
     /// header is still being read. A player with a verdict of its own is asked no further.
-    fn may_answer_differently(&self) -> bool {
-        match self.verdict() {
+    fn may_answer_differently(&self, asked: u32) -> bool {
+        match self.verdict(asked) {
             Verdict::Unanswered | Verdict::NoDevice => true,
-            Verdict::NoTrack | Verdict::Heard => false,
+            Verdict::NoTrack | Verdict::Heard | Verdict::Silent => false,
         }
     }
 }
@@ -267,17 +312,40 @@ impl EngineAnswers {
 /// **`no-device` is two faults sharing a word**: a device refused, and a player that has named its
 /// driver and not yet opened it, which is why the guard reads the answers themselves before it writes
 /// anything (see `EngineAnswers::a_driver_with_no_params`).
+///
+/// **`silent` is the verdict that reads as sound everywhere else**: a track, an output and params, with
+/// the player's own level at nothing or its mute on (see `Verdict::Silent`).
 pub(super) fn the_verdict_word(verdict: Verdict) -> &'static str {
     match verdict {
         Verdict::NoTrack => "no-track",
         Verdict::NoDevice => "no-device",
         Verdict::Heard => "heard",
+        Verdict::Silent => "silent",
         Verdict::Unanswered => "unanswered",
     }
 }
 
-/// The line the engine's own answers are written as: the four properties it reported, and what they
+/// The level a player reported, or `-` where it reported none.
+pub(super) fn the_level_word(level: Option<f64>) -> String {
+    level.map_or_else(|| "-".to_string(), |level| format!("{level}"))
+}
+
+/// The flag a player reported, as `yes`/`no`, or `-` where it reported none.
+pub(super) fn the_flag_word(flag: Option<bool>) -> String {
+    match flag {
+        Some(true) => "yes".to_string(),
+        Some(false) => "no".to_string(),
+        None => "-".to_string(),
+    }
+}
+
+/// The line the engine's own answers are written as: the six properties it reported, and what they
 /// come to.
+///
+/// **`asked` is the level the launch resolved to and `volume` the level the player is at**, and the two
+/// are two different words on purpose: a line that reads `asked 100 volume 0 mute no` is a film this
+/// app gave a level to and a player that is not at it, which is the one silence the four answers
+/// before this change could not see.
 ///
 /// **`audio-device` is the device asked for and `current-ao` the driver in use**, so one line carries
 /// both what the launch (or a cure) requested and what the player got; a property an older build
@@ -285,17 +353,20 @@ pub(super) fn the_verdict_word(verdict: Verdict) -> &'static str {
 ///
 /// **`no-track` is the launch's own fault and `no-device` is not**, which is the whole of what a run
 /// of this is read for: the first is a level this app resolved to nothing, the second is a player that
-/// was handed a level and could not open the device it wanted.
-pub(super) fn the_engine_truth(pid: u32, volume: u32, answers: &EngineAnswers) -> String {
+/// was handed a level and could not open the device it wanted — and `silent` is a player that opened
+/// one and was told not to be heard through it.
+pub(super) fn the_engine_truth(pid: u32, asked: u32, answers: &EngineAnswers) -> String {
     let said = |answer: &Option<String>| answer.clone().unwrap_or_else(|| "-".to_string());
     format!(
-        "engine truth mpv pid {pid} volume {volume} aid {} audio-device {} current-ao {} \
-         audio-out-params {} verdict {}",
+        "engine truth mpv pid {pid} asked {asked} volume {} mute {} aid {} audio-device {} \
+         current-ao {} audio-out-params {} verdict {}",
+        the_level_word(answers.volume),
+        the_flag_word(answers.mute),
         said(&answers.aid),
         said(&answers.audio_device),
         said(&answers.current_ao),
         said(&answers.audio_out_params),
-        the_verdict_word(answers.verdict()),
+        the_verdict_word(answers.verdict(asked)),
     )
 }
 
@@ -356,7 +427,7 @@ pub(super) fn watch_the_engine(pid: u32, volume: u32) {
                     std::thread::sleep(BETWEEN_ASKS);
                 }
                 answers = ask_the_engine(pid);
-                if !answers.may_answer_differently() {
+                if !answers.may_answer_differently(volume) {
                     break;
                 }
             }
@@ -365,7 +436,7 @@ pub(super) fn watch_the_engine(pid: u32, volume: u32) {
         });
 }
 
-/// The four properties, each bounded (see `mpv_ipc::get_property_within`), and the one place they are
+/// The six properties, each bounded (see `mpv_ipc::get_property_within`), and the one place they are
 /// asked: the trace reads them once to describe a launch, and the guard reads them again after each
 /// rung of its ladder and on each of the sparse watches that follow one that was heard (see
 /// `audio_guard`).
@@ -374,6 +445,10 @@ pub(super) fn watch_the_engine(pid: u32, volume: u32) {
 /// it answers an empty list rather than a driver (see `EngineAnswers::an_output_opened`).
 /// `audio-device` is read for the other half of that pair — what was asked for — and answers nothing
 /// on a build without it, which leaves the line as `-` and every verdict exactly as it was.
+///
+/// **`volume` and `mute` are the player's own and not the launch's**: mpv answers a level of its own
+/// whatever it was handed, and the pair is the only way a film that is open and told to be quiet is
+/// ever seen (see `EngineAnswers::told_to_be_quiet`).
 pub(super) fn ask_the_engine(pid: u32) -> EngineAnswers {
     EngineAnswers {
         aid: super::mpv_ipc::get_property_within(pid, "aid", AN_ANSWER_WAIT),
@@ -384,6 +459,32 @@ pub(super) fn ask_the_engine(pid: u32) -> EngineAnswers {
             "audio-out-params",
             AN_ANSWER_WAIT,
         ),
+        volume: the_number_said(super::mpv_ipc::get_property_within(
+            pid,
+            "volume",
+            AN_ANSWER_WAIT,
+        )),
+        mute: the_flag_said(super::mpv_ipc::get_property_within(
+            pid,
+            "mute",
+            AN_ANSWER_WAIT,
+        )),
+    }
+}
+
+/// The number mpv answered a property with, where it answered one: a scalar is written `100.000000`
+/// or `0`, and a build without the property answers nothing at all.
+fn the_number_said(answer: Option<String>) -> Option<f64> {
+    answer?.trim().parse().ok()
+}
+
+/// The flag mpv answered a property with, where it answered one: a boolean is written `true` or
+/// `false`, and `yes`/`no` are taken as the same two answers.
+fn the_flag_said(answer: Option<String>) -> Option<bool> {
+    match answer?.trim() {
+        "true" | "yes" => Some(true),
+        "false" | "no" => Some(false),
+        _ => None,
     }
 }
 
@@ -509,26 +610,27 @@ mod tests {
                 audio_device: None,
                 current_ao: current_ao.map(str::to_string),
                 audio_out_params: params.map(str::to_string),
+                ..Default::default()
             };
 
-        assert_eq!(answers(None, None, None).verdict(), Verdict::Unanswered);
+        assert_eq!(answers(None, None, None).verdict(40), Verdict::Unanswered);
         assert_eq!(
-            answers(Some("no"), None, None).verdict(),
+            answers(Some("no"), None, None).verdict(40),
             Verdict::NoTrack,
             "no track selected is the launch's own doing, whatever the device would have done"
         );
         assert_eq!(
-            answers(Some("1"), None, None).verdict(),
+            answers(Some("1"), None, None).verdict(40),
             Verdict::NoDevice,
             "a track picked and no output opened from it is the device, not the launch"
         );
         assert_eq!(
-            answers(Some("1"), Some("wasapi"), None).verdict(),
+            answers(Some("1"), Some("wasapi"), None).verdict(40),
             Verdict::NoDevice,
             "a driver named with nothing playing through it is not yet an output"
         );
         assert_eq!(
-            answers(Some("1"), Some("null"), Some("{")).verdict(),
+            answers(Some("1"), Some("null"), Some("{")).verdict(40),
             Verdict::NoDevice,
             "mpv's fallback to a null output makes no session either"
         );
@@ -538,8 +640,94 @@ mod tests {
                 Some("wasapi"),
                 Some(r#"{"samplerate":48000}"#)
             )
-            .verdict(),
+            .verdict(40),
             Verdict::Heard
+        );
+    }
+
+    /// **The third road, and the one no other answer could see.** A track is selected, an output is
+    /// open and its params are present — everything that has always read as sound — and the player's
+    /// own level is 0, or its own mute is on: a film that is playing and cannot be heard, which the
+    /// guard now heals rather than calls heard.
+    ///
+    /// **The level a player reports is not the level the launch asked for**, and that is why the
+    /// launch's level is read beside it: the same answers on a launch that asked for no audio at all
+    /// are a silence the setting chose (see the next test).
+    #[test]
+    fn a_player_at_nothing_or_muted_is_silent_and_never_heard() {
+        let open = |volume: Option<f64>, mute: Option<bool>| EngineAnswers {
+            aid: Some("1".to_string()),
+            audio_device: Some("auto".to_string()),
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+            volume,
+            mute,
+        };
+
+        assert_eq!(
+            open(Some(0.0), Some(false)).verdict(100),
+            Verdict::Silent,
+            "an open output at a level of nothing is a film nobody can hear"
+        );
+        assert_eq!(
+            open(Some(100.0), Some(true)).verdict(100),
+            Verdict::Silent,
+            "a mute silences a film at the very level it was asked for"
+        );
+        assert_eq!(
+            open(Some(0.0), None).verdict(100),
+            Verdict::Silent,
+            "a mute that answered nothing does not unmake a level of nothing"
+        );
+        assert_eq!(
+            open(Some(100.0), Some(false)).verdict(100),
+            Verdict::Heard,
+            "the level asked for, unmuted, is the film this whole ladder is not for"
+        );
+        assert_eq!(
+            open(None, None).verdict(100),
+            Verdict::Heard,
+            "a build that answers neither property is not a film told to be quiet: no cure is \
+             written on an unknown"
+        );
+        assert!(
+            !open(Some(0.0), Some(false)).may_answer_differently(100),
+            "a player that said where its level stands is asked no further"
+        );
+    }
+
+    /// **A launch that legitimately asked for no audio is never a silent film.** The setting said no
+    /// track, the player was begun with `--aid=no` rather than a level of nothing
+    /// (see `mpv_launched_without_audio`), and the silence is the level's own rather than a fault to
+    /// heal — so it reads as the launch's road however the player's level happens to stand.
+    #[test]
+    fn a_launch_that_asked_for_no_audio_never_reads_as_silent() {
+        let no_track = EngineAnswers {
+            aid: Some("no".to_string()),
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+            volume: Some(0.0),
+            mute: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(
+            no_track.verdict(0),
+            Verdict::NoTrack,
+            "a level of nothing is no track at all, which is the launch's own form"
+        );
+
+        // A track a later level asked back for on that same player: the output is open and the level
+        // is still at nothing, and it is still not this app's fault to heal — the launch asked for
+        // none, and the trace cannot tell this level from a hand's.
+        let asked_back = EngineAnswers {
+            aid: Some("auto".to_string()),
+            volume: Some(0.0),
+            ..no_track
+        };
+        assert_eq!(
+            asked_back.verdict(0),
+            Verdict::Heard,
+            "a launch begun without audio is never read as a film to be cured"
         );
     }
 
@@ -556,17 +744,19 @@ mod tests {
             audio_device: Some("auto".to_string()),
             current_ao: Some("null".to_string()),
             audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+            ..Default::default()
         };
 
-        assert_eq!(answers.verdict(), Verdict::NoDevice);
+        assert_eq!(answers.verdict(40), Verdict::NoDevice);
         assert!(
             !answers.an_output_opened(),
             "a null output makes no session, so nothing was heard"
         );
     }
 
-    /// And a driver that is not the fallback, with the params of what it is playing at, is a film that
-    /// was heard — the one verdict that ends the guard's ladder without touching the player.
+    /// And a driver that is not the fallback, with the params of what it is playing at and a level
+    /// above nothing in it, is a film that was heard — the one verdict that ends the guard's ladder
+    /// without touching the player.
     #[test]
     fn a_driver_on_current_ao_with_the_params_is_a_film_that_was_heard() {
         let answers = EngineAnswers {
@@ -574,9 +764,11 @@ mod tests {
             audio_device: Some("auto".to_string()),
             current_ao: Some("wasapi".to_string()),
             audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+            volume: Some(100.0),
+            mute: Some(false),
         };
 
-        assert_eq!(answers.verdict(), Verdict::Heard);
+        assert_eq!(answers.verdict(100), Verdict::Heard);
     }
 
     /// **A `current-ao` that answers nothing at all is not a device that failed.** A build too old to
@@ -592,9 +784,9 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(answers.verdict(), Verdict::Heard);
+        assert_eq!(answers.verdict(40), Verdict::Heard);
         assert!(
-            !answers.may_answer_differently(),
+            !answers.may_answer_differently(40),
             "a heard film is not asked about again"
         );
     }
@@ -648,9 +840,10 @@ mod tests {
             audio_device: Some("auto".to_string()),
             current_ao: Some("wasapi".to_string()),
             audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+            ..Default::default()
         };
         assert_eq!(
-            no_track_but_heard.verdict(),
+            no_track_but_heard.verdict(40),
             Verdict::NoTrack,
             "a track the launch never gave the player is the launch's road, sound or no sound"
         );
@@ -662,7 +855,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            no_answer_but_heard.verdict(),
+            no_answer_but_heard.verdict(40),
             Verdict::Unanswered,
             "an `aid` of `-` says nothing about the sound, so nothing may be done about it"
         );
@@ -682,21 +875,21 @@ mod tests {
         let heard = Some(r#"{"samplerate":48000}"#);
 
         assert!(
-            answers(None, None, None).may_answer_differently(),
+            answers(None, None, None).may_answer_differently(40),
             "nothing yet"
         );
         assert!(
-            answers(Some("1"), None, None).may_answer_differently(),
+            answers(Some("1"), None, None).may_answer_differently(40),
             "a track whose output has not come up yet"
         );
         assert!(
-            answers(Some("1"), Some("null"), heard).may_answer_differently(),
+            answers(Some("1"), Some("null"), heard).may_answer_differently(40),
             "a fallback the device cure may still reload out of"
         );
-        assert!(!answers(Some("no"), None, None).may_answer_differently());
-        assert!(!answers(Some("1"), Some("wasapi"), heard).may_answer_differently());
+        assert!(!answers(Some("no"), None, None).may_answer_differently(40));
+        assert!(!answers(Some("1"), Some("wasapi"), heard).may_answer_differently(40));
         assert!(
-            !answers(Some("1"), None, heard).may_answer_differently(),
+            !answers(Some("1"), None, heard).may_answer_differently(40),
             "a driver nothing can name with the params of an output beside it is heard"
         );
     }
@@ -728,7 +921,7 @@ mod tests {
         };
         assert_eq!(
             the_engine_truth(7, 0, &answers),
-            "engine truth mpv pid 7 volume 0 aid no audio-device - current-ao - \
+            "engine truth mpv pid 7 asked 0 volume - mute - aid no audio-device - current-ao - \
              audio-out-params - verdict no-track"
         );
 
@@ -740,12 +933,32 @@ mod tests {
             audio_device: Some("auto".to_string()),
             current_ao: None,
             audio_out_params: None,
+            ..Default::default()
         };
         assert_eq!(
             the_engine_truth(9, 40, &answers),
-            "engine truth mpv pid 9 volume 40 aid 1 audio-device auto current-ao - \
+            "engine truth mpv pid 9 asked 40 volume - mute - aid 1 audio-device auto current-ao - \
              audio-out-params - verdict no-device",
             "a launch that gave a level and a playlist that opened no output is the device's road"
+        );
+
+        // **And the two levels are two words, which is the whole of what makes the third road
+        // readable**: the level the launch resolved to is `asked`, and the one the player is at is
+        // `volume`, with its own mute beside it.
+        let answers = EngineAnswers {
+            aid: Some("1".to_string()),
+            audio_device: Some("auto".to_string()),
+            current_ao: Some("wasapi".to_string()),
+            audio_out_params: Some(r#"{"samplerate":48000}"#.to_string()),
+            volume: Some(0.0),
+            mute: Some(false),
+        };
+        assert_eq!(
+            the_engine_truth(11, 100, &answers),
+            "engine truth mpv pid 11 asked 100 volume 0 mute no aid 1 audio-device auto \
+             current-ao wasapi audio-out-params {\"samplerate\":48000} verdict silent",
+            "a player at nothing on a launch that asked for 100 is the film that was open and told \
+             to be quiet"
         );
     }
 

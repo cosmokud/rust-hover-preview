@@ -494,6 +494,10 @@ pub(super) fn finish(pid: u32) -> bool {
     };
 
     let _ = mpv_ipc::stop_playing(pid);
+    // **The film a guard was armed for is over, though the player stands by.** A serve is an episode
+    // of the resident, and a probe that woke after this one would write an audio property on an idle
+    // player and call it a cure; the next serve arms a ladder of its own (see `audio_guard::arm`).
+    audio_guard::a_player_ended(pid);
     resident.serving = false;
     resident.idle_since = Some(Instant::now());
     true
