@@ -58,22 +58,36 @@
 //! what stopped it. The line exists to be read where nobody can reproduce the fault, so an answer that
 //! is missing is written as missing rather than passed over.
 //!
-//! **This is a reader and never a cure.** Nothing here sets a session's volume, unmutes anything, or
-//! touches `IAudioEndpointVolume`: the mixer's own answer is the evidence, and changing what the
-//! user's mixer says would destroy the thing being collected. The one module that does write to a
-//! player is `audio_guard`, and it writes to the player rather than to the OS.
+//! **What this was built as a reader for, the run proved, and it is a fault with a cure.** Of eighteen
+//! players in one captured run, two had a session whose `ISimpleAudioVolume` was **muted** while mpv
+//! reported `volume 94 mute no` — two switches, and the player can see only its own. Both of those
+//! sessions were at `mixer 1.000` with `channels 1.000 1.000`: nothing a hand could have moved was
+//! down, the film had no sound, and the mixer showed the user no audible session for it. So a mute
+//! switch found on under a player this app launched and is guarding is **taken off** (see
+//! `look_and_cure`), and it is the only write this module makes: no master volume, no per-channel
+//! volume and no `IAudioEndpointVolume` is ever set, because a level the user set is not this app's
+//! to put back.
+//!
+//! **A slider at nothing is a hand, and the mute beside it is part of that hand.** `mixer 0.000` is
+//! somebody's deliberate setting in Windows' own mixer, and restoring it would overwrite a decision
+//! this app has no business with — so that session is written down and left exactly as it is (see
+//! `Warrant::LeaveIt`). The line this module draws is the mute switch, which a captured run found on
+//! under a player that could not see it, against the slider, which is the user's.
 //!
 //! **COM here is this thread's own apartment, and nowhere else.** The preview loop already holds an
 //! apartment for the engines that draw into it (see `pdf_preview::initialize_apartment` and the head
 //! of `run_preview_window`), and the trace's other thread reads a player's pipe and holds none — so
-//! this probe begins a thread, takes `COINIT_MULTITHREADED` at the top of it, gives it back at the
-//! end, and touches nothing of the loop's.
+//! the probe begins a thread of its own, and the guard's look takes an apartment on the probe thread
+//! it is called from (`look_and_cure`): both take `COINIT_MULTITHREADED` and give it back in the same
+//! call, and neither touches the loop's, which holds one for the engines that draw into it.
 //!
-//! **Nothing runs unless `RHP_PLAYBACK_TRACE` asks for a line** (see `playback_trace::asked`): no
-//! thread, no apartment, no COM call and no line, so a run without the variable pays a read of an
-//! atomic. And what it says is written on that thread: a walk of the machine's endpoints is a
-//! microsecond-scale call but the wait for a player's session to exist is not, and no tick may pay it
-//! (see `playback_trace`, whose own thread is the same shape).
+//! **The line is what `RHP_PLAYBACK_TRACE` asks for; the cure is not.** A traced launch begins a
+//! thread and walks the mixer once to write down what it found (see `watch_the_mixer`); a **guarded**
+//! player's session is looked at for every read the playback guard already makes — after the same
+//! engine ask, on the same probe thread, at no other time and for no other player — and that look runs
+//! whether or not the variable is set, because the trace is the recorder and this is the fix (see
+//! `audio_guard::spawn_probe_after`). A run with neither a trace nor a guarded player pays a read of an
+//! atomic and nothing else.
 
 use std::time::Duration;
 
@@ -90,7 +104,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 
-use super::playback_trace;
+use super::playback_trace::{self, Verdict};
 
 /// How long a launched player is given before the mixer is first walked.
 ///
@@ -272,7 +286,7 @@ impl State {
 /// that says nothing about its own failure reads as a machine with no session, and those are two
 /// different findings (see the module note).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Refusal {
+pub(super) enum Refusal {
     /// The thread could not take an apartment, so no COM call was ever made.
     Apartment,
     /// The device enumerator itself could not be made.
@@ -292,6 +306,124 @@ impl Refusal {
     }
 }
 
+/// Where a slider stops being a hand's and starts being this app's fault.
+///
+/// **A session muted with its slider at nothing is a setting somebody made** in the mixer's own
+/// window, and the mute beside it is part of that setting rather than a fault under a player that
+/// cannot see it. The line writes a slider to three places (see `the_mixer_word`), so a slider that
+/// would be written `0.000` is one at nothing, and it is a hand.
+const A_SLIDER_UP: f32 = 0.0005;
+
+/// What a muted session warrants, which is the whole of the rule this module writes by.
+///
+/// **A pure function of three answers** — the mixer's slider, the mixer's mute switch, and the level
+/// the launch asked for — so that what this module will and will not write can be read and tested with
+/// no mixer on the machine (see `the_warrant`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Warrant {
+    /// Nothing: the switch is off, the session would not say which way it is, or the launch asked for
+    /// no audio at all — a silence the setting chose is not a fault to heal.
+    Nothing,
+    /// The switch is on with the slider up: the fault a captured run proved, and the one write this
+    /// module makes.
+    TakeItOff,
+    /// The switch is on with the slider at nothing: a hand, written down and left (see
+    /// [`A_SLIDER_UP`]).
+    LeaveIt,
+}
+
+/// What came of one look at a session's mute switch, in the words a line is read by.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Cure {
+    /// Nothing was written, because nothing was warranted.
+    Nothing,
+    /// The mute was on and the mixer took `SetMute(false)`.
+    Unmuted,
+    /// `SetMute(false)` was refused, or the session went before it could be asked — **a failure that is
+    /// written down rather than swallowed**, since the film is still silent.
+    Refused,
+    /// The mute is a hand's, at a slider that is down: written down and left as it was.
+    TurnedDown,
+}
+
+impl Cure {
+    /// The word a read-back names a cure by, and nothing at all where nothing was warranted.
+    fn word(self) -> &'static str {
+        match self {
+            Self::Nothing => "",
+            Self::Unmuted => "cured",
+            Self::Refused => "cure-failed",
+            Self::TurnedDown => "left-alone",
+        }
+    }
+}
+
+/// What one look at a guarded player's session came to (see `look_and_cure`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum Seen {
+    /// No session for this pid on any of the machine's render endpoints.
+    Absent,
+    /// Windows would not list its sessions at all, so the question was never put to one.
+    Refused(Refusal),
+    /// The player's session, the mixer's slider and mute switch as they stood, and what that switch
+    /// warranted.
+    There {
+        mixer: Option<f32>,
+        mute: Option<bool>,
+        cure: Cure,
+    },
+}
+
+impl Seen {
+    /// **What a player's verdict comes to with the machine's own answer beside it**: the third
+    /// silence, and the reason this module is asked at every read.
+    ///
+    /// A session that is muted and still muted is `Verdict::SessionMuted` — the film every answer on
+    /// the player's pipe calls sound. A session whose mute the cure took off is `Heard`, because that
+    /// is what the film is now: the write was the whole of what was wrong with it. And a look that
+    /// said nothing about a mute — no session, a walk that refused, a switch the mixer would not read —
+    /// leaves the player's own verdict exactly as it was, which is the rule
+    /// `EngineAnswers::an_output_opened` keeps for an unknown, and for the same reason.
+    ///
+    /// **A player that is already a fault of its own keeps it**: `no-track`, `no-device` and the
+    /// player's own `silent` are the ladder's road, and a session cannot soften one of them.
+    pub(super) fn the_verdict_of(&self, engine: Verdict) -> Verdict {
+        if engine != Verdict::Heard {
+            return engine;
+        }
+
+        match self {
+            Self::There {
+                mute: Some(true),
+                cure,
+                ..
+            } if *cure != Cure::Unmuted => Verdict::SessionMuted,
+            _ => engine,
+        }
+    }
+}
+
+/// What a session's mute switch warrants, given the level the launch asked for.
+///
+/// **The launch's level is half the rule**, for the reason it is half the verdict: a launch that
+/// resolved to nothing handed its player no track at all (see `video_launch::AudioForm`), so there is
+/// no session of this app's making to have muted — and a mute on a player begun without audio is
+/// nobody's but the mixer's.
+///
+/// **A mute the mixer would not report is not a mute**, and neither is a session whose slider could
+/// not be read at all: a switch this build cannot read is not a switch to throw.
+fn the_warrant(mixer: Option<f32>, mute: Option<bool>, asked: u32) -> Warrant {
+    if super::video_launch::mpv_launched_without_audio(asked) || mute != Some(true) {
+        return Warrant::Nothing;
+    }
+
+    if mixer.is_some_and(|mixer| mixer < A_SLIDER_UP) {
+        return Warrant::LeaveIt;
+    }
+
+    Warrant::TakeItOff
+}
+
 /// The key Windows keeps an endpoint's user-visible name under.
 ///
 /// The crate binds this key only behind a feature this app has no other use for
@@ -303,93 +435,234 @@ const PKEY_DEVICE_FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
     pid: 14,
 };
 
-/// Walk every render endpoint this machine has and answer what the mixer says about one player.
+/// Every session the machine's render endpoints list, handed to `look` with the pid it belongs to and
+/// the endpoint it was listed on.
+///
+/// **One walk and two questions**: the probe line (see `walk_the_mixer`) and the guard's look (see
+/// `look_and_cure`) are the same enumeration with a different reader behind it, and it is written once
+/// so that neither can drift from the other — a session found for one is found for both, and the
+/// endpoints are walked in the same order for a line as for a write.
 ///
 /// **Every endpoint and not only the default one**, because a stream that landed on a device the user
-/// is not listening to is one of the answers this line exists to give, and a walk of the default
-/// endpoint alone could never see one. The default endpoint is read first and at that instant, so that
-/// the pair the line carries compares the session's endpoint with the device the room is listening
-/// through now rather than with a default read a moment later.
-fn walk_the_mixer(pid: u32) -> Probe {
-    let mut probe = Probe::default();
+/// is not listening to is one of the answers this module exists to give, and a walk of the default
+/// endpoint alone could never see one. `default` is filled with the default render endpoint as it
+/// stood at the top of the walk, before anything is enumerated, so that what a line says about it is
+/// the device the room was listening through at that instant.
+///
+/// `look` answers whether it has found what it came for: a `true` ends the walk where it stands, which
+/// is what a look for one player wants. The count of sessions the endpoints listed is handed back
+/// whoever they belong to, and so is what stopped the walk.
+///
+/// Safety: the caller's thread must hold an apartment, and nothing `look` keeps may outlive the call —
+/// every interface here is dropped before this returns.
+unsafe fn each_session(
+    default: &mut Option<Endpoint>,
+    look: &mut dyn FnMut(u32, &IAudioSessionControl, &IMMDevice) -> bool,
+) -> Walked {
+    let mut walked = Walked::default();
 
-    // Safety: every interface below is one this function holds and drops before it returns, on a
-    // thread whose apartment its caller took. Every call is a read: no session is set, muted, or
-    // otherwise written to.
-    unsafe {
-        let enumerator: IMMDeviceEnumerator =
-            match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) {
-                Ok(enumerator) => enumerator,
-                Err(_) => {
-                    probe.refused = Some(Refusal::Enumerator);
-                    return probe;
-                }
-            };
-
-        probe.default = enumerator
-            .GetDefaultAudioEndpoint(eRender, eConsole)
-            .map(|device| the_endpoint(&device))
-            .ok();
-
-        let endpoints = match enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) {
-            Ok(endpoints) => endpoints,
+    let enumerator: IMMDeviceEnumerator =
+        match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) {
+            Ok(enumerator) => enumerator,
             Err(_) => {
-                probe.refused = Some(Refusal::Endpoints);
-                return probe;
+                walked.refused = Some(Refusal::Enumerator);
+                return walked;
             }
         };
 
-        let count = endpoints.GetCount().unwrap_or(0);
-        for index in 0..count {
-            let Ok(device) = endpoints.Item(index) else {
-                continue;
-            };
-            let Ok(sessions) = the_sessions_of(&device) else {
-                continue;
-            };
-            let listed = sessions.GetCount().unwrap_or(0);
+    *default = enumerator
+        .GetDefaultAudioEndpoint(eRender, eConsole)
+        .map(|device| the_endpoint(&device))
+        .ok();
 
-            for at in 0..listed {
-                let Ok(control) = sessions.GetSession(at) else {
-                    continue;
-                };
-                probe.sessions += 1;
-
-                // **`GetProcessId` is the whole of the match**, and it is the second generation of
-                // the interface that answers it: a session belongs to the process that made it
-                // whatever its identifier says, and a session a process inherited from its parent
-                // carries the parent's pid as readily as the parent's image (see
-                // `the_executable_named`, which is the identifier's half of the same question).
-                //
-                // **It is read for every session and not only for the match**, because a miss counts
-                // the sessions the player's own children made (see `the_children_among`).
-                let Ok(theirs) = control.cast::<IAudioSessionControl2>() else {
-                    continue;
-                };
-                let Ok(session_pid) = theirs.GetProcessId() else {
-                    continue;
-                };
-                probe.listed.push(session_pid);
-
-                if session_pid != pid {
-                    continue;
-                }
-
-                probe.matching += 1;
-                if probe.theirs.is_none() {
-                    probe.theirs = Some(the_session(&control, &device));
-                }
-            }
+    let endpoints = match enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) {
+        Ok(endpoints) => endpoints,
+        Err(_) => {
+            walked.refused = Some(Refusal::Endpoints);
+            return walked;
         }
+    };
 
-        // **A miss is counted against the player's own tree before it is written**, and only a miss: a
-        // session that is the player's own already answers the question the count is for.
-        if probe.matching == 0 {
-            probe.children = the_children_among(&probe.listed, pid);
+    let count = endpoints.GetCount().unwrap_or(0);
+    for index in 0..count {
+        let Ok(device) = endpoints.Item(index) else {
+            continue;
+        };
+        let Ok(sessions) = the_sessions_of(&device) else {
+            continue;
+        };
+        let listed = sessions.GetCount().unwrap_or(0);
+
+        for at in 0..listed {
+            let Ok(control) = sessions.GetSession(at) else {
+                continue;
+            };
+            walked.sessions += 1;
+
+            // **`GetProcessId` is the whole of the match**, and it is the second generation of the
+            // interface that answers it: a session belongs to the process that made it whatever its
+            // identifier says, and a session a process inherited from its parent carries the parent's
+            // pid as readily as the parent's image (see `the_executable_named`, which is the
+            // identifier's half of the same question).
+            //
+            // **It is read for every session and not only for a match**, because a miss counts the
+            // sessions the player's own children made (see `the_children_among`), and because a look
+            // for a player cannot be answered by a session whose pid is not said.
+            let Ok(theirs) = control.cast::<IAudioSessionControl2>() else {
+                continue;
+            };
+            let Ok(session_pid) = theirs.GetProcessId() else {
+                continue;
+            };
+
+            if look(session_pid, &control, &device) {
+                return walked;
+            }
         }
     }
 
+    walked
+}
+
+/// What one walk of the machine's endpoints came to, whoever its sessions belong to.
+#[derive(Default)]
+struct Walked {
+    /// How many sessions the render endpoints listed between them.
+    sessions: usize,
+    /// What stopped the walk, where something did.
+    refused: Option<Refusal>,
+}
+
+/// Walk every render endpoint this machine has and answer what the mixer says about one player.
+///
+/// **Every read it makes is a read** (see `each_session`): the probe describes and never writes, and the
+/// one write in this module is the guard's, made by `look_and_cure` on a session it found for a player
+/// this app is standing behind.
+fn walk_the_mixer(pid: u32) -> Probe {
+    let mut probe = Probe::default();
+
+    // Safety: every interface the walk holds is one `each_session` makes and drops before it returns,
+    // on a thread whose apartment its caller took. Nothing here is written to a session.
+    unsafe {
+        let walked = each_session(&mut probe.default, &mut |session_pid, control, device| {
+            probe.listed.push(session_pid);
+
+            if session_pid != pid {
+                return false;
+            }
+
+            probe.matching += 1;
+            if probe.theirs.is_none() {
+                probe.theirs = Some(the_session(control, device));
+            }
+
+            // **Every session of this pid is counted and the first one's facts are the ones written**,
+            // so the walk goes on to the count rather than stopping at the first match.
+            false
+        });
+        probe.sessions = walked.sessions;
+        probe.refused = walked.refused;
+    }
+
+    // **A miss is counted against the player's own tree before it is written**, and only a miss: a
+    // session that is the player's own already answers the question the count is for.
+    if probe.matching == 0 {
+        probe.children = the_children_among(&probe.listed, pid);
+    }
+
     probe
+}
+
+/// **Look at the session Windows has for one guarded player, and take its mute off where the rule says
+/// a mute is this app's business.**
+///
+/// It is called for every read the playback guard already makes and for no other reason, so a run
+/// without a trace walks the mixer exactly as often as it reads a player — which is the whole of what
+/// the cure costs (see `audio_guard::spawn_probe_after`), and why nothing here is on a schedule of its
+/// own.
+///
+/// **The apartment is the calling thread's and lasts for this call.** The preview loop holds one of its
+/// own for the engines that draw into it, so the only thread this may be called on is a probe thread of
+/// the guard's; nothing of the walk outlives the call, and nothing here touches an interface another
+/// thread's apartment made.
+///
+/// A look that finds no session for the pid answers `Seen::Absent` rather than nothing, and one that
+/// could not be made at all answers the part of the walk that refused — because a look that said
+/// nothing would read as a film with no session, and those are two different findings.
+pub(super) fn look_and_cure(pid: u32, asked: u32) -> Seen {
+    // Safety: the apartment is taken here and given back at the end of this same call, whatever the
+    // walk found — the pattern `watch_the_mixer` keeps on its own thread, and for the same reason. A
+    // thread that already has an apartment still gives this one back, so only a refusal skips it.
+    let taken = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    if taken.is_err() {
+        return Seen::Refused(Refusal::Apartment);
+    }
+
+    let seen = unsafe { look_on_this_apartment(pid, asked) };
+
+    // Safety: this thread's apartment is the one taken five lines up, and nothing of the walk outlives
+    // the call that made it.
+    unsafe { CoUninitialize() };
+    seen
+}
+
+/// The walk and the one write, on an apartment its caller has already taken.
+///
+/// Safety: this thread must hold an apartment, and the session found is dropped with the walk.
+unsafe fn look_on_this_apartment(pid: u32, asked: u32) -> Seen {
+    let mut found = None;
+    let walked = each_session(&mut None, &mut |session_pid, control, _device| {
+        if session_pid != pid {
+            return false;
+        }
+
+        found = Some(the_cure_of(control, asked));
+        // **The first session of this pid is the one the player's sound is on**, and it is the one this
+        // module finds the player by everywhere (see `walk_the_mixer`).
+        true
+    });
+
+    match (found, walked.refused) {
+        (Some(seen), _) => seen,
+        (None, Some(why)) => Seen::Refused(why),
+        (None, None) => Seen::Absent,
+    }
+}
+
+/// One session as the cure reads it: the mixer's slider, its mute switch, and what that switch
+/// warranted — with the one write this module makes, where the rule asks for it.
+///
+/// **`SetMute(false)` and nothing else**: not `SetMasterVolume`, not `IChannelAudioVolume` and not
+/// `IAudioEndpointVolume`. The slider and the per-channel volumes are a hand's or a handover's, and the
+/// mute switch is the one a captured run found on under a player that answered `mute no` — two
+/// switches, and the film had no sound through the half the player could not see.
+///
+/// **An interface that would not be had is `Cure::Nothing`** rather than a guess: a session this build
+/// cannot read the mute of is not a session to throw a switch on, and the line says `mute -`.
+///
+/// Safety: the session must be one this thread holds, on the apartment its caller took. The write is
+/// made with no event context, which is what a write nobody waits on the mixer's answer for uses.
+unsafe fn the_cure_of(control: &IAudioSessionControl, asked: u32) -> Seen {
+    let Ok(volume) = control.cast::<ISimpleAudioVolume>() else {
+        return Seen::There {
+            mixer: None,
+            mute: None,
+            cure: Cure::Nothing,
+        };
+    };
+
+    let mixer = volume.GetMasterVolume().ok();
+    let mute = volume.GetMute().ok().map(|mute| mute.as_bool());
+    let cure = match the_warrant(mixer, mute, asked) {
+        Warrant::Nothing => Cure::Nothing,
+        Warrant::LeaveIt => Cure::TurnedDown,
+        Warrant::TakeItOff => match volume.SetMute(false, std::ptr::null()) {
+            Ok(()) => Cure::Unmuted,
+            Err(_) => Cure::Refused,
+        },
+    };
+
+    Seen::There { mixer, mute, cure }
 }
 
 /// The session manager of one endpoint, which is where its sessions are listed from.
@@ -618,6 +891,83 @@ fn the_endpoint_word(endpoint: Option<&Endpoint>) -> String {
     let id = endpoint.id.as_deref().unwrap_or("-");
 
     format!("{name} {id}")
+}
+
+/// The session's half of a read-back: the mixer's slider and mute switch for one player, and what the
+/// switch warranted where it warranted anything (see `Seen`).
+///
+/// **It is where the three silences are told apart on one line.** `verdict session-muted` with
+/// `session mixer 1.000 mute yes` is Windows silencing a player that reports itself unmuted — the fault
+/// a captured run proved, and the one the look takes off. `session mixer 0.000 mute yes left-alone` is
+/// a hand on the mixer's own slider, written down and not restored. And `verdict silent` beside
+/// `session mixer 1.000 mute no` is the player's own `volume 0` or its own `mute yes`, which is the
+/// ladder's level rung; `no-device` beside a clear session is a device that never opened. The verdict
+/// says what was found and this clause says what it was found in, so neither has to be guessed at.
+///
+/// The three words a look can fail in are words of their own: `session none` is the mixer answering and
+/// the player not in it, and `session unreadable <why>` is the machine not answering at all — a silent
+/// probe would read as the first of those, which is a finding about the player rather than about this
+/// question (see `Refusal`).
+pub(super) fn the_session_word(seen: &Seen) -> String {
+    match seen {
+        Seen::Absent => "session none".to_string(),
+        Seen::Refused(why) => format!("session unreadable {}", why.word()),
+        Seen::There { mixer, mute, cure } => {
+            let written = format!(
+                "session mixer {} mute {}",
+                the_mixer_word(*mixer),
+                playback_trace::the_flag_word(*mute),
+            );
+            let cure = cure.word();
+            if cure.is_empty() {
+                written
+            } else {
+                format!("{written} {cure}")
+            }
+        }
+    }
+}
+
+/// The line a look at a session writes of its own, where it wrote to the mixer or found a mute it
+/// deliberately did not write to — **so that a cure is never silent and a failure is never swallowed**.
+///
+/// **It is written where the read-back is not.** A read that found a mute and took it off goes back as
+/// `Heard` (see `Seen::the_verdict_of`), and a film that stays heard writes one read-back for its whole
+/// length — so a cure written only on the read-back would leave no trace at all in the log it is read
+/// from, which is exactly the line a run of this needs: the second mute switch, the one the player
+/// cannot see, being taken off.
+///
+/// **A look that found nothing writes nothing here**: the read-back's clause carries it, and a line every
+/// ten seconds about a machine whose mixer lists no session for a film is noise rather than evidence.
+///
+/// **A look that could not be made at all is a failure and is written as one**, because the cure it might
+/// have been needed for was never attempted: a thread with no apartment, an enumerator that would not be
+/// had and endpoints that would not be listed each get a line of their own, once per read, which is the
+/// rate the read-back itself keeps (see `Refusal`).
+pub(super) fn a_cure_line(pid: u32, seen: &Seen) -> Option<String> {
+    let Seen::There { mixer, mute, cure } = seen else {
+        return match seen {
+            Seen::Absent => None,
+            Seen::Refused(why) => {
+                Some(format!("session look refused pid {pid} why {}", why.word()))
+            }
+            Seen::There { .. } => None,
+        };
+    };
+
+    let mixer = the_mixer_word(*mixer);
+    match cure {
+        Cure::Nothing => None,
+        Cure::Unmuted => Some(format!("session unmuted pid {pid} mixer {mixer} was mute")),
+        Cure::Refused => Some(format!(
+            "session unmute failed pid {pid} mixer {mixer} mute {}",
+            playback_trace::the_flag_word(*mute),
+        )),
+        Cure::TurnedDown => Some(format!(
+            "session turned down pid {pid} mixer {mixer} mute {} left alone",
+            playback_trace::the_flag_word(*mute),
+        )),
+    }
 }
 
 /// The line one walk of the mixer is written as — **the pure half of this module**, and the whole of
@@ -1060,5 +1410,213 @@ mod tests {
             "session unknown pid 9504 found 1 of 3 identifier - mixer - channels refused mute - \
              on - default -"
         );
+    }
+
+    /// **The rule the cure is written by, and the three answers it turns on.** A muted session under a
+    /// launch that asked for a level is the fault a captured run proved, and it is taken off. A switch
+    /// that is already off is nothing to do — and so is one the mixer would not report, because a
+    /// switch this build cannot read is not a switch to throw.
+    #[test]
+    fn a_muted_session_under_a_launch_that_asked_for_a_level_is_taken_off() {
+        assert_eq!(
+            the_warrant(Some(1.0), Some(true), 100),
+            Warrant::TakeItOff,
+            "muted at a slider nobody touched is the second mute switch, and this app's own doing"
+        );
+        assert_eq!(
+            the_warrant(Some(0.05), Some(true), 40),
+            Warrant::TakeItOff,
+            "any slider that is up at all is the same finding"
+        );
+        assert_eq!(
+            the_warrant(None, Some(true), 100),
+            Warrant::TakeItOff,
+            "a slider that would not answer is not a slider at nothing: the mute is still the fault"
+        );
+
+        assert_eq!(
+            the_warrant(Some(1.0), Some(false), 100),
+            Warrant::Nothing,
+            "a session that is not muted has nothing to take off"
+        );
+        assert_eq!(
+            the_warrant(None, None, 100),
+            Warrant::Nothing,
+            "a mute the mixer would not report is never written to"
+        );
+    }
+
+    /// **A launch that asked for no audio is never cured**, and the level is half the rule for the
+    /// reason it is half the verdict: the player was begun with no track at all (see
+    /// `video_launch::AudioForm`), so a mute on a session it does not have is nobody's but the mixer's
+    /// — and a film the setting silenced is not a fault to heal.
+    #[test]
+    fn a_launch_that_asked_for_no_audio_never_unmutes_a_session() {
+        assert_eq!(the_warrant(Some(1.0), Some(true), 0), Warrant::Nothing);
+        assert_eq!(
+            the_warrant(Some(1.0), Some(true), 100),
+            Warrant::TakeItOff,
+            "while the same session under a launch that asked for a level is the fault itself"
+        );
+    }
+
+    /// **A hand on the mixer's own slider is written down and not restored.** The same muted session at
+    /// `mixer 0.000` is somebody's deliberate setting, and putting the slider back would overwrite a
+    /// decision this app has no business with — so the look records it and the write it makes is none.
+    #[test]
+    fn a_session_muted_with_its_slider_at_nothing_is_left_as_a_hand_left_it() {
+        assert_eq!(
+            the_warrant(Some(0.0), Some(true), 100),
+            Warrant::LeaveIt,
+            "the slider is down, so the mute is part of the same hand"
+        );
+        assert_eq!(
+            the_warrant(Some(0.0004), Some(true), 100),
+            Warrant::LeaveIt,
+            "a slider the line would write as 0.000 is a slider at nothing"
+        );
+
+        let turned_down = Seen::There {
+            mixer: Some(0.0),
+            mute: Some(true),
+            cure: Cure::TurnedDown,
+        };
+        assert_eq!(
+            the_session_word(&turned_down),
+            "session mixer 0.000 mute yes left-alone"
+        );
+        assert_eq!(
+            a_cure_line(9504, &turned_down).as_deref(),
+            Some("session turned down pid 9504 mixer 0.000 mute yes left alone"),
+            "a film this app left alone still says so, so that nobody reads the silence as this \
+             module's failure"
+        );
+    }
+
+    /// **The cure is written down, and so is the cure that failed.** A mute taken off is the line a run
+    /// of this is read from — the second switch, the one the player cannot see — and a `SetMute` the
+    /// mixer refused is written as a failure rather than swallowed, because the film is still silent
+    /// and the next read will try again.
+    #[test]
+    fn a_cure_and_a_cure_that_failed_are_each_written_down() {
+        let muted = Seen::There {
+            mixer: Some(1.0),
+            mute: Some(true),
+            cure: Cure::Unmuted,
+        };
+        assert_eq!(
+            a_cure_line(23724, &muted).as_deref(),
+            Some("session unmuted pid 23724 mixer 1.000 was mute")
+        );
+        assert_eq!(
+            the_session_word(&muted),
+            "session mixer 1.000 mute yes cured",
+            "the read-back says both what was found and what was done about it"
+        );
+
+        let refused = Seen::There {
+            mixer: Some(1.0),
+            mute: Some(true),
+            cure: Cure::Refused,
+        };
+        assert_eq!(
+            a_cure_line(23724, &refused).as_deref(),
+            Some("session unmute failed pid 23724 mixer 1.000 mute yes")
+        );
+        assert_eq!(
+            the_session_word(&refused),
+            "session mixer 1.000 mute yes cure-failed"
+        );
+
+        // And a session that needed nothing says so on the read-back and writes no line of its own,
+        // which is what keeps a healthy film's log to the one line it opened with.
+        let clear = Seen::There {
+            mixer: Some(1.0),
+            mute: Some(false),
+            cure: Cure::Nothing,
+        };
+        assert_eq!(a_cure_line(23724, &clear), None);
+        assert_eq!(the_session_word(&clear), "session mixer 1.000 mute no");
+    }
+
+    /// **An unreadable session is nothing done to it, and the line says which part of the walk
+    /// refused**: a look that found no session, and one whose walk could not be made, are two
+    /// findings that must never read as each other.
+    #[test]
+    fn a_session_that_could_not_be_looked_at_is_never_written_to() {
+        assert_eq!(the_session_word(&Seen::Absent), "session none");
+        assert_eq!(a_cure_line(23724, &Seen::Absent), None);
+
+        for (refused, word) in [
+            (Refusal::Apartment, "apartment"),
+            (Refusal::Enumerator, "enumerator"),
+            (Refusal::Endpoints, "endpoints"),
+        ] {
+            let seen = Seen::Refused(refused);
+            assert_eq!(
+                the_session_word(&seen),
+                format!("session unreadable {word}")
+            );
+            assert_eq!(
+                a_cure_line(23724, &seen),
+                Some(format!("session look refused pid 23724 why {word}")),
+                "a look that could not be made threw no switch, and says so rather than passing over"
+            );
+        }
+    }
+
+    /// **The third silence, and what it folds into a verdict.** A session still muted under a player
+    /// that says it is heard is `session-muted` — the word a log is read for — and a session whose mute
+    /// the cure took off is `heard`, because that is what the film is now. A look that said nothing
+    /// about a mute leaves the player's own verdict exactly as it was, and a fault of the player's own
+    /// is never softened by a session.
+    #[test]
+    fn a_muted_session_reads_as_session_muted_and_never_as_heard() {
+        let muted = |cure| Seen::There {
+            mixer: Some(1.0),
+            mute: Some(true),
+            cure,
+        };
+
+        assert_eq!(
+            muted(Cure::Unmuted).the_verdict_of(Verdict::Heard),
+            Verdict::Heard,
+            "a mute taken off is a film with its sound: the write was the whole of the fault"
+        );
+        for cure in [Cure::Refused, Cure::TurnedDown] {
+            assert_eq!(
+                muted(cure).the_verdict_of(Verdict::Heard),
+                Verdict::SessionMuted,
+                "{cure:?} is a film that is still silent, and no read of mpv could say so"
+            );
+        }
+
+        let clear = Seen::There {
+            mixer: Some(1.0),
+            mute: Some(false),
+            cure: Cure::Nothing,
+        };
+        assert_eq!(clear.the_verdict_of(Verdict::Heard), Verdict::Heard);
+        assert_eq!(
+            Seen::Absent.the_verdict_of(Verdict::Heard),
+            Verdict::Heard,
+            "a look that found no session cannot unmake a heard film"
+        );
+        assert_eq!(
+            Seen::Refused(Refusal::Apartment).the_verdict_of(Verdict::Heard),
+            Verdict::Heard
+        );
+        for engine in [
+            Verdict::NoTrack,
+            Verdict::NoDevice,
+            Verdict::Silent,
+            Verdict::Unanswered,
+        ] {
+            assert_eq!(
+                muted(Cure::Refused).the_verdict_of(engine),
+                engine,
+                "{engine:?} is the ladder's road and a session cannot soften it"
+            );
+        }
     }
 }
