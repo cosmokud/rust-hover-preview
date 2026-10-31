@@ -1286,8 +1286,8 @@ stream, and a `kill` line per player ended with whether a zero-timeout wait conf
 question that nothing else on the machine can: a film that plays with no sound and no entry in Windows' Volume Mixer is
 either a launch that gave the player no track at all (the launch line says so) or a player that could not open a device
 from the track it had (the player says so, and FFmpeg's player only says anything at all under this switch — its stderr
-is otherwise `-loglevel quiet` into a null stream). Unset, nothing is written, no thread is spawned and both launches
-build the command lines they always did (`playback_trace`).
+is otherwise `-loglevel quiet` into a null stream). Unset, nothing is written and no thread is spawned; a launch that
+is neither traced nor guarded builds the command line it always did (`playback_trace`).
 
 **Healing a film's sound.** The trace describes the two roads to a silent film; `audio_guard` walks back down them. It
 asks the same three questions (`aid`, `ao`, `audio-out-params`) and reads the same verdict out of them, then climbs a
@@ -1301,9 +1301,10 @@ player, and only for a pin's own film begun at a level — a hover, a sound, and
 none of its business. Every rung writes a line (`audio guard`, `audio read-back`, `audio step`), so a field log carries
 the ladder's whole evidence even where it healed silently.
 
-**mpv has a pipe, and FFmpeg's player does not**, so the second one's ladder is one rung. Every ffplay launch is piped
-on the standard error and drained — a pipe nobody empties blocks the child, so the pipe is only ever there with its
-reader — and a launch the guard stands behind is played at a level that prints whether or not the trace is on, because
+**mpv has a pipe, and FFmpeg's player does not**, so the second one's ladder is one rung. An ffplay launch is piped
+on the standard error, and drained, on exactly the launches that have a use for a line — the trace, or a guard standing
+behind the film — because a pipe nobody empties blocks the child: the pipe is only ever there with its reader. A launch
+the guard stands behind is played at a level that prints whether or not the trace is on, because
 `-loglevel quiet` would suppress the one line that can say a device never opened. A match against four strict
 fragments (`Could not open audio device`, `Failed to initialize the SDL audio`, `Failed to initialize audio`,
 `Could not initialize audio`) begins that player again once; an ordinary warning is not a signature, and a line the

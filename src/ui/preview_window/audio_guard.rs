@@ -27,9 +27,10 @@
 //!
 //! **FFmpeg's player has no pipe, so its ladder is one rung and it is the last one.** It can be told
 //! nothing, and it reports the device it could not open on the standard error this app used to throw
-//! away — so its launch always pipes that stream and always drains it (see
+//! away — so a launch it stands behind pipes that stream and drains it (see
 //! `player_logs::drain_a_players_errors`), and a line matching [`AUDIO_FAILURES`] in a launch this
-//! guard stands behind is one player begun again. Not two, and never for a line it did not see.
+//! guard stands behind is one player begun again. Not two, and never for a line it did not see. A
+//! launch it does not stand behind is given `null` and no thread, the way every ordinary launch is.
 //!
 //! **The loop never waits, and nothing here runs on it.** A player that has only just been begun has
 //! no pipe yet, and waiting for one is a wait no tick may pay (see `mpv_ipc::get_property_within`,
