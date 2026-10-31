@@ -1350,18 +1350,21 @@ audio output, so a device refused while the film was starting gets one more atte
 asked that player for asserted again with the player's own `mute` taken off beside it, which is the cure for a verdict of
 `silent` — a track selected, an output open and a player told to be quiet; and, if none of those was heard, **one** new
 player at the second and the pause the old one had, read once, and then the ladder ends. Each rung is entered on what the read-back
-said and never on a write having landed, and a player that answered nothing is asked once more and then left entirely
-alone: a verdict that never arrived is not a film without sound, so it is not a player to begin again. **So is a driver
+said and never on a write having landed, and a player that answered **nothing at all** is asked again every half second
+for the half minute it is given, and not once more the moment it says anything — heard, no track, no device or silent. **That
+retry is bounded by the player's own readiness rather than by a schedule**, because a player is not ready at a wall clock: a
+4 GB file off a slow disk can spend several seconds before mpv has created its audio client at all, and a read that gave up
+on such a player would never see the session that client owns. A player that has said nothing is not a film without sound
+and is never begun again: the one verdict the guard may not act on is the one it never got. **The same goes for a driver
 named with nothing playing through it** — `current-ao wasapi` and no `audio-out-params`, which a captured run read 548 ms
 after its launch and which is a player still opening its output as readily as a film that lost it — so that shape is read
 once more and the device cure is written on its second consecutive read; `aid=no` and a driver of `null` are answers,
 and each takes its rung on the first read. **A `session-muted` read climbs nothing**: the player's answers are the ones a
 working film gives, so a track, a device or a level asserted again would be writes to a film that is not what is muted,
-and the cure was the session's and was taken where the read was made. **Every read that moves the verdict writes a line**
-(`audio guard`, `audio read-back`, `audio step`), so a field log carries the ladder's whole evidence even where it healed
-silently: the session clause is the last word on the read-back, and a read that was `session-muted` is a verdict that
-moved, so a mute that lands after the film was heard is written where it is found. **A read that came back `heard` because
-a mute was taken off writes no read-back at all**, which is why the cure has a line of its own
+and the cure was the session's and was taken where the read was made. **Every read writes a line** (`audio guard`,
+`audio read-back`, `audio step`), so a field log carries the ladder's whole evidence even where it healed silently: the
+session clause is the last word on the read-back, and a read that was `session-muted` is a fault found rather than a film
+with its sound. **A cure that worked reads back as `heard`**, which is why it has a line of its own
 (`session unmuted pid … mixer 1.000 was mute`) — a cure nobody wrote down is one nobody can tell from a fault that never
 happened, and a cure the mixer refused is written as `session unmute failed …` rather than swallowed. **A
 ladder that ends is written once, and its last rung is written whole**: one `audio gave up` line carrying the launch's
@@ -1370,7 +1373,7 @@ verdict they come to — because a film nothing could cure is the case a log is 
 (`audio_guard::a_give_up`).
 
 **The guard stands behind both roads, and a hover's ladder is the in-place rungs and nothing else.** A pin's film is
-cured where it stands, begun again once, and watched; a hover's — on a cold launch and on the resident's serve alike —
+cured where it stands and begun again once; a hover's — on a cold launch and on the resident's serve alike —
 is cured where it stands and then left, because the resident is the one player where a stale audio decision lives
 longest (one process handed file after file, begun at whatever level the first hover had) and because a hover that
 began a player again would pay the very wait the resident exists to save. **A serve is a new episode of the same pid**,
@@ -1402,20 +1405,22 @@ there because a film that plays with **no sound at all and no session in the mix
 road and was never seen on the tag before it, so the two architectures are run against each other on one machine rather
 than argued about. Unset, the resident road is the run, byte for byte.
 
-**A film that was heard is watched, because it can lose its sound later.** `Heard` is not where a pin's guard ends: the
-player is kept under a sparse schedule of read-backs — +2 s, +4 s, +8 s, then one every ~10 s for as long as it lives —
-sampled on the probe thread and decided on the tick, so a film whose endpoint is taken away hours in still says so. **And
-every one of those reads asks the machine as well as the player**, so a session muted a minute into a film is caught,
-written and taken off — a mute that lands after the first second is exactly the shape that used to leave no trace
-anywhere at all. A hover is on no schedule at all: it is short-lived and its per-serve reads are the whole of what there
-is to know. A read
-that is heard again writes nothing at all: the line is written where the verdict moved, so a healthy film's log is the
-one line it opened with. A late failure climbs the three in-place rungs once more (`aid`, then `audio-device`, then the
-level) and may take the relaunch **at most once in a player's whole life**, not once per episode — a device that is
-genuinely gone must never be begun again for, every ten seconds, forever. The sampling ends with the player:
-`a_player_ended` clears the guard (and a hover's serve is the end of its episode, whether the player is killed or left
-standing by), a probe that wakes to a guard that is not its own reads no pipe and reports nothing, and the player a spent
-ladder began (the `REBIRTH` record, `SPENT`) is given its one read and no schedule behind it.
+**A player that answered `heard` is asked nothing further, and the sparse schedule that used to keep asking is gone.**
+`Heard` is where a guard ends: the one read `AUDIO_SETTLING` after the player comes up, the asks a player that has said
+nothing is owed, and the read-back of every rung the ladder took are the whole of what it asks a film, and a read that
+comes back heard clears it. The schedule it replaced — `+2 s`, `+4 s`, `+8 s`, then one every ~10 s for as long as the
+player lived, sampled on the probe thread and with it the late failure that climbed the in-place rungs a second time —
+sampled for a failure mode never once observed: a player heard at its first read that went silent later. Every muted film
+captured was **born** muted and caught by that first read, so the price was a poll for the length of a film for a case that
+has not happened. **Every read that remains asks the machine as well as the player**, so a session muted under a player
+whose own answers are sound is caught, written and taken off at whichever read finds it — and the asks of a player that has
+said nothing are reads like any other, which is what lets a 4 GB file that spends six seconds opening still be cured on
+the ask after it. What ends a guard besides `heard` is the ladder's own: a give-up and a session the mixer would not unmute
+are written once and the player is let go of, `a_player_ended` clears it (and a hover's serve is the end of its episode,
+whether the player is killed or left standing by), and a probe that wakes to a guard that is not its own reads no pipe and
+reports nothing. The player a spent ladder began (the `REBIRTH` record, `SPENT`) is given its one read and no rung at all,
+and the relaunch stays a player's own — **at most once in its whole life**, not once per episode — so a device that is
+genuinely gone is never begun again for.
 
 **mpv has a pipe, and FFmpeg's player does not**, so the second one's ladder is one rung. An ffplay launch is piped
 on the standard error, and drained, on exactly the launches that have a use for a line — the trace, or a guard standing
@@ -1461,7 +1466,7 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
 | `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it — the level asked for beside the level it is at — both players' own lines, and a kill's confirmation |
 | `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), who it is — both identifiers whole, the image the pid runs, and the sessions the endpoints listed beside it, each with `dead` on one whose process has ended — the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none — and the one write this app makes to the OS: a muted session's `SetMute(false)` under a guarded player at a slider that is up |
-| `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict with the machine's own answer folded into it (`session-muted` being the fourth road), the in-place rungs and the one relaunch, the level it stands for being the one this app last asked for, the hover's in-place-only road, the sparse watch of a pin's player that was heard, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
+| `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict with the machine's own answer folded into it (`session-muted` being the fourth road), the in-place rungs and the one relaunch, the asks of a player that has said nothing being bounded by its own readiness, the level it stands for being the one this app last asked for, the hover's in-place-only road, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |
 
