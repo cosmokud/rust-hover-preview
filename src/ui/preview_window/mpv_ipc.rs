@@ -297,6 +297,11 @@ pub(super) fn write_to_a_real_pipe(real: bool) {
 /// of a drag, and a release's re-assertion, are the level alone (see `HeldPlayer`). A level of
 /// nothing asks for nothing, since a film a hand has taken back down to silence wants the property
 /// it already has and not a decoder turned off behind it.
+///
+/// **It is also the level rung of the playback guard's ladder**, which is why nothing second was
+/// written for it: a player with a track and an output that reports `volume 0` or `mute yes` is
+/// brought back to the level its launch asked for by this same call, with `set_muted` beside it (see
+/// `audio_guard`).
 pub(super) fn set_volume(pid: u32, level: u32) -> bool {
     let Some(held) = held_player(pid) else {
         return false;
@@ -356,6 +361,20 @@ pub(super) fn ask_for_an_audio_device(pid: u32) -> bool {
     write(
         pid,
         r#"{"command":["set_property","audio-device","auto"],"async":true}"#.to_string() + "\n",
+    )
+}
+
+/// Take mpv's own mute off, or put it on.
+///
+/// **It is the second half of the one cure and has no other caller**: a player at a level it was asked
+/// for that still reports `mute yes` is silent for a reason the level alone cannot move, so the guard
+/// re-asserts the level through `set_volume` and takes the mute off beside it (see `audio_guard`). A
+/// mute is mpv's own property and not this app's, which is why nothing of the pin's chrome writes it:
+/// the level is the knob, and this is the flag that silences a film without the level moving at all.
+pub(super) fn set_muted(pid: u32, muted: bool) -> bool {
+    write(
+        pid,
+        format!(r#"{{"command":["set_property","mute",{muted}],"async":true}}"#) + "\n",
     )
 }
 
@@ -881,6 +900,8 @@ mod tests {
         assert!(set_paused(7, true));
         assert!(set_paused(7, false));
         assert!(set_ontop(7, false));
+        assert!(set_muted(7, false));
+        assert!(set_muted(7, true));
         assert!(cycle_subtitles(7));
         assert!(add_subtitles(
             7,
@@ -905,6 +926,14 @@ mod tests {
                 format!(
                     "{}\n",
                     r#"{"command":["set_property","ontop",false],"async":true}"#
+                ),
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","mute",false],"async":true}"#
+                ),
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","mute",true],"async":true}"#
                 ),
                 format!("{}\n", r#"{"command":["cycle","sub"],"async":true}"#),
                 format!(

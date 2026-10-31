@@ -619,10 +619,10 @@ fn start_video_playback_where(
             must_not_activate,
         )?;
 
-        // **A pin's film begun at a level is watched until it has a sound** (see `audio_guard`). The
-        // launch is the one moment a guard is armed, so a player is watched once and a player this
-        // app did not begin is nobody's to heal: a hover's film, a served hover and a film the level
-        // gave no track are all left exactly as they were.
+        // **A film begun at a level is watched until it has a sound**, on either road (see
+        // `audio_guard`). The launch is the one moment a guard is armed, so a player is watched once
+        // and a player this app did not begin is nobody's to heal: a hover's ladder is the in-place
+        // rungs and nothing else, and a film the level gave no track is left exactly as it was.
         audio_guard::arm(
             player.id(),
             path,
@@ -863,7 +863,7 @@ fn start_video_playback_where(
     // safe because it is read: the drain below begins with the player on exactly the launches that were
     // given one, which is the half a stream piped and not read would block the player on.
     let traced = playback_trace::asked();
-    let guarded = audio_guard::guarded(for_a_hover, volume);
+    let guarded = audio_guard::guarded(video_launch::Engine::Ffplay, for_a_hover, volume);
     // **The one answer both halves are taken from**, so that the stream and its reader cannot come
     // apart: a launch that keeps what a line carries is a launch whose stream is piped, and the drain
     // below is begun on the same launches and no others.
@@ -1111,7 +1111,9 @@ fn start_mpv_video_playback(
             // **A served film is asked what the resident did with its sound as well**, and the answer
             // belongs to this file rather than to the resident's own start: the level is asked per
             // file down the pipe, so a track the resident was begun without is asked back for the file
-            // that wants it (see `mpv_ipc::set_volume` and `playback_trace::watch_the_engine`).
+            // that wants it (see `mpv_ipc::set_volume` and `playback_trace::watch_the_engine`). **The
+            // guard is armed for it on the way out**, by the caller this returns to, which is what makes
+            // a serve a new episode of the same pid with a ladder of its own (see `audio_guard::arm`).
             playback_trace::watch_the_engine(pid, volume);
             return Some(served.player);
         }
@@ -1557,8 +1559,11 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
     let killed = media.video_process.as_ref().map(|process| process.id());
     if let Some(ref mut process) = media.video_process {
         // The pipe a player was told things on goes with the player: nothing is left behind for a
-        // command to reach once the process is ended (see `mpv_ipc`).
+        // command to reach once the process is ended (see `mpv_ipc`). And so does any guard standing
+        // behind it: a player that is gone is not a film to heal, and a `Silent` cure written down a
+        // pipe with nobody at the other end is a rung spent on nothing (see `audio_guard`).
         mpv_ipc::forget_pipe(process.id());
+        audio_guard::a_player_ended(process.id());
         // Kill only, never wait: a process stuck in kernel I/O would block the
         // caller (possibly the Explorer hook thread) indefinitely. The leftover
         // process checks confirm death and clear VIDEO_PID.
