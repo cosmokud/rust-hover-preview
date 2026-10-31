@@ -429,6 +429,52 @@ fn dragged_overlay(
 /// that the one lock is held, swapped on acquire and cleared on drop.
 static THE_ROOM_IS_TAKEN: AtomicBool = AtomicBool::new(false);
 
+/// **Every window of the suite's own that has been made and not put away**, with the test that made
+/// it: the count `the_room_to_itself` reads on its way in, and the whole of what stops this bug
+/// coming back.
+///
+/// Mutual exclusion alone does not answer the question this holds, and the run that produced this
+/// file is the measurement: three failures in forty-two runs with every test already holding the
+/// room, and three in thirty-two with the room added. The cause is not two tests at once, it is a
+/// window that outlives the test that made it — a real `1920` by `1080` window of the desktop's,
+/// left standing where a test dropped its handle instead of destroying it, which the picker that
+/// chooses a film's source prefers over the smaller window the test now running has just made. So
+/// the question is not "is anyone else inside" but "what did the last one leave behind", and that
+/// question is answered here rather than remembered by each test.
+///
+/// A window goes in at `a_window_of_the_suite_kept_back_in`, the one road every window of the
+/// suite's own is made by, and comes out at `put_away_a_window_of_the_suite`, which is the road
+/// every test that has one ends by. `the_room_to_itself` then asks, on acquisition, whether the
+/// previous holder put everything away — so a test that forgets fails the *next* test, with a
+/// message naming it, rather than flaking three runs later inside a stranger's assertion.
+///
+/// The handle is kept as a number because a `static` cannot hold one: `HWND` is a raw pointer and
+/// the ledger is shared by every thread of the suite.
+static THE_WINDOWS_OF_THE_SUITE: Mutex<Vec<SuiteWindow>> = Mutex::new(Vec::new());
+
+/// The test that held the room before the one that holds it now, so that the tripwire below can name
+/// the test it is accusing even when the ledger's own record is the thing that cannot be believed.
+static THE_TEST_THAT_HELD_THE_ROOM: Mutex<Option<String>> = Mutex::new(None);
+
+/// One window of the suite's own: the handle it was made with, and the name of the test that made it.
+struct SuiteWindow {
+    hwnd: isize,
+    made_by: String,
+}
+
+/// The name the suite gave the test running on this thread: libtest names each test's thread after
+/// the test, so while the suite runs in parallel this is the test's own path, which is what a failure
+/// has to name. A run with one thread answers `main` for all of them — which is why the ledger
+/// records the maker when the window is made rather than reading the holder when the room changes
+/// hands, and why the tripwire names the test as the suite named it rather than claiming more than it
+/// knows.
+fn the_test_this_thread_is_running() -> String {
+    std::thread::current().name().map_or_else(
+        || String::from("a thread of the suite's own it did not name"),
+        String::from,
+    )
+}
+
 thread_local! {
     /// Whether it is *this* thread that took it. The room is one for the whole process and is not
     /// re-entrant, so a thread already inside that asks for it a second time is a road that holds
@@ -492,6 +538,23 @@ pub(super) fn the_room_to_itself() -> RoomToItself {
     let _room = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
+
+    // **The tripwire: what the test before this one left standing.** Asked with the room in hand and
+    // before this test names itself its holder, so that what is read is the state of the suite when
+    // the last holder let go of it — and before the two records above it are touched, so that a
+    // failure here leaves the room as it found it rather than marked taken by a thread that is on its
+    // way out of the test.
+    let left_behind = the_windows_of_the_suite_left_behind();
+    assert!(
+        left_behind.is_empty(),
+        "{}",
+        a_window_of_the_suite_outlived_its_test(&left_behind, &the_test_that_held_the_room_last())
+    );
+    THE_TEST_THAT_HELD_THE_ROOM
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .replace(the_test_this_thread_is_running());
+
     THE_ROOM_IS_TAKEN.store(true, Ordering::SeqCst);
     THIS_THREAD_TOOK_THE_ROOM.with(|inside| inside.set(true));
 
@@ -526,6 +589,41 @@ fn two_window_tests_at_once() -> String {
          that takes the room from inside a test that holds it stands the suite still for ever \
          rather than failing here, so take it on the first line of the test's own body and hand the \
          guard to any helper that needs it.",
+    )
+}
+
+/// What the tripwire says: **a window of the suite's own outlived the test that made it**, which is the
+/// one thing mutual exclusion cannot answer and the cause the room was built around.
+///
+/// It names the previous holder, the count, every window still standing with the test that made it,
+/// and the one call that would have put it away — the whole of what a person needs to fix it without
+/// having to read this file.
+fn a_window_of_the_suite_outlived_its_test(left_behind: &[SuiteWindow], previous: &str) -> String {
+    let made_by: Vec<&str> = left_behind
+        .iter()
+        .map(|window| window.made_by.as_str())
+        .collect();
+    let handles: Vec<String> = left_behind
+        .iter()
+        .map(|window| format!("0x{:x}", window.hwnd))
+        .collect();
+
+    format!(
+        "a window of the suite's own outlived the test that made it: {} still standing on the \
+         desktop when this test took the room, and the test that held the room last was `{previous}`. \
+         Made by {made_by:?}, at {handles:?}. Serialising the window tests does not answer this and \
+         was measured not to: the flake is not two tests running at once, it is one of these left \
+         behind — a real 1920 by 1080 window of the desktop's where a test dropped the handle \
+         instead of destroying it — and the picker that chooses a film's source prefers the largest \
+         window it can see, so the next test's smaller window loses to a dead test's. Put the window \
+         away before the test that made it ends: \
+         `preview_window::tests::put_away_a_window_of_the_suite(hwnd)`, which destroys the window \
+         and takes it out of the count this tripwire reads. Every window test after this one fails \
+         the same way and with the same name in it, because the window is still standing: the other \
+         failures of this run that read like this one are this one leak. If the window is meant to \
+         outlive the test rather than to be put away, say so here rather than leaving it unsaid: no \
+         window is allowed to outlive its test today.",
+        left_behind.len()
     )
 }
 
@@ -583,7 +681,8 @@ pub(super) unsafe fn a_window_of_the_suite(
     style: WINDOW_STYLE,
     box_: ScreenRegion,
 ) -> HWND {
-    // SAFETY: the class is one this process registered, and the window is the caller's to destroy.
+    // SAFETY: the class is one this process registered, and the window is the caller's to put away
+    // with `put_away_a_window_of_the_suite`.
     unsafe {
         a_window_of_the_suite_of(
             GetModuleHandleW(None)
@@ -625,7 +724,8 @@ pub(super) unsafe fn a_window_of_the_suite_kept_back(
     style: WINDOW_STYLE,
     box_: ScreenRegion,
 ) -> HWND {
-    // SAFETY: the class is one this process registered, and the window is the caller's to destroy.
+    // SAFETY: the class is one this process registered, and the window is the caller's to put away
+    // with `put_away_a_window_of_the_suite`.
     unsafe {
         a_window_of_the_suite_kept_back_in(
             GetModuleHandleW(None)
@@ -647,6 +747,11 @@ pub(super) unsafe fn a_window_of_the_suite_kept_back(
 /// to the style because every window of the suite's own is a window of the desktop's rather than a
 /// child of another — a child cannot activate, and a child of a window here is a window a test makes
 /// itself, with `WS_CHILD` named where it does.
+///
+/// **The caller puts it away**, and with `put_away_a_window_of_the_suite` rather than a
+/// `DestroyWindow` of its own: the window goes into the ledger the room's tripwire reads as it is
+/// made, and only that road takes it out again. A window of this road left standing is a window of
+/// the desktop's handed to the next test to enumerate (see `THE_WINDOWS_OF_THE_SUITE`).
 pub(super) unsafe fn a_window_of_the_suite_kept_back_in(
     hinstance: HINSTANCE,
     extra: WINDOW_EX_STYLE,
@@ -689,8 +794,85 @@ pub(super) unsafe fn a_window_of_the_suite_kept_back_in(
     .expect("a window of the suite's own");
     // SAFETY: the window is this call's own, and the alpha is what makes it drawn as nothing.
     unsafe { keep_a_window_of_the_suite_unseen(hwnd) };
+    // Into the ledger the tripwire reads: from here this window is one the test that made it owes
+    // the test after it, and nothing but `put_away_a_window_of_the_suite` takes it back out. Written
+    // under the room, which this call has already asserted, so the ledger is one test's at a time.
+    THE_WINDOWS_OF_THE_SUITE
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .push(SuiteWindow {
+            hwnd: hwnd.0 as isize,
+            made_by: the_test_this_thread_is_running(),
+        });
 
     hwnd
+}
+
+/// **Put a window of the suite's own away**, and take it out of the ledger the tripwire reads.
+///
+/// This is the road every test that stands a window of the suite's own ends by, and the reason it is
+/// one road rather than a `DestroyWindow` at each end is the bug it exists for: dropping the handle
+/// leaves the window on the desktop, the picker that chooses a film's source prefers the largest
+/// window it can see, and the test that fails is whichever one comes next with a smaller window of its
+/// own. A helper that says what is owed is what a test can be held to; `DestroyWindow` says nothing
+/// about a window that was never asked for.
+///
+/// It is deliberately not tolerant of a window the ledger does not know: that would be a window of
+/// another kind being put away down this road, and the ledger would grow by one for a window that was
+/// never counted — so the panic below is the other half of the tripwire, and it is what catches a
+/// put-away that has drifted from its make.
+///
+/// # Panics
+///
+/// If the window is not one the suite is holding — put away twice, or never made by a road of the
+/// suite's own.
+pub(super) unsafe fn put_away_a_window_of_the_suite(hwnd: HWND) {
+    let held = THE_WINDOWS_OF_THE_SUITE
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .iter()
+        .position(|window| window.hwnd == hwnd.0 as isize);
+    assert!(
+        held.is_some(),
+        "a window was put away down the road the suite's own windows are put away down, and the \
+         ledger of the windows of the suite's own has no record of it: {:?} was either never made by \
+         `a_window_of_the_suite`, `a_window_of_the_suite_of` or `a_window_of_the_suite_kept_back` — \
+         in which case it is another window's to destroy — or it has already been put away, and this \
+         is the second time. Either way the count the tripwire reads would be wrong from here on.",
+        hwnd
+    );
+    // SAFETY: the window is one of the suite's own, still standing, and this is the call that takes it
+    // off the desktop.
+    unsafe { DestroyWindow(hwnd) }.expect("a window of the suite's own goes");
+    // Taken out after the destroy and not before: a destroy that fails has left the window standing,
+    // and the ledger is the only thing that says so to the next test.
+    THE_WINDOWS_OF_THE_SUITE
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .retain(|window| window.hwnd != hwnd.0 as isize);
+}
+
+/// Every window of the suite's own the ledger is still holding: what the test before this one did not
+/// put away.
+fn the_windows_of_the_suite_left_behind() -> Vec<SuiteWindow> {
+    THE_WINDOWS_OF_THE_SUITE
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .iter()
+        .map(|window| SuiteWindow {
+            hwnd: window.hwnd,
+            made_by: window.made_by.clone(),
+        })
+        .collect()
+}
+
+/// The test that held the room when it was last taken, for the tripwire's message.
+fn the_test_that_held_the_room_last() -> String {
+    THE_TEST_THAT_HELD_THE_ROOM
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .clone()
+        .unwrap_or_else(|| String::from("no test before this one"))
 }
 
 /// Put the bits and the alpha on a window that is on the desktop and not of the user's: the layered
@@ -731,7 +913,7 @@ pub(super) unsafe fn show_a_window_of_the_suite(hwnd: HWND) {
 fn a_window_of_the_suite_is_on_the_desktop_and_drawn_as_nothing() {
     let _room = the_room_to_itself();
     let box_ = (40, 40, 360, 220);
-    // SAFETY: a window of this test's own, destroyed below.
+    // SAFETY: a window of this test's own, put away below.
     let hwnd =
         unsafe { a_window_of_the_suite(WINDOW_EX_STYLE::default(), w!("STATIC"), WS_POPUP, box_) };
 
@@ -775,8 +957,9 @@ fn a_window_of_the_suite_is_on_the_desktop_and_drawn_as_nothing() {
         "and showing it took nothing: the user's own window is still the one with the keyboard"
     );
 
-    // SAFETY: the window is this test's own.
-    unsafe { DestroyWindow(hwnd) }.expect("the window of the suite's own goes");
+    // SAFETY: the window is this test's own, and this is the road a window of the suite's own is put
+    // away down: it is destroyed, and the count the tripwire reads is one lower for it.
+    unsafe { put_away_a_window_of_the_suite(hwnd) };
 }
 
 mod audio_bands;

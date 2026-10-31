@@ -8,9 +8,9 @@
 use super::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WINDOW_EX_STYLE, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    IsWindowVisible, GWL_EXSTYLE, GWL_STYLE, WINDOW_EX_STYLE, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MINIMIZEBOX, WS_POPUP,
+    WS_SYSMENU,
 };
 
 const NOWHERE: i32 = -32000;
@@ -284,7 +284,7 @@ fn the_hover_host_follows_the_box_and_answers_for_the_players_window() {
         "the first frame reveals the host"
     );
 
-    unsafe { DestroyWindow(source) }.expect("the source goes");
+    unsafe { put_away_a_window_of_the_suite(source) };
     assert!(
         !pin_film_host::the_players_window_is_up(pid),
         "and a player whose window is gone is a window that is not up"
@@ -305,7 +305,7 @@ fn the_loops_hover_box_reveals_the_host_at_the_hovers_own_size() {
     let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 1, 1)) }
         .expect("the hover's host");
     hover_film_host::note_hover_film_host_player(pid, &path);
-    let _source = unsafe { a_source_of_the_host(pid) };
+    let source = unsafe { a_source_of_the_host(pid) };
 
     unsafe {
         hover_film_host::reveal_the_hover_film_host(
@@ -328,6 +328,8 @@ fn the_loops_hover_box_reveals_the_host_at_the_hovers_own_size() {
         unsafe { IsWindowVisible(host) }.as_bool(),
         "the host is up once the player is drawing"
     );
+
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// A hosted hover's visible surface is the hover's own host, and a pin key over it takes that box up:
@@ -348,7 +350,7 @@ fn a_visible_hover_host_is_the_rect_a_pin_takes_up() {
     }
     .expect("the hover's host");
     hover_film_host::note_hover_film_host_player(pid, &path);
-    let _source = unsafe { a_source_of_the_host(pid) };
+    let source = unsafe { a_source_of_the_host(pid) };
     VIDEO_PID.store(pid, Ordering::SeqCst);
     VIDEO_HWND.store(0, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -387,6 +389,8 @@ fn a_visible_hover_host_is_the_rect_a_pin_takes_up() {
         }
         _ => panic!("the pin key takes the hover's box up rather than finding nothing"),
     }
+
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// Teardown is owner-aware: ending another player leaves the hover's host standing, and only the
@@ -502,7 +506,7 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
     // `keep_a_window_of_the_suite_unseen`).
     unsafe { keep_a_window_of_the_suite_unseen(host) };
     hover_film_host::note_hover_film_host_player(pid, &path);
-    let _source = unsafe { a_source_of_the_host(pid) };
+    let source = unsafe { a_source_of_the_host(pid) };
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         let mut sound = video_media();
         sound.media_type = MediaType::Audio;
@@ -512,6 +516,8 @@ fn an_ffplay_video_hover_is_kept_in_a_host_and_an_audio_hover_is_not() {
         hover_film_host::the_hover_film_to_adopt(&path).is_none(),
         "an audio hover is never taken up into a film's pin"
     );
+
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// A hosted hover's FFmpeg launch is the same one a hosted pin gets: the composed renderer, whose

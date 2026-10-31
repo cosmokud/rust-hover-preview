@@ -424,7 +424,7 @@ fn an_erase_is_clipped_out_of_a_childs_box_where_the_window_asks_it_to_be() {
         // SAFETY: the two windows are this test's own, and the child goes with its parent.
         unsafe {
             let _ = DestroyWindow(child);
-            let _ = DestroyWindow(parent);
+            put_away_a_window_of_the_suite(parent);
         }
     }
 }
@@ -689,6 +689,9 @@ impl Drop for HostedHover {
             unsafe { hover_film_host::take_down_the_hover_film_host() };
         }
         forget_video_loop(self.pid);
+        // The source this hover stood is the suite's own, and the stand is what made it: put away here,
+        // so that a test that keeps the guard to the end of its body owes nothing for it.
+        unsafe { put_away_a_window_of_the_suite(self.source) };
     }
 }
 /// An FFmpeg hover that was already in the app's host is taken up the same way mpv's is: the same
@@ -1142,7 +1145,7 @@ fn the_frozen_hover_is_retired_only_once_the_pin_has_the_frame() {
     let drawn = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(drawn);
     let host = pin_film_host::film_host().expect("the film's host");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     assert!(
         matches!(
             unsafe { pin_film_host::settle_pin_handover() },
@@ -1194,6 +1197,7 @@ fn the_frozen_hover_is_retired_only_once_the_pin_has_the_frame() {
     mpv_ipc::clear_reads();
     clear_restart_count();
     drop(film);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// **A film the user had held stays held after the handover.** The player is begun paused only because
@@ -1215,7 +1219,7 @@ fn a_film_the_user_held_stays_held_at_the_handover() {
     let drawn = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(drawn);
     let host = pin_film_host::film_host().expect("the film's host");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     the_hosted_player_has_the_frame(drawn, "0.000000");
 
     assert!(
@@ -1250,6 +1254,7 @@ fn a_film_the_user_held_stays_held_at_the_handover() {
     mpv_ipc::clear_reads();
     clear_restart_count();
     drop(film);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// A pin that goes away down another road — closed, or collapsed — takes the hover it froze with it:
@@ -1332,7 +1337,7 @@ fn a_host_with_no_film_in_it_is_not_on_screen() {
     );
 
     unsafe {
-        let _ = DestroyWindow(child);
+        put_away_a_window_of_the_suite(child);
     };
 }
 
@@ -1415,7 +1420,7 @@ fn the_topmost_road_neither_moves_nor_raises_the_host() {
     );
 
     unsafe {
-        let _ = DestroyWindow(child);
+        put_away_a_window_of_the_suite(child);
     };
 }
 
@@ -1444,7 +1449,7 @@ fn the_film_is_drawing_when_the_players_own_window_is_the_source() {
     );
 
     unsafe {
-        let _ = DestroyWindow(source);
+        put_away_a_window_of_the_suite(source);
     };
 
     assert!(
@@ -1488,7 +1493,7 @@ fn a_stopped_pinned_player_leaves_no_empty_host_over_the_band() {
     );
 
     unsafe {
-        let _ = DestroyWindow(child);
+        put_away_a_window_of_the_suite(child);
     };
 }
 
@@ -1504,7 +1509,7 @@ fn a_swap_from_a_hosted_film_to_a_picture_takes_the_host_off_the_band() {
     film.drawn_in_the_host(drawn);
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     unsafe {
         let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
     }
@@ -1536,6 +1541,7 @@ fn a_swap_from_a_hosted_film_to_a_picture_takes_the_host_off_the_band() {
         "the host the film was drawn in goes off the band with the film, rather than standing as \
          a black rectangle over the picture that replaces it"
     );
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// A retired player is ended when its replacement has arrived, and a hosted replacement arrives
@@ -1556,7 +1562,7 @@ fn a_hosted_replacement_ends_the_retirement_it_took_over_from() {
     film.drawn_in_the_host(drawn);
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
 
     // The replacement is this test's own process, recorded under the image it runs: alive as far
     // as the check is concerned, which is what makes its *arrival* the only thing that can end the
@@ -1593,6 +1599,7 @@ fn a_hosted_replacement_ends_the_retirement_it_took_over_from() {
         *held = previous_retirement;
     }
     note_player_process(previous_pid, previous_image);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// A swap onto a hosted film is answered by the picture changing hands, and not by the player's
@@ -1612,7 +1619,7 @@ fn a_hosted_swaps_wait_is_answered_by_the_picture_changing_hands() {
     // The film the pin is showing, registered in the host: the picture the step's box is cropped to
     // and the one the incoming film has to take over before the box may change (see
     // `pin_film_thumbnail::note_the_source`).
-    let _outgoing = unsafe { a_source_of_the_host(host) };
+    let outgoing = unsafe { a_source_of_the_host(host) };
 
     let mut media = create_loading_media(320, 240);
     media.media_type = MediaType::Video;
@@ -1663,8 +1670,9 @@ fn a_hosted_swaps_wait_is_answered_by_the_picture_changing_hands() {
     );
 
     unsafe {
-        let _ = DestroyWindow(next_source);
+        put_away_a_window_of_the_suite(next_source);
     };
+    unsafe { put_away_a_window_of_the_suite(outgoing) };
 }
 /// **On the thumbnail road the pin's film is a window of the desktop's and the host only shows it**:
 /// the launch names no window of this app's, and the command line it is given carries the box the
@@ -1871,7 +1879,7 @@ fn the_chrome_strips_outlive_the_film_host() {
     let host = pin_film_host::film_host().expect("the film's host");
     let caption = pin_chrome_strips::caption_strip().expect("the strips are made with the window");
     let transport = pin_chrome_strips::transport_strip().expect("both of them");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     unsafe { show_pinned_window(film.pin_hwnd) };
     assert!(
         unsafe { IsWindowVisible(caption) }.as_bool()
@@ -1891,6 +1899,7 @@ fn the_chrome_strips_outlive_the_film_host() {
             && unsafe { IsWindowVisible(transport) }.as_bool(),
         "and the unpark is the picture back under the same chrome"
     );
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// The strips follow the chrome's own state, apart: the caption comes and goes with
@@ -1905,7 +1914,7 @@ fn the_chrome_strips_of_a_hosted_film_carry_the_chrome_state() {
     let host = pin_film_host::film_host().expect("the film's host");
     let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
     let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     unsafe { show_pinned_window(film.pin_hwnd) };
     assert!(
         unsafe { IsWindowVisible(caption) }.as_bool()
@@ -1944,6 +1953,7 @@ fn the_chrome_strips_of_a_hosted_film_carry_the_chrome_state() {
             && unsafe { IsWindowVisible(transport) }.as_bool(),
         "and what the chrome asks for again, the strips carry again"
     );
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// The volume popup is over a hosted film's picture the way the chrome is: the panel drawn into
@@ -2339,7 +2349,7 @@ fn the_chrome_waits_for_the_hosted_films_frame_not_its_window() {
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
     // The window the player has made, with its video output not configured for a frame yet.
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     with_pin(|pin| {
         pin.chrome = PinChrome::hidden();
         pin.transport_bar = true;
@@ -2395,6 +2405,7 @@ fn the_chrome_waits_for_the_hosted_films_frame_not_its_window() {
     mpv_ipc::clear_reads();
     mpv_ipc::clear_noted();
     drop(film);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// **An arm that is over is not an arm**: a pin whose own window is on the screen is a handover
@@ -2582,7 +2593,7 @@ fn a_window_that_is_not_the_source_is_not_a_film_drawing() {
     );
 
     unsafe {
-        let _ = DestroyWindow(unmade);
+        put_away_a_window_of_the_suite(unmade);
     };
 }
 
@@ -2655,9 +2666,10 @@ impl StandingHover {
 impl Drop for StandingHover {
     fn drop(&mut self) {
         PREVIEW_HWND.store(self.previous, Ordering::SeqCst);
-        unsafe {
-            let _ = DestroyWindow(self.hwnd);
-        }
+        // A window of the suite's own, put away down the road that also takes it out of the count the
+        // room's tripwire reads: a hover left standing is a window of the desktop's in the next test's
+        // way.
+        unsafe { put_away_a_window_of_the_suite(self.hwnd) };
     }
 }
 
@@ -2729,7 +2741,7 @@ fn the_handover_shows_the_pin_over_the_drawn_film_and_takes_the_hover_down() {
     let drawn = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(drawn);
     let host = pin_film_host::film_host().expect("the film's host");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
 
     // And the player's own word that the frame it is standing on is the one the hover froze on: a
     // window under the host is not a picture, and the swap waits for both (see
@@ -2803,6 +2815,7 @@ fn the_handover_shows_the_pin_over_the_drawn_film_and_takes_the_hover_down() {
     mpv_ipc::clear_noted();
     mpv_ipc::clear_reads();
     drop(film);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// **A window under the host is not a picture**, and the swap waits for the player's own word that
@@ -2823,7 +2836,7 @@ fn a_window_alone_is_not_a_handover() {
     let drawn = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(drawn);
     let host = pin_film_host::film_host().expect("the film's host");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
 
     // A player that has said nothing: a window with a box, and no frame this app can prove.
     mpv_ipc::remember_pipe(drawn, "the-hosted-players-pipe", false);
@@ -2878,6 +2891,7 @@ fn a_window_alone_is_not_a_handover() {
     mpv_ipc::clear_noted();
     mpv_ipc::clear_reads();
     drop(film);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// No handover before the first frame: the pin stays down, the hover stays up, and the chrome
@@ -2958,7 +2972,7 @@ fn a_step_handover_starts_the_new_film_with_the_chrome_hidden() {
     let drawn = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(drawn);
     let host = pin_film_host::film_host().expect("the film's host");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     the_hosted_player_has_the_frame(drawn, "0.000000");
 
     assert!(
@@ -2984,6 +2998,7 @@ fn a_step_handover_starts_the_new_film_with_the_chrome_hidden() {
     mpv_ipc::clear_noted();
     mpv_ipc::clear_reads();
     drop(film);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// A film that never draws hands the pin back: the replacement is dead, so the wait is over and
@@ -3417,8 +3432,10 @@ fn a_step_begins_the_next_mpv_film_into_the_pins_host() {
 ///
 /// The source is a window of this process's own and the player answers the size it is placed at, so
 /// the adoption registers it rather than leaving it waiting for a shape (see
-/// `pin_film_thumbnail::place_the_source`). Answers the pin's film host.
-unsafe fn a_pin_showing_a_registered_film(film: &StandingFilm) -> HWND {
+/// `pin_film_thumbnail::place_the_source`). Answers the pin's film host and the source window it is
+/// drawing, which the caller puts away at the end of its body: the source is a window of the suite's
+/// own, and the picture has to stand for every assertion that reads it.
+unsafe fn a_pin_showing_a_registered_film(film: &StandingFilm) -> (HWND, HWND) {
     let pid = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(pid);
     unsafe { show_pinned_window(film.pin_hwnd) };
@@ -3434,7 +3451,7 @@ unsafe fn a_pin_showing_a_registered_film(film: &StandingFilm) -> HWND {
         pin_film_host::the_host_is_drawing(),
         "the film is the host's picture before the step"
     );
-    host
+    (host, source)
 }
 
 /// A step of the pin's own walk onto another film, through the road the caption's **Next** takes
@@ -3519,7 +3536,7 @@ fn a_step_leaves_the_pins_band_to_the_outgoing_picture_until_the_next_is_adopted
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
-    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let (host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
 
     let swap = a_step_onto_the_next_film(&film);
@@ -3550,6 +3567,7 @@ fn a_step_leaves_the_pins_band_to_the_outgoing_picture_until_the_next_is_adopted
         Some(host),
         "and the band was read over the host the outgoing film is drawn in"
     );
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **A click's swap keeps the picture on the band exactly as a caption's does.** The two roads differ
@@ -3569,7 +3587,7 @@ fn a_click_road_swap_keeps_the_picture_standing_until_the_next_film_can_draw() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
-    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let (host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
 
     // **The player the picture belongs to is not the one the host records as its own**, which is the
@@ -3622,6 +3640,7 @@ fn a_click_road_swap_keeps_the_picture_standing_until_the_next_film_can_draw() {
         Some(host),
         "and the band was read over the host that picture is drawn in"
     );
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **A second press on the file the pin is already on its way to is dropped, not asked for again.**
@@ -3699,7 +3718,7 @@ fn a_step_holds_the_pins_band_until_the_new_source_is_adopted() {
         config.pin_always_on_top = false;
     }
     let film = StandingFilm::new();
-    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let (host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
     assert!(
         !unsafe { window_holds_the_topmost_band(host) },
@@ -3741,13 +3760,14 @@ fn a_step_holds_the_pins_band_until_the_new_source_is_adopted() {
     );
 
     unsafe {
-        let _ = DestroyWindow(next_source);
+        put_away_a_window_of_the_suite(next_source);
     };
     if let Ok(mut config) = CONFIG.lock() {
         if let Some(always_on_top) = always_on_top {
             config.pin_always_on_top = always_on_top;
         }
     }
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **A pin taken down in the middle of a step gives the band back before its host goes**, so a hold
@@ -3760,7 +3780,7 @@ fn a_pin_taken_down_in_a_step_clears_the_band_it_held() {
         config.pin_always_on_top = false;
     }
     let film = StandingFilm::new();
-    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let (host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
 
     let swap = a_step_onto_the_next_film(&film);
@@ -3791,6 +3811,7 @@ fn a_pin_taken_down_in_a_step_clears_the_band_it_held() {
             config.pin_always_on_top = always_on_top;
         }
     }
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **The film a step leaves behind is held where it stands**: mpv is told to pause the player the
@@ -3800,7 +3821,7 @@ fn a_pin_taken_down_in_a_step_clears_the_band_it_held() {
 fn a_step_pauses_the_outgoing_mpv_player_it_keeps() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
-    let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let (_host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
     mpv_ipc::clear_noted();
 
@@ -3822,6 +3843,7 @@ fn a_step_pauses_the_outgoing_mpv_player_it_keeps() {
 
     mpv_ipc::forget_pipe(VIDEO_PID.load(Ordering::SeqCst));
     mpv_ipc::clear_noted();
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **A pin that has been stepped and is closed leaves exactly what a pin that was never stepped
@@ -3841,7 +3863,7 @@ fn a_pin_that_ends_after_a_step_leaves_what_a_pin_that_never_stepped_leaves() {
     // the kills still owed, and whether the app still holds the player the step kept.
     fn what_a_close_leaves(step: bool) -> (Option<u32>, Vec<u32>, bool) {
         let film = StandingFilm::new();
-        let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+        let (_host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
         let player = unsafe { GetCurrentProcessId() };
 
         if step {
@@ -3873,6 +3895,7 @@ fn a_pin_that_ends_after_a_step_leaves_what_a_pin_that_never_stepped_leaves() {
             engine_processes::holds_a_player(player),
         );
         drop(film);
+        unsafe { put_away_a_window_of_the_suite(source) };
         left
     }
 
@@ -3903,7 +3926,7 @@ fn a_pin_that_ends_during_a_take_ups_handover_leaves_what_a_pin_that_never_waite
     // and the hover it froze where one was held.
     fn what_a_close_leaves(waited: bool) -> (bool, Option<(u32, f64)>) {
         let film = StandingFilm::new();
-        let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+        let (_host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
 
         if waited {
             // The state the take-up leaves behind: **the pin's own window is down**, because the wait
@@ -3930,6 +3953,7 @@ fn a_pin_that_ends_during_a_take_ups_handover_leaves_what_a_pin_that_never_waite
             pin_film_host::held_hover_for_a_test(),
         );
         drop(film);
+        unsafe { put_away_a_window_of_the_suite(source) };
         left
     }
 
@@ -3973,7 +3997,7 @@ fn a_pin_that_ends_takes_its_ffplay_film_host_with_it() {
     assert!(pin_film_host::film_host().is_none());
     assert!(pin_film_host::hosted_player_pid().is_none());
 
-    unsafe { DestroyWindow(source) }.expect("the source's window goes");
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// A hosted player's window is a source and not a window of the desktop's to publish: the top-level
@@ -4009,7 +4033,7 @@ fn the_top_level_roads_leave_a_hosted_ffplay_player_alone() {
     assert_eq!(unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) }, ex);
     assert_eq!(VIDEO_HWND.load(Ordering::SeqCst), 0);
 
-    unsafe { DestroyWindow(source) }.expect("the source's window goes");
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// FFmpeg's player has no pipe to say its video output is configured, so its adopted source is the
@@ -4023,7 +4047,7 @@ fn a_hosted_ffplay_films_frame_is_its_source_and_the_chrome_comes_back() {
     unsafe { show_pinned_window(film.pin_hwnd) };
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     let host = pin_film_host::film_host().expect("the film's host");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     with_pin(|pin| {
         pin.chrome = PinChrome::hidden();
         pin.transport_bar = true;
@@ -4058,6 +4082,7 @@ fn a_hosted_ffplay_films_frame_is_its_source_and_the_chrome_comes_back() {
 
     stand_window_at_point_in(None);
     drop(film);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// A `Hide` can already be in the channel when the pin key takes the window up — a hover's
@@ -4072,7 +4097,7 @@ fn a_late_hide_leaves_the_pins_window_host_and_media_alone() {
     let pid = unsafe { GetCurrentProcessId() };
     film.drawn_in_the_host(pid);
     let host = pin_film_host::film_host().expect("the film's host");
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
     let hover = unsafe { a_hover_window_of_the_tests_own() };
     let mut path = Some(PathBuf::from("a-film.mkv"));
@@ -4119,6 +4144,7 @@ fn a_late_hide_leaves_the_pins_window_host_and_media_alone() {
         let _ = DestroyWindow(hover);
     }
     drop(film);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// With the pin drawn in the preview's own window nothing owns the window the hide takes down, so
@@ -4188,7 +4214,7 @@ fn a_pinned_hosted_film_is_revealed_without_a_hover_path() {
     film.drawn_in_the_host(pid);
     let host = pin_film_host::film_host().expect("the film's host");
     unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
 
     assert!(
         !unsafe { IsWindowVisible(host) }.as_bool(),
@@ -4203,6 +4229,7 @@ fn a_pinned_hosted_film_is_revealed_without_a_hover_path() {
     );
 
     drop(film);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 /// The same for a film FFmpeg's player draws: the pin stands in its own window, the adopted child
@@ -4216,7 +4243,7 @@ fn a_pinned_ffplay_film_is_revealed_without_a_hover_path() {
     film.drawn_in_the_host(pid);
     let host = pin_film_host::film_host().expect("the film's host");
     unsafe { pin_film_host::set_the_pin_film_host_visible(false) };
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     let path: Option<PathBuf> = None;
 
     if pin_film_host::the_video_window_is_owed_the_front(path.as_deref()) {
@@ -4237,6 +4264,7 @@ fn a_pinned_ffplay_film_is_revealed_without_a_hover_path() {
     );
 
     drop(film);
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 /// **A pin's mpv launch is asked not to take the foreground, exactly as a hover's is**: the same
 /// `--focus-on*` switch where this build parses one, and the same eager style handed to the monitor
@@ -4400,7 +4428,7 @@ fn a_pin_put_away_in_the_taskbar_leaves_its_film_standing(ffplay: bool) {
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the film's host");
     film.drawn_in_the_host(unsafe { GetCurrentProcessId() });
-    let _child = unsafe { a_source_of_the_host(host) };
+    let child = unsafe { a_source_of_the_host(host) };
     unsafe {
         let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
     }
@@ -4421,6 +4449,8 @@ fn a_pin_put_away_in_the_taskbar_leaves_its_film_standing(ffplay: bool) {
         unsafe { IsWindowVisible(host) }.as_bool(),
         "and the film is left standing for the still the Shell shows of it"
     );
+
+    unsafe { put_away_a_window_of_the_suite(child) };
 }
 
 #[test]
@@ -4505,6 +4535,7 @@ fn a_film_host_brought_back_is_the_pin_and_its_film_coming_back() {
         "and the source the Shell draws through the host is up again: a restore that showed the host \
          alone left the band black"
     );
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **The Shell's own minimize of a film host's button is the pin going away into the taskbar**, and it
@@ -5610,8 +5641,8 @@ fn an_owned_pin_and_its_film_stand_in_one_band() {
     );
 
     unsafe {
-        let _ = DestroyWindow(cover);
-        let _ = DestroyWindow(child);
+        put_away_a_window_of_the_suite(cover);
+        put_away_a_window_of_the_suite(child);
     };
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = always_on_top;
@@ -5776,7 +5807,7 @@ fn a_hover_drawn_through_a_thumbnail_is_taken_up_without_a_player_or_a_placement
         "and no registration either"
     );
 
-    let _ = unsafe { DestroyWindow(source) };
+    unsafe { put_away_a_window_of_the_suite(source) };
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
 }
@@ -5805,7 +5836,7 @@ fn a_hover_drawn_through_a_thumbnail_that_is_never_pinned_leaves_no_source() {
         "and the registration its host was drawn with"
     );
 
-    let _ = unsafe { DestroyWindow(source) };
+    unsafe { put_away_a_window_of_the_suite(source) };
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
 }
@@ -5921,7 +5952,7 @@ fn a_whole_gesture_places_a_source_once(film: StandingFilm, route: VideoRoute) {
         "and leaves no source behind it"
     );
 
-    let _ = unsafe { DestroyWindow(source) };
+    unsafe { put_away_a_window_of_the_suite(source) };
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
 }
@@ -5953,7 +5984,7 @@ fn a_source_that_replaced_itself_is_adopted_once_and_takes_the_picture_when_it_i
 
     // The player's window goes and another takes its place, under the same pid: the pass that
     // watches the player adopts what it finds, and only what it finds.
-    unsafe { DestroyWindow(first) }.expect("the first source goes");
+    unsafe { put_away_a_window_of_the_suite(first) };
     let second = unsafe { a_window_of_the_players_own() };
     pin_film_thumbnail::clear_the_source_placements();
     pin_film_thumbnail::clear_the_registrations();
@@ -6072,7 +6103,7 @@ fn a_source_that_replaced_itself_is_adopted_once_and_takes_the_picture_when_it_i
         "and the pin's end leaves no source behind it"
     );
 
-    let _ = unsafe { DestroyWindow(second) };
+    unsafe { put_away_a_window_of_the_suite(second) };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
@@ -6088,7 +6119,7 @@ fn a_late_subtitle_swaps_nothing_and_rides_the_relaunch_the_user_asks_for() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
-    let (host, _first, pid) =
+    let (host, first, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
     let _ = host;
 
@@ -6165,6 +6196,7 @@ fn a_late_subtitle_swaps_nothing_and_rides_the_relaunch_the_user_asks_for() {
     mpv_ipc::clear_reads();
     clear_pending_pinned_relaunch();
     pin_trace::clear_noted();
+    unsafe { put_away_a_window_of_the_suite(first) };
 }
 
 /// **A seek is one read of the numbers the frame it lands on is drawn from, and nothing of the picture
@@ -6182,7 +6214,6 @@ fn a_seek_moves_the_second_and_not_the_picture_on_either_engine() {
     let (host, source, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Mpv) };
     let content = film.box_;
-    let _ = source;
     let _ = host;
 
     // mpv: a line down the pipe, the bar rebased onto the second, and one read of what the engine
@@ -6303,6 +6334,7 @@ fn a_seek_moves_the_second_and_not_the_picture_on_either_engine() {
     mpv_ipc::clear_reads();
     clear_restart_count();
     pin_trace::clear_noted();
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **A source that never reaches the client it was placed at is waited for and never blanks the pin.**
@@ -6322,7 +6354,7 @@ fn a_source_that_never_reaches_its_asked_client_does_not_blank_the_pin() {
     // The player's window comes back and is adopted in the place of the one that was drawing — and
     // then puts itself back at a box of its own, which is the client the placement did not ask for
     // and the way a player that will not take the box it was given behaves.
-    unsafe { DestroyWindow(source) }.expect("the source goes");
+    unsafe { put_away_a_window_of_the_suite(source) };
     let short = unsafe { a_window_of_the_players_own() };
     mpv_ipc::answer_a_read(pid, "vo-configured", Some("true"));
     pin_film_thumbnail::clear_the_registrations();
@@ -6367,7 +6399,7 @@ fn a_source_that_never_reaches_its_asked_client_does_not_blank_the_pin() {
     );
 
     unsafe { pin_film_host::take_down_the_pin_film_host() };
-    let _ = unsafe { DestroyWindow(short) };
+    unsafe { put_away_a_window_of_the_suite(short) };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
@@ -6389,7 +6421,7 @@ fn every_relaunch_ends_its_old_player_only_after_the_new_picture_stands() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
-    let (host, _first, old_pid) =
+    let (host, first, old_pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
     // The route a pinned film of this kind is relaunched on: FFmpeg's player, which answers nothing. The
     // relaunches below begin noted players, so nothing of the desktop's is spawned for them.
@@ -6409,7 +6441,9 @@ fn every_relaunch_ends_its_old_player_only_after_the_new_picture_stands() {
         RestartReason::Engine,
     ];
     let mut standing = old_pid;
-    let mut sources = Vec::new();
+    // The film's own source and every replacement the relaunches stand up: all of them are windows of
+    // the suite's own, and all of them are put away before the room is let go of.
+    let mut sources = vec![first];
     for reason in reasons {
         let hides = pin_film_host::host_hides_asked();
         pin_trace::clear_noted();
@@ -6536,7 +6570,7 @@ fn every_relaunch_ends_its_old_player_only_after_the_new_picture_stands() {
     }
 
     for source in sources {
-        let _ = unsafe { DestroyWindow(source) };
+        unsafe { put_away_a_window_of_the_suite(source) };
     }
     stand_the_freeze_road_in(None);
     unsafe { pin_film_host::take_down_the_pin_film_host() };
@@ -6589,7 +6623,7 @@ fn a_relaunch_record_that_names_the_picture_is_forgotten_rather_than_killed() {
         pin_trace::noted_lines()
     );
 
-    let _ = unsafe { DestroyWindow(source) };
+    unsafe { put_away_a_window_of_the_suite(source) };
     unsafe { pin_film_host::take_down_the_pin_film_host() };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     clear_pending_pinned_relaunch();
@@ -6610,7 +6644,7 @@ fn a_source_at_the_asked_client_takes_the_picture_only_once_it_has_drawn() {
 
     // The player's window goes and another takes its place, placed once at the same film's size — and not
     // one pixel of a picture in it yet.
-    unsafe { DestroyWindow(first) }.expect("the first source goes");
+    unsafe { put_away_a_window_of_the_suite(first) };
     let second = unsafe { a_window_of_the_players_own() };
     pin_film_thumbnail::clear_the_registrations();
     pin_film_thumbnail::clear_the_unregistrations();
@@ -6658,7 +6692,7 @@ fn a_source_at_the_asked_client_takes_the_picture_only_once_it_has_drawn() {
     );
 
     unsafe { pin_film_host::take_down_the_pin_film_host() };
-    let _ = unsafe { DestroyWindow(second) };
+    unsafe { put_away_a_window_of_the_suite(second) };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     pin_film_thumbnail::stand_the_drawn_probe_in(Some(true));
     mpv_ipc::forget_pipe(pid);
@@ -6677,7 +6711,7 @@ fn a_source_that_never_draws_is_swapped_at_the_bound_and_says_so() {
     let (host, first, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
 
-    unsafe { DestroyWindow(first) }.expect("the first source goes");
+    unsafe { put_away_a_window_of_the_suite(first) };
     let second = unsafe { a_window_of_the_players_own() };
     pin_film_thumbnail::clear_the_registrations();
     pin_film_thumbnail::clear_the_unregistrations();
@@ -6704,7 +6738,7 @@ fn a_source_that_never_draws_is_swapped_at_the_bound_and_says_so() {
     );
 
     unsafe { pin_film_host::take_down_the_pin_film_host() };
-    let _ = unsafe { DestroyWindow(second) };
+    unsafe { put_away_a_window_of_the_suite(second) };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     pin_film_thumbnail::stand_the_drawn_probe_in(Some(true));
     mpv_ipc::forget_pipe(pid);
@@ -6740,7 +6774,7 @@ fn the_drawn_sample_reads_a_lit_client_and_a_dark_one() {
         "a lit client is one sample away from being drawn"
     );
 
-    let _ = unsafe { DestroyWindow(window) };
+    unsafe { put_away_a_window_of_the_suite(window) };
 }
 
 /// Paint a window's whole client one colour, through the window's own DC: what a player would have had
@@ -6816,7 +6850,7 @@ fn a_seek_on_ffplay_ends_no_standing_source_and_crops_by_the_placed_client() {
         pin_trace::noted_lines()
     );
 
-    let _ = unsafe { DestroyWindow(source) };
+    unsafe { put_away_a_window_of_the_suite(source) };
     unsafe { pin_film_host::take_down_the_pin_film_host() };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     stand_mpv_in(None);
@@ -6839,7 +6873,7 @@ fn the_swap_forgets_the_relaunch_that_put_the_picture_up() {
     let (host, first, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
 
-    unsafe { DestroyWindow(first) }.expect("the first source goes");
+    unsafe { put_away_a_window_of_the_suite(first) };
     let second = unsafe { a_window_of_the_players_own() };
     pin_film_thumbnail::clear_the_registrations();
     pin_film_thumbnail::clear_the_unregistrations();
@@ -6869,7 +6903,7 @@ fn the_swap_forgets_the_relaunch_that_put_the_picture_up() {
     );
 
     unsafe { pin_film_host::take_down_the_pin_film_host() };
-    let _ = unsafe { DestroyWindow(second) };
+    unsafe { put_away_a_window_of_the_suite(second) };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
@@ -6899,7 +6933,7 @@ fn a_player_with_no_command_channel_is_suspended_and_its_frame_sampled() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
-    let (_host, _source, pid) =
+    let (_host, source, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
     ffplay_window::clear_suspended_players();
     ffplay_window::clear_pause_posts();
@@ -6963,6 +6997,7 @@ fn a_player_with_no_command_channel_is_suspended_and_its_frame_sampled() {
     mpv_ipc::clear_reads();
     pin_film_thumbnail::stand_the_drawn_probe_in(Some(true));
     pin_trace::clear_noted();
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **The cover is retained in the host, not painted once**: a resize in the middle of the gap re-crops
@@ -7191,8 +7226,8 @@ fn the_dc_road_paints_the_sources_own_frame_and_ends_the_player_before_the_repla
         "nothing erases the host for the swap either"
     );
 
-    let _ = unsafe { DestroyWindow(second) };
-    let _ = unsafe { DestroyWindow(source) };
+    unsafe { put_away_a_window_of_the_suite(second) };
+    unsafe { put_away_a_window_of_the_suite(source) };
     if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
         *held = previous_retirement;
     }
@@ -7284,7 +7319,7 @@ fn a_source_with_no_lit_frame_paints_no_cover_and_leaves_the_old_picture_playing
         "nothing erases the host on the fallback either"
     );
 
-    let _ = unsafe { DestroyWindow(source) };
+    unsafe { put_away_a_window_of_the_suite(source) };
     if let Ok(mut held) = VIDEO_RETIREMENT.lock() {
         *held = previous_retirement;
     }
@@ -7299,7 +7334,7 @@ fn a_failed_handover_ends_the_player_it_suspended() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
-    let (_host, _source, pid) =
+    let (_host, source, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
     ffplay_window::clear_suspended_players();
     pin_trace::clear_noted();
@@ -7330,6 +7365,7 @@ fn a_failed_handover_ends_the_player_it_suspended() {
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
     pin_trace::clear_noted();
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **`off` covers nothing, not even a player that would take a command**, and it is a stand-in for the
@@ -7339,7 +7375,7 @@ fn a_relaunch_on_the_off_road_freezes_nothing() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
-    let (_host, _source, pid) =
+    let (_host, source, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Mpv) };
     stand_the_freeze_road_in(Some(FreezeRoad::Off));
     ffplay_window::clear_suspended_players();
@@ -7391,6 +7427,7 @@ fn a_relaunch_on_the_off_road_freezes_nothing() {
     mpv_ipc::clear_noted();
     mpv_ipc::clear_reads();
     pin_trace::clear_noted();
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **A posted key reaches a window wearing the source's own extended style.** The pause key the
@@ -7538,7 +7575,7 @@ fn the_standing_source_is_what_the_tracker_and_the_topmost_road_follow() {
     );
 
     unsafe { pin_film_host::take_down_the_pin_film_host() };
-    let _ = unsafe { DestroyWindow(first) };
+    unsafe { put_away_a_window_of_the_suite(first) };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     stand_mpv_in(None);
     stand_ffplay_in(None);
@@ -7570,7 +7607,7 @@ fn a_registration_whose_source_has_gone_is_not_a_host_drawing() {
     // One engine's stand at a time, because each stands the pin's host and the pin's globals over
     // again.
     let on_one_engine = |film: StandingFilm, engine: &str| {
-        let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+        let (_host, _source) = unsafe { a_pin_showing_a_registered_film(&film) };
         let source =
             pin_film_thumbnail::the_source_window().expect("the picture the host was given");
         assert!(
@@ -7580,7 +7617,7 @@ fn a_registration_whose_source_has_gone_is_not_a_host_drawing() {
 
         // The player is ended under the registration, which is what a step's outgoing film does
         // once its replacement is the newer one the host records.
-        unsafe { DestroyWindow(source) }.expect("the source's window goes");
+        unsafe { put_away_a_window_of_the_suite(source) };
 
         assert!(
             !pin_film_host::the_host_is_drawing(),
@@ -7603,7 +7640,7 @@ fn a_seeks_picture_line_calls_nothing_a_mismatch_that_was_never_read() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     let path = PathBuf::from("a-film.mkv");
-    let (host, _first, pid) =
+    let (host, first, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
@@ -7663,7 +7700,7 @@ fn a_seeks_picture_line_calls_nothing_a_mismatch_that_was_never_read() {
     );
 
     unsafe { pin_film_host::take_down_the_pin_film_host() };
-    let _ = unsafe { DestroyWindow(second) };
+    unsafe { put_away_a_window_of_the_suite(second) };
     unsafe { hover_film_host::take_down_the_hover_film_host() };
     stand_mpv_in(None);
     stand_ffplay_in(None);
@@ -7674,6 +7711,7 @@ fn a_seeks_picture_line_calls_nothing_a_mismatch_that_was_never_read() {
     mpv_ipc::forget_pipe(pid);
     mpv_ipc::clear_reads();
     pin_trace::clear_noted();
+    unsafe { put_away_a_window_of_the_suite(first) };
 }
 
 /// The pin's own band as one paint left it: every pixel of it, and the row of the window it begins
@@ -7929,7 +7967,7 @@ fn a_step_leaves_the_pin_standing_over_the_films_host() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
-    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let (host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
     let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
     let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
@@ -7994,9 +8032,10 @@ fn a_step_leaves_the_pin_standing_over_the_films_host() {
     the_pair("a step whose box did not change");
 
     unsafe {
-        let _ = DestroyWindow(next_source);
+        put_away_a_window_of_the_suite(next_source);
     }
     mpv_ipc::clear_reads();
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 /// **A step's wait for its player's first frame does not take the hand's chrome down**: while the
 /// incoming player has a window under the host and no frame of it proved yet, the strip the hand is
@@ -8011,7 +8050,7 @@ fn a_steps_wait_for_its_first_frame_leaves_the_hands_chrome_up() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
-    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let (host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
     let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
     let shows = |strip| unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
@@ -8082,9 +8121,10 @@ fn a_steps_wait_for_its_first_frame_leaves_the_hands_chrome_up() {
 
     stand_window_at_point_in(None);
     unsafe {
-        let _ = DestroyWindow(next_source);
+        put_away_a_window_of_the_suite(next_source);
     }
     mpv_ipc::clear_reads();
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **The window a step's own player makes for itself is not a window standing over the pin**, even
@@ -8102,7 +8142,7 @@ fn a_steps_own_player_window_under_the_hand_is_not_a_window_over_the_pin() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
-    let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let (_host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
     let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
     let shows = |strip| unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
@@ -8178,10 +8218,11 @@ fn a_steps_own_player_window_under_the_hand_is_not_a_window_over_the_pin() {
 
     stand_window_at_point_in(None);
     unsafe {
-        let _ = DestroyWindow(the_players_window);
+        put_away_a_window_of_the_suite(the_players_window);
     }
     mpv_ipc::clear_reads();
     mpv_ipc::clear_noted();
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **A window of a player this app began for a film is the pin's own at every tick of a step's
@@ -8200,7 +8241,7 @@ fn the_window_a_step_puts_under_the_hand_is_the_films_own_at_every_tick_of_its_h
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
-    let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let (_host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
     let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
     let shows = |strip| unsafe { GetWindowLongPtrW(strip, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
@@ -8287,10 +8328,11 @@ fn the_window_a_step_puts_under_the_hand_is_the_films_own_at_every_tick_of_its_h
     stand_window_at_point_in(None);
     engine_processes::forget(player);
     unsafe {
-        let _ = DestroyWindow(the_players_window);
+        put_away_a_window_of_the_suite(the_players_window);
     }
     mpv_ipc::clear_reads();
     mpv_ipc::clear_noted();
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **A window of this app's own process is the pin, not a window standing over it.** With `Pin Mode →
@@ -8390,7 +8432,7 @@ fn a_step_leaves_the_hand_chrome_up_from_its_take_up_to_its_first_frame() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     with_pin(|pin| pin.transport_bar = true);
-    let host = unsafe { a_pin_showing_a_registered_film(&film) };
+    let (host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
     let _parked = AStepParkedTheOldPlayer::take();
     let caption = pin_chrome_strips::caption_strip().expect("the caption's strip of its own");
     let transport = pin_chrome_strips::transport_strip().expect("the transport's strip of its own");
@@ -8484,12 +8526,13 @@ fn a_step_leaves_the_hand_chrome_up_from_its_take_up_to_its_first_frame() {
 
     for source in sources {
         unsafe {
-            let _ = DestroyWindow(source);
+            put_away_a_window_of_the_suite(source);
         }
     }
     stand_window_at_point_in(None);
     mpv_ipc::clear_reads();
     mpv_ipc::clear_noted();
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **The chrome the pointer is resting on stays up across a step**, and nothing about the step can
@@ -8627,7 +8670,7 @@ fn a_steps_hand_back_goes_by_the_window_the_foreground_was_taken_from() {
 
     stand_pin(previous_pin);
     pin_real_window::stand_real_pin_window_for_a_test(previous_window);
-    unsafe { DestroyWindow(ours) }.expect("the window this test made goes");
+    unsafe { put_away_a_window_of_the_suite(ours) };
 
     assert!(
         a_pin_stands,
@@ -8675,7 +8718,7 @@ fn always_on_top_is_the_pins_own_band_and_not_only_the_hosts() {
         } else {
             StandingFilm::new()
         };
-        let _host = unsafe { a_pin_showing_a_registered_film(&film) };
+        let (_host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
         let host = pin_film_host::film_host().expect("the film's host");
         let pin = pin_real_window::real_pin_window().expect("the pin's own window");
         assert_eq!(
@@ -8726,6 +8769,8 @@ fn always_on_top_is_the_pins_own_band_and_not_only_the_hosts() {
                 && !unsafe { window_holds_the_topmost_band(pin) },
             "a pin that is not Always On Top is an ordinary window, host and chrome alike"
         );
+
+        unsafe { put_away_a_window_of_the_suite(source) };
     }
 
     // **And the row that changes the setting is a placement of the pin that is on the screen.** This
@@ -8841,7 +8886,7 @@ fn the_band_is_asked_of_the_pair_after_its_host_appears() {
         // The player draws, and the tick is the road that shows the host the picture is in.
         let pid = unsafe { GetCurrentProcessId() };
         film.drawn_in_the_host(pid);
-        let _picture = unsafe { a_source_of_the_host(host) };
+        let picture = unsafe { a_source_of_the_host(host) };
         pin_trace::clear_noted();
         assert!(
             pin_film_host::the_video_window_is_owed_the_front(None),
@@ -8882,6 +8927,7 @@ fn the_band_is_asked_of_the_pair_after_its_host_appears() {
         );
 
         drop(film);
+        unsafe { put_away_a_window_of_the_suite(picture) };
     }
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = standing;
@@ -8936,7 +8982,7 @@ fn a_pin_whose_host_appears_over_an_ordinary_window_is_put_in_front_of_it() {
         // The picture arrives in the host, and the tick shows it.
         let pid = unsafe { GetCurrentProcessId() };
         film.drawn_in_the_host(pid);
-        let _picture = unsafe { a_source_of_the_host(host) };
+        let picture = unsafe { a_source_of_the_host(host) };
         video_playback::bring_the_video_window_to_the_front(film.box_);
 
         assert!(
@@ -8951,7 +8997,8 @@ fn a_pin_whose_host_appears_over_an_ordinary_window_is_put_in_front_of_it() {
         );
 
         unsafe {
-            let _ = DestroyWindow(listing);
+            put_away_a_window_of_the_suite(listing);
+            put_away_a_window_of_the_suite(picture);
         }
         drop(film);
     }

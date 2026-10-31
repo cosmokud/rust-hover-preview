@@ -2433,7 +2433,10 @@ impl Drop for AStandingMenu {
             if !self.menu.is_invalid() {
                 let _ = DestroyWindow(self.menu);
             }
-            let _ = DestroyWindow(self.stand_in);
+            // The card's stand-in is a window of the suite's own, and it is put away down the road
+            // that also takes it out of the count the room's tripwire reads (see
+            // `put_away_a_window_of_the_suite`).
+            put_away_a_window_of_the_suite(self.stand_in);
         }
         PIN_MENU_HWND.store(0, Ordering::SeqCst);
         PREVIEW_HWND.store(self.preview, Ordering::SeqCst);
