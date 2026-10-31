@@ -600,6 +600,25 @@ can be clicked. As a last resort, a pinned window whose thread stops turning alt
 player, browser and bubble included, rather than left as a window that cannot be closed: a pin you can lose is a better
 answer than an app that has to be restarted.
 
+- Damaged film: `engines::corruption_log` (signature table, `CorruptionWatch` latch, `CorruptionCard` run) +
+  `player_logs` (a player's own log off a pipe of its own) → `PinnedPreview::corruption` → `paint_corruption_card`
+  → the card strip. A film that is *corrupt* rather than merely unplayable plays — silently, or looping two frames
+  after a seek — and nothing this app decodes can be asked why: the only thing on the machine that says so is the
+  player's own log. mpv is launched with `--terminal=yes --msg-level=all=warn`, which on Windows writes those lines to
+  its standard **output** (measured: the standard error carries nothing at all), so that pipe is the one drained — on a
+  thread of its own that starts with the player and ends at its end of file, keeping one capped line and no more. A hard
+  line (a container that will not open, a codec that will not start, an EBML parse that fails) trips the latch alone; a
+  soft one (a per-frame decode error, a non-monotonic stamp) needs two. The latch is per player and read by the pin
+  taken up on it, under *both* the id and the file it was begun for — so a step to the next file cannot inherit the last
+  one's card — and it is monotonic, so nothing has to be reset when a pin is rebuilt. The card is one run per file: a
+  scrim over the media band with the panel "This video file may be corrupted" / "playback errors detected" on it,
+  150 ms in, 3 s held, 500 ms out (`corruption_log::card_coverage`). It cannot be painted into the pin's own layered
+  surface, because a hosted film composites over it: it is carried by a strip of its own at the band's box, which is the
+  road the caption and the volume popup take (`pin_chrome_strips`). The loop draws it in the frame band for its 3.65 s
+  and drops back to the slow one after (`CorruptionCard::is_animating`). Hover previews never draw it, and ffplay is not
+  wired at all: its launch asks FFmpeg to ignore what it decodes (`-err_detect ignore_err`, `+discardcorrupt`) and a film
+  it recovered from prints nothing a card could be earned by (measured: an escape sequence, no line).
+
 A swap fits the new file to the window's own longest side (`PinnedPreview::bound`), so a portrait pin followed by a
 widescreen file is not walked down a size at a time — and the window is kept where the hand put it, rather than being
 placed back beside the cursor. A second video is a swap that is _held_ while the new film reaches the screen, so the
@@ -1278,6 +1297,17 @@ is worth reading. The rectangles in the `thumbnail update` line are the whole di
 
 `thumbnail source moved` is not a fault — it is the slide at an edge — and `thumbnail source cannot hold the crop on screen` names the one case no position can fix (a crop longer than the work area). `thumbnail source native unknown`, `late` and `unobtainable` say which of the placement roads a film got.
 
+**Watching a film's sound.** `RHP_PLAYBACK_TRACE` (presence is enough) writes `%TEMP%\rhp-playback-trace.log`: one
+`launch` line per engine start (engine, kind, the level the launch resolved to, and the form that level was given the
+player in — `aid=no`/`-an` or `volume=N gain=…`), one `engine truth` line per mpv start (the `aid`, `ao` and
+`audio-out-params` the player itself reports, and the verdict they come to), every line either player writes on its own
+stream, and a `kill` line per player ended with whether a zero-timeout wait confirmed the process gone. It answers one
+question that nothing else on the machine can: a film that plays with no sound and no entry in Windows' Volume Mixer is
+either a launch that gave the player no track at all (the launch line says so) or a player that could not open a device
+from the track it had (the player says so, and FFmpeg's player only says anything at all under this switch — its stderr
+is otherwise `-loglevel quiet` into a null stream). Unset, nothing is written, no thread is spawned and both launches
+build the command lines they always did (`playback_trace`).
+
 **What this means for another player engine.** The road is engine-agnostic, and both players this app has are on it: it
 needs a player that draws into a window of its own, whose picture size is known before anything else asks it for a box
 (so the source can be placed at it), and that is happy to render at that size while the pin is any size — the Shell does
@@ -1300,6 +1330,7 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/ffplay_window.rs` | the pass that finds a player's window, adopts it as a source, keeps it invisible and styles it |
 | `src/ui/preview_window/video_playback.rs` | both launches: where a film is born (the desktop, at its own size, borderless) and which host keeps it |
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
+| `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it, both players' own lines, and a kill's confirmation |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |
 

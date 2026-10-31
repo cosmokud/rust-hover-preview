@@ -96,12 +96,96 @@ fn write_input_conf(file: &Path) -> bool {
 /// Whether a launch at `volume` is given no audio at all rather than a level of zero, which is
 /// `--aid=no` and nothing else — no track at all, so the decoder is saved the whole soundtrack.
 ///
-/// It is one rule asked in two places, and it is one function so that the two cannot come apart:
-/// `mpv_args`, which pushes the flag from it, and the launch itself, which records the answer
-/// beside the pipe so that a level moved on to such a player has a track to ask back for before it
-/// can be heard (see `mpv_ipc::set_volume`).
+/// It is one rule asked in three places, and it is one function so that the three cannot come
+/// apart: `AudioForm::of`, which both routes' arguments are built from and which a traced launch
+/// writes down (see `playback_trace`); `mpv_args`, which pushes the flag from it; and the launch
+/// itself, which records the answer beside the pipe so that a level moved on to such a player has a
+/// track to ask back for before it can be heard (see `mpv_ipc::set_volume`).
 pub(super) fn mpv_launched_without_audio(volume: u32) -> bool {
     volume == 0
+}
+
+/// Which of the two players a launch begins: the fact a line about a launch names first, and the
+/// one thing that makes the two spellings of a film's sound one decision (see `AudioForm`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Engine {
+    /// mpv, the player this app can talk to while it runs (see `mpv_ipc`).
+    Mpv,
+    /// FFmpeg's `ffplay`, the player nothing can be told once it is going.
+    Ffplay,
+}
+
+impl Engine {
+    /// The word a line about a launch names the engine by.
+    pub(super) fn word(self) -> &'static str {
+        match self {
+            Self::Mpv => "mpv",
+            Self::Ffplay => "ffplay",
+        }
+    }
+}
+
+/// The sound a launch gives its film: one decision, spelled the way each player spells it.
+///
+/// **A film at a level of nothing is given no track at all** rather than a level of nothing, which
+/// is mpv's `--aid=no` and FFmpeg's `-an` — the decoder is saved the whole soundtrack, and `aid` is
+/// what a later level is asked back through (see `mpv_launched_without_audio` and
+/// `mpv_ipc::set_volume`). Everything above nothing is the level, with the file's own measured gain
+/// folded into it where one has been measured.
+///
+/// It is one value that both launches are built from, so that the two cannot disagree about what a
+/// level of nothing means — and so that the line a traced launch writes cannot say one thing while
+/// the player was handed another (see `playback_trace`). Which of the two *did* happen is the
+/// engine's own answer, and it is read separately for exactly that reason.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum AudioForm {
+    /// No audio track is selected at all: `--aid=no` on mpv, `-an` on FFmpeg's player.
+    NoTrack,
+    /// The level the film plays at, 0–100, and the gain the file's own loudness was measured to.
+    Level { level: u32, gain: Option<f64> },
+}
+
+impl AudioForm {
+    /// The form a launch at `volume` with `gain` in hand takes — the whole of the rule, which both
+    /// routes' arguments and the trace's own line are read from.
+    pub(super) fn of(volume: u32, gain: Option<f64>) -> Self {
+        if mpv_launched_without_audio(volume) {
+            Self::NoTrack
+        } else {
+            Self::Level {
+                level: volume,
+                gain,
+            }
+        }
+    }
+
+    /// This form in the words a traced launch writes: the flag the player is actually given, or the
+    /// level and the gain it is given instead — the two facts a silent film is read against.
+    pub(super) fn word(self, engine: Engine) -> String {
+        match self {
+            Self::NoTrack => match engine {
+                Engine::Mpv => "aid=no".to_string(),
+                Engine::Ffplay => "-an".to_string(),
+            },
+            Self::Level { level, gain } => match gain {
+                Some(gain) => format!("volume={level} gain={gain:.4}"),
+                None => format!("volume={level} gain=none"),
+            },
+        }
+    }
+
+    /// The filter FFmpeg's player is given for this form, and nothing where it is given none: the
+    /// level as the share of full the `volume` filter takes, with the measured gain multiplied into
+    /// it — the same product a sound file's player is given (see `start_audio_player`).
+    pub(super) fn ffplay_filter(self) -> Option<String> {
+        match self {
+            Self::NoTrack => None,
+            Self::Level { level, gain } => Some(match gain {
+                Some(gain) => format!("volume={:.4}", level as f64 / 100.0 * gain),
+                None => format!("volume={:.2}", level as f64 / 100.0),
+            }),
+        }
+    }
 }
 
 /// The arguments an mpv video is begun with, which is the command line the spec settles on. A video
@@ -300,19 +384,22 @@ pub(super) fn mpv_args(
         args.push("--pause".to_string());
     }
 
-    if mpv_launched_without_audio(volume) {
-        args.push("--aid=no".to_string());
-    } else {
-        args.push(format!("--volume={volume}"));
+    // The sound, in whichever of its two forms this launch takes (see `AudioForm`, which is the
+    // same rule FFmpeg's player is given its `-an` or its filter from).
+    match AudioForm::of(volume, gain) {
+        AudioForm::NoTrack => args.push("--aid=no".to_string()),
+        AudioForm::Level { level, gain } => {
+            args.push(format!("--volume={level}"));
 
-        // The measured gain, as the same libavfilter `volume` filter the ffplay route applies it
-        // with — named through mpv's bridge to libavfilter, which is the documented spelling of a
-        // libavfilter graph: the bare `--af=volume=` reaches the same filter, but only through
-        // mpv's automatic bridge for a name it has no filter of its own for, and the manual says
-        // that bridge neither verifies its arguments nor answers for them (see `--vf`'s `lavfi`).
-        // A muted film is not normalised, since there is nothing to hear.
-        if let Some(gain) = gain {
-            args.push(format!("--af=lavfi=[volume={gain:.4}]"));
+            // The measured gain, as the same libavfilter `volume` filter the ffplay route applies it
+            // with — named through mpv's bridge to libavfilter, which is the documented spelling of a
+            // libavfilter graph: the bare `--af=volume=` reaches the same filter, but only through
+            // mpv's automatic bridge for a name it has no filter of its own for, and the manual says
+            // that bridge neither verifies its arguments nor answers for them (see `--vf`'s `lavfi`).
+            // A muted film is not normalised, since there is nothing to hear.
+            if let Some(gain) = gain {
+                args.push(format!("--af=lavfi=[volume={gain:.4}]"));
+            }
         }
     }
 

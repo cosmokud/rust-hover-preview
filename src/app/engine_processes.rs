@@ -694,6 +694,22 @@ pub fn terminate_verified(pid: u32, image: &str, created: Option<u64>) -> bool {
         let same = created.is_none_or(|created| creation_time_of(process) == Some(created));
 
         let ended = named && same && TerminateProcess(process, 1).is_ok();
+        // **And whether the end was answered, where a trace asked for it.** A process is ended with a
+        // request, and what is written beside the request is whether it had taken effect by the time
+        // the call returned — read as an exit code rather than waited for, because a wait is the one
+        // thing this road cannot have and the handle here carries no right to make one anyway. It is
+        // the same read a sweep makes of a process it is not sure about (see `is_running`). Nothing is
+        // done with the answer but record it: a kill nobody confirmed is a process that may still be
+        // holding what it held.
+        let mut code = 0u32;
+        let confirmed =
+            ended && GetExitCodeProcess(process, &mut code).is_ok() && code != STILL_ACTIVE;
+        if ended && crate::ui::preview_window::playback_trace_asked() {
+            crate::ui::preview_window::note_a_playback_trace_line(&format!(
+                "kill {image} pid {pid} confirmed {}",
+                confirmed as u8
+            ));
+        }
         let _ = CloseHandle(process);
 
         ended
