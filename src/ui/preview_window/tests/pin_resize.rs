@@ -1063,7 +1063,9 @@ fn a_pin_with_no_bound_is_fitted_into_the_room_the_display_has() {
 ///
 /// A page of text is the other side of it, and the side that keeps the rule honest: text is drawn at
 /// a fixed size, so half the box is half the lines rather than the same page smaller, and a frame of
-/// it stretched into a box it was not laid out for is a different pageful rather than a soft one.
+/// it stretched into a box it was not laid out for is a different pageful rather than a soft one. It
+/// is not owed a read for that box either — its own seat has already drawn it — and the listing is
+/// the kind left below that is (see `a_page_of_text_answers_its_own_box`).
 #[test]
 fn a_box_the_frames_pixels_already_cover_owes_the_pin_no_decode() {
     let _room = the_room_to_itself();
@@ -1129,7 +1131,7 @@ fn a_box_the_frames_pixels_already_cover_owes_the_pin_no_decode() {
     // And the kinds a box lays out again rather than scales are owed one whatever the frame's size
     // is: half the box is half the lines at the same size, and that smaller pageful is what a frame
     // of such a kind would have been drawn as.
-    for kind in [MediaType::Text, MediaType::Archive, MediaType::Peazip] {
+    for kind in [MediaType::Archive, MediaType::Peazip] {
         held(kind, 1600, 1200);
         assert!(
             owed(&path, (100, 100, 500, 400), PinRelayoutRoad::BoxChange),
@@ -1137,6 +1139,78 @@ fn a_box_the_frames_pixels_already_cover_owes_the_pin_no_decode() {
              again at the box it is now shown in"
         );
     }
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous;
+    }
+}
+
+/// **A page of text answers its own box, and the read a box change starts for every other kind is one
+/// it is not owed.** The seat of the box change draws the page again at the reader's line, keeping
+/// what is selected and the size they put it to (see `relayout_text_for_the_box`), so a read behind it
+/// would be the same screenful from the top — and the line `keep_text_place` then carries back onto
+/// that frame is the one the next notch scrolls from, which is the jump (see
+/// `relayout_pinned_media`).
+///
+/// A take-up is the other side of it: the pin is being built whole for a file it has not stood on, and
+/// the page is drawn in full mode with the gutter only by that read (see `PinRelayoutRoad`).
+#[test]
+fn a_page_of_text_answers_its_own_box() {
+    let _room = the_room_to_itself();
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    // A real page rather than a kind stood on a picture, because what the box change is asked about
+    // is the media on screen. It is drawn in full mode with a place in it, which is the state a
+    // reader's line is held on.
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-resize");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a-page-under-a-hand.txt");
+    std::fs::write(
+        &path,
+        (0..60).map(|n| format!("line {n}\n")).collect::<String>(),
+    )
+    .expect("a written page");
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..current_text_options()
+    };
+    let Some(page) = load_text_preview(&path, 400, 300, 96, options) else {
+        panic!("a page of text was not loaded")
+    };
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(page);
+    }
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(state) = media.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.first_line = 20;
+        }
+    }
+
+    assert!(
+        relayout_pinned_media(
+            &path,
+            (100, 100, 500, 400),
+            96,
+            None,
+            PinRelayoutRoad::BoxChange
+        )
+        .is_none(),
+        "a page of text answers its own box: the seat of the box change has drawn it again at the \
+         line the reader was on, and a read here would begin at the first line and leave the frame \
+         and the state on two different pages"
+    );
+    assert!(
+        relayout_pinned_media(
+            &path,
+            (100, 100, 500, 400),
+            96,
+            None,
+            PinRelayoutRoad::TakeUp
+        )
+        .is_some(),
+        "while a take-up is owed one: the pin is built whole for a file it has not stood on, and the \
+         page comes up in full mode only from that read"
+    );
 
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous;

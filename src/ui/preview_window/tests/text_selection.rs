@@ -882,14 +882,15 @@ fn a_control_wheel_draws_a_pinned_page_again_at_another_size() {
 }
 
 /// The size a reader put a page to is the reader's own, so it survives the page being laid out
-/// again: a window given another box re-renders the page, and what that render reads is the
-/// configuration rather than the pin — which is exactly the value the carried size replaces (see
-/// `keep_text_place`).
+/// again: the page a relayout installs is read at the configuration's size rather than the pin's, and
+/// what the carry puts back is exactly the value that read replaced (see `keep_text_place`).
 ///
-/// Without this the size is a setting that lasts until the first resize, which is the one thing a
-/// reader who has just chosen it is most likely to do.
+/// A box change no longer comes through that carry — its own seat draws the page at the options the
+/// page already has (see `relayout_text_for_the_box`) — so what still does is a take-up and the step
+/// onto another file (see `PinRelayoutRoad`). Without the carry the size a reader chose would go with
+/// the file they left.
 #[test]
-fn a_resize_keeps_the_size_the_reader_put_the_page_to() {
+fn a_page_laid_out_again_keeps_the_size_the_reader_put_it_to() {
     let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
@@ -923,8 +924,9 @@ fn a_resize_keeps_the_size_the_reader_put_the_page_to() {
         }
     }
 
-    // A relayout answers with a page read at the configuration's size, which is the road a box
-    // change takes (see `relayout_pinned_media` and `pin_media_load`).
+    // A relayout answers with a page read at the configuration's size rather than the pin's, which is
+    // the road a take-up of another file still takes (see `relayout_pinned_media` and
+    // `pin_media_load`).
     let Some(relaid) = load_text_preview(&path, 320, 160, 96, current_text_options()) else {
         panic!("the page was not laid out again")
     };

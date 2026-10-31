@@ -664,8 +664,13 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
 }
 
 /// Lay a pinned page of text out again in the box its window has just been given — one a hand has
-/// dragged it to, a maximize or a restore, or a display that changed — keeping the line it is
-/// scrolled to, what is selected in it and the size the reader put it to.
+/// dragged it to, a maximize, a restore, a size reset, or a display that changed — keeping the line
+/// it is scrolled to, what is selected in it and the size the reader put it to.
+///
+/// It is the whole of what a box asks of a page, and nothing lays the page out again behind it: a read
+/// begins at the document's first line, because nothing carries the reader's line into a frame that
+/// is not the one being replaced, so the load the same box change starts for every other kind is that
+/// page drawn a second time from the top (see `relayout_pinned_media`).
 ///
 /// A box decides what a page of text shows rather than how large it is: the font is a fixed,
 /// display-scaled size, and the box decides how many lines it holds and how long each of them may
