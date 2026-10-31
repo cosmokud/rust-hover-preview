@@ -98,6 +98,21 @@ impl Selection {
     }
 }
 
+/// Every place a find bar's query was found in the document, and which of them the reader is on:
+/// what a frame highlights over the page, under the selection the reader made for themselves.
+///
+/// It is owned rather than borrowed because it is taken out of the page's state before the frame is
+/// drawn — the lock that holds the state is let go of while the page is laid out and painted — and
+/// it is a list rather than a range because a search is read as a whole: what the frame draws is the
+/// part of it that is on screen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FindHighlights {
+    pub matches: Vec<Selection>,
+    /// Index into `matches` of the one the reader is on, drawn in a colour of its own so that the
+    /// count beside the query can be read off the page as well as off the card.
+    pub current: Option<usize>,
+}
+
 /// One painted text preview: its pixels, what it took to lay it out, and where the
 /// text landed.
 #[derive(Clone)]
@@ -349,6 +364,7 @@ pub fn measure(
 /// kept per document and window (`DOCUMENTS` and `WindowCache`), which is what makes a second
 /// hover a layout instead of a parse. A painted frame is a screenful of pixels — the dearest
 /// thing here to hold and the cheapest of the three to make again.
+#[allow(clippy::too_many_arguments)] // The box, the options and the two things drawn over the page are one frame.
 pub fn render_scrolled(
     path: &Path,
     first_line: usize,
@@ -357,6 +373,7 @@ pub fn render_scrolled(
     dpi: u32,
     options: TextPreviewOptions,
     selection: Option<Selection>,
+    find: Option<FindHighlights>,
 ) -> Option<TextFrame> {
     if width == 0 || height == 0 {
         return None;
@@ -417,6 +434,7 @@ pub fn render_scrolled(
             &metrics,
             scrollbar.as_ref(),
             selection,
+            find.as_ref(),
         );
     }
 

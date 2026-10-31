@@ -1,0 +1,565 @@
+//! The card a pinned page's find bar is drawn in: where its two rows sit over the page, what each of
+//! its controls answers, and the pixels of all of it.
+//!
+//! **A card rather than a strip.** A page of text is this app's own pixels the whole of the band down,
+//! so there is no hosted window for the card to stand over and it is drawn into the pin's own surface
+//! — the road the volume popup takes over a picture, one window simpler (see `pin_chrome_strips`).
+//! It floats over the page's top-right corner, under the caption, and it is placed in the window's own
+//! coordinates because that is where a press is answered (see `text_find::find_bar`).
+//!
+//! **Everything here is the display's scale.** A pad, a row, the glyphs and the shadow are all
+//! `text_paint::scaled` pixels, so the card at 150% is the card rather than a small one in a large
+//! corner.
+//!
+//! The card says what the reader typed and nothing else: the query with a solid caret after it, the
+//! count of the place they are on, the two switches and the three commands. A caret that blinked would
+//! put a static page on the frame cadence for as long as the bar was up, so it is drawn solid.
+
+use super::primitives::{
+    caption_style, draw_cross, fill_box, fill_round_rect, measure_text, stroke_round_rect,
+    stroke_segment, surface_pixels, ChromePalette, GLYPH_PIXELS, GLYPH_STROKE_PIXELS,
+};
+use crate::text::text_paint::{self, DibSurface};
+use windows::Win32::Foundation::RECT;
+
+/// The card's size and the room its rows are given, in the pixels a display's scale multiplies.
+const FIND_BAR_WIDTH: i32 = 320;
+const FIND_BAR_ROW_HEIGHT: i32 = 22;
+const FIND_BAR_PADDING: f32 = 7.0;
+const FIND_BAR_MARGIN: f32 = 10.0;
+const FIND_BAR_RADIUS: f32 = 9.0;
+const FIND_BAR_SHADOW: f32 = 2.0;
+/// The room the count keeps at the right end of the query's row, where `current/total` is drawn.
+const FIND_BAR_COUNT_WIDTH: i32 = 44;
+/// The gap between the two step buttons and the close, and the wider one between the switches and the
+/// commands — two groups a hand reaches for for different reasons.
+const FIND_BAR_GAP: i32 = 2;
+const FIND_BAR_GROUP_GAP: i32 = 9;
+
+/// Where a find bar is, in the window's own coordinates: the card, the row a query is typed into, the
+/// count at its right end, and the five controls under it.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct FindBar {
+    pub(crate) panel: RECT,
+    pub(crate) query: RECT,
+    pub(crate) count: RECT,
+    /// The case switch, written `Aa`.
+    pub(crate) case: RECT,
+    /// The whole-word switch, written `W`.
+    pub(crate) whole_word: RECT,
+    pub(crate) previous: RECT,
+    pub(crate) next: RECT,
+    pub(crate) close: RECT,
+}
+
+/// One of the card's five controls, named rather than numbered: a press is answered against the name,
+/// and the number a control sits at moves the moment another is put beside it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FindBarPart {
+    Case,
+    WholeWord,
+    Previous,
+    Next,
+    Close,
+}
+
+impl FindBar {
+    /// Where a point in the window falls on the card's controls, if it falls on one: the switches are
+    /// asked first, then the three commands, so two boxes that a page too narrow has pushed into each
+    /// other are still answered in the order a reader reads them.
+    pub(crate) fn part_at(&self, x: i32, y: i32) -> Option<FindBarPart> {
+        [
+            (self.case, FindBarPart::Case),
+            (self.whole_word, FindBarPart::WholeWord),
+            (self.previous, FindBarPart::Previous),
+            (self.next, FindBarPart::Next),
+            (self.close, FindBarPart::Close),
+        ]
+        .into_iter()
+        .find(|(rect, _)| inside(*rect, x, y))
+        .map(|(_, part)| part)
+    }
+
+    /// Whether a point is anywhere on the card, its controls and its own face alike: the card floats
+    /// over the page, so nothing under it is what a hand there meant (see `text_find::press`).
+    pub(crate) fn holds(&self, x: i32, y: i32) -> bool {
+        inside(self.panel, x, y)
+    }
+}
+
+/// What the card says: the query, the count of the place the reader is on, and the two switches.
+///
+/// A value rather than a borrow, like every other answer a paint is handed: the page's state is read
+/// under its lock and the lock is let go of before anything is drawn (see `PinnedPaint`).
+pub(crate) struct FindBarPaint {
+    pub(crate) query: String,
+    /// The match the reader is on, or nothing while the query is empty or found nowhere — which is
+    /// the `0/0` a count reads as.
+    pub(crate) current: Option<usize>,
+    pub(crate) total: usize,
+    pub(crate) case_sensitive: bool,
+    pub(crate) whole_word: bool,
+}
+
+/// Where the card is drawn for a page of `width` x `height` whose box begins at `top`: against the
+/// page's top-right corner, inside the page's own margin, and as wide as the page leaves room for —
+/// a card wider than its page would be a card drawn over the frame's edge.
+///
+/// Every rectangle is in the window's coordinates rather than the page's: the page is the band between
+/// the pin's chrome, and a press arrives in the window's own points (see `text_find::find_bar`).
+pub(crate) fn find_bar_layout(width: i32, height: i32, top: i32, dpi: u32) -> FindBar {
+    let scale = dpi as f32 / 96.0;
+    let margin = text_paint::scaled(FIND_BAR_MARGIN as i32, scale);
+    let padding = text_paint::scaled(FIND_BAR_PADDING as i32, scale);
+    let row = text_paint::scaled(FIND_BAR_ROW_HEIGHT, scale);
+    let gap = text_paint::scaled(FIND_BAR_GAP, scale).max(1);
+    let group_gap = text_paint::scaled(FIND_BAR_GROUP_GAP, scale).max(gap);
+    let count_width = text_paint::scaled(FIND_BAR_COUNT_WIDTH, scale);
+    // A command is a box the row's own height across, so a hand has a square to land in rather than a
+    // mark to hit: the mark inside it is the smaller glyph the caption's buttons are drawn with.
+    let side = row;
+
+    // The card keeps its margin where the page has room for it and gives it up rather than paint past
+    // the page's edge on one that does not.
+    let right = (width - margin).max(1);
+    let panel_width = text_paint::scaled(FIND_BAR_WIDTH, scale)
+        .min((right - margin).max(padding * 2 + side))
+        .min(right);
+    let wanted_height = padding * 2 + row * 2;
+    let panel_top = top + margin;
+    // A page too short to hold the card's two rows draws no card at all rather than a card painted
+    // over the transport bar below it: there is nowhere for a hand to type on such a page anyway.
+    if height - margin < wanted_height {
+        return FindBar::default();
+    }
+    let panel_height = wanted_height;
+
+    let panel = RECT {
+        left: right - panel_width,
+        top: panel_top,
+        right,
+        bottom: panel_top + panel_height,
+    };
+
+    let inner_right = panel.right - padding;
+    let query_row = RECT {
+        left: panel.left + padding,
+        top: panel.top + padding,
+        right: (inner_right - count_width - padding).max(panel.left + padding + 1),
+        bottom: panel.top + padding + row,
+    };
+    let count = RECT {
+        left: (inner_right - count_width).max(query_row.right),
+        top: query_row.top,
+        right: inner_right,
+        bottom: query_row.bottom,
+    };
+
+    let command_row_top = query_row.bottom + padding;
+
+    // The commands from the right: close, then the two steps, then the two switches, each in a box of
+    // its own with the commands tighter together than the switches are (see `FIND_BAR_GROUP_GAP`).
+    let close = RECT {
+        left: inner_right - side,
+        top: command_row_top,
+        right: inner_right,
+        bottom: command_row_top + row,
+    };
+    let next = RECT {
+        left: close.left - gap - side,
+        top: command_row_top,
+        right: close.left - gap,
+        bottom: command_row_top + row,
+    };
+    let previous = RECT {
+        left: next.left - gap - side,
+        top: command_row_top,
+        right: next.left - gap,
+        bottom: command_row_top + row,
+    };
+    let whole_word = RECT {
+        left: previous.left - group_gap - side,
+        top: command_row_top,
+        right: previous.left - group_gap,
+        bottom: command_row_top + row,
+    };
+    let case = RECT {
+        left: whole_word.left - gap - side,
+        top: command_row_top,
+        right: whole_word.left - gap,
+        bottom: command_row_top + row,
+    };
+
+    // A page narrow enough to push a mark off the card's left edge keeps every box on it: an
+    // off-card name would answer at a point nothing is drawn at.
+    let on_the_card = |rect: RECT| RECT {
+        left: rect.left.max(panel.left + padding),
+        ..rect
+    };
+
+    FindBar {
+        panel,
+        query: query_row,
+        count,
+        case: on_the_card(case),
+        whole_word: on_the_card(whole_word),
+        previous: on_the_card(previous),
+        next: on_the_card(next),
+        close: on_the_card(close),
+    }
+}
+
+/// Whether a point is inside a rectangle, which is half-open the way every box of the chrome is:
+/// two buttons that meet share an edge rather than a column.
+fn inside(rect: RECT, x: i32, y: i32) -> bool {
+    x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+}
+
+/// Paint the card: its panel and hairline, the two switches where they are on, the three marks, the
+/// query with its caret, and the count.
+///
+/// The panel and the marks are drawn straight into the window's own pixels, because that is what they
+/// are — a card over a picture, with the page behind it. The text is not, because GDI needs a device
+/// context: it is drawn onto the surface the caller keeps, and then carried across the card (see
+/// `carry_text_across`), which is the road the caption's tooltip and the menu's labels take.
+#[allow(clippy::too_many_arguments)] // The card, what it says, and the surface it is written on are one paint.
+pub(crate) fn paint_find_bar(
+    buffer: &mut [u8],
+    width: i32,
+    palette: &ChromePalette,
+    bar: &FindBar,
+    state: &FindBarPaint,
+    surface: &DibSurface,
+    dpi: u32,
+) {
+    if bar.panel.bottom <= bar.panel.top || bar.panel.right <= bar.panel.left {
+        return;
+    }
+
+    let scale = dpi as f32 / 96.0;
+    let radius = (FIND_BAR_RADIUS * scale).max(1.0);
+    let shadow = text_paint::scaled(FIND_BAR_SHADOW as i32, scale);
+    let stroke = (GLYPH_STROKE_PIXELS * scale).max(1.0);
+    let panel_color = palette.hover(0.05);
+
+    // The shadow, the panel, and a hairline around it: a flat panel rather than a shaded one, because
+    // a query written across a gradient has a shade running through it — the same reason the
+    // caption's tooltip is flat (see `paint_tooltip`).
+    fill_round_rect(
+        buffer,
+        width,
+        RECT {
+            top: bar.panel.top + shadow,
+            bottom: bar.panel.bottom + shadow,
+            ..bar.panel
+        },
+        radius,
+        [0, 0, 0],
+        [0, 0, 0],
+        0.32,
+    );
+    // The panel is opaque rather than almost so: the query and the count are written on a surface of
+    // the card's own and carried over it as whole pixels, and a panel that is even a shade transparent
+    // shows the run's box as a band of another colour across itself.
+    fill_round_rect(
+        buffer,
+        width,
+        bar.panel,
+        radius,
+        panel_color,
+        panel_color,
+        1.0,
+    );
+    stroke_round_rect(
+        buffer,
+        width,
+        bar.panel,
+        radius,
+        (1.0 * scale).round().max(1.0),
+        palette.hover(0.32),
+        1.0,
+    );
+
+    // A switch that is on is a button held down: the same wash and the same accent ink a caption's
+    // button uses for the state it is in, so that `Aa` on and `Aa` off are told apart at a glance.
+    for (rect, on) in [
+        (bar.case, state.case_sensitive),
+        (bar.whole_word, state.whole_word),
+    ] {
+        if on {
+            fill_round_rect(
+                buffer,
+                width,
+                rect,
+                (radius * 0.5).max(1.0),
+                palette.accent,
+                palette.accent,
+                0.24,
+            );
+        }
+    }
+
+    let glyph = text_paint::scaled(GLYPH_PIXELS as i32, scale).max(6);
+    let ink = palette.foreground;
+
+    for (rect, pointing_up) in [(bar.previous, true), (bar.next, false)] {
+        let center_x = (rect.left + rect.right) / 2;
+        let center_y = (rect.top + rect.bottom) / 2;
+        draw_step_mark(
+            buffer,
+            width,
+            center_x,
+            center_y,
+            glyph,
+            stroke,
+            ink,
+            pointing_up,
+        );
+    }
+
+    let close_center_x = (bar.close.left + bar.close.right) / 2;
+    let close_center_y = (bar.close.top + bar.close.bottom) / 2;
+    draw_cross(
+        buffer,
+        width,
+        close_center_x,
+        close_center_y,
+        glyph,
+        stroke,
+        ink,
+    );
+
+    // The text: the query, its caret, the count and the two switch names. Drawn on the caller's
+    // surface, which is the card's own size, and sealed over the boxes the runs fill (see
+    // `paint_tooltip` for why GDI's alpha byte has to be given back).
+    let cell = text_paint::scaled(
+        text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
+        scale,
+    );
+    let centered_top = |rect: RECT| rect.top + ((rect.bottom - rect.top - cell) / 2).max(0);
+    let style = caption_style(palette.foreground);
+    // Everything the text is drawn against is the card's own surface, so a box of the window's is
+    // taken back to the card's corner first (see `carry_text_across`).
+    let on_the_surface = |rect: RECT| RECT {
+        left: rect.left - bar.panel.left,
+        top: rect.top - bar.panel.top,
+        right: rect.right - bar.panel.left,
+        bottom: rect.bottom - bar.panel.top,
+    };
+    let mut painter = text_paint::RunPainter::new(surface, scale);
+    // The window-coordinate boxes the runs really fill, so that what is sealed and carried across is
+    // the run's own box and not a button's whole width: a sealed pixel the run never reached would be
+    // a blank one carried over the panel as black.
+    let mut boxes: Vec<RECT> = Vec::new();
+
+    // The query is drawn from the right where it is wider than the room it has, so the caret after the
+    // last character is on the card and the beginning of a long query is what is cut — the end is
+    // where a reader is typing.
+    if !state.query.is_empty() {
+        let measured = measure_text(surface, &style, &state.query, scale);
+        let origin = (bar.query.right - measured).min(bar.query.left);
+        let top = centered_top(bar.query);
+        let box_ = RECT {
+            top,
+            bottom: top + cell,
+            ..bar.query
+        };
+        painter.draw(
+            &state.query,
+            origin - bar.panel.left,
+            on_the_surface(box_),
+            &style,
+            palette.foreground,
+            panel_color,
+        );
+        boxes.push(box_);
+    }
+
+    // The caret is solid and non-blinking: it is one column at the end of what was typed, and it is
+    // drawn into the panel rather than onto the text's surface so that its colour is the panel's ink
+    // and not a run's background.
+    let typed = if state.query.is_empty() {
+        0
+    } else {
+        measure_text(surface, &style, &state.query, scale)
+    };
+    let caret_x = (bar.query.left + typed).min(bar.query.right);
+    let caret = text_paint::scaled(1, scale).max(1);
+    fill_box(
+        buffer,
+        width,
+        RECT {
+            left: caret_x,
+            top: bar.query.top + (cell / 4).max(1),
+            right: caret_x + caret,
+            bottom: bar.query.bottom - (cell / 4).max(1),
+        },
+        palette.foreground,
+        0.9,
+    );
+
+    let count = if state.total == 0 {
+        "0/0".to_string()
+    } else {
+        format!(
+            "{}/{}",
+            state.current.map_or(0, |current| current + 1),
+            state.total
+        )
+    };
+    let count_width = measure_text(surface, &style, &count, scale);
+    let count_left = (bar.count.right - count_width).max(bar.count.left);
+    let count_top = centered_top(bar.count);
+    let count_box = RECT {
+        left: count_left,
+        top: count_top,
+        right: bar.count.right,
+        bottom: count_top + cell,
+    };
+    painter.draw(
+        &count,
+        count_left - bar.panel.left,
+        on_the_surface(count_box),
+        &style,
+        palette.foreground,
+        panel_color,
+    );
+    boxes.push(count_box);
+
+    for (rect, text, on) in [
+        (bar.case, "Aa", state.case_sensitive),
+        (bar.whole_word, "W", state.whole_word),
+    ] {
+        let measured = measure_text(surface, &style, text, scale);
+        let left = rect.left + ((rect.right - rect.left - measured) / 2).max(0);
+        let top = centered_top(rect);
+        let box_ = RECT {
+            left,
+            top,
+            right: (left + measured).min(rect.right),
+            bottom: top + cell,
+        };
+        painter.draw(
+            text,
+            left - bar.panel.left,
+            on_the_surface(box_),
+            &style,
+            if on {
+                palette.accent
+            } else {
+                palette.foreground
+            },
+            panel_color,
+        );
+        boxes.push(box_);
+    }
+
+    drop(painter);
+
+    // Every run was drawn over the whole of its own box, so the boxes are given their coverage back;
+    // what is then carried across is those boxes and no more, and the marks and the panel already in
+    // the window's pixels are left as they are.
+    for box_ in boxes {
+        seal_text(surface, on_the_surface(box_));
+    }
+
+    carry_text_across(surface, buffer, width, bar.panel);
+}
+
+/// One chevron pointing up or down, the mark the two step buttons carry: two arms closing on the row
+/// the mark points at, drawn as strokes for the reason the caption's sideways chevrons are (see
+/// `draw_chevron`).
+#[allow(clippy::too_many_arguments)] // Which way it points is a fact about the mark, not a drawing flag.
+fn draw_step_mark(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: i32,
+    center_y: i32,
+    span: i32,
+    thickness: f32,
+    color: [u8; 3],
+    pointing_up: bool,
+) {
+    let edge = (thickness * std::f32::consts::FRAC_1_SQRT_2).max(1.0);
+    let half = span as f32 / 2.0;
+    let (middle_x, middle_y) = (center_x as f32 + 0.5, center_y as f32 + 0.5);
+    let point = if pointing_up { -half } else { half };
+    let stop = edge / 2.0;
+
+    for side in [-1.0, 1.0] {
+        stroke_segment(
+            buffer,
+            width,
+            (middle_x + side * half, middle_y - point),
+            (
+                middle_x,
+                middle_y + point + if pointing_up { stop } else { -stop },
+            ),
+            edge,
+            color,
+            1.0,
+        );
+    }
+}
+
+/// Give the alpha byte back to a box GDI drew text over, so that what is carried across is the run
+/// rather than nothing: GDI leaves it at zero, and a run drawn over the whole of its own box is the
+/// box's coverage to seal (see `paint_tooltip`).
+fn seal_text(surface: &DibSurface, rect: RECT) {
+    let pixels = unsafe {
+        std::slice::from_raw_parts_mut(
+            surface_pixels(surface),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    };
+
+    for y in rect.top.max(0)..rect.bottom.min(surface.height as i32) {
+        for x in rect.left.max(0)..rect.right.min(surface.width as i32) {
+            pixels[(y as usize * surface.width as usize + x as usize) * 4 + 3] = 255;
+        }
+    }
+}
+
+/// Put the text a card-sized surface was drawn on into the window's own pixels, at the card's corner
+/// and over the panel that was drawn there first.
+///
+/// A pixel the run did not reach is left exactly as it was, which is what makes this the text rather
+/// than a rectangle of card-coloured surface: the run's background is written over the whole of its
+/// box, and its coverage is what separates the letters from the box around them. The card's panel and
+/// marks are already in the buffer and none of them is touched (see `composite_text_into`, the same
+/// road at the panel's own corner).
+fn carry_text_across(surface: &DibSurface, out: &mut [u8], width: i32, panel: RECT) {
+    let source = unsafe {
+        std::slice::from_raw_parts(
+            surface_pixels(surface),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    };
+
+    for y in 0..surface.height as i32 {
+        for x in 0..surface.width as i32 {
+            let from = (y as usize * surface.width as usize + x as usize) * 4;
+            let alpha = source[from + 3] as u32;
+            if alpha == 0 {
+                continue;
+            }
+
+            let (out_x, out_y) = (panel.left + x, panel.top + y);
+            if out_x < 0 || out_y < 0 || out_x >= width {
+                continue;
+            }
+            let to = (out_y as usize * width as usize + out_x as usize) * 4;
+            if to + 4 > out.len() {
+                continue;
+            }
+
+            let pixel = &mut out[to..to + 4];
+            for channel in 0..3 {
+                let over = source[from + channel] as u32;
+                let under = pixel[channel] as u32;
+                pixel[channel] = (over + (under * (255 - alpha)) / 255).min(255) as u8;
+            }
+            pixel[3] = 255;
+        }
+    }
+}

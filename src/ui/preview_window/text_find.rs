@@ -34,6 +34,84 @@ pub(super) fn is_open() -> bool {
         .unwrap_or(false)
 }
 
+/// Where the bar's card is and what it says: the card against the page's top-right corner, under the
+/// caption, and the query, count and switches it is drawn with.
+///
+/// It is asked of the pin and the page rather than of the paint, and by both the paint and a press, which
+/// is what makes the card that is drawn the card a hand answers — the same road the volume popup's
+/// panel takes (see `pinned_volume_geometry`).
+pub(super) struct FindBarPlacement {
+    pub(super) card: pin_chrome::FindBar,
+    pub(super) state: pin_chrome::FindBarPaint,
+}
+
+/// Where the bar is and what it says, or nothing while it is down or the pin holds something other
+/// than a page (see `FindBarPlacement`).
+pub(super) fn find_bar() -> Option<FindBarPlacement> {
+    let (page_top, dpi) = {
+        let pinned = pin_state()?;
+        let pin = pinned.pin()?;
+        if pin.collapsed {
+            return None;
+        }
+
+        let height = pin.window_size().1;
+        let (top, _) = pinned_band_rows(
+            height,
+            pin.caption,
+            pinned_transport_height(pin.dpi, pin.transport_bar),
+            pin.overlay,
+        );
+        (top, pin.dpi)
+    };
+
+    let media = CURRENT_MEDIA.lock().ok()?;
+    let state = media.as_ref()?.text_state.as_ref()?;
+    let find = &state.find;
+    if !find.open {
+        return None;
+    }
+
+    Some(FindBarPlacement {
+        card: pin_chrome::find_bar_layout(state.width as i32, state.height as i32, page_top, dpi),
+        state: pin_chrome::FindBarPaint {
+            query: find.query.clone(),
+            current: find.current,
+            total: find.matches.len(),
+            case_sensitive: find.case_sensitive,
+            whole_word: find.whole_word,
+        },
+    })
+}
+
+/// A press on the find bar over the page, answering whether it landed on the card, and what the card
+/// was asked of it.
+///
+/// A press on the card's own face — the query's row, the gaps between its controls — is the bar's as
+/// well as one on a control: the card floats over the text, so nothing under it is what the hand meant,
+/// and there is no caret in the query for a press to place. What a control asks for is queued like a
+/// key's, for the same reason: the search styles the document and the tick is what may take that work
+/// (see `settle`).
+pub(super) fn press(x: i32, y: i32) -> bool {
+    let Some(placed) = find_bar() else {
+        return false;
+    };
+    if !placed.card.holds(x, y) {
+        return false;
+    }
+
+    match placed.card.part_at(x, y) {
+        Some(pin_chrome::FindBarPart::Case) => note(FindEdit::ToggleCase),
+        Some(pin_chrome::FindBarPart::WholeWord) => note(FindEdit::ToggleWholeWord),
+        Some(pin_chrome::FindBarPart::Previous) => note(FindEdit::Step(-1)),
+        Some(pin_chrome::FindBarPart::Next) => note(FindEdit::Step(1)),
+        Some(pin_chrome::FindBarPart::Close) => note(FindEdit::Close),
+        None => {}
+    }
+
+    true
+}
+
 /// Open the bar over the pinned page on screen, or ask the same search of a bar that is already
 /// open: `Ctrl`+`F` over a bar that holds a query refocuses it rather than throwing the query away,
 /// because the reader who reaches for the key again is reaching for the bar they were just in.

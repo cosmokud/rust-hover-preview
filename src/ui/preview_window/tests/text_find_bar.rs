@@ -501,3 +501,130 @@ fn another_file_does_not_inherit_the_bar_a_page_was_searched_with() {
         "and no places in a document it is not showing"
     );
 }
+
+/// The card a bar is drawn in is the card its controls answer in, and every one of them asks the thing
+/// it is drawn as: a switch turns and searches again under it, the two arrows step the matches, the
+/// cross closes the bar, and the card's own face swallows a press without asking anything — nothing
+/// under the floating card was what the hand meant (see `text_find::press` and
+/// `pin_chrome::FindBar::part_at`).
+#[test]
+fn a_press_on_the_card_answers_its_own_controls() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    put_page("Cat cat CAT\nscat cat\n", "a-bar-pressed-on.txt", 240, 80);
+
+    text_find::open_text_find();
+    type_into_the_bar("cat");
+    assert_eq!(
+        bar_now().2,
+        5,
+        "every case of the letters is found to begin with"
+    );
+
+    let card = text_find::find_bar()
+        .expect("the card the bar is drawn in")
+        .card;
+    let middle = |rect: RECT| ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+    let press = |rect: RECT| {
+        let (x, y) = middle(rect);
+        text_find::press(x, y)
+    };
+
+    assert!(press(card.case), "a press on a switch is the card's");
+    unsafe { text_find::settle(a_pin_window()) };
+    assert!(bar_now().4, "the case switch is on");
+    assert_eq!(bar_now().2, 3, "and the search ran again under it");
+
+    assert!(press(card.case));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert!(!bar_now().4, "the same press turns it off again");
+    assert_eq!(bar_now().2, 5, "and every case is found again");
+
+    assert!(press(card.whole_word));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert!(bar_now().5, "the whole-word switch is on");
+    assert_eq!(
+        bar_now().2,
+        4,
+        "and the one inside `scat` is no longer a word"
+    );
+
+    assert!(press(card.next));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(bar_now().3, Some(1), "the arrow on the right steps on");
+    assert!(press(card.previous));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(bar_now().3, Some(0), "and the one on the left steps back");
+
+    let (x, y) = (card.query.left + 1, card.query.top + 1);
+    let before = bar_now();
+    assert!(
+        text_find::press(x, y),
+        "the card's own face is the card's too"
+    );
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        bar_now(),
+        before,
+        "and a press there asks nothing of the bar"
+    );
+
+    assert!(
+        !text_find::press(card.panel.left - 2, card.panel.top + 2),
+        "a press beside the card is the page's"
+    );
+
+    assert!(press(card.close));
+    unsafe { text_find::settle(a_pin_window()) };
+    assert!(!bar_now().0, "the cross puts the bar away");
+    assert!(
+        text_find::find_bar().is_none(),
+        "and there is no card left to press"
+    );
+}
+
+/// A box change keeps the bar: the page is the same document laid out again, so its query is still
+/// searched for, its places are still the document's places, and the card is still over it — only the
+/// page under the card is wrapped at another width (see `relayout_text_for_the_box` and `FindState`).
+#[test]
+fn a_box_change_keeps_the_bar_and_the_places_it_found() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    put_page(
+        "needle here\nnothing\nneedle again\n",
+        "a-bar-box-changed.txt",
+        240,
+        80,
+    );
+
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+    let before = bar_now();
+    assert_eq!(before.2, 2, "both needles are found in the first box");
+
+    relayout_text_for_the_box((0, 0, 180, 120));
+
+    let after = bar_now();
+    assert!(after.0, "the bar is still up over the page");
+    assert_eq!(after.1, before.1, "at the query it was typed with");
+    assert_eq!(
+        (after.2, after.4, after.5),
+        (before.2, before.4, before.5),
+        "and its places and switches are places in the document, which did not move"
+    );
+    assert!(
+        CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| {
+                media
+                    .as_ref()
+                    .and_then(|media| media.text_state.as_ref())
+                    .map(|state| (state.width, state.height, state.find.highlights().is_some()))
+            })
+            .is_some_and(|(width, height, drawn)| width == 180 && height == 120 && drawn),
+        "the page is laid out for the new box and the frame is drawn with the places on it"
+    );
+}
