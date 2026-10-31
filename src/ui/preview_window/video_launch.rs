@@ -246,13 +246,23 @@ pub(super) fn mpv_args(
     // streams redirected, a missing file printed `[file] Cannot open file '…': Invalid argument`
     // into the standard output (134 bytes) and nothing into the standard error (0 bytes), with
     // `--terminal=yes` and with the default alike — which is why the pipe a traced launch drains is
-    // the standard output (see `player_logs`). `all=warn` is the level those lines are written at
-    // and the ceiling on how many of them a player produces: `info` is a line per track, per filter
-    // and per device, and none of it is about a device that would not open. An ordinary launch is
-    // given neither flag, which is the command line this app had before there was a trace.
+    // the standard output (see `player_logs`). `all=warn` is the level every module's lines are
+    // written at and the ceiling on how many of them a player produces: `info` is a line per track,
+    // per filter and per device, and most of it is about nothing that went wrong.
+    //
+    // **Two modules are widened past that ceiling, and they are the two that name a device.** mpv
+    // reports an audio output that will not initialise, that retries, that falls back to `null` or
+    // that is invalidated at `ao` and `audio` verbosity and nowhere else — `all=warn` above those
+    // two modules is a launch that plays silently with nothing at all in the log, which is what three
+    // captured traced runs of this fault left behind: the answers, and no reason. `v` is the level
+    // they are raised to, so the driver's own HRESULT is in the drained stream beside the read-back
+    // that gave up on it (see `playback_trace` and `audio_guard`).
+    //
+    // An ordinary launch is given neither flag, which is the command line this app had before there
+    // was a trace — the widening is the trace's alone, and its argv is byte for byte what it was.
     if traced {
         args.push("--terminal=yes".to_string());
-        args.push("--msg-level=all=warn".to_string());
+        args.push("--msg-level=all=warn,ao=v,audio=v".to_string());
     }
 
     // The mouse: mpv's own bindings are what a hover overlay must not have, and they survive
@@ -1719,12 +1729,59 @@ mod tests {
 
         let mut traced = untraced.clone();
         traced.insert(2, "--terminal=yes".to_string());
-        traced.insert(3, "--msg-level=all=warn".to_string());
+        traced.insert(3, "--msg-level=all=warn,ao=v,audio=v".to_string());
         assert_eq!(
             launch(true),
             traced,
             "a traced launch is the untraced command line with the two log flags after \
              `--no-config`, and nothing else"
+        );
+    }
+
+    /// **The level a traced launch reads its player's own lines at, and the two modules raised past it**:
+    /// a device that refuses is reported at `ao` and `audio` verbosity and nowhere else, so `all=warn`
+    /// alone is a traced run with no line about the sound in it at all — which is what three captured
+    /// traced runs of the silent-film fault left behind, the state and no reason. The spelling is mpv's
+    /// own: a comma-separated list of `module=level`, with the ceiling still beside the two raised
+    /// modules for everything else the player has to say.
+    #[test]
+    fn a_traced_launch_asks_the_audio_output_and_the_audio_filter_what_would_not_open() {
+        let traced = mpv_args(
+            Path::new("a.mkv"),
+            0,
+            0,
+            640,
+            360,
+            0.0,
+            false,
+            80,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+            false,
+            true,
+            true,
+        );
+        let level = traced
+            .iter()
+            .find(|arg| arg.starts_with("--msg-level"))
+            .map(String::as_str)
+            .expect("a traced launch is given a level at all");
+        assert_eq!(
+            level, "--msg-level=all=warn,ao=v,audio=v",
+            "the audio output and the audio filter are the two modules a refused device speaks \
+             through, so they are at `v` and everything else stays at `warn`"
+        );
+        assert_eq!(
+            traced
+                .iter()
+                .filter(|arg| arg.starts_with("--msg-level"))
+                .count(),
+            1,
+            "and the level is written once: a second spelling of one decision is a launch whose \
+             verbosity is read out of the order of two flags"
         );
     }
 
