@@ -14,8 +14,8 @@
 use super::document::{styled_window, CachedDocument, DocLine, LineBlock};
 use super::frame::{FindHighlights, ScrollBar, Selection};
 use crate::text::text_paint::{
-    blend, fill_rect, plain_style, rgb, scaled, DibSurface, RunPainter, TextMetrics, TextStyle,
-    BODY_LEVEL, SIZE_LEVELS,
+    blend, fill_rect, luminance, plain_style, rgb, scaled, DibSurface, RunPainter, TextMetrics,
+    TextStyle, BODY_LEVEL, SIZE_LEVELS,
 };
 use crate::text::text_theme::LoadedTheme;
 use windows::Win32::Foundation::RECT;
@@ -758,6 +758,22 @@ enum RunMark {
     Selection,
 }
 
+/// The ink a found run's glyphs are drawn in over `background`: the theme's own find foreground
+/// wins; otherwise whichever of the run's own ink and the page stands further from the match
+/// background, so a strong band brightens its text rather than swallowing it.
+fn find_ink(ink: [u8; 3], page: [u8; 3], background: [u8; 3], chosen: Option<[u8; 3]>) -> [u8; 3] {
+    if let Some(chosen) = chosen {
+        return chosen;
+    }
+    let ink_from = (luminance(ink) - luminance(background)).abs();
+    let page_from = (luminance(page) - luminance(background)).abs();
+    if page_from > ink_from {
+        page
+    } else {
+        ink
+    }
+}
+
 /// The part of a run a selection covers, as character offsets within the run, or
 /// `None` when it does not touch it.
 ///
@@ -830,16 +846,18 @@ pub(super) unsafe fn paint(
     let selection = selection.filter(|selection| !selection.is_empty());
 
     // A find's places are drawn in the theme's find highlight where it has one, and in a shade of
-    // the page where it does not. Every other place the query was found is a wash of that colour;
-    // the one the reader is on is the colour itself, which is what tells the count's current match
-    // from the rest of the page (see `FindHighlights`).
+    // the page where it does not. The derived shade is mixed well away from the page so every mark
+    // is stronger than the selection's wash; a colour the theme names is used as it stands. Every
+    // other place the query was found is a wash of that colour; the one the reader is on is the
+    // colour itself, which is what tells the count's current match from the rest of the page (see
+    // `FindHighlights`).
     let find_color = theme
         .theme()
         .settings
         .find_highlight
         .map(rgb)
-        .unwrap_or_else(|| blend(page, rgb(theme.foreground()), 0.30));
-    let find_background = blend(page, find_color, 0.55);
+        .unwrap_or_else(|| blend(page, rgb(theme.foreground()), 0.65));
+    let find_background = blend(page, find_color, 0.75);
     let find_foreground = theme.theme().settings.find_highlight_foreground.map(rgb);
 
     // A paint of a band of the frame is a paint of a page moved under the reader: the rows outside it
@@ -1040,11 +1058,12 @@ pub(super) unsafe fn paint(
                         highlight_foreground.unwrap_or(run.style.foreground),
                         highlight,
                     ),
-                    Some(RunMark::Current) => {
-                        (find_foreground.unwrap_or(run.style.foreground), find_color)
-                    }
+                    Some(RunMark::Current) => (
+                        find_ink(run.style.foreground, page, find_color, find_foreground),
+                        find_color,
+                    ),
                     Some(RunMark::Find) => (
-                        find_foreground.unwrap_or(run.style.foreground),
+                        find_ink(run.style.foreground, page, find_background, find_foreground),
                         find_background,
                     ),
                     None => (run.style.foreground, run_background),
