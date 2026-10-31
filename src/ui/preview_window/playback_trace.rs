@@ -468,9 +468,9 @@ pub(super) fn watch_the_engine(pid: u32, volume: u32) {
 }
 
 /// The six properties, each bounded (see `mpv_ipc::get_property_within`), and the one place they are
-/// asked: the trace reads them once to describe a launch, and the guard reads them again after each
-/// rung of its ladder and on each of the sparse watches that follow one that was heard (see
-/// `audio_guard`).
+/// asked: the trace reads them once to describe a launch, and the guard reads them again at every read
+/// its ladder makes — the one after a player comes up, each ask of a player that has said nothing, and
+/// the read-back of every rung it took (see `audio_guard`).
 ///
 /// The driver is `current-ao` and never `ao`: the second is the option, which no launch here sets, so
 /// it answers an empty list rather than a driver (see `EngineAnswers::an_output_opened`).

@@ -100,7 +100,7 @@
 //! player's session is looked at for every read the playback guard already makes — after the same
 //! engine ask, on the same probe thread, at no other time and for no other player — and that look runs
 //! whether or not the variable is set, because the trace is the recorder and this is the fix (see
-//! `audio_guard::spawn_probe_after`). A run with neither a trace nor a guarded player pays a read of an
+//! `audio_guard::spawn_probe`). A run with neither a trace nor a guarded player pays a read of an
 //! atomic and nothing else.
 
 use std::time::Duration;
@@ -758,7 +758,7 @@ fn walk_the_mixer(pid: u32) -> Probe {
 ///
 /// It is called for every read the playback guard already makes and for no other reason, so a run
 /// without a trace walks the mixer exactly as often as it reads a player — which is the whole of what
-/// the cure costs (see `audio_guard::spawn_probe_after`), and why nothing here is on a schedule of its
+/// the cure costs (see `audio_guard::spawn_probe`), and why nothing here is on a schedule of its
 /// own. **A traced look reads one thing more and writes nothing more**: it goes on past the session it
 /// found until the endpoints are walked out, so that the sessions beside the player's can be written on
 /// the line a cure makes, and it reads a session's whole identity while that session is still in hand
@@ -1283,13 +1283,15 @@ pub(super) fn the_session_word(seen: &Seen) -> String {
 /// deliberately did not write to — **so that a cure is never silent and a failure is never swallowed**.
 ///
 /// **It is written where the read-back is not.** A read that found a mute and took it off goes back as
-/// `Heard` (see `Seen::the_verdict_of`), and a film that stays heard writes one read-back for its whole
-/// length — so a cure written only on the read-back would leave no trace at all in the log it is read
-/// from, which is exactly the line a run of this needs: the second mute switch, the one the player
+/// `Heard` (see `Seen::the_verdict_of`), so the read-back says the film has its sound and nothing of
+/// what it cost — and a cure written only on the read-back would leave no trace at all in the log it is
+/// read from, which is exactly the line a run of this needs: the second mute switch, the one the player
 /// cannot see, being taken off.
 ///
-/// **A look that found nothing writes nothing here**: the read-back's clause carries it, and a line every
-/// ten seconds about a machine whose mixer lists no session for a film is noise rather than evidence.
+/// **A look that found nothing writes nothing here**: the read-back's clause carries it, and a line per
+/// read about a machine whose mixer lists no session for a film is noise rather than evidence — the
+/// more so for a player that has said nothing, which is asked again until it speaks (see
+/// `audio_guard::ASKS_OF_A_SILENT_PLAYER`).
 ///
 /// **A look that could not be made at all is a failure and is written as one**, because the cure it might
 /// have been needed for was never attempted: a thread with no apartment, an enumerator that would not be
