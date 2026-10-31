@@ -954,6 +954,13 @@ fn start_video_playback_where(
             video_launch::Engine::Ffplay,
             for_a_hover,
         );
+        // **And what the machine itself thinks this player is doing**, where a trace asks for it: the
+        // session it has in Windows' mixer, if any, and the endpoint it landed on (see
+        // `audio_session`). FFmpeg's player is read on the same terms as mpv's — a film with no session
+        // on one engine and a session on the other is the comparison that makes either answer readable
+        // — and the read gates itself on the trace, so a run without the variable begins no thread and
+        // calls no COM here.
+        audio_session::watch_the_mixer(player.id());
     }
 
     // After spawning, try to set WS_EX_NOACTIVATE on the player's window

@@ -1298,6 +1298,30 @@ line it always did (`playback_trace`). **A traced launch is read at a level that
 refuses is reported at `ao` and `audio` verbosity and nowhere else, and `all=warn` above them is a run that plays
 silently with the state written down and no reason beside it (`video_launch::mpv_args`).
 
+**The player's opinion is not the only one, so the OS is asked as well.** A `session` line per launch,
+on the same trace, is what Windows' own mixer says about that player's pid: whether a session exists for it at all on
+the machine's render endpoints, the mixer's state for it (`active`/`inactive`/**`expired`**), the executable its
+session identifier names, the mixer's own slider and mute beside the player's, the stream's own per-channel volumes,
+and the endpoint it is on against the default endpoint read at that same instant (`audio_session`). **It exists because
+a captured run left every answer the player had exhausted**: mpv logged a device selected, a stereo float buffer
+opened and no error after it, reported `aid`, `wasapi` and params, `volume 100 mute no` — the six answers of twelve
+launches the user did hear — and played silently with no session in the Volume Mixer. **The four words a line is read for**:
+`expired` is the OS saying the stream is over under a player still writing to it, which nothing on the player's pipe can
+say; `session none` is the mixer answering and the player not in it, qualified by `children` — the sessions its own
+child processes made, since the mixer groups a child under its parent — so a miss is never ambiguous between nothing
+started and something started where nobody looked; `mixer 0.000` or `mute yes` is a silence of the mixer's own, at any
+level the player reports; and `channels` is the per-stream level, which is where a handover to the driver lands — mpv's
+default `--softvol=no` means the level this app gave it is applied by the driver, not inside the player, and neither
+`volume` nor the slider is that number. **The line states its own gaps**: `-` for a value the OS would not give, `unknown`
+for a state with no word, `refused` for an interface that would not be had (say `IChannelAudioVolume`), `none` for a
+session with no channel, and `session refused` with the part of the walk that failed — a silent probe would read as
+`session none`, which is a finding about the player rather than about this question. **It is a reader and never a cure**:
+no session is set, no mute is taken off and `IAudioEndpointVolume` is not touched, because changing what the user's
+mixer says would destroy the evidence. **COM is taken on that thread's own apartment** (`COINIT_MULTITHREADED`, given
+back at the end) and nowhere near the preview loop, which holds one for the engines that draw into it; the wait for a
+player's session to exist and every call after it are on the thread, bounded the way the pipe reads are. Unset, no
+thread is spawned, no apartment is taken and no COM is called.
+
 **Healing a film's sound.** The trace describes the roads to a silent film; `audio_guard` walks back down them. It asks
 the same six questions (`aid`, `audio-device`, `current-ao`, `audio-out-params`, `volume`, `mute`) and reads the same
 verdict out of them, then climbs a ladder, each rung taken at most once: a track asked back for with
@@ -1384,6 +1408,7 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/video_playback.rs` | both launches: where a film is born (the desktop, at its own size, borderless) and which host keeps it |
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
 | `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it — the level asked for beside the level it is at — both players' own lines, and a kill's confirmation |
+| `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), the executable its identifier names, the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none |
 | `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict, the in-place rungs and the one relaunch, the hover's in-place-only road, the sparse watch of a pin's player that was heard, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |
