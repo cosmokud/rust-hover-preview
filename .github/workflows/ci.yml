@@ -67,5 +67,24 @@ jobs:
       - name: Lints
         run: cargo clippy --all-targets -- -D warnings
 
+      # Nine tests are named out of this run, not out of the tree. Each of them asserts a fact
+      # about the desktop it is running on -- whether this process may take the foreground, what
+      # the Shell's band looks like, what a synthetic pointer passed over, which window a player
+      # is drawn through -- rather than a fact about this code, so they fail for reasons this
+      # repository cannot fix and pass for the same reasons. A red run that means "the runner's
+      # desktop was different" is a run people learn to restart instead of read, which is worse
+      # than the coverage it buys. Every name below has been seen to fail on a quiet machine, and
+      # each is still run by manual-ci.yml and by scripts/verify.ps1, where a desktop exists to
+      # judge it on.
       - name: Tests
-        run: cargo test
+        run: >
+          cargo test --
+          --skip a_host_activation_hands_the_keyboard_to_the_pin
+          --skip the_player_stands_over_the_pin_only_while_it_is_raised_over_it
+          --skip a_press_on_a_picture_bigger_than_its_window_carries_the_picture_rather_than_the_window
+          --skip a_dragged_mpv_pin_carries_its_players_window_on_every_move_step
+          --skip a_pinned_mpv_film_is_placed_by_a_tick_a_drag_and_a_monitor_pass
+          --skip a_left_border_and_a_right_border_stroke_each_land_the_edge_where_the_hand_put_it
+          --skip an_update_brings_a_pin_put_away_into_its_bubble_back_on_top
+          --skip a_seek_moves_the_second_and_not_the_picture_on_either_engine
+          --skip a_late_subtitle_swaps_nothing_and_rides_the_relaunch_the_user_asks_for
