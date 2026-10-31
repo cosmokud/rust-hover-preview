@@ -16,11 +16,12 @@
 //! exception is GDI, which knows nothing of an alpha channel: what it draws leaves the alpha
 //! byte at zero, so a caption is closed by handing every pixel its coverage back.
 //!
-//! The chrome lives in six files below: `transport` for the bar a playing file is driven and
+//! The chrome lives in seven files below: `transport` for the bar a playing file is driven and
 //! drawn from, `caption` for the strip above it, `bubble` for the two panels that float over
 //! the media rather than standing in it, `menu` for the panel a card's right-click opens,
-//! `find_bar` for the card a page's find bar floats in, and
-//! `primitives` for the palette and the shapes, marks and text runs the other five are drawn
+//! `find_bar` for the card a page's find bar floats in, `page_marks` for the two marks a page of
+//! text wears — the caret over its text and the **Read only** pill on its caption — and
+//! `primitives` for the palette and the shapes, marks and text runs the other six are drawn
 //! from. What is left in this file is the way in: every
 //! name the rest of the tree reaches as `pin_chrome::`, and the imports the tests beside it read
 //! the five through.
@@ -29,6 +30,7 @@ mod bubble;
 mod caption;
 mod find_bar;
 mod menu;
+mod page_marks;
 mod primitives;
 mod transport;
 
@@ -47,6 +49,7 @@ pub(crate) use menu::{
     menu_flyout_from_menu, menu_flyout_gap_holds, menu_popup_from_point, menu_popup_shifted,
     menu_row_at, paint_menu_popup, MenuArrow, MenuMark, MenuPopup, MenuRow, MENU_SHADOW_PIXELS,
 };
+pub(crate) use page_marks::paint_text_caret;
 pub(crate) use primitives::{fill_disc, fill_ring, stroke_segment, surface_pixels, ChromePalette};
 pub(crate) use transport::{
     paint_card_control, paint_transport, paint_volume_popup, transport_part_at, transport_share_at,

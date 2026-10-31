@@ -430,6 +430,12 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // wait is not allowed to cost the window (see `paint_pin_spinner`).
     paint_pin_spinner(out, width.max(1) as u32, band_top, band_height as i32);
 
+    // The caret a pinned page is holding, drawn over the frame rather than into it: it goes away
+    // again every half of a blink, and a frame drawn again for each phase would restyle a screenful
+    // of text twice a second for a bar one pixel wide (see `text_caret::caret_mark` and
+    // `pin_chrome::paint_text_caret`).
+    paint_pin_caret(out, width, band_top, &paint);
+
     // The find bar over a pinned page: a card floating over the page's top-right corner, drawn into
     // the band's own pixels. There is no hosted window under a page of text for it to stand over,
     // which is the whole of how it differs from the volume popup's road (see `pin_chrome_strips` and
@@ -454,6 +460,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
             let caption = pin_chrome::Caption {
                 title: &paint.title,
                 maximized: paint.maximized,
+                read_only: paint.read_only,
                 maximizable: paint.maximizable,
                 always_on_top: paint.always_on_top,
                 hovered: paint.hovered,
@@ -775,6 +782,10 @@ pub(super) struct PinnedPaint {
     pub(super) bar: bool,
     pub(super) dpi: u32,
     pub(super) title: String,
+    /// Whether this pin is a page of text, which is the one kind whose caption says **Read only**.
+    /// It is read out of the media here rather than asked at the paint, so that the strip is drawn
+    /// from the same answer the press road is given (see `pin_chrome::Caption::read_only`).
+    pub(super) read_only: bool,
     pub(super) maximized: bool,
     /// Whether this pin's caption offers a maximize at all (see `PinFrame`).
     pub(super) maximizable: bool,
@@ -806,6 +817,25 @@ pub(super) struct PinnedPaint {
     pub(super) playing: bool,
     pub(super) position: Option<f64>,
     pub(super) duration: Option<f64>,
+}
+
+/// Whether the pin is showing a page of text, which is the one kind whose caption says **Read only**.
+///
+/// It is the media's kind and not the file's name: a page of text is the only thing this app draws
+/// that a reader can move a caret through without being able to change a character of it, and a
+/// picture, a film, a sound's card and a bubble all carry no such mark (see
+/// `pin_chrome::Caption::read_only`). The media is the same answer the page's own keys are read
+/// against, so a caption cannot say a page is read-only while the keys are walking the folder.
+fn pinned_read_only() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .map(|media| media.media_type == MediaType::Text && media.text_state.is_some())
+        })
+        .unwrap_or(false)
 }
 
 /// A repaint's one tooltip, taken out of the pin as a value: which button is saying it and what
@@ -858,6 +888,10 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
                 .unwrap_or_default(),
+            // A page of text and nothing else: a picture, a film, a sound's card and a bubble are
+            // not read-only, and a pill on one of them would be a caption telling the reader
+            // something that is not true of the file in it.
+            read_only: pinned_read_only(),
             maximized: pin.restore.is_some(),
             maximizable: pin.frame != PinFrame::None,
             always_on_top: pin_always_on_top(),
@@ -1389,6 +1423,31 @@ pub(super) fn sample_bilinear(
 ///
 /// A pin that holds no page, or a page whose bar is down, has nothing here and this is one answer of
 /// `None`: nothing is allocated and nothing is drawn.
+/// Draw the caret a pinned page is holding, in the row of the band the page's own frame begins at.
+///
+/// The place comes from the page and the line it is on comes from the frame the page last drew, so
+/// the two are asked together and a caret whose line is not in that frame is a caret with nothing to
+/// draw (see `text_preview::caret_rect`). Nothing is drawn for any other kind, and nothing is drawn
+/// while the blink is in its dark half.
+pub(super) fn paint_pin_caret(out: &mut [u8], width: i32, band_top: i32, paint: &PinnedPaint) {
+    let Some(caret) = text_caret::caret_mark().filter(|caret| caret.lit) else {
+        return;
+    };
+    let Some(palette) = pin_chrome::ChromePalette::current() else {
+        return;
+    };
+    let Some(rect) = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.text_state.as_ref())
+            .and_then(|state| text_preview::caret_rect(&state.lines, caret.at))
+    }) else {
+        return;
+    };
+
+    pin_chrome::paint_text_caret(out, width, rect, band_top.max(0), &palette, paint.dpi);
+}
+
 pub(super) fn paint_pin_find_bar(out: &mut [u8], width: i32, paint: &PinnedPaint) {
     let (Some(placed), Some(palette)) = (
         paint.find_bar.as_ref(),

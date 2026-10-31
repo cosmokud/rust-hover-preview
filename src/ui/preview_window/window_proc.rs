@@ -65,15 +65,25 @@ pub(super) fn pinned_key_command(vk: i32) -> Option<PinCommand> {
         return Some(PinCommand::Next);
     }
 
-    // An up arrow or a `PageUp` is a screenful back where the window holds a page of text and the
-    // previous file where it holds anything else, which is the same question a Space is: what the
-    // key means is the file in the window's answer rather than this mapping's (see
-    // `pin_command_request`).
-    if vk == VK_UP.0 as i32 || vk == VK_PRIOR.0 as i32 {
+    // An up arrow is a line back where the window holds a page of text and the previous file where
+    // it holds anything else, which is the same question a Space is: what the key means is the file
+    // in the window's answer rather than this mapping's (see `pin_command_request`). A `PageUp` is
+    // the same walk for a window with no page and a screenful for one with a page, and it is its own
+    // command for exactly that reason: the two used to be one, and a caret needs them apart (see
+    // `PinCommand::CaretUp`).
+    if vk == VK_UP.0 as i32 {
+        return Some(PinCommand::CaretUp);
+    }
+
+    if vk == VK_PRIOR.0 as i32 {
         return Some(PinCommand::PageBack);
     }
 
-    if vk == VK_DOWN.0 as i32 || vk == VK_NEXT.0 as i32 {
+    if vk == VK_DOWN.0 as i32 {
+        return Some(PinCommand::CaretDown);
+    }
+
+    if vk == VK_NEXT.0 as i32 {
         return Some(PinCommand::PageOn);
     }
 
@@ -129,11 +139,13 @@ pub(super) fn hook_pin_key_command(command: u8) -> Option<PinCommand> {
         2 => Some(PinCommand::Close),
         3 => Some(PinCommand::TogglePlayback),
         4 => Some(PinCommand::NextSubtitle),
-        5 => Some(PinCommand::PageBack),
-        6 => Some(PinCommand::PageOn),
-        7 => Some(PinCommand::PageTop),
-        8 => Some(PinCommand::PageBottom),
-        9 => Some(PinCommand::FindNext),
+        5 => Some(PinCommand::CaretUp),
+        6 => Some(PinCommand::PageBack),
+        7 => Some(PinCommand::CaretDown),
+        8 => Some(PinCommand::PageOn),
+        9 => Some(PinCommand::PageTop),
+        10 => Some(PinCommand::PageBottom),
+        11 => Some(PinCommand::FindNext),
         _ => None,
     }
 }

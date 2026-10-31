@@ -346,6 +346,40 @@ fn drawn_line(document: &CachedDocument, theme: &LoadedTheme, index: usize) -> O
     text
 }
 
+/// A place in a document a caret can be: a document line and a character of that line, which is
+/// the shape `Selection`'s two ends already have. Named here because a caret move is a question
+/// about the document rather than about the frame, and the page that asks it has a selection to
+/// keep in step with the answer.
+pub type Place = (usize, usize);
+
+/// Every drawn line of `path`, as it is drawn: what a caret move is measured against, because a
+/// line too long for the box is one document line however many rows it takes, and a move that
+/// counted rows would be a move through text the document does not have.
+///
+/// This reads the whole document rather than the screenful, which is what makes `Ctrl`+`End` and a
+/// search's own line numbers the document's rather than the frame's — and it is why it is asked
+/// once per key press rather than per painted line.
+pub fn drawn_lines(path: &Path, options: TextPreviewOptions) -> Vec<String> {
+    let Some(document) = document(path, options) else {
+        return Vec::new();
+    };
+    let Some(theme) = text_theme::loaded(options.theme) else {
+        return Vec::new();
+    };
+
+    let total = document.doc.total_lines();
+    if total == 0 {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::with_capacity(total);
+    walk_drawn_lines(&document, theme, 0, total - 1, |_, text| {
+        lines.push(text);
+        true
+    });
+    lines
+}
+
 /// What a selection takes out of the document of `path`: the lines it covers as they are drawn,
 /// the two ends cut to the characters it names, joined the way Windows joins lines.
 ///

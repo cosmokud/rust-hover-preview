@@ -145,6 +145,7 @@ mod requests;
 mod still_probe;
 mod subtitle_files;
 mod surfaces;
+mod text_caret;
 mod text_find;
 mod text_find_field;
 mod text_selection;
