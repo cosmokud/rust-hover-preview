@@ -122,16 +122,34 @@ static RESIDENT: Mutex<Option<Resident>> = Mutex::new(None);
 /// `a_pin_took_it_over`).
 static RE_WARM: AtomicBool = AtomicBool::new(false);
 
-/// Whether the hover road keeps a resident at all: on in a run, and in a test only where the test
-/// asks for it.
+/// **A prototype's knob, and not a setting: `RHP_NO_RESIDENT`.**
+///
+/// The hover road keeps one mpv warm and hands it file after file (see the module note). This takes
+/// that whole road out of a run — every hover begins a player of its own and ends it with the hover,
+/// which is the road the app had before the resident existed — so that the one architecture can be
+/// A/B'd against the other while a fault is hunted: a film that plays with **no sound at all and no
+/// session in Windows' Volume Mixer**, intermittent and not reproducible on `v0.4.5`, the tag the
+/// resident came after. **Presence is the whole switch**, as it is for `RHP_PLAYBACK_TRACE`: the
+/// variable being there at all is the run with no resident, and whatever it holds is not read.
+pub(super) const NO_RESIDENT_VARIABLE: &str = "RHP_NO_RESIDENT";
+
+/// Whether the hover road keeps a resident at all: on in a run unless the knob above is set, and in
+/// a test only where the test asks for it.
 ///
 /// **The suite's other hover tests must keep the launch they were written for**, and one of them
 /// sharing a resident with the next is one noted player standing in for two launches — so the seam
 /// is off by default and the tests that are about the resident turn it on (see
-/// `keep_a_resident_in_a_test`). The release binary carries no part of it.
+/// `keep_a_resident_in_a_test`). The release binary reads the machine's answer instead, and carries
+/// no part of the seam.
 #[cfg(not(test))]
 fn keeping_a_resident() -> bool {
-    true
+    keeping_a_resident_from(std::env::var_os(NO_RESIDENT_VARIABLE).as_deref())
+}
+
+/// The knob's answer for one environment: a resident is kept unless the variable is there at all,
+/// which is the whole of what it says.
+pub(super) fn keeping_a_resident_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_none()
 }
 
 #[cfg(test)]

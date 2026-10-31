@@ -1353,6 +1353,15 @@ and FFmpeg's player is guarded on a pin's road only — its ladder has no in-pla
 could only ever give up. **A pin that takes a hover's player over gets the pin's road** — the same process and the same
 reads, with the rungs a hover stops short of from that moment (`audio_guard::a_pin_took_it_over`).
 
+**The resident can be taken out of a run without a rebuild, which is the one A/B this fault needs.** A hover's film is
+loaded on the one mpv kept warm between hovers unless `RHP_NO_RESIDENT` is in the environment — presence is enough, and
+the value is not read. With it set no resident is begun at all: every hover begins a player of its own and ends it with
+the hover, and a pin adopts that player as it adopted one before the resident existed, which is the road `v0.4.5` had
+(`mpv_resident::keeping_a_resident`). It is a prototype's knob and not a setting, and not one the tray can reach: it is
+there because a film that plays with **no sound at all and no session in the mixer** is intermittent on the resident's
+road and was never seen on the tag before it, so the two architectures are run against each other on one machine rather
+than argued about. Unset, the resident road is the run, byte for byte.
+
 **A film that was heard is watched, because it can lose its sound later.** `Heard` is not where a pin's guard ends: the
 player is kept under a sparse schedule of read-backs — +2 s, +4 s, +8 s, then one every ~10 s for as long as it lives —
 sampled on the probe thread and decided on the tick, so a film whose endpoint is taken away hours in still says so. A
