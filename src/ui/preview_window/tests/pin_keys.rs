@@ -1,4 +1,7 @@
 use super::*;
+use windows::Win32::UI::WindowsAndMessaging::{
+    HC_ACTION, KBDLLHOOKSTRUCT, KBDLLHOOKSTRUCT_FLAGS, WM_KEYDOWN,
+};
 
 /// A pin up, with nothing being dragged and nothing on the keyboard.
 fn a_pin_awaiting_a_press() {
@@ -1264,4 +1267,77 @@ fn a_page_key_writes_its_move_down_and_the_page_is_scrolled_only_to_show_the_car
         past.is_some(),
         "and one past the last row takes the page just far enough to show it"
     );
+}
+
+/// A key the hook answers for a pinned page is counted for the loop *and* wakes it.
+///
+/// The count is an atomic written on the hook's own thread, so a loop waiting for a pinned static
+/// page reads it at the end of its own wait: `STATIC_PIN_WAIT_MS` rounded up to the system timer's
+/// own 15.6 ms tick, which measured 62 ms — four frames of a 144 Hz display, and the whole of what
+/// makes a caret lag the hand that pressed the key. The key is swallowed, so no message of it ever
+/// reaches the loop: the signal is the only thing that tells it the key happened at all.
+#[test]
+fn a_caret_key_the_hook_answers_is_counted_and_wakes_the_loop() {
+    let _room = the_room_to_itself();
+
+    // The pin the hook answers for is whatever window is in front, because that is what the hook
+    // asks Windows rather than remembers. A desktop with nothing in front has no window for a pin to
+    // be, and there is nothing here to ask (see `pin_owns_caret`).
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.0.is_null() {
+        return;
+    }
+    crate::shell::key_input::publish_pin_key_owner(foreground.0 as u64, 0);
+    crate::shell::key_input::publish_find_bar_up(false);
+
+    // The count and the signal are the process's own, so both are cleared here: what is read below
+    // has to be this key's and not one left behind by a test beside this one.
+    let _ = crate::shell::key_input::take_pin_key_presses();
+    unsafe {
+        let _ = ResetEvent(preview_channel_event());
+    }
+    let counted = crate::shell::key_input::pin_key_counted();
+
+    // A key-down the way the system hands it over: a low-level hook's `lParam` is the structure, and
+    // `VK_DOWN` is the caret a line on.
+    let event = KBDLLHOOKSTRUCT {
+        vkCode: 0x28,
+        scanCode: 0,
+        flags: KBDLLHOOKSTRUCT_FLAGS(0),
+        time: 0,
+        dwExtraInfo: 0,
+    };
+
+    let answer = unsafe {
+        crate::shell::key_input::key_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_KEYDOWN as usize),
+            LPARAM(&event as *const KBDLLHOOKSTRUCT as isize),
+        )
+    };
+
+    assert_eq!(
+        answer,
+        LRESULT(1),
+        "a caret key with the pin in front is the pin's, and is swallowed rather than passed on"
+    );
+    assert_eq!(
+        crate::shell::key_input::pin_key_counted(),
+        counted + 1,
+        "and it is counted for the loop"
+    );
+    assert!(
+        crate::shell::key_input::take_pin_key_presses().contains(&7),
+        "as the command the page's caret answers, which is what the loop drains"
+    );
+
+    unsafe {
+        assert_eq!(
+            WaitForSingleObject(preview_channel_event(), 0),
+            WAIT_OBJECT_0,
+            "and the wait that would have read the count 62 ms later is ended by the key itself"
+        );
+    }
+
+    crate::shell::key_input::publish_pin_key_owner(0, 0);
 }

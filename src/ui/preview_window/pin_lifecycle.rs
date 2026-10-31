@@ -315,7 +315,7 @@ pub(crate) enum PinCommand {
 
 // The commands the window procedure has left for the preview loop are a field of the pin's own
 // state, beside the window they are about (see `pin_window::ask_pin` and
-// `pin_window::take_pin_command`).
+// `pin_window::take_pin_commands`).
 
 /// Whether the pin key is watched, as the configuration has it.
 pub(super) fn pin_enabled() -> bool {

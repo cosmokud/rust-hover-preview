@@ -1687,7 +1687,7 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
         let mut shown = sound_pin();
         shown.audio_window_buttons = true;
         stand_pin(Some(shown));
-        take_pin_command();
+        take_pin_commands();
 
         let (x, y) = a_sound_window_button_point(&sound_pin(), control);
         assert!(
@@ -1699,9 +1699,8 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
             Some(control),
             "so the press armed it"
         );
-        assert_eq!(
-            take_pin_command(),
-            None,
+        assert!(
+            take_pin_commands().is_empty(),
             "and a press alone asks for nothing — the command is the release's to ask for"
         );
         assert!(
@@ -1717,8 +1716,8 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
             "and the pointer is still on it, so the release is the card's own to answer"
         );
         assert_eq!(
-            take_pin_command(),
-            Some(command),
+            take_pin_commands(),
+            vec![command],
             "which asks for the command the button exists to ask for"
         );
         assert_eq!(the_pressed_control(), None, "and the button is let go of");

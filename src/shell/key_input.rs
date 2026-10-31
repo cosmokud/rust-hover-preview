@@ -197,6 +197,18 @@ pub(crate) fn take_pin_key_presses() -> Vec<u8> {
         .collect()
 }
 
+/// How many commands this hook has counted since the process started, which is the one thing a
+/// reader of the two roads a pin's key can travel can tell apart: a key this hook counted never
+/// became a message, and a key the pin's own window answered never came here (see `pin_owns_caret`).
+#[cfg(test)]
+static PIN_KEY_COUNTED: AtomicU64 = AtomicU64::new(0);
+
+/// The number of commands this hook has counted (see `PIN_KEY_COUNTED`).
+#[cfg(test)]
+pub(crate) fn pin_key_counted() -> u64 {
+    PIN_KEY_COUNTED.load(Ordering::Relaxed)
+}
+
 /// Whether a key-down is a command, from the command it means and whether the toggle was already
 /// held when it arrived.
 ///
@@ -631,7 +643,11 @@ pub(crate) fn request_stop() {
     super::hook_thread::request_stop(&KEY_THREAD_ID)
 }
 
-unsafe extern "system" fn key_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+pub(crate) unsafe extern "system" fn key_hook_proc(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     // Keep this callback cheap: every keystroke on the desktop waits for it to
     // return, and a hook that answers too slowly is removed by Windows. It reads a
     // few numbers, touches a few atomics, and mostly passes the message on — the
@@ -722,6 +738,13 @@ unsafe extern "system" fn key_hook_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 PinKeyAnswer::PassedOn => {}
                 PinKeyAnswer::Command(counted) => {
                     PIN_KEY_PRESSES[counted as usize].fetch_add(1, Ordering::AcqRel);
+                    #[cfg(test)]
+                    PIN_KEY_COUNTED.fetch_add(1, Ordering::Relaxed);
+                    // The count is an atomic and nothing else, so the loop is woken for it: a press
+                    // read at the end of a pinned static page's wait is 50 ms late, rounded up to
+                    // the system timer's own 15.6 ms tick, and the caret is a mark the reader who
+                    // pressed the key is watching for (see `wake_preview_loop`).
+                    crate::ui::preview_window::wake_preview_loop();
                     return LRESULT(1);
                 }
                 PinKeyAnswer::Swallowed => return LRESULT(1),

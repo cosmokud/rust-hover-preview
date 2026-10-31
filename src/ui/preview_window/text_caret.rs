@@ -180,7 +180,9 @@ pub(super) unsafe fn settle(hwnd: HWND) {
         return;
     };
 
-    let lines = text_preview::drawn_lines(&path, options);
+    // Held: the page is drawn from a document already read, and a move is a question about that
+    // page rather than about whether the file has changed since (see `drawn_lines_held`).
+    let lines = text_preview::drawn_lines_held(&path, options);
     if lines.is_empty() {
         return;
     }
