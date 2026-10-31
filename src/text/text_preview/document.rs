@@ -484,6 +484,130 @@ pub fn find_next(
     })
 }
 
+/// Every place `query` is found in the document, in the order the document is read: the line each
+/// occurrence starts on and the characters it covers, left to right and without overlapping.
+///
+/// It sits beside [`find_next`] rather than in place of it, because the two are asked different
+/// questions: that one takes what is selected as its needle and answers where the *next* occurrence
+/// is, walking on past the one the selection names, while a find bar is asked to colour every place
+/// at once and to say how many of them there are. Both read the drawn lines the frame is drawn
+/// from, so a rendered Markdown document is searched as it is rendered rather than as it was
+/// written (see `walk_drawn_lines`).
+///
+/// `case_sensitive` and `whole_word` are the bar's two switches: a case-blind search compares the
+/// characters' own lower-case forms, and a whole-word one takes a match whose first character is a
+/// word character only where no word character stands before it, and one whose last is a word
+/// character only where no word character stands after it. A query that begins or ends with
+/// punctuation therefore has no boundary to meet at that end, which is what lets a search for
+/// `->` find it inside `a->b` — the punctuation is what the query is.
+///
+/// **A needle that spans a wrapped line is not found**, which is the same limit [`find_next`] has
+/// and for the same reason: the lines are searched one at a time, and a wrapped line is still one
+/// line of the document however many of the frame's rows it takes.
+#[cfg_attr(not(test), allow(dead_code))] // asked by the find bar, which is not wired to it yet
+pub fn find_all(
+    path: &Path,
+    options: TextPreviewOptions,
+    query: &str,
+    case_sensitive: bool,
+    whole_word: bool,
+) -> Vec<Selection> {
+    let needle: Vec<char> = query.chars().collect();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+
+    let Some(document) = document(path, options) else {
+        return Vec::new();
+    };
+    let Some(theme) = text_theme::loaded(options.theme) else {
+        return Vec::new();
+    };
+
+    let total = document.doc.total_lines();
+    if total == 0 {
+        return Vec::new();
+    }
+
+    let mut found = Vec::new();
+    walk_drawn_lines(&document, theme, 0, total - 1, |index, text| {
+        let characters: Vec<char> = text.chars().collect();
+        let mut from = 0usize;
+
+        while let Some(at) = find_in_line(&characters, from, &needle, case_sensitive, whole_word) {
+            found.push(Selection {
+                anchor: (index, at),
+                caret: (index, at + needle.len()),
+            });
+            // Just past the occurrence, so two of them do not overlap: `aaaa` holds two `aa`, not
+            // three.
+            from = at + needle.len();
+        }
+
+        true
+    });
+
+    found
+}
+
+/// Where `needle` next sits in one drawn line at or after `from`, as the character it starts at,
+/// under the two switches a find bar carries (see [`find_all`]).
+fn find_in_line(
+    characters: &[char],
+    from: usize,
+    needle: &[char],
+    case_sensitive: bool,
+    whole_word: bool,
+) -> Option<usize> {
+    let length = needle.len();
+    if length == 0 || characters.len() < length || from > characters.len() - length {
+        return None;
+    }
+
+    (from..=characters.len() - length).find(|at| {
+        let same = characters[*at..*at + length]
+            .iter()
+            .zip(needle)
+            .all(|(found, wanted)| same_character(*found, *wanted, case_sensitive));
+
+        same && (!whole_word || word_boundaries_hold(characters, *at, needle))
+    })
+}
+
+/// Whether a match at `at` meets the word boundaries a whole-word search asks for: a query that
+/// begins with a word character has to be preceded by one that is not a word character, and one
+/// that ends with a word character has to be followed by one that is not. Punctuation at either
+/// end of the query asks for nothing at that end (see [`find_all`]).
+fn word_boundaries_hold(characters: &[char], at: usize, needle: &[char]) -> bool {
+    let last = needle.len() - 1;
+    let starts_a_word = is_word_character(needle[0]);
+    let ends_a_word = is_word_character(needle[last]);
+
+    let before_is_a_word = at
+        .checked_sub(1)
+        .is_some_and(|before| is_word_character(characters[before]));
+    let after_is_a_word = characters
+        .get(at + needle.len())
+        .is_some_and(|after| is_word_character(*after));
+
+    (!starts_a_word || !before_is_a_word) && (!ends_a_word || !after_is_a_word)
+}
+
+/// Whether two characters are the same one to a search: the character itself, or the same character
+/// in another case where the search is not to mind case. A character whose lower-case form is more
+/// than one character is compared as the whole of that form, so a search never matches half of one
+/// character's case folding.
+fn same_character(found: char, wanted: char, case_sensitive: bool) -> bool {
+    found == wanted || (!case_sensitive && found.to_lowercase().eq(wanted.to_lowercase()))
+}
+
+/// Whether a character is part of a word for a whole-word search: letters, digits and the underscore,
+/// which is exactly the run `run_kind` in `frame` calls a word — so a double click and a whole-word
+/// find take the same characters to be one.
+fn is_word_character(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
 /// Where `needle` sits in one drawn line, between the two character bounds, if it does.
 fn find_in(text: &str, from: usize, to: usize, needle: &[char]) -> Option<usize> {
     let characters: Vec<char> = text.chars().collect();
