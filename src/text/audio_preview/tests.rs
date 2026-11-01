@@ -33,8 +33,8 @@ fn card() -> Card {
 /// The same card as a pinned window shows it: the four controls it carries, and the state
 /// they are drawn from. Nothing is hovered or held, because what a test is about is where the
 /// buttons are rather than how a lit one looks. The window buttons are up, because a test
-/// painting a card is a card a hand is near — the top border of the window, where the card's
-/// own rows begin.
+/// painting a card is a card a hand is near — the buttons themselves, where the card's
+/// own top rows begin.
 fn pinned() -> Card {
     Card {
         controls: Some(CardChrome {
