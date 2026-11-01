@@ -1038,6 +1038,31 @@ fn a_wheel_notch_steps_the_level_by_five_percent_and_stops_at_the_ends() {
     );
 }
 
+/// A notch arrives on a carry built from a level a drag, a tray row or a key has since moved: the
+/// notch is added to the level in hand rather than to that older position, which is what used to
+/// step the thumb back to where the hand had been. A carry the wheel is still gliding toward is
+/// kept whole instead, so sub-notch travel survives a ramp (see `wheel_base_units`).
+#[test]
+fn a_wheel_notch_starts_from_the_level_in_hand_unless_a_glide_is_still_running() {
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    let fresh = 60 * per;
+
+    // A drag raised the level under a carry left three notches below it.
+    assert_eq!(wheel_base_units(Some(30 * per), 60, false), fresh);
+    // And lowered it under a carry above it.
+    assert_eq!(wheel_base_units(Some(90 * per), 60, false), fresh);
+    // A carry built from the level in hand is that carry, sub-notch travel and all.
+    let travelling = fresh + 5;
+    assert_eq!(volume_from_wheel_units(travelling), 60);
+    assert_eq!(wheel_base_units(Some(travelling), 60, false), travelling);
+    // A glide in flight is the wheel's own level still on its way, so its carry outlives a level
+    // that would otherwise re-base it.
+    assert_eq!(wheel_base_units(Some(30 * per), 60, true), 30 * per);
+    // Nothing carried is the level itself.
+    assert_eq!(wheel_base_units(None, 60, false), fresh);
+    assert_eq!(wheel_base_units(None, 60, true), fresh);
+}
+
 /// A drag or a wheel burst asks for a level on every message, but the engine hears it once per
 /// preview tick, and what it hears is the level the hand stopped on — never a queue of stale ones
 /// (see `flush_pin_volume_level`).

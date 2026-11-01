@@ -10,6 +10,7 @@
 //! extracted out of it here, and no helper is introduced into it: it is the file as it was.
 
 use super::pin_trace::note_pin_trace;
+use super::playback_trace::note_playback_trace;
 use super::*;
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
@@ -2250,9 +2251,16 @@ pub fn run_preview_window() {
             let volume_delta = wheel_input::take_pin_volume_delta();
             if volume_delta != 0 {
                 if let Some(level) = pin_volume_level() {
-                    let base = volume_wheel_units
-                        .unwrap_or(i64::from(level) * WHEEL_LEVEL_UNITS_PER_PERCENT);
+                    let base =
+                        wheel_base_units(volume_wheel_units, level, pin_volume_target_pending());
                     let units = volume_after_wheel_delta(base, volume_delta);
+                    note_playback_trace!(
+                        "volume wheel base {} delta {} units {} level {}",
+                        base,
+                        volume_delta,
+                        units,
+                        level
+                    );
                     volume_wheel_units = Some(units);
                     set_pin_volume_target(units);
                     open_pin_volume(pinned_window());
