@@ -502,6 +502,23 @@ pub fn run_explorer_hook() {
             suspend_preview_until_user_input = false;
             is_keyboard_hover = false;
             keyboard_screen_owner = false;
+
+            // A pin whose file was handed off to another program is the one close that is not a
+            // pointer on something new: the hand pressed a way out to that program, and the file
+            // under the pin — a listing behind it — was never asked for. A preview raised there
+            // on the next tick is an audio card over the program the click started, which is the
+            // click appearing to have landed on the file below. So hovers stay quiet until the
+            // pointer moves, the way they do after a folder change, and the anchor is taken from
+            // where the pointer stands now rather than from the last place the hook read before
+            // the pin went up: the hand has moved since, and a stale anchor is a move already.
+            if take_pin_handed_off() {
+                let mut cursor_pos = POINT::default();
+                if unsafe { GetCursorPos(&mut cursor_pos) }.is_ok() {
+                    last_cursor_pos = cursor_pos;
+                }
+                suspend_preview_until_user_input = true;
+                folder_change_time = None;
+            }
         }
 
         // A pinned preview is the whole of what this app is showing, and the pin's own promise is
