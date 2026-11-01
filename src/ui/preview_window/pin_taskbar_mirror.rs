@@ -52,15 +52,12 @@ use super::*;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT};
 use windows::Win32::Graphics::Dwm::{
-    DwmFlush, DwmInvalidateIconicBitmaps, DwmRegisterThumbnail, DwmSetIconicLivePreviewBitmap,
-    DwmSetIconicThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
-    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY,
-    DWM_TNP_VISIBLE,
+    DwmFlush, DwmInvalidateIconicBitmaps, DwmRegisterThumbnail, DwmSetIconicThumbnail,
+    DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES,
+    DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
-use windows::Win32::Graphics::Gdi::{
-    MonitorFromRect, SetBrushOrgEx, SetStretchBltMode, StretchBlt, HALFTONE, MONITOR_DEFAULTTONULL,
-};
-use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsIconic, IsWindow, IsWindowVisible};
+use windows::Win32::Graphics::Gdi::{SetBrushOrgEx, SetStretchBltMode, StretchBlt, HALFTONE};
+use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow, IsWindowVisible};
 
 /// How large a mirrored pin may be on its longest side.
 ///
@@ -130,11 +127,6 @@ impl PinMirror {
 /// for a pin put away is the same rule at its narrowest, since every window the pin's picture could
 /// be taken from is off the screen by then (see `keep_the_pin_for_the_taskbar`, `mirror_source`).
 pub(super) fn sync_pin_mirror(kind: Option<MediaType>) {
-    // The pin's own button is settled first: a pin that stands in its own window wears a button of
-    // its own, and one whose band holds the browser's page cannot be frozen (see
-    // `sync_the_pins_own_still`).
-    sync_the_pins_own_still(kind);
-
     let Some(hwnd) = pin_taskbar::showing_taskbar_window() else {
         return;
     };
@@ -327,14 +319,6 @@ pub(super) unsafe fn answer_the_thumbnail_request(hwnd: HWND, requested: (i32, i
         return;
     };
 
-    unsafe { hand_a_picture_over(hwnd, requested, picture) };
-}
-
-/// Hand `picture` to the Shell in the box it asked for, and count it where a test can see that an
-/// ask was answered at all.
-///
-/// Safety: `hwnd` is a window of this app's that supplies its own stills.
-unsafe fn hand_a_picture_over(hwnd: HWND, requested: (i32, i32), picture: &PinPicture) {
     let Some((width, height)) = thumbnail_size(requested, (picture.width, picture.height)) else {
         return;
     };
@@ -378,170 +362,6 @@ pub(super) unsafe fn answer_a_thumbnail_ask(hwnd: HWND, lparam: LPARAM) -> LRESU
     let requested = ((asked >> 16) as i32, (asked & 0xFFFF) as i32);
     unsafe { answer_the_thumbnail_request(hwnd, requested) };
     LRESULT(0)
-}
-
-/// The pin's own window that has been told it supplies its own still: only a pin whose band holds the
-/// browser's page, whose own rows are a hole where that page stands, so the still of them is the pin
-/// without it (see `sync_the_pins_own_still`).
-static PIN_SUPPLIES_ITS_OWN_STILL: Mutex<Option<isize>> = Mutex::new(None);
-
-/// Whether a pin's band is the browser's page: the two engine kinds, and the page's window alive.
-///
-/// Asked per tick and never of a new global: the kind is what `mirror_source` asks, and the page's
-/// window is the engine's own answer (see `webview_preview::showing_hwnd`).
-fn a_page_in_the_band(kind: Option<MediaType>, page: isize) -> bool {
-    page != 0 && kind.is_some_and(|kind| kind.is_engine())
-}
-
-/// Tell the Shell whether the pin's own window supplies the still of its taskbar button.
-///
-/// **A pin whose band holds the browser's page is the one window a DWM freeze cannot picture.** The
-/// page is a top-level window of the engine's standing over the pin's content band, and the chrome
-/// strips are the pin window's children: the composition the Shell freezes holds the strips and a
-/// hole where the page is. So such a pin supplies a bitmap of its whole box instead — taken off the
-/// desktop at ask time, strips and page together (see `answer_the_pins_own_thumbnail_ask`) — while
-/// every other kind is left exactly as it was, its hover the live picture of its own rows.
-///
-/// Called on every tick beside the mirror, and written only where the answer changed: the two
-/// attributes are the Shell's, and a window told the same thing every sixteen milliseconds is work
-/// nobody asked for. A pin that later shows another kind is told so here, and gets the Shell's
-/// freeze back.
-///
-/// **A collapsed pin is not this window's still.** The stand-in owns that button then, and its
-/// picture is taken while the pin's windows are still up (see `keep_the_pin_for_the_taskbar`).
-pub(super) fn sync_the_pins_own_still(kind: Option<MediaType>) {
-    let painted = pin_real_window::real_pin_window();
-    // A pin whose own window is down keeps the Shell's freeze rather than a picture taken of the desk
-    // where it stood, which is the behaviour every pin had before this road (see `the_pins_box`).
-    let wanted = a_page_in_the_band(kind, webview_preview::showing_hwnd())
-        && !pin_is_collapsed()
-        && pin_is_its_own_window()
-        && painted.is_some_and(|hwnd| !the_pin_window_is_down(hwnd));
-    let wanted_for = painted.filter(|_| wanted).map(|hwnd| hwnd.0 as isize);
-
-    let Ok(mut told) = PIN_SUPPLIES_ITS_OWN_STILL.lock() else {
-        return;
-    };
-    if *told == wanted_for {
-        return;
-    }
-
-    // Safety: the window is this app's own pin window, and the two writes are the same asks the
-    // stand-in and the film host are made with (see `pin_taskbar::supply_the_stills_of_this_window`,
-    // `pin_taskbar::the_buttons_still_is_the_apps_own`).
-    if let Some(hwnd) = painted {
-        unsafe {
-            pin_taskbar::supply_the_stills_of_this_window(hwnd, wanted);
-            pin_taskbar::the_buttons_still_is_the_apps_own(hwnd, wanted);
-        }
-        // The Shell keeps the bitmap it was last handed, and it does not know the pin has changed:
-        // this is what makes it ask again for the box it now holds.
-        if wanted {
-            the_stills_are_out_of_date(hwnd);
-        }
-    }
-    *told = wanted_for;
-}
-
-/// The box a thumbnail of the pin is taken of, or nothing where there is no picture to take.
-///
-/// The *whole* window rather than its client area, because the chrome strips and the page over the
-/// band are both part of the pin: `GetWindowRect` is the box the two are composed in. A window that
-/// is down, minimized or off every display answers nothing — a picture read there is the desk, not
-/// the pin — so the ask is left to the Shell's own fallback, which is what it was before this road.
-fn the_box_to_take(window: RECT, iconic: bool, visible: bool, on_a_display: bool) -> Option<RECT> {
-    if iconic || !visible || !on_a_display {
-        return None;
-    }
-    (window.right > window.left && window.bottom > window.top).then_some(window)
-}
-
-/// The pin's whole box on the screen, or nothing where there is nothing of it to read.
-///
-/// Safety: `hwnd` is this app's own pin window.
-unsafe fn the_pins_box(hwnd: HWND) -> Option<RECT> {
-    let mut window = RECT::default();
-    GetWindowRect(hwnd, &mut window).ok()?;
-
-    // Safety: the questions are measurements of this app's own window, and the monitor is the one
-    // the box stands on, which a box off every display has none of.
-    let on_a_display = unsafe {
-        let monitor = MonitorFromRect(&window, MONITOR_DEFAULTTONULL);
-        !monitor.is_invalid()
-    };
-    the_box_to_take(
-        window,
-        unsafe { IsIconic(hwnd) }.as_bool(),
-        unsafe { IsWindowVisible(hwnd) }.as_bool(),
-        on_a_display,
-    )
-}
-
-/// Answer the Shell's ask for the still of the pin's own button with a picture of the pin taken now:
-/// chrome strips and the browser page over its band, as the desktop composes them.
-///
-/// The picture is read live at ask time because that is the only moment both windows are known to be
-/// standing where the user sees them, and it is read of the whole window rather than of the pin's own
-/// surface because the page is no part of that surface. Nothing is answered where the pin is down,
-/// minimized or off every display: the button keeps whatever the Shell drew for it.
-///
-/// `None` is the ask that is not this window's — another kind's pin, a hover's window, a pin that has
-/// put a stand-in in its place — and the caller's fallback is the ordinary window procedure.
-///
-/// Safety: `hwnd` is a window of this app's, asked from its own window procedure.
-pub(super) unsafe fn answer_the_pins_own_thumbnail_ask(
-    hwnd: HWND,
-    lparam: LPARAM,
-) -> Option<LRESULT> {
-    let told = PIN_SUPPLIES_ITS_OWN_STILL.lock().ok()?;
-    if *told != Some(hwnd.0 as isize) {
-        return None;
-    }
-    drop(told);
-
-    // Safety: the window is the pin's own, settled on the line above, and the box is where it stands
-    // on the screen at this moment.
-    let area = unsafe { the_pins_box(hwnd) }?;
-    let (pixels, width, height) = screen_pixels(area)?;
-    let picture = PinPicture {
-        pixels,
-        width,
-        height,
-    };
-
-    let asked = lparam.0 as u32;
-    let requested = ((asked >> 16) as i32, (asked & 0xFFFF) as i32);
-    // Safety: the bitmap is made for this ask, and the window is the one that asked.
-    unsafe { hand_a_picture_over(hwnd, requested, &picture) };
-    Some(LRESULT(0))
-}
-
-/// Answer the Shell's ask for a live preview of the pin's own button with the same picture, at the
-/// pin's own size: the live bitmap is drawn where the hover is grown, so a page that moves is drawn
-/// from the desktop rather than from the freeze of the pin's rows (see
-/// `answer_the_pins_own_thumbnail_ask`).
-///
-/// Safety: `hwnd` is a window of this app's, asked from its own window procedure.
-pub(super) unsafe fn answer_the_pins_own_live_preview_ask(hwnd: HWND) -> Option<LRESULT> {
-    let told = PIN_SUPPLIES_ITS_OWN_STILL.lock().ok()?;
-    if *told != Some(hwnd.0 as isize) {
-        return None;
-    }
-    drop(told);
-
-    let area = unsafe { the_pins_box(hwnd) }?;
-    let (pixels, width, height) = screen_pixels(area)?;
-    let picture = PinPicture {
-        pixels,
-        width,
-        height,
-    };
-    let bitmap = thumbnail_bitmap(&picture, width, height)?;
-
-    // Safety: the bitmap is this call's own, made for this ask, and the window is the one that asked.
-    // No client offset is given: the pin is a layered window whose client area is its whole box.
-    let _ = unsafe { DwmSetIconicLivePreviewBitmap(hwnd, bitmap.bitmap(), None, 0) };
-    Some(LRESULT(0))
 }
 
 /// What the button holds, for a test asking which picture a put-away pin's button is showing.
@@ -865,84 +685,6 @@ unsafe fn window_process(hwnd: HWND) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Only a pin whose band holds the browser's page supplies the still of its own button: every
-    /// other kind's hover is the live picture of its own rows and must keep it.
-    #[test]
-    fn only_a_page_in_the_band_supplies_the_pins_own_still() {
-        assert!(a_page_in_the_band(Some(MediaType::EngineSvg), 0x1000));
-        assert!(a_page_in_the_band(Some(MediaType::EngineFont), 0x1000));
-
-        assert!(
-            !a_page_in_the_band(Some(MediaType::StaticImage), 0x1000),
-            "a picture is drawn into the pin's own rows, which is what the Shell freezes"
-        );
-        assert!(
-            !a_page_in_the_band(Some(MediaType::Text), 0x1000),
-            "and so is a page of this app's own painting"
-        );
-        assert!(
-            !a_page_in_the_band(Some(MediaType::EngineSvg), 0),
-            "an engine pin whose page has not landed has no window to be missing from the freeze"
-        );
-        assert!(!a_page_in_the_band(None, 0x1000));
-    }
-
-    /// The picture is taken of the pin's *whole* window — the chrome strips and the page over the band
-    /// together — and of nothing at all while the pin is not on a display.
-    #[test]
-    fn a_pins_still_is_its_whole_box_and_only_while_it_is_on_the_screen() {
-        let window = RECT {
-            left: 100,
-            top: 80,
-            right: 740,
-            bottom: 560,
-        };
-
-        assert_eq!(
-            the_box_to_take(window, false, true, true),
-            Some(window),
-            "the window's own rect, which is where both the strips and the page are composed"
-        );
-        assert_eq!(
-            the_box_to_take(window, true, true, true),
-            None,
-            "a minimized pin is not drawn where it stands, so what is read there is the desk"
-        );
-        assert_eq!(the_box_to_take(window, false, false, true), None);
-        assert_eq!(
-            the_box_to_take(window, false, true, false),
-            None,
-            "a box off every display is no picture either"
-        );
-        assert_eq!(
-            the_box_to_take(RECT::default(), false, true, true),
-            None,
-            "and a window with no area has no bitmap to make"
-        );
-    }
-
-    /// The bitmap handed over is made in the box the Shell asked for, never larger than it — the same
-    /// box a put-away pin's still is made in.
-    #[test]
-    fn the_still_of_a_pin_is_made_in_the_box_the_shell_asked_for() {
-        let picture = PinPicture {
-            pixels: vec![0x40; 400 * 300 * 4],
-            width: 400,
-            height: 300,
-        };
-
-        let (width, height) = thumbnail_size((160, 90), (picture.width, picture.height))
-            .expect("a box the picture does not fit in");
-        assert_eq!(
-            (width, height),
-            (120, 90),
-            "brought down with its shape kept"
-        );
-
-        let bitmap = thumbnail_bitmap(&picture, width, height).expect("a bitmap for the ask");
-        assert_eq!((bitmap.width, bitmap.height), (120, 90));
-    }
 
     /// A pin the size of a display is brought down to the ceiling with its shape kept: what the Shell
     /// draws is stretched into the box it is given, so a box of another shape is another picture.
