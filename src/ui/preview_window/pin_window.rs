@@ -309,6 +309,17 @@ static PIN_UP: AtomicBool = AtomicBool::new(false);
 /// re-hover delay. What a pin is over writes it (see `end_pin`).
 static PIN_RESUMED: AtomicBool = AtomicBool::new(false);
 
+/// Whether the pin that came down did so because its file was handed off to another program,
+/// rather than closed by the user: the last two rows of a sound card's menu, and the two buttons
+/// beside them in its command bar (see `pin_menu::pin_menu_hand_off_release`).
+///
+/// The Explorer hook reads it beside `PIN_RESUMED`, and what it answers is the opposite of what
+/// that one does: a pin that was closed is a pointer on something new, while a pin that was
+/// handed off is a hand that has left for another program — the file under it was never asked
+/// for, and a preview raised over that program is a card the click did not mean. The hook holds
+/// hovers back on it until the pointer moves (see `take_pin_handed_off`).
+static PIN_HANDED_OFF: AtomicBool = AtomicBool::new(false);
+
 /// Whether a preview is pinned, answered without a lock and without waiting for one (see
 /// [`PIN_UP`]).
 pub(super) fn pin_is_up() -> bool {
@@ -318,6 +329,19 @@ pub(super) fn pin_is_up() -> bool {
 /// Whether a pin has been closed since this was last asked (see [`PIN_RESUMED`]).
 pub(super) fn take_pin_resumed() -> bool {
     PIN_RESUMED.swap(false, Ordering::AcqRel)
+}
+
+/// Note that the pin being asked for its end is one whose file was handed off to another
+/// program, so that the hook reads the end as that rather than as a close (see
+/// [`PIN_HANDED_OFF`]).
+pub(super) fn note_pin_handed_off() {
+    PIN_HANDED_OFF.store(true, Ordering::Release);
+}
+
+/// Whether the pin that just came down was handed off to another program (see
+/// [`PIN_HANDED_OFF`]).
+pub(crate) fn take_pin_handed_off() -> bool {
+    PIN_HANDED_OFF.swap(false, Ordering::AcqRel)
 }
 
 /// Take a pin up over whatever was on screen: the window, what it is showing, and everything

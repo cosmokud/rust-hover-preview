@@ -1251,6 +1251,7 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
                 pin_chrome::CaptionButton::OpenWith => {
                     if let Some(path) = pinned_path() {
                         open_path_with_default_app(&path, hwnd);
+                        note_pin_handed_off();
                         request_pin_end();
                     }
                 }
@@ -1268,6 +1269,7 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
                             let at = (box_.0, box_.1, box_.0 + box_.2, box_.1 + box_.3);
                             std::thread::spawn(move || carry_open_with_to(at, before));
                         }
+                        note_pin_handed_off();
                         request_pin_end();
                     }
                 }

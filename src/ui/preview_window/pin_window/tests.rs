@@ -1127,3 +1127,41 @@ fn a_pin_s_end_is_published_to_the_hook_once() {
          would be a file the pointer never left"
     );
 }
+
+/// The one end that is not a pointer on something new is a file handed off to another program:
+/// it is published beside the ordinary resume, and the hook tells the two apart — a hand-off
+/// raises no preview of the file under the pointer, while a close does (see `PIN_HANDED_OFF`).
+#[test]
+fn a_handed_off_pin_s_end_is_published_as_a_hand_off() {
+    let _room = the_room_to_itself();
+
+    // The two flags are process-wide and a test beside this one writes them, so both are
+    // drained first: what is asked here is what an end publishes, not what it found.
+    take_pin_resumed();
+    take_pin_handed_off();
+
+    install(a_pin());
+    note_pin_handed_off();
+    end_pin(Reason::Asked, &RecordedPinWindow::new(0x1000));
+    assert!(
+        take_pin_resumed(),
+        "a pin that is over is still a hover the hook has not answered"
+    );
+    assert!(
+        take_pin_handed_off(),
+        "and a pin whose file was handed off says so beside it"
+    );
+    assert!(!take_pin_handed_off(), "it is said once, as the resume is");
+
+    // A pin the user closed is no hand-off: the pointer is on a file the hand may have meant.
+    install(a_pin());
+    end_pin(Reason::Closed, &RecordedPinWindow::new(0x1000));
+    assert!(
+        take_pin_resumed(),
+        "a close is still the pointer on something new"
+    );
+    assert!(
+        !take_pin_handed_off(),
+        "and a close is not a hand-off to another program"
+    );
+}

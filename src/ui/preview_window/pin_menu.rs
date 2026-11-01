@@ -881,7 +881,9 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
 ///
 /// Answers whether a hand-off was armed, and whether the press was therefore this function's.
 /// The pointer is given back here and the pin asked for its end the way the card's own two
-/// buttons ask for it (see `pin_input`'s caption release).
+/// buttons ask for it (see `pin_input`'s caption release). The end is noted as a hand-off rather
+/// than a close, so that the Explorer hook does not read the file under the pointer as one the
+/// hand asked for and raise a hover over the program it started (see `note_pin_handed_off`).
 pub(super) unsafe fn pin_menu_hand_off_release(hwnd: HWND) -> bool {
     let hand_off = pin_state().and_then(|mut pinned| pinned.pin_mut()?.menu.hand_off.take());
     let Some(hand_off) = hand_off else {
@@ -904,6 +906,7 @@ pub(super) unsafe fn pin_menu_hand_off_release(hwnd: HWND) -> bool {
                 }
             }
         }
+        note_pin_handed_off();
         request_pin_end();
     }
 
