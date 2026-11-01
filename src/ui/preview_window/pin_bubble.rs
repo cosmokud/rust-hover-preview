@@ -1168,6 +1168,10 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
                 }
             }
         }
+        // The carried claim is answered by every restore: the bubble is taken down right after, so a
+        // later collapse and restore must come back to `pin.content` rather than to the hidden
+        // bubble's old place (see `drag_pin_bubble`).
+        PIN_BUBBLE_CARRIED.store(false, Ordering::Release);
     }
 
     hide_minimized_pin();
