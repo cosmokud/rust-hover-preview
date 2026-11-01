@@ -961,9 +961,12 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
             true
         }
         // The two ways out of the pin are collapses that take the card off the screen with
-        // them, so the menu goes away with the window it was opened over.
+        // them, so the menu goes away with the window it was opened over. The bubble stands
+        // where the row was pressed rather than on the minimize button: the hand named a place
+        // when it chose this row, and that place is where it clicked (see
+        // `collapse_pin_to_at`).
         Some(PinMenuRow::ToBubble) => {
-            ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Bubble));
+            ask_pin(PinCommand::MinimizeToAt(PinMinimizeTo::Bubble, (x, y)));
             false
         }
         Some(PinMenuRow::ToTaskbar) => {
@@ -1039,9 +1042,11 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
 
 /// What a press on the menu a pinned window shares with the bubble means: the rows a bubble's
 /// menu holds, answered the same way on both menus wherever the two meet (see
-/// `shared_menu_row_press`) — with the one row the two walk differently, `To Taskbar`, putting
-/// this pin away into the app's own place in the taskbar from the window it is standing in,
-/// which is where the pin's own minimize button can put it (see `PinCommand::MinimizeTo`).
+/// `shared_menu_row_press`) — with the two rows the two walk differently handed their own roads,
+/// `To Bubble` putting this pin away into a bubble centred on the place the hand pressed the row
+/// rather than on a minimize button, and `To Taskbar` putting it away into the app's own place in
+/// the taskbar from the window it is standing in, which is where the pin's own minimize button can
+/// put it (see `PinCommand::MinimizeTo` and `PinCommand::MinimizeToAt`).
 ///
 /// No row of this menu opens a flyout, so the panel is the whole of what a press is answered
 /// against and a press outside it has left the menu (see `pinned_menu_paint`).
@@ -1078,9 +1083,11 @@ unsafe fn shared_menu_press(hwnd: HWND, paint: &PinMenuPaint, x: i32, y: i32) ->
         });
 
     match pressed {
-        Some(row) => shared_menu_row_press(row, || {
-            ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar))
-        }),
+        Some(row) => shared_menu_row_press(
+            row,
+            || ask_pin(PinCommand::MinimizeToAt(PinMinimizeTo::Bubble, (x, y))),
+            || ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+        ),
         // A press anywhere else is a press outside the panel, which puts the menu away: the
         // panel is over the window, and a hand that has come for what is under it is a hand
         // that has left the menu.
