@@ -84,8 +84,13 @@ for a full system overview.
 
    If a check fails, fix it before opening a pull request. `rust-toolchain.toml` pins
    the toolchain, so cargo, rustfmt and clippy answer the same on every machine as they
-   do in CI — `manual-ci.yml`, which runs these three commands plus
-   `cargo test --test no_path_leaks` and is started by hand from the Actions tab.
+   do in CI. `ci.yml` runs on every push and pull request and is those three less the
+   suite — the path gate, the formatter and the linter; `cargo test` runs in
+   `manual-ci.yml`, started by hand from the Actions tab.
+
+   `pwsh -File scripts/verify.ps1` runs the checks in one command: `-Fast` for the
+   compile-and-targets loop, `-Pure` for a session with no desktop, `-Filter <name>` for
+   one test, and `-NoTest` for a change the suite has nothing to say about.
 4. Write a clear commit message in the present tense, for example
    `Fix preview placement on second monitor` rather than `Fixed...`.
 5. Push your branch and open a pull request against `main`.
@@ -95,7 +100,7 @@ for a full system overview.
 Measured warm, on the pinned toolchain: a clean build is minutes, because the 194 dependencies in
 the lock include native C and C++ in the image and archive crates. Then `cargo check --all-targets`
 is about 5 s, `cargo clippy --all-targets -- -D warnings` 0.3 s, `cargo fmt --all -- --check` 1.5 s,
-and `cargo test` about 10 s of test time.
+and `cargo test` about 12 s of test time.
 
 ## Running one test
 
@@ -121,7 +126,7 @@ so a failure is the session answering rather than the change.
 
 ## The tests that do not run
 
-37 tests carry `#[ignore]`: they start a third-party program, ask the network, or read a desktop a
+38 tests carry `#[ignore]`: they start a third-party program, ask the network, or read a desktop a
 run of the suite must not take over — a window shown, a pointer driven, the composed desk. Each
 message names its input; `grep -rn '#[ignore' src tests` finds all of them with those reasons.
 
@@ -148,6 +153,8 @@ them.
   rather than paying for a 194-dependency compile — and stops the commit on a failure, printing the
   command that fixes what failed. It runs no test, so it cannot hang.
   `RHP_SKIP_PRECOMMIT=1 git commit ...` skips both checks for that one commit and prints that it did.
+  On a checkout that sits on a Windows-hosted share — one cargo cannot build in at all — the lint is
+  skipped; formatting is still checked there, since it writes nothing when it passes.
 
 ## Opening a pull request
 

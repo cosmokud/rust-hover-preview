@@ -49,7 +49,7 @@ The long-lived roles, plus a family of per-hover threads that come and go:
 | Main           | `main.rs`                                                               | `RUNNING: AtomicBool`, `CONFIG: Lazy<Mutex<AppConfig>>`; claims `Local\rust-hover-preview-single-instance` (`app::single_instance::InstanceGuard`); COM+DPI init; reaps leftovers (`app::engine_processes`); temp clear; tray loop. `RHP_STARTUP_TRACE` → `%TEMP%\rhp-startup-trace.log`     |
 | Preview        | `ui/preview_window.rs` + `ui/preview_window/*.rs`                       | Layered window (`WS_EX_LAYERED\|TOOLWINDOW\|TOPMOST\|NOACTIVATE`, `UpdateLayeredWindow`, `TOPMOST` dropped while `pin_always_on_top` is off). Channel-driven, idle sleep; cadences: `STATIC_WAIT_MS`=150, `STATIC_PIN_WAIT_MS`=50, 60s anim tick; `STATIC_MEDIA_REFRESH_MS`=500, `POINTER_HOLD_HEARTBEAT_MS`=500, `HOVER_TOPMOST_REASSERT_MS`=1s; `pin_bubble`/`pin_taskbar` = the two stand-ins a pin can leave in its own place: the bubble on the desktop (painted from `bubble_stream`, its bars read by `audio_meter`), and a borderless `WS_EX_APPWINDOW` window whose button is this app's own entry in the taskbar — worn by a collapsed pin, and by a pin that is up under `pin_always_on_top = false` — titled for the pinned file, its hover the pin itself (`pin_taskbar_mirror` keeps the DWM thumbnail of the window the picture is really in, `pin_taskbar_buttons` the transport toolbar); a film a player draws wears its button on the film host that owns its chrome instead, and both that host and the stand-in hand the Shell a still of their own when they are down (`DWMWA_HAS_ICONIC_BITMAP`, `answer_a_thumbnail_ask`) |
 | Explorer hook  | `shell/explorer_hook/*.rs`                                              | UI Automation + Shell COM poll; `tick_ms` / `explorer_pace` / `ExplorerState`; `EnumWindows` CabinetWClass/ExplorerWClass multimonitor rule. Not joined (blocks in shell). Publishes `HoverLocation`, `AvoidRegion`, `preview_screen_rect`, pointer-item box                                 |
-| Wheel watcher  | `shell/wheel_input.rs`                                                  | `WH_MOUSE_LL`; wheel-tick counter; a text scroll's notches and a pinned picture's zoom notches, each counted and swallowed for its owner                                                                                                                                                                                            |
+| Wheel watcher  | `shell/wheel_input.rs`                                                  | `WH_MOUSE_LL`; wheel-tick counter; a text scroll's notches, a pinned picture's zoom notches and a pin's volume notches, each counted and swallowed for its owner; pin presses when `pin_key` names a mouse button (`note_mouse_button`, the button's own down state) |
 | Key watcher    | `shell/key_input.rs`                                                    | `WH_KEYBOARD_LL`; pin/trigger/toggle keys; `refresh`; press counter drained per tick. Msg-pump only                                                                                                                                                                                                 |
 | Hook helper    | `shell/hook_thread.rs`                                                  | `hook_thread::spawn`: shared pump, publishes tid, joinable                                                                                                                                                                                                                                   |
 | Config watcher | `config/config.rs` + `shell/key_input::refresh`                         | Reloads `%APPDATA%\rust-hover-preview\config.ini` without restart, and never writes it back — a read changes what the app is using and leaves the file to say what it said (see Config section)                                                                                                                                                                                                                             |
@@ -457,7 +457,7 @@ yet the hook retries slowly rather than declaring Explorer gone.
 
 The wheel doubles as a hover signal: turning the wheel means the pointer is over the window the user cares about, so a preview that was suppressed reopens. It also hands control back from the keyboard to the mouse. The hook reads the wheel delta from `mouseData` directly rather than installing a second low-level hook, and swallows the event only when the pointer is over the preview's own region.
 
-- Folder-change: post-press active cadence; suspension lifts on settle; box-change = gone (`read_failure_is_the_same_item`); programmatic change waits for input; auto-focus never previews.
+- Folder-change: post-press active cadence; suspension lifts on settle; box-change = gone (`read_failure_is_the_same_item`); programmatic change waits for input; auto-focus never previews. A pin whose file was handed to another program (`take_pin_handed_off`) suspends previews the same way — the press was the pin's way out, not a pick of the row it uncovered — and the anchor is re-taken from where the pointer stands, so the hold lifts on the hand's next move.
 
 The last item is the subtle one. When Explorer changes folders _by itself_ — a refresh, an auto-arrange — the app waits
 for the user to do something rather than previewing whatever is under a pointer that is no longer meaningful.
@@ -487,18 +487,20 @@ hand moving, so by the time the press is read the point is back over the listing
 otherwise be answered as the file the user had picked. A click is read through this app's own windows as well as
 Explorer's, and wherever its own look at the point answers nothing it is read the second way a pick is: out of the item
 the view has the _focus_ on, which is the one reading a window standing on top cannot take away — and the third fact
-matters most, because the item a fresh listing puts under a parked pointer is drawn exactly where the click landed.
+matters most, because the item a fresh listing puts under a parked pointer is drawn exactly where the click landed. A
+press on one of a pin's caption buttons is asked of the geometry that button's own press reads
+(`pin_caption_button_covers`); it is no pick, it spends the rest of the hand, and a click held from before it is dropped
+rather than answered out of the listing the chrome covered.
 
 ## Pin mode (`ui/preview_window/pin_*.rs`, `pin_window.rs`, `pin_chrome/`, `text/`)
 
-> How a hover becomes a persistent topmost window. Pin key freezes hover machinery, grows the same window with caption/transport chrome, and swaps media in place for picks or prev/next walks — same surface, new file, no re-resolve.
+> How a hover becomes a persistent topmost window. Pin key freezes hover machinery, stands a window of the pin's own with caption/transport chrome, and swaps media in place for picks or prev/next walks — same file, no re-resolve.
 
-The design decision that shapes all of this: the pin is _the preview window_, not a second window. It does not create an
-HWND, and it does not re-run the hover path. It takes the window that is already there and changes its frame, its
-height, and which code path fills it. Everything that would require re-resolving a file is therefore free — the pin
-already knows the folder, the window, the sort order, and the config.
+The design decision that shapes all of this: the pin is a window of this app's own, and the hover's window is not it. A hover is made a non-activating tool window on purpose — it appears under a pointer that may be in the middle of renaming a file, and a window that took the focus would swallow the name being typed — while what Windows decides from a window's styles (whether a click may activate it, whether it is listed, whether it can be minimized and restored) is asked of that window once, when it is made. A pin is the opposite case, so it gets `pin_real_window`'s class: `WS_POPUP` with `WS_SYSMENU | WS_MINIMIZEBOX`, layered because its edges are alpha, no band in its styles at all (the setting asks for the band when the pin is shown), and no stand-in of its own for the taskbar, because this window brings its own button. Everything that would require re-resolving a file is still free — the pin already knows the folder, the window, the sort order, and the config.
 
 - Take-up: `pin_key` (Mouse3 or Space) on settled preview (`pin_screen_is_settled`), never spinner; engine kinds install `pinned_engine_media`. `key_input`/`wheel_input` LL hooks + per-tick counter; `refresh` on config/tray.
+- The key a setting names: `key_binding` reads a binding as alternatives separated by `,` and the keys of one alternative by `+` — `space,page_down`, `ctrl+alt+space`, `ctrl+mouse4` — where the last key of an alternative is the press counted and the rest only have to be held. Mouse buttons are `mouse3`–`mouse5`, carried as their Windows virtual keys so one down-state read answers for both kinds, and left and right are not names it takes; an unreadable or empty `pin_key` falls back to `DEFAULT_PIN_KEY` (`mouse3,space`). The same parse answers `trigger_key` and `toggle_key`, and every stored spelling keeps working.
+- The preview shortcut (`toggle_key`, `f7` by default, named in the tray's **Enable Preview** row) is counted by the same hook on different terms: it counts only while Explorer is the foreground window, it is never swallowed — Explorer and every other program still get their own key — and a held key is one toggle, because the hook marks the main key down on the frame it arrives and only an edge counts. A press made in another program still marks its key down, so holding it there cannot become a press when Explorer comes forward.
 
 A pin can only be taken from a _settled_ preview. Pinning a spinner would mean pinning an unknown box and an unknown
 kind, and both are needed to lay the pin out. The middle button or Space is the default pin key because a listing has no
@@ -507,7 +509,7 @@ hooks only count presses — the tick drains the count, so a held key cannot pin
 
 The key's other half is restore: pressed while the pin is a bubble, with Explorer in front, it puts the window back up
 on the file picked since the bubble went down — the same file, in the same place and the same size `Update Preview`
-would have shown it in (`restore_pin` → `placed_pin_box`); with nothing picked it does nothing rather than losing the
+would have shown it in; a restore returns a pin to the box it went down in whether the bubble was carried or not, and only a bubble the hand carried is placed beside (`PIN_BUBBLE_CARRIED`, `placed_pin_box`), while every restore answers the claim, so a later taskbar collapse does not come back beside the hidden bubble's old place (`restore_pin` → `placed_pin_box`); with nothing picked it does nothing rather than losing the
 window. It never hides a pin, wherever the keyboard is — a pin is put up and a bubble is brought back, and that is all
 the key does; the key typed into whatever the pin appeared over cannot satisfy it. A pin is ended by the caption's close
 button, a right-click on the bubble, or `Escape` in a window that holds the keyboard. Alt+F4 cannot destroy one: a key
@@ -525,7 +527,10 @@ app's own media (`is_showing`), so the window that comes up is an ordinary pinne
   `HWND_NOTOPMOST`. A window that is not on the screen is shown with `HWND_TOP` beside the demotion, so a pin brought
   back by its button or its bubble stands over whatever was opened over it. Such a pin wears the app's own taskbar
   button while it is up, and the wheel is the pin's only while the pin is the window the user is in
-  (`pin_owns_foreground`) — a hover preview is unchanged.
+  (`pin_owns_foreground`) — a hover preview is unchanged. The app-window bit is the setting's rather than the take-up's:
+  written on the window of the pair that owns the chrome, off while **Always On Top** is on, a change to a window already
+  on screen followed by the hide and show the Shell reads (`a_button_is_owed`, `set_the_pin_window_appwindow`), and the
+  demotion asks every window the pin draws through, the chrome included.
 
 - State:
   `pin_window::{PinState::Down/Up(PinUp)/Ending(Reason), PinExit, end_pin, Closed/Asked/SwitchedOff/MediaGone/Hung}`;
@@ -626,9 +631,14 @@ each kind behind its own switch (`pin_pause_video`/`pin_pause_audio` — two swi
 different things to want quiet, and what should go quiet while a pin is away is a question about one kind of file), and
 the restore tick starts it again at the second it stopped at; the same two switches govern a pin put away into the
 taskbar, since the away-state is the same either way. Which of the two a minimize leaves — the bubble or the taskbar
-stand-in — is `pin_minimize_to`, read when the button is pressed. A pinned video's volume knob is the window's own,
-independent of `Volume → Video` for hovers, and a level a tray **Volume** row is moved to reaches a pin already playing
-at once (`PreviewMessage::TrayVolume` → `tray_volume_moved`) rather than at the next file it is shown;
+stand-in — is `pin_minimize_to`, read when the button is pressed. A pinned video's volume knob is the pin's own, and it moves
+the tray's `Volume → Video` level only where that half's **Remember Level** is on; a level the tray's own rows or a
+hand-edited `config.ini` is moved to reaches a pin already playing at once (`PreviewMessage::TrayVolume` →
+`tray_volume_moved`, published by the config watcher as well as the menu), the wheel over the knob steps it `5%` a notch
+from the level in hand, and the popup's box is frozen for the duration of a drag, so no chrome or card re-layout under
+the hand can move the groove the pointer is measured against; and the level is given to whichever player is running — a property down mpv's pipe, the media
+engine's own session, and FFmpeg's player at its Windows mixer session (`ask_the_ffplay_its_level`) — so no level alone
+ever ends a player;
 `remember_audio_volume`/`remember_video_volume` write the level on release, so the next hover — or the next film, or the
 next sound after a film and back — plays at it. What a kind's previews are like is its own half of
 `Preview Settings`: **Image** holds a `Pin Mode` of its own with the two questions a picture answers — `Shuffle`, and
@@ -709,11 +719,21 @@ rather than retried.
   `FindWindowExW`, since `EnumWindows` does not list them — re-moved while settling, a list the user moved is left),
   same end; no launch polling.
 
-The window is one rectangle with fixed button slots; a kind that draws to the edge (a video, an SVG) draws _over_ the
-chrome instead of being inset around it, so there is no second window to keep in sync. `Open With` deliberately ends the
+The window is one rectangle with fixed button slots, but it is not one surface. A film is drawn by another process's
+player in a window of its own, and a window of this app's cannot composite over it — so the film's host
+(`pin_film_host`) is a window of the desktop's standing at the whole of the pin's band, the pin's own window is an
+owned window of it (which is what gives the pair one band and one taskbar button), and the film reaches it as a DWM
+thumbnail of the player's own window (`pin_film_thumbnail`) rather than as a child. A thumbnail composes *over* its
+destination's own pixels, so the pin's layered surface paints an alpha-1 claim on the chrome's rows and no chrome in
+them, and the chrome has windows of its own — layered, **disabled** children of the pin's window at the caption's
+strip, the transport's and the volume popup's footprint (`pin_chrome_strips`), so they stand over whatever is in the
+band and stay in step with the pin's own paint. A disabled child is skipped by `WindowFromPoint`, and the host answers
+`WM_NCHITTEST` with `HTTRANSPARENT`, so a press on the chrome or on the band still lands on the pin and is answered by
+its coordinates. `Open With` deliberately ends the
 pin: it hands the file to another application, and keeping a preview up over a file the user has just opened in Word is
 not useful. It ends by asking for a close rather than closing directly, so there is exactly one path that tears a pin
-down. The two hand-off buttons name themselves while the pointer rests on them — **Open With** names the program it
+down. A hand-off is not a close: the end is noted as one (`note_pin_handed_off`, `PIN_HANDED_OFF`) and the hook holds
+hovers back until the pointer moves, so no card opens over the program that was just launched. The two hand-off buttons name themselves while the pointer rests on them — **Open With** names the program it
 would use (*Open With Adobe Photoshop*), read once when the window is pinned rather than asked of the machine on every
 repaint (`AssocQueryStringW` once), and **Open With...** says *Open With...*; a machine with nothing registered for the
 format has no program to name, so that button says nothing. The name hangs below the caption, over the picture, rather
@@ -721,11 +741,15 @@ than inside the strip — a name that wide would cover the buttons it describes.
 
 The pinned sound card's own menu holds the whole of what a pin does, and a window still standing opens the same panel on
 a right-click (`pin_menu::pinned_menu_paint`): `bubble_menu_rows(kind, standing)` gives it the shared rows with **To
-Bubble** above **To Taskbar**, and a page of text carries **Select All** / **Copy** / **Find Next** above them, read
+Bubble** above **To Taskbar**, and a page of text carries **Select All** / **Copy** / **Find** / **Find Next** above them, read
 against the media on screen on the paint and on the press alike; where the menu opens is the kind's own answer, and a
 film's title bar is the only way to it, the player's own band taking the clicks in the picture. A key that reaches the
 window with the panel up puts the panel away before it is answered, and a film is left in its own band while the panel
-is up rather than raised over it (`player_order` asks `pin_menu_open`). Its two flyouts are placed by the one
+is up rather than raised over it (`player_order` asks `pin_menu_open`). A card's menu ends in a rule and **Open in Default
+App** / **Open With...**, the caption's two hand-offs by another name; both are armed on the press and made on the release
+that follows (`pin_menu_hand_off_release`), because each raises a window under the hand that would take that release for a
+click of its own, and the end is noted as a hand-off (`note_pin_handed_off`) so the hook reads it as a hand-off rather
+than a close and holds hovers back until the pointer moves. Its two flyouts are placed by the one
 computation both placements ask (`menu_flyout_tier`): which side has the more room beside the menu decides which side
 the arrow points, and a panel narrower than the room it was measured in used to stand a whole reserve of empty space off
 the menu it came from, since the side was answered in the room the placement _reserves_ rather than the room the menu
@@ -748,10 +772,14 @@ own window now counts the bubble's window as the pin's own (`pin_menu_dismiss_as
 press on it is answered there (`bubble_menu_press`) rather than dismissed — so the loop's tick puts that menu away the
 way it puts the card's, with the pin left standing.
 
-Where the window goes when it comes back: out of the bubble it is centered where it is (`placed_pin_box`), rather than
-jumping back to where it was before it went away, and a maximized one restores around the center of the screen it is on.
-A caption pinned at the top of the screen is clamped onto it, not drawn off the top with its buttons. The bubble always
-lands in the same place — on the minimize button (`pinned_minimize_box`), rather than on the window's corner, so
+Where the window goes when it comes back: to the box it went down in, and only a bubble the hand carried places it
+beside itself (`PIN_BUBBLE_CARRIED`, `placed_pin_box`), rather than jumping back to where it was before it went away —
+every restore answers the claim, so a later taskbar collapse does not come back beside the hidden bubble's old place; a
+maximized one restores around the center of the screen it is on, and a menu's **To Bubble** row puts the bubble on the
+point the row was pressed rather than on the minimize button (`PinCommand::MinimizeToAt`, `collapse_pin_to_at`), because
+the hand named a place when it chose that row. A caption pinned at the top of the screen is clamped onto it, not drawn
+off the top with its buttons. Every other collapse lands the bubble in the same place — on the minimize button
+(`pinned_minimize_box`), rather than on the window's corner, so
 repeated collapses no longer wander, and it no longer remembers a position from an earlier move. Dragging a bubble no
 longer stutters or overshoots, and it stays under the hand where it was grabbed rather than jumping to its middle
 (`drag_pin_bubble` slop `PIN_DRAG_SLOP_PIXELS`, `carry_bubble_drag` bounded by `Carry` + `PIN_BUBBLE_DRAG_CARRY_MS`); a
@@ -893,7 +921,10 @@ held frame, no cover and no reload (see "The film road").
   `RestartReason`), while the one subtitle mpv can simply be handed writes `subtitle added without a restart` and begins
   nothing; level at start, `0%`=no player; `remember_audio/video_volume` write on release; sound card = own controls
   (`control_boxes/control_at`, `BAR_REACH/GAP_PIXELS`), no caption (`pinned_caption_height`=0), `Space`=hold, bar=seek
-  (`PIN_AUDIO_TOGGLE/SEEK`, `toggle/restart_pinned_audio`, `playing_player`); unknown len = block bar, seek refused.
+  (`PIN_AUDIO_TOGGLE/SEEK`, `toggle/restart_pinned_audio`, `playing_player`); unknown len = block bar, seek refused. A
+  card's command bar is asked out only by a hand near its own row (`pin_audio_command_bar_band`,
+  `AUDIO_COMMAND_BAR_REVEAL_PIXELS`), and the card's two window buttons surface for a hand inside their band *and*
+  across their columns (`pin_audio_window_buttons_at`, `audio_preview::window_button_span`).
 
 What a *hold* is, is the question a play/pause press answers (`a_sound_that_is_held(paused, player, engine_paused)`):
 the second a player of this app's is paused at is written down, but an engine's hold is the engine's own state and was
@@ -937,7 +968,12 @@ second for a press to mean.
   path in); a sound a pin is *taken up* over is the sound the hover was already playing and no player is begun for it,
   so it is begun again at the second it is at where the two rules disagree — which is the only way a player of this
   app's can be told anything — and left exactly as it is where they agree, every sound under the default `End of File`
-  (`take_up_pinned_audio`, `a_taken_up_sound_is_begun_again`); `End of File` (`Pause` / `Loop` / `Jump`, written
+  (`take_up_pinned_audio`, `a_taken_up_sound_is_begun_again`); that beginning again is now only the fallback, since where
+  the rules disagree the pass is played out and the pin's `End of File` answered at the seam — a player that loops
+  itself never exits, so the clock says the file has come round (`A_PASS_END_SEAM` `0.05 s`, or a clock fallen
+  `A_PASS_END_MARGIN` `0.5 s` behind the take-up's second) and the end is enacted before the engine's own end is read,
+  and only a file with no nameable length, or one already at its end, is begun again (`owe_a_pass_end`,
+  `end_a_sound_a_pin_took_up`); `End of File` (`Pause` / `Loop` / `Jump`, written
   `pause`/`loop`/`continue`) at `Pause`: the end holds the card instead (`audio_paused = Some(0.0)`, play button at
   `0:00`, session let go, the press plays the file again from its beginning) on both players, and `pinned_pass_end` is
   the one rule the two ends read. Normalize: `ebur128` → gain to −14 LUFS vs −1 dBTP (`audio_track::gain`,
@@ -1260,6 +1296,21 @@ and re-crops like any other box change. A hover that is never pinned takes its s
 FFmpeg's player's hover is begun at the film's own size on the desktop and the pin promotes that same host, which is
 what keeps a take-up from relaunching a player that cannot be told where to start.
 
+**A hover's film is loaded on one mpv kept warm between hovers** (`mpv_resident::serve`), begun idle from the hover's
+own argv with no file and parked off every display at 1×1, and a resident begun under a signature a hover cannot change
+is ended and begun again rather than reused. A resident serves only while no pin stands, and it is the pin's from the
+moment a pin takes the hover's player over — which leaves a fresh one owed, begun by the tick once no pin stands and none
+is held; only a standby resident whose **MPV TTL** has run out is ever reaped. The pipe is waited on only for a resident
+this hover began, and a file that has not answered `video-params` inside `FILE_LOADED_WAIT` is stopped and left warming
+rather than ended.
+
+**A level is coalesced rather than written per message.** The popup is drawn at the level at once and the engine is told
+the latest one at most once a preview tick (`flush_pin_volume_level`), and FFmpeg's player takes it through a single slot
+that keeps only the last request, on the thread that holds the mixer's apartment. A level of nothing is a slider at `0.0`
+and never a mute. **Every level this app gives a player is written to the trace** — `volume takeup`, `volume press`/
+`volume drag`, `volume set`/`volume target`, `volume ramp applied`, and `volume settle … playing_at`, which says whether
+the level is one a player was told or one still owed, so a knob a hand turned is told apart from a film born quiet.
+
 **A film pin put away into the taskbar is its host minimized, and the hover of that button is a still this app takes
 itself.** The host is the window Windows lists on this road — it owns the pin's chrome (`own_the_pin_window`), so the
 Shell's button belongs to it and not to the pin, and a minimize is `ShowWindow(host, SW_MINIMIZE)` after the source the
@@ -1389,8 +1440,9 @@ proved a fault it now cures**: of eighteen players in one captured run, two had 
 and the player can see only its own. So a **guarded** player's session is looked at for every read the guard already makes
 (`audio_session::look_and_cure`, on the guard's probe thread and straight after the engine ask), and a mute found on is
 taken off with one write — `ISimpleAudioVolume::SetMute(false)` — **whether or not `RHP_PLAYBACK_TRACE` is set**, because
-the trace is the recorder and the cure is the fix. **Nothing else is ever set**: not the master volume, not a per-channel
-volume, not `IAudioEndpointVolume`. **A session muted with its slider at nothing is a hand in Windows' own mixer**, so it
+the trace is the recorder and the cure is the fix. **Nothing else is written by the cure**: not the master volume, not a per-channel
+volume, not `IAudioEndpointVolume` — the master volume is the app's own level and is written only by `set_the_mixer_level`
+for a film's knob, on the same walk and the same apartment (see `ask_the_ffplay_its_level`). **A session muted with its slider at nothing is a hand in Windows' own mixer**, so it
 is written down and left as it is (`session turned down … left alone`), because putting it back would overwrite a
 deliberate setting; and a mute the mixer refused, or a walk that could not be made, is written as a failure rather than
 swallowed (`session unmute failed …`). **COM is taken on that thread's own apartment** (`COINIT_MULTITHREADED`, given
@@ -1491,7 +1543,11 @@ launch a guard alone stands behind keeps `warning`, which is where its own cure 
 a trace of keeps the argv it had. A match against four strict
 fragments (`Could not open audio device`, `Failed to initialize the SDL audio`, `Failed to initialize audio`,
 `Could not initialize audio`) begins that player again once; an ordinary warning is not a signature, and a line the
-stream never carried is not one either.
+stream never carried is not one either. **The pipe and the thread that empties it are one contract** (`player_logs`): a
+pipe nobody reads fills, and a player blocked on a full pipe stops playing, so the drain starts with the player, keeps no
+more than one line, and ends when the pipe closes with the process — nothing on the UI thread, and no lock the paint
+wants. What that buys is the one account a hung player or a film with no sound is diagnosed from: the player's own lines,
+at the level the launch asked for, in `playback_trace`.
 
 **Nothing here waits on the preview loop.** A player that has only just been begun has no pipe yet, so a thread asks
 and leaves the answer where the tick finds it, and the tick is what writes and decides. Its last rung is the pin's own
@@ -1506,11 +1562,12 @@ needs a player that draws into a window of its own, whose picture size is known 
 (so the source can be placed at it), and that is happy to render at that size while the pin is any size — the Shell does
 the scaling from there. The engine must never be asked to change that size while a pin is alive, and any engine whose
 film is sized per step, whichever it is, reintroduces the race described above. **What an engine cannot do decides how
-the road gets its two numbers, and nothing else.** FFmpeg's player is told nothing once it is running and has no API to
-answer with, so its picture size comes from the probe and every seek, volume change or late subtitle copy is a relaunch
-— which the road takes as a new window and therefore a new source, adopted and placed once, with the picture before it
-kept until the new one can draw. mpv answers over its pipe, so its size is its own answer and a seek is a line down that
-pipe. An engine that could do neither would need a third: a size known at launch and a window that outlives the film.
+the road gets its two numbers, and nothing else.** FFmpeg's player has no API to answer with, so its picture size comes
+from the probe and a seek or a late subtitle copy is a relaunch — which the road takes as a new window and therefore a
+new source, adopted and placed once, with the picture before it kept until the new one can draw. A level is the one thing
+that reaches it while it runs, at its Windows mixer session (see `audio_session`), so changing the sound never relaunches
+a film. mpv answers over its pipe, so its size is its own answer, a seek is a line down that pipe, and its level is a
+property. An engine that could do neither would need a third: a size known at launch and a window that outlives the film.
 
 **Where the code is.**
 
@@ -1524,7 +1581,7 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/video_playback.rs` | both launches: where a film is born (the desktop, at its own size, borderless) and which host keeps it |
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
 | `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it — the level asked for beside the level it is at — both players' own lines, and a kill's confirmation |
-| `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), who it is — both identifiers whole, the image the pid runs, and the sessions the endpoints listed beside it, each with `dead` on one whose process has ended — the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none — and the one write this app makes to the OS: a muted session's `SetMute(false)` under a guarded player at a slider that is up |
+| `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), who it is — both identifiers whole, the image the pid runs, and the sessions the endpoints listed beside it, each with `dead` on one whose process has ended — the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none — the two writes this app makes to the OS: a muted session's `SetMute(false)` under a guarded player at a slider that is up, and the master volume `SetMasterVolume` a film's or a sound's level asks for |
 | `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict with the machine's own answer folded into it (`session-muted` being the fourth road), the in-place rungs and the one relaunch, the asks of a player that has said nothing being bounded by its own readiness, the level it stands for being the one this app last asked for, the hover's in-place-only road, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |
@@ -1636,6 +1693,24 @@ and cannot be scaled afterwards. A change to one kind rebuilds only that kind's 
 would be visible as a flash on formats that have nothing to do with the setting changed. Themes are loaded per menu
 build, not cached forever, so editing a `.tmTheme` file and reopening the tray menu is enough. Text is also the one kind
 that force-reads: an unsupported format shows no preview, except text, which the app will try to force-read.
+
+**A pinned page is a document, and its presses and its marks follow from that.** A third press inside the same time and
+box takes the whole document line the word is on, break included and nothing painted past the text, and the word a double
+press took stays whole for as long as the drag after it runs, which grows a run at a time rather than a character. The
+column a line's text begins in is part of the painted line, so a caret on an empty line stands past the numbers and past
+the indent, where `Home`/`End`, the arrows onto it and a press in the gutter beside it all land at column 0. A move is
+queued from the window procedure and answered on the tick, and the hook signals the loop where it counts, as a wheel
+notch does, so a batch of presses is drained in one tick and a move reads the document the page already holds rather than
+asking the disk whether the file changed.
+
+**A theme that names neither find colour gets a find band derived at 0.65 from the page and its foreground**, every other
+match a 0.75 wash of it and the current one opaque, with matched glyphs chosen by luminance against the band they sit on —
+so a find out-ranks the selection's 0.25 rather than reading as the same grey; an explicit theme find colour or
+foreground still wins (`find_ink`). `Ctrl`+`C` is no longer the field's unconditionally: it copies from the surface the
+reader was last in (`FindFocus`, `text_find::copy_target`) — the query on `Ctrl`+`F` or a press in it, the page on a press
+or drag in it — and a surface with nothing selected gives the chord back to the other. The find bar's two chevrons step
+on the press and then repeat while held, a 350 ms delay and a 90 ms interval (`HOLD_DELAY_MS`, `HOLD_REPEAT_MS`),
+disarmed by the release, by a close and by a capture taken away.
 
 - Archive page (`archive_preview` + `archive_listing`): TOC→`Listing` (zip/7z/UnRAR/tar+flate2); never resolve/join/open; folders-first natural sort, collapse, Fluent/MDL2 glyphs; 100 rows + `… and N more`; unscrollable; cache (path,mtime,len); engine listings separate.
 
@@ -1835,6 +1910,9 @@ while **System → Theme** still re-styles a card on screen.
   `video_engine` (`best`/`mpv`/`ffmpeg`/`native`/`hybrid`) + `video_engine_fallback` (read only where the choice names
   an engine — **Best** walks both either way; a choice the machine cannot supply reads as `best`),
   `trigger_key_affect_pin_mode` (default `false`), `pin_key`/`pin_enabled`, `pin_update_enabled`/`pin_update_on_hover`,
+  `toggle_key` (default `f7`: throws `preview_enabled` while Explorer is in front, never swallowed, and named in the
+  tray's **Enable Preview** row), `pin_update_move_to_top` (default `true`: an update also puts the pin at the top of its
+  band without taking the keyboard, and the row is greyed while `pin_update_enabled` is off),
   `pin_double_click_center`/`pin_double_click_reset_size` (both `true`: a double-click lays a pin out again at the size
   its kind's scale names and puts it in the middle of the screen it stands on),
   `pin_nav_video`/`pin_nav_audio`/`pin_nav_others` (`all`/`category`; Video/Category, Audio/Category, Others/All by
@@ -1867,7 +1945,9 @@ while **System → Theme** still re-styles a card on screen.
   place, so a read a second later took half of what they were writing and put the whole of the app's own view back over
   the rest of it. It is also what made an outside write stay — the app read what some other writer had put there, and
   the next thing on disk was the app's own agreeing with it. `differs` is therefore no longer consulted on the read path
-  at all.
+  at all. A reload keeps a volume level this process last wrote — `save` records what it put on disk, and a reload that
+  finds the file still holding that level keeps the level in hand, so a knob a hand has turned past it is not snapped
+  back; a level the file holds at anything else is a hand edit and is taken whole.
 
 Each list row records five things about itself — the built-ins it shipped with, how a name is matched, how it is
 normalised, which field it holds, and what it was `before` the user last edited it. That last one is what makes
@@ -1878,8 +1958,9 @@ missing key, which means "restore the built-ins and rewrite the file". Retired k
 an old install's file converges to the current shape on first save. Two match rules: an entry with a dot, like `tar.gz`,
 matches the end of the file's whole name rather than an extension; and a name two sections hold belongs to the earlier
 kind, so the kind decides which switch applies to it. No `ImageMagick TTL`, `PeaZip TTL` or `Calibre TTL`: those tools
-run once and exit, so idle time cannot bound them — a second hover is a cache hit. The players are the same kind of
-short-lived: ffplay/mpv live exactly as long as the preview they draw, so there is no player TTL either.
+run once and exit, so idle time cannot bound them — a second hover is a cache hit. Nothing bounds `ffplay`, which lives
+exactly as long as the preview it draws; the mpv every hover is shown through is one resident kept between films (see
+**The film road**), and `MPV TTL` (`video_engine_idle`, default `away`) is the whole of what ends it.
 
 Every start reads what the startup entry names against the path this process is running from and rewrites it where the
 two are not the same file, so the machine starts the copy you launched — not a portable copy unpacked in a folder, an
@@ -1928,7 +2009,7 @@ run registers anything of its own.
 
 An update is an installer, not a patch: the running copy is handed over via `/S /R`, which means silent install plus relaunch, so the check verifies the downloaded file is a PE image (`MZ`) of a plausible length before it is trusted at all.
 
-- Build: MSVC + `rust-lld` (`.cargo/config.toml`); `build.rs` + `winres`; release kills running copy (src-watch; debug exempt); `cargo packager` NSIS from `packaging/nsis/installer.nsi` (silent uninstall, close running); `github` profile (`target/github`, `build-installers.ps1` pinned packager) vs `release` thin-LTO loop.
+- Build: MSVC + `rust-lld` (`.cargo/config.toml`); `build.rs` + `winres` — the icon, the version block and a manifest declaring Windows 8 and later (the declaration is what stops `CreateWindowExW` refusing `WS_CHILD` with `WS_EX_LAYERED`), a failure rather than a warning where they do not compile, and the resource archive named as the binary's own link argument because a build script's `rustc-link-lib` reaches the library target (`tests/executable_icon` asks the linked executable); release kills running copy (src-watch; debug exempt); `cargo packager` NSIS from `packaging/nsis/installer.nsi` (silent uninstall, close running); `github` profile (`target/github`, `build-installers.ps1` pinned packager) vs `release` thin-LTO loop.
 
 Two build profiles, two jobs. `release` is the fast inner loop: thin-LTO for quick incremental builds, no installer, and
 it kills the running copy first because the linker cannot overwrite an executable that is mapped. The `github` profile

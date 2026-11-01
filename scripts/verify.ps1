@@ -96,9 +96,10 @@ $integration = @(
 # The tests that assert a fact about the desktop rather than about this code: whether this process
 # may take the foreground, what the Shell's band looks like, which window a synthetic pointer
 # passed over, which window a player is drawn through. On a machine whose desktop is different they
-# fail for reasons this repository cannot fix, so they are named out of the default run -- the same
-# nine names .github/workflows/ci.yml names out, and the two lists must not disagree about what
-# "passing" means here. They are not removed from the tree, and `-Filter <name>` runs one by name,
+# fail for reasons this repository cannot fix, so they are named out of the default run. No
+# workflow names them out -- .github/workflows/ci.yml runs no suite at all -- so this list and
+# `-Pure` are the whole of what a session with no desktop is held to. They are not removed from
+# the tree, and `-Filter <name>` runs one by name,
 # which is how each is judged rather than counted.
 $desktopDependent = @(
     "a_host_activation_hands_the_keyboard_to_the_pin",

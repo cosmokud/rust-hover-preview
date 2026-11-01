@@ -116,6 +116,8 @@ Each release provides two options:
 - `rust-hover-preview_<version>_x64-setup.exe` — NSIS installer. Installs to `%LOCALAPPDATA%\rust-hover-preview` with an optional startup entry.
 - `rust-hover-preview.exe` — portable standalone binary. Run it from any folder.
 
+The installer also puts `app.ico` beside the executable, and the Installed apps entry draws its icon from that file rather than from the exe an update replaces.
+
 1. Open [Releases](../../releases).
 2. Download your preferred asset.
 3. Run the installer, or place the portable binary wherever you like.
@@ -266,8 +268,9 @@ On Top** is off, in which case it is an ordinary window that also wears this app
 button while it is up. `Space` in a focused pin pauses and resumes a sound; a minimized pin
 sits in a draggable bubble — or in that taskbar button — that a middle click or `Space` in Explorer brings back.
 Arrow keys walk siblings, `Escape` closes. A right-click on a pinned window opens its own menu,
-and a pinned page of text takes the keyboard: the arrows and page keys scroll it, `F3` finds
-the next place the selection appears, and `Ctrl` and a wheel sizes it.
+and a pinned page of text takes the keyboard: the arrows move a caret a line at a time and the
+page keys a screenful, `Ctrl+F` opens a find bar, `F3` finds the next place the selection appears,
+and `Ctrl` and a wheel changes that page's text size.
 
 ## System Tray Menu
 
@@ -282,7 +285,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - **Open With** — Opens the file in whatever program Windows has registered for it.
       - **Open With...** — Asks you to pick one from the list Windows keeps of the programs that could.
       - The two hand-off buttons name themselves while the pointer rests on them; **Open With** names the program it would use.
-    - A **right-click** on a pinned window opens the pin's own menu — the panel a collapsed pin's bubble opens: the hold, **Next File**, **Previous File**, **Pause on Minimize** where the kind plays something, the two picks of where a minimize sends the pin, **To Bubble** / **To Taskbar** to put it away at once, then **Close**. A pinned page carries **Select All**, **Copy** and **Find Next** above them, and a sound's card keeps its own menu. A film's title bar is the way to it, since the player's own band takes the clicks in the picture.
+    - A **right-click** on a pinned window opens the pin's own menu — the panel a collapsed pin's bubble opens: the hold, **Next File**, **Previous File**, **Pause on Minimize** where the kind plays something, the two picks of where a minimize sends the pin, **To Bubble** / **To Taskbar** to put it away at once, then **Close**. A pinned page carries **Select All**, **Copy**, **Find** and **Find Next** above them, and a sound's card keeps its own menu. A film's title bar is the way to it, since the player's own band takes the clicks in the picture.
     - A caption the hand has narrowed past the point of saying the file's name leaves the name out, and one narrowed past ten pixels leaves the strip out altogether — a row of window buttons over the top of somebody's picture is not what the strip is for. Both come back as the window is widened.
     - Its edges resize it; what that does depends on what is inside.
       - A picture, video, or rendered page keeps its own shape.
@@ -290,20 +293,22 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - A sound's card keeps the size **Audio** names, and a video `ffplay` has is not resized at all.
     - A picture's caption and bar are drawn over the media rather than in bands around it, and fade in as the pointer arrives; only the strip under the pointer is shown.
     - A wheel over a pinned picture zooms it: the window grows about the picture's middle to the size its scale's fit names, then the picture grows inside the window that has stopped, about the cursor. A wheel back out takes it down the way it came, and a picture the hand has carried off its window comes home over the last of the zoom with a small swing past its place. A film is not zoomed — its picture belongs to its player.
-    - A pinned video carries a transport bar of its own: play/pause, a draggable seek bar, and the two clocks.
-      - Where FFmpeg's player is the one playing it, a read-out bar appears instead, since that player can be told nothing.
+    - A pinned video carries a transport bar of its own: play/pause, a draggable seek bar, the two clocks, and a volume button.
+      - The wheel over that volume button or the panel it opens turns the level `5%` a notch, and the level glides there rather than jumping.
+      - FFmpeg's player gets the same bar: a seek is a relaunch, and a level is written to that player's Windows mixer session, so the film plays on while the knob turns.
     - A pinned sound's card carries four buttons of its own: **Previous**, **Play/Pause**, **Next**, and **Volume**.
       - `Space` holds a sound where it stood and sets it going again from there.
       - The mark beside the name is a dot the ripples of a beat travel out from: the bass under the sound sends them, and a pause brings them home. Which band they follow is `beat_hz` in `config.ini` — `off`, or a top of band between `20 Hz` and `16 kHz` (`250 Hz` by default). The dot is centred on the name line's own ink, and `audio_mark_offset_y` shifts it up or down from there in pixels (`0` by default, `-100` to `100`).
       - A click on a sound's bar takes the file to that second.
       - A right-click on the card opens the card's own menu in a panel of its own over the screen: the whole of what a pin does — the two ways out, the file's own playback, then **Shuffle**, **End of File** and **Seek**.
+        - Below a rule after **Seek**, the card offers **Open in Default App** and **Open With...**, which hand the file over and end the pin the way the card's own two buttons do.
     - A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied.
       - `Up`, `Down`, `Page Up` and `Page Down` move a screenful at a time, and `Home` and `End` take the page to its top and its last screenful.
       - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected; `F3` takes the page to the next place what is selected appears.
       - `Ctrl` and a wheel steps the page's own text size through the sizes **Text → Font Size** offers; the size rides across a resize and the next file of a walk, and closing the pin gives it up.
       - A press begins a selection, `Shift` grows it, and a second press takes the word under the pointer; a drag carried past the page's edge scrolls it three lines a tick, a wrapped line copies whole, and **Select All** means the page rather than the screenful.
       - A page of code keeps a column of line numbers down its left.
-    - A pinned video has a transport bar with a volume of its own, set on the window; it does not change **Volume → Video**.
+    - A pinned video's transport bar carries a volume of its own, set on the pin; it does not change **Volume → Video** unless that half's **Remember Level** is on.
     - **Maximize** fits the window to the screen.
     - A **double-click** puts the window back to the size its kind's scaling setting names and in the middle of the screen it stands on (both halves are switches in `config.ini`: `pin_double_click_reset_size` and `pin_double_click_center`, both on).
     - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a film's bubble keeps showing the film, and holds the frame it stopped on when it is paused; a right-click on the bubble opens its own menu: the same playback rows, then **Pause on Minimize** where the kind behind it plays something, then the ways out; **Play** there gives back a park the collapse made, without waiting for the window), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
@@ -318,6 +323,8 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - Stepping over a file that will not open belongs to the caption's own **Previous** and **Next**, which you pressed.
       - A sound's card is drawn at the size its **Audio** setting names, in the middle of that box; it follows **System → Theme**, and no longer **Font Size**.
       - The keyboard half follows Explorer, so it pauses while a pinned window holds the keyboard; click back into the listing and it carries on.
+    - **Move To Top** — On by default (`pin_update_move_to_top`).
+      - A file an update shows also puts the pin at the top of its own band without taking the keyboard from the listing; greyed while **Follow Selection** is off.
     - **On Hover** — Off by default.
       - On, the pointer's own hover is one of the ways a pin is told about a file, the way a Quick Look window follows a listing.
       - Greyed while **Follow Selection** is off.
@@ -462,7 +469,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **LibreOffice** — Draws every Office document.
     - LibreOffice is greyed out if not installed.
   - **MPV TTL** — How long the player is kept between films: **Until away** (`default`), `30 seconds`, `1 minute`, `5 minutes`, `10 minutes`, `30 minutes`, `1 hour`, `Indefinitely`, `Never (0 seconds)`.
-    - The setting is stored and marked today; keeping a player warm between films is not wired to it yet.
+    - One mpv is kept warm between hovers and every film is loaded into it; this is what ends it — **Until away** while you are at the keyboard, a time that long after its last film, **Indefinitely** until the app exits, and **Never (0 seconds)** the moment a film ends. A pin that takes that player over keeps it for as long as the pin is up (`video_engine_idle`).
     - Greyed out where `mpv` is not installed.
   - **Microsoft Office TTL** — How long a family's Office app stays warm: **Until away** (`default`), `30 seconds`, `1 minute`, `5 minutes`, `10 minutes`, `30 minutes`, `1 hour`, `Indefinitely`, `Never (0 seconds)`.
     - **Until away** is kept while Explorer is reachable, then let go by **Away Timer**; a time is that long after the family's last page.
@@ -510,6 +517,7 @@ pin_nav_others=all
 pin_nav_video=category
 pin_update_enabled=true
 pin_update_on_hover=false
+pin_update_move_to_top=true
 preview_enabled=true
 run_at_startup=true
 theme=light
@@ -599,15 +607,13 @@ video_hw_accel=true
 
 ; Engine
 afk_timer_seconds=60
-libreoffice_idle=600
-libreoffice_persistent=false
+libreoffice_idle=away
 office_engine=microsoft_office
-office_engine_idle=600
-office_engine_persistent=false
+office_engine_idle=away
 video_engine=best
+video_engine_idle=away
 video_engine_fallback=true
-webview_idle=600
-webview_persistent=false
+webview_idle=away
 
 ; Advanced
 hdr_exposure=0
@@ -685,9 +691,8 @@ spinner_delay_ms=250
   - Read where a preview begins, so a film already playing keeps the player it was begun under; a change reaches the next hover, or a pin's next file.
 - `mpv_path`: which `mpv.exe` plays, written by **Codecs → Videos → MPV** where the machine has more than one. Empty, the default, means the first one found — beside the app, then the `PATH`, then `MPV Player` under Program Files, then SVP's `mpv64`. The only setting that holds a path.
 - `video_engine_fallback`: `true` (default) lets a chosen engine that cannot play a given file fall through to the engines it may — a chosen `mpv` to both of the others, `native` and `ffmpeg` to each other — and `false` makes the engine you chose stand alone. Read only where `video_engine` names an engine; **Best** is its own walk either way.
-- `libreoffice_idle` / `office_engine_idle`: seconds the engine is kept after its last page, or `indefinitely`. Default `600`; `0` launches it per document.
-- `afk_timer_seconds`: seconds with no Explorer window before a non-persistent engine is released. Default `60`, max one day. `0` releases immediately.
-- `office_engine_persistent`, `libreoffice_persistent`, `webview_persistent`: `true` keeps that engine always, bounded only by its `…_idle` time. `false` default keeps it while Explorer is reachable, bounded by `afk_timer_seconds`.
+- `video_engine_idle` / `libreoffice_idle` / `office_engine_idle` / `webview_idle`: how long each engine is kept after its last file — `away` (default) keeps it while Explorer is reachable and lets it go after `afk_timer_seconds`, a number of seconds is that long after the last page (or film, for mpv), `indefinitely` until the app exits, and `0` lets it go at once. The tray's **MPV TTL**, **Microsoft Office TTL**, **LibreOffice TTL** and **WebView2 TTL** write them.
+- `afk_timer_seconds`: seconds with no Explorer window before an engine set to `away` is released. Default `60`, max one day. `0` releases immediately.
 
 ### Trigger and position
 
@@ -709,6 +714,7 @@ spinner_delay_ms=250
   - Off, the pin keeps the file it was taken up on until it is closed — a pin is also a window to read in, and one that swapped its file out from under the hand on every keystroke would be unreadable.
   - The keyboard half follows Explorer, so it is inert while a pinned window holds the keyboard — click back into the listing and it resumes.
 - `pin_update_on_hover`: whether that following includes the pointer's own hover, or only what a click or a key asks for. Default `false`; greyed in the tray while `pin_update_enabled` is off.
+- `pin_update_move_to_top`: whether a file an update shows also puts the pin at the top of its own band, without taking the keyboard from the listing. Default `true`; greyed in the tray while `pin_update_enabled` is off.
 - `pin_nav_video` / `pin_nav_audio` / `pin_nav_others`: what the caption's **Previous** and **Next** buttons step through, by the walk's anchor — the first file pinned. Video and Audio default to `category`, Others to `all`.
   - `all` is every file this build can preview, so a video steps to the sound beside it.
   - `category` narrows the walk to the anchor's category — video, audio, or the anchor's own kind for Others, where a camera raw is a picture and a book is a document.
@@ -757,6 +763,7 @@ spinner_delay_ms=250
 - `pin_nav_file_types`: gone. Use `pin_nav_video`, `pin_nav_audio` and `pin_nav_others`; a file holding only the old key seeds all three with it.
 - `video_jump_enabled` / `audio_jump_enabled`: gone. Use `video_loop` / `audio_loop`.
 - `pin_mode_video_jump_enabled`, `pin_mode_audio_jump_enabled`, `pin_mode_video_jump`, `pin_mode_audio_jump` and `pin_mode_audio_loop`: gone, replaced by `pin_mode_video_end_of_file`/`pin_mode_audio_end_of_file` beside `pin_mode_video_shuffle`/`pin_mode_audio_shuffle`. A file holding one is read once into the settings that replaced it — `…_jump_enabled = false` as `pause`, `…_jump = shuffle` as `continue` with shuffle on, an old `…_loop` as `continue` — and the retired keys are dropped on the next save.
+- `office_engine_persistent`, `libreoffice_persistent` and `webview_persistent`: no longer written and read only once — `false` reads as `away`, `true` as that engine's `*_idle`, or `indefinitely` where it names nothing — and a save drops them.
 - No `magick_idle`, `peazip_idle`, or `calibre_idle`. ImageMagick, PeaZip, and Calibre are converters, not engines kept open. A second hover usually costs only a cache hit.
 
 ### Extension list behavior
