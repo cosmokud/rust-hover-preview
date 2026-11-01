@@ -532,13 +532,16 @@ pub(super) fn refresh_pin_chrome(
 ///
 /// A pointer resting on the card is asked about every control at once rather than one at a time,
 /// because the card is a media frame and not a strip of chrome: there is no band of it to come and
-/// go, so what a hand is on is settled on this clock and nowhere else.
+/// go, so what a hand is on is settled on this clock and nowhere else. What the hand must also be
+/// near is the card's own command bar, so that a hand on the artwork asks for nothing (see
+/// `pin_audio_control_revealed`).
 pub(super) fn pin_audio_hover_refresh(pin: &mut PinnedPreview, cursor: Option<(i32, i32)>) -> bool {
     let window = pin.window_box();
     let hovered = cursor.and_then(|(x, y)| {
         (x >= window.0 && x < window.2 && y >= window.1 && y < window.3)
             .then(|| pin_audio_control_at(pin, x - window.0, y - window.1))
             .flatten()
+            .filter(|control| pin_audio_control_revealed(pin, y - window.1, *control))
     });
 
     // The two window buttons come and go with the hand as well, and are

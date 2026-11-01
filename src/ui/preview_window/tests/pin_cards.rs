@@ -2106,3 +2106,82 @@ fn a_play_on_a_collapsed_pins_bubble_begins_the_parked_sound_again() {
     let _ =
         std::fs::remove_dir_all(std::env::temp_dir().join("rust-hover-preview-pin-bubble-play"));
 }
+
+/// The card's command bar is asked out by a hand near the row its controls stand in, and by
+/// nothing else: a hand on the artwork's own rows — the top-left of the card — leaves the row
+/// unlit, and a hand one row past the band's margin is no longer near it. Asked at two display
+/// scales because the row and its margin are read at the display's own scale.
+#[test]
+fn a_hand_on_the_artwork_does_not_ask_the_cards_command_bar_out() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+
+    for dpi in [96u32, 192] {
+        let mut pin = sound_pin();
+        pin.dpi = dpi;
+        let window = pin.window_box();
+        let width = (pin.content.2 - pin.content.0).max(1) as u32;
+        let play = audio_preview::control_box(
+            CardControl::Play,
+            width,
+            dpi,
+            current_audio_options(),
+            true,
+        )
+        .expect("a button on the card's own row");
+        let bar = audio_preview::control_box(
+            CardControl::Seek,
+            width,
+            dpi,
+            current_audio_options(),
+            true,
+        )
+        .expect("the card's own bar");
+        let (top, bottom) = pin_audio_command_bar_band(&pin).expect("a band over the row's rows");
+        let margin = logical_px(dpi, AUDIO_COMMAND_BAR_REVEAL_PIXELS);
+        assert_eq!(
+            (top, bottom),
+            (
+                play.top.min(bar.top) - margin,
+                bar.bottom.max(play.bottom) + margin
+            ),
+            "the band is the row widened by the margin at this display's scale"
+        );
+
+        stand_pin(Some(pin));
+
+        let hovered_at = |x: i32, y: i32| {
+            pin_state().and_then(|mut pinned| {
+                let pin = pinned.pin_mut()?;
+                let _ = pin_audio_hover_refresh(pin, Some((x, y)));
+                Some(pin.audio_hovered)
+            })
+        };
+
+        // The artwork's own top-left corner: a hand on the card, nowhere near its row.
+        assert_eq!(
+            hovered_at(window.0 + 1, window.1 + 1),
+            Some(None),
+            "a hand on the artwork asks for nothing at {dpi} dpi"
+        );
+
+        // The row itself, where the bar is drawn: the hand is near it and the row is lit.
+        assert_eq!(
+            hovered_at(
+                window.0 + (bar.left + bar.right) / 2,
+                window.1 + (bar.top + bar.bottom) / 2
+            ),
+            Some(Some(CardControl::Seek)),
+            "a hand on the command bar's own row is a hand on its bar at {dpi} dpi"
+        );
+
+        // One row past the band's margin: near the row, and no longer near enough.
+        assert_eq!(
+            hovered_at(window.0 + (bar.left + bar.right) / 2, window.1 + top - 1),
+            Some(None),
+            "a hand past the margin is a hand on the artwork at {dpi} dpi"
+        );
+    }
+
+    stand_pin(previous_pin);
+}
