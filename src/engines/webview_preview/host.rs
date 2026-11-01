@@ -8,13 +8,14 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 };
 use webview2_com::{NavigationCompletedEventHandler, TrySuspendCompletedHandler};
 use windows::core::{Interface, PCWSTR};
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW, KillTimer, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE, HWND_NOTOPMOST,
-    HWND_TOPMOST, MSG, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW, KillTimer,
+    SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TranslateMessage, GWL_EXSTYLE, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, LWA_ALPHA, MSG,
+    SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE,
 };
 
 use super::api::{
@@ -25,7 +26,7 @@ use super::engine::trace;
 use super::environment::{
     background_color, configure, create_controller, create_environment, create_host_window,
     ex_style_for, file_version, register_class, remaining, set_scripts, user_data_folder, wide,
-    HOST_CREATION_TIMEOUT,
+    HOST_CREATION_TIMEOUT, SOURCE_ALPHA,
 };
 use super::pages::{font_page, frame_page, html_page};
 
@@ -58,6 +59,10 @@ pub(super) struct Host {
     /// owed only by a box that changed *size*, and a drag that changes only where the window
     /// is has no reason to ask the browser to lay the document out again (see `place`).
     last_area: Option<(i32, i32)>,
+    /// Whether this window has been placed as a pin's *source* already: a page the pin draws through
+    /// the Shell's thumbnail of this window is placed once at the band it is the picture in, and only
+    /// moved after that, because the picture it is sampled for is its client area (see `put_window`).
+    a_source: bool,
     /// The browser process this engine started, when it could be told which one it
     /// was. The runtime owns the browser, but the process is this app's own child —
     /// started by the loader in this process — and it is what is ended if it is
@@ -185,6 +190,7 @@ impl Host {
             webview,
             current: None,
             last_area: None,
+            a_source: false,
             browser_pid,
             hung: false,
             suspended: false,
@@ -335,21 +341,57 @@ impl Host {
         self.last_area = Some((area.width, area.height));
 
         unsafe {
-            self.set_bounds(area);
-
-            let current = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
-            let style = ex_style_for(current, runs);
-            if style != current {
-                SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, style);
-            }
+            self.put_the_page_style();
 
             let _ = self.controller.SetIsVisible(true);
 
-            self.put_window(area);
+            self.set_bounds(area);
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+            self.put_window(area);
         }
 
         publish(Some((path.clone(), area)));
+    }
+
+    /// Whether the page this window is holding is the pin's *picture*: the pin draws it through the
+    /// Shell's thumbnail of this window, so the window is the film road's source — placed once,
+    /// lowered once, never raised — rather than a window of the desktop's in front of the pin.
+    ///
+    /// A page that runs is never one: it is clicked into, and a click into an invisible window is a
+    /// page nobody can use (see `ex_style_for`, `pin_page_thumbnail`).
+    fn the_page_is_a_source(&self) -> bool {
+        crate::ui::preview_window::pinned()
+            && self
+                .current
+                .as_ref()
+                .is_some_and(|(path, _, _)| !page_runs(path))
+    }
+
+    /// Put the style the document on screen asks for on this window, and the invisibility a pin's
+    /// source is looked at through (see `ex_style_for`).
+    ///
+    /// It is asked of every placement as well as of every show, because a pin taken up over a page
+    /// already on screen never navigates again: the page becomes the pin's picture by a placement,
+    /// and a style that only a show puts on would leave it a window of the desktop's in front of the
+    /// pin it is the picture of.
+    unsafe fn put_the_page_style(&self) {
+        let Some((path, _, _)) = self.current.as_ref() else {
+            return;
+        };
+        let source = self.the_page_is_a_source();
+
+        unsafe {
+            let current = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            let style = ex_style_for(current, page_runs(path), source);
+            if style != current {
+                let _ = SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, style);
+            }
+            if source {
+                // Safety: the alpha is this app's own to give a window of its own, and the style above
+                // is what makes it one that is composited at all (see `SOURCE_ALPHA`).
+                let _ = SetLayeredWindowAttributes(self.hwnd, COLORREF(0), SOURCE_ALPHA, LWA_ALPHA);
+            }
+        }
     }
 
     /// Put the window in `area`, in the band the preview holds, and without ever activating it.
@@ -367,7 +409,36 @@ impl Host {
     /// the same page in front of the pin resizes smoothly. So the page holds the band the pin is
     /// in and the pin stands under it, and what the pin loses by it is the presses that land on the
     /// page — which are the pin's own and raise it anyway (see `settle_pinned_press`).
-    pub(super) fn put_window(&self, area: Area) {
+    ///
+    /// **A page the pin draws is not a window of the desktop's at all, and it is the film road's own
+    /// one placement** (see `pin_film_thumbnail::place_the_source`): invisible at one part in 255 and
+    /// click-through, at the bottom of the order, placed at the band once and only *moved* after that.
+    /// What the pin shows of it is the Shell's thumbnail of this window, so the surface it samples —
+    /// this window's client — is a constant for as long as the page is the picture, and a drag step is
+    /// one `SetWindowPos` that changes nothing of the picture the band draws (see `pin_page_thumbnail`).
+    pub(super) fn put_window(&mut self, area: Area) {
+        if self.the_page_is_a_source() {
+            let placed = std::mem::replace(&mut self.a_source, true);
+            let (after, flags) = if placed {
+                (HWND::default(), SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+            } else {
+                (HWND_BOTTOM, SWP_NOACTIVATE | SWP_SHOWWINDOW)
+            };
+            unsafe {
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    after,
+                    area.x,
+                    area.y,
+                    area.width,
+                    area.height,
+                    flags,
+                );
+            }
+            return;
+        }
+        self.a_source = false;
+
         let raises = raises(
             crate::ui::preview_window::pinned(),
             crate::ui::preview_window::pin_holds_the_front(),
@@ -451,7 +522,14 @@ impl Host {
         let resized = self.last_area != Some(size);
         self.last_area = Some(size);
 
-        if resized {
+        // The pin may have been taken up over this very page, which is a style to put on and not a
+        // navigation: a document already on screen is never shown again for it (see `put_the_page_style`).
+        unsafe { self.put_the_page_style() };
+
+        // **A pin's picture is laid out once**: the client area of a page placed as a source is the
+        // surface the Shell samples, so a resize of the pin is the destination rectangle's and never
+        // this window's (see `put_window`).
+        if resized && !self.a_source {
             self.set_bounds(placement.area);
         }
 

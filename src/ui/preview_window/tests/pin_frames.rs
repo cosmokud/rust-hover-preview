@@ -1204,6 +1204,36 @@ fn every_film_has_a_band_the_pin_wins_the_point_of() {
     }
 }
 
+/// **A page the pin carries is a picture and a page that runs is a program**: the band of the first is
+/// the pin's point to win — the press on it carries the window, the picture itself being the Shell's
+/// thumbnail of the page — and the band of the second is a hole, because a page whose links, selection and
+/// wheel the pin had claimed the pixels of is a page nobody could use.
+#[test]
+fn a_pages_band_is_the_pins_point_to_win_unless_the_page_runs() {
+    for kind in [MediaType::EngineSvg, MediaType::EngineFont] {
+        assert!(
+            a_pages_band_is_hit_testable(kind, false),
+            "{kind:?} is a document or a specimen: a press on it is the pin's, and the picture in the band              is the Shell's thumbnail of the page"
+        );
+        assert!(
+            !a_pages_band_is_hit_testable(kind, true),
+            "{kind:?} can also be a page of HTML, which runs: its band is the page's to click"
+        );
+    }
+
+    for kind in [
+        MediaType::StaticImage,
+        MediaType::Text,
+        MediaType::NativeVideo,
+        MediaType::Video,
+    ] {
+        assert!(
+            !a_pages_band_is_hit_testable(kind, false),
+            "{kind:?} has no page of the engine's in its band"
+        );
+    }
+}
+
 /// A band the pin wins the point of is one part in 255, over the band and nowhere else, and that
 /// part is a change no eye can see.
 ///

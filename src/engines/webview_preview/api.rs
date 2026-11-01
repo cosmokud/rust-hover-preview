@@ -285,6 +285,24 @@ pub(crate) fn is_showing() -> bool {
     SHOWING.load(Ordering::Acquire)
 }
 
+/// Whether the page on screen is one that runs, and so one the user works in: a pin's band is a hole for
+/// it and the pin's own claim on the pixel for everything else (see `RUNNING_DOCUMENT`).
+///
+/// Asked as one question and answered by two atomics, because the caller is a paint that must not take
+/// the engine's or the configuration's lock to know it.
+pub(crate) fn the_shown_page_runs() -> bool {
+    SHOWING.load(Ordering::Acquire) && RUNNING_DOCUMENT.load(Ordering::Acquire)
+}
+
+/// Stand that answer in for a test whose subject is the band a page that runs keeps and the pin a page it
+/// carries is: no engine is begun for either (see `the_shown_page_runs`). `false` is the answer for a
+/// machine with nothing on screen, which is what a test leaves behind it.
+#[cfg(test)]
+pub(crate) fn stand_the_shown_page_in(runs: bool) {
+    SHOWING.store(runs, Ordering::Release);
+    RUNNING_DOCUMENT.store(runs, Ordering::Release);
+}
+
 /// Where the engine's window is, when it has one on screen: the box the document was
 /// last handed over in, in screen coordinates.
 ///

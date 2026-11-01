@@ -3,6 +3,7 @@ use super::host::{raises, Raise};
 use super::*;
 use windows::Win32::UI::WindowsAndMessaging::{
     HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
 
 /// The page the engine is pointed at is what makes a document the size of the window
@@ -490,26 +491,37 @@ fn the_keyboard_goes_to_a_page_that_runs_and_to_nothing_else() {
     let bare = WS_EX_TOOLWINDOW.0 as isize | WS_EX_TOPMOST.0 as isize;
     let noactivate = WS_EX_NOACTIVATE.0 as isize;
     let refusing = bare | noactivate;
+    let invisible = WS_EX_LAYERED.0 as isize | WS_EX_TRANSPARENT.0 as isize;
 
     assert_eq!(
-        ex_style_for(refusing, true),
+        ex_style_for(refusing, true, false),
         bare,
         "a page that runs is a window that can be activated, and is otherwise untouched"
     );
     assert_eq!(
-        ex_style_for(bare, true),
+        ex_style_for(bare, true, false),
         bare,
         "a style with nothing to clear is left as it is"
     );
     assert_eq!(
-        ex_style_for(bare, false),
+        ex_style_for(bare, false, false),
         refusing,
         "a document is refused activation, and the tool window and topmost are kept"
     );
     assert_eq!(
-        ex_style_for(refusing, false),
+        ex_style_for(refusing, false, false),
         refusing,
         "and a window already refusing is not asked twice"
+    );
+    assert_eq!(
+        ex_style_for(bare, false, true),
+        refusing | invisible,
+        "a pin's picture is invisible, click-through and refused the keyboard"
+    );
+    assert_eq!(
+        ex_style_for(refusing | invisible, true, false),
+        bare,
+        "and a page that runs takes the pair off again, as it takes the refusal off"
     );
 }
 

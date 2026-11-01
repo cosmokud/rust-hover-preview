@@ -3045,7 +3045,7 @@ fn lower_the_source(source: HWND) {
 }
 
 /// The corner of a window's client area, on the screen.
-unsafe fn client_origin(hwnd: HWND) -> Option<(i32, i32)> {
+pub(super) unsafe fn client_origin(hwnd: HWND) -> Option<(i32, i32)> {
     let mut origin = POINT::default();
     (unsafe { ClientToScreen(hwnd, &mut origin) }.as_bool()).then_some((origin.x, origin.y))
 }
