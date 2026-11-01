@@ -2645,3 +2645,59 @@ fn a_pin_that_is_a_window_of_its_own_takes_the_band_to_appear_and_gives_it_back(
     }
     stand_pin(previous_pin);
 }
+
+/// The bubble a right-click `To Bubble` row leaves stands on the place the hand pressed the row
+/// rather than on the minimize button the same collapse asked for by a button goes to: a bubble
+/// asked for at a point is centred on that point (see `collapse_pin_to_at`).
+#[test]
+fn a_bubble_asked_for_at_a_point_stands_centred_on_it() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+
+    // Safety: a window of this test's own, created and destroyed under the one-at-a-time lock.
+    let bubble = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            700,
+            500,
+            120,
+            120,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the bubble")
+    };
+    PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
+
+    stand_pin(Some(overlay_pin((100, 100, 420, 340), PinChrome::always())));
+
+    // A place the hand named rather than the one the minimize button would have given the bubble.
+    let point = (600, 400);
+    collapse_pin_to_at(PinMinimizeTo::Bubble, Some(point));
+
+    let mut rect = RECT::default();
+    assert!(
+        unsafe { GetWindowRect(bubble, &mut rect) }.is_ok(),
+        "the bubble the collapse stands the pin in is a window of its own"
+    );
+    assert_eq!(
+        ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2),
+        point,
+        "the circle a `To Bubble` press leaves is centred on the place the row was pressed"
+    );
+
+    // Safety: the window is this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(bubble);
+    }
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    stand_pin(previous_pin);
+}
