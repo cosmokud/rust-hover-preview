@@ -33,10 +33,10 @@
 //! [`Card::controls`]). The row the buttons stand in is the bar's own line either way, so what
 //! those buttons cost is the width of the bar, not the height of the card (see `bar_row`). The
 //! two window buttons cost no height either: they stand in the name's own rows, which is room the
-//! card has already, and they come and go with the hand — a hand near the window's top border or
-//! near the buttons themselves is what asks for them (see `window_button_band`) — so a pin's card
-//! is still the size a hover's is, and a name too long for the card runs underneath the buttons
-//! while they are up, its box and its scroll unchanged.
+//! card has already, and they come and go with the hand — a hand near the buttons themselves, in
+//! their own band and across their own columns, is what asks for them (see `window_button_band`
+//! and `window_button_span`) — so a pin's card is still the size a hover's is, and a name too long
+//! for the card runs underneath the buttons while they are up, its box and its scroll unchanged.
 //!
 //! The card a sound is previewed as lives in two files below: `card` for what the card says and
 //! the two calls that draw it, and `page` for the page it is laid out and painted from. What is
@@ -50,7 +50,7 @@ pub(crate) use card::{
     bar_share_at, control_at, control_box, facts_of, measure, name_of, render, AudioPreviewOptions,
     Card, CardChrome, CardControl, NameScroll,
 };
-pub(crate) use page::window_button_band;
+pub(crate) use page::{window_button_band, window_button_span};
 
 #[cfg(test)]
 use crate::config::config::TextTheme;

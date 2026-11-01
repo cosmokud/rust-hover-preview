@@ -1,5 +1,9 @@
 use super::*;
 
+// What the wheel hook is handed a message as (see `wheel_hook_proc`).
+use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{HC_ACTION, MSLLHOOKSTRUCT, WM_MOUSEWHEEL};
+
 /// The volume popup belongs to the button that opened it and to nothing else: it is kept while
 /// the pointer is anywhere in that control — the panel itself, or the strip the button sits in
 /// — held while the knob is being dragged, and put away once the pointer has left the whole of
@@ -486,6 +490,7 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     mpv_ipc::remember_pipe(101, "test-pipe", false);
     stand(70, 40);
     set_pin_volume(70);
+    flush_pin_volume_level();
     assert_eq!(
         mpv_ipc::noted_lines(),
         vec![format!(
@@ -588,6 +593,7 @@ fn a_level_moved_up_from_nothing_on_a_pinned_mpv_asks_the_track_back() {
     // A hand takes the knob up, and the level is heard: the property first, and the track the
     // level opens at asked for after it.
     set_pin_volume(60);
+    flush_pin_volume_level();
     assert_eq!(
         mpv_ipc::noted_lines(),
         vec![
@@ -611,6 +617,7 @@ fn a_level_moved_up_from_nothing_on_a_pinned_mpv_asks_the_track_back() {
     // The rest of the drag is the level alone — the track is a fact of the player now — and the
     // release begins nothing: mpv took the level as it played.
     set_pin_volume(80);
+    flush_pin_volume_level();
     assert_eq!(
         mpv_ipc::noted_lines()[2..],
         [format!(
@@ -805,4 +812,675 @@ fn a_sounds_level_reaches_the_filter_at_every_level_including_the_top() {
         "silence that still plays, so the card's clock moves and the file stays seekable"
     );
     assert_eq!(audio_volume_filter(100, Some(1.5)), "volume=1.5000");
+}
+
+/// The box on screen a wheel notch over the volume control belongs to: the transport strip's
+/// button while the popup is closed, that button and the panel above it once it is open, and a
+/// sound's card button where the pin has no strip at all (see `pin_volume_keep_alive_try`).
+#[test]
+fn a_wheel_notch_over_the_volume_control_is_answered_by_the_box_that_control_is_drawn_in() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    let window = pin.window_box();
+    let button = pinned_volume_button(&pin).expect("a strip carries a volume button");
+    stand_pin(Some(pin));
+
+    assert_eq!(
+        pin_volume_keep_alive_try(),
+        Some((
+            window.0 + button.left,
+            window.1 + button.top,
+            window.0 + button.right,
+            window.1 + button.bottom,
+        )),
+        "a closed popup leaves the notch the button's own box"
+    );
+
+    // And opening the panel widens the answer to take it in: the level is turned on the panel
+    // above the button without the hand having to find the button again.
+    let mut pin = take_pin_for_a_test().expect("the pin the test stands");
+    pin.volume.open = true;
+    let popup = pinned_volume_panel(&pin).expect("a panel to hang off the button");
+    stand_pin(Some(pin));
+
+    assert_eq!(
+        pin_volume_keep_alive_try(),
+        Some((
+            window.0 + button.left.min(popup.panel.left),
+            window.1 + button.top.min(popup.panel.top),
+            window.0 + button.right.max(popup.panel.right),
+            window.1 + button.bottom.max(popup.panel.bottom),
+        )),
+        "an open popup is the panel and the button it hangs from"
+    );
+
+    // A sound has no strip, and its card's own button is the control the same panel hangs off.
+    let sound = PinnedPreview {
+        content,
+        zoom: Some(PinZoom::filling(content)),
+        frame: PinFrame::None,
+        overlay: false,
+        hides_chrome: false,
+        caption: 0,
+        ..PinnedPreview::for_test()
+    };
+    let sound_window = sound.window_box();
+    let sound_button = pinned_volume_button(&sound).expect("a card carries a volume button");
+    stand_pin(Some(sound));
+
+    assert_eq!(
+        pin_volume_keep_alive_try(),
+        Some((
+            sound_window.0 + sound_button.left,
+            sound_window.1 + sound_button.top,
+            sound_window.0 + sound_button.right,
+            sound_window.1 + sound_button.bottom,
+        )),
+        "a sound's card button is the control with no transport strip to carry one"
+    );
+
+    stand_pin(None);
+    assert_eq!(pin_volume_keep_alive_try(), None, "and no pin is no box");
+    stand_pin(previous);
+}
+
+/// A notch over the volume control is the level's before it is the pin's zoom: the button sits
+/// inside the box the zoom road claims whole, and the panel can float over a page that scrolls,
+/// so the hook has to ask the volume first and leave neither count behind (see
+/// `wheel_hook_proc`).
+#[test]
+fn a_wheel_notch_over_the_volume_control_is_the_levels_and_not_the_pins_zoom() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume.open = true;
+    let button = pinned_volume_button(&pin).expect("a strip carries a volume button");
+    let window = pin.window_box();
+    stand_pin(Some(pin));
+
+    crate::shell::key_input::publish_pin_always_on_top(true);
+    crate::shell::wheel_input::publish_preview_under_the_pointer(false);
+    let _ = wheel_input::take_pin_volume_delta();
+    let _ = wheel_input::take_pin_zoom_delta();
+
+    let info = MSLLHOOKSTRUCT {
+        pt: POINT {
+            x: window.0 + (button.left + button.right) / 2,
+            y: window.1 + (button.top + button.bottom) / 2,
+        },
+        mouseData: (WHEEL_DELTA as u32) << 16,
+        flags: 0,
+        time: 0,
+        dwExtraInfo: 0,
+    };
+    let swallowed = unsafe {
+        wheel_input::wheel_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_MOUSEWHEEL as usize),
+            LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
+        )
+    };
+
+    assert_eq!(
+        wheel_input::take_pin_volume_delta(),
+        WHEEL_DELTA,
+        "the notch over the button is the level being turned"
+    );
+    assert_eq!(
+        wheel_input::take_pin_zoom_delta(),
+        0,
+        "and it is not also the picture being zoomed"
+    );
+    assert_eq!(
+        swallowed,
+        LRESULT(1),
+        "and the notch is not left for the listing behind the pin"
+    );
+
+    crate::shell::key_input::publish_pin_always_on_top(false);
+    stand_pin(None);
+    stand_pin(previous);
+}
+
+/// A wheel turned over the sound card's own volume button opens the panel, and the panel does not
+/// close on the next tick while the pointer is still on the button that opened it (see
+/// `refresh_pin_volume`).
+#[test]
+fn a_volume_popup_opened_over_a_sounds_button_is_kept_while_the_pointer_is_on_it() {
+    let content = (100, 100, 500, 400);
+    let mut sound = PinnedPreview {
+        content,
+        zoom: Some(PinZoom::filling(content)),
+        frame: PinFrame::None,
+        overlay: false,
+        hides_chrome: false,
+        caption: 0,
+        ..PinnedPreview::for_test()
+    };
+    sound.volume.open = true;
+    let button = pinned_volume_button(&sound).expect("a card carries a volume button");
+    let window = sound.window_box();
+    let cursor = Some((
+        window.0 + (button.left + button.right) / 2,
+        window.1 + (button.top + button.bottom) / 2,
+    ));
+
+    assert!(
+        !refresh_pin_volume(&mut sound, cursor),
+        "the pointer on the button that opened the panel does not put it away"
+    );
+    assert!(sound.volume.open, "and the panel the notch opened stays up");
+}
+
+/// A notch moves the level by five percent of the range, a smooth wheel's smaller messages add up
+/// to the same, and both stop at the ends `set_pin_volume` draws (see `volume_after_wheel_delta`).
+#[test]
+fn a_wheel_notch_steps_the_level_by_five_percent_and_stops_at_the_ends() {
+    let notch = |level: u32, notches: i64| {
+        let units = (0..notches.abs()).fold(
+            i64::from(level) * WHEEL_LEVEL_UNITS_PER_PERCENT,
+            |units, _| volume_after_wheel_delta(units, WHEEL_DELTA * notches.signum() as i32),
+        );
+        volume_from_wheel_units(units)
+    };
+    assert_eq!(notch(50, 1), 55, "up is louder");
+    assert_eq!(notch(50, -1), 45, "and down is quieter");
+    assert_eq!(notch(98, 1), 100, "the top holds");
+    assert_eq!(notch(2, -1), 0, "and so does nothing");
+    assert_eq!(notch(50, -100), 0, "however far the wheel turns");
+
+    // Twelve 10-unit messages are one notch, exactly: a smooth wheel's travel is not lost to a
+    // whole-notch carry, and does not overshoot the +5% a notched wheel lands on.
+    let mut units = 50 * WHEEL_LEVEL_UNITS_PER_PERCENT;
+    for _ in 0..(WHEEL_DELTA / 10) {
+        units = volume_after_wheel_delta(units, 10);
+    }
+    assert_eq!(
+        units,
+        50 * WHEEL_LEVEL_UNITS_PER_PERCENT + WHEEL_DELTA as i64,
+        "twelve sub-notch messages carry exactly one notch, with nothing dropped"
+    );
+    assert_eq!(
+        volume_from_wheel_units(units),
+        55,
+        "and exactly one notch on"
+    );
+    assert_eq!(
+        volume_from_wheel_units(volume_after_wheel_delta(
+            100 * WHEEL_LEVEL_UNITS_PER_PERCENT - 1,
+            10
+        )),
+        100,
+        "the top clamps the fine carry too"
+    );
+    assert_eq!(
+        volume_from_wheel_units(volume_after_wheel_delta(1, -10)),
+        0,
+        "and so does nothing"
+    );
+}
+
+/// A drag or a wheel burst asks for a level on every message, but the engine hears it once per
+/// preview tick, and what it hears is the level the hand stopped on — never a queue of stale ones
+/// (see `flush_pin_volume_level`).
+#[test]
+fn a_level_burst_reaches_mpv_once_per_tick_with_the_latest_level() {
+    let _room = the_room_to_itself();
+
+    let mut levels = PinLevels::set(100, 50);
+    levels.remembering(false, false);
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+
+    let content = (100, 100, 420, 340);
+    let film = PathBuf::from("pin-coalesced-volume-film.mkv");
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = film;
+    pin.transport.begun(30.0, true, false);
+    pin.transport.duration = Some(200.0);
+    pin.volume.level = 40;
+    pin.volume.playing_at = 40;
+    stand_pin(Some(pin));
+
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    mpv_ipc::remember_pipe(101, "coalesced-volume-pipe", false);
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+
+    // Three steps of one drag, one tick.
+    set_pin_volume(41);
+    set_pin_volume(55);
+    set_pin_volume(70);
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "nothing is written while the hand is still moving"
+    );
+
+    flush_pin_volume_level();
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![format!(
+            "{}\n",
+            r#"{"command":["set_property","volume",70],"async":true}"#
+        )],
+        "one command, and it is the latest level"
+    );
+    assert_eq!(
+        pinned_playback_state().map(|(_, _, _, volume)| volume.playing_at),
+        Some(70),
+        "the claim follows the one level that was actually told"
+    );
+
+    // A second flush in the same tick sends nothing: the burst is spent.
+    flush_pin_volume_level();
+    assert_eq!(mpv_ipc::noted_lines().len(), 1, "no second command");
+
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
+/// FFmpeg's player takes a level only by being begun again, so a wheel burst must not begin one per
+/// notch: the relaunch waits for `PIN_VOLUME_SETTLE_TICKS` quiet ticks and then happens once, while
+/// a drag released still settles at once (see `settle_pin_volume_after_quiet` and
+/// `settle_pin_volume`).
+#[test]
+fn a_wheel_burst_relaunches_ffplay_only_after_the_quiet_window() {
+    let _room = the_room_to_itself();
+
+    let mut levels = PinLevels::set(100, 50);
+    levels.remembering(false, false);
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+
+    let content = (100, 100, 420, 340);
+    let film = PathBuf::from("pin-quiet-volume-film.mkv");
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = film;
+    pin.transport.begun(30.0, true, false);
+    pin.transport.duration = Some(200.0);
+    pin.volume.level = 40;
+    pin.volume.playing_at = 40;
+    stand_pin(Some(pin));
+
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    clear_restart_count();
+
+    // A normal wheel's notches arrive with gaps between ticks; every one resets the countdown.
+    for level in [45, 50, 55, 60, 65] {
+        set_pin_volume(level);
+        settle_pin_volume_after_quiet();
+        assert_eq!(
+            restart_count(),
+            0,
+            "the player is not replaced while the wheel is still turning"
+        );
+    }
+    assert_eq!(restart_count(), 0, "a burst of notches begins nothing");
+
+    // Then the hand stops, the quiet window passes, and one player takes the level.
+    for _ in 0..PIN_VOLUME_SETTLE_TICKS {
+        settle_pin_volume_after_quiet();
+    }
+    assert_eq!(
+        restart_count(),
+        1,
+        "one relaunch once the level has been quiet"
+    );
+
+    // And the ticks after it begin nothing more.
+    for _ in 0..PIN_VOLUME_SETTLE_TICKS {
+        settle_pin_volume_after_quiet();
+    }
+    assert_eq!(
+        restart_count(),
+        1,
+        "the quiet window is spent, not repeated"
+    );
+
+    // A release still settles at once, however recently the knob moved.
+    set_pin_volume(80);
+    settle_pin_volume();
+    assert_eq!(
+        restart_count(),
+        2,
+        "a release is the end of the drag and settles immediately"
+    );
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
+/// The box a wheel notch over the volume control is answered by is published, not resolved: the
+/// wheel hook asks it while `PIN_STATE` is held by the preview thread, which is half of the notches
+/// of a turned wheel falling through to Explorer (see `pin_volume_keep_alive_try` and
+/// `PIN_VOLUME_REGION`).
+#[test]
+fn a_wheel_notch_is_answered_by_the_volume_box_while_the_pin_state_is_held() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    let button = pinned_volume_button(&pin).expect("a strip carries a volume button");
+    let window = pin.window_box();
+    stand_pin(Some(pin));
+
+    crate::shell::key_input::publish_pin_always_on_top(true);
+    crate::shell::wheel_input::publish_preview_under_the_pointer(false);
+    let _ = wheel_input::take_pin_volume_delta();
+
+    // The lock the hook used to wait on, held for the whole of the question.
+    let held = pin_state().expect("the pin state the test published");
+
+    assert_eq!(
+        pin_volume_keep_alive_try(),
+        Some((
+            window.0 + button.left,
+            window.1 + button.top,
+            window.0 + button.right,
+            window.1 + button.bottom,
+        )),
+        "the box is read without the lock the preview thread is holding"
+    );
+
+    let info = MSLLHOOKSTRUCT {
+        pt: POINT {
+            x: window.0 + (button.left + button.right) / 2,
+            y: window.1 + (button.top + button.bottom) / 2,
+        },
+        mouseData: (WHEEL_DELTA as u32) << 16,
+        flags: 0,
+        time: 0,
+        dwExtraInfo: 0,
+    };
+    let swallowed = unsafe {
+        wheel_input::wheel_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_MOUSEWHEEL as usize),
+            LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
+        )
+    };
+    assert_eq!(
+        wheel_input::take_pin_volume_delta(),
+        WHEEL_DELTA,
+        "the notch is the level's even with the pin held by another thread"
+    );
+    assert_eq!(swallowed, LRESULT(1), "and it is not left for Explorer");
+    drop(held);
+
+    crate::shell::key_input::publish_pin_always_on_top(false);
+    stand_pin(None);
+    stand_pin(previous);
+}
+
+/// The level a wheel asks for is a glide: it climbs toward the wheel's fine target a step a tick,
+/// never past it and never backwards, and lands on the exact level the notch names (see
+/// `ramp_pin_volume`).
+#[test]
+fn a_wheel_notchs_level_glides_to_its_target_and_lands_on_it_exactly() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume = PinVolume {
+        level: 50,
+        playing_at: 50,
+        ..Default::default()
+    };
+    stand_pin(Some(pin));
+
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    let target = volume_after_wheel_delta(50 * per, WHEEL_DELTA);
+    set_pin_volume_target(target);
+
+    let held = || {
+        pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.volume))
+            .expect("the pin the test stands")
+    };
+
+    assert_eq!(
+        held().level,
+        50,
+        "the popup is still drawn where the level is"
+    );
+    assert_eq!(
+        held().target,
+        Some(target as u32),
+        "and the notch is owed a glide"
+    );
+
+    let mut applied = 0;
+    let mut level = 0;
+    let mut ticks = 0;
+    loop {
+        ramp_pin_volume();
+        ticks += 1;
+        let volume = held();
+        assert!(
+            volume.applied >= applied,
+            "the glide only ever climbs toward the target"
+        );
+        assert!(
+            i64::from(volume.applied) <= target,
+            "and it never goes past it"
+        );
+        assert!(volume.level >= level, "and the drawn level with it");
+        applied = volume.applied;
+        level = volume.level;
+
+        if volume.target.is_none() {
+            assert_eq!(
+                i64::from(volume.applied),
+                target,
+                "the glide stops exactly on the target"
+            );
+            break;
+        }
+        assert!(
+            ticks < 60,
+            "a five percent notch is a handful of ticks, not a second of them"
+        );
+    }
+
+    // One 120-unit notch is five percent, exactly: 50 -> 55, not 54 or 56.
+    assert_eq!(
+        i64::from(held().level) * per,
+        target,
+        "the notch settles on its own fine level"
+    );
+    assert_eq!(held().level, 55, "which is five percent on");
+
+    stand_pin(previous);
+}
+
+/// A knob dragged on the popup, a tray row and a key are levels in hand rather than requests: they
+/// are applied at once, and a glide a wheel left behind is dropped rather than carried on with (see
+/// `set_pin_volume` and `ramp_pin_volume`).
+#[test]
+fn a_dragged_knob_moves_the_level_at_once_and_drops_a_wheels_glide() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume = PinVolume {
+        level: 50,
+        playing_at: 50,
+        ..Default::default()
+    };
+    stand_pin(Some(pin));
+
+    let held = || {
+        pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.volume))
+            .expect("the pin the test stands")
+    };
+
+    set_pin_volume(64);
+    assert_eq!(held().level, 64, "the drag is heard at once");
+    assert_eq!(held().target, None, "with nothing left to glide toward");
+
+    // A wheel request mid-drag is replaced by the hand that came after it.
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    set_pin_volume_target(volume_after_wheel_delta(64 * per, WHEEL_DELTA));
+    assert_eq!(held().level, 64, "the request alone moves no level");
+    set_pin_volume(20);
+    assert_eq!(held().level, 20);
+    assert_eq!(held().target, None);
+    assert_eq!(
+        i64::from(held().applied),
+        20 * per,
+        "the glide starts from the level in hand"
+    );
+    ramp_pin_volume();
+    assert_eq!(held().level, 20, "and there is nothing to glide toward");
+
+    stand_pin(previous);
+}
+
+/// Every notch of a burst moves the wheel's target five percent on, and the applied level stays
+/// behind it until the ticks catch up (see `set_pin_volume_target` and `ramp_pin_volume`).
+#[test]
+fn a_burst_of_wheel_notches_moves_the_target_five_percent_a_notch() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume = PinVolume {
+        level: 50,
+        playing_at: 50,
+        ..Default::default()
+    };
+    stand_pin(Some(pin));
+
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    let mut units = 50 * per;
+    for notch in 1..=3 {
+        units = volume_after_wheel_delta(units, WHEEL_DELTA);
+        set_pin_volume_target(units);
+        let volume = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.volume))
+            .expect("the pin the test stands");
+        assert_eq!(
+            volume.target,
+            Some(units as u32),
+            "notch {notch} is another five percent of the range"
+        );
+        assert_eq!(volume.level, 50, "and the applied level has not jumped");
+    }
+    assert_eq!(volume_from_wheel_units(units), 65, "three notches up");
+
+    stand_pin(previous);
+}
+
+/// A notch is chrome on every kind, and a film's thumb is drawn in the strip a repaint reaches:
+/// the flag a notch sets is drained once a tick, so the thumb steps at the cadence the wheel holds
+/// the loop at rather than on whatever incidental repaint comes next — and a sound's card, whose
+/// paint is the card rather than chrome, is left to its own arm (see `pin_chrome_owes_a_repaint`).
+#[test]
+fn a_wheel_notch_on_a_film_owes_one_chrome_repaint_a_tick() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume = PinVolume {
+        level: 50,
+        playing_at: 50,
+        ..Default::default()
+    };
+    stand_pin(Some(pin));
+    AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+
+    // Two notches inside the one tick: the level moves twice, and the tick still owes one paint.
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    set_pin_volume_target(50 * per);
+    set_pin_volume_target(55 * per);
+    assert!(
+        pin_chrome_owes_a_repaint(),
+        "a notch on a film asks for the chrome the thumb is drawn in"
+    );
+    assert!(
+        !pin_chrome_owes_a_repaint(),
+        "and the notch after it is the same repaint, not another"
+    );
+
+    // A sound's card is refreshed by its own arm before this one is asked: the drain here leaves
+    // its flag standing rather than repainting a card the window's paint does not rebuild.
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            media.media_type = MediaType::Audio;
+        }
+    }
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+    assert!(
+        !pin_chrome_owes_a_repaint(),
+        "a sound's card is not owed the film's chrome repaint"
+    );
+    assert!(
+        AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+        "and the flag is still the card's own to spend"
+    );
+
+    AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
 }

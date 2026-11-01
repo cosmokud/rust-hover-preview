@@ -11,7 +11,7 @@ use super::card::{
     BAR_PIXELS, BAR_REACH_PIXELS, CHASE_DIVISOR, CHASE_SECONDS, CLOCK_ADVANCES, CONTROL_GAP_PIXELS,
     CONTROL_SIDE_PIXELS, HEADER_LEVEL, MARK_CELL_ADVANCES, MIN_CONTENT_ADVANCES, RULE_GAP_PIXELS,
     RULE_PIXELS, TIME_GAP_ADVANCES, TRACK_PIXELS, WINDOW_BUTTON_CUSHION_PIXELS,
-    WINDOW_BUTTON_GAP_PIXELS,
+    WINDOW_BUTTON_GAP_PIXELS, WINDOW_BUTTON_REVEAL_PIXELS,
 };
 use crate::text::pin_chrome::{
     self, fill_disc, fill_ring, stroke_segment, surface_pixels, ControlGlyph,
@@ -341,25 +341,53 @@ fn window_button_reach(metrics: &TextMetrics) -> i32 {
 
 /// The band a pointer is near the window's own top border in, at the display's scale
 /// and font size: the bottom of the box a press on any window button is answered
-/// against. A hand anywhere in it is a hand near the top border or near the buttons
-/// themselves, which is the one thing that asks for the two window buttons — the one
-/// thing on a sound's card that comes and goes, because a button twice the margin's
-/// own side stands in the name's own rows (see [`window_button_reach`]).
+/// against. A hand anywhere in it is a hand in the band the buttons stand in, which is
+/// one of the two axes a hand asks for them on — the other being [`window_button_span`]
+/// — the one thing on a sound's card that comes and goes, because a button twice the
+/// margin's own side stands in the name's own rows (see [`window_button_reach`]).
 pub(crate) fn window_button_band(dpi: u32, options: AudioPreviewOptions) -> i32 {
+    window_button_layout(dpi, options, window_button_reach).unwrap_or(0)
+}
+
+/// The columns the two window buttons and a hand's margin around them reach across, on a
+/// card of `width` pixels: from the leftmost button's own left to the rightmost one's own
+/// right, widened by `WINDOW_BUTTON_REVEAL_PIXELS` on each side at the display's scale.
+///
+/// The horizontal half of what asks for the buttons — the band is the vertical one (see
+/// [`window_button_band`]) — so a hand in the top band but across the card from them is a
+/// hand near neither.
+pub(crate) fn window_button_span(dpi: u32, options: AudioPreviewOptions, width: i32) -> (i32, i32) {
+    window_button_layout(dpi, options, |metrics| {
+        let (always_on_top, _, close) = window_button_boxes(metrics, width);
+        let margin = scaled(WINDOW_BUTTON_REVEAL_PIXELS, metrics.scale);
+        (
+            always_on_top.drawn.left - margin,
+            close.drawn.right + margin,
+        )
+    })
+    .unwrap_or((0, 0))
+}
+
+/// Window-button arithmetic asked of a throwaway display context made for this one pass and
+/// released here: the buttons are laid out from the metrics of the font the card is built at,
+/// which no caller keeps (see [`window_button_band`] and [`window_button_span`]).
+fn window_button_layout<R>(
+    dpi: u32,
+    options: AudioPreviewOptions,
+    f: impl FnOnce(&TextMetrics) -> R,
+) -> Option<R> {
     let dc = unsafe { CreateCompatibleDC(None) };
     if dc.0.is_null() {
-        return 0;
+        return None;
     }
 
-    let band = TextMetrics::new(dc, dpi, options.font_scale_percent)
-        .map(|metrics| window_button_reach(&metrics))
-        .unwrap_or(0);
+    let answer = TextMetrics::new(dc, dpi, options.font_scale_percent).map(|metrics| f(&metrics));
 
     unsafe {
         let _ = DeleteDC(dc);
     }
 
-    band
+    answer
 }
 
 /// The two window buttons a pinned card carries in its top corner: the minimize that
@@ -1047,9 +1075,10 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         // kept on top that took it would say nothing but that the hand is near.
         //
         // They are the one thing on the card that comes and goes: a button twice the
-        // margin's own side stands in the name's own rows, so a hand near the window's
-        // top border or near the buttons themselves is what asks for them (see
-        // `window_button_band`), and while they are up the name runs underneath them —
+        // margin's own side stands in the name's own rows, so a hand near the buttons
+        // themselves — in their own band and across their own columns — is what asks for
+        // them (see `window_button_band` and `window_button_span`), and while they are up
+        // the name runs underneath them —
         // the box each stands in is the page's own colour, which is what keeps a name
         // scrolling under one from running under its mark.
         if chrome.window_buttons {

@@ -916,6 +916,87 @@ fn a_sound_a_pin_takes_up_is_begun_again_only_where_the_two_rules_disagree() {
     );
 }
 
+/// The pin's own end of a taken-up sound is applied at the seam of its pass where the file has a
+/// long way to go, and only there: a beginning-again is what is heard as a gap, so it is kept for
+/// the cases where there is no seam this side can name or aim at (see `a_pass_end_is_owed`).
+#[test]
+fn a_pass_end_is_owed_only_where_there_is_a_seam_to_apply_it_at() {
+    assert!(
+        a_pass_end_is_owed(true, false, 0.0, 4.0, Some(180.0)),
+        "a looping hover taken up by a pin that continues at the end of the file has a long pass left: it is played out and owed its end"
+    );
+    assert!(
+        !a_pass_end_is_owed(true, false, 0.0, 179.8, Some(180.0)),
+        "a file whose end is already at hand is the next tick's seam, so it is begun again as it always was"
+    );
+    assert!(
+        !a_pass_end_is_owed(true, false, 0.0, 4.0, None),
+        "a length nothing here can name leaves no seam to aim at, so the sound is begun again"
+    );
+    assert!(
+        !a_pass_end_is_owed(true, true, 0.0, 4.0, Some(180.0)),
+        "where both rules say the sound goes round there is nothing owed"
+    );
+}
+
+/// The clock says its pass has come round in the two shapes the two players' clocks take at the
+/// seam: held at the length of the file, or fallen back past the second the sound was taken up at
+/// (see `a_sound_has_gone_round`).
+#[test]
+fn a_sound_has_gone_round_at_its_end_or_a_clock_that_fell_back() {
+    assert!(
+        a_sound_has_gone_round(179.99, 4.0, 180.0),
+        "a clock standing at the end of the file has finished the pass"
+    );
+    assert!(
+        a_sound_has_gone_round(0.2, 30.0, 180.0),
+        "and the engine's clock wraps back to the beginning of the file rather than being held at its end"
+    );
+    assert!(
+        !a_sound_has_gone_round(90.0, 4.0, 180.0),
+        "mid-file is mid-pass, whatever the sound was taken up at"
+    );
+}
+
+/// A pin taken up on a looping sound with most of its file left owes itself the end of that pass
+/// rather than beginning the player again: the debt is what the tick applies the pin's own `End of
+/// File` at the seam from, and nothing has restarted the player to make it (see
+/// `owe_a_pass_end` and `end_a_sound_a_pin_took_up`).
+#[test]
+fn a_sound_a_pin_takes_up_mid_pass_is_left_playing_and_owed_its_end() {
+    let _room = the_room_to_itself();
+    let path = PathBuf::from("the-sound-a-pin-takes-up.flac");
+    stand_pin(Some(PinnedPreview {
+        path: path.clone(),
+        ..PinnedPreview::for_test()
+    }));
+    drop_the_owed_pass_end();
+
+    // The take-up's own decision, on the facts of a hover four seconds into a long sound under a
+    // pin whose `End of File` is `Continue`.
+    let played = 4.0;
+    assert!(a_pass_end_is_owed(true, false, 0.0, played, Some(180.0)));
+    owe_a_pass_end(&path, played);
+
+    assert_eq!(
+        owed_pass_end(),
+        Some(OwedEnd {
+            path: path.clone(),
+            from: played,
+        }),
+        "the sound is owed the end of its pass, which is where the pin's rule is applied rather than by a player begun under it"
+    );
+
+    // A fresh start is a sound begun again — a seek, a resume, a swap — and it supersedes the debt.
+    drop_the_owed_pass_end();
+    assert!(
+        owed_pass_end().is_none(),
+        "a sound begun again owes nothing: the rule it was begun with is the one it ends by"
+    );
+
+    stand_pin(None);
+}
+
 /// The pin key is answered by what is *on screen*, and for the three kinds the engine
 /// draws that is the engine's own window rather than any media of this app's — the slot
 /// behind one is empty by design, or holds the spinner that stood in for the page until it

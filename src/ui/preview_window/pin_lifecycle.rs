@@ -2859,14 +2859,77 @@ pub(super) fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Optio
     )
 }
 
-/// Whether the card's two window buttons are showing at `y`, the pointer's row in
-/// the window's own coordinates: the top band as tall as the buttons' own hit boxes,
-/// which is the one band of the window a hand in is a hand near the window's top
-/// border or near the buttons themselves — the one thing on a sound's card that
-/// comes and goes, because a button twice the margin's own side stands in the name's
-/// own rows (see `audio_preview::window_button_band`).
-pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
-    y < audio_preview::window_button_band(pin.dpi, pinned_audio_options(pin))
+/// Whether the card's two window buttons are showing at the window's own point: the top band as
+/// tall as the buttons' own hit boxes (see `audio_preview::window_button_band`) *and* the columns
+/// from the leftmost button to the rightmost widened by a hand's margin (see
+/// `audio_preview::window_button_span`). Both axes are needed: the band alone spans the window's
+/// whole width, so a hand in the card's top-left would ask for buttons standing at its top-right.
+///
+/// The x is the window's own, which is the card's own: the card fills the pin's media box and is
+/// drawn at the media band's row, so only y is offset (see `pin_audio_control_at`).
+pub(super) fn pin_audio_window_buttons_at(pin: &PinnedPreview, x: i32, y: i32) -> bool {
+    if y >= audio_preview::window_button_band(pin.dpi, pinned_audio_options(pin)) {
+        return false;
+    }
+
+    let width = (pin.content.2 - pin.content.0).max(1);
+    let (left, right) =
+        audio_preview::window_button_span(pin.dpi, pinned_audio_options(pin), width);
+
+    x >= left && x < right
+}
+
+/// How far above and below the card's command bar a hand still asks it out, in logical pixels:
+/// the row's own rows are tight around a three-pixel track, and a hand aiming at the buttons
+/// stands a little outside them.
+pub(super) const AUDIO_COMMAND_BAR_REVEAL_PIXELS: f32 = 16.0;
+
+/// The rows of a pinned sound's card the pointer asks its command bar out from, in the window's
+/// own coordinates, or nothing where the pin is showing no card of a sound's.
+///
+/// The band is the row the card's own controls are drawn in — the bar's line together with the
+/// buttons standing on it, which reach above and below that line — widened by
+/// `AUDIO_COMMAND_BAR_REVEAL_PIXELS` on each side at the display's scale. A hand on the artwork's
+/// own rows is a hand on the picture and not on the bar, and a bar that came out for it would be a
+/// row of controls over the very thing the window is for (see `pin_audio_control_revealed`).
+pub(super) fn pin_audio_command_bar_band(pin: &PinnedPreview) -> Option<(i32, i32)> {
+    let width = (pin.content.2 - pin.content.0).max(1) as u32;
+    let options = pinned_audio_options(pin);
+    let bar = audio_preview::control_box(CardControl::Seek, width, pin.dpi, options, true)?;
+    let button = audio_preview::control_box(CardControl::Previous, width, pin.dpi, options, true)?;
+
+    let (_, height) = pin.window_size();
+    let (top, _) = pinned_band_rows(
+        height,
+        pin.caption,
+        pinned_transport_height(pin.dpi, pin.transport_bar),
+        pin.overlay,
+    );
+    let margin = logical_px(pin.dpi, AUDIO_COMMAND_BAR_REVEAL_PIXELS);
+
+    Some((
+        top + bar.top.min(button.top) - margin,
+        top + bar.bottom.max(button.bottom) + margin,
+    ))
+}
+
+/// Whether a pointer at `y`, the window's own row, is near enough the card's command bar to light
+/// `control`: the row's controls only inside the bar's band, and the two window buttons wherever
+/// they are answered — they stand in a band of their own at the top of the card (see
+/// `pin_audio_command_bar_band` and `pin_audio_window_buttons_at`).
+pub(super) fn pin_audio_control_revealed(
+    pin: &PinnedPreview,
+    y: i32,
+    control: CardControl,
+) -> bool {
+    if matches!(
+        control,
+        CardControl::AlwaysOnTop | CardControl::Minimize | CardControl::Close
+    ) {
+        return true;
+    }
+
+    pin_audio_command_bar_band(pin).is_some_and(|(top, bottom)| y >= top && y < bottom)
 }
 
 /// Put a window of somebody else's — the player's — where a pinned window's media band is.

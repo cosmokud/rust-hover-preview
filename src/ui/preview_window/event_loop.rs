@@ -300,6 +300,10 @@ pub fn run_preview_window() {
         // would be most of that wheel's travel, so the remainder is carried into the tick after it
         // (see `WHEEL_DELTA` and the zoom road's own `notch_step`).
         let mut text_scroll_carry = 0i32;
+        // The level a wheel has asked for over a pin's volume control, in the wheel's own sub-notch
+        // units so that a smooth wheel's messages move it too; `None` until the wheel is first
+        // turned (see `volume_after_wheel_delta`).
+        let mut volume_wheel_units: Option<i64> = None;
         // A walk a pin's own caption button stepped, held for as long as the walk has files
         // left to offer rather than for the length of the tick that started it: a file the pin
         // cannot be shown is stepped over rather than stopped at, and the file after it is
@@ -1444,6 +1448,20 @@ pub fn run_preview_window() {
                                 pin_walk_anchor(&pin_walk),
                             );
 
+                            // A pass end a take-up owed this sound is answered here, on the
+                            // tick the clock says its file has come round — before the engine's
+                            // own end is read below, so a player ended here cannot answer for an
+                            // end twice (see `end_a_sound_a_pin_took_up`).
+                            end_a_sound_a_pin_took_up(
+                                media,
+                                path,
+                                &mut audio_started,
+                                &mut audio_start_offset,
+                                &mut audio_paused,
+                                &mut pin_walk_wait,
+                                pin_walk_anchor(&pin_walk),
+                            );
+
                             // A sound the engine Windows has was asked to play the pinned
                             // file once where the pin's end of file is not `Loop`, so the end
                             // the engine reports for it is the end of the sound. Where that
@@ -1593,6 +1611,12 @@ pub fn run_preview_window() {
                         needs_repaint = true;
                     }
                 }
+            }
+            // A pin's chrome is not a sound's card, so what a wheel notch sets on it is drained
+            // here rather than in that card's arm: one repaint a tick for the thumb the notch
+            // stepped, whatever number of them landed in the tick (see `pin_chrome_owes_a_repaint`).
+            if pin_chrome_owes_a_repaint() {
+                needs_repaint = true;
             }
             if need_media_check {
                 last_full_media_check = Instant::now();
@@ -2221,6 +2245,46 @@ pub fn run_preview_window() {
                     *current = None;
                 }
             }
+
+            // A wheel notch over a pin's volume control is the level: the hook swallowed it and
+            // left the count here, and the popup is opened after the level moves, so the frame it
+            // paints is the level the notch asked for. The requested level is carried in the
+            // wheel's sub-notch units, so a smooth wheel's messages move it too, and a whole notch
+            // is still exactly `VOLUME_WHEEL_STEP` percent (see `volume_after_wheel_delta`).
+            let volume_delta = wheel_input::take_pin_volume_delta();
+            if volume_delta != 0 {
+                if let Some(level) = pin_volume_level() {
+                    let base = volume_wheel_units
+                        .unwrap_or(i64::from(level) * WHEEL_LEVEL_UNITS_PER_PERCENT);
+                    let units = volume_after_wheel_delta(base, volume_delta);
+                    volume_wheel_units = Some(units);
+                    set_pin_volume_target(units);
+                    open_pin_volume(pinned_window());
+                }
+            } else if let Some(level) = pin_volume_level() {
+                // A knob moved by the drag or the tray between wheel ticks re-bases the carry, so
+                // sub-notch travel is not applied twice to the old level. A level the wheel itself
+                // is still gliding toward is not a knob moved: the carry is where that notch asked
+                // to go, and re-basing on the level it has got to so far would throw the rest of it
+                // away (see `set_pin_volume_target`).
+                if !pin_volume_target_pending()
+                    && volume_wheel_units
+                        .is_some_and(|units| volume_from_wheel_units(units) != level)
+                {
+                    volume_wheel_units = Some(i64::from(level) * WHEEL_LEVEL_UNITS_PER_PERCENT);
+                }
+            }
+
+            // The applied level is stepped toward the wheel's request before anything is told to the
+            // engine, so a notch is heard as a short glide rather than as a step (see
+            // `ramp_pin_volume`).
+            ramp_pin_volume();
+
+            // One engine command per tick, always the latest level, and FFmpeg's player begun
+            // again only after the wheel or drag has been quiet (see `flush_pin_volume_level`
+            // and `settle_pin_volume_after_quiet`).
+            flush_pin_volume_level();
+            settle_pin_volume_after_quiet();
 
             // A wheel notch over a scrollable text preview belongs to the preview:
             // the wheel hook swallowed it so Explorer does not scroll, and left
@@ -4712,9 +4776,12 @@ pub fn run_preview_window() {
                 // frame cadence for as long as it lasts and the loop drops back to its own wait the
                 // tick after it has arrived (see `pin_zoom_in_flight`).
                 let travelling = pin_zoom_in_flight();
+                // A level the wheel has just asked for is something to animate as well: its glide and
+                // its flush are only as smooth as the ticks they land on, and the pin's own wait is
+                // four times the frame's (see `pin_volume_is_moving`).
                 let wait_ms = wait_before_the_next_tick(
                     false,
-                    media_dynamic_hint || tick_has_wait || travelling,
+                    media_dynamic_hint || tick_has_wait || travelling || pin_volume_is_moving(),
                     pinned(),
                 );
                 // And a travel is paced by the compositor rather than by that wait, because what its

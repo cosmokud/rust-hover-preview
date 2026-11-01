@@ -165,8 +165,9 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let audio_changed = pin_state()
         .and_then(|mut pinned| {
             let pin = pinned.pin_mut()?;
-            let hovered = pin_audio_control_at(pin, x, y);
-            let shown = pin_audio_window_buttons(pin, y);
+            let hovered = pin_audio_control_at(pin, x, y)
+                .filter(|control| pin_audio_control_revealed(pin, y, *control));
+            let shown = pin_audio_window_buttons_at(pin, x, y);
             let changed = pin.audio_hovered != hovered || pin.audio_window_buttons != shown;
             pin.audio_hovered = hovered;
             pin.audio_window_buttons = shown;
@@ -505,24 +506,119 @@ pub(super) fn pinned_volume_geometry() -> Option<pin_chrome::VolumePopup> {
 /// against a window other than the one under the hand is a panel that closes when it should not
 /// (see `refresh_pin_volume`).
 pub(super) fn pinned_volume_panel(pin: &PinnedPreview) -> Option<pin_chrome::VolumePopup> {
+    let (width, _) = pin.window_size();
+    Some(pin_chrome::volume_popup_from_button(
+        pinned_volume_button(pin)?,
+        width,
+        pin.dpi,
+    ))
+}
+
+/// Where the pin's volume button is drawn, in the window's own coordinates: the
+/// transport strip's own where the pin has a strip, and the sound card's for a pin whose
+/// controls are the card's.
+///
+/// The button and not only the panel, because the wheel over the button is the same level
+/// being turned and the popup is kept open while the pointer is on it (see
+/// `pin_volume_keep_alive_try` and `refresh_pin_volume`).
+pub(super) fn pinned_volume_button(pin: &PinnedPreview) -> Option<RECT> {
     if pin.collapsed {
         return None;
     }
 
-    let strip = if pin.transport_bar {
+    if pin.transport_bar {
         let (width, height) = pin.window_size();
         let band = pinned_transport_height(pin.dpi, true);
-        Some(pin_chrome::volume_popup_layout(
-            width,
-            (height - band).max(0),
-            band,
-            pin.dpi,
-        ))
+        let strip_top = (height - band).max(0);
+        let in_strip = pin_chrome::transport_layout(width, band, pin.dpi, true).volume;
+        Some(RECT {
+            top: in_strip.top + strip_top,
+            bottom: in_strip.bottom + strip_top,
+            ..in_strip
+        })
     } else {
-        None
+        pinned_audio_volume_button(pin)
+    }
+}
+
+/// The screen-space box a wheel notch over a pin's volume control belongs to, published by the
+/// preview tick and read by the wheel hook.
+///
+/// It is published rather than resolved on the hook's path because resolving it needs
+/// `PIN_STATE`, which the preview thread holds through each tick: a hook that waited there would
+/// stall every wheel message on the desktop, and one that gave up on the lock — which is what this
+/// used to do — dropped about half the notches of a turned wheel to Explorer instead (see
+/// `pin_volume_keep_alive_try`). The four edges and the flag are written by one thread and read by
+/// the other; a torn box costs one notch taken wrongly, which is why this is four atomics and not
+/// a lock.
+static PIN_VOLUME_REGION: [AtomicI32; 4] = [
+    AtomicI32::new(0),
+    AtomicI32::new(0),
+    AtomicI32::new(0),
+    AtomicI32::new(0),
+];
+
+/// Whether `PIN_VOLUME_REGION` names a box at all (see `pin_volume_keep_alive_try`).
+static PIN_VOLUME_REGION_SET: AtomicBool = AtomicBool::new(false);
+
+/// Publish the box a wheel notch over `pin`'s volume control belongs to, or clear it where there
+/// is no pin (see `PIN_VOLUME_REGION`).
+///
+/// Called by the tick that already has the pin, and by the two roads that change the box between
+/// ticks — the panel opening or closing and the pin coming up or down — so the first notch after a
+/// popup opens matches the panel it opened.
+pub(super) fn publish_pin_volume_region(pin: Option<&PinnedPreview>) {
+    let region = pin.and_then(|pin| {
+        let button = pinned_volume_button(pin)?;
+        let panel = if pin.volume.open {
+            pinned_volume_panel(pin)?.panel
+        } else {
+            button
+        };
+        let window = pin.window_box();
+        Some((
+            window.0 + button.left.min(panel.left),
+            window.1 + button.top.min(panel.top),
+            window.0 + button.right.max(panel.right),
+            window.1 + button.bottom.max(panel.bottom),
+        ))
+    });
+
+    let Some(region) = region else {
+        clear_pin_volume_region();
+        return;
     };
 
-    strip.or_else(|| pinned_audio_volume_popup(pin))
+    for (edge, value) in PIN_VOLUME_REGION
+        .iter()
+        .zip([region.0, region.1, region.2, region.3])
+    {
+        edge.store(value, Ordering::Relaxed);
+    }
+    PIN_VOLUME_REGION_SET.store(true, Ordering::Release);
+}
+
+/// Take the published box away, for a pin that is no longer up (see `publish_pin_volume_region`).
+pub(super) fn clear_pin_volume_region() {
+    PIN_VOLUME_REGION_SET.store(false, Ordering::Release);
+}
+
+/// The box on screen a wheel notch over a pin's volume control belongs to: the open
+/// popup's panel and the button it hangs from, or just the button while it is closed.
+///
+/// Asked from the wheel hook, so it reads only what the tick published and waits on no lock (see
+/// `PIN_VOLUME_REGION`).
+pub(crate) fn pin_volume_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
+    if !PIN_VOLUME_REGION_SET.load(Ordering::Acquire) {
+        return None;
+    }
+
+    Some((
+        PIN_VOLUME_REGION[0].load(Ordering::Relaxed),
+        PIN_VOLUME_REGION[1].load(Ordering::Relaxed),
+        PIN_VOLUME_REGION[2].load(Ordering::Relaxed),
+        PIN_VOLUME_REGION[3].load(Ordering::Relaxed),
+    ))
 }
 
 /// Where a pinned sound's card's volume button opens its panel from, in the window's own
@@ -533,12 +629,22 @@ pub(super) fn pinned_volume_panel(pin: &PinnedPreview) -> Option<pin_chrome::Vol
 /// Nothing about the two windows standing in each other's place applies to it — the panel floats
 /// over this app's own card rather than over a player's window, so there is no window to put in
 /// front and no tick to hold off (see `pin_volume_open`).
+#[cfg(test)]
 pub(super) fn pinned_audio_volume_popup(pin: &PinnedPreview) -> Option<pin_chrome::VolumePopup> {
+    let (width, _) = pin.window_size();
+    Some(pin_chrome::volume_popup_from_button(
+        pinned_audio_volume_button(pin)?,
+        width,
+        pin.dpi,
+    ))
+}
+
+fn pinned_audio_volume_button(pin: &PinnedPreview) -> Option<RECT> {
     if !pin_shows_an_audio_card(pin) {
         return None;
     }
 
-    let (width, height) = pin.window_size();
+    let (_, height) = pin.window_size();
     let (top, _) = pinned_band_rows(
         height,
         pin.caption,
@@ -559,14 +665,10 @@ pub(super) fn pinned_audio_volume_popup(pin: &PinnedPreview) -> Option<pin_chrom
         true,
     )?;
 
-    Some(pin_chrome::volume_popup_from_button(
-        RECT {
-            top: button.top + top,
-            ..button
-        },
-        width,
-        pin.dpi,
-    ))
+    Some(RECT {
+        top: button.top + top,
+        ..button
+    })
 }
 
 /// Whether the popup's knob is being held.
@@ -669,23 +771,41 @@ pub(super) unsafe fn pinned_volume_release(hwnd: HWND, window: &dyn PinWindow) -
 /// harmless rather than necessary — which is why this function asks nothing about the kind (see
 /// `pinned_audio_volume_popup`).
 pub(super) unsafe fn toggle_pin_volume(hwnd: HWND) {
-    let opened = {
+    let open = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.open))
+        .unwrap_or(false);
+    set_pin_volume_open(hwnd, !open);
+}
+
+/// Open the volume popup where it is not already open: what a wheel notch over the
+/// volume button does before it moves the level, so the slider it is turning is the one
+/// the user sees (see `take_pin_volume_delta`).
+pub(super) unsafe fn open_pin_volume(hwnd: HWND) {
+    set_pin_volume_open(hwnd, true);
+}
+
+unsafe fn set_pin_volume_open(hwnd: HWND, open: bool) {
+    {
         let Some(mut pinned) = pin_state() else {
             return;
         };
         let Some(pin) = pinned.pin_mut() else {
             return;
         };
-
-        pin.volume.open = !pin.volume.open;
-        if !pin.volume.open {
-            pin.volume.dragging = false;
+        if pin.volume.open == open {
+            return;
         }
 
-        pin.volume.open
-    };
+        pin.volume.open = open;
+        if !open {
+            pin.volume.dragging = false;
+        }
+        // The hook reads the published box rather than this lock, so the panel's own box has to be
+        // out before the next notch arrives (see `publish_pin_volume_region`).
+        publish_pin_volume_region(Some(pin));
+    }
 
-    if opened {
+    if open {
         raise_pinned_window(hwnd);
     }
 
@@ -1156,6 +1276,12 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
 /// refusal has to cost nothing at all. A press no arm owns is given back once, after every arm has
 /// declined, by the procedure's last resort (see `release_pin_capture`).
 pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn PinWindow) -> bool {
+    // A hand-off a press on the card's menu armed first: it is the one arm that raises another
+    // program, so it is the one that must have the release rather than the window it raises (see
+    // `pin_menu_hand_off_release`).
+    if pin_menu_hand_off_release(hwnd) {
+        return true;
+    }
     // A drag of the volume knob first, which is a hand on the level rather than on anything else:
     // it is the one press on a pinned window that is let go of somewhere other than where it began
     // (see `pinned_volume_press`).
@@ -1244,6 +1370,7 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
                 pin_chrome::CaptionButton::OpenWith => {
                     if let Some(path) = pinned_path() {
                         open_path_with_default_app(&path, hwnd);
+                        note_pin_handed_off();
                         request_pin_end();
                     }
                 }
@@ -1261,6 +1388,7 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
                             let at = (box_.0, box_.1, box_.0 + box_.2, box_.1 + box_.3);
                             std::thread::spawn(move || carry_open_with_to(at, before));
                         }
+                        note_pin_handed_off();
                         request_pin_end();
                     }
                 }
