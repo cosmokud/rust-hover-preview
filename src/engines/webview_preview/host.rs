@@ -9,18 +9,20 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 use webview2_com::{NavigationCompletedEventHandler, TrySuspendCompletedHandler};
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW, KillTimer, SetParent,
-    SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE,
-    GWL_STYLE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, MSG, SET_WINDOW_POS_FLAGS, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
-    SW_SHOWNOACTIVATE,
+    DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW, IsWindow, KillTimer,
+    SetParent, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
+    GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, MSG, SET_WINDOW_POS_FLAGS,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE,
 };
 
 use super::api::{
-    drop_placement, is_wanted, note_document_failed, page_runs, publish, publish_rect, wanted_area,
-    Area, Placement, Wanted, BROWSER_PID, HOST_HWND, LAST_TIMINGS, RUNNING_DOCUMENT,
+    drop_placement, is_wanted, note_document_failed, page_runs, publish, publish_nested,
+    publish_rect, wanted_area, Area, Placement, Wanted, BROWSER_PID, HOST_HWND, LAST_TIMINGS,
+    RUNNING_DOCUMENT,
 };
 use super::engine::trace;
 use super::environment::{
@@ -29,8 +31,9 @@ use super::environment::{
     HOST_CREATION_TIMEOUT,
 };
 use super::nesting::{
-    child_ex_style, child_style, client_band, nested_calls, parent_origin, popup_style, NestedCall,
-    Nesting, NestingChange,
+    child_ex_style, child_style, client_band, nested_calls, parent_origin, popup_style,
+    settle_parents, the_page_is_placed, unnest_calls, NestedCall, Nesting, NestingChange,
+    UnnestCall,
 };
 use super::pages::{font_page, frame_page, html_page};
 
@@ -50,6 +53,10 @@ pub(super) struct Host {
     /// Where the page's window stands — the pin's window while a pin is up, the desktop otherwise —
     /// and the style it wore before it was a child (see `nesting`).
     nesting: Nesting,
+    /// The box the nested page was last put in, on the screen: a placement arrives on every pointer
+    /// move of a drag, and a page put in the box it already has is a recomposited layered pin per
+    /// tick (see `put_window`).
+    last_placed: Option<(i32, i32, i32, i32)>,
     /// The file the engine is holding, the backdrop its page was written for, and — for a font —
     /// the face of a collection it was read at, so a second hover on the same file is a window
     /// that is put back up rather than a navigation. A change of backdrop or of face is a page to
@@ -192,6 +199,7 @@ impl Host {
             controller,
             webview,
             nesting: Nesting::new(),
+            last_placed: None,
             current: None,
             last_area: None,
             browser_pid,
@@ -235,6 +243,15 @@ impl Host {
             area,
         } = wanted;
         let (background, area) = (*background, *area);
+
+        // A page can be destroyed with a parent Windows no longer has, and a window that is gone has
+        // nothing to navigate in or put up: the document is answered as one that failed rather than
+        // navigated in a window that is not there (see `settle_nesting`).
+        if !unsafe { IsWindow(self.hwnd) }.as_bool() {
+            self.current = None;
+            note_document_failed();
+            return;
+        }
 
         // Which face of a collection a specimen of this file is drawn from, read here rather
         // than inside the page: it is part of what the engine is holding, so a setting changed
@@ -354,6 +371,9 @@ impl Host {
 
             let _ = self.controller.SetIsVisible(true);
 
+            // A document put up is a page in a box nobody has placed it in yet, whatever box the
+            // window last stood in (see `put_window`).
+            self.last_placed = None;
             self.put_window(area);
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
@@ -380,10 +400,22 @@ impl Host {
         // desktop's it always was: the hover window refuses activation, and a child of it could not
         // be the foreground a page that runs takes its keys from.
         let pin = crate::ui::preview_window::engine_page_parent();
-        self.settle_nesting(pin);
+        let change = self.settle_nesting(pin);
 
         if let Some(parent) = self.nesting.parent() {
             let runs = RUNNING_DOCUMENT.load(Ordering::Acquire);
+            let box_ = (area.x, area.y, area.width, area.height);
+            let placed = the_page_is_placed(change, self.last_placed, box_);
+            self.last_placed = Some(box_);
+            publish_nested(Some(area));
+
+            // A placement arrives on every pointer move of a drag, and a page put in the box it is
+            // already in — and the chrome raised over it again — recomposites the whole layered pin
+            // four times a tick (see `the_page_is_placed`).
+            if !placed {
+                return;
+            }
+
             let (x, y) = client_band(area, parent_origin(parent));
 
             for call in nested_calls(pin.is_some()).into_iter().flatten() {
@@ -419,6 +451,11 @@ impl Host {
             return;
         }
 
+        // A page that is not nested is not a band the pin may claim, and the box it last stood in
+        // is not one it is in any more: the next nesting places it whatever the box.
+        self.last_placed = None;
+        publish_nested(None);
+
         let raises = raises(
             crate::ui::preview_window::pinned(),
             crate::ui::preview_window::pin_holds_the_front(),
@@ -444,9 +481,18 @@ impl Host {
     /// page that flickers: the state machine is what makes the Win32 calls cost one `Stayed` check
     /// (see `Nesting`). The popup style it wore before it was made a child is kept, so the window it
     /// goes back to is the one it was rather than a second copy of that decision.
+    ///
+    /// **A parent Windows no longer has is forgotten rather than stood in.** A pin's window can be
+    /// destroyed under a page nested in it, and a page left an owned child of a window that is gone
+    /// is one that hides with the pin for the rest of the run: it is put back on the desktop and
+    /// shown, so the engine is never stranded (see `settle_parents`).
     fn settle_nesting(&mut self, parent: Option<HWND>) -> NestingChange {
         let runs = RUNNING_DOCUMENT.load(Ordering::Acquire);
         let current_ex = unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) };
+        let was = self.nesting.parent();
+        let (parent, orphaned) = settle_parents(self.nesting.parent(), parent, |window| {
+            unsafe { IsWindow(window) }.as_bool()
+        });
         let change = self.nesting.settle(parent, current_ex);
 
         if change == NestingChange::Stayed {
@@ -464,17 +510,30 @@ impl Host {
                     let _ = SetParent(self.hwnd, parent);
                 }
                 None => {
-                    let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE);
-                    let popup = popup_style(style);
-                    if popup != style {
-                        SetWindowLongPtrW(self.hwnd, GWL_STYLE, popup);
+                    // **The parent is given up before the style is.** A page styled `WS_POPUP`
+                    // while it is still the pin's owned child is a popup the pin owns, and it hides
+                    // with it (see `unnest_calls`).
+                    for call in unnest_calls().into_iter().flatten() {
+                        match call {
+                            UnnestCall::LeaveParent => {
+                                let _ = SetParent(self.hwnd, None);
+                            }
+                            UnnestCall::PopupStyle => {
+                                let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE);
+                                let popup = popup_style(style);
+                                if popup != style {
+                                    SetWindowLongPtrW(self.hwnd, GWL_STYLE, popup);
+                                }
+                            }
+                            UnnestCall::DesktopExStyle => {
+                                SetWindowLongPtrW(
+                                    self.hwnd,
+                                    GWL_EXSTYLE,
+                                    ex_style_for(self.nesting.desktop_ex_style(), runs),
+                                );
+                            }
+                        }
                     }
-                    let _ = SetParent(self.hwnd, None);
-                    SetWindowLongPtrW(
-                        self.hwnd,
-                        GWL_EXSTYLE,
-                        ex_style_for(self.nesting.desktop_ex_style(), runs),
-                    );
                 }
             }
 
@@ -488,6 +547,31 @@ impl Host {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
             );
+        }
+
+        if self.nesting.parent().is_none() {
+            // A page on the desktop's is a band the pin may not claim and a press the pin may not
+            // hand it (see `pin_page_input`).
+            publish_nested(None);
+        }
+
+        // The pin's claim on the band is a fact of its pixels, so a pin that adopted or gave up a
+        // page is a pin to paint again: the band it painted as a hole is one it now claims.
+        for window in [was, self.nesting.parent()].into_iter().flatten() {
+            if unsafe { IsWindow(window) }.as_bool() {
+                let _ = unsafe { InvalidateRect(window, None, false) };
+            }
+        }
+
+        if orphaned {
+            // Its parent was taken away by someone else. Where nothing adopted it, it is a window of
+            // the desktop's again and nothing shows it any more, so it is put back on the screen it
+            // was on (see `settle_parents`); where another window did, the placement that follows
+            // puts it in that window's band.
+            self.last_placed = None;
+            if self.nesting.parent().is_none() {
+                let _ = unsafe { ShowWindow(self.hwnd, SW_SHOWNOACTIVATE) };
+            }
         }
 
         change
@@ -570,6 +654,13 @@ impl Host {
 
         if resized {
             self.set_bounds(placement.area);
+        }
+
+        // A road that only re-raises a page over the pin — an activation, a pin raised over the
+        // window that covered the page — asks for a placement the box did not change, so the record
+        // of where the page last stood is cleared for it to be placed again.
+        if placement.re_raise {
+            self.last_placed = None;
         }
 
         self.put_window(placement.area);

@@ -214,6 +214,12 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
         let notches = (info.mouseData >> 16) as u16 as i16 as i32;
 
+        // A wheel over a page nested in a pinned window is the page's own: a page scrolls, and the
+        // pin's zoom claim over the same box would swallow every notch (see `pin_page_input`).
+        if crate::ui::preview_window::the_wheel_is_the_pages((info.pt.x, info.pt.y)) {
+            return CallNextHookEx(None, code, wparam, lparam);
+        }
+
         // A notch over the volume popup or the button that opens it is the level's, and it is
         // asked before the two regions below: the button sits inside the pin's own box, which
         // the zoom road claims whole, and the popup can float over a page that scrolls.

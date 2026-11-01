@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -143,6 +143,10 @@ pub(super) struct Placement {
     pub(super) path: PathBuf,
     pub(super) background: TransparentBackground,
     pub(super) area: Area,
+    /// Whether the ask is a raise of a page that is already where it stands rather than a box that
+    /// moved: a page put in the box it already has is placed again only for one of these (see
+    /// `Host::place`).
+    pub(super) re_raise: bool,
 }
 
 /// The newest placement asked for, taken back for the engine's thread to carry out, and the
@@ -218,6 +222,47 @@ pub(super) static HOST_HWND: AtomicIsize = AtomicIsize::new(0);
 /// placed. `IsChild` answers for a window that is still the host's in the tree; the process
 /// answers for one that is not, and a pid the host wrote down is only ever this app's engine.
 pub(super) static BROWSER_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Whether the page is a child of the pin's window right now, and the band it was put in on the
+/// screen.
+///
+/// The pin's band is hit-tested on its composed surface, so a transparent band is one no child of
+/// the pin is reachable through: the pin paints its claim on that band only while the page really
+/// stands in it, and hands it the presses that land there (see `pin_page_input`). The band is kept
+/// in atomics rather than behind a lock because the wheel hook reads it, and a hook callback may
+/// take no lock at all.
+static NESTED: AtomicBool = AtomicBool::new(false);
+static NESTED_BAND: [AtomicI32; 4] = [const { AtomicI32::new(0) }; 4];
+
+/// Say where the page stands, or that it is back on the desktop.
+pub(super) fn publish_nested(area: Option<Area>) {
+    if let Some(area) = area {
+        for (cell, value) in NESTED_BAND
+            .iter()
+            .zip([area.x, area.y, area.width, area.height])
+        {
+            cell.store(value, Ordering::Release);
+        }
+    }
+    NESTED.store(area.is_some(), Ordering::Release);
+}
+
+/// Whether the page is nested in the pin and on screen.
+pub(crate) fn page_is_nested() -> bool {
+    NESTED.load(Ordering::Acquire)
+}
+
+/// The nested page's band as its left, top, width and height, or nothing when it is not nested.
+pub(crate) fn nested_page_band() -> Option<(i32, i32, i32, i32)> {
+    if !page_is_nested() {
+        return None;
+    }
+
+    let [x, y, width, height] = NESTED_BAND
+        .each_ref()
+        .map(|cell| cell.load(Ordering::Acquire));
+    Some((x, y, width, height))
+}
 
 /// The document the loop wants drawn, as the engine's thread takes it up: the want and the
 /// generation it was made under, or nothing when nothing is wanted.

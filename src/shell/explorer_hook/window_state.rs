@@ -65,17 +65,20 @@ pub(super) fn engine_owns_the_keyboard() -> bool {
             return false;
         }
 
-        let engine_root = GetAncestor(engine, GA_ROOT);
         let page_runs =
             webview_preview::showing_path().is_some_and(|path| webview_preview::page_runs(&path));
 
-        (foreground.0 as isize) == engine.0 as isize
-            || IsChild(engine, foreground).as_bool()
-            // A page is a child of the pin while a pin is up, so the click that activated it made
-            // the pin the foreground: a page that runs is the one document whose keys belong to
-            // it, and the pin's own front is how the Shell reports them (see
-            // `webview_preview::nesting`).
-            || (page_runs && foreground.0 as isize == engine_root.0 as isize)
+        // A page nested in the pin is a child, so the click that activated it made the *pin* the
+        // foreground — the page's own root — and a foreground of anything else is not the page's,
+        // however that window came to be in front (see `webview_preview::nesting`).
+        if webview_preview::page_is_nested() {
+            let pin = GetAncestor(engine, GA_ROOT);
+            return page_runs && !pin.is_invalid() && foreground.0 == pin.0;
+        }
+
+        // On the desktop the page is a window of its own, and a page that runs is the one document
+        // whose keys belong to it.
+        (foreground.0 as isize) == engine.0 as isize || IsChild(engine, foreground).as_bool()
     }
 }
 
