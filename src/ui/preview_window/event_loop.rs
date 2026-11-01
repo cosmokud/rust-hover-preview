@@ -2238,16 +2238,27 @@ pub fn run_preview_window() {
                         .unwrap_or(i64::from(level) * WHEEL_LEVEL_UNITS_PER_PERCENT);
                     let units = volume_after_wheel_delta(base, volume_delta);
                     volume_wheel_units = Some(units);
-                    set_pin_volume(volume_from_wheel_units(units));
+                    set_pin_volume_target(units);
                     open_pin_volume(pinned_window());
                 }
             } else if let Some(level) = pin_volume_level() {
                 // A knob moved by the drag or the tray between wheel ticks re-bases the carry, so
-                // sub-notch travel is not applied twice to the old level.
-                if volume_wheel_units.is_some_and(|units| volume_from_wheel_units(units) != level) {
+                // sub-notch travel is not applied twice to the old level. A level the wheel itself
+                // is still gliding toward is not a knob moved: the carry is where that notch asked
+                // to go, and re-basing on the level it has got to so far would throw the rest of it
+                // away (see `set_pin_volume_target`).
+                if !pin_volume_target_pending()
+                    && volume_wheel_units
+                        .is_some_and(|units| volume_from_wheel_units(units) != level)
+                {
                     volume_wheel_units = Some(i64::from(level) * WHEEL_LEVEL_UNITS_PER_PERCENT);
                 }
             }
+
+            // The applied level is stepped toward the wheel's request before anything is told to the
+            // engine, so a notch is heard as a short glide rather than as a step (see
+            // `ramp_pin_volume`).
+            ramp_pin_volume();
 
             // One engine command per tick, always the latest level, and FFmpeg's player begun
             // again only after the wheel or drag has been quiet (see `flush_pin_volume_level`
@@ -4745,9 +4756,12 @@ pub fn run_preview_window() {
                 // frame cadence for as long as it lasts and the loop drops back to its own wait the
                 // tick after it has arrived (see `pin_zoom_in_flight`).
                 let travelling = pin_zoom_in_flight();
+                // A level the wheel has just asked for is something to animate as well: its glide and
+                // its flush are only as smooth as the ticks they land on, and the pin's own wait is
+                // four times the frame's (see `pin_volume_is_moving`).
                 let wait_ms = wait_before_the_next_tick(
                     false,
-                    media_dynamic_hint || tick_has_wait || travelling,
+                    media_dynamic_hint || tick_has_wait || travelling || pin_volume_is_moving(),
                     pinned(),
                 );
                 // And a travel is paced by the compositor rather than by that wait, because what its

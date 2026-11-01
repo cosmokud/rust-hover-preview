@@ -1190,3 +1190,233 @@ fn a_wheel_burst_relaunches_ffplay_only_after_the_quiet_window() {
     }
     clear_restart_count();
 }
+
+/// The box a wheel notch over the volume control is answered by is published, not resolved: the
+/// wheel hook asks it while `PIN_STATE` is held by the preview thread, which is half of the notches
+/// of a turned wheel falling through to Explorer (see `pin_volume_keep_alive_try` and
+/// `PIN_VOLUME_REGION`).
+#[test]
+fn a_wheel_notch_is_answered_by_the_volume_box_while_the_pin_state_is_held() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    let button = pinned_volume_button(&pin).expect("a strip carries a volume button");
+    let window = pin.window_box();
+    stand_pin(Some(pin));
+
+    crate::shell::key_input::publish_pin_always_on_top(true);
+    crate::shell::wheel_input::publish_preview_under_the_pointer(false);
+    let _ = wheel_input::take_pin_volume_delta();
+
+    // The lock the hook used to wait on, held for the whole of the question.
+    let held = pin_state().expect("the pin state the test published");
+
+    assert_eq!(
+        pin_volume_keep_alive_try(),
+        Some((
+            window.0 + button.left,
+            window.1 + button.top,
+            window.0 + button.right,
+            window.1 + button.bottom,
+        )),
+        "the box is read without the lock the preview thread is holding"
+    );
+
+    let info = MSLLHOOKSTRUCT {
+        pt: POINT {
+            x: window.0 + (button.left + button.right) / 2,
+            y: window.1 + (button.top + button.bottom) / 2,
+        },
+        mouseData: (WHEEL_DELTA as u32) << 16,
+        flags: 0,
+        time: 0,
+        dwExtraInfo: 0,
+    };
+    let swallowed = unsafe {
+        wheel_input::wheel_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_MOUSEWHEEL as usize),
+            LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
+        )
+    };
+    assert_eq!(
+        wheel_input::take_pin_volume_delta(),
+        WHEEL_DELTA,
+        "the notch is the level's even with the pin held by another thread"
+    );
+    assert_eq!(swallowed, LRESULT(1), "and it is not left for Explorer");
+    drop(held);
+
+    crate::shell::key_input::publish_pin_always_on_top(false);
+    stand_pin(None);
+    stand_pin(previous);
+}
+
+/// The level a wheel asks for is a glide: it climbs toward the wheel's fine target a step a tick,
+/// never past it and never backwards, and lands on the exact level the notch names (see
+/// `ramp_pin_volume`).
+#[test]
+fn a_wheel_notchs_level_glides_to_its_target_and_lands_on_it_exactly() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume = PinVolume {
+        level: 50,
+        playing_at: 50,
+        ..Default::default()
+    };
+    stand_pin(Some(pin));
+
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    let target = volume_after_wheel_delta(50 * per, WHEEL_DELTA);
+    set_pin_volume_target(target);
+
+    let held = || {
+        pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.volume))
+            .expect("the pin the test stands")
+    };
+
+    assert_eq!(
+        held().level,
+        50,
+        "the popup is still drawn where the level is"
+    );
+    assert_eq!(
+        held().target,
+        Some(target as u32),
+        "and the notch is owed a glide"
+    );
+
+    let mut applied = 0;
+    let mut level = 0;
+    let mut ticks = 0;
+    loop {
+        ramp_pin_volume();
+        ticks += 1;
+        let volume = held();
+        assert!(
+            volume.applied >= applied,
+            "the glide only ever climbs toward the target"
+        );
+        assert!(
+            i64::from(volume.applied) <= target,
+            "and it never goes past it"
+        );
+        assert!(volume.level >= level, "and the drawn level with it");
+        applied = volume.applied;
+        level = volume.level;
+
+        if volume.target.is_none() {
+            assert_eq!(
+                i64::from(volume.applied),
+                target,
+                "the glide stops exactly on the target"
+            );
+            break;
+        }
+        assert!(
+            ticks < 60,
+            "a five percent notch is a handful of ticks, not a second of them"
+        );
+    }
+
+    // One 120-unit notch is five percent, exactly: 50 -> 55, not 54 or 56.
+    assert_eq!(
+        i64::from(held().level) * per,
+        target,
+        "the notch settles on its own fine level"
+    );
+    assert_eq!(held().level, 55, "which is five percent on");
+
+    stand_pin(previous);
+}
+
+/// A knob dragged on the popup, a tray row and a key are levels in hand rather than requests: they
+/// are applied at once, and a glide a wheel left behind is dropped rather than carried on with (see
+/// `set_pin_volume` and `ramp_pin_volume`).
+#[test]
+fn a_dragged_knob_moves_the_level_at_once_and_drops_a_wheels_glide() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume = PinVolume {
+        level: 50,
+        playing_at: 50,
+        ..Default::default()
+    };
+    stand_pin(Some(pin));
+
+    let held = || {
+        pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.volume))
+            .expect("the pin the test stands")
+    };
+
+    set_pin_volume(64);
+    assert_eq!(held().level, 64, "the drag is heard at once");
+    assert_eq!(held().target, None, "with nothing left to glide toward");
+
+    // A wheel request mid-drag is replaced by the hand that came after it.
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    set_pin_volume_target(volume_after_wheel_delta(64 * per, WHEEL_DELTA));
+    assert_eq!(held().level, 64, "the request alone moves no level");
+    set_pin_volume(20);
+    assert_eq!(held().level, 20);
+    assert_eq!(held().target, None);
+    assert_eq!(
+        i64::from(held().applied),
+        20 * per,
+        "the glide starts from the level in hand"
+    );
+    ramp_pin_volume();
+    assert_eq!(held().level, 20, "and there is nothing to glide toward");
+
+    stand_pin(previous);
+}
+
+/// Every notch of a burst moves the wheel's target five percent on, and the applied level stays
+/// behind it until the ticks catch up (see `set_pin_volume_target` and `ramp_pin_volume`).
+#[test]
+fn a_burst_of_wheel_notches_moves_the_target_five_percent_a_notch() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume = PinVolume {
+        level: 50,
+        playing_at: 50,
+        ..Default::default()
+    };
+    stand_pin(Some(pin));
+
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    let mut units = 50 * per;
+    for notch in 1..=3 {
+        units = volume_after_wheel_delta(units, WHEEL_DELTA);
+        set_pin_volume_target(units);
+        let volume = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.volume))
+            .expect("the pin the test stands");
+        assert_eq!(
+            volume.target,
+            Some(units as u32),
+            "notch {notch} is another five percent of the range"
+        );
+        assert_eq!(volume.level, 50, "and the applied level has not jumped");
+    }
+    assert_eq!(volume_from_wheel_units(units), 65, "three notches up");
+
+    stand_pin(previous);
+}

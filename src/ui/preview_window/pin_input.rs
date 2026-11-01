@@ -541,26 +541,83 @@ pub(super) fn pinned_volume_button(pin: &PinnedPreview) -> Option<RECT> {
     }
 }
 
+/// The screen-space box a wheel notch over a pin's volume control belongs to, published by the
+/// preview tick and read by the wheel hook.
+///
+/// It is published rather than resolved on the hook's path because resolving it needs
+/// `PIN_STATE`, which the preview thread holds through each tick: a hook that waited there would
+/// stall every wheel message on the desktop, and one that gave up on the lock — which is what this
+/// used to do — dropped about half the notches of a turned wheel to Explorer instead (see
+/// `pin_volume_keep_alive_try`). The four edges and the flag are written by one thread and read by
+/// the other; a torn box costs one notch taken wrongly, which is why this is four atomics and not
+/// a lock.
+static PIN_VOLUME_REGION: [AtomicI32; 4] = [
+    AtomicI32::new(0),
+    AtomicI32::new(0),
+    AtomicI32::new(0),
+    AtomicI32::new(0),
+];
+
+/// Whether `PIN_VOLUME_REGION` names a box at all (see `pin_volume_keep_alive_try`).
+static PIN_VOLUME_REGION_SET: AtomicBool = AtomicBool::new(false);
+
+/// Publish the box a wheel notch over `pin`'s volume control belongs to, or clear it where there
+/// is no pin (see `PIN_VOLUME_REGION`).
+///
+/// Called by the tick that already has the pin, and by the two roads that change the box between
+/// ticks — the panel opening or closing and the pin coming up or down — so the first notch after a
+/// popup opens matches the panel it opened.
+pub(super) fn publish_pin_volume_region(pin: Option<&PinnedPreview>) {
+    let region = pin.and_then(|pin| {
+        let button = pinned_volume_button(pin)?;
+        let panel = if pin.volume.open {
+            pinned_volume_panel(pin)?.panel
+        } else {
+            button
+        };
+        let window = pin.window_box();
+        Some((
+            window.0 + button.left.min(panel.left),
+            window.1 + button.top.min(panel.top),
+            window.0 + button.right.max(panel.right),
+            window.1 + button.bottom.max(panel.bottom),
+        ))
+    });
+
+    let Some(region) = region else {
+        clear_pin_volume_region();
+        return;
+    };
+
+    for (edge, value) in PIN_VOLUME_REGION
+        .iter()
+        .zip([region.0, region.1, region.2, region.3])
+    {
+        edge.store(value, Ordering::Relaxed);
+    }
+    PIN_VOLUME_REGION_SET.store(true, Ordering::Release);
+}
+
+/// Take the published box away, for a pin that is no longer up (see `publish_pin_volume_region`).
+pub(super) fn clear_pin_volume_region() {
+    PIN_VOLUME_REGION_SET.store(false, Ordering::Release);
+}
+
 /// The box on screen a wheel notch over a pin's volume control belongs to: the open
 /// popup's panel and the button it hangs from, or just the button while it is closed.
 ///
-/// Asked from the wheel hook, so it waits on no lock (see `pin_zoom_keep_alive_try`).
+/// Asked from the wheel hook, so it reads only what the tick published and waits on no lock (see
+/// `PIN_VOLUME_REGION`).
 pub(crate) fn pin_volume_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
-    let pinned = pin_window::pin_state_try()?;
-    let pin = pinned.pin()?;
-    let button = pinned_volume_button(pin)?;
-    let panel = if pin.volume.open {
-        pinned_volume_panel(pin)?.panel
-    } else {
-        button
-    };
-    let window = pin.window_box();
+    if !PIN_VOLUME_REGION_SET.load(Ordering::Acquire) {
+        return None;
+    }
 
     Some((
-        window.0 + button.left.min(panel.left),
-        window.1 + button.top.min(panel.top),
-        window.0 + button.right.max(panel.right),
-        window.1 + button.bottom.max(panel.bottom),
+        PIN_VOLUME_REGION[0].load(Ordering::Relaxed),
+        PIN_VOLUME_REGION[1].load(Ordering::Relaxed),
+        PIN_VOLUME_REGION[2].load(Ordering::Relaxed),
+        PIN_VOLUME_REGION[3].load(Ordering::Relaxed),
     ))
 }
 
@@ -743,6 +800,9 @@ unsafe fn set_pin_volume_open(hwnd: HWND, open: bool) {
         if !open {
             pin.volume.dragging = false;
         }
+        // The hook reads the published box rather than this lock, so the panel's own box has to be
+        // out before the next notch arrives (see `publish_pin_volume_region`).
+        publish_pin_volume_region(Some(pin));
     }
 
     if open {
