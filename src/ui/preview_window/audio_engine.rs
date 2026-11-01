@@ -826,8 +826,8 @@ pub(super) fn start_audio_playback_at(
     // A level of nothing is handed to the player like any other level rather than answered here:
     // silence is what a player at zero is, not the absence of one, so the sound goes on playing and
     // stays seekable with nothing to hear. Both players already read a zero as silence while they
-    // run — the engine as a mute (`video_player::Session::begin`) and FFmpeg as a level of its own
-    // scale, or a gain of nothing where a file has been measured (`start_audio_player`).
+    // run — the engine as a mute (`video_player::Session::begin`) and FFmpeg's player as a mixer
+    // session at zero (`audio_session::ask_the_mixer`).
     if normalizing_audio() {
         match audio_track::gain(path) {
             // A gain of one is a gain: a file measured as already standing at the target is played
@@ -897,9 +897,9 @@ pub(super) fn player_loops_itself(loop_: bool, start: f64) -> bool {
 }
 
 /// Start FFmpeg's player on a sound: no window at all, which is the whole of what this side asks
-/// of it, and the level the sound is played at — the filter's own scale, `0` to `100` taken as a
-/// share, where the file is played as it holds it, with the gain the tray's `Normalize` measured
-/// for it folded into it where one was (see `audio_volume_filter` and `Normalize`).
+/// of it, and **the file's own measured gain as the filter's whole job** — the app's level is never
+/// in it, and is put on the session Windows gives the player instead (see `audio_session::ask_the_mixer`).
+/// A file nothing has measured is played as the file holds it, which is FFmpeg's own 100%.
 ///
 /// A sound is looped while it is hovered, as a video is: what a hover is for is the file, and a
 /// sound that stopped under a pointer that had not moved would be a preview that ended on its
@@ -927,23 +927,12 @@ pub(super) fn player_loops_itself(loop_: bool, start: f64) -> bool {
 /// Which of the two a player is begun with is [`player_loops_itself`], and the card's clock is
 /// read by the same answer: a player that loops itself never exits, so there is no pass of it
 /// for this side to turn over and the clock is the thing that goes round (see `audio_clock`).
-/// The `-af` argument a sound's player is started with: the level, with the file's own measured
-/// gain folded into it where one was — the same filter a film's soundtrack goes through at every
-/// level (see `start_video_playback`).
+/// The `-af` argument a sound's player is started with, and nothing where the file has no measured
+/// gain: **the gain alone**, never the app's level (see `audio_session::ask_the_mixer`).
 ///
-/// The player's own `-volume` knob is never used: it is silent at 100, while the filter plays the
-/// whole of the scale — so a sound at `Volume → Audio` 100% is heard at full like a film.
-pub(super) fn audio_volume_filter(volume: u32, gain: Option<f64>) -> String {
-    match gain {
-        // What is handed to the filter is the whole of what the file is scaled by, so a
-        // normalized file at `Volume → Audio` 10% is heard at a tenth of the level rather than at ten
-        // times it.
-        Some(gain) => format!("volume={:.4}", f64::from(volume.min(100)) / 100.0 * gain),
-        // A level of nothing is a filter of nothing rather than no player at all: silence is what
-        // a player at zero is, so the sound goes on playing and stays seekable with nothing to
-        // hear (see `start_audio_playback_at`).
-        None => format!("volume={:.2}", f64::from(volume.min(100)) / 100.0),
-    }
+/// A gain of one is a gain, so a measured file standing at the target is still given the filter.
+pub(super) fn audio_gain_filter(gain: Option<f64>) -> Option<String> {
+    gain.map(|gain| format!("volume={gain:.4}"))
 }
 
 pub(super) fn start_audio_player(
@@ -956,10 +945,11 @@ pub(super) fn start_audio_player(
     let mut command = engine_processes::hidden_command("ffplay");
     command.args(["-nodisp", "-autoexit", "-loglevel", "quiet"]);
 
-    // The level the sound is played at, with the file's own measured gain folded into it where
-    // one was (see `audio_volume_filter`).
-    let level = audio_volume_filter(volume, gain);
-    command.args(["-af", &level]);
+    // The file's own measured gain, where one was, and nothing else: the app's level reaches the
+    // player through its mixer session (see `audio_gain_filter`).
+    if let Some(filter) = audio_gain_filter(gain) {
+        command.args(["-af", &filter]);
+    }
 
     if start.is_finite() && start > 0.0 {
         command.args(["-ss", &format!("{start:.3}")]);
@@ -990,6 +980,10 @@ pub(super) fn start_audio_player(
     // way: the audio route has no other player.
     note_player_process(child.id(), FFPLAY_IMAGE_NAME);
     VIDEO_HWND.store(0, Ordering::SeqCst);
+
+    // The level is the session's, asked for as the player is begun: a level of nothing is a session
+    // at nothing, so the sound is there to be turned up (see `audio_session::ask_the_mixer`).
+    audio_session::ask_the_mixer(child.id(), volume);
 
     Some(child)
 }

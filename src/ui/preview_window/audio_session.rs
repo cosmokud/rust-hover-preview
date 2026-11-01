@@ -103,7 +103,9 @@
 //! `audio_guard::spawn_probe`). A run with neither a trace nor a guarded player pays a read of an
 //! atomic and nothing else.
 
-use std::time::Duration;
+use once_cell::sync::Lazy;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use windows::core::{Interface, GUID, PWSTR};
 use windows::Win32::Media::Audio::{
@@ -119,6 +121,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 
 use super::playback_trace::{self, Verdict};
+use super::video_launch::Engine;
 
 /// How long a launched player is given before the mixer is first walked.
 ///
@@ -153,6 +156,144 @@ const CHANNELS_WRITTEN: u32 = 8;
 /// hidden by it without the line saying so; the ones written are the first the endpoints listed, in the
 /// walk's own order, which is the order every other field of the line is read in.
 const NEIGHBOURS_WRITTEN: usize = 8;
+
+/// How long the mixing thread keeps looking for a session that has not been listed yet, and how long
+/// between two looks.
+///
+/// **A session exists from the moment a player activates a stream**, which is after it has opened its
+/// file (see `MIXER_SETTLING`), so a write asked for at the spawn is a write to nothing. The thread
+/// retries until the session appears or a newer request supersedes this one, and gives up silently at
+/// the end of this window: a player that never made a session is a player Windows is not playing.
+const MIXER_ASK_PATIENCE: Duration = Duration::from_millis(2500);
+const MIXER_ASK_RETRY: Duration = Duration::from_millis(100);
+
+/// The app's level on the mixer's own scale: `0..=100` as a share of full, `0.0..=1.0`.
+pub(super) fn mixer_level(level: u32) -> f32 {
+    level.min(100) as f32 / 100.0
+}
+
+/// One level still to be written, and the player it belongs to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct MixerRequest {
+    pid: u32,
+    level: u32,
+}
+
+/// The one level waiting to be written, and the signal the mixing thread waits on.
+///
+/// **One slot, so the last request wins**: a knob dragged is a hundred requests and a queue of them
+/// would be a film heard at every level it passed through, long after the hand stopped.
+struct MixerAsk {
+    slot: Arc<(Mutex<Option<MixerRequest>>, Condvar)>,
+}
+
+static MIXER_ASK: Lazy<MixerAsk> = Lazy::new(|| {
+    let slot = Arc::new((Mutex::new(None), Condvar::new()));
+    let worker = Arc::clone(&slot);
+    let _ = std::thread::Builder::new()
+        .name("mixer-level".to_string())
+        .spawn(move || the_mixing_thread(worker));
+    MixerAsk { slot }
+});
+
+/// Ask Windows' mixer to put the session `pid` owns at `level`, on a thread of its own.
+///
+/// **Never the preview loop**: the walk blocks on the audio service and the thread needs an apartment
+/// of its own, so what this does is leave the request where that thread finds it. A level of nothing
+/// is a slider at `0.0` and never a mute (see `set_the_mixer_level`).
+pub(super) fn ask_the_mixer(pid: u32, level: u32) {
+    if pid == 0 {
+        return;
+    }
+
+    let (slot, signal) = &*MIXER_ASK.slot;
+    if let Ok(mut waiting) = slot.lock() {
+        *waiting = Some(MixerRequest { pid, level });
+        signal.notify_one();
+    }
+}
+
+/// The thread that writes the waiting level, for as long as this app runs.
+///
+/// **The apartment is taken once, here, and given back only where it was refused**: the walk of
+/// `each_session` needs one, and a thread that took one per request would pay for it on every step of
+/// a drag. A refusal is silent — a machine whose audio service will not start is a machine with no
+/// level to move — and leaves the thread waiting rather than spinning.
+fn the_mixing_thread(slot: Arc<(Mutex<Option<MixerRequest>>, Condvar)>) {
+    // Safety: this thread's own apartment, taken before anything is walked and held for its life.
+    if unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_err() {
+        return;
+    }
+
+    let (waiting, signal) = &*slot;
+    loop {
+        let request = {
+            let mut slot = match waiting.lock() {
+                Ok(slot) => slot,
+                Err(_) => return,
+            };
+            while slot.is_none() {
+                slot = match signal.wait(slot) {
+                    Ok(slot) => slot,
+                    Err(_) => return,
+                };
+            }
+            // The slot is the last request, so this is the level the hand stopped at.
+            slot.take().expect("the slot was just found filled")
+        };
+
+        let give_up_at = Instant::now() + MIXER_ASK_PATIENCE;
+        loop {
+            // A newer request is the one to serve now; this level is already history.
+            if waiting.lock().map(|slot| slot.is_some()).unwrap_or(true) {
+                break;
+            }
+            if set_the_mixer_level(request) {
+                break;
+            }
+            if Instant::now() >= give_up_at {
+                break;
+            }
+            std::thread::sleep(MIXER_ASK_RETRY);
+        }
+    }
+}
+
+/// The one write this module makes to a slider: the master volume of the session `request.pid` owns.
+///
+/// **The session is found the way the probe finds it**, by the same walk (see `each_session`), so the
+/// writer and the reader cannot disagree about which session is a player's. **Nothing else is touched**:
+/// the mute switch is the guard's cure and a hand's, and the per-channel volumes are nobody's here (see
+/// `the_cure_of`). The first session of the pid is the one, the same answer `look_and_cure` gives, and
+/// an answer of `false` is a session not listed yet rather than a refusal.
+fn set_the_mixer_level(request: MixerRequest) -> bool {
+    let mut written = false;
+    let mut no_neighbours: Option<Neighbours> = None;
+
+    // Safety: the caller's thread holds an apartment, which in this module is the mixing thread's
+    // own, and the session found is dropped with the walk.
+    unsafe {
+        each_session(
+            &mut None,
+            request.pid,
+            &mut no_neighbours,
+            &mut |session_pid, control, _device| {
+                if session_pid != request.pid {
+                    return false;
+                }
+
+                written = control.cast::<ISimpleAudioVolume>().is_ok_and(|volume| {
+                    volume
+                        .SetMasterVolume(mixer_level(request.level), std::ptr::null())
+                        .is_ok()
+                });
+                true
+            },
+        );
+    }
+
+    written
+}
 
 /// Read the mixer's side of a launched film, on a thread of its own, and write what it says.
 ///
@@ -410,8 +551,8 @@ const A_SLIDER_UP: f32 = 0.0005;
 
 /// What a muted session warrants, which is the whole of the rule this module writes by.
 ///
-/// **A pure function of three answers** — the mixer's slider, the mixer's mute switch, and the level
-/// the launch asked for — so that what this module will and will not write can be read and tested with
+/// **A pure function of three answers** — the mixer's slider, the mixer's mute switch, and the launch
+/// that began the player — so that what this module will and will not write can be read and tested with
 /// no mixer on the machine (see `the_warrant`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Warrant {
@@ -419,7 +560,7 @@ enum Warrant {
     /// no audio at all — a silence the setting chose is not a fault to heal.
     Nothing,
     /// The switch is on with the slider up: the fault a captured run proved, and the one write this
-    /// module makes.
+    /// cure makes.
     TakeItOff,
     /// The switch is on with the slider at nothing: a hand, written down and left (see
     /// [`A_SLIDER_UP`]).
@@ -536,17 +677,18 @@ impl Seen {
     }
 }
 
-/// What a session's mute switch warrants, given the level the launch asked for.
+/// What a session's mute switch warrants, given the launch that began the player.
 ///
-/// **The launch's level is half the rule**, for the reason it is half the verdict: a launch that
-/// resolved to nothing handed its player no track at all (see `video_launch::AudioForm`), so there is
-/// no session of this app's making to have muted — and a mute on a player begun without audio is
-/// nobody's but the mixer's.
+/// **The launch's form is half the rule**, for the reason it is half the verdict: only mpv at a level
+/// of zero is handed no track at all (see `video_launch::launched_without_audio`), so there is no
+/// session of this app's making to have muted — and a mute on a player begun without audio is
+/// nobody's but the mixer's. FFmpeg's player keeps its track at every level and is at a slider the
+/// app moved, so a mute on that session is still the fault this cure exists for.
 ///
 /// **A mute the mixer would not report is not a mute**, and neither is a session whose slider could
 /// not be read at all: a switch this build cannot read is not a switch to throw.
-fn the_warrant(mixer: Option<f32>, mute: Option<bool>, asked: u32) -> Warrant {
-    if super::video_launch::mpv_launched_without_audio(asked) || mute != Some(true) {
+fn the_warrant(mixer: Option<f32>, mute: Option<bool>, asked: u32, engine: Engine) -> Warrant {
+    if super::video_launch::launched_without_audio(engine, asked) || mute != Some(true) {
         return Warrant::Nothing;
     }
 
@@ -705,9 +847,9 @@ struct Walked {
 
 /// Walk every render endpoint this machine has and answer what the mixer says about one player.
 ///
-/// **Every read it makes is a read** (see `each_session`): the probe describes and never writes, and the
-/// one write in this module is the guard's, made by `look_and_cure` on a session it found for a player
-/// this app is standing behind.
+/// **Every read it makes is a read** (see `each_session`): the probe describes and never writes. The two
+/// writes this module makes are the guard's, by `look_and_cure` on a session it found for a player this
+/// app is standing behind, and the app's level, by the mixing thread alone (see `set_the_mixer_level`).
 fn walk_the_mixer(pid: u32) -> Probe {
     let mut probe = Probe::default();
     // **The sessions beside the player's only where a line will name them**, which is what the trace is
@@ -772,7 +914,7 @@ fn walk_the_mixer(pid: u32) -> Probe {
 /// A look that finds no session for the pid answers `Seen::Absent` rather than nothing, and one that
 /// could not be made at all answers the part of the walk that refused — because a look that said
 /// nothing would read as a film with no session, and those are two different findings.
-pub(super) fn look_and_cure(pid: u32, asked: u32) -> Seen {
+pub(super) fn look_and_cure(pid: u32, asked: u32, engine: Engine) -> Seen {
     // Safety: the apartment is taken here and given back at the end of this same call, whatever the
     // walk found — the pattern `watch_the_mixer` keeps on its own thread, and for the same reason. A
     // thread that already has an apartment still gives this one back, so only a refusal skips it.
@@ -781,7 +923,7 @@ pub(super) fn look_and_cure(pid: u32, asked: u32) -> Seen {
         return Seen::Refused(Refusal::Apartment);
     }
 
-    let seen = unsafe { look_on_this_apartment(pid, asked) };
+    let seen = unsafe { look_on_this_apartment(pid, asked, engine) };
 
     // Safety: this thread's apartment is the one taken five lines up, and nothing of the walk outlives
     // the call that made it.
@@ -792,7 +934,7 @@ pub(super) fn look_and_cure(pid: u32, asked: u32) -> Seen {
 /// The walk and the one write, on an apartment its caller has already taken.
 ///
 /// Safety: this thread must hold an apartment, and the session found is dropped with the walk.
-unsafe fn look_on_this_apartment(pid: u32, asked: u32) -> Seen {
+unsafe fn look_on_this_apartment(pid: u32, asked: u32, engine: Engine) -> Seen {
     let traced = playback_trace::asked();
     let mut found = None;
     let mut identity = Identity::default();
@@ -820,7 +962,7 @@ unsafe fn look_on_this_apartment(pid: u32, asked: u32) -> Seen {
             if traced {
                 identity = the_identity_of(control, session_pid);
             }
-            found = Some(the_cure_of(control, asked));
+            found = Some(the_cure_of(control, asked, engine));
 
             !traced
         },
@@ -836,9 +978,10 @@ unsafe fn look_on_this_apartment(pid: u32, asked: u32) -> Seen {
 }
 
 /// One session as the cure reads it: the mixer's slider, its mute switch, and what that switch
-/// warranted — with the one write this module makes, where the rule asks for it.
+/// warranted — with the one write this cure makes, where the rule asks for it.
 ///
-/// **`SetMute(false)` and nothing else**: not `SetMasterVolume`, not `IChannelAudioVolume` and not
+/// **`SetMute(false)` and nothing else**: not `SetMasterVolume` — that is the app's level, written by
+/// the mixing thread alone (see `set_the_mixer_level`) — and not `IChannelAudioVolume` or
 /// `IAudioEndpointVolume`. The slider and the per-channel volumes are a hand's or a handover's, and the
 /// mute switch is the one a captured run found on under a player that answered `mute no` — two
 /// switches, and the film had no sound through the half the player could not see.
@@ -848,14 +991,14 @@ unsafe fn look_on_this_apartment(pid: u32, asked: u32) -> Seen {
 ///
 /// Safety: the session must be one this thread holds, on the apartment its caller took. The write is
 /// made with no event context, which is what a write nobody waits on the mixer's answer for uses.
-unsafe fn the_cure_of(control: &IAudioSessionControl, asked: u32) -> Seen {
+unsafe fn the_cure_of(control: &IAudioSessionControl, asked: u32, engine: Engine) -> Seen {
     let Ok(volume) = control.cast::<ISimpleAudioVolume>() else {
         return Seen::there(None, None, Cure::Nothing);
     };
 
     let mixer = volume.GetMasterVolume().ok();
     let mute = volume.GetMute().ok().map(|mute| mute.as_bool());
-    let cure = match the_warrant(mixer, mute, asked) {
+    let cure = match the_warrant(mixer, mute, asked, engine) {
         Warrant::Nothing => Cure::Nothing,
         Warrant::LeaveIt => Cure::TurnedDown,
         Warrant::TakeItOff => match volume.SetMute(false, std::ptr::null()) {
@@ -1914,6 +2057,21 @@ mod tests {
         assert_eq!(the_executable_named("-"), None);
     }
 
+    /// **The app's level as the mixer's slider**: a share of full, `0..=100` onto `0.0..=1.0`, and a
+    /// level past the top clamped to the top rather than asked for beyond the scale.
+    #[test]
+    fn the_apps_level_is_a_mixer_slider_between_nothing_and_full() {
+        assert_eq!(mixer_level(0), 0.0);
+        assert_eq!(mixer_level(40), 0.4);
+        assert_eq!(mixer_level(100), 1.0);
+        assert_eq!(mixer_level(140), 1.0, "a slider has no above full");
+        assert_eq!(
+            mixer_level(1),
+            0.01,
+            "the slider takes fractions, so a level of 1 is audible rather than rounded to nothing"
+        );
+    }
+
     /// The four states a session can be read in, each with the word the line carries — a state this
     /// build has no value for being `unknown` rather than nothing.
     #[test]
@@ -1968,44 +2126,53 @@ mod tests {
     #[test]
     fn a_muted_session_under_a_launch_that_asked_for_a_level_is_taken_off() {
         assert_eq!(
-            the_warrant(Some(1.0), Some(true), 100),
+            the_warrant(Some(1.0), Some(true), 100, Engine::Mpv),
             Warrant::TakeItOff,
             "muted at a slider nobody touched is the second mute switch, and this app's own doing"
         );
         assert_eq!(
-            the_warrant(Some(0.05), Some(true), 40),
+            the_warrant(Some(0.05), Some(true), 40, Engine::Mpv),
             Warrant::TakeItOff,
             "any slider that is up at all is the same finding"
         );
         assert_eq!(
-            the_warrant(None, Some(true), 100),
+            the_warrant(None, Some(true), 100, Engine::Mpv),
             Warrant::TakeItOff,
             "a slider that would not answer is not a slider at nothing: the mute is still the fault"
         );
 
         assert_eq!(
-            the_warrant(Some(1.0), Some(false), 100),
+            the_warrant(Some(1.0), Some(false), 100, Engine::Mpv),
             Warrant::Nothing,
             "a session that is not muted has nothing to take off"
         );
         assert_eq!(
-            the_warrant(None, None, 100),
+            the_warrant(None, None, 100, Engine::Mpv),
             Warrant::Nothing,
             "a mute the mixer would not report is never written to"
         );
     }
 
-    /// **A launch that asked for no audio is never cured**, and the level is half the rule for the
-    /// reason it is half the verdict: the player was begun with no track at all (see
-    /// `video_launch::AudioForm`), so a mute on a session it does not have is nobody's but the mixer's
-    /// — and a film the setting silenced is not a fault to heal.
+    /// **A launch that asked for no audio is never cured**, and the form is half the rule for the
+    /// reason it is half the verdict: only mpv at a level of nothing was begun without a track (see
+    /// `video_launch::launched_without_audio`), so a mute on a session it does not have is nobody's
+    /// but the mixer's — and a film the setting silenced is not a fault to heal. FFmpeg's player is
+    /// never that case.
     #[test]
     fn a_launch_that_asked_for_no_audio_never_unmutes_a_session() {
-        assert_eq!(the_warrant(Some(1.0), Some(true), 0), Warrant::Nothing);
         assert_eq!(
-            the_warrant(Some(1.0), Some(true), 100),
+            the_warrant(Some(1.0), Some(true), 0, Engine::Mpv),
+            Warrant::Nothing
+        );
+        assert_eq!(
+            the_warrant(Some(1.0), Some(true), 100, Engine::Mpv),
             Warrant::TakeItOff,
             "while the same session under a launch that asked for a level is the fault itself"
+        );
+        assert_eq!(
+            the_warrant(Some(1.0), Some(true), 0, Engine::Ffplay),
+            Warrant::TakeItOff,
+            "FFmpeg's player keeps its track at every level, so a mute under it is still this app's              to take off — the session is unmuted at a mixer of 0.0"
         );
     }
 
@@ -2015,12 +2182,12 @@ mod tests {
     #[test]
     fn a_session_muted_with_its_slider_at_nothing_is_left_as_a_hand_left_it() {
         assert_eq!(
-            the_warrant(Some(0.0), Some(true), 100),
+            the_warrant(Some(0.0), Some(true), 100, Engine::Mpv),
             Warrant::LeaveIt,
             "the slider is down, so the mute is part of the same hand"
         );
         assert_eq!(
-            the_warrant(Some(0.0004), Some(true), 100),
+            the_warrant(Some(0.0004), Some(true), 100, Engine::Mpv),
             Warrant::LeaveIt,
             "a slider the line would write as 0.000 is a slider at nothing"
         );

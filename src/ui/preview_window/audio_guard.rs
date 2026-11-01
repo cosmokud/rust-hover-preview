@@ -178,9 +178,10 @@ fn names_an_audio_failure(line: &str) -> bool {
 /// players, and on a hover's for mpv alone — and no film whose level the launch itself resolved to
 /// nothing.
 ///
-/// The form is the one rule both routes' arguments are built from (see `video_launch::AudioForm`): a
-/// launch that gave its player no track at all has no ladder to climb, because that silence is the
-/// level asked for rather than a fault.
+/// The form is the one rule both routes' arguments are built from (see
+/// `video_launch::launched_without_audio`): only mpv at a level of zero is given no track at all, so
+/// only that launch has no ladder to climb — FFmpeg's player keeps its track at every level and is
+/// turned down at the mixer (see `audio_session`), which is a silence that can still be a fault.
 ///
 /// **A hover is watched too, because the resident is the player a stale audio decision lives longest
 /// in**: one process handed file after file down a pipe, begun at whatever level the first hover had,
@@ -195,7 +196,7 @@ fn names_an_audio_failure(line: &str) -> bool {
 /// has always made (see `video_playback`, which pipes its errors on exactly the launches that are
 /// guarded).
 pub(super) fn guarded(engine: Engine, for_a_hover: bool, volume: u32) -> bool {
-    if super::video_launch::mpv_launched_without_audio(volume) {
+    if super::video_launch::launched_without_audio(engine, volume) {
         return false;
     }
     engine == Engine::Mpv || !for_a_hover
@@ -449,7 +450,7 @@ fn the_guard_a_launch_arms(
         volume,
         // The same call the launch's own line is built from, so that a give-up cannot say the
         // player was handed anything other than what it was handed (see `playback_trace::a_launch`).
-        form: AudioForm::of(volume, gain).word(engine),
+        form: AudioForm::of(engine, volume, gain).word(engine),
         spend: the_spend_for(road, path),
         report: None,
         wants_again: false,
@@ -515,7 +516,7 @@ fn spawn_probe(pid: u32) {
         .name("audio-guard".to_string())
         .spawn(move || {
             std::thread::sleep(AUDIO_SETTLING);
-            let Some(asked) = still_watched(pid) else {
+            let Some((asked, engine)) = still_watched(pid) else {
                 return;
             };
             let answers = super::playback_trace::ask_the_engine(pid);
@@ -527,7 +528,7 @@ fn spawn_probe(pid: u32) {
             // look is made whether or not the trace is asked for, because the trace is the recorder
             // and the cure is the fix; what it came to goes back with the answers, so the tick reads
             // one report rather than two.
-            let seen = super::audio_session::look_and_cure(pid, asked);
+            let seen = super::audio_session::look_and_cure(pid, asked, engine);
             if let Some(line) = super::audio_session::a_cure_line(pid, &seen) {
                 note_playback_trace!("{line}");
             }
@@ -542,20 +543,22 @@ fn spawn_probe(pid: u32) {
         });
 }
 
-/// The level the guard is still holding this player to, where this player is still the one it guards
-/// (see `spawn_probe`).
+/// The level the guard is still holding this player to, and which player it is, where this player is
+/// still the one it guards (see `spawn_probe`).
 ///
 /// **The level comes back with the answer**, because it is the half of the session rule that says a
-/// launch begun without audio is never cured: a serve re-arms this guard for the same pid at the level
-/// of its new file, so a probe that carried the level it was begun at would heal a silence the setting
-/// chose (see `audio_session::the_warrant`).
-fn still_watched(pid: u32) -> Option<u32> {
+/// launch begun without audio is never cured — and so does the engine, because which launch that is
+/// depends on the player: only mpv at zero is given no track (see
+/// `video_launch::launched_without_audio`). A serve re-arms this guard for the same pid at the level
+/// of its new file, so a probe that carried the level it was begun at would heal a silence the
+/// setting chose (see `audio_session::the_warrant`).
+fn still_watched(pid: u32) -> Option<(u32, Engine)> {
     GUARD
         .lock()
         .ok()?
         .as_ref()
         .filter(|guard| guard.pid == pid)
-        .map(|guard| guard.volume)
+        .map(|guard| (guard.volume, guard.engine))
 }
 
 /// Note what a player said, where the guard is that player's, and answer whether it was.
@@ -1707,7 +1710,7 @@ mod tests {
         the_level_moved(7, 0);
         assert_eq!(
             still_watched(7),
-            Some(0),
+            Some((0, Engine::Mpv)),
             "the guard stands for the level this app last asked the player for"
         );
 
@@ -1772,7 +1775,7 @@ mod tests {
         the_level_moved(10, 0);
         assert_eq!(
             still_watched(9),
-            Some(40),
+            Some((40, Engine::Mpv)),
             "the guard is armed for 9, so a level moved on 10 is none of its business"
         );
         assert_eq!(
@@ -1812,7 +1815,7 @@ mod tests {
         assert!(super::super::mpv_ipc::set_volume(11, 30));
         assert_eq!(
             still_watched(11),
-            Some(40),
+            Some((40, Engine::Mpv)),
             "the level rung's own write is not a level a hand moved"
         );
 
@@ -1820,7 +1823,7 @@ mod tests {
         assert_eq!(tick(false), None);
         assert_eq!(
             still_watched(11),
-            Some(40),
+            Some((40, Engine::Mpv)),
             "and a rung taken on a silent read leaves the record where it was"
         );
 

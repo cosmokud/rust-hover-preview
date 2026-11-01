@@ -196,10 +196,10 @@ fn a_drag_and_a_resize_keep_the_same_player_throughout() {
     }
 }
 
-/// **A level let go of on an FFmpeg film is still one player begun again**, and it says why:
-/// `player restarted for volume`. The press itself told the player nothing.
+/// **A level let go of on an FFmpeg film begins no player**: the level is its mixer session's (see
+/// `audio_session::ask_the_mixer`), so the same pid stands and no reason line is written.
 #[test]
-fn a_volume_change_restarts_once_and_says_why() {
+fn a_volume_change_begins_no_player() {
     let _room = the_room_to_itself();
 
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
@@ -207,7 +207,7 @@ fn a_volume_change_restarts_once_and_says_why() {
     let previous_media = stand_video_media(true, false);
     clear_restart_count();
 
-    let mut pin = a_playing_film_pin("a-volume-change-restarts.mkv", (100, 80, 420, 320));
+    let mut pin = a_playing_film_pin("a-volume-change-begins-nothing.mkv", (100, 80, 420, 320));
     pin.volume.level = 70;
     pin.volume.playing_at = 40;
     stand_pin(Some(pin));
@@ -216,13 +216,18 @@ fn a_volume_change_restarts_once_and_says_why() {
 
     assert_eq!(
         restart_count(),
-        1,
-        "FFmpeg's player takes a level only by being begun at one, so the change is one relaunch"
+        0,
+        "FFmpeg's level is its session's, so the change replaces nothing"
     );
     assert_eq!(
         last_restart_reason(),
-        Some(RestartReason::Volume),
-        "and the line says what it was for"
+        None,
+        "and no reason line is written, because no player was begun"
+    );
+    assert_eq!(
+        pinned_playback_state().map(|(_, _, _, volume)| volume.playing_at),
+        Some(70),
+        "and the bar knows the level the player was told"
     );
     clear_restart_count();
     stand_mpv_in(None);

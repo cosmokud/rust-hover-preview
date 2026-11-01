@@ -194,24 +194,42 @@ pub(super) fn pin_level_is_remembered(audio: bool) -> bool {
 /// It is the knob's own road rather than a second one beside it: the level is moved exactly as
 /// a drag moves it and settled exactly as a release settles it, so every route answers with
 /// what it always has — mpv and the media engine are told the level while they run, FFmpeg's
-/// player is begun again at the second it was watching, and a *held* film is left holding its
+/// player is told it at its mixer session, and a *held* film is left holding its
 /// level for the player that begins when it is let go of (see `set_pin_volume` and
 /// `settle_pin_volume`).
 ///
 /// The other half's row is about the other kind of file, and a pin answers only the half it is
 /// playing: a sound's level moved is not a hand on a film, which is the same answer a film
-/// stepped onto from a sound is given (see `pinned_level`).
+/// stepped onto from a sound is given (see `pinned_level`). Where no pin of that kind is up, the row
+/// is a hover's player's instead, which is FFmpeg's and is told at the mixer (see
+/// `ask_the_ffplay_its_level`).
 pub(super) fn tray_volume_moved(audio: bool) {
-    if pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.volume.audio)) != Some(audio) {
+    let kind = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.volume.audio));
+    if kind == Some(audio) {
+        set_pin_volume(if audio {
+            current_audio_volume()
+        } else {
+            current_video_volume()
+        });
+        settle_pin_volume();
         return;
     }
 
-    set_pin_volume(if audio {
-        current_audio_volume()
+    // **A hover follows the row too**, and it is not a pin's level to settle: the player is FFmpeg's
+    // and its level is its mixer session's, asked for at once (see `ask_the_ffplay_its_level`).
+    let on_screen = current_media_type();
+    let row = if audio {
+        Some(MediaType::Audio)
     } else {
-        current_video_volume()
-    });
-    settle_pin_volume();
+        Some(MediaType::Video)
+    };
+    if !pinned() && on_screen == row {
+        ask_the_ffplay_its_level(if audio {
+            current_audio_volume()
+        } else {
+            current_video_volume()
+        });
+    }
 }
 
 /// Whether the pin that is up has its volume popup open, which is what the tick's re-assertion of
@@ -1288,10 +1306,10 @@ pub(super) fn put_remembered_pin_volume(
 /// What a level let go of on a pinned FFmpeg video is settled by.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum PinLevelSettling {
-    /// A player is *playing* behind the pin and takes a level only by being begun at one, so it is
-    /// replaced: begun at the pin's own level, playing on from the second the hand let go of the
-    /// knob at (see `restart_pinned_player`).
-    Relaunch,
+    /// A player is behind the pin and takes the level at its mixer session, so nothing is begun,
+    /// ended or restarted: the level is asked for and the claim moves (see
+    /// `ask_the_ffplay_its_level`).
+    Mixed,
     /// A player is behind the pin and it is *holding* the file, so it is left exactly where it is
     /// and the level is owed to the player that begins when the file is let go of.
     ///
@@ -1304,8 +1322,8 @@ pub(super) enum PinLevelSettling {
     Recorded,
 }
 
-/// Whether a level moved on a pinned FFmpeg video costs a player, is left owed to the player that
-/// begins next, or is simply written down.
+/// Whether a level moved on a pinned FFmpeg video is told to the running player, is left owed to the
+/// player that begins next, or is simply written down.
 ///
 /// The question is whether a *player* is behind the pin rather than whether the film is playing,
 /// which is what makes a held file a case of its own: a held file is still a file playing at a
@@ -1313,54 +1331,35 @@ pub(super) enum PinLevelSettling {
 /// it — the film would go on at the level it was at when the hand stopped it while the bar claimed
 /// the level it was set to (see `settle_pin_volume`).
 ///
-/// A held file is *not* given a replacement, and the reason is a measurement rather than a
-/// preference. FFmpeg's player cannot be started paused — its whole option list was read on
-/// 9.0.2 for one and there is none, so the only holds it takes are keys posted to its own window —
-/// and a relaunch of a held file is therefore a player that plays, audibly at the new level, from
-/// the second the hold was taken at, until the hold written beside it reaches it. That is one `P`
-/// on the first tick that finds a window there, which is a good few hundred milliseconds after the
-/// process was spawned, and what it sounds like is a held film answering a knob with a burst of its
-/// own soundtrack from the point it was stopped at, stopping again a fraction later.
-///
-/// So the level waits for the player that begins when the file is let go of. Nothing is relaunched
-/// for it, which is also the whole of what keeps a knob from arming the app's own loop: a launch
-/// named at a second is the launch this app has to loop itself (see `video_launch::loop_is_ours`),
-/// and its rewind is a relaunch at zero (see `video_loop_tick`).
+/// **A held file's level is still left to the next player**, because a tune at the mixer of a player
+/// that is holding a frame is not a thing the user asked for until the film is let go of; and the
+/// claim of what the running player was begun at is what keeps it owed.
 ///
 /// A player this app has lost the handle to is still a player while it is running, so a process
 /// behind a bar that has stopped claiming playback is still owed the level; only a pin with neither
 /// a claim nor a process is owed nothing, and a held pin with neither is owed nothing for the same
 /// reason — there is no player holding it to owe the level to.
-///
-/// All three answers are taken before the decision rather than one short-circuiting another, so a
-/// knob let go of on a playing film reconciles the player behind it exactly as one let go of on a
-/// held film does — and the lock that costs is one the relaunch is about to take anyway (see
-/// `restart_pinned_player`).
 pub(super) fn pin_level_settled_by(playing: bool, running: bool, held: bool) -> PinLevelSettling {
     if held && running {
         PinLevelSettling::OwedToTheNextPlayer
     } else if playing || running {
-        PinLevelSettling::Relaunch
+        PinLevelSettling::Mixed
     } else {
         PinLevelSettling::Recorded
     }
 }
 
-/// Give the pin's level to the player it is owed to, where giving it costs a player replaced.
+/// Give the pin's level to the player it is owed to, where a player is running to take it.
 ///
-/// FFmpeg's player is told nothing once it is running, so the level it is to play at is another
-/// player begun at it — the same bargain a seek makes, and it is taken to the second the hand let
-/// go of the knob at rather than back to the beginning (see `pin_playhead`).
+/// **FFmpeg's player takes the level where it runs**: the write is the mixer session's, and nothing
+/// is begun, ended or restarted for it (see `ask_the_ffplay_its_level`). The claim then moves, which
+/// is what says the player owes nothing more (see `PinVolume::playing_at`).
 ///
-/// A pin that is *held* owes it too, and what is asked in that arm is which of three things the
-/// level is settled by (see `pin_level_settled_by`). It is not settled by a player being replaced,
-/// because a replacement for a held film is a player that plays until the hold written beside it
-/// reaches it, and a knob is not worth handing a held film a burst of its own soundtrack for: the
-/// level is left owed to the player that begins when the file is let go of, which is what that
-/// player refuses a pause key until it has been replaced (see `video_key_pause`). What is
-/// genuinely owed nothing is a pin whose player has gone, where the file is held because there is
-/// nothing holding it: the player that begins when the file is let go of is begun at the level this
-/// reads.
+/// A pin that is *held* owes the level to the player that begins when the file is let go of, and
+/// what is asked in that arm is which of three things the level is settled by (see
+/// `pin_level_settled_by`). What is genuinely owed nothing is a pin whose player has gone, where the
+/// file is held because there is nothing holding it: the player that begins when the file is let go
+/// of is begun at the level this reads.
 ///
 /// A sound is the one kind whose settling is the loop's rather than this one's: the clock behind
 /// its card and the player a level is owed to are both the loop's, so the door is a flag rather
@@ -1375,7 +1374,7 @@ pub(super) fn settle_pin_volume() {
     with_pin(|pin| pin.volume.quiet = 0);
     flush_pin_volume_level();
 
-    let Some((path, content, transport, volume)) = pinned_playback_state() else {
+    let Some((path, _content, transport, volume)) = pinned_playback_state() else {
         return;
     };
     save_remembered_pin_volume(volume.level);
@@ -1397,8 +1396,8 @@ pub(super) fn settle_pin_volume() {
         {
             // mpv was told the level as the knob moved (see `set_pin_volume`), so there is no player
             // to replace here: the command is re-asserted and the claim moves only where it reached
-            // the player. One that did not falls to the arm below, which is the relaunch FFmpeg's
-            // player has always taken (see `pin_level_settled_by`).
+            // the player. One that did not falls to the arm below, which is FFmpeg's player told at
+            // its mixer session (see `pin_level_settled_by`).
             with_pin(|pin| pin.volume.playing_at = pin.volume.level);
         }
         Some(MediaType::Video) => match pin_level_settled_by(
@@ -1406,9 +1405,9 @@ pub(super) fn settle_pin_volume() {
             is_video_process_running(),
             transport.paused_at.is_some(),
         ) {
-            PinLevelSettling::Relaunch => {
-                let playhead = pin_playhead(&transport).unwrap_or(0.0);
-                restart_pinned_player(&path, content, playhead, false, RestartReason::Volume);
+            PinLevelSettling::Mixed => {
+                ask_the_ffplay_its_level(volume.level);
+                with_pin(|pin| pin.volume.playing_at = pin.volume.level);
             }
             PinLevelSettling::OwedToTheNextPlayer => {
                 // Nothing is done, and nothing is written: the claim of what the running player
@@ -1429,9 +1428,8 @@ pub(super) fn settle_pin_volume() {
                     with_pin(|pin| pin.volume.playing_at = pin.volume.level);
                 }
             } else {
-                // Otherwise the player that takes a level only by being started at one is owed it,
-                // and the clock behind a sound's card is the loop's: so the flag, and the loop
-                // starts the player at the pin's level on its next tick (see
+                // Otherwise the player at the mixer is owed it, and the clock behind a sound's card
+                // is the loop's: so the flag, and the loop asks for the level on its next tick (see
                 // `settle_pinned_audio_volume`).
                 PIN_AUDIO_VOLUME.store(true, Ordering::Release);
             }
@@ -1440,9 +1438,9 @@ pub(super) fn settle_pin_volume() {
     }
 }
 
-/// Settle a level once the wheel or drag has left it alone for `PIN_VOLUME_SETTLE_TICKS`: FFmpeg's
-/// player takes a level only by being begun again, so a relaunch per notch would replace it for
-/// every notch of a normal wheel — one relaunch when the hand stops is the whole point.
+/// Settle a level once the wheel or drag has left it alone for `PIN_VOLUME_SETTLE_TICKS`: a knob is a
+/// burst of notches, and one settle when the hand stops is what keeps the claims in step with the
+/// player rather than a write per notch.
 pub(super) fn settle_pin_volume_after_quiet() {
     let quiet = pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin.volume.quiet))
@@ -1483,19 +1481,13 @@ pub(super) fn audio_preview_level_is_owed_to_the_engine() -> bool {
     playing_player(&path, &track) == Player::Native
 }
 
-/// Restart the player behind a pinned sound at the pin's level, from the second the hand let go of
-/// the knob at.
+/// Give a pinned sound's player the level the pin was moved to, where that player is FFmpeg's.
 ///
-/// The player is the loop's and the clock is the loop's, which is why this is the loop's tick and
-/// not the release: a knob dragged across a card is a hundred releases a second, and a player
-/// begun for each of them is a sound that never settles. What is settled at the end of the drag is
-/// one player at one level from one second, which is the whole of what the transport bar's own
-/// knob does for a video (see `settle_pin_volume`).
-pub(super) fn settle_pinned_audio_volume(
-    started: &mut Option<Instant>,
-    offset: &mut f64,
-    paused: &mut Option<f64>,
-) {
+/// **The write is the mixer session's**, so the player is neither restarted nor seeked and the clock
+/// behind the card is left exactly where it was: the level a sound plays at is not a fact of when it
+/// was begun any more (see `audio_session::ask_the_mixer`). A sound that is held, or one whose player
+/// has gone, is left alone — the player that begins next is begun at the pin's level.
+pub(super) fn settle_pinned_audio_volume() {
     if !PIN_AUDIO_VOLUME.swap(false, Ordering::AcqRel) {
         return;
     }
@@ -1513,23 +1505,9 @@ pub(super) fn settle_pinned_audio_volume(
         return;
     }
 
-    // A sound that was playing goes on playing from the second the knob was let go at, and a
-    // sound that was held stays held there — the same two answers a seek gives, because a level
-    // moved is a player begun and a player begun at a second is a seek (see
-    // `pinned_audio_after_seek`).
-    let seconds = match paused {
-        Some(at) => *at,
-        None => audio_clock(&path, *started, *offset, None).0.unwrap_or(0.0),
-    };
-    let was_playing = paused.is_none();
-    let player = was_playing
-        .then(|| restart_pinned_audio(&path, seconds))
-        .flatten();
-
-    // A level of nothing is a player begun at nothing rather than no player at all, so this is
-    // `pinned_audio_after_seek` written as it is for every other level: a clock begun at the second
-    // the knob was let go at, and a sound going on in silence (see `start_audio_playback_at`).
-    (*started, *offset, *paused) = pinned_audio_after_seek(was_playing, player.is_some(), seconds);
+    if let Some(level) = pin_volume_level() {
+        ask_the_ffplay_its_level(level);
+    }
 
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
 }
