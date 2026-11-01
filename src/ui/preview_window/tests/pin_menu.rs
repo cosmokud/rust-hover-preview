@@ -832,10 +832,10 @@ fn a_key_puts_the_menu_away_and_escape_leaves_the_pin_standing() {
 
 /// A press on a row a pinned window's menu shares with the bubble's leaves the ask that row
 /// leaves there: the two walks and the close the same; `To Bubble`, which only a pin still
-/// standing has, putting this pin away into the bubble it leaves on the desktop; and `To Taskbar`
-/// — the row the two menus walk differently — putting it away into the app's own place in the
-/// taskbar from the window it is standing in (see `shared_menu_row_press` and
-/// `PinCommand::MinimizeTo`).
+/// standing has, putting this pin away into a bubble centred where the row was pressed; and
+/// `To Taskbar` — the row the two menus walk differently — putting it away into the app's own
+/// place in the taskbar from the window it is standing in (see `shared_menu_row_press` and
+/// `PinCommand::MinimizeToAt`).
 #[test]
 fn a_press_on_a_row_a_pin_shares_with_a_bubble_leaves_its_ask() {
     let _room = the_room_to_itself();
@@ -866,9 +866,18 @@ fn a_press_on_a_row_a_pin_shares_with_a_bubble_leaves_its_ask() {
             unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
             "a hand on the {label} row is the menu's own"
         );
+        // The bubble a `To Bubble` press leaves stands on the place the hand pressed rather
+        // than on the minimize button it would otherwise take the place of (see
+        // `collapse_pin_to_at`).
+        let expected = match command {
+            PinCommand::MinimizeTo(PinMinimizeTo::Bubble) => {
+                PinCommand::MinimizeToAt(PinMinimizeTo::Bubble, (x, y))
+            }
+            other => other,
+        };
         assert_eq!(
             take_pin_command(),
-            Some(command),
+            Some(expected),
             "the {label} row asks for what it says"
         );
         assert!(
@@ -1408,9 +1417,17 @@ fn the_rows_that_do_something_leave_their_ask_with_the_loop() {
             unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
             "a hand on the {label} row is the menu's own"
         );
+        // The bubble a `To Bubble` press leaves stands where the row was pressed (see
+        // `collapse_pin_to_at`).
+        let expected = match command {
+            PinCommand::MinimizeTo(PinMinimizeTo::Bubble) => {
+                PinCommand::MinimizeToAt(PinMinimizeTo::Bubble, (x, y))
+            }
+            other => other,
+        };
         assert_eq!(
             take_pin_command(),
-            Some(command),
+            Some(expected),
             "the {label} row asks for what it says"
         );
         assert!(

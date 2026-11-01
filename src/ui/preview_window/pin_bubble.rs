@@ -272,17 +272,22 @@ fn set_pin_minimize_to(target: PinMinimizeTo) {
 }
 
 /// What a press on one of the rows a bubble's menu and a pinned window's menu answer does, where
-/// the two answer it the same way — which is every row they both hold but `ToTaskbar`, whose road
-/// is handed in because the two menus walk it differently: a pin already collapsed moves the bubble
-/// it left on the desktop into the app's stand-in, and one still standing puts itself away from its
-/// own window (see `bubble_menu_press` and `pin_menu`). Two of the rows are one menu's own and take
-/// the road there is for them: `ToBubble`, a standing window's, and `Maximize`, whose ask a bubble
-/// has no window for (see `bubble_menu_rows`). Answers whether the panel stays up.
+/// the two answer it the same way — which is every row they both hold but `ToBubble` and `ToTaskbar`,
+/// whose roads are handed in because the two menus walk them differently: a pin already collapsed
+/// moves the bubble it left on the desktop into the app's stand-in, and one still standing puts
+/// itself away from its own window, into a bubble centred where the hand pressed the row rather than
+/// on a minimize button (see `bubble_menu_press` and `pin_menu`). `ToBubble` is one menu's own, a
+/// standing window's — a bubble has no second bubble to be put away into — and `Maximize`'s ask a
+/// bubble has no window for (see `bubble_menu_rows`). Answers whether the panel stays up.
 ///
 /// A row that picks one of two answers goes away with the pick, the way a menu a choice was made
 /// in does; the switch above them stays up with the mark it now carries, because there is
 /// nothing to pick from and the mark is the answer.
-pub(super) fn shared_menu_row_press(row: BubbleMenuRow, to_taskbar: impl FnOnce()) -> bool {
+pub(super) fn shared_menu_row_press(
+    row: BubbleMenuRow,
+    to_bubble: impl FnOnce(),
+    to_taskbar: impl FnOnce(),
+) -> bool {
     match row {
         // The caption's own button's ask, and nothing else: a maximize puts the window into the
         // box the button would have given it (see `toggle_pin_maximized`).
@@ -319,7 +324,7 @@ pub(super) fn shared_menu_row_press(row: BubbleMenuRow, to_taskbar: impl FnOnce(
             false
         }
         BubbleMenuRow::ToBubble => {
-            ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Bubble));
+            to_bubble();
             false
         }
         BubbleMenuRow::ToTaskbar => {
@@ -598,7 +603,11 @@ pub(super) unsafe fn bubble_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     // were answered where they were pressed, with the panel left standing.
     // A press outside both the rows and the circle is a press that has left the menu.
     if let Some(row) = row {
-        shared_menu_row_press(row, bubble_to_taskbar);
+        shared_menu_row_press(
+            row,
+            || ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Bubble)),
+            bubble_to_taskbar,
+        );
     }
     true
 }
@@ -740,9 +749,20 @@ pub(super) fn collapse_pin() {
     collapse_pin_to(pin_minimize_to());
 }
 
+/// Collapse a pinned window into a place of the asker's own choosing, the bubble it leaves standing
+/// on the minimize button's own box.
+pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
+    collapse_pin_to_at(target, None);
+}
+
 /// Collapse a pinned window into a place of the asker's own choosing: the window and
 /// everything standing in it come off the screen, and a small circle takes their place — or the
 /// app is left standing in the taskbar with the pin off the screen instead.
+///
+/// `point` is where the bubble is centred, in screen coordinates, where the asker named a place
+/// rather than leaving it to the layout — a right-click menu's `To Bubble` row is a press at a
+/// place the hand chose, so the bubble goes there rather than onto the minimize button the same
+/// collapse asked for by a press on a button goes to (see `collapse_pin`).
 ///
 /// A collapsed pin is still a pin — previews are still held back until it is restored or
 /// closed, and what it is playing is held where it is by the two `Pin Mode → Pause on
@@ -750,7 +770,7 @@ pub(super) fn collapse_pin() {
 ///
 /// Everything but the last step is the same either way — which is why only the last step of a
 /// collapse differs between the two places (see `pin_minimize_to`).
-pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
+pub(super) fn collapse_pin_to_at(target: PinMinimizeTo, point: Option<(i32, i32)>) {
     let anchor = {
         let Some(mut pinned) = pin_state() else {
             return;
@@ -766,8 +786,13 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
         // looked up in the layout of what the pin is showing — a sound's
         // minimize is one of the two window buttons its card carries, and that
         // question is asked while the pin still shows its card, before the
-        // collapse below takes it off it (see `pinned_minimize_box`).
-        let anchor = pinned_minimize_box(pin);
+        // collapse below takes it off it (see `pinned_minimize_box`). A place
+        // the asker named is where the hand pressed instead, and the bubble is
+        // centred on it the same way: one point is a box no wider than itself.
+        let anchor = match point {
+            Some((x, y)) => (x, y, x, y),
+            None => pinned_minimize_box(pin),
+        };
 
         pin.collapsed = true;
 
