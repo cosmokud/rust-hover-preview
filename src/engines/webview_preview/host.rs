@@ -60,8 +60,9 @@ pub(super) struct Host {
     /// is has no reason to ask the browser to lay the document out again (see `place`).
     last_area: Option<(i32, i32)>,
     /// Whether this window has been placed as a pin's *source* already: a page the pin draws through
-    /// the Shell's thumbnail of this window is placed once at the band it is the picture in, and only
-    /// moved after that, because the picture it is sampled for is its client area (see `put_window`).
+    /// the Shell's thumbnail of this window is lowered once and, after that, moved without asking the
+    /// Shell about it again — but its *size* follows the band, because the Shell fits this window's
+    /// client into that band (see `put_window`).
     a_source: bool,
     /// The browser process this engine started, when it could be told which one it
     /// was. The runtime owns the browser, but the process is this app's own child —
@@ -347,7 +348,7 @@ impl Host {
 
             self.set_bounds(area);
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
-            self.put_window(area);
+            self.put_window(area, true);
         }
 
         publish(Some((path.clone(), area)));
@@ -412,18 +413,27 @@ impl Host {
     ///
     /// **A page the pin draws is not a window of the desktop's at all, and it is the film road's own
     /// one placement** (see `pin_film_thumbnail::place_the_source`): invisible at one part in 255 and
-    /// click-through, at the bottom of the order, placed at the band once and only *moved* after that.
-    /// What the pin shows of it is the Shell's thumbnail of this window, so the surface it samples —
-    /// this window's client — is a constant for as long as the page is the picture, and a drag step is
-    /// one `SetWindowPos` that changes nothing of the picture the band draws (see `pin_page_thumbnail`).
-    pub(super) fn put_window(&mut self, area: Area) {
+    /// click-through, at the bottom of the order, lowered once at the band it is the picture in.
+    ///
+    /// **Its size is the band's, and its place alone is free.** What the pin shows of it is the
+    /// Shell's thumbnail of this window, and the Shell fits that thumbnail of this client into the
+    /// band — so a client of another size is a page drawn at a shape the band is not, and the band
+    /// around it is the pin's own alpha-1 band, which is the desktop seen through. A drag changes no
+    /// side, so a step of one is a `SetWindowPos` that costs the Shell nothing; a resize and a new
+    /// document are sizes, and both are this window's (see `pin_page_thumbnail`).
+    pub(super) fn put_window(&mut self, area: Area, resized: bool) {
         if self.the_page_is_a_source() {
             let placed = std::mem::replace(&mut self.a_source, true);
-            let (after, flags) = if placed {
-                (HWND::default(), SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+            let (after, mut flags) = if placed {
+                (HWND::default(), SWP_NOZORDER | SWP_NOACTIVATE)
             } else {
                 (HWND_BOTTOM, SWP_NOACTIVATE | SWP_SHOWWINDOW)
             };
+            if placed && !resized {
+                // The one thing a carried window does not owe: the client the Shell samples is the
+                // band's own, and a box that only moved is that same band elsewhere on the screen.
+                flags |= SWP_NOSIZE;
+            }
             unsafe {
                 let _ = SetWindowPos(
                     self.hwnd,
@@ -526,14 +536,15 @@ impl Host {
         // navigation: a document already on screen is never shown again for it (see `put_the_page_style`).
         unsafe { self.put_the_page_style() };
 
-        // **A pin's picture is laid out once**: the client area of a page placed as a source is the
-        // surface the Shell samples, so a resize of the pin is the destination rectangle's and never
-        // this window's (see `put_window`).
-        if resized && !self.a_source {
+        // **A resize is the window's and the *layout's*, and a move is neither.** The client area of a
+        // page placed as a source is the surface the Shell fits into the pin's band, so a band of
+        // another side is a client of that side; and a page is laid out at the bounds it is given, so
+        // the same answer is the browser's (see `put_window`). A drag changes no side and pays neither.
+        if resized {
             self.set_bounds(placement.area);
         }
 
-        self.put_window(placement.area);
+        self.put_window(placement.area, resized);
         publish_rect(Some(placement.area));
     }
 

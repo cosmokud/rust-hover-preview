@@ -2748,7 +2748,7 @@ pub(super) fn place_pinned_siblings() {
     // registration — so this is the call a band change of any kind (a drag, a resize, a display move) is
     // owed, and the one a step of a drag costs nothing of, the band being the same rectangle in the pin's
     // client wherever the pin stands (see `pin_page_thumbnail`).
-    pin_page_thumbnail::the_page_was_placed(page.map(|(_, content)| content));
+    pin_page_thumbnail::the_page_was_placed();
 }
 
 /// The engine-drawn page a pin of its own is framing, and the band it stands in: what every road
@@ -2798,6 +2798,40 @@ pub(super) fn pinned_content() -> Option<ScreenRegion> {
     let pinned = pin_state()?;
     let pin = pinned.pin()?;
     (!pin.collapsed).then_some(pin.content)
+}
+
+/// The rows a pinned window's own media band covers, in its client: the same answer `pinned_band_rows`
+/// gives the paint, and so the one rectangle the page in the band is fitted into (see
+/// `pin_page_thumbnail::the_pair`).
+///
+/// **A window and a media box that disagree are said out loud here**, because that is the one fault the
+/// answer can hide: a window that was never resized for the document it is showing has the Shell fit a
+/// thumbnail of an old client into a band of another shape, and the band around it is the pin's own
+/// alpha-1 claim — the desktop seen through it. The band is the window's rows either way, so it is
+/// covered rather than cut short.
+pub(super) fn pinned_band_rows_of_the_client(client: (i32, i32)) -> Option<(i32, i32)> {
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
+    let transport = pinned_transport_height(pin.dpi, pin.transport_bar);
+    let window = pin.window_box();
+    let (width, height) = (window.2 - window.0, window.3 - window.1);
+    if (width, height) != (client.0, client.1) {
+        note_pin_trace!(
+            "page band: pin window {}x{}+{}+{} is not its client {}x{}",
+            width,
+            height,
+            window.0,
+            window.1,
+            client.0,
+            client.1
+        );
+    }
+    Some(pinned_band_rows(
+        client.1,
+        pin.caption,
+        transport,
+        pin.overlay,
+    ))
 }
 
 /// The card's own controls as they stand, read in one look and handed over rather than asked for
