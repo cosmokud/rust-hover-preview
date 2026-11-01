@@ -77,6 +77,53 @@ fn a_click_on_a_pinned_window_is_a_click_on_the_listing_under_it() {
     );
 }
 
+/// A press on the pin's own caption buttons is the pin's, not the listing the pin stands over.
+///
+/// The reported fault: the hand is on a file in Explorer, the pin stands over it, and the user
+/// clicks the pin's Minimize. The press lands on this app's own window, which the hook reads as a
+/// press on the listing underneath — so the file drawn under the chrome was being offered to the
+/// pin on the same click that minimized it. The button's own geometry is what tells them apart,
+/// and nothing below the caption strip loses the pass-through a click on a pinned window has.
+#[test]
+fn a_press_on_the_pins_caption_button_is_not_a_pick_of_the_file_under_it() {
+    // The hook's reading of the press: the window under it is the pin's, standing over a listing,
+    // and the point is on a caption button (`pin_caption_button_covers` answered that).
+    let over_our_own = true;
+    let on_a_caption_button = true;
+    let on_the_pins_chrome = press_is_the_pins_chrome(true, on_a_caption_button);
+
+    assert!(on_the_pins_chrome, "a caption button is the pin's own");
+    assert!(
+        press_is_a_listing(false, over_our_own, false, false, false),
+        "the same spot would otherwise be a press on the listing the pin stands over"
+    );
+    let picked =
+        press_is_a_listing(false, over_our_own, false, false, false) && !on_the_pins_chrome;
+    assert!(
+        !picked,
+        "and the chrome is what refuses it: no file under the button is offered to the pin"
+    );
+
+    // The media below the strip keeps the pass-through: a click on a pinned window is a click on
+    // the listing underneath, and only the caption's buttons are the pin's (see
+    // `a_click_on_a_pinned_window_is_a_click_on_the_listing_under_it`).
+    let below_the_strip = press_is_the_pins_chrome(true, false);
+    assert!(
+        !below_the_strip,
+        "a press below the buttons is not a press on the chrome"
+    );
+    assert!(
+        press_is_a_listing(false, over_our_own, false, false, false) && !below_the_strip,
+        "so a press on the pin's media is still a pick of the listing under it"
+    );
+
+    // A tick that read no press names no chrome, however the point sits.
+    assert!(
+        !press_is_the_pins_chrome(false, on_a_caption_button),
+        "a tick with no press spends nothing"
+    );
+}
+
 /// A press aimed at a menu popup is not a press on the listing that popup was covering:
 /// `View ▸ Tiles` and `Sort ▸ Name` sit over rows, and the press that picks one dismisses
 /// it without the hand moving. Which tick reads the press is the shell's choice and not the
