@@ -320,6 +320,7 @@ pub(crate) use image_cache::trim_image_cache;
 pub(crate) use media_types::PreviewMessage;
 pub(crate) use mpv_resident::shut_down_the_resident;
 pub(crate) use pin_bubble::PIN_BUBBLE_HWND;
+pub(crate) use pin_chrome_strips::raise_the_chrome_strips_over_the_host;
 pub(crate) use pin_drag::publish_pin_media_press;
 pub(crate) use pin_input::pin_volume_keep_alive_try;
 pub(crate) use pin_lifecycle::band_place;
@@ -344,6 +345,19 @@ pub(crate) use pointer::text_scroll_keep_alive_try;
 pub(crate) use pointer::text_size_keep_alive_try;
 pub(crate) use pointer::AvoidRegion;
 pub(crate) use requests::hide_preview;
+
+/// The window a page the engine draws is a child of while a pin is up: the pin's own window,
+/// which is the window DWM freezes for the taskbar peek (see `webview_preview::nesting`).
+///
+/// A collapsed pin has no band on the screen, so the page is not a child of a window nobody is
+/// looking at: it falls back to the hover's window until the pin is restored.
+pub(crate) fn engine_page_parent() -> Option<HWND> {
+    if !pinned() || pin_model::pin_is_collapsed() {
+        return None;
+    }
+
+    pin_real_window::real_pin_window()
+}
 
 /// Whether a screen point is on one of a standing pin's caption buttons.
 ///

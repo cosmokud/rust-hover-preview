@@ -17,10 +17,10 @@
 //!
 //! What lives here is the engine and the window it draws in, not the preview loop: the
 //! loop measures the document for the layout, hands it over with the box the layout came
-//! out with, and this answers with a window of its own. That window is its own because
-//! the preview window is a layered one, and a layered window has no window tree to put a
-//! child in — the same shape as the video path, where the player's own window is the
-//! preview.
+//! out with, and this answers with a window that is made a child of the window the preview
+//! stands in (see `nesting`). A layered window has a window tree like any other, and being a
+//! child is what puts the page inside the surface DWM freezes for a pinned window's taskbar
+//! peek; the chrome strips the pin already draws are children for the same reason.
 //!
 //! One engine is kept warm between documents and let go after `webview_idle`, which is the
 //! AFK timer until the user gives it a time of its own: beginning one costs a browser start,
@@ -46,6 +46,7 @@ mod api;
 mod engine;
 mod environment;
 mod host;
+mod nesting;
 mod pages;
 
 pub(crate) use api::{

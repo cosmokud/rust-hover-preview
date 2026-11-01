@@ -11,10 +11,11 @@ use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW, KillTimer, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE, HWND_NOTOPMOST,
-    HWND_TOPMOST, MSG, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW, KillTimer, SetParent,
+    SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE,
+    GWL_STYLE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, MSG, SET_WINDOW_POS_FLAGS, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE,
 };
 
 use super::api::{
@@ -26,6 +27,10 @@ use super::environment::{
     background_color, configure, create_controller, create_environment, create_host_window,
     ex_style_for, file_version, register_class, remaining, set_scripts, user_data_folder, wide,
     HOST_CREATION_TIMEOUT,
+};
+use super::nesting::{
+    child_ex_style, child_style, client_band, nested_calls, parent_origin, popup_style, NestedCall,
+    Nesting, NestingChange,
 };
 use super::pages::{font_page, frame_page, html_page};
 
@@ -42,6 +47,9 @@ pub(super) struct Host {
     environment: ICoreWebView2Environment,
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
+    /// Where the page's window stands — the pin's window while a pin is up, the desktop otherwise —
+    /// and the style it wore before it was a child (see `nesting`).
+    nesting: Nesting,
     /// The file the engine is holding, the backdrop its page was written for, and — for a font —
     /// the face of a collection it was read at, so a second hover on the same file is a window
     /// that is put back up rather than a navigation. A change of backdrop or of face is a page to
@@ -183,6 +191,7 @@ impl Host {
             environment,
             controller,
             webview,
+            nesting: Nesting::new(),
             current: None,
             last_area: None,
             browser_pid,
@@ -359,15 +368,57 @@ impl Host {
     /// than where it was. The band is the pin's when a pin is showing the page, and the topmost one
     /// everywhere else (see `pin_holds_the_front`).
     ///
-    /// **A page is put in front of the pin, not behind it — the one thing it does not share with a
-    /// film.** A film behind the pin is a picture the band's hole is seen through, and a pass of the
-    /// compositor over a video surface costs nothing a hand can feel. A browser's surface is not
-    /// that: standing behind a layered window it is blended through the band's transparent pixels
-    /// on every frame the window is presented, which is a resize that goes black and stutters where
-    /// the same page in front of the pin resizes smoothly. So the page holds the band the pin is
-    /// in and the pin stands under it, and what the pin loses by it is the presses that land on the
-    /// page — which are the pin's own and raise it anyway (see `settle_pinned_press`).
-    pub(super) fn put_window(&self, area: Area) {
+    /// **While a pin is up the page is a child of the pin's own window; while it is a hover it is the
+    /// window of the desktop's it always was.** Being a child is what puts the page in the surface
+    /// DWM freezes for the pin's taskbar peek: a page of the desktop's is no part of the pin, and the
+    /// peek showed the chrome and the band's hole. The chrome strips are raised back over it after
+    /// every placement, or the caption would be under the page. A hover's window is left alone
+    /// because the hover window refuses activation and a page that runs takes its keys only as the
+    /// foreground (see `window_proc`).
+    pub(super) fn put_window(&mut self, area: Area) {
+        // Only a pin has a peek the page must be inside. A hover's page is left the window of the
+        // desktop's it always was: the hover window refuses activation, and a child of it could not
+        // be the foreground a page that runs takes its keys from.
+        let pin = crate::ui::preview_window::engine_page_parent();
+        self.settle_nesting(pin);
+
+        if let Some(parent) = self.nesting.parent() {
+            let runs = RUNNING_DOCUMENT.load(Ordering::Acquire);
+            let (x, y) = client_band(area, parent_origin(parent));
+
+            for call in nested_calls(pin.is_some()).into_iter().flatten() {
+                match call {
+                    NestedCall::PlacePage => unsafe {
+                        // The style is the document's, and a document changes while the window is
+                        // nested: a page that runs takes `WS_EX_NOACTIVATE` off and the next one
+                        // puts it back (see `ex_style_for`).
+                        let current = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+                        let wanted = child_ex_style(current, runs);
+                        if wanted != current {
+                            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, wanted);
+                        }
+
+                        // A child is placed in client units, and above its siblings: the chrome
+                        // strips are the pin's children too (see `NestedCall`).
+                        let _ = SetWindowPos(
+                            self.hwnd,
+                            HWND_TOP,
+                            x,
+                            y,
+                            area.width,
+                            area.height,
+                            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                        );
+                    },
+                    NestedCall::RaiseChrome => unsafe {
+                        crate::ui::preview_window::raise_the_chrome_strips_over_the_host();
+                    },
+                }
+            }
+
+            return;
+        }
+
         let raises = raises(
             crate::ui::preview_window::pinned(),
             crate::ui::preview_window::pin_holds_the_front(),
@@ -385,6 +436,72 @@ impl Host {
                 );
             }
         }
+    }
+
+    /// Make the page a child of `parent`, or put it back on the desktop, only where that changed.
+    ///
+    /// A placement arrives on every pointer move of a drag, and a reparent on every one of them is a
+    /// page that flickers: the state machine is what makes the Win32 calls cost one `Stayed` check
+    /// (see `Nesting`). The popup style it wore before it was made a child is kept, so the window it
+    /// goes back to is the one it was rather than a second copy of that decision.
+    fn settle_nesting(&mut self, parent: Option<HWND>) -> NestingChange {
+        let runs = RUNNING_DOCUMENT.load(Ordering::Acquire);
+        let current_ex = unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) };
+        let change = self.nesting.settle(parent, current_ex);
+
+        if change == NestingChange::Stayed {
+            return change;
+        }
+
+        unsafe {
+            match parent {
+                Some(parent) => {
+                    let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE);
+                    let child = child_style(style);
+                    if child != style {
+                        SetWindowLongPtrW(self.hwnd, GWL_STYLE, child);
+                    }
+                    let _ = SetParent(self.hwnd, parent);
+                }
+                None => {
+                    let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE);
+                    let popup = popup_style(style);
+                    if popup != style {
+                        SetWindowLongPtrW(self.hwnd, GWL_STYLE, popup);
+                    }
+                    let _ = SetParent(self.hwnd, None);
+                    SetWindowLongPtrW(
+                        self.hwnd,
+                        GWL_EXSTYLE,
+                        ex_style_for(self.nesting.desktop_ex_style(), runs),
+                    );
+                }
+            }
+
+            // A style written behind a window's back is not one the window re-reads.
+            let _ = SetWindowPos(
+                self.hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+
+        change
+    }
+
+    /// Put the page back on the desktop before it is taken off the screen: a pin's window can be
+    /// hidden and reused, and a page left its child is a page whose surface belongs to a window a
+    /// later document is no longer in.
+    fn unnest(&mut self) {
+        if self.nesting.parent().is_none() {
+            return;
+        }
+
+        self.settle_nesting(None);
     }
 
     /// Tell the controller the box the page is rendered in, which is what the browser lays the
@@ -484,6 +601,11 @@ impl Host {
     /// ever come along and do it. What not guarding costs is two Win32 calls and the one
     /// `Interface::cast` in `suspend`.
     pub(super) fn hide(&mut self) {
+        // A page is a child of the pin's window while one is up, and that window is kept between
+        // pins: leaving the page its child is a page whose surface belongs to a window that is
+        // about to be somebody else's (see `unnest`).
+        self.unnest();
+
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
             // `TrySuspend` states a precondition rather than a preference: the controller's
