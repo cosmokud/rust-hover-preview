@@ -1735,6 +1735,56 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
     );
 }
 
+/// The menu's two ways out to another program are armed on the press and made on the release
+/// that follows it: the press takes the menu away and leaves the pin standing, and the hand-off
+/// waits for the button to be let go of, so the program or the Shell's list is not raised under
+/// a mouse button that is still down — which is the click the window it raised would otherwise
+/// have been given (see `pin_menu_hand_off_release`).
+#[test]
+fn a_press_on_either_way_out_to_another_program_waits_for_the_release() {
+    let _room = the_room_to_itself();
+
+    let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
+
+    let previous_end = PIN_END_REQUESTED.swap(false, Ordering::SeqCst);
+
+    for (label, hand_off) in [
+        ("Open in Default App", PinMenuHandOff::DefaultApp),
+        ("Open With...", PinMenuHandOff::OpenWithList),
+    ] {
+        with_pin(|pin| {
+            pin.menu.open = true;
+            pin.menu.hand_off = None;
+        });
+        let Some(paint) = pinned_menu_geometry() else {
+            panic!("a menu that is up is painted");
+        };
+        let (x, y) = menu_row_point(&paint, row_at(&paint.rows, label));
+        assert!(
+            unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+            "a hand on the {label} row is the menu's own"
+        );
+
+        assert!(
+            pinned_menu_geometry().is_none(),
+            "{label}: the menu goes away as a choice's does"
+        );
+        assert_eq!(
+            pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.menu.hand_off)),
+            Some(hand_off),
+            "{label}: the release is what makes the hand-off"
+        );
+        assert!(
+            !PIN_END_REQUESTED.load(Ordering::SeqCst),
+            "{label}: the pin is asked for its end on the release, not on the press"
+        );
+    }
+
+    PIN_END_REQUESTED.store(previous_end, Ordering::SeqCst);
+}
+
 /// A press outside both panels puts the whole menu
 /// away: the panels are over the card, and a hand that
 /// has come for what is under them is a hand that has
