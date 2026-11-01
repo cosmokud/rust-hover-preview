@@ -93,16 +93,24 @@ fn write_input_conf(file: &Path) -> bool {
     std::fs::write(file, MPV_PAUSE_BINDING).is_ok()
 }
 
-/// Whether a launch at `volume` is given no audio at all rather than a level of zero, which is
-/// `--aid=no` and nothing else — no track at all, so the decoder is saved the whole soundtrack.
+/// Whether a launch at `volume` on `engine` is given no audio at all rather than a level of zero,
+/// which is mpv's `--aid=no` and nothing else — no track at all, so the decoder is saved the whole
+/// soundtrack.
 ///
-/// It is one rule asked in three places, and it is one function so that the three cannot come
-/// apart: `AudioForm::of`, which both routes' arguments are built from and which a traced launch
-/// writes down (see `playback_trace`); `mpv_args`, which pushes the flag from it; and the launch
-/// itself, which records the answer beside the pipe so that a level moved on to such a player has a
-/// track to ask back for before it can be heard (see `mpv_ipc::set_volume`).
+/// **FFmpeg's player is never begun without its track**: its level is applied to the session Windows
+/// gives the player (see `audio_session::ask_the_mixer`), so a level of zero is a session at zero and
+/// not a film with nothing to hear.
+pub(super) fn launched_without_audio(engine: Engine, volume: u32) -> bool {
+    engine == Engine::Mpv && volume == 0
+}
+
+/// The same rule for the route that has only the one player, mpv: `--aid=no` at a level of zero.
+///
+/// It is asked by the pipe's own writes and by the resident's serves, which are mpv's every one of
+/// them, and by the engine's read-back (see `mpv_ipc::set_volume`, `mpv_resident` and
+/// `playback_trace::EngineAnswers::verdict`).
 pub(super) fn mpv_launched_without_audio(volume: u32) -> bool {
-    volume == 0
+    launched_without_audio(Engine::Mpv, volume)
 }
 
 /// Which of the two players a launch begins: the fact a line about a launch names first, and the
@@ -127,11 +135,10 @@ impl Engine {
 
 /// The sound a launch gives its film: one decision, spelled the way each player spells it.
 ///
-/// **A film at a level of nothing is given no track at all** rather than a level of nothing, which
-/// is mpv's `--aid=no` and FFmpeg's `-an` — the decoder is saved the whole soundtrack, and `aid` is
-/// what a later level is asked back through (see `mpv_launched_without_audio` and
-/// `mpv_ipc::set_volume`). Everything above nothing is the level, with the file's own measured gain
-/// folded into it where one has been measured.
+/// **A film at a level of nothing on mpv is given no track at all** rather than a level of nothing,
+/// which is `--aid=no` — the decoder is saved the whole soundtrack, and `aid` is what a later level is
+/// asked back through (see `launched_without_audio` and `mpv_ipc::set_volume`). FFmpeg's player keeps
+/// its track at every level and is turned down at the mixer (see `AudioForm::ffplay_filter`).
 ///
 /// It is one value that both launches are built from, so that the two cannot disagree about what a
 /// level of nothing means — and so that the line a traced launch writes cannot say one thing while
@@ -146,10 +153,10 @@ pub(super) enum AudioForm {
 }
 
 impl AudioForm {
-    /// The form a launch at `volume` with `gain` in hand takes — the whole of the rule, which both
-    /// routes' arguments and the trace's own line are read from.
-    pub(super) fn of(volume: u32, gain: Option<f64>) -> Self {
-        if mpv_launched_without_audio(volume) {
+    /// The form a launch at `volume` with `gain` in hand takes on `engine` — the whole of the rule,
+    /// which both routes' arguments and the trace's own line are read from.
+    pub(super) fn of(engine: Engine, volume: u32, gain: Option<f64>) -> Self {
+        if launched_without_audio(engine, volume) {
             Self::NoTrack
         } else {
             Self::Level {
@@ -167,23 +174,29 @@ impl AudioForm {
                 Engine::Mpv => "aid=no".to_string(),
                 Engine::Ffplay => "-an".to_string(),
             },
-            Self::Level { level, gain } => match gain {
-                Some(gain) => format!("volume={level} gain={gain:.4}"),
-                None => format!("volume={level} gain=none"),
-            },
+            // mpv takes the level as its own percent; FFmpeg's player takes none in its arguments
+            // and is turned down at the mixer, so its line names the mixer instead (see
+            // `audio_session::ask_the_mixer`).
+            Self::Level { level, gain } => {
+                let level = match engine {
+                    Engine::Mpv => format!("volume={level}"),
+                    Engine::Ffplay => format!("mixer={level}"),
+                };
+                match gain {
+                    Some(gain) => format!("{level} gain={gain:.4}"),
+                    None => format!("{level} gain=none"),
+                }
+            }
         }
     }
 
-    /// The filter FFmpeg's player is given for this form, and nothing where it is given none: the
-    /// level as the share of full the `volume` filter takes, with the measured gain multiplied into
-    /// it — the same product a sound file's player is given (see `start_audio_player`).
+    /// The filter FFmpeg's player is given for this form, and nothing where it is given none: **the
+    /// measured gain and never the app's level**, which is the mixer's (see `audio_session`). A file
+    /// nothing has measured is played as the file holds it.
     pub(super) fn ffplay_filter(self) -> Option<String> {
         match self {
             Self::NoTrack => None,
-            Self::Level { level, gain } => Some(match gain {
-                Some(gain) => format!("volume={:.4}", level as f64 / 100.0 * gain),
-                None => format!("volume={:.2}", level as f64 / 100.0),
-            }),
+            Self::Level { gain, .. } => gain.map(|gain| format!("volume={gain:.4}")),
         }
     }
 }
@@ -201,8 +214,9 @@ impl AudioForm {
 /// reads it for the *next* hover: a film already playing was launched with the answer that stood
 /// then and is kept playing with it (see `video_hw_accel_wanted`).
 ///
-/// **A muted film is given no audio rather than a level of zero**, which is the ffplay route's
-/// `-an` and saves the decoder the whole soundtrack; and **a film with no measured gain is given
+/// **A muted film on mpv is given no audio rather than a level of zero**, which saves the decoder the
+/// whole soundtrack — FFmpeg's player is the other way round, keeping its track and being turned down
+/// at the mixer (see `AudioForm`); and **a film with no measured gain is given
 /// no filter at all**, because none has measured one yet and what measures it is a read on a
 /// thread of its own (see `spawn_gain_scan`). What that first half leaves for a later hand is
 /// `mpv_launched_without_audio`, which the launch records beside the pipe as well (see
@@ -405,8 +419,8 @@ pub(super) fn mpv_args(
     }
 
     // The sound, in whichever of its two forms this launch takes (see `AudioForm`, which is the
-    // same rule FFmpeg's player is given its `-an` or its filter from).
-    match AudioForm::of(volume, gain) {
+    // same rule FFmpeg's player is given its filter from).
+    match AudioForm::of(Engine::Mpv, volume, gain) {
         AudioForm::NoTrack => args.push("--aid=no".to_string()),
         AudioForm::Level { level, gain } => {
             args.push(format!("--volume={level}"));

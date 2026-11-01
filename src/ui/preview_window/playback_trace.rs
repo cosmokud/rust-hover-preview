@@ -167,7 +167,7 @@ pub(super) fn a_launch(
         the_kinds_word(kind),
         super::pin_trace::path_name(path),
         volume,
-        AudioForm::of(volume, gain).word(engine),
+        AudioForm::of(engine, volume, gain).word(engine),
         pinned as u8,
     )
 }
@@ -572,25 +572,34 @@ pub(super) use note_playback_trace;
 mod tests {
     use super::*;
 
-    /// **The one rule both launches are built from**: a level of nothing is no track at all, and every
-    /// level above nothing is the level, with the gain where one was measured.
+    /// **The one rule both launches are built from**: only mpv at a level of nothing is given no track
+    /// at all. FFmpeg's player keeps its track at every level and is turned down at the mixer, so a
+    /// level of nothing is a level like any other for it.
     #[test]
-    fn a_level_of_nothing_is_no_track_and_every_other_level_is_the_level() {
-        assert_eq!(AudioForm::of(0, None), AudioForm::NoTrack);
+    fn a_level_of_nothing_is_no_track_on_mpv_and_a_level_on_ffplay() {
+        assert_eq!(AudioForm::of(Engine::Mpv, 0, None), AudioForm::NoTrack);
         assert_eq!(
-            AudioForm::of(0, Some(1.5)),
+            AudioForm::of(Engine::Mpv, 0, Some(1.5)),
             AudioForm::NoTrack,
             "a muted film is not normalised, since there is nothing to hear"
         );
         assert_eq!(
-            AudioForm::of(40, None),
+            AudioForm::of(Engine::Ffplay, 0, None),
+            AudioForm::Level {
+                level: 0,
+                gain: None
+            },
+            "FFmpeg's player plays its track at mixer 0.0 rather than being given no track"
+        );
+        assert_eq!(
+            AudioForm::of(Engine::Mpv, 40, None),
             AudioForm::Level {
                 level: 40,
                 gain: None
             }
         );
         assert_eq!(
-            AudioForm::of(100, Some(1.25)),
+            AudioForm::of(Engine::Ffplay, 100, Some(1.25)),
             AudioForm::Level {
                 level: 100,
                 gain: Some(1.25)
@@ -598,35 +607,38 @@ mod tests {
         );
     }
 
-    /// And the words a line names the form by are each player's own flag, so a run can be read against
-    /// the command line the launch built.
+    /// And the words a line names the form by are each player's own answer: mpv's level in its own
+    /// percent, FFmpeg's at its mixer (see `audio_session::ask_the_mixer`).
     #[test]
     fn a_form_is_named_by_the_flag_the_player_is_actually_given() {
         assert_eq!(AudioForm::NoTrack.word(Engine::Mpv), "aid=no");
-        assert_eq!(AudioForm::NoTrack.word(Engine::Ffplay), "-an");
         assert_eq!(
-            AudioForm::of(40, None).word(Engine::Mpv),
+            AudioForm::of(Engine::Mpv, 40, None).word(Engine::Mpv),
             "volume=40 gain=none"
         );
         assert_eq!(
-            AudioForm::of(40, Some(1.25)).word(Engine::Ffplay),
-            "volume=40 gain=1.2500"
+            AudioForm::of(Engine::Ffplay, 40, Some(1.25)).word(Engine::Ffplay),
+            "mixer=40 gain=1.2500"
         );
     }
 
-    /// FFmpeg's player is given the level as a share of full and nothing at all where the form is no
-    /// track — the filter that plays the film, and not one that plays it at nothing.
+    /// FFmpeg's player is given the file's measured gain and **never the app's level**, which is its
+    /// mixer session's; a file with no measured gain is given no filter at all.
     #[test]
-    fn ffmpegs_player_is_given_its_filter_only_where_it_has_a_level_to_play_at() {
+    fn ffmpegs_player_is_given_its_gain_and_never_the_apps_level() {
         assert_eq!(AudioForm::NoTrack.ffplay_filter(), None);
         assert_eq!(
-            AudioForm::of(40, None).ffplay_filter(),
-            Some("volume=0.40".to_string())
+            AudioForm::of(Engine::Ffplay, 40, None).ffplay_filter(),
+            None
         );
         assert_eq!(
-            AudioForm::of(100, Some(1.25)).ffplay_filter(),
-            Some("volume=1.2500".to_string()),
-            "the level and the gain multiply, as they do for a sound file's player"
+            AudioForm::of(Engine::Ffplay, 0, Some(1.5)).ffplay_filter(),
+            Some("volume=1.5000".to_string()),
+            "the gain is the filter's whole job, at a level of nothing as much as any other"
+        );
+        assert_eq!(
+            AudioForm::of(Engine::Ffplay, 100, Some(1.25)).ffplay_filter(),
+            Some("volume=1.2500".to_string())
         );
     }
 
@@ -1035,7 +1047,7 @@ mod tests {
             noted_lines(),
             vec![
                 "launch engine ffplay kind video file a-film.mkv volume 40 form \
-                  volume=40 gain=none pinned 0"
+                  mixer=40 gain=none pinned 0"
                     .to_string()
             ],
             "one line per launch, and the form is the one the arguments are built from"

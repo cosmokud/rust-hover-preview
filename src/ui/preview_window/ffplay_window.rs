@@ -58,6 +58,20 @@ pub(super) fn video_process_image() -> &'static str {
         .unwrap_or(FFPLAY_IMAGE_NAME)
 }
 
+/// Ask the mixer for the level of the FFmpeg player on screen, where that is the player there.
+///
+/// **Two answers gate it**: the player this app last began is FFmpeg's (an mpv or the media engine is
+/// told its own level another way), and the media on screen still holds a process — a pid left behind
+/// by a player that has ended is not one to write to. Nothing is begun, ended or restarted here: the
+/// level is a session's (see `audio_session::ask_the_mixer`).
+pub(super) fn ask_the_ffplay_its_level(level: u32) {
+    if video_process_image() != FFPLAY_IMAGE_NAME || !is_video_process_running() {
+        return;
+    }
+
+    audio_session::ask_the_mixer(VIDEO_PID.load(Ordering::SeqCst), level);
+}
+
 /// The image name the player of a route is begun, recorded and verified under.
 ///
 /// Every route that begins a player at all is answered here rather than left to a fallback arm, so

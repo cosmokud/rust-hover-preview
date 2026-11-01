@@ -783,11 +783,7 @@ pub fn run_preview_window() {
                     &mut audio_start_offset,
                     &mut audio_paused,
                 );
-                settle_pinned_audio_volume(
-                    &mut audio_started,
-                    &mut audio_start_offset,
-                    &mut audio_paused,
-                );
+                settle_pinned_audio_volume();
 
                 // What a collapse into the bubble holds back and what a restore puts back,
                 // read from the two `Pin Mode → Pause on Minimize` switches every tick: a switch

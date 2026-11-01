@@ -689,13 +689,13 @@ fn start_video_playback_where(
     // software. So hardware decode is mpv's switch alone and FFmpeg's player decodes on a core
     // (see `video_hw_accel_wanted`).
 
-    // The same two forms mpv's launch is given, spelled the way FFmpeg's player spells them (see
-    // `video_launch::AudioForm`, which is the one rule both are read from): no audio at all at a
-    // level of nothing, and otherwise the level as the share of full the `volume` filter takes, with
-    // the soundtrack's own measured gain folded into it where `Normalize` is on for videos and one
-    // has been measured — the two multiply, exactly as they do for a sound file (see
-    // `start_audio_player`).
-    match video_launch::AudioForm::of(volume, gain) {
+    // The two forms the launch can take, spelled the way FFmpeg's player spells them (see
+    // `video_launch::AudioForm`, which is the one rule mpv's arguments are read from too): FFmpeg's
+    // player is never given `-an` — its track is always there — and the filter it is given is the
+    // soundtrack's own measured gain where `Normalize` is on for videos and one has been measured.
+    // The app's level is put on the session Windows gives the player (see
+    // `audio_session::ask_the_mixer`).
+    match video_launch::AudioForm::of(video_launch::Engine::Ffplay, volume, gain) {
         video_launch::AudioForm::NoTrack => {
             cmd.arg("-an");
         }
@@ -948,12 +948,16 @@ fn start_video_playback_where(
             player.id(),
             path,
             volume,
-            // FFmpeg's player is given the same level, folded into its own `volume` filter, so the
-            // form a give-up writes is the one this launch handed it (see `video_launch::AudioForm`).
+            // FFmpeg's player is given the file's gain in its own `volume` filter and the level at
+            // the mixer, so the form a give-up writes is the one this launch handed it (see
+            // `video_launch::AudioForm`).
             gain,
             video_launch::Engine::Ffplay,
             for_a_hover,
         );
+        // The level goes on the session Windows gave this player, and the player is begun at its own
+        // 100% (see `audio_session::ask_the_mixer`).
+        audio_session::ask_the_mixer(player.id(), volume);
         // **And what the machine itself thinks this player is doing**, where a trace asks for it: the
         // session it has in Windows' mixer, if any, and the endpoint it landed on (see
         // `audio_session`). FFmpeg's player is read on the same terms as mpv's — a film with no session

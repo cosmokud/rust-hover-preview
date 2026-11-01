@@ -423,15 +423,15 @@ fn a_remembered_level_is_written_even_where_the_configuration_already_holds_it()
     );
 }
 
-/// A level moved on a pinned film: mpv is told it while it runs, and FFmpeg's player is begun
-/// again at it — the gate this ticket turns on, asserted on both routes.
+/// A level moved on a pinned film: mpv is told it while it runs, and FFmpeg's player is told it at
+/// its mixer session — the gate this ticket turns on, asserted on both routes.
 ///
-/// FFmpeg's player takes a level only by being started at one, so the settle is a player replaced;
-/// mpv takes one as it plays, so the knob itself is the write and the settle begins nothing (see
-/// `set_pin_volume` and `settle_pin_volume`). The `Remember` rows are stood off so that a test
-/// never writes the configuration file a level would be remembered into.
+/// Neither route's settle begins a player: mpv takes the level as it plays, so the knob itself is
+/// the write, and FFmpeg's level is its session's (see `set_pin_volume` and `settle_pin_volume`).
+/// The `Remember` rows are stood off so that a test never writes the configuration file a level
+/// would be remembered into.
 #[test]
-fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_again() {
+fn a_level_moved_on_a_pinned_player_is_told_to_it_and_begins_nothing() {
     let _room = the_room_to_itself();
 
     let mut levels = PinLevels::set(100, 50);
@@ -461,7 +461,7 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     clear_restart_count();
     mpv_ipc::clear_noted();
 
-    // FFmpeg's player takes a level only by being begun again at one.
+    // FFmpeg's player takes a level at its mixer session, so nothing is begun again.
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
@@ -474,8 +474,13 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     settle_pin_volume();
     assert_eq!(
         restart_count(),
-        1,
-        "a level moved on FFmpeg's player is a player begun again at the level, as it always was"
+        0,
+        "FFmpeg's player takes the level at its mixer session, so none is begun again"
+    );
+    assert_eq!(
+        pinned_playback_state().map(|(_, _, _, volume)| volume.playing_at),
+        Some(70),
+        "and the claim moves, because the player was told"
     );
 
     // mpv is told the level while it runs, and neither the knob nor the settle begins anything.
@@ -684,8 +689,8 @@ fn a_level_moved_in_the_tray_is_given_to_the_pin_that_is_up() {
         stand_pin(Some(pin));
     };
 
-    // FFmpeg's player, which is told nothing while it runs: the film the tray has turned down to
-    // nothing is begun again at nothing, from the second it was watching.
+    // FFmpeg's player, whose level is its mixer session's: the film the tray has turned down to
+    // nothing is told at the mixer, and nothing is begun again.
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
@@ -696,8 +701,13 @@ fn a_level_moved_in_the_tray_is_given_to_the_pin_that_is_up() {
     assert_eq!(pinned_volume_level(), 0, "the pin is playing at 0%");
     assert_eq!(
         restart_count(),
-        1,
-        "FFmpeg's player takes a level by being begun at one, so the row is a player begun again"
+        0,
+        "FFmpeg's player takes the level at its mixer session, so the row begins nothing"
+    );
+    assert_eq!(
+        pinned_playback_state().map(|(_, _, _, volume)| volume.playing_at),
+        Some(0),
+        "and the claim moves with the level the player was told"
     );
 
     // mpv's, which can be told one while it plays: the level is written down its own pipe and
@@ -798,20 +808,21 @@ fn stand_native_video_media() {
     }
 }
 
-/// A sound's level reaches the player's filter at every level including the top: the player's own
-/// `-volume` knob is silent at 100, so a sound at `Volume → Audio` 100% goes through `volume=1.00`
-/// like a film's — and a level of nothing is still a player playing silence, not no player at all
-/// (see `audio_volume_filter`).
+/// A sound's filter is the file's own measured gain and **never the app's level**, which is the
+/// session's (see `audio_session::ask_the_mixer`): a file nothing has measured is played as the file
+/// holds it, and a measured one is normalised at every level including nothing.
 #[test]
-fn a_sounds_level_reaches_the_filter_at_every_level_including_the_top() {
-    assert_eq!(audio_volume_filter(100, None), "volume=1.00");
-    assert_eq!(audio_volume_filter(99, None), "volume=0.99");
+fn a_sounds_filter_is_the_files_gain_and_never_the_apps_level() {
+    assert_eq!(audio_gain_filter(None), None);
     assert_eq!(
-        audio_volume_filter(0, None),
-        "volume=0.00",
-        "silence that still plays, so the card's clock moves and the file stays seekable"
+        audio_gain_filter(Some(1.5)).as_deref(),
+        Some("volume=1.5000")
     );
-    assert_eq!(audio_volume_filter(100, Some(1.5)), "volume=1.5000");
+    assert_eq!(
+        audio_gain_filter(Some(1.0)).as_deref(),
+        Some("volume=1.0000"),
+        "a gain of one is a gain, not the absence of one"
+    );
 }
 
 /// The box on screen a wheel notch over the volume control belongs to: the transport strip's
@@ -1104,12 +1115,11 @@ fn a_level_burst_reaches_mpv_once_per_tick_with_the_latest_level() {
     clear_restart_count();
 }
 
-/// FFmpeg's player takes a level only by being begun again, so a wheel burst must not begin one per
-/// notch: the relaunch waits for `PIN_VOLUME_SETTLE_TICKS` quiet ticks and then happens once, while
-/// a drag released still settles at once (see `settle_pin_volume_after_quiet` and
-/// `settle_pin_volume`).
+/// **A wheel burst and a release begin no player at all**: FFmpeg's level is its mixer session's, so
+/// the quiet window is the claims' settling and nothing is replaced at either end of it (see
+/// `settle_pin_volume_after_quiet` and `settle_pin_volume`).
 #[test]
-fn a_wheel_burst_relaunches_ffplay_only_after_the_quiet_window() {
+fn a_wheel_burst_and_a_release_begin_no_player() {
     let _room = the_room_to_itself();
 
     let mut levels = PinLevels::set(100, 50);
@@ -1151,33 +1161,23 @@ fn a_wheel_burst_relaunches_ffplay_only_after_the_quiet_window() {
     }
     assert_eq!(restart_count(), 0, "a burst of notches begins nothing");
 
-    // Then the hand stops, the quiet window passes, and one player takes the level.
+    // Then the hand stops, the quiet window passes, and the level is told at the mixer.
     for _ in 0..PIN_VOLUME_SETTLE_TICKS {
         settle_pin_volume_after_quiet();
     }
     assert_eq!(
         restart_count(),
-        1,
-        "one relaunch once the level has been quiet"
+        0,
+        "the level is the session's, so nothing is begun for it"
     );
 
-    // And the ticks after it begin nothing more.
-    for _ in 0..PIN_VOLUME_SETTLE_TICKS {
-        settle_pin_volume_after_quiet();
-    }
-    assert_eq!(
-        restart_count(),
-        1,
-        "the quiet window is spent, not repeated"
-    );
-
-    // A release still settles at once, however recently the knob moved.
+    // A release settles at once, however recently the knob moved, and begins nothing either.
     set_pin_volume(80);
     settle_pin_volume();
     assert_eq!(
         restart_count(),
-        2,
-        "a release is the end of the drag and settles immediately"
+        0,
+        "a release is the end of the drag and begins no player"
     );
 
     stand_mpv_in(None);

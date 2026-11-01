@@ -454,36 +454,25 @@ fn a_retired_players_id_is_given_up_only_once_the_end_is_confirmed() {
     );
 }
 
-/// The knob let go of on a pinned FFmpeg video: whether the level costs a player at all.
+/// The knob let go of on a pinned FFmpeg video: who the level is given to.
 ///
-/// A film that is *playing* owes the level to a player, because FFmpeg's player takes one only by
-/// being started at it, and that player is begun playing (see `restart_pinned_player`).
+/// A player that is running is told at its mixer session, and nothing is begun, ended or restarted
+/// for it (see `ask_the_ffplay_its_level`).
 ///
-/// A film that is *held* owes it to nobody yet, and the reason is a measurement rather than a
-/// preference: ffplay 9.0.2 has no way to be started paused — its whole option list was read for
-/// one and there is none — so a relaunch of a held film is a player that plays, audibly at the new
-/// level, from the second it was begun at, until the hold written beside it reaches it. That is one
-/// `P` posted on the first tick that finds a window there, which is hundreds of milliseconds after
-/// the process was spawned: a held film answers a knob with a burst of its own soundtrack at the
-/// second the hand stopped it at, and it stops again a fraction later. The level is therefore
-/// written down against the player that *begins when the file is let go of*, which is the same
-/// answer a pin with no player behind it has always had, and the player that is holding now is left
-/// alone — which also leaves the app's own loop record alone, so a knob can no longer arm the
-/// rewind that is a relaunch at zero (see `note_video_loop`).
+/// A film that is *held* has its level left owing to the player that begins when the file is let go
+/// of: the claim of what the running player was begun at is what keeps it owed, which is also what
+/// leaves the app's own loop record alone (see `note_video_loop`).
 #[test]
-fn pin_level_settled_by_owes_a_level_to_a_playing_player_only() {
+fn pin_level_settled_by_tells_a_running_player_and_owes_a_held_one() {
     assert_eq!(
         pin_level_settled_by(true, false, false),
-        PinLevelSettling::Relaunch,
-        "a player that is playing takes a level only by being begun at one, so it is replaced, \
-             and a file that was not held is begun playing"
+        PinLevelSettling::Mixed,
+        "a player that is playing is told the level at its session"
     );
     assert_eq!(
         pin_level_settled_by(false, true, true),
         PinLevelSettling::OwedToTheNextPlayer,
-        "a held file must not be relaunched for a level: the replacement cannot be started paused, \
-             so it plays audibly at the new level from the second the hold was taken at until the \
-             hold reaches it — the loop-back a knob on a held film used to answer with"
+        "a held file's level waits for the player that begins when the file is let go of"
     );
     assert_eq!(
         pin_level_settled_by(false, false, true),
@@ -655,7 +644,7 @@ fn stand_native_video_media() -> Option<MediaData> {
 
 /// A pin standing on `film` at a box, playing from the thirtieth second — what a hover leaves
 /// behind when it is pinned. No player is begun here; every question below is about the command
-/// the mpv route sends or the relaunch FFmpeg's player takes.
+/// the mpv route sends.
 fn a_playing_pin(film: &Path, content: ScreenRegion) -> PinnedPreview {
     let mut pin = overlay_pin(content, PinChrome::always());
     pin.path = film.to_path_buf();
