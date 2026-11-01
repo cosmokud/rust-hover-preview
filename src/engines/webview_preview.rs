@@ -71,6 +71,22 @@ use pages::{
 #[cfg(test)]
 pub(crate) use pages::{clear_want_for_test, publish_want_for_test};
 
+/// The page placement the pin has asked for, read without taking it: what a test of a road that
+/// puts the page back above the pin holds the road to.
+#[cfg(test)]
+pub(crate) fn placed_for_test() -> Option<(PathBuf, Area)> {
+    PLACED
+        .lock()
+        .ok()
+        .and_then(|placed| placed.as_ref().map(|p| (p.path.clone(), p.area)))
+}
+
+/// Clear the page placement so that a test can tell its own ask from one left by a road before it.
+#[cfg(test)]
+pub(crate) fn clear_placement_for_test() {
+    drop_placement();
+}
+
 #[cfg(test)]
 use crate::config::config::TransparentBackground;
 #[cfg(test)]

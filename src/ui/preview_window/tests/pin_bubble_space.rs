@@ -4,8 +4,8 @@ use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetWindow, GetWindowRect, IsIconic, IsWindow, IsWindowVisible,
-    SendMessageW, ShowWindow, GW_HWNDPREV, SC_CLOSE, SC_MINIMIZE, SW_SHOWNOACTIVATE,
-    WINDOW_EX_STYLE, WM_CLOSE, WM_SYSCOMMAND, WS_POPUP,
+    SendMessageW, ShowWindow, GW_HWNDPREV, SC_CLOSE, SC_MINIMIZE, SW_SHOWNOACTIVATE, WA_ACTIVE,
+    WINDOW_EX_STYLE, WM_ACTIVATE, WM_CLOSE, WM_SYSCOMMAND, WS_POPUP,
 };
 
 /// A SPACE with a focused bubble holds a film or a sound, and nothing else.
@@ -2699,5 +2699,190 @@ fn a_bubble_asked_for_at_a_point_stands_centred_on_it() {
         let _ = DestroyWindow(bubble);
     }
     PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    stand_pin(previous_pin);
+}
+
+/// A pin of the browser's kind, a window of this suite's own, with a second window of the suite's
+/// opened over it: the arrangement a press on the band meets once the pair has been put behind
+/// something, with `Pin Mode → Always On Top` off.
+///
+/// The caller holds the room and puts back every global written here, the pin's own window handle
+/// and the setting included. The returned pair is `(in_front, pin)`.
+unsafe fn a_put_behind_pin(kind: MediaType, path: &Path) -> (HWND, HWND, ScreenRegion) {
+    let box_ = (100, 100, 420, 340);
+    let pin_hwnd = unsafe {
+        a_window_of_the_suite(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        )
+    };
+    let in_front = unsafe {
+        a_window_of_the_suite(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        )
+    };
+    pin_real_window::stand_real_pin_window_for_a_test(Some(pin_hwnd));
+
+    let mut media = create_loading_media(8, 8);
+    media.media_type = kind;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.path = path.to_path_buf();
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "the window made after the pin is the window the pair is behind"
+    );
+    (in_front, pin_hwnd, box_)
+}
+
+/// A press on the band of an engine-drawn pin takes the band for the pair and places the page last:
+/// the raise is what Windows does not refuse to a background process, and the page ends above the
+/// pin so both the chrome and the document are on top again (see `put_pin_at_the_front`).
+#[test]
+fn an_engine_pins_press_takes_the_band_and_puts_the_page_back_above_it() {
+    let _room = the_room_to_itself();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_own = pin_is_its_own_window();
+    let before = pin_always_on_top();
+
+    let (in_front, pin_hwnd, content) =
+        unsafe { a_put_behind_pin(MediaType::EngineSvg, Path::new("a-drawing.svg")) };
+    webview_preview::clear_placement_for_test();
+
+    unsafe { put_pin_at_the_front(pin_hwnd) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a press on a page raised the pin over the window the pair was behind"
+    );
+    let (path, area) = webview_preview::placed_for_test()
+        .expect("the page is placed again after the pin is raised");
+    assert_eq!(path, Path::new("a-drawing.svg"));
+    assert_eq!(
+        (area.x, area.y, area.width, area.height),
+        (
+            content.0,
+            content.1,
+            content.2 - content.0,
+            content.3 - content.1
+        ),
+        "the page is put in the band the raised pin frames"
+    );
+
+    unsafe {
+        put_away_a_window_of_the_suite(in_front);
+        put_away_a_window_of_the_suite(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    stand_pin(previous_pin);
+}
+
+/// The same press on a picture pin takes no band at all: it stands in a window of its own that
+/// Windows activates from the click, and a raise here would be a band the setting does not name
+/// (see `put_pin_at_the_front`).
+#[test]
+fn a_picture_pins_press_takes_no_band_and_places_no_page() {
+    let _room = the_room_to_itself();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_own = pin_is_its_own_window();
+    let before = pin_always_on_top();
+
+    let (in_front, pin_hwnd, _) =
+        unsafe { a_put_behind_pin(MediaType::StaticImage, Path::new("a-drawing.png")) };
+    webview_preview::clear_placement_for_test();
+
+    unsafe { put_pin_at_the_front(pin_hwnd) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "a picture pin is left where Windows put it, with no band taken for it"
+    );
+    assert!(
+        webview_preview::placed_for_test().is_none(),
+        "and nothing of the browser's is placed for a picture"
+    );
+
+    unsafe {
+        put_away_a_window_of_the_suite(in_front);
+        put_away_a_window_of_the_suite(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    stand_pin(previous_pin);
+}
+
+/// Alt+Tab, the taskbar button and a click on the chrome all activate the pin rather than the page,
+/// and the page is a window of its own: the activation places it again so the band is not left blank
+/// or covered (see `window_proc`).
+#[test]
+fn an_engine_pins_activation_places_the_page_again() {
+    let _room = the_room_to_itself();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_own = pin_is_its_own_window();
+    let before = pin_always_on_top();
+
+    let (in_front, pin_hwnd, content) =
+        unsafe { a_put_behind_pin(MediaType::EngineFont, Path::new("a-specimen.ttf")) };
+    webview_preview::clear_placement_for_test();
+
+    unsafe {
+        window_proc(pin_hwnd, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0));
+    }
+    let (path, area) = webview_preview::placed_for_test()
+        .expect("an activated engine pin places its page back in the band");
+    assert_eq!(path, Path::new("a-specimen.ttf"));
+    assert_eq!(
+        (area.x, area.y, area.width, area.height),
+        (
+            content.0,
+            content.1,
+            content.2 - content.0,
+            content.3 - content.1
+        ),
+        "the page is put in the pin's content box, which is what shows it above the pin"
+    );
+
+    unsafe {
+        put_away_a_window_of_the_suite(in_front);
+        put_away_a_window_of_the_suite(pin_hwnd);
+    }
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
     stand_pin(previous_pin);
 }

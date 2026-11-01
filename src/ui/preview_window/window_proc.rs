@@ -275,6 +275,16 @@ pub(super) unsafe extern "system" fn window_proc(
                 // this answers the activation change that came without one.
                 close_pin_menu(hwnd);
             }
+
+            // **Alt+Tab, the taskbar button and a click on the chrome all activate this window
+            // rather than the page**, and the page is a window of its own that Windows does not
+            // bring along. It is placed again last, which shows it and puts it above the pin the
+            // activation has just raised (see `place_pinned_siblings` and `Host::put_window`).
+            if matches!((wparam.0 & 0xFFFF) as u32, WA_ACTIVE | WA_CLICKACTIVE)
+                && engine_page_in_the_band().is_some()
+            {
+                place_pinned_siblings();
+            }
             LRESULT(0)
         }
         WM_KEYDOWN | WM_SYSKEYDOWN => {

@@ -1665,6 +1665,15 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         window,
         preview_up as u8,
     );
+
+    // **A shown engine pin puts its page back last**, whether it was shown by the restore, the
+    // taskbar's own button or a box change: the page is a window of its own that the show above
+    // does not carry, and one left behind is a band drawn over by whatever raised the pin. Every
+    // other kind is placed by the caller that knows what stands in its band (see
+    // `place_pinned_siblings`).
+    if engine_page_in_the_band().is_some() {
+        place_pinned_siblings();
+    }
 }
 
 /// How long after a pick a pin keeps answering for the front of its band.
@@ -1886,6 +1895,21 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
     // `lower_pinned_preview`). Everything below is the stand-in the kinds still standing in the preview's
     // window need, because a window the Shell does not own is never raised by a click.
     if pin_is_its_own_window() {
+        // **A press on an engine-drawn pin is a press on the page, and the page is a window of
+        // its own in front of the pin.** Windows activates the pin from that click, but with
+        // `Always On Top` off the pair is behind whatever was in front, and the pin comes forward
+        // only by the band a process without the foreground can take (see
+        // `take_the_band_and_give_it_back`). The page is then placed last so it ends above the
+        // raised pin, which is the only order that leaves both the chrome and the page on top.
+        //
+        // Every other own-window kind is left to Windows: the press that lands on it activates it.
+        if engine_page_in_the_band().is_some()
+            && !pin_always_on_top()
+            && GetForegroundWindow() != hwnd
+        {
+            take_the_band_and_give_it_back(hwnd);
+        }
+
         // What stands in this window's band is placed again after the raise: a page the engine
         // draws is a window of its own in front of the pin, so raising the pin alone leaves the
         // page where it was — over the listing, or under the window that has just gone over both
@@ -2701,7 +2725,7 @@ pub(super) fn place_pinned_siblings() {
         // rather than behind it: a browser's surface behind the band's hole is a resize that goes
         // black and stutters (see `Host::put_window`).
         Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
-            if let Some((path, _)) = pinned_media_owner() {
+            if let Some((path, content)) = engine_page_in_the_band() {
                 webview_preview::raise(
                     &path,
                     webview_preview::Area {
@@ -2716,6 +2740,31 @@ pub(super) fn place_pinned_siblings() {
         }
         _ => {}
     }
+}
+
+/// The engine-drawn page a pin of its own is framing, and the band it stands in: what every road
+/// that raises the pin has to place again, because the page is a window of its own in front of it.
+///
+/// Some only for a pin that is up, not collapsed, standing in its own window and showing an
+/// engine-drawn page (an SVG, a font specimen, or the HTML page the engine is handed as
+/// `EngineSvg`, see `engine_svg_media`). Every other kind has nothing of the browser's in its band.
+pub(super) fn engine_page_in_the_band() -> Option<(PathBuf, ScreenRegion)> {
+    if !pin_is_its_own_window() {
+        return None;
+    }
+    let kind = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.media_type));
+    if !matches!(
+        kind,
+        Some(MediaType::EngineSvg) | Some(MediaType::EngineFont)
+    ) {
+        return None;
+    }
+    let content = pinned_content()?;
+    let (path, _) = pinned_media_owner()?;
+    Some((path, content))
 }
 
 /// The media box of the pin that is up, or nothing when there is no pin or it is collapsed: a
