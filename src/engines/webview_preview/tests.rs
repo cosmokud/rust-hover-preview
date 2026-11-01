@@ -1,5 +1,9 @@
 use super::environment::user_data_folder;
+use super::host::{raises, Raise};
 use super::*;
+use windows::Win32::UI::WindowsAndMessaging::{
+    HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+};
 
 /// The page the engine is pointed at is what makes a document the size of the window
 /// it was given: the document goes in an image, and an image is scaled to its box
@@ -415,6 +419,51 @@ fn a_drag_publishes_one_box_rather_than_a_queue_of_them() {
         !PLACE_ASKED.load(Ordering::Acquire),
         "and the ask goes with it, rather than being owed to a window that is gone"
     );
+}
+
+/// A page under a pin goes into the band the pin is in, which is the ordinary one whenever
+/// Always On Top is off — and `HWND_NOTOPMOST` does not put a window there. On a window that is
+/// not topmost it is a no-op, which is the measured bug this pair exists for: the pin reached the
+/// foreground and its page stayed under Explorer, so the band's hole showed what was behind it.
+/// Claiming topmost and then giving it up is what drops the window to the *top* of the ordinary
+/// band, and the second call carries no box: the window is where the first call put it.
+#[test]
+fn a_pinned_page_with_always_on_top_off_is_raised_through_topmost_into_the_ordinary_band() {
+    let topmost = Raise {
+        insert_after: HWND_TOPMOST,
+        flags: SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    };
+
+    assert_eq!(
+        raises(true, false),
+        [
+            Some(topmost),
+            Some(Raise {
+                insert_after: HWND_NOTOPMOST,
+                flags: SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            }),
+        ],
+        "topmost then notopmost, or the page is not raised at all"
+    );
+}
+
+/// A hover page, and a page under a pin that holds the front, are topmost in one call — the band
+/// that needs no lifting. Every first call carries `SWP_SHOWWINDOW`, which is what brings back a
+/// page a hide collapsed, and a single call is all that is made: the second is owed to the
+/// ordinary band and to nothing else.
+#[test]
+fn a_page_in_the_topmost_band_is_put_there_in_one_call() {
+    let one = [
+        Some(Raise {
+            insert_after: HWND_TOPMOST,
+            flags: SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        }),
+        None,
+    ];
+
+    for (pinned, holds_front) in [(false, false), (false, true), (true, true)] {
+        assert_eq!(raises(pinned, holds_front), one, "{pinned} {holds_front}");
+    }
 }
 
 /// The keyboard follows the document, and nothing else does. A page that runs is a program
