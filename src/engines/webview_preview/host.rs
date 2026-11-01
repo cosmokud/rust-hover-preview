@@ -31,9 +31,9 @@ use super::environment::{
     HOST_CREATION_TIMEOUT,
 };
 use super::nesting::{
-    child_ex_style, child_style, client_band, nested_calls, parent_origin, popup_style,
-    settle_parents, the_page_is_placed, unnest_calls, NestedCall, Nesting, NestingChange,
-    UnnestCall,
+    child_ex_style, child_style, client_band, nested_calls, parent_origin, placement, places_now,
+    popup_style, scale_of, settle_parents, unnest_calls, NestedCall, Nesting, NestingChange,
+    PlacedBand, UnnestCall,
 };
 use super::pages::{font_page, frame_page, html_page};
 
@@ -53,10 +53,10 @@ pub(super) struct Host {
     /// Where the page's window stands — the pin's window while a pin is up, the desktop otherwise —
     /// and the style it wore before it was a child (see `nesting`).
     nesting: Nesting,
-    /// The box the nested page was last put in, on the screen: a placement arrives on every pointer
-    /// move of a drag, and a page put in the box it already has is a recomposited layered pin per
-    /// tick (see `put_window`).
-    last_placed: Option<(i32, i32, i32, i32)>,
+    /// The box the nested page was last put in, keyed as `PlacedBand`: a placement arrives on every
+    /// pointer move of a drag, and a page put in the box it already has is a recomposited layered
+    /// pin per tick (see `put_window`).
+    last_placed: Option<PlacedBand>,
     /// The file the engine is holding, the backdrop its page was written for, and — for a font —
     /// the face of a collection it was read at, so a second hover on the same file is a window
     /// that is put back up rather than a navigation. A change of backdrop or of face is a page to
@@ -404,19 +404,19 @@ impl Host {
 
         if let Some(parent) = self.nesting.parent() {
             let runs = RUNNING_DOCUMENT.load(Ordering::Acquire);
-            let box_ = (area.x, area.y, area.width, area.height);
-            let placed = the_page_is_placed(change, self.last_placed, box_);
-            self.last_placed = Some(box_);
+            let origin = parent_origin(parent);
+            let band = placement(area, origin, scale_of(parent), runs);
             publish_nested(Some(area));
 
-            // A placement arrives on every pointer move of a drag, and a page put in the box it is
-            // already in — and the chrome raised over it again — recomposites the whole layered pin
-            // four times a tick (see `the_page_is_placed`).
-            if !placed {
+            // A child is carried by its parent: while the pin is in its own move/size loop nothing
+            // is placed and the chrome is not raised again, and the first placement after it
+            // settles the page on the box the loop ended in (see `places_now`).
+            if !places_now(change, self.last_placed, band, super::pin_in_move_loop()) {
                 return;
             }
+            self.last_placed = Some(band);
 
-            let (x, y) = client_band(area, parent_origin(parent));
+            let (x, y) = client_band(area, origin);
 
             for call in nested_calls(pin.is_some()).into_iter().flatten() {
                 match call {
