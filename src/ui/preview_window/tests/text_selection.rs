@@ -6,10 +6,10 @@ use super::*;
 /// A page of text put where a press and a menu answer against it, with the media slot put back
 /// when the guard is dropped: what a selection is made in is the lines the frame holds, and a
 /// test has no document to read them out of (see `TextPreviewState`).
-struct TextPagePutBack(Option<MediaData>);
+pub(super) struct TextPagePutBack(Option<MediaData>);
 
 impl TextPagePutBack {
-    fn put() -> Self {
+    pub(super) fn put() -> Self {
         let was = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let mut media = create_loading_media(200, 100);
         media.media_type = MediaType::Text;
@@ -29,14 +29,20 @@ impl TextPagePutBack {
             lines: vec![text_preview::FrameLine {
                 top: 0,
                 height: 20,
+                left: 0,
                 runs: Vec::new(),
                 source: (0, 0),
             }],
             selection: None,
             selecting: false,
+            caret: None,
+            caret_goal: None,
+            caret_blink: text_find_field::CaretBlink::default(),
+            pending_caret: Vec::new(),
             word_drag: None,
             click_run: None,
             drag_pointer: None,
+            find: FindState::default(),
         });
         if let Ok(mut slot) = CURRENT_MEDIA.lock() {
             *slot = Some(media);
@@ -56,10 +62,10 @@ impl Drop for TextPagePutBack {
 
 /// A pin stood up for a test and whatever was there before put back when the guard is dropped,
 /// even when the test is done by panicking (see `stand_pin`).
-struct PinPutBack(Option<PinnedPreview>);
+pub(super) struct PinPutBack(Option<PinnedPreview>);
 
 impl PinPutBack {
-    fn take() -> Self {
+    pub(super) fn take() -> Self {
         Self(take_pin_for_a_test())
     }
 }
@@ -121,6 +127,7 @@ fn put_painted_line(text: &str) {
             state.lines = vec![text_preview::FrameLine {
                 top: 0,
                 height: 20,
+                left: 0,
                 runs: vec![text_preview::FrameRun {
                     x: 0,
                     width: text.chars().count() as i32 * 10,
@@ -355,7 +362,7 @@ fn a_press_with_shift_extends_the_selection_it_already_has() {
 /// A page of a real file, loaded the way a pin loads one: a copy is taken of the document rather
 /// than of the frame, so a test asking for one has to have a document to read it out of (see
 /// `text_of`). The pin a full-mode page is read from is stood up by the caller.
-fn a_page_of(text: &str, name: &str, width: u32, height: u32) -> Option<MediaData> {
+pub(super) fn a_page_of(text: &str, name: &str, width: u32, height: u32) -> Option<MediaData> {
     let folder = std::env::temp_dir().join("rust-hover-preview-text-selection");
     std::fs::create_dir_all(&folder).expect("a test folder");
     let path = folder.join(name);
@@ -696,7 +703,71 @@ fn a_press_on_the_pages_find_next_row_takes_the_page_to_the_next_place() {
         panic!("the page's own menu is up")
     };
 
-    // The third of the page's own rows: `Select All` and `Copy` are above it (see `TEXT_MENU_ROWS`).
+    // The fourth of the page's own rows: `Select All`, `Copy` and `Find` are above it (see
+    // `TEXT_MENU_ROWS`).
+    let (x, y) = (
+        (paint.popup.panel.left + paint.popup.panel.right) / 2,
+        paint.popup.rows_top + paint.popup.row_height * 3 + paint.popup.row_height / 2,
+    );
+    assert_eq!(
+        pin_chrome::menu_row_at(&paint.popup, x, y),
+        Some(3),
+        "the point this test presses is on the fourth of the page's own rows"
+    );
+
+    assert!(
+        unsafe { pinned_menu_press(hwnd, x, y) },
+        "a hand on the page's own command is the menu's"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(needle(2, 2)),
+        "the command found the next place the selection appears"
+    );
+}
+
+/// The row above `Find Next` opens the bar the key does, and it opens it over the query it was last
+/// left with rather than over nothing: a command chosen from the menu is the same bar `Ctrl`+`F`
+/// asks for (see `text_menu_row_press` and `text_find::open_text_find`).
+#[test]
+fn a_press_on_the_pages_find_row_opens_the_bar_it_names() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    let _media = TextPagePutBack::put();
+    stand_pin(Some(a_pin_whose_menu_fits_the_screen()));
+
+    let text = "needle here
+nothing
+a needle again
+";
+    let Some(page) = a_page_of(text, "a-page-found-from-the-menu.txt", 240, 80) else {
+        panic!("a page of text was not loaded")
+    };
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+
+    // A query the page has been searched with before, and a bar put away again: the row is what has
+    // to bring that query back.
+    let hwnd = HWND(0x1000 as *mut _);
+    text_find::open_text_find();
+    text_find::note(FindEdit::Typed('n'));
+    text_find::note(FindEdit::Typed('e'));
+    unsafe { text_find::settle(hwnd) };
+    text_find::note(FindEdit::Close);
+    unsafe { text_find::settle(hwnd) };
+    assert!(
+        !text_find::is_open(),
+        "the bar is away before the row is pressed"
+    );
+
+    unsafe { open_pin_menu(hwnd, 20, 20, PinMenuPage::Text) };
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("the page's own menu is up")
+    };
+
+    // The third of the page's own rows: `Select All` and `Copy` are above it, and `Find Next` below
+    // it (see `TEXT_MENU_ROWS`).
     let (x, y) = (
         (paint.popup.panel.left + paint.popup.panel.right) / 2,
         paint.popup.rows_top + paint.popup.row_height * 2 + paint.popup.row_height / 2,
@@ -711,10 +782,18 @@ fn a_press_on_the_pages_find_next_row_takes_the_page_to_the_next_place() {
         unsafe { pinned_menu_press(hwnd, x, y) },
         "a hand on the page's own command is the menu's"
     );
+    assert!(text_find::is_open(), "the row opened the bar");
+
+    let query = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.text_state.as_ref())
+            .map(|state| state.find.field.text().to_string())
+    });
     assert_eq!(
-        selection_now(),
-        Some(needle(2, 2)),
-        "the command found the next place the selection appears"
+        query.as_deref(),
+        Some("ne"),
+        "at the query the bar was closed with rather than at nothing"
     );
 }
 
@@ -882,14 +961,15 @@ fn a_control_wheel_draws_a_pinned_page_again_at_another_size() {
 }
 
 /// The size a reader put a page to is the reader's own, so it survives the page being laid out
-/// again: a window given another box re-renders the page, and what that render reads is the
-/// configuration rather than the pin — which is exactly the value the carried size replaces (see
-/// `keep_text_place`).
+/// again: the page a relayout installs is read at the configuration's size rather than the pin's, and
+/// what the carry puts back is exactly the value that read replaced (see `keep_text_place`).
 ///
-/// Without this the size is a setting that lasts until the first resize, which is the one thing a
-/// reader who has just chosen it is most likely to do.
+/// A box change no longer comes through that carry — its own seat draws the page at the options the
+/// page already has (see `relayout_text_for_the_box`) — so what still does is a take-up and the step
+/// onto another file (see `PinRelayoutRoad`). Without the carry the size a reader chose would go with
+/// the file they left.
 #[test]
-fn a_resize_keeps_the_size_the_reader_put_the_page_to() {
+fn a_page_laid_out_again_keeps_the_size_the_reader_put_it_to() {
     let _room = the_room_to_itself();
     let _pin = PinPutBack::take();
     let _media = TextPagePutBack::put();
@@ -923,8 +1003,9 @@ fn a_resize_keeps_the_size_the_reader_put_the_page_to() {
         }
     }
 
-    // A relayout answers with a page read at the configuration's size, which is the road a box
-    // change takes (see `relayout_pinned_media` and `pin_media_load`).
+    // A relayout answers with a page read at the configuration's size rather than the pin's, which is
+    // the road a take-up of another file still takes (see `relayout_pinned_media` and
+    // `pin_media_load`).
     let Some(relaid) = load_text_preview(&path, 320, 160, 96, current_text_options()) else {
         panic!("the page was not laid out again")
     };

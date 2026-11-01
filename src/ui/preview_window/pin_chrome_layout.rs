@@ -512,7 +512,18 @@ pub(super) fn refresh_pin_chrome(
         .and(pin.hovered);
     let spoken = pin.tooltip.refresh(spoken, now);
 
-    spoken || shown || closed || card || menu
+    // And the find bar's card over a pinned page, which is a card over a media band the same way a
+    // sound's is: the pointer that has left the pin sends it no more moves, and a control left lit
+    // under a pointer that is somewhere else is exactly what a caption refuses to let happen to its
+    // own. It is asked of the pin in hand rather than through `text_find::hover`, which asks for this
+    // lock again (see `text_find::hover_over`).
+    let window = pin.window_box();
+    let find = cursor
+        .filter(|(x, y)| *x >= window.0 && *x < window.2 && *y >= window.1 && *y < window.3)
+        .map(|(x, y)| text_find::hover_over(pin, x - window.0, y - window.1))
+        .unwrap_or_else(|| text_find::hover_over(pin, -1, -1));
+
+    spoken || shown || closed || card || menu || find
 }
 
 /// The card's own control the pointer is on, asked of the cursor's place on the screen rather than
@@ -897,6 +908,29 @@ pub(super) fn settle_pinned_audio_seek(
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
 }
 
+/// Tell the pin's running video player a level, and move the guard's own record of it where the
+/// player was told.
+///
+/// **The guard stands for the level this app last asked a player for** (see
+/// `audio_guard::the_level_moved`), and every road a hand reaches a running player by arrives here:
+/// a step of the knob's drag, the wheel and the press behind it (`pin_input`), the release's
+/// re-assertion, and a row moved in the tray — which is the knob's road and not a second one (see
+/// `tray_volume_moved`). A level of nothing is the whole of what this closes: a pin dragged to 0
+/// leaves a player with its track and `volume 0`, which a guard holding the launch's level would
+/// take for a film something else had silenced and take back up ten seconds later.
+///
+/// Only a write that reached a player moves it, which is `PinVolume::playing_at`'s rule as well: a
+/// level no player was told is still owed to the next one, and the player behind the bar is still at
+/// the level the guard already holds.
+fn set_the_pin_players_level(level: u32) -> bool {
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    let told = mpv_ipc::set_volume(pid, level);
+    if told {
+        audio_guard::the_level_moved(pid, level);
+    }
+    told
+}
+
 /// Move the pin's level to `level`, giving it to a player that can be told one while it runs.
 ///
 /// The media engine takes a level while it plays, which is what makes a knob dragged on the pin
@@ -933,8 +967,9 @@ pub(super) fn set_pin_volume(level: u32) {
         let told = if current_media_type() == Some(MediaType::Video) {
             // mpv is told the level as the knob moves, which is the whole of what the mpv route is
             // for here: FFmpeg's player would have to be ended and begun again at it instead (see
-            // `settle_pin_volume`).
-            mpv_ipc::set_volume(VIDEO_PID.load(Ordering::SeqCst), level)
+            // `settle_pin_volume`). The guard's record moves with the level it was told (see
+            // `set_the_pin_players_level`).
+            set_the_pin_players_level(level)
         } else {
             // The engine answers for itself whether there was a session to take the level, rather
             // than this arm assuming one: the claim of what the player is playing at may move only
@@ -1139,8 +1174,7 @@ pub(super) fn settle_pin_volume() {
             }
         }
         Some(MediaType::Video)
-            if video_route(&path) == VideoRoute::Mpv
-                && mpv_ipc::set_volume(VIDEO_PID.load(Ordering::SeqCst), volume.level) =>
+            if video_route(&path) == VideoRoute::Mpv && set_the_pin_players_level(volume.level) =>
         {
             // mpv was told the level as the knob moved (see `set_pin_volume`), so there is no player
             // to replace here: the command is re-asserted and the claim moves only where it reached

@@ -1,4 +1,7 @@
 use super::*;
+use windows::Win32::UI::WindowsAndMessaging::{
+    HC_ACTION, KBDLLHOOKSTRUCT, KBDLLHOOKSTRUCT_FLAGS, WM_KEYDOWN,
+};
 
 /// A pin up, with nothing being dragged and nothing on the keyboard.
 fn a_pin_awaiting_a_press() {
@@ -190,16 +193,16 @@ fn a_pinned_windows_bands_are_the_caption_above_it_and_the_bar_below_it() {
 /// thing this app polls for. So the mapping is the whole of what decides which keys a pin
 /// answers, and a key it does not answer is a key the listing behind it is sent as usual.
 ///
-/// The two arrows a page of text has somewhere to go with are the page's own commands rather than
-/// the folder's, and which of the two a window means is asked where the file in it is known (see
+/// The two arrows a page of text has a caret for are the page's own commands rather than the
+/// folder's, and which of the two a window means is asked where the file in it is known (see
 /// `pin_command_request`).
 #[test]
 fn a_key_reaches_a_pin_by_being_the_one_the_keyboard_is_in() {
     for (vk, expected, name) in [
         (VK_LEFT.0 as i32, Some(PinCommand::Previous), "left"),
-        (VK_UP.0 as i32, Some(PinCommand::PageBack), "up"),
+        (VK_UP.0 as i32, Some(PinCommand::CaretUp), "up"),
         (VK_RIGHT.0 as i32, Some(PinCommand::Next), "right"),
-        (VK_DOWN.0 as i32, Some(PinCommand::PageOn), "down"),
+        (VK_DOWN.0 as i32, Some(PinCommand::CaretDown), "down"),
         (VK_PRIOR.0 as i32, Some(PinCommand::PageBack), "page up"),
         (VK_NEXT.0 as i32, Some(PinCommand::PageOn), "page down"),
         (VK_HOME.0 as i32, Some(PinCommand::PageTop), "home"),
@@ -1064,25 +1067,25 @@ impl Drop for PagePutBack {
     }
 }
 
-/// A page of text answers the keys its own window maps to it, a page's size is what a screenful of
-/// it is, and the same keys are the folder's walk to a pin that holds no page: what an up arrow
-/// means is the file in the window's answer rather than the key's, the way a Space is (see
-/// `pinned_key_command`, `text_scroll_line` and `pin_command_request`).
+/// A page of text answers the keys its own window maps to it, and the same keys are the folder's
+/// walk to a pin that holds no page: what an up arrow means is the file in the window's answer
+/// rather than the key's, the way a Space is (see `pinned_key_command`, `text_caret::command_move`
+/// and `pin_command_request`).
 #[test]
-fn a_pin_holding_a_page_scrolls_for_the_keys_the_page_owns() {
+fn a_pin_holding_a_page_answers_the_keys_the_page_owns() {
     let _room = the_room_to_itself();
     a_pin_awaiting_a_press();
 
-    // The keys, as the pin's own window maps them: the two the folder shares with the page, the two
+    // The keys, as the pin's own window maps them: the two arrows that are the page's caret, the two
     // page keys, and the two ends.
     assert_eq!(
         pinned_key_command(VK_UP.0 as i32),
-        Some(PinCommand::PageBack),
-        "an up arrow is the page's own"
+        Some(PinCommand::CaretUp),
+        "an up arrow is the page's caret"
     );
     assert_eq!(
         pinned_key_command(VK_DOWN.0 as i32),
-        Some(PinCommand::PageOn),
+        Some(PinCommand::CaretDown),
         "and so is a down arrow"
     );
     assert_eq!(
@@ -1144,48 +1147,197 @@ fn a_pin_holding_a_page_scrolls_for_the_keys_the_page_owns() {
         "the page is longer than the box, so there is somewhere for its keys to take it"
     );
 
-    assert_eq!(
-        text_scroll_line(PinCommand::PageOn),
-        Some(box_lines - 1),
-        "a page answers a page key with a screenful, less the line a reader keeps their place by"
-    );
-
-    assert_eq!(
-        text_scroll_line(PinCommand::PageTop),
-        Some(0),
-        "`Home` is the top of it"
-    );
-    assert_eq!(
-        text_scroll_line(PinCommand::PageBottom),
-        Some(reachable),
-        "and `End` is the last screenful of it, not the line past it"
-    );
-
-    // From there, a page back is a screenful up from where the page stands rather than from where
-    // the frame it was drawn in began.
-    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
-        if let Some(state) = slot.as_mut().and_then(|media| media.text_state.as_mut()) {
-            state.first_line = reachable;
-        }
+    // A page's keys are its caret's now: a page key asks the caret for a screenful rather than the
+    // frame for a scroll, and `Home`/`End` for the line's two ends — the document's under `Ctrl`.
+    // Every one of them is the page taking the key, which is what stops `pin_command_request`
+    // walking the folder instead (see `text_caret::command_move`).
+    for command in [
+        PinCommand::PageOn,
+        PinCommand::PageBack,
+        PinCommand::PageTop,
+        PinCommand::PageBottom,
+        PinCommand::CaretUp,
+        PinCommand::CaretDown,
+        PinCommand::Previous,
+        PinCommand::Next,
+    ] {
+        assert_eq!(
+            text_caret::command_move(command),
+            Some(()),
+            "{command:?} is the page's own while the pin holds one"
+        );
     }
-    assert_eq!(
-        text_scroll_line(PinCommand::PageBack),
-        Some(reachable - (box_lines - 1)),
-        "a page back from the end is a screenful up from where it stands"
-    );
 
-    // A pin that holds no page is a pin whose two arrows are the folder's: the answer is what
+    // A pin that holds no page is a pin whose arrows are the folder's: the answer is what
     // `pin_command_request` reads to walk instead (see `pin_command_request`).
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
         if let Some(media) = slot.as_mut() {
             media.text_state = None;
         }
     }
-    assert_eq!(
-        text_scroll_line(PinCommand::PageOn),
-        None,
-        "a pin with no page in it has nothing for a page key to move"
-    );
+    for command in [
+        PinCommand::PageOn,
+        PinCommand::PageBack,
+        PinCommand::PageTop,
+        PinCommand::CaretUp,
+    ] {
+        assert_eq!(
+            text_caret::command_move(command),
+            None,
+            "{command:?} is the walk's to a pin with no page in it"
+        );
+    }
 
     stand_pin(None);
+}
+
+/// A page's caret is moved by the tick that may read the document and not by the key that asked: a key
+/// writes the motion down and reads nothing, and the page is scrolled only as far as the caret needs
+/// to be on it (see `text_caret::command_move`, `text_caret::settle` and
+/// `TextPreviewState::scroll_to_show`).
+///
+/// The two halves are asked apart because they are two halves: a key that reached the document would
+/// be a key that took the page's lock inside a window procedure, and a page that scrolled to the
+/// caret every time would be a page that moved for a keystroke that stayed where it was.
+#[test]
+fn a_page_key_writes_its_move_down_and_the_page_is_scrolled_only_to_show_the_caret() {
+    let _room = the_room_to_itself();
+    let _page = PagePutBack::put(
+        &(0..40).map(|n| format!("line {n}\n")).collect::<String>(),
+        "a-page-a-caret-walks.txt",
+        240,
+        80,
+    );
+
+    let queued = || {
+        CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| {
+                media
+                    .as_ref()
+                    .and_then(|media| media.text_state.as_ref())
+                    .map(|state| state.pending_caret.len())
+            })
+            .unwrap_or(0)
+    };
+
+    assert_eq!(
+        queued(),
+        0,
+        "a page nobody has pressed a key over has no move in hand"
+    );
+    assert_eq!(
+        text_caret::command_move(PinCommand::CaretDown),
+        Some(()),
+        "a down arrow is the page's own"
+    );
+    assert_eq!(
+        queued(),
+        1,
+        "and what it did was write the move down for the tick"
+    );
+    assert_eq!(
+        text_caret::command_move(PinCommand::PageBottom),
+        Some(()),
+        "so is the last screenful"
+    );
+    assert_eq!(queued(), 2, "and it is written down beside the first");
+
+    // The scroll is the caret's to ask for, and it asks for one only where the caret would be off the
+    // page: a move that lands inside the screenful moves nothing.
+    let (inside, past) = {
+        let Ok(media) = CURRENT_MEDIA.lock() else {
+            panic!("the media lock")
+        };
+        let state = media
+            .as_ref()
+            .and_then(|media| media.text_state.as_ref())
+            .expect("a pinned page keeps state");
+        (
+            state.scroll_to_show((state.first_line + 1, 0)),
+            state.scroll_to_show((state.first_line + state.visible_lines, 0)),
+        )
+    };
+    assert_eq!(
+        inside, None,
+        "a caret already on the page draws no scroll at all"
+    );
+    assert!(
+        past.is_some(),
+        "and one past the last row takes the page just far enough to show it"
+    );
+}
+
+/// A key the hook answers for a pinned page is counted for the loop *and* wakes it.
+///
+/// The count is an atomic written on the hook's own thread, so a loop waiting for a pinned static
+/// page reads it at the end of its own wait: `STATIC_PIN_WAIT_MS` rounded up to the system timer's
+/// own 15.6 ms tick, which measured 62 ms — four frames of a 144 Hz display, and the whole of what
+/// makes a caret lag the hand that pressed the key. The key is swallowed, so no message of it ever
+/// reaches the loop: the signal is the only thing that tells it the key happened at all.
+#[test]
+fn a_caret_key_the_hook_answers_is_counted_and_wakes_the_loop() {
+    let _room = the_room_to_itself();
+
+    // The pin the hook answers for is whatever window is in front, because that is what the hook
+    // asks Windows rather than remembers. A desktop with nothing in front has no window for a pin to
+    // be, and there is nothing here to ask (see `pin_owns_caret`).
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.0.is_null() {
+        return;
+    }
+    crate::shell::key_input::publish_pin_key_owner(foreground.0 as u64, 0);
+    crate::shell::key_input::publish_find_bar_up(false);
+
+    // The count and the signal are the process's own, so both are cleared here: what is read below
+    // has to be this key's and not one left behind by a test beside this one.
+    let _ = crate::shell::key_input::take_pin_key_presses();
+    unsafe {
+        let _ = ResetEvent(preview_channel_event());
+    }
+    let counted = crate::shell::key_input::pin_key_counted();
+
+    // A key-down the way the system hands it over: a low-level hook's `lParam` is the structure, and
+    // `VK_DOWN` is the caret a line on.
+    let event = KBDLLHOOKSTRUCT {
+        vkCode: 0x28,
+        scanCode: 0,
+        flags: KBDLLHOOKSTRUCT_FLAGS(0),
+        time: 0,
+        dwExtraInfo: 0,
+    };
+
+    let answer = unsafe {
+        crate::shell::key_input::key_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_KEYDOWN as usize),
+            LPARAM(&event as *const KBDLLHOOKSTRUCT as isize),
+        )
+    };
+
+    assert_eq!(
+        answer,
+        LRESULT(1),
+        "a caret key with the pin in front is the pin's, and is swallowed rather than passed on"
+    );
+    assert_eq!(
+        crate::shell::key_input::pin_key_counted(),
+        counted + 1,
+        "and it is counted for the loop"
+    );
+    assert!(
+        crate::shell::key_input::take_pin_key_presses().contains(&7),
+        "as the command the page's caret answers, which is what the loop drains"
+    );
+
+    unsafe {
+        assert_eq!(
+            WaitForSingleObject(preview_channel_event(), 0),
+            WAIT_OBJECT_0,
+            "and the wait that would have read the count 62 ms later is ended by the key itself"
+        );
+    }
+
+    crate::shell::key_input::publish_pin_key_owner(0, 0);
 }

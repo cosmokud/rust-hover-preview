@@ -2,6 +2,7 @@
 //! frame, and putting the player's window back in front.
 
 use super::pin_trace::note_pin_trace;
+use super::playback_trace::note_playback_trace;
 use super::*;
 
 /// The one SDL renderer an FFmpeg film is ever begun with, and the escape hatch that names another.
@@ -227,6 +228,71 @@ impl PlayerProcess {
             Self::Served(_) => Ok(None),
             #[cfg(test)]
             Self::Noted(_) => Ok(None),
+        }
+    }
+
+    /// The pipe the player's own log lines arrive on, where a real player was begun with one.
+    ///
+    /// It is handed over once and read by a thread of its own (see `player_logs`), which is the
+    /// only reader the pipe has: a player whose log nobody empties is a player blocked on a full
+    /// buffer. A noted player — the test seam's — has no process and so no pipe, and a hover's
+    /// resident serves its files in turn rather than one being begun for each.
+    pub(super) fn take_log_stream(&mut self) -> Option<std::process::ChildStdout> {
+        match self {
+            Self::Started(child) => child.stdout.take(),
+            #[cfg(not(test))]
+            Self::Served(_) => None,
+            #[cfg(test)]
+            Self::Noted(_) => None,
+        }
+    }
+
+    /// The handle a started player is held by, where this app has one: a real process of its own.
+    ///
+    /// A noted player and a resident have none — the resident's process is held in one place, and a
+    /// note is not a process — so every question about a handle is answered `None` for them rather
+    /// than by reaching for a process this handle does not own.
+    fn handle(&self) -> Option<HANDLE> {
+        match self {
+            Self::Started(child) => {
+                use std::os::windows::io::AsRawHandle;
+                Some(HANDLE(child.as_raw_handle()))
+            }
+            #[cfg(not(test))]
+            Self::Served(_) => None,
+            #[cfg(test)]
+            Self::Noted(_) => None,
+        }
+    }
+
+    /// Whether the player is gone, asked with a wait of nothing — the one observation a kill can make
+    /// without paying for it.
+    ///
+    /// **The teardown of a player is a kill and nothing else** (see `kill_player_process`), so nothing
+    /// in the app ever learns whether the process it killed was gone by the time the kill returned.
+    /// A player that is still standing holds what it held — an audio endpoint among it — and a second
+    /// player begun a moment later has to get past it, which is one of the two roads a film can come
+    /// up with no session. `None` is a player this app holds no handle to, which is a player the
+    /// question cannot be asked about at all.
+    pub(super) fn exit_confirmed(&self) -> Option<bool> {
+        let handle = self.handle()?;
+        // SAFETY: the handle is the process this app started and has not closed, and a wait of zero
+        // milliseconds only reads whether it has signalled.
+        Some(unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0)
+    }
+
+    /// The pipe the player's own error lines arrive on, where a traced launch gave it one.
+    ///
+    /// Only FFmpeg's player is given a stream to complain on, and only where the playback trace asked
+    /// for it: mpv says everything it has to say on its standard output, which is already drained (see
+    /// `player_logs` and `take_log_stream`).
+    pub(super) fn take_error_stream(&mut self) -> Option<std::process::ChildStderr> {
+        match self {
+            Self::Started(child) => child.stderr.take(),
+            #[cfg(not(test))]
+            Self::Served(_) => None,
+            #[cfg(test)]
+            Self::Noted(_) => None,
         }
     }
 
@@ -510,8 +576,34 @@ fn start_video_playback_where(
         }
     };
 
+    // **The one line a traced launch begins with**: which engine, which kind of file, the level the
+    // launch resolved to and the form that level took (see `playback_trace` and
+    // `video_launch::AudioForm`). It is written here, before either route's command line exists,
+    // because what it records is the decision — and it is the decision, not the player, that the two
+    // roads to a silent film differ in. What the *player* did with it is a second line, read off the
+    // player itself (see `playback_trace::watch_the_engine`).
+    //
+    // Every route that has a player is named here: mpv is the arm above, and everything that reaches
+    // the command below is FFmpeg's player — the media engine's route never gets this far, so there is
+    // no third engine to name.
+    note_playback_trace!(
+        "{}",
+        playback_trace::a_launch(
+            if route == VideoRoute::Mpv {
+                video_launch::Engine::Mpv
+            } else {
+                video_launch::Engine::Ffplay
+            },
+            kind,
+            path,
+            volume,
+            gain,
+            pinned(),
+        )
+    );
+
     if route == VideoRoute::Mpv {
-        return start_mpv_video_playback(
+        let player = start_mpv_video_playback(
             path,
             x,
             y,
@@ -525,7 +617,21 @@ fn start_video_playback_where(
             kind,
             for_a_hover,
             must_not_activate,
+        )?;
+
+        // **A film begun at a level is watched until it has a sound**, on either road (see
+        // `audio_guard`). The launch is the one moment a guard is armed, so a player is watched once
+        // and a player this app did not begin is nobody's to heal: a hover's ladder is the in-place
+        // rungs and nothing else, and a film the level gave no track is left exactly as it was.
+        audio_guard::arm(
+            player.id(),
+            path,
+            volume,
+            gain,
+            video_launch::Engine::Mpv,
+            for_a_hover,
         );
+        return Some(player);
     }
 
     // Use ffplay for video playback - borderless, positioned at preview location
@@ -583,18 +689,21 @@ fn start_video_playback_where(
     // software. So hardware decode is mpv's switch alone and FFmpeg's player decodes on a core
     // (see `video_hw_accel_wanted`).
 
-    // If volume is 0, disable audio completely for better performance
-    if volume == 0 {
-        cmd.arg("-an");
-    } else {
-        // The level, with the soundtrack's own measured gain folded into it where `Normalize` is on
-        // for videos and one has been measured: the two multiply, exactly as they do for a sound
-        // file (see `start_audio_player`).
-        let volume_filter = match gain {
-            Some(gain) => format!("volume={:.4}", volume as f64 / 100.0 * gain),
-            None => format!("volume={:.2}", volume as f64 / 100.0),
-        };
-        cmd.args(["-af", &volume_filter]);
+    // The same two forms mpv's launch is given, spelled the way FFmpeg's player spells them (see
+    // `video_launch::AudioForm`, which is the one rule both are read from): no audio at all at a
+    // level of nothing, and otherwise the level as the share of full the `volume` filter takes, with
+    // the soundtrack's own measured gain folded into it where `Normalize` is on for videos and one
+    // has been measured — the two multiply, exactly as they do for a sound file (see
+    // `start_audio_player`).
+    match video_launch::AudioForm::of(volume, gain) {
+        video_launch::AudioForm::NoTrack => {
+            cmd.arg("-an");
+        }
+        form => {
+            if let Some(volume_filter) = form.ffplay_filter() {
+                cmd.args(["-af", &volume_filter]);
+            }
+        }
     }
 
     // The geometry is read from the cache and never probed for here: this runs on the
@@ -729,6 +838,56 @@ fn start_video_playback_where(
     let height_arg = asked_height.to_string();
     let left_arg = x.to_string();
     let top_arg = y.to_string();
+    // **A stream is piped only where someone reads it, and read wherever it is piped.** That is one
+    // decision, taken once below and used for both halves — the way the mpv launch takes it — so an
+    // ordinary launch is given `null` and begins no thread, and only a launch with a use for a line is
+    // given one. FFmpeg's player is the one engine here whose start leaves no trace at all otherwise:
+    // a start that finds no audio device says so on its own error stream, and a stream nobody reads is
+    // a film that plays silently with nothing anywhere to say why (see
+    // `player_logs::drain_a_players_errors` and `playback_trace`).
+    //
+    // **`verbose` where the trace asks for a level, because `warning` is not the level a device's own
+    // refusal is printed at**: SDL's reason for turning an endpoint down, and FFmpeg's for not
+    // initialising what it decoded a soundtrack into, are `verbose` lines — and that one sentence is the
+    // whole of what this stream exists for (see `audio_guard`, which matches it).
+    //
+    // **And `-nostats` beside it, which is the measurement that makes the level safe rather than a
+    // preference.** `verbose` turns on FFmpeg's status line, and that line is one stream of
+    // `\r`-updated text with no `\n` in it at all: the drain splits on newlines, so it keeps growing
+    // that one line until it passes the longest it holds, and from there every line written after it
+    // is dropped with it — the device's own sentence included. Measured on the installed ffplay
+    // 9.0.2, a two-second run of a test pattern: 57 lone `\r` on the standard error at `verbose` and
+    // 56 at `info`, against none at all with `-nostats`, every diagnostic line surviving whole.
+    // `-stats` is an ffplay boolean option, so its negation is the switch that turns the one
+    // unterminated stream off without touching a level.
+    //
+    // **A launch a guard alone stands behind keeps `warning`, which is where its own cure is read
+    // from**: a warning and an error both end in a newline, the status line is an `info` line and is
+    // never reached at that level (measured: one stray `\r` and no status at all), and a run nobody
+    // asked for a trace of is handed the argv it had before — the wider level is the trace's, as the
+    // wider `--msg-level` is on the other route (see `video_launch::mpv_args`). **A film the guard
+    // stands behind is printed at all whether or not a trace is running**, and that is the whole of what
+    // makes its one cure reachable: FFmpeg's player has no pipe and can be told nothing, so the only
+    // thing that can say its sound never opened is a line on this stream — and `-loglevel quiet`, which
+    // an ordinary launch is given, prints no line at all (see `audio_guard`). What an ordinary hover
+    // keeps is the quiet level, the null stream and the argv it always had.
+    //
+    // The child stays windowless either way: `engine_processes::hidden_command` starts it with
+    // `CREATE_NO_WINDOW`, so a redirected stream is a pipe and never a console. And the pipe is only
+    // safe because it is read: the drain below begins with the player on exactly the launches that were
+    // given one, which is the half a stream piped and not read would block the player on.
+    let traced = playback_trace::asked();
+    let guarded = audio_guard::guarded(video_launch::Engine::Ffplay, for_a_hover, volume);
+    // **The one answer both halves are taken from**, so that the stream and its reader cannot come
+    // apart: a launch that keeps what a line carries is a launch whose stream is piped, and the drain
+    // below is begun on the same launches and no others — and the level and its status switch are that
+    // decision's third half, kept in one place for the same reason.
+    let drain_the_pipe = traced || guarded;
+    let level: &[&str] = match (traced, guarded) {
+        (true, _) => &["-nostats", "-loglevel", "verbose"],
+        (false, true) => &["-loglevel", "warning"],
+        (false, false) => &["-loglevel", "quiet"],
+    };
     let cmd = cmd.args([
         "-err_detect",
         "ignore_err", // Ignore header/stream errors
@@ -748,23 +907,61 @@ fn start_video_playback_where(
             "-y",
             &height_arg,
             "-autoexit",
-            "-loglevel",
-            "quiet",
         ])
+        .args(level)
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        // **Piped on the launches that are drained below, and on no others** (see `player_logs`): one
+        // decision, so no launch holds a stream nobody reads and none begins a thread with nothing to
+        // read.
+        .stderr(if drain_the_pipe {
+            player_logs::a_stream_to_drain()
+        } else {
+            Stdio::null()
+        });
 
     // The seek is written after the input file rather than before it, which is the whole of why it
     // is written here and not above: a seek written before the input makes the `subtitles` filter
     // draw nothing, and one written after it does not (measured — see the note over the filter
     // chain). A player begun at the beginning is given no `-ss` rather than `-ss 0`, so that
     // nothing is asked for that would be answered with the position it is already at.
-    let child = match (start > 0.0).then(|| format!("{start:.3}")) {
+    let mut child = match (start > 0.0).then(|| format!("{start:.3}")) {
         Some(second) => spawn_player(child.args(["-ss", &second])),
         None => spawn_player(child),
     };
+
+    // **The pipe the player's own errors arrive on is emptied from here on**, on a thread that ends
+    // with the player — the same contract the mpv route's log drain keeps, and for the same reason: a
+    // pipe nobody reads fills, and a player blocked on a full pipe stops playing (see `player_logs`).
+    // The drain is what lets a device that would not open be noticed at all, and it is begun before the
+    // player is booked in below: a line written in the first millisecond of a run must land in a pipe
+    // that already has its reader (see `audio_guard`). **A launch given no pipe begins no thread**,
+    // which is the same decision's other half rather than a second one.
+    if let Some(ref mut player) = child {
+        if drain_the_pipe {
+            if let Some(stream) = player.take_error_stream() {
+                player_logs::drain_a_players_errors(stream, player.id());
+            }
+        }
+        audio_guard::arm(
+            player.id(),
+            path,
+            volume,
+            // FFmpeg's player is given the same level, folded into its own `volume` filter, so the
+            // form a give-up writes is the one this launch handed it (see `video_launch::AudioForm`).
+            gain,
+            video_launch::Engine::Ffplay,
+            for_a_hover,
+        );
+        // **And what the machine itself thinks this player is doing**, where a trace asks for it: the
+        // session it has in Windows' mixer, if any, and the endpoint it landed on (see
+        // `audio_session`). FFmpeg's player is read on the same terms as mpv's — a film with no session
+        // on one engine and a session on the other is the comparison that makes either answer readable
+        // — and the read gates itself on the trace, so a run without the variable begins no thread and
+        // calls no COM here.
+        audio_session::watch_the_mixer(player.id());
+    }
 
     // After spawning, try to set WS_EX_NOACTIVATE on the player's window
     // to prevent it from stealing focus, and book the player in: its window is the monitor's, its
@@ -939,6 +1136,13 @@ fn start_mpv_video_playback(
                 start,
                 true,
             );
+            // **A served film is asked what the resident did with its sound as well**, and the answer
+            // belongs to this file rather than to the resident's own start: the level is asked per
+            // file down the pipe, so a track the resident was begun without is asked back for the file
+            // that wants it (see `mpv_ipc::set_volume` and `playback_trace::watch_the_engine`). **The
+            // guard is armed for it on the way out**, by the caller this returns to, which is what makes
+            // a serve a new episode of the same pid with a ladder of its own (see `audio_guard::arm`).
+            playback_trace::watch_the_engine(pid, volume);
             return Some(served.player);
         }
     }
@@ -951,6 +1155,10 @@ fn start_mpv_video_playback(
     // asked the same thing**: the front a pin asks for is its own window's, on a press, and a player
     // that activates itself takes the front off the listing the click was made in (see
     // `pin_lifecycle::a_hand_back_goes_to`).
+    // **A traced launch is the only one given the player's own log and a stream to write it on**,
+    // and an ordinary one is exactly the launch this app has always made: `null` on every stream, no
+    // thread, and no terminal flags in the argv (see `playback_trace` and `video_launch::mpv_args`).
+    let traced = playback_trace::asked();
     let mut args = video_launch::mpv_args(
         path,
         launch_x,
@@ -967,6 +1175,7 @@ fn start_mpv_video_playback(
         &ipc,
         thumbnail_flip,
         !behind_the_host,
+        traced,
     );
     if must_not_activate {
         if let Some(switch) = video_launch::hover_focus_switch(video_launch::the_focus_on_support())
@@ -975,11 +1184,25 @@ fn start_mpv_video_playback(
         }
     }
 
+    // **The level a traced launch reads its player's own lines at came in with `mpv_args`'
+    // arguments** — `--msg-level=all=warn,ao=v,audio=v`, where the two widened modules are argued for
+    // (see `mpv_args`) — and it is written once: a second `--msg-level` here would only be a second
+    // spelling of one decision, and a run without the trace is handed neither.
+
     let mut command = engine_processes::hidden_command(program);
     command
         .args(args)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        // **The player's own log lines, and only where a trace asks for them** (see
+        // `video_launch::mpv_args`, where `--terminal=yes` is argued for and the measurement that
+        // puts them on the standard output is written down). A pipe nobody empties would block the
+        // player on a full buffer, so the draining thread begins with the player below (see
+        // `player_logs`). An untraced launch is given a null stream and no thread at all.
+        .stdout(if traced {
+            player_logs::a_stream_to_drain()
+        } else {
+            Stdio::null()
+        })
         .stderr(Stdio::null());
 
     // **A pin that steps from one film to the next holds the topmost band for the swap.** The
@@ -995,7 +1218,7 @@ fn start_mpv_video_playback(
         unsafe { pin_lifecycle::hold_the_band_for_the_step() };
     }
 
-    let child = match spawn_player(&mut command) {
+    let mut child = match spawn_player(&mut command) {
         Some(child) => child,
         None => {
             // A player that never came up is no picture to take the band over: the hold is over
@@ -1032,6 +1255,22 @@ fn start_mpv_video_playback(
         &ipc,
         video_launch::mpv_launched_without_audio(volume),
     );
+
+    // **And the pipe its own log is read off is emptied from here on, where a trace asked for
+    // one**, on a thread that ends with the player (see `player_logs`): what the player says about
+    // an audio device that would not open is the half of a silent film only it can describe (see
+    // `playback_trace`). An untraced launch has no pipe to empty and begins no thread.
+    if traced {
+        if let Some(stream) = child.take_log_stream() {
+            player_logs::drain_a_player_log(stream, child.id());
+        }
+    }
+
+    // **And what the player itself did with the sound, where a trace asks for it.** The launch's line
+    // says what was asked of it; only the player can say what it got, and the answer is read on a
+    // thread of its own because a player that has only just been begun has no pipe yet (see
+    // `playback_trace::watch_the_engine`).
+    playback_trace::watch_the_engine(child.id(), volume);
 
     // **A player begun for a pin is told the pin's own answer about the topmost band before it has
     // drawn anything.** `--ontop` is the launch's flag for a hover's window, and a pin that does
@@ -1342,12 +1581,26 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
     let killed = media.video_process.as_ref().map(|process| process.id());
     if let Some(ref mut process) = media.video_process {
         // The pipe a player was told things on goes with the player: nothing is left behind for a
-        // command to reach once the process is ended (see `mpv_ipc`).
+        // command to reach once the process is ended (see `mpv_ipc`). And so does any guard standing
+        // behind it: a player that is gone is not a film to heal, and a `Silent` cure written down a
+        // pipe with nobody at the other end is a rung spent on nothing (see `audio_guard`).
         mpv_ipc::forget_pipe(process.id());
+        audio_guard::a_player_ended(process.id());
         // Kill only, never wait: a process stuck in kernel I/O would block the
         // caller (possibly the Explorer hook thread) indefinitely. The leftover
         // process checks confirm death and clear VIDEO_PID.
         let _ = process.kill();
+        // **And whether that kill was answered, where a trace asked** — a wait of nothing on the
+        // handle this app still holds, which is a read rather than a wait and so is the one
+        // observation this road can afford (see `PlayerProcess::exit_confirmed`). It is written down
+        // because a player that outlives its kill goes on holding what it held, an audio endpoint
+        // among it, and it is what the player begun a moment later has to get past.
+        if playback_trace::wanted() {
+            note_playback_trace!(
+                "{}",
+                playback_trace::a_kill(process.id(), process.exit_confirmed(), "player")
+            );
+        }
     }
     media.video_process = None;
     // **The hover's host goes with the player it was holding**, and only with that one: a pin's

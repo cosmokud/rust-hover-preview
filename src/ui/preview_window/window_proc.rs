@@ -65,15 +65,25 @@ pub(super) fn pinned_key_command(vk: i32) -> Option<PinCommand> {
         return Some(PinCommand::Next);
     }
 
-    // An up arrow or a `PageUp` is a screenful back where the window holds a page of text and the
-    // previous file where it holds anything else, which is the same question a Space is: what the
-    // key means is the file in the window's answer rather than this mapping's (see
-    // `pin_command_request`).
-    if vk == VK_UP.0 as i32 || vk == VK_PRIOR.0 as i32 {
+    // An up arrow is a line back where the window holds a page of text and the previous file where
+    // it holds anything else, which is the same question a Space is: what the key means is the file
+    // in the window's answer rather than this mapping's (see `pin_command_request`). A `PageUp` is
+    // the same walk for a window with no page and a screenful for one with a page, and it is its own
+    // command for exactly that reason: the two used to be one, and a caret needs them apart (see
+    // `PinCommand::CaretUp`).
+    if vk == VK_UP.0 as i32 {
+        return Some(PinCommand::CaretUp);
+    }
+
+    if vk == VK_PRIOR.0 as i32 {
         return Some(PinCommand::PageBack);
     }
 
-    if vk == VK_DOWN.0 as i32 || vk == VK_NEXT.0 as i32 {
+    if vk == VK_DOWN.0 as i32 {
+        return Some(PinCommand::CaretDown);
+    }
+
+    if vk == VK_NEXT.0 as i32 {
         return Some(PinCommand::PageOn);
     }
 
@@ -129,11 +139,13 @@ pub(super) fn hook_pin_key_command(command: u8) -> Option<PinCommand> {
         2 => Some(PinCommand::Close),
         3 => Some(PinCommand::TogglePlayback),
         4 => Some(PinCommand::NextSubtitle),
-        5 => Some(PinCommand::PageBack),
-        6 => Some(PinCommand::PageOn),
-        7 => Some(PinCommand::PageTop),
-        8 => Some(PinCommand::PageBottom),
-        9 => Some(PinCommand::FindNext),
+        5 => Some(PinCommand::CaretUp),
+        6 => Some(PinCommand::PageBack),
+        7 => Some(PinCommand::CaretDown),
+        8 => Some(PinCommand::PageOn),
+        9 => Some(PinCommand::PageTop),
+        10 => Some(PinCommand::PageBottom),
+        11 => Some(PinCommand::FindNext),
         _ => None,
     }
 }
@@ -292,6 +304,22 @@ pub(super) unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
+            // **A find bar that is up owns the keyboard, and this arm is the only owner there is.**
+            // The keyboard hook stands down from the pin's keys for as long as a bar is up (see
+            // `key_input::publish_find_bar_up`), because a key it swallowed would never become the
+            // `WM_CHAR` of the arm below — the characters a query is typed from. So every key
+            // arrives here, and the bar's one table reads the ones it owns: a return, a backspace,
+            // the two arrows and the two page keys, the two ends, `Esc` and `F3` (see
+            // `text_find::key_edit_with`). Every other key is swallowed whole — a `Space`, a `T` and
+            // a `Tab` mean nothing to a query — and none of them may reach the page's own table
+            // below or `DefWindowProcW`'s.
+            if text_find::is_open() {
+                if let Some(edit) = text_find::key_edit(wparam.0 as i32) {
+                    text_find::note(edit);
+                }
+                return LRESULT(0);
+            }
+
             if let Some(command) = pinned_key_message_command(msg, wparam.0 as i32, lparam.0) {
                 ask_pin(command);
             }
@@ -386,6 +414,17 @@ pub(super) unsafe extern "system" fn window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_CHAR => {
+            // **A character is the find bar's while it is up.** It arrives here as one UTF-16 code
+            // unit because the loop translates the key before dispatching it, and the bar is the
+            // one caret a pinned page has (see `text_find::typed_character`). The page's own key
+            // table is below this arm, so nothing of a typed character reaches it.
+            if text_find::is_open() {
+                if let Some(character) = text_find::typed_character(wparam.0) {
+                    text_find::note(FindEdit::Typed(character));
+                }
+                return LRESULT(0);
+            }
+
             // The character a key press has already been answered as. It is swallowed for the
             // same reason the key-down is: the pin has had the keyboard, and what it does with a
             // key is decided there — a character left to the default procedure would beep for
@@ -443,6 +482,25 @@ pub(super) unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
+            // A find bar that is up is the first thing a hand on the page can land on: the card floats
+            // over the page's top-right corner, so a press inside it is the card's rather than the
+            // page's, and nothing under it was what the hand meant (see `text_find::press`).
+            if text_find::press(x, y) {
+                // A press on one of the card's controls is held until it is let go of, and the pointer
+                // is taken for as long as that lasts: a hand that slides off the card still lets go of
+                // the button it pressed, rather than leaving it lit under a pointer that is somewhere
+                // else (see `text_find::release`). A press in the query is held for the same reason: a
+                // drag grows the selection and the release is what ends it (see `text_find::drag`).
+                if text_find::a_control_is_held() {
+                    let _ = SetCapture(hwnd);
+                }
+                // A press in the query has moved the caret without asking for a search, so nothing
+                // else on this tick is going to paint it: the card is drawn again here rather than
+                // left showing the caret it had before the hand landed.
+                render_layered_preview(hwnd);
+                return LRESULT(0);
+            }
+
             // A press on the scrollbar starts a drag from where it landed, so the
             // thumb follows the pointer from the first click. Anywhere else, a
             // press on a text preview starts a selection. What the media's own handlers are
@@ -464,6 +522,13 @@ pub(super) unsafe extern "system" fn window_proc(
             if pinned() {
                 pinned_mouse_move(hwnd, x, y);
             }
+            // A drag in the find bar's query is answered before the page's own selection, and only
+            // where the card really took the press: the selection grows to the place under the
+            // pointer, and the card is drawn again only where that place changed (see
+            // `text_find::drag`).
+            if text_find::drag(x) {
+                render_layered_preview(hwnd);
+            }
             let (media_x, media_y) = media_point(x, y);
             if is_text_scroll_dragging() {
                 if let Some(first_line) = drag_target_for_y(media_y) {
@@ -476,6 +541,16 @@ pub(super) unsafe extern "system" fn window_proc(
         }
         WM_LBUTTONUP => {
             let (x, y) = message_point(lparam);
+            // A press the find bar's card answered is released here, before the pin's own arms: the
+            // card owns the press from the moment it takes it, and a chevron held down stops where it
+            // got to. The capture the press took is given back here rather than left to the arm below,
+            // which this answer returns before — the same `GetCapture` guard, for the same reason (see
+            // `release_pin_capture`).
+            if text_find::release() {
+                release_pin_capture(hwnd);
+                render_layered_preview(hwnd);
+                return LRESULT(0);
+            }
             if pinned() && pinned_release(hwnd, x, y, &Win32PinWindow) {
                 return LRESULT(0);
             }
@@ -495,6 +570,13 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         windows::Win32::UI::WindowsAndMessaging::WM_CAPTURECHANGED => {
+            // A press the find bar's card took is over when the pointer is taken away from this window:
+            // a chevron that never sees its release would step for as long as the bar is up, a drag
+            // would go on growing a selection with nobody holding it, and the card would draw a button
+            // held under a hand that is no longer on it (see `text_find::release`).
+            if text_find::release() {
+                render_layered_preview(hwnd);
+            }
             // Whatever a pinned window was doing with the pointer is over: a capture lost to
             // another window is a drag that is not coming back, and one this app released itself
             // is its own road's to finish (see `pin_capture_lost`).

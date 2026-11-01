@@ -217,9 +217,9 @@ pub(super) unsafe fn take_the_strips_up(parent: HWND) {
 /// Put the strips back over the host a take-up has just made: making it puts it on top of them,
 /// and the chrome stands over the film rather than under it (see `pin_film_host`).
 ///
-/// The caption first, the transport after it, and the volume popup last, which is the order the
-/// take-up made them in: the popup stands nearest the top, the transport under it, the caption
-/// under that, and the host under them all.
+/// The caption first, the transport after it, and the volume popup last — which is the order the
+/// take-up made them in: the popup stands nearest the top, the transport under it, and the caption
+/// under that.
 pub(super) unsafe fn raise_the_chrome_strips_over_the_host() {
     for strip in [caption_strip(), transport_strip(), volume_strip()]
         .into_iter()
@@ -255,8 +255,8 @@ pub(super) unsafe fn take_the_strips_down() {
     if let Some(strip) = transport_strip() {
         let _ = DestroyWindow(strip);
     }
-    if let Some(strip) = volume_strip() {
-        let _ = DestroyWindow(strip);
+    if let Some(volume) = volume_strip() {
+        let _ = DestroyWindow(volume);
     }
     CAPTION_STRIP.store(0, Ordering::SeqCst);
     TRANSPORT_STRIP.store(0, Ordering::SeqCst);

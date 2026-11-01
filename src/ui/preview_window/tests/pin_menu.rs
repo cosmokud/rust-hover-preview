@@ -709,6 +709,7 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
         [
             "Select All",
             "Copy",
+            "Find",
             "Find Next",
             "",
             "Next File",
@@ -724,7 +725,7 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
          settings are the title bar's rather than the text's"
     );
     assert!(
-        matches!(paint.rows[3].mark, pin_chrome::MenuMark::Separator),
+        matches!(paint.rows[4].mark, pin_chrome::MenuMark::Separator),
         "and the rule between the two groups is drawn where the page's own rows end"
     );
     assert!(

@@ -12,10 +12,10 @@
 //! painted lines a pointer or a selection is measured against.
 
 use super::document::{styled_window, CachedDocument, DocLine, LineBlock};
-use super::frame::{ScrollBar, Selection};
+use super::frame::{FindHighlights, ScrollBar, Selection};
 use crate::text::text_paint::{
-    blend, fill_rect, plain_style, rgb, scaled, DibSurface, RunPainter, TextMetrics, TextStyle,
-    BODY_LEVEL, SIZE_LEVELS,
+    blend, fill_rect, luminance, plain_style, rgb, scaled, DibSurface, RunPainter, TextMetrics,
+    TextStyle, BODY_LEVEL, SIZE_LEVELS,
 };
 use crate::text::text_theme::LoadedTheme;
 use windows::Win32::Foundation::RECT;
@@ -55,6 +55,11 @@ pub(super) struct LaidLine {
     pub(super) runs: Vec<LaidRun>,
     pub(super) top: i32,
     pub(super) height: i32,
+    /// Where this line's own text begins: the left edge of the column it is drawn in, past the
+    /// numbers and past the indent the line carries. A line with nothing on it has no run to be
+    /// measured against, and a caret standing at the start of one is a mark on this edge rather
+    /// than on the frame's (see `FrameLine::left`).
+    pub(super) left: i32,
     block: LineBlock,
     /// The document line this one drawn line belongs to, and the character of that line its
     /// first run starts at: what a point on the frame is turned back into, and what a selection
@@ -151,10 +156,13 @@ pub(super) fn layout(
         0
     };
 
-    // A pinned page of a file drawn through a syntax definition keeps a column for its own line
-    // numbers: a reader refers to a line of code by its number, where prose and NFO art are read
-    // rather than cited — and the column is width the text does not have.
-    let gutter = if full_mode && doc.wants_line_numbers() {
+    // **A pinned page keeps a column for its own line numbers, and a hover does not.** The pin is
+    // the page a reader works in — a caret, a selection, a find — and a line is referred to by its
+    // number there, whatever the file is: source, prose, a listing, a rendered document. A hover is
+    // something looked at on the way past, and a column of numbers down its left is width the text
+    // does not have. The column is as wide as the widest number the page can reach, so it does not
+    // move as the page is scrolled from line 9 to line 10 (see `gutter_width`).
+    let gutter = if full_mode {
         gutter_width(scrollable_lines, metrics)
     } else {
         0
@@ -238,6 +246,7 @@ pub(super) fn layout(
                 }],
                 top: body.y,
                 height: note_height,
+                left: padding + gutter,
                 block: LineBlock::Plain,
                 // The note stands where the lines it hides begin, so a press on it is a press on
                 // the line under it rather than on nothing at all — and it is not that line, so it
@@ -414,6 +423,7 @@ fn lay_out_body(
                     runs,
                     top: y,
                     height,
+                    left: text_left(line, metrics, left),
                     block: line.block,
                     source: (index, source_char),
                     own_line: true,
@@ -471,13 +481,28 @@ fn visual_lines_of(
     right: i32,
     max_lines: usize,
 ) -> Vec<(usize, Vec<LaidRun>)> {
-    let indent = left + metrics.indent(line.indent);
     let text_right = match line.block {
         LineBlock::Quote => right - metrics.quote_bar - 4,
         _ => right,
     };
 
-    wrap_line(line, indent, text_right, max_lines, metrics)
+    wrap_line(
+        line,
+        text_left(line, metrics, left),
+        text_right,
+        max_lines,
+        metrics,
+    )
+}
+
+/// Where a document line's own text begins inside the column kept for it: the indent the line
+/// carries shifts the whole of it, so an indented line starts further right than the column does.
+///
+/// Both the runs of a line and the edge a caret on an empty line stands on are worked out here, so
+/// that a line with nothing to measure still begins where the same line with something on it would
+/// (see `LaidLine::left`).
+fn text_left(line: &DocLine, metrics: &TextMetrics, left: i32) -> i32 {
+    left + metrics.indent(line.indent)
 }
 
 /// A word or the spaces between words, carrying the style it was colored with.
@@ -723,6 +748,32 @@ pub fn scroll_line_at_track_y(
 
 // ------------------------------------------------------------------ painting
 
+/// Which of the marks over a run a piece of it belongs to, in the order they are drawn over one
+/// another where two of them meet: a place a search found, the one the reader is on, and the
+/// selection they made for themselves.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RunMark {
+    Find,
+    Current,
+    Selection,
+}
+
+/// The ink a found run's glyphs are drawn in over `background`: the theme's own find foreground
+/// wins; otherwise whichever of the run's own ink and the page stands further from the match
+/// background, so a strong band brightens its text rather than swallowing it.
+fn find_ink(ink: [u8; 3], page: [u8; 3], background: [u8; 3], chosen: Option<[u8; 3]>) -> [u8; 3] {
+    if let Some(chosen) = chosen {
+        return chosen;
+    }
+    let ink_from = (luminance(ink) - luminance(background)).abs();
+    let page_from = (luminance(page) - luminance(background)).abs();
+    if page_from > ink_from {
+        page
+    } else {
+        ink
+    }
+}
+
 /// The part of a run a selection covers, as character offsets within the run, or
 /// `None` when it does not touch it.
 ///
@@ -769,6 +820,7 @@ fn selected_part(
 /// fills the box and the pieces GDI leaves alone (the space a line that stops
 /// before the edge did not use, the gaps between blocks) are already the right
 /// color.
+#[allow(clippy::too_many_arguments)] // The box, the options and the rows a moved page leaves to paint are one frame.
 pub(super) unsafe fn paint(
     surface: &DibSurface,
     laid_out: &LaidOut,
@@ -776,10 +828,12 @@ pub(super) unsafe fn paint(
     metrics: &TextMetrics,
     scrollbar: Option<&ScrollBar>,
     selection: Option<Selection>,
+    find: Option<&FindHighlights>,
+    damage: Option<(i32, i32)>,
 ) {
     let width = surface.width as i32;
     let page = rgb(theme.background());
-    let band = blend(page, rgb(theme.foreground()), 0.08);
+    let band_color = blend(page, rgb(theme.foreground()), 0.08);
     // A selection is drawn with the theme's own highlight where it has one, and
     // with a shade of the page where it does not.
     let highlight = theme
@@ -791,8 +845,43 @@ pub(super) unsafe fn paint(
     let highlight_foreground = theme.theme().settings.selection_foreground.map(rgb);
     let selection = selection.filter(|selection| !selection.is_empty());
 
-    fill_rect(
-        surface,
+    // A find's places are drawn in the theme's find highlight where it has one, and in a shade of
+    // the page where it does not. The derived shade is mixed well away from the page so every mark
+    // is stronger than the selection's wash; a colour the theme names is used as it stands. Every
+    // other place the query was found is a wash of that colour; the one the reader is on is the
+    // colour itself, which is what tells the count's current match from the rest of the page (see
+    // `FindHighlights`).
+    let find_color = theme
+        .theme()
+        .settings
+        .find_highlight
+        .map(rgb)
+        .unwrap_or_else(|| blend(page, rgb(theme.foreground()), 0.65));
+    let find_background = blend(page, find_color, 0.75);
+    let find_foreground = theme.theme().settings.find_highlight_foreground.map(rgb);
+
+    // A paint of a band of the frame is a paint of a page moved under the reader: the rows outside it
+    // are the ones already on screen, shifted (see `PaintedFrame`). The band clamps every fill and
+    // clips the text, so nothing this paints can reach them.
+    let band = damage.map(|(top, bottom)| RECT {
+        left: 0,
+        top,
+        right: width,
+        bottom,
+    });
+    let fill = |rect: RECT, color: [u8; 3]| {
+        let rect = match band {
+            Some(band) => RECT {
+                top: rect.top.max(band.top),
+                bottom: rect.bottom.min(band.bottom),
+                ..rect
+            },
+            None => rect,
+        };
+        fill_rect(surface, rect, color);
+    };
+
+    fill(
         RECT {
             left: 0,
             top: 0,
@@ -802,22 +891,32 @@ pub(super) unsafe fn paint(
         page,
     );
 
-    for line in &laid_out.lines {
+    // The rows that are not in the band are already on screen, so their runs are not asked of GDI at
+    // all (see `PaintedFrame`).
+    //
+    // **They are skipped rather than clipped**, and that is not the same thing: GDI draws text
+    // inside a clip region with its antialiasing turned down, so a band clipped out of a page is a
+    // band whose glyphs are a little lighter than the same glyphs painted with no clip — a page that
+    // shimmers where the band meets the rows the shift kept. A run's own rectangle is the room it was
+    // given, which is the row it is in, so nothing of a run in the band reaches outside it.
+    let in_the_band = |line: &LaidLine| match band {
+        Some(band) => line.top + line.height > band.top && line.top < band.bottom,
+        None => true,
+    };
+    for line in laid_out.lines.iter().filter(|line| in_the_band(line)) {
         match line.block {
-            LineBlock::Code => fill_rect(
-                surface,
+            LineBlock::Code => fill(
                 RECT {
                     left: 0,
                     top: line.top,
                     right: width,
                     bottom: line.top + line.height,
                 },
-                band,
+                band_color,
             ),
             LineBlock::Quote => {
                 let bar = theme.style_for_scopes(&["markup.quote"]).foreground;
-                fill_rect(
-                    surface,
+                fill(
                     RECT {
                         left: 0,
                         top: line.top,
@@ -843,7 +942,7 @@ pub(super) unsafe fn paint(
         let mut style = plain_style(BODY_LEVEL);
         style.foreground = blend(rgb(theme.foreground()), rgb(theme.background()), 0.45);
 
-        for line in &laid_out.lines {
+        for line in laid_out.lines.iter().filter(|line| in_the_band(line)) {
             if !line.own_line || line.source.1 != 0 {
                 continue;
             }
@@ -867,14 +966,38 @@ pub(super) unsafe fn paint(
         }
     }
 
-    for line in &laid_out.lines {
+    for line in laid_out.lines.iter().filter(|line| in_the_band(line)) {
         let mut run_start = 0usize;
 
         for run in &line.runs {
             let run_characters = run.text.chars().count();
-            let selected_part = selection.and_then(|selection| {
+
+            // The marks over this run, in the characters the run itself counts: the reader's own
+            // selection, and every place a find found, with the current one told from the rest. The
+            // search's places do not overlap each other — `find_all` walks past each one it takes —
+            // so the only overlap a run can carry is a find under the selection, and the selection
+            // wins it (see `RunMark`).
+            let mut marks: Vec<(usize, usize, RunMark)> = Vec::new();
+            if let Some(part) = selection.and_then(|selection| {
                 selected_part(line.source, run_start, run_characters, selection)
-            });
+            }) {
+                marks.push((part.0, part.1, RunMark::Selection));
+            }
+            if let Some(find) = find {
+                for (index, at) in find.matches.iter().enumerate() {
+                    if let Some((from, to)) =
+                        selected_part(line.source, run_start, run_characters, *at)
+                    {
+                        let mark = if find.current == Some(index) {
+                            RunMark::Current
+                        } else {
+                            RunMark::Find
+                        };
+                        marks.push((from, to, mark));
+                    }
+                }
+            }
+
             run_start += run_characters;
 
             if run.text.is_empty() {
@@ -883,7 +1006,7 @@ pub(super) unsafe fn paint(
 
             let run_background = match (run.style.background, line.block) {
                 (Some(color), _) => color,
-                (None, LineBlock::Code) => band,
+                (None, LineBlock::Code) => band_color,
                 (None, _) => page,
             };
 
@@ -894,62 +1017,73 @@ pub(super) unsafe fn paint(
                 bottom: line.top + line.height,
             };
 
-            match selected_part {
-                Some((from, to)) => {
-                    // The selected part is painted over its own highlight, so the
-                    // run is drawn in up to three pieces: the text before it as
-                    // usual, the selection without touching its background, and the
-                    // text after it as usual.
-                    let characters: Vec<char> = run.text.chars().collect();
-                    let advance = run.width as f32 / characters.len() as f32;
-                    let piece = |start: usize, end: usize| {
-                        characters[start..end].iter().collect::<String>()
-                    };
-
-                    painter.draw(
-                        &piece(0, from),
-                        rect.left,
-                        rect,
-                        &run.style,
-                        run.style.foreground,
-                        run_background,
-                    );
-
-                    let highlight_rect = RECT {
-                        left: run.x + (from as f32 * advance).round() as i32,
-                        right: run.x + (to as f32 * advance).round() as i32,
-                        ..rect
-                    };
-                    painter.draw(
-                        &piece(from, to),
-                        highlight_rect.left,
-                        highlight_rect,
-                        &run.style,
-                        highlight_foreground.unwrap_or(run.style.foreground),
-                        highlight,
-                    );
-
-                    let tail_x = run.x + (to as f32 * advance).round() as i32;
-                    painter.draw(
-                        &piece(to, characters.len()),
-                        tail_x,
-                        RECT {
-                            left: tail_x,
-                            ..rect
-                        },
-                        &run.style,
-                        run.style.foreground,
-                        run_background,
-                    );
-                }
-                None => painter.draw(
+            if marks.is_empty() {
+                painter.draw(
                     &run.text,
                     rect.left,
                     rect,
                     &run.style,
                     run.style.foreground,
                     run_background,
-                ),
+                );
+                continue;
+            }
+
+            // The run is drawn in the pieces the marks cut it into, each with the colour of the
+            // highest mark that covers it: the text before a mark as usual, the mark without
+            // touching its background, and the text after it as usual.
+            let characters: Vec<char> = run.text.chars().collect();
+            let advance = run.width as f32 / characters.len().max(1) as f32;
+            let mut edges = vec![0usize, run_characters];
+            for (from, to, _) in &marks {
+                edges.push(*from);
+                edges.push(*to);
+            }
+            edges.sort_unstable();
+            edges.dedup();
+
+            for pair in edges.windows(2) {
+                let (start, end) = (pair[0], pair[1]);
+                if start >= end {
+                    continue;
+                }
+
+                let mark = marks
+                    .iter()
+                    .filter(|(from, to, _)| *from <= start && *to >= end)
+                    .map(|(_, _, mark)| *mark)
+                    .max();
+                let (foreground, background) = match mark {
+                    Some(RunMark::Selection) => (
+                        highlight_foreground.unwrap_or(run.style.foreground),
+                        highlight,
+                    ),
+                    Some(RunMark::Current) => (
+                        find_ink(run.style.foreground, page, find_color, find_foreground),
+                        find_color,
+                    ),
+                    Some(RunMark::Find) => (
+                        find_ink(run.style.foreground, page, find_background, find_foreground),
+                        find_background,
+                    ),
+                    None => (run.style.foreground, run_background),
+                };
+
+                let piece: String = characters[start..end].iter().collect();
+                let left = run.x + (start as f32 * advance).round() as i32;
+                let right = run.x + (end as f32 * advance).round() as i32;
+                painter.draw(
+                    &piece,
+                    left,
+                    RECT {
+                        left,
+                        right,
+                        ..rect
+                    },
+                    &run.style,
+                    foreground,
+                    background,
+                );
             }
         }
     }
@@ -959,7 +1093,9 @@ pub(super) unsafe fn paint(
     drop(painter);
 
     // The scrollbar goes last so it sits above everything, including a line that
-    // ran to the right edge.
+    // ran to the right edge. It is filled whole and not through `fill`: its thumb is the one thing
+    // about a page that moves *without* the text moving, so it is not in the band a shifted frame
+    // leaves to paint (see `the_shift_of`).
     if let Some(scrollbar) = scrollbar {
         let (left, top, right, bottom) = scrollbar.track;
         fill_rect(

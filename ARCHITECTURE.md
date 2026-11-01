@@ -969,19 +969,78 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
 
 - Text pin = full mode (`current_text_options`): scroll/select/clipboard (`Ctrl+C/A`, menu), scrollbar (`bar_row` shared
   geometry), wrap-to-width + pull-back + end rule, `text_cache_mb` frames, `Refresh` rebuilds from recorded hover;
-  journey+preview regions published per tick. The page is also the one media a pin's own keyboard reaches:
-  `Up`/`Down`/`PageUp`/`PageDown`/`Home`/`End` work it a screenful at a time
-  (`PinCommand::PageBack/PageOn/PageTop/PageBottom`, asked where the file in the window is known, the folder still
-  walking for anything else), `F3` takes it to the next place the selection appears (`find_next`: exact, case-sensitive,
-  from just after the selection, wrapping to end where it began), and `Ctrl` and a wheel steps the page's own size
+  journey+preview regions published per tick. **The page is a read-only editor rather than a scroll box, and it is the
+  one media a pin's own keyboard reaches**: `↑`/`↓` move a caret a line at a time with the column kept over the short
+  lines in between, `←`/`→` a character across the ends of lines, `Ctrl`+arrows a word by the page's own run rule,
+  `Home`/`End` the line's two ends and `Ctrl`+`Home`/`End` the document's, `PgUp`/`PgDn` a screenful
+  (`PinCommand::CaretUp/CaretDown/Previous/Next/PageTop/PageBottom/PageBack/PageOn`, asked where the file in the window
+  is known, the folder still walking for anything else), `Shift` grows the selection and a bare move collapses it, and the
+  page scrolls **only** to keep the caret on it (`text_preview::moved` for the arithmetic, `text_caret` for the keys — a
+  key writes its move down and the tick that may read the document makes it, because a window procedure may not). Nothing
+  that writes reaches the document: a typed character, `Backspace`, `Delete` and `Ctrl`+`X`/`Ctrl`+`V` all change nothing,
+  since a cut that cannot cut is worse than a chord that does nothing, while `Ctrl`+`A`/`C` still read it. The caret
+  blinks at the pace the system names while the page holds one. `F3`, and the page's **Find Next** row, take it to the
+  next place the selection appears
+  (`find_next`: exact, case-sensitive, from just after the selection, wrapping to end where it began) — or, while a find
+  bar is up, to the next place that bar's query appears — and `Ctrl` and a wheel steps the page's own size
   through the tray's list (`PIN_TEXT_SIZE_DELTA`) — a size the pin carries across a resize and a walk and gives up when
-  it closes. A page of code — a syntax syntect found — keeps a line-number column as wide as the widest number the
-  document can show. A selection, the word a double press takes and the place a copy is cut from are document places
+  it closes.
+
+  **A pinned page keeps a line-number column down its left, and a hover does not** — whatever the file is: source, prose,
+  a listing or a rendered document. The pin is the page a reader works in, where a line is referred to by its number; a
+  hover is something looked at on the way past, and the column is width the text does not have. It is as wide as the
+  widest number the page can reach (`gutter_width`, the document's own line numbers, `MAX_DOC_LINES` of them), so it does
+  not move as the page is scrolled from line 9 to line 10, and it is the layout's (`LaidOut::gutter`): the wrap width,
+  the runs' own `x`, the caret, a press turned back into a place and the wash a selection or a find lays are all measured
+  after it, so nothing of the text is drawn under it and a copy of the page (`text_of`, `drawn_lines`) names no number at
+  all. A wrapped line carries its number on its first painted row and none on the rest (`own_line`, `FrameLine::source`),
+  and the room between the numbers and the text is `text_paint::scaled`, so it grows with the display like every other
+  measurement. A selection, the word a double press takes and the place a copy is cut from are document places
   rather than frame places (`FrameLine::source`, `Selection` in document lines and characters), so a wrapped line copies
   whole, **Select All** means the page rather than the screenful, and a drag carried past the box takes the page three
   lines a tick toward where it left. A box change lays the page out again for the box it has reached, at the reader's
   own size and at the place and selection they were at (`relayout_text_for_the_box`), ahead of the window being put up
   around it; only a page takes that road — every other kind is sampled into the new box.
+
+  **The caption says the page is read only** (`Caption::read_only`, `pin_chrome::page_marks`): a pill at the right end of
+  the title area, immediately left of the buttons, carrying a hand-drawn padlock and the words `Read only` — a mark built
+  from the chrome's own primitives, so it scales and antialiases with the rest of the strip rather than being a glyph
+  borrowed from a font. A caption too narrow for the two keeps the name and gives the pill up, the name's own room is
+  measured against the room it actually has (a caption without a pill does not give its name up for one), and whether the
+  pill is there is part of the strip's cache key — a page's caption repainted as a picture's would otherwise keep it.
+
+  **A find bar floats over the page** (`text_find`, `text_find_field`, `pin_chrome::find_bar`): `Ctrl+F`, or the
+  **Find** row above **Find Next** in the page's own menu, opens a card at the page's top-right corner with the query,
+  `current/total`, `Aa`/`W` switches and `↑ ↓ ✕`. The query is a real single-line field rather than an append-only box
+  (`text_find_field::Field`): the caret and both ends of a selection are byte indices on character boundaries, typing
+  lands at the caret and replaces a selection, `Backspace`/`Delete` take a character or the selection and `Ctrl`
+  +`Backspace`/`Delete` a word, the arrows and `Home`/`End` move the caret (word-wise under `Ctrl`), and `Shift` with
+  any of them grows the selection the way `Shift`+click and a drag in the field do. `Ctrl+A`, `C`, `X` and `V` are the
+  field's, pasting the clipboard as one line — breaks as spaces, controls and a byte-order mark dropped, runs of space
+  collapsed, capped in characters (`sanitize_pasted`, pure and tested, over a thin untested `OpenClipboard` read), and
+  the copy writer is the page's own. `Ctrl+Z` undoes and `Ctrl+Y`/`Ctrl+Shift+Z` redoes, over whole-field snapshots
+  with a run of typing coalesced into one; `Ctrl+U` is deliberately not bound. Every keystroke searches the document as
+  it is drawn (`find_all`: document order, non-overlapping, the two switches read as the search it runs under), every
+  match is painted into the frame with the current one distinct (`FindHighlights`, drawn under the reader's own
+  selection), and a match off screen takes the page to it the way `F3` takes it to a selection. `Enter`/`↓`/`PgDn`/`F3`
+  step on and `Shift`+`Enter`/`↑`/`PgUp` back, wrapping at both ends and never moving the query; a new query starts at
+  the first
+  match at or after the line the reader was on. A press in the field places the caret at the character under the pointer
+  — measured from the column the query is really drawn at, so a query too long for its row is pressed where it is
+  scrolled to, not a field's width away — a double press takes the word by the page's own run rule, and the caret blinks
+  at `GetCaretBlinkTime`'s pace on the ticks a pin already takes, solid from every edit, with the selection washed the
+  way the page washes its own. A query too wide for the field scrolls under the caret: the scroll is worked out from
+  the caret as the run is measured rather than stored, so a resize, a paste or an undo cannot leave it stale, the run
+  rests where it always did while the caret's column is inside the field and moves just enough to keep it there, a
+  margin clear of either edge, and the run, its wash and the caret are all clipped to the field rather than drawn over
+  the card's padding. A repaint is asked for a changed query, caret, selection, hover or blink and never for a
+  mouse move that changed nothing. While the bar is up it owns the keyboard, and the keyboard hook stands down for the
+  whole of it: a swallowed key never becomes the `WM_CHAR` a field types from, so every key arrives as a message and the
+  bar's one table reads it — the page's own keys and the polled `Ctrl+A`/`Ctrl+C` are inert — and `Esc` empties a query
+  that has text before it puts the bar away, with the page left where it is either way. The query outlives the bar
+  while the matches do not; `Ctrl+F` over an open bar selects the
+  query it finds rather than appending to it; a box change keeps both, because a match is a place in the document
+  rather than a row of the frame; another file keeps neither (`keep_text_place`).
 
 A pinned text file is a full text preview, not a picture of one: it scrolls, selects, copies, and wraps to the pin's current width, and the frames it re-renders are cached. `Refresh` after a config change works by replaying the _recorded_ hover rather than asking Explorer again, because the pin is the only thing that knows what it is showing.
 
@@ -1278,6 +1337,170 @@ is worth reading. The rectangles in the `thumbnail update` line are the whole di
 
 `thumbnail source moved` is not a fault — it is the slide at an edge — and `thumbnail source cannot hold the crop on screen` names the one case no position can fix (a crop longer than the work area). `thumbnail source native unknown`, `late` and `unobtainable` say which of the placement roads a film got.
 
+**Watching a film's sound.** `RHP_PLAYBACK_TRACE` (presence is enough) writes `%TEMP%\rhp-playback-trace.log`: one
+`launch` line per engine start (engine, kind, the level the launch resolved to, and the form that level was given the
+player in — `aid=no`/`-an` or `volume=N gain=…`), one `engine truth` line per mpv start (the `aid`, `audio-device`,
+`current-ao`, `audio-out-params`, `volume` and `mute` the player itself reports, and the verdict they come to — the device
+that was asked for beside the driver in use, and that driver rather than the `ao` option this app never passes, which
+answers an empty list rather than a driver), every line either player writes on its own stream, and a `kill` line per
+player ended with whether a zero-timeout wait confirmed the process gone. **The level the launch asked for and the level
+the player is at are two words on that line** — `asked 100` beside `volume 0 mute no` — because they are two facts: a
+player that says all of a track, a driver and params while its own level stands at nothing, or its own mute is on, is a
+film that plays with no sound and every one of those answers calls it sound. It answers one question that nothing else
+on the machine can: a film that plays with no sound and no entry in Windows' Volume Mixer is either a launch that gave
+the player no track at all (the launch line says so), a player that could not open a device from the track it had (the
+player says so, and FFmpeg's player only says anything at all under this switch — its stderr is otherwise
+`-loglevel quiet` into a null stream), or that player told to be quiet (the level and the mute beside the level asked
+for). Unset, nothing is written and no thread is spawned; a launch that is neither traced nor guarded builds the command
+line it always did (`playback_trace`). **A traced launch is read at a level that names a device**: `--msg-level=all=warn,ao=v,audio=v`
+— `all=warn` still the ceiling, and the two modules an audio output speaks through raised past it — because a device that
+refuses is reported at `ao` and `audio` verbosity and nowhere else, and `all=warn` above them is a run that plays
+silently with the state written down and no reason beside it (`video_launch::mpv_args`).
+
+**The player's opinion is not the only one, so the OS is asked as well.** A `session` line per launch,
+on the same trace, is what Windows' own mixer says about that player's pid: whether a session exists for it at all on
+the machine's render endpoints, the mixer's state for it (`active`/`inactive`/**`expired`**), the executable its
+session identifier names, the mixer's own slider and mute beside the player's, the stream's own per-channel volumes,
+and the endpoint it is on against the default endpoint read at that same instant (`audio_session`). **It exists because
+a captured run left every answer the player had exhausted**: mpv logged a device selected, a stereo float buffer
+opened and no error after it, reported `aid`, `wasapi` and params, `volume 100 mute no` — the six answers of twelve
+launches the user did hear — and played silently with no session in the Volume Mixer. **The four words a line is read for**:
+`expired` is the OS saying the stream is over under a player still writing to it, which nothing on the player's pipe can
+say; `session none` is the mixer answering and the player not in it, qualified by `children` — the sessions its own
+child processes made, since the mixer groups a child under its parent — so a miss is never ambiguous between nothing
+started and something started where nobody looked; `mixer 0.000` or `mute yes` is a silence of the mixer's own, at any
+level the player reports; and `channels` is the per-stream level, which is where a handover to the driver lands — mpv's
+default `--softvol=no` means the level this app gave it is applied by the driver, not inside the player, and neither
+`volume` nor the slider is that number. **The line states its own gaps**: `-` for a value the OS would not give, `unknown`
+for a state with no word, `refused` for an interface that would not be had (say `IChannelAudioVolume`), `none` for a
+session with no channel, and `session refused` with the part of the walk that failed — a silent probe would read as
+`session none`, which is a finding about the player rather than about this question. **Who a session is, and who stood
+beside it, is on the same line**: `session-id` and `instance-id` are `GetSessionIdentifier` and
+`GetSessionInstanceIdentifier` entire — the two strings Windows keys its remembered per-app volume and mute by, and the
+reason two sessions of one `mpv.exe` can be remembered differently — with the image the pid really runs beside them,
+and `neighbours` naming the sessions the endpoints listed beside the player's: their pid, image, state, mute and
+slider, the first eight of them with the count of what there was (`neighbours 8 of 14`), and **`dead` on a session
+whose process has ended** — the carrier this was added for, a lingering muted session a new one inherits from, and never
+dropped from the list. A cure's own line carries the same identity and neighbours, so a victim and a clean film are
+compared field for field inside one run. None of it is read where no trace asked for it: a guarded look on a run nobody
+is diagnosing walks exactly the walk it always did. **And the run it was built to describe
+proved a fault it now cures**: of eighteen players in one captured run, two had a session whose mute switch was on at
+`mixer 1.000` with its channels at `1.000 1.000`, under a player that reported `volume 94 mute no` — two mute switches,
+and the player can see only its own. So a **guarded** player's session is looked at for every read the guard already makes
+(`audio_session::look_and_cure`, on the guard's probe thread and straight after the engine ask), and a mute found on is
+taken off with one write — `ISimpleAudioVolume::SetMute(false)` — **whether or not `RHP_PLAYBACK_TRACE` is set**, because
+the trace is the recorder and the cure is the fix. **Nothing else is ever set**: not the master volume, not a per-channel
+volume, not `IAudioEndpointVolume`. **A session muted with its slider at nothing is a hand in Windows' own mixer**, so it
+is written down and left as it is (`session turned down … left alone`), because putting it back would overwrite a
+deliberate setting; and a mute the mixer refused, or a walk that could not be made, is written as a failure rather than
+swallowed (`session unmute failed …`). **COM is taken on that thread's own apartment** (`COINIT_MULTITHREADED`, given
+back at the end) and nowhere near the preview loop, which holds one for the engines that draw into it; the wait for a
+player's session to exist and every call after it are on the thread, bounded the way the pipe reads are. Unset, the
+trace spawns no thread and writes no line of its own; a player this app did not begin and is not guarding is never looked
+at at all.
+
+**Healing a film's sound.** The trace describes the roads to a silent film; `audio_guard` walks back down them. It asks
+the same six questions (`aid`, `audio-device`, `current-ao`, `audio-out-params`, `volume`, `mute`), **and the machine's
+own look at that pid's session beside them**, and reads one verdict out of the two — a player whose every answer is sound
+and whose session is still muted is `session-muted`, the fourth road, and one whose mute the look took off is `heard`
+(see `audio_session`). Then it climbs a ladder, each rung taken at most once: a track asked back for with
+`set_property aid auto` — the launch's own road, healed; `audio-device` handed its own `auto`, which is mpv reloading its
+audio output, so a device refused while the film was starting gets one more attempt at it; the level this app last
+asked that player for asserted again with the player's own `mute` taken off beside it, which is the cure for a verdict of
+`silent` — a track selected, an output open and a player told to be quiet; and, if none of those was heard, **one** new
+player at the second and the pause the old one had, read once, and then the ladder ends. Each rung is entered on what the read-back
+said and never on a write having landed, and a player that answered **nothing at all** is asked again every half second
+for the half minute it is given, and not once more the moment it says anything — heard, no track, no device or silent. **That
+retry is bounded by the player's own readiness rather than by a schedule**, because a player is not ready at a wall clock: a
+4 GB file off a slow disk can spend several seconds before mpv has created its audio client at all, and a read that gave up
+on such a player would never see the session that client owns. A player that has said nothing is not a film without sound
+and is never begun again: the one verdict the guard may not act on is the one it never got. **The same goes for a driver
+named with nothing playing through it** — `current-ao wasapi` and no `audio-out-params`, which a captured run read 548 ms
+after its launch and which is a player still opening its output as readily as a film that lost it — so that shape is read
+once more and the device cure is written on its second consecutive read; `aid=no` and a driver of `null` are answers,
+and each takes its rung on the first read. **A `session-muted` read climbs nothing**: the player's answers are the ones a
+working film gives, so a track, a device or a level asserted again would be writes to a film that is not what is muted,
+and the cure was the session's and was taken where the read was made. **Every read writes a line** (`audio guard`,
+`audio read-back`, `audio step`), so a field log carries the ladder's whole evidence even where it healed silently: the
+session clause is the last word on the read-back, and a read that was `session-muted` is a fault found rather than a film
+with its sound. **A cure that worked reads back as `heard`**, which is why it has a line of its own
+(`session unmuted pid … mixer 1.000 was mute`) — a cure nobody wrote down is one nobody can tell from a fault that never
+happened, and a cure the mixer refused is written as `session unmute failed …` rather than swallowed. **A
+ladder that ends is written once, and its last rung is written whole**: one `audio gave up` line carrying the launch's
+form and the level it asked for, the six answers of the read that reached it (`-` for the player with no pipe), and the
+verdict they come to — because a film nothing could cure is the case a log is read from with no reproducer behind it
+(`audio_guard::a_give_up`).
+
+**The guard stands behind both roads, and a hover's ladder is the in-place rungs and nothing else.** A pin's film is
+cured where it stands and begun again once; a hover's — on a cold launch and on the resident's serve alike —
+is cured where it stands and then left, because the resident is the one player where a stale audio decision lives
+longest (one process handed file after file, begun at whatever level the first hover had) and because a hover that
+began a player again would pay the very wait the resident exists to save. **A serve is a new episode of the same pid**,
+so it arms a ladder of its own: the file before it spent nothing of this one's, and the `REBIRTH` record a pin's relaunch
+leaves behind is not a hover's to consume. A film the level itself gave no track is nobody's business on either road,
+and FFmpeg's player is guarded on a pin's road only — its ladder has no in-place rung at all, so a hover's guard on it
+could only ever give up. **A pin that takes a hover's player over gets the pin's road** — the same process and the same
+reads, with the rungs a hover stops short of from that moment (`audio_guard::a_pin_took_it_over`).
+
+**The level a `silent` player is taken back up to is the level this app last asked for, not the one the film began at**
+(`audio_guard::the_level_moved`). A hand moves the level while the film plays, and mpv keeps its track at `volume 0`, so
+a pin dragged to the bottom of its knob answers exactly as a film something else silenced does — and the launch's level
+put back over that hand is the bug this closes. A level of nothing is the silence the setting chose, which the verdict
+already exempts, so no rung fires; a level moved to 60 makes the level rung assert 60. **The roads call the seam, and
+`mpv_ipc::set_volume` does not**: the guard's own rung writes through that function with its lock held, so a seam inside
+it would be the guard feeding its own record — a level it wrote taken for a level a hand had moved, on a lock it already
+holds. So a write the guard makes moves nothing, and the app's own writes move it where each of them landed: the pin's
+knob and the wheel and press behind it, the release's re-assertion and a row moved in the tray (which is the knob's road,
+`pin_chrome_layout::set_the_pin_players_level`), and a pin taking a hover's player over at the pin's own level
+(`pin_playback::adopt_the_hovered_film_in_the_host`). A hover's per-serve level needs no second write: the serve's caller
+arms the guard with that very level the moment the serve returns, so the arming is the record.
+
+**The resident can be taken out of a run without a rebuild, which is the one A/B this fault needs.** A hover's film is
+loaded on the one mpv kept warm between hovers unless `RHP_NO_RESIDENT` is in the environment — presence is enough, and
+the value is not read. With it set no resident is begun at all: every hover begins a player of its own and ends it with
+the hover, and a pin adopts that player as it adopted one before the resident existed, which is the road `v0.4.5` had
+(`mpv_resident::keeping_a_resident`). It is a prototype's knob and not a setting, and not one the tray can reach: it is
+there because a film that plays with **no sound at all and no session in the mixer** is intermittent on the resident's
+road and was never seen on the tag before it, so the two architectures are run against each other on one machine rather
+than argued about. Unset, the resident road is the run, byte for byte.
+
+**A player that answered `heard` is asked nothing further, and the sparse schedule that used to keep asking is gone.**
+`Heard` is where a guard ends: the one read `AUDIO_SETTLING` after the player comes up, the asks a player that has said
+nothing is owed, and the read-back of every rung the ladder took are the whole of what it asks a film, and a read that
+comes back heard clears it. The schedule it replaced — `+2 s`, `+4 s`, `+8 s`, then one every ~10 s for as long as the
+player lived, sampled on the probe thread and with it the late failure that climbed the in-place rungs a second time —
+sampled for a failure mode never once observed: a player heard at its first read that went silent later. Every muted film
+captured was **born** muted and caught by that first read, so the price was a poll for the length of a film for a case that
+has not happened. **Every read that remains asks the machine as well as the player**, so a session muted under a player
+whose own answers are sound is caught, written and taken off at whichever read finds it — and the asks of a player that has
+said nothing are reads like any other, which is what lets a 4 GB file that spends six seconds opening still be cured on
+the ask after it. What ends a guard besides `heard` is the ladder's own: a give-up and a session the mixer would not unmute
+are written once and the player is let go of, `a_player_ended` clears it (and a hover's serve is the end of its episode,
+whether the player is killed or left standing by), and a probe that wakes to a guard that is not its own reads no pipe and
+reports nothing. The player a spent ladder began (the `REBIRTH` record, `SPENT`) is given its one read and no rung at all,
+and the relaunch stays a player's own — **at most once in its whole life**, not once per episode — so a device that is
+genuinely gone is never begun again for.
+
+**mpv has a pipe, and FFmpeg's player does not**, so the second one's ladder is one rung. An ffplay launch is piped
+on the standard error, and drained, on exactly the launches that have a use for a line — the trace, or a guard standing
+behind the film — because a pipe nobody empties blocks the child: the pipe is only ever there with its reader. A traced
+launch is played at `verbose` rather than `warning`, because SDL's own reason for refusing an endpoint is a `verbose`
+line, and `-nostats` is asked for beside it on exactly those launches: `verbose` otherwise turns on the status line —
+one `\r`-updated stream with no newline in it that would swallow the lines written after it (see `video_playback`). A
+launch a guard alone stands behind keeps `warning`, which is where its own cure is read from, and a run nobody asked for
+a trace of keeps the argv it had. A match against four strict
+fragments (`Could not open audio device`, `Failed to initialize the SDL audio`, `Failed to initialize audio`,
+`Could not initialize audio`) begins that player again once; an ordinary warning is not a signature, and a line the
+stream never carried is not one either.
+
+**Nothing here waits on the preview loop.** A player that has only just been begun has no pipe yet, so a thread asks
+and leaves the answer where the tick finds it, and the tick is what writes and decides. Its last rung is the pin's own
+swap path (`pin_playback::begin_the_pinned_film_again_for_its_sound` → `restart_pinned_player`), so the picture is kept
+exactly as a seek keeps it. **The guard moves no picture and no clock**: no pause is toggled, no second is asked for, and
+the only level it ever writes is the one the launch already asked for, put back on a player that had been silenced
+under it — a film the handover left held is begun again held. The rung waits for a tick with no swap and no handover in
+flight, because a picture changing hands is not a player to be begun under it.
+
 **What this means for another player engine.** The road is engine-agnostic, and both players this app has are on it: it
 needs a player that draws into a window of its own, whose picture size is known before anything else asks it for a box
 (so the source can be placed at it), and that is happy to render at that size while the pin is any size — the Shell does
@@ -1296,10 +1519,13 @@ pipe. An engine that could do neither would need a third: a size known at launch
 | `src/ui/preview_window/pin_film_thumbnail.rs` | the road: the one placement, the crop, the registration, the slide, the held-frame count, every trace line above |
 | `src/ui/preview_window/pin_film_host.rs` | the film host both engines' films are drawn through, and `promote_the_hover_film_host` |
 | `src/ui/preview_window/hover_film_host.rs` | the hover's host, which is the pin's after a take-up |
-| `src/ui/preview_window/video_launch.rs` | mpv's launch: no `--wid`, `--no-border`, `--geometry` at the source's place, the swapchain |
+| `src/ui/preview_window/video_launch.rs` | mpv's launch: no `--wid`, `--no-border`, `--geometry` at the source's place, the swapchain, and the level a traced run is read at |
 | `src/ui/preview_window/ffplay_window.rs` | the pass that finds a player's window, adopts it as a source, keeps it invisible and styles it |
 | `src/ui/preview_window/video_playback.rs` | both launches: where a film is born (the desktop, at its own size, borderless) and which host keeps it |
 | `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
+| `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it — the level asked for beside the level it is at — both players' own lines, and a kill's confirmation |
+| `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), who it is — both identifiers whole, the image the pid runs, and the sessions the endpoints listed beside it, each with `dead` on one whose process has ended — the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none — and the one write this app makes to the OS: a muted session's `SetMute(false)` under a guarded player at a slider that is up |
+| `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict with the machine's own answer folded into it (`session-muted` being the fourth road), the in-place rungs and the one relaunch, the asks of a player that has said nothing being bounded by its own readiness, the level it stands for being the one this app last asked for, the hover's in-place-only road, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
 | `mod tests` in `pin_film_thumbnail.rs`, `src/ui/preview_window/tests/pin_film_host_window.rs` | the crop matrix and the one placement, the whole gesture on both routes that asks for no box, the source that replaced itself; the host and its promotion |
 | `ARCHITECTURE.md` | this section |
 

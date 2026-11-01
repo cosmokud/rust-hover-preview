@@ -590,7 +590,7 @@ pub(super) fn load_text_preview(
     dpi: u32,
     options: TextPreviewOptions,
 ) -> Option<MediaData> {
-    let frame = text_preview::render_scrolled(path, 0, width, height, dpi, options, None)?;
+    let frame = text_preview::render_scrolled(path, 0, width, height, dpi, options, None, None)?;
 
     // Any text preview in full mode keeps its state, scrollable or not: the
     // pointer rests on it, its text can be selected, and a document that happens to
@@ -609,9 +609,16 @@ pub(super) fn load_text_preview(
         lines: frame.lines,
         selection: None,
         selecting: false,
+        // A page that has just been drawn has no caret: the first key or press puts one down, and a
+        // bar blinking in a window nobody has worked in would be a field nobody has clicked into.
+        caret: None,
+        caret_goal: None,
+        caret_blink: text_find_field::CaretBlink::default(),
+        pending_caret: Vec::new(),
         word_drag: None,
         click_run: None,
         drag_pointer: None,
+        find: FindState::default(),
     });
 
     let frame = ImageFrame::new(frame.pixels, frame.width, frame.height, 0);

@@ -3,7 +3,7 @@ use super::*;
 // a name's room and whether there is one are questions the caption asks itself, and the test of that
 // rule has to reach them where they live rather than through the glob — which finds the *test* module
 // named `caption` first.
-use crate::text::pin_chrome::caption::{title_fits, title_room};
+use crate::text::pin_chrome::caption::{title_fits, title_fits_beside_pill, title_room};
 
 #[test]
 fn a_cut_name_is_the_whole_name_where_it_fits_and_the_longest_beginning_where_it_does_not() {
@@ -295,6 +295,7 @@ fn a_caption_is_opaque_everywhere_it_is_painted() {
     for title in ["picture.png", ""] {
         let caption = Caption {
             title,
+            read_only: false,
             maximized: false,
             maximizable: true,
             always_on_top: true,
@@ -347,6 +348,7 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
     // tell a stale strip from a changed one.
     let caption = Caption {
         title: "Readme.md",
+        read_only: false,
         maximized: false,
         maximizable: true,
         always_on_top: true,
@@ -1009,4 +1011,214 @@ fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
     assert!(!title_fits(240, 96, true) && !title_fits(480, 192, true));
     assert!(caption_fits(240, 96, true) && caption_fits(480, 192, true));
     assert!(!caption_fits(210, 96, true) && !caption_fits(420, 192, true));
+}
+
+/// The strip a page's window carries says the page is read only, and the strips of every other kind
+/// say nothing of it: the pill stands at the right end of the title area, immediately left of the
+/// buttons (see `Caption::read_only` and `page_marks`).
+///
+/// Asked at 100% and at 150%, because every measurement the pill is drawn from is the display's scale
+/// and a pill that only says its piece at 100% is one a reader at 150% never sees.
+#[test]
+fn a_page_says_it_is_read_only_and_a_caption_for_another_kind_does_not() {
+    let palette = ChromePalette {
+        background: [250, 250, 250],
+        foreground: [30, 30, 30],
+        accent: [10, 90, 200],
+        dark: false,
+    };
+
+    for dpi in [96u32, 144] {
+        let scale = dpi as f32 / 96.0;
+        let width = (600.0 * scale) as u32;
+        let height = (30.0 * scale) as u32;
+        let surface = DibSurface::create(width, height).expect("a surface");
+        let strip = |read_only: bool| {
+            let caption = Caption {
+                title: "notes.txt",
+                read_only,
+                maximized: false,
+                maximizable: true,
+                always_on_top: true,
+                hovered: None,
+                pressed: None,
+            };
+            paint_caption(&surface, &palette, &caption, dpi);
+            surface.pixels()
+        };
+        let page = strip(true);
+        let picture = strip(false);
+
+        let buttons = button_boxes(width as i32, height as i32, dpi, true);
+        let title_right = buttons
+            .iter()
+            .map(|button| button.rect.left)
+            .min()
+            .unwrap_or(width as i32);
+        let pill =
+            page_marks::read_only_pill_box(&surface, width as i32, height as i32, title_right, dpi);
+        assert!(
+            pill.right - pill.left > 0,
+            "a caption {width} wide has room for the pill at {dpi} dpi"
+        );
+
+        let background = palette.background;
+        let ink_at = |pixels: &[u8], x: i32, y: i32| {
+            let at = (y as usize * width as usize + x as usize) * 4;
+            pixels[at..at + 3] != background
+        };
+        let said = |pixels: &[u8]| {
+            (pill.left..pill.right)
+                .flat_map(|x| (pill.top..pill.bottom).map(move |y| (x, y)))
+                .any(|(x, y)| ink_at(pixels, x, y))
+        };
+
+        assert!(
+            said(&page),
+            "a page's caption says it is read only in the pill's own box, at {dpi} dpi"
+        );
+        assert!(
+            !said(&picture),
+            "and a caption that is not a page's says nothing there, at {dpi} dpi"
+        );
+    }
+}
+
+/// The name's room stops at the pill rather than running under it, and the room a name is measured
+/// against is the room it actually has — a caption with no pill keeps a name the pill's room would
+/// have given up (see `title_fits` and `title_fits_beside_pill`).
+#[test]
+fn a_name_stops_at_the_pill_and_is_only_given_up_where_the_pill_takes_its_room() {
+    let palette = ChromePalette {
+        background: [250, 250, 250],
+        foreground: [30, 30, 30],
+        accent: [10, 90, 200],
+        dark: false,
+    };
+
+    let strip = |width: u32, title: &str, read_only: bool| {
+        let surface = DibSurface::create(width, 30).expect("a surface");
+        let caption = Caption {
+            title,
+            read_only,
+            maximized: false,
+            maximizable: true,
+            always_on_top: true,
+            hovered: None,
+            pressed: None,
+        };
+        paint_caption(&surface, &palette, &caption, 96);
+        surface.pixels()
+    };
+
+    // A caption wide enough for a name and the pill together, and one long enough to be cut.
+    let width = 600u32;
+    let surface = DibSurface::create(width, 30).expect("a surface");
+    let buttons = button_boxes(width as i32, 30, 96, true);
+    let title_right = buttons
+        .iter()
+        .map(|button| button.rect.left)
+        .min()
+        .unwrap_or(width as i32);
+    let pill = page_marks::read_only_pill_box(&surface, width as i32, 30, title_right, 96);
+
+    // The pill on its own, with nothing written beside it, so that what the name changed is the only
+    // difference between the two strips.
+    let pill_only = strip(width, "", true);
+    let named = strip(
+        width,
+        "a rather long file name that has to be cut short.txt",
+        true,
+    );
+    let background = palette.background;
+    for y in 0..30i32 {
+        for x in 0..width as i32 {
+            let at = (y as usize * width as usize + x as usize) * 4;
+            if named[at..at + 3] != pill_only[at..at + 3] {
+                assert!(
+                    x < pill.left,
+                    "the name reached into the pill's own room at {x},{y}: the name's room is the \
+                     pill's left edge, not the buttons'"
+                );
+            }
+        }
+    }
+
+    // And a caption too narrow for both keeps the name: the pill is what the strip is saying about
+    // the file, and a strip with no room to say what the file is has nothing for the pill to be
+    // about. The width is found rather than written down, so the rule is asked rather than guessed.
+    let narrow = (160..width as i32)
+        .find(|width| title_fits(*width, 96, true) && !title_fits_beside_pill(*width, 96, true))
+        .expect("a caption width where the pill's own room is the difference");
+    let narrow = narrow as u32;
+    let without_pill = strip(narrow, "notes.txt", false);
+    let said = (0..narrow as i32).any(|x| {
+        (0..30i32).any(|y| {
+            let at = (y as usize * narrow as usize + x as usize) * 4;
+            without_pill[at..at + 3] != background
+        })
+    });
+    assert!(
+        said,
+        "a caption with no pill and no room for one still says the file's name: it is not the \
+         pill's room it is giving up"
+    );
+}
+
+/// The pill's ring closes at both ends: a run of text drawn on the caption's own surface is drawn with
+/// an opaque background over the whole of its box, so a run whose box reached the pill's edge painted
+/// that background over the ring's right cap and left the pill cut off where the words stop (see
+/// `page_marks::paint_read_only_pill`).
+///
+/// Measured as ink rather than as a picture: the last pixel of the middle row is the ring, which is the
+/// accent over the wash, so it is nearer the accent than the wash is. A run's background there would be
+/// the wash itself, and the pill would read as open at that end.
+#[test]
+fn the_pills_ring_closes_at_the_end_the_words_stop_at() {
+    let palette = ChromePalette {
+        background: [30, 32, 40],
+        foreground: [220, 220, 220],
+        accent: [80, 170, 240],
+        dark: true,
+    };
+
+    for dpi in [96u32, 144] {
+        let scale = dpi as f32 / 96.0;
+        let (width, height) = ((600.0 * scale) as u32, (30.0 * scale) as u32);
+        let surface = DibSurface::create(width, height).expect("a surface");
+        let buttons = button_boxes(width as i32, height as i32, dpi, true);
+        let title_right = buttons
+            .iter()
+            .map(|button| button.rect.left)
+            .min()
+            .unwrap_or(width as i32);
+        let box_ =
+            page_marks::read_only_pill_box(&surface, width as i32, height as i32, title_right, dpi);
+        page_marks::paint_read_only_pill(&surface, &palette, box_, dpi);
+
+        let middle = (box_.top + box_.bottom) / 2;
+        // The surface is the desktop's own byte order, so a pixel is read back the way it was
+        // written: blue first.
+        let at = |x: i32, y: i32| {
+            let index = (y as usize * width as usize + x as usize) * 4;
+            let pixels = surface.pixels();
+            [pixels[index + 2], pixels[index + 1], pixels[index]]
+        };
+        let wash = text_paint::blend(palette.background, palette.accent, 0.14);
+        let distance = |colour: [u8; 3], from: [u8; 3]| {
+            let mut total = 0i32;
+            for channel in 0..3 {
+                let gap = colour[channel] as i32 - from[channel] as i32;
+                total += gap * gap;
+            }
+            total
+        };
+
+        let edge = at(box_.right - 1, middle);
+        assert!(
+            distance(edge, palette.accent) < distance(edge, wash),
+            "the pill's rightmost pixel at {dpi} dpi is the ring rather than the wash a run's \
+             background leaves: it was {edge:?}"
+        );
+    }
 }

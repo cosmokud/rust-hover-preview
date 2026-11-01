@@ -318,7 +318,18 @@ pub(super) unsafe fn publish_pointer_hold(hwnd: HWND) {
     // rather than the media is what keeps the hold from outliving the spinner it was
     // published for: a hold left standing over a document is a preview the pointer can
     // never close, because the pointer arriving at it is exactly what the hold refuses.
-    if !IsWindowVisible(hwnd).as_bool() {
+    //
+    // **And the window that is asked is the one the media is drawn in, which a pin makes a
+    // different window from the handle here.** A pin that stands in a window of its own has put
+    // the preview's window down (see `take_up_pinned_window`), and the handle the loop's
+    // heartbeat carries is that preview's: it answers "nothing of ours is on the screen" for the
+    // whole life of the pin, so every heartbeat withdrew the hold — the regions, the scroll's own
+    // answer and the size's — and a notch over a pinned page belonged to Explorer while the
+    // scrollbar, which is a mouse message to the pin's own window, still dragged. What is on
+    // screen is the window the pin stands in, which is the same question
+    // `hover_facts::cursor_preview_hover` already had to learn to ask (see `pinned_window`).
+    let drawn_in = if pinned() { pinned_window() } else { hwnd };
+    if !IsWindowVisible(drawn_in).as_bool() {
         clear_pointer_hold();
         return;
     }
@@ -586,22 +597,37 @@ fn text_region_try() -> Option<(i32, i32, i32, i32)> {
 /// styled, the window it is drawn in does not move, and a document that is
 /// scrolled through costs a window of highlighting per step rather than a
 /// re-read.
+///
+/// **And a page moved by a line or two is the frame already on screen, shifted.** A held arrow's
+/// press is mostly a page scrolled a line, and laying a screenful out and painting every run of it
+/// again cost 4.5 ms of the 6.9 a press took — the frame that is on screen is the same frame, and the
+/// rows that came in from an edge are the only ones not already painted (see `PaintedFrame`).
 pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
     // Taken out of the media so the lock is not held while the lines are styled
-    // and painted.
-    let Some((path, options, dpi, width, height, current)) =
+    // and painted — the frame on screen as well, as a handle rather than a copy: a screenful is a
+    // megabyte and a half.
+    let Some((path, options, dpi, width, height, current, painted)) =
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media.as_ref().and_then(|media| {
-                media.text_state.as_ref().map(|scroll| {
+                let scroll = media.text_state.as_ref()?;
+                let painted = media.current_frame().cloned().map(|frame| {
                     (
-                        scroll.path.clone(),
-                        scroll.options,
-                        scroll.dpi,
-                        scroll.width,
-                        scroll.height,
+                        frame,
                         scroll.first_line,
+                        scroll.lines.clone(),
+                        scroll.selection,
+                        scroll.find.highlights(),
                     )
-                })
+                });
+                Some((
+                    scroll.path.clone(),
+                    scroll.options,
+                    scroll.dpi,
+                    scroll.width,
+                    scroll.height,
+                    scroll.first_line,
+                    painted,
+                ))
             })
         })
     else {
@@ -614,17 +640,48 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
 
     // What is selected is kept exactly as it is: a selection is a place in the document, so the
     // frame that comes back draws the same text somewhere else rather than the selection having
-    // to be moved to where the text went (see `Selection`).
-    let selection = CURRENT_MEDIA.lock().ok().and_then(|media| {
+    // to be moved to where the text went (see `Selection`). A find bar's places are taken out beside
+    // it and drawn into the same frame, because a highlight is a place in the document too and one
+    // painted over the frame afterwards would cover a selection the reader made (see
+    // `FindHighlights`).
+    let Some((selection, find)) = CURRENT_MEDIA.lock().ok().and_then(|media| {
         media
             .as_ref()
             .and_then(|media| media.text_state.as_ref())
-            .and_then(|state| state.selection)
-    });
+            .map(|state| (state.selection, state.find.highlights()))
+    }) else {
+        return;
+    };
 
-    let Some(frame) =
-        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
-    else {
+    // An empty selection is no selection — `paint` reads it that way — so it is said that way here
+    // too, and a page whose caret was put down without a drag is a page with nothing painted into it.
+    let selection = selection.filter(|selection| !selection.is_empty());
+
+    // What was painted into the frame on screen besides its text, which is only nothing: a page with
+    // a selection or a search painted into it is a page whose pixels are not the ones the layout would
+    // paint elsewhere, and it is drawn again rather than shifted (see `PaintedFrame`).
+    let painted = match painted.as_ref() {
+        Some((frame, first_line, lines, selection, find))
+            if selection.is_none_or(|selection| selection.is_empty()) && find.is_none() =>
+        {
+            Some(text_preview::PaintedFrame {
+                pixels: &frame.pixels,
+                width: frame.width,
+                height: frame.height,
+                first_line: *first_line,
+                lines,
+                selection: None,
+                find: None,
+            })
+        }
+        _ => None,
+    };
+
+    // Held: the page being scrolled is drawn from the document that drew it, so a line moved by a
+    // caret or a notch is not a look at the file (see `render_scrolled_held`).
+    let Some(frame) = text_preview::render_scrolled_held(
+        painted, &path, first_line, width, height, dpi, options, selection, find,
+    ) else {
         return;
     };
 
@@ -653,8 +710,13 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
 }
 
 /// Lay a pinned page of text out again in the box its window has just been given — one a hand has
-/// dragged it to, a maximize or a restore, or a display that changed — keeping the line it is
-/// scrolled to, what is selected in it and the size the reader put it to.
+/// dragged it to, a maximize, a restore, a size reset, or a display that changed — keeping the line
+/// it is scrolled to, what is selected in it and the size the reader put it to.
+///
+/// It is the whole of what a box asks of a page, and nothing lays the page out again behind it: a read
+/// begins at the document's first line, because nothing carries the reader's line into a frame that
+/// is not the one being replaced, so the load the same box change starts for every other kind is that
+/// page drawn a second time from the top (see `relayout_pinned_media`).
 ///
 /// A box decides what a page of text shows rather than how large it is: the font is a fixed,
 /// display-scaled size, and the box decides how many lines it holds and how long each of them may
@@ -675,7 +737,7 @@ pub(super) fn relayout_text_for_the_box(content: ScreenRegion) {
     // Read out of the media, so the lock is not held while the page is laid out and painted — and
     // answered with nothing at all where the pin is showing a page of another kind, or no page at
     // all, which is what keeps a resize of every other kind the paint it has always been.
-    let Some((path, options, dpi, drawn, first_line, selection)) =
+    let Some((path, options, dpi, drawn, first_line, selection, find)) =
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media
                 .as_ref()
@@ -689,6 +751,7 @@ pub(super) fn relayout_text_for_the_box(content: ScreenRegion) {
                         (state.width, state.height),
                         state.first_line,
                         state.selection,
+                        state.find.highlights(),
                     )
                 })
         })
@@ -702,9 +765,12 @@ pub(super) fn relayout_text_for_the_box(content: ScreenRegion) {
         return;
     }
 
-    let Some(frame) =
-        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
-    else {
+    // A find bar that is up stays up across the box: its matches are places in the document, so the
+    // page laid out again draws the same places on the same lines, wherever the new width wraps them
+    // (see `FindState`).
+    let Some(frame) = text_preview::render_scrolled(
+        &path, first_line, width, height, dpi, options, selection, find,
+    ) else {
         return;
     };
 
@@ -729,36 +795,6 @@ pub(super) fn relayout_text_for_the_box(content: ScreenRegion) {
             state.scrollbar = frame.scrollbar;
             state.lines = frame.lines;
         }
-    }
-}
-
-/// The line one of the pin's own page keys asks the page on screen to be taken to, or nothing at
-/// all when the pin holds no page — which is what tells an up arrow meant for the page from one
-/// meant for the folder (see `pin_command_request`).
-///
-/// The page is asked for its own numbers rather than told where it is: what a screenful is is the
-/// box the page is drawn in, and where its ends are is what it can reach (see
-/// `TextPreviewState::page_lines`). Nothing is drawn here: the line is handed back to the tick that
-/// answered the key, which draws it the way it draws the wheel's own scroll.
-pub(super) fn text_scroll_line(command: PinCommand) -> Option<usize> {
-    // What the last paint said was on screen is asked before the media is, and it is the whole
-    // answer to whether there is a page: a pin whose page is being replaced this tick is still a pin
-    // holding one — and a page whose turn of the page walked the folder would be the up arrow the
-    // page took with it coming out as another file.
-    if !TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
-        return None;
-    }
-
-    let media = CURRENT_MEDIA.lock().ok()?;
-    let state = media.as_ref().and_then(|media| media.text_state.as_ref())?;
-
-    let step = state.page_lines();
-    match command {
-        PinCommand::PageBack => Some(state.scrolled_by(-step)),
-        PinCommand::PageOn => Some(state.scrolled_by(step)),
-        PinCommand::PageTop => Some(0),
-        PinCommand::PageBottom => Some(state.max_first_line()),
-        _ => None,
     }
 }
 
@@ -884,7 +920,7 @@ pub(super) unsafe fn redraw_pinned_page(hwnd: HWND, font_scale: Option<u32>) {
         return;
     }
 
-    let Some((path, before, dpi, width, height, first_line, selection)) =
+    let Some((path, before, dpi, width, height, first_line, selection, find)) =
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media.as_ref().and_then(|media| {
                 media.text_state.as_ref().map(|state| {
@@ -896,6 +932,7 @@ pub(super) unsafe fn redraw_pinned_page(hwnd: HWND, font_scale: Option<u32>) {
                         state.height,
                         state.first_line,
                         state.selection,
+                        state.find.highlights(),
                     )
                 })
             })
@@ -918,10 +955,12 @@ pub(super) unsafe fn redraw_pinned_page(hwnd: HWND, font_scale: Option<u32>) {
     }
 
     // Nothing is laid out while the lock is held: the render is a screenful of text, and the lock is
-    // the one a paint takes (see `scroll_text_preview`).
-    let Some(frame) =
-        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
-    else {
+    // the one a paint takes (see `scroll_text_preview`). The find bar's places are drawn with it: a
+    // page redrawn at another size or theme is the same document, and its search is not thrown away
+    // by a repaint (see `FindHighlights`).
+    let Some(frame) = text_preview::render_scrolled(
+        &path, first_line, width, height, dpi, options, selection, find,
+    ) else {
         return;
     };
 
@@ -955,7 +994,7 @@ pub(super) unsafe fn redraw_pinned_page(hwnd: HWND, font_scale: Option<u32>) {
 /// one costs a re-render of the window that is on screen — a screenful of lines,
 /// all of which are cached after the first pass.
 pub(super) unsafe fn repaint_text_preview(hwnd: HWND) {
-    let Some((path, options, dpi, width, height, first_line, selection)) =
+    let Some((path, options, dpi, width, height, first_line, selection, find)) =
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media.as_ref().and_then(|media| {
                 media.text_state.as_ref().map(|state| {
@@ -967,6 +1006,7 @@ pub(super) unsafe fn repaint_text_preview(hwnd: HWND) {
                         state.height,
                         state.first_line,
                         state.selection,
+                        state.find.highlights(),
                     )
                 })
             })
@@ -975,9 +1015,11 @@ pub(super) unsafe fn repaint_text_preview(hwnd: HWND) {
         return;
     };
 
-    let Some(frame) =
-        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
-    else {
+    // Held, for the reason `scroll_text_preview` is: a selection painted into the page is a page
+    // drawn again from the text it already has, not a look at the file (see `render_scrolled_held`).
+    let Some(frame) = text_preview::render_scrolled_held(
+        None, &path, first_line, width, height, dpi, options, selection, find,
+    ) else {
         return;
     };
 

@@ -433,10 +433,31 @@ impl PinState {
     }
 
     /// Take the command the chrome left, if one was left.
-    fn take_command(&mut self) -> Option<PinCommand> {
+    /// Take every command the chrome left, in the order they were asked for.
+    ///
+    /// One tick is one answer: a key held down repeats faster than a page is drawn, and a command
+    /// answered one per tick is a caret that keeps moving after the hand has let go (see
+    /// `pin_command_request`).
+    fn take_commands(&mut self) -> Vec<PinCommand> {
         match self {
-            PinState::Up(up) => up.commands.pop_front(),
-            _ => None,
+            PinState::Up(up) => up.commands.drain(..).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Put commands the tick did not answer back where they were, in their own order.
+    ///
+    /// A tick that can answer only one of something — a walk of the folder, an end of the pin —
+    /// hands the rest back rather than dropping them or answering them all at once: two presses of
+    /// `Next` are two files along, and a queue is what keeps the second one for the next tick.
+    fn return_commands(&mut self, commands: Vec<PinCommand>) {
+        if let PinState::Up(up) = self {
+            for command in commands.into_iter().rev() {
+                if up.commands.len() >= PIN_COMMANDS_MAX {
+                    up.commands.pop_back();
+                }
+                up.commands.push_front(command);
+            }
         }
     }
 
@@ -537,13 +558,25 @@ pub(super) fn ask_pin(command: PinCommand) {
     }
 }
 
-/// Take the command the chrome left, if one was left.
-///
-/// `None` says the queue was already empty, which is the whole of what the loop asks for
-/// beyond the command itself: the read is destructive, so a command nobody wanted any more is
-/// gone rather than acted on by a later tick.
+/// One command, for a test that asks the queue a press at a time (see `take_pin_commands`).
+#[cfg(test)]
 pub(super) fn take_pin_command() -> Option<PinCommand> {
-    pin_state()?.take_command()
+    pin_state()?.take_commands().into_iter().next()
+}
+
+/// Take every command left for the loop since the last tick (see `PinState::take_commands`).
+pub(super) fn take_pin_commands() -> Vec<PinCommand> {
+    pin_state()
+        .map(|mut state| state.take_commands())
+        .unwrap_or_default()
+}
+
+/// Put back commands this tick could not answer, in the order they were left (see
+/// `PinState::return_commands`).
+pub(super) fn return_pin_commands(commands: Vec<PinCommand>) {
+    if let Some(mut state) = pin_state() {
+        state.return_commands(commands);
+    }
 }
 
 /// The whole of what a road out of a pin owes the window, and on which thread.

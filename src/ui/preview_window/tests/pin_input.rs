@@ -41,9 +41,9 @@ fn a_pin_that_claims_the_keyboard_and_does_not_have_it_asks_for_it_back() {
 /// and it is why a loop is given by beginning the file again rather than by posting an arrow at
 /// it (see `video_launch::rewind_launch_seconds`).
 ///
-/// The two arrows that are a page of text's own are commands of this app's like the walks are: a
+/// The two arrows a page of text has a caret for are commands of this app's like the walks are: a
 /// walk is what they come to in a window with no page behind them, and that is asked where the
-/// file in the window is known rather than here (see `scroll_pinned_text`).
+/// file in the window is known rather than here (see `pin_command_request`).
 #[test]
 fn an_arrow_on_a_pinned_window_is_never_a_seek() {
     for (vk, expected, name) in [
@@ -59,14 +59,13 @@ fn an_arrow_on_a_pinned_window_is_never_a_seek() {
     }
 
     for (vk, expected, name) in [
-        (VK_UP.0 as i32, PinCommand::PageBack, "up"),
-        (VK_DOWN.0 as i32, PinCommand::PageOn, "down"),
+        (VK_UP.0 as i32, PinCommand::CaretUp, "up"),
+        (VK_DOWN.0 as i32, PinCommand::CaretDown, "down"),
     ] {
         assert_eq!(
             pinned_key_command(vk),
             Some(expected),
-            "{name} is the page's own command, which is a walk of the folder to a pin that \
-                 holds no page"
+            "{name} is the page's caret, which is a walk of the folder to a pin that holds no page"
         );
     }
 }

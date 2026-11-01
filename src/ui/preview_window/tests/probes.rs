@@ -2112,3 +2112,308 @@ fn a_window_of_the_engines_browser_is_the_page() {
     assert!(!the_engines_window(false, false, 4242, 0));
     assert!(!the_engines_window(false, false, 0, 0));
 }
+
+/// How long one arrow press takes to reach the screen on a pinned page: the hook's count, the loop's
+/// wake, the settling of the caret and the frame that shows it.
+///
+/// A page is pinned the way the pin key pins one — a real hover, a real low-level key count, a real
+/// loop — and an arrow is sent to the desktop with `SendInput`, so what is measured is what a hand
+/// pays. The caret is watched on the media it is settled into, and the frame on `PIN_PAINTS`, which
+/// moves when `UpdateLayeredWindow` has run: a press whose count has moved but whose paint has not is
+/// a press the loop has not answered.
+///
+/// Ignored, and driven by `RHP_APP_PROBE` naming a text file to pin, or by a page written out here.
+/// `cargo test -- --ignored --nocapture pin_text_caret_lag_probe`
+#[test]
+#[ignore = "pins a page and drives the desktop's keyboard"]
+fn pin_text_caret_lag_probe() {
+    let _room = the_room_to_itself();
+
+    let path = match std::env::var("RHP_APP_PROBE") {
+        Ok(path) => PathBuf::from(path),
+        Err(_) => {
+            let path = std::env::temp_dir().join("rhp-caret-probe.txt");
+            let text: String = (0..4000)
+                .map(|line| format!("    let value_{line} = compute({line}) * 3 + 17;\n"))
+                .collect();
+            std::fs::write(&path, text).expect("a written page");
+            path
+        }
+    };
+
+    std::thread::spawn(run_preview_window);
+    std::thread::sleep(Duration::from_millis(500));
+    show_preview(&path, 200, 200, None);
+
+    // The hover carries no caret of its own — a text state is what full mode gives a page, and
+    // full mode is the pin's — so the pin is what puts a page on screen with one.
+    let mut hovered = false;
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(50));
+        if CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| media.as_ref().map(|media| media.media_type))
+            == Some(MediaType::Text)
+        {
+            hovered = true;
+            break;
+        }
+    }
+    assert!(hovered, "the file never reached the preview as text");
+
+    crate::shell::key_input::spawn_key_watcher();
+    crate::shell::key_input::refresh();
+    std::thread::sleep(Duration::from_millis(200));
+    send_pin_key();
+
+    let mut up = false;
+    for _ in 0..50 {
+        std::thread::sleep(Duration::from_millis(50));
+        if pinned() {
+            up = true;
+            break;
+        }
+    }
+    assert!(up, "the pin never came up");
+
+    let mut shown = false;
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(50));
+        if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
+            shown = true;
+            break;
+        }
+    }
+    if !shown {
+        let kind = CURRENT_MEDIA.lock().ok().and_then(|m| {
+            m.as_ref().map(|m| {
+                format!(
+                    "{:?} loading={} text_state={} lines={}",
+                    m.media_type,
+                    m.media_type.is_loading(),
+                    m.text_state.is_some(),
+                    m.text_state.as_ref().map(|s| s.lines.len()).unwrap_or(0),
+                )
+            })
+        });
+        println!("nothing shown: media {kind:?}");
+    }
+    assert!(shown, "the page never reached the preview");
+    std::thread::sleep(Duration::from_millis(300));
+
+    // The pin takes the keyboard on its press, and a page's arrows are the pin's own only while the
+    // caret is in it — so the page is pressed the way a hand presses it, which is what puts the
+    // keyboard in the pin rather than in whatever was in front of it.
+    let content = pinned_content().expect("a pinned page");
+    send_pointer_to((content.0 + content.2) / 2, (content.1 + content.3) / 2);
+    std::thread::sleep(Duration::from_millis(120));
+    send_left_button(true);
+    std::thread::sleep(Duration::from_millis(120));
+    send_left_button(false);
+    std::thread::sleep(Duration::from_millis(300));
+
+    println!(
+        "foreground {:?} pinned window {:?}",
+        unsafe { GetForegroundWindow() },
+        pinned_window(),
+    );
+
+    // How often the loop is painting when nothing is being pressed, which says which band of the
+    // cadence this page is in.
+    let idle_before = PIN_PAINTS.load(Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(1000));
+    let idle = PIN_PAINTS.load(Ordering::Relaxed) - idle_before;
+    println!("idle paints in a second: {idle}");
+
+    let counted_before = crate::shell::key_input::pin_key_counted();
+    let mut caret_ms = Vec::new();
+    let mut paint_ms = Vec::new();
+    for _ in 0..12 {
+        let before_caret = text_caret::caret_now();
+        let before_paints = PIN_PAINTS.load(Ordering::Relaxed);
+        let began = Instant::now();
+        send_key_down(0x28);
+        while began.elapsed() < Duration::from_millis(500) {
+            if text_caret::caret_now() != before_caret {
+                caret_ms.push(began.elapsed().as_secs_f64() * 1e3);
+                break;
+            }
+            std::thread::sleep(Duration::from_micros(50));
+        }
+        while began.elapsed() < Duration::from_millis(500) {
+            if PIN_PAINTS.load(Ordering::Relaxed) > before_paints {
+                paint_ms.push(began.elapsed().as_secs_f64() * 1e3);
+                break;
+            }
+            std::thread::sleep(Duration::from_micros(50));
+        }
+        send_key_up(0x28);
+        std::thread::sleep(Duration::from_millis(120));
+    }
+
+    println!(
+        "caret settled after {caret_ms:?} ms (the hook counted {})",
+        crate::shell::key_input::pin_key_counted() - counted_before
+    );
+    println!("frame painted after {paint_ms:?} ms");
+
+    // A press that scrolls, which is the one that lays the page out again: the caret is walked to
+    // the last row the frame shows and one press further is the frame moved a line.
+    let (first, visible) = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| (state.first_line, state.visible_lines))
+        })
+        .expect("a page");
+    println!("first line {first}, {visible} lines on the page");
+    if let Some((path, options, dpi, width, height, first_line, selection, find)) =
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media.as_ref().and_then(|media| {
+                media.text_state.as_ref().map(|state| {
+                    (
+                        state.path.clone(),
+                        state.options,
+                        state.dpi,
+                        state.width,
+                        state.height,
+                        state.first_line,
+                        state.selection,
+                        state.find.highlights(),
+                    )
+                })
+            })
+        })
+    {
+        for _ in 0..3 {
+            let t = Instant::now();
+            let frame = text_preview::render_scrolled_held(
+                None,
+                &path,
+                first_line,
+                width,
+                height,
+                dpi,
+                options,
+                selection,
+                find.clone(),
+            );
+            let took = t.elapsed();
+            println!(
+                "frame {width}x{height}: {took:?}, {} lines, first {}",
+                frame.as_ref().map(|frame| frame.lines.len()).unwrap_or(0),
+                frame.as_ref().map(|frame| frame.first_line).unwrap_or(0),
+            );
+        }
+    }
+    let mut scrolled_ms = Vec::new();
+    for _ in 0..12 {
+        let before_caret = text_caret::caret_now();
+        let before_paints = PIN_PAINTS.load(Ordering::Relaxed);
+        let before_frames = text_preview::frame_render_count();
+        let before_shifted = text_preview::shifted_frame_count();
+        let began = Instant::now();
+        send_key_down(0x28);
+        while began.elapsed() < Duration::from_millis(500) {
+            if text_caret::caret_now() != before_caret {
+                break;
+            }
+            std::thread::sleep(Duration::from_micros(50));
+        }
+        while began.elapsed() < Duration::from_millis(500) {
+            if PIN_PAINTS.load(Ordering::Relaxed) > before_paints {
+                let took = began.elapsed().as_secs_f64() * 1e3;
+                let frames = text_preview::frame_render_count() - before_frames;
+                let shifted = text_preview::shifted_frame_count() - before_shifted;
+                let (first, caret) = CURRENT_MEDIA
+                    .lock()
+                    .ok()
+                    .and_then(|media| {
+                        media.as_ref().and_then(|media| {
+                            media
+                                .text_state
+                                .as_ref()
+                                .map(|state| (state.first_line, state.caret.map(|place| place.0)))
+                        })
+                    })
+                    .unwrap_or((0, None));
+                println!(
+                    "  scroll press {took:.2} ms, {frames} frames ({shifted} shifted), first {first}, caret {caret:?}"
+                );
+                scrolled_ms.push(took);
+                break;
+            }
+            std::thread::sleep(Duration::from_micros(50));
+        }
+        send_key_up(0x28);
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    println!("scrolling presses painted after {scrolled_ms:?} ms");
+
+    // A held arrow, which is the press a hand makes when it wants to go a page down rather than a
+    // line: thirty presses at auto-repeat's own rate, and then nothing. What is counted is where the
+    // caret was when the last of them was sent, and how long after that it was still moving.
+    let line_now = || text_caret::caret_now().map(|place| place.0);
+    let began = Instant::now();
+    let from = line_now();
+    for _ in 0..30 {
+        send_key_down(0x28);
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    send_key_up(0x28);
+    let at_release = line_now();
+    let mut reached = None;
+    let mut last = at_release;
+    let mut still_at = Instant::now();
+    while began.elapsed() < Duration::from_millis(3000) {
+        std::thread::sleep(Duration::from_millis(5));
+        let now = line_now();
+        if now != last {
+            last = now;
+            still_at = Instant::now();
+        }
+        if reached.is_none() && now == at_release.map(|line| line + 30) {
+            reached = Some(began.elapsed());
+        }
+        if still_at.elapsed() > Duration::from_millis(120) {
+            break;
+        }
+    }
+    println!(
+        "held arrow: line {from:?} -> {at_release:?} at release (30 presses), stopped at {last:?}          {:.0} ms after the burst",
+        still_at.saturating_duration_since(Instant::now()).as_secs_f64() * 0.0
+            + (began.elapsed().as_secs_f64() * 1e3),
+    );
+    println!("  thirty lines reached after {reached:?}");
+}
+
+fn send_key_down(vk: u16) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS;
+    send_a_key(vk, KEYBD_EVENT_FLAGS(0));
+}
+
+fn send_key_up(vk: u16) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS;
+    send_a_key(vk, KEYBD_EVENT_FLAGS(0x0002));
+}
+
+fn send_a_key(vk: u16, flags: windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{KEYBDINPUT, VIRTUAL_KEY};
+
+    send_inputs(&[INPUT {
+        r#type: INPUT_TYPE(1),
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(vk),
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }]);
+}

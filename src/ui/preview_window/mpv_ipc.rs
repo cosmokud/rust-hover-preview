@@ -297,6 +297,11 @@ pub(super) fn write_to_a_real_pipe(real: bool) {
 /// of a drag, and a release's re-assertion, are the level alone (see `HeldPlayer`). A level of
 /// nothing asks for nothing, since a film a hand has taken back down to silence wants the property
 /// it already has and not a decoder turned off behind it.
+///
+/// **It is also the level rung of the playback guard's ladder**, which is why nothing second was
+/// written for it: a player with a track and an output that reports `volume 0` or `mute yes` is
+/// brought back to the level its launch asked for by this same call, with `set_muted` beside it (see
+/// `audio_guard`).
 pub(super) fn set_volume(pid: u32, level: u32) -> bool {
     let Some(held) = held_player(pid) else {
         return false;
@@ -313,10 +318,7 @@ pub(super) fn set_volume(pid: u32, level: u32) -> bool {
     }
 
     if level > 0 && held.audio_off {
-        if !write(
-            pid,
-            r#"{"command":["set_property","aid","auto"],"async":true}"#.to_string() + "\n",
-        ) {
+        if !ask_for_a_track(pid) {
             return false;
         }
         // The ask landed, so the player has its track: the fact moves with it, which is what keeps
@@ -329,6 +331,51 @@ pub(super) fn set_volume(pid: u32, level: u32) -> bool {
     }
 
     true
+}
+
+/// Ask mpv to select a track for the file it is playing again — `aid` back to `auto`, which is the
+/// selection a launch with audio leaves the property at, since this app names no track of its own.
+///
+/// **It is the cure for a player that has no track at all**, and there are two roads to one: a launch
+/// whose level resolved to nothing gave the player `--aid=no` rather than `--volume=0` (see
+/// `video_launch::mpv_args`), and a pin that begins a film silent records that beside its pipe so
+/// that the first level above nothing asks the track back for (see `set_volume`). The second road is
+/// a player this app can see is silent — and the first is not, which is what the playback guard is
+/// for: it asks the same question of a player that was begun with a level and has no track anyway
+/// (see `audio_guard`).
+///
+pub(super) fn ask_for_a_track(pid: u32) -> bool {
+    write(
+        pid,
+        r#"{"command":["set_property","aid","auto"],"async":true}"#.to_string() + "\n",
+    )
+}
+
+/// Ask mpv to open an audio output again, by handing `audio-device` its own `auto` back.
+///
+/// **A runtime write of `audio-device` is an audio output reinitialised**, which is what makes this a
+/// cure rather than a restatement: a device that was refused while the film was starting — another
+/// player holding it, a driver that had not come up — is asked for once more, on a player that is
+/// already drawing, with nothing of its picture or its clock moved (see `audio_guard`).
+pub(super) fn ask_for_an_audio_device(pid: u32) -> bool {
+    write(
+        pid,
+        r#"{"command":["set_property","audio-device","auto"],"async":true}"#.to_string() + "\n",
+    )
+}
+
+/// Take mpv's own mute off, or put it on.
+///
+/// **It is the second half of the one cure and has no other caller**: a player at a level it was asked
+/// for that still reports `mute yes` is silent for a reason the level alone cannot move, so the guard
+/// re-asserts the level through `set_volume` and takes the mute off beside it (see `audio_guard`). A
+/// mute is mpv's own property and not this app's, which is why nothing of the pin's chrome writes it:
+/// the level is the knob, and this is the flag that silences a film without the level moving at all.
+pub(super) fn set_muted(pid: u32, muted: bool) -> bool {
+    write(
+        pid,
+        format!(r#"{{"command":["set_property","mute",{muted}],"async":true}}"#) + "\n",
+    )
 }
 
 /// Take mpv to a second of its file.
@@ -483,7 +530,38 @@ pub(super) fn get_property(pid: u32, property: &str) -> Option<String> {
     }
 
     let held = held_player(pid)?;
-    read_reply(&held.pipe, property_request(property))
+    // Only a pipe whose every instance is taken is worth the read again: this question is asked on
+    // the thread that is waiting for its answer, so the patience it is offered is the offers a
+    // command is (see `deliver`) rather than the patience a read of a player that has just been begun
+    // is (see `get_property_within`).
+    let pipe = open_for_a_question(&held.pipe, PIPE_OFFER_WAIT * PIPE_OFFERS as u32, |error| {
+        error.raw_os_error() == Some(ERROR_PIPE_BUSY)
+    })?;
+    the_answer_to(pipe, property_request(property))
+}
+
+/// The same question, offered to a player that has only just been begun: the open is tried again for
+/// as long as `within` has to run and the pipe is one worth trying again — not there yet, or there
+/// with nobody listening on it (see `worth_offering_again`, whose patience a resident's first
+/// `loadfile` is written with). The answer itself is read exactly as `get_property` reads one, and is
+/// bounded at `READ_WAIT` once the question has been asked.
+///
+/// **It is on no road a hover waits on.** Its one caller is the trace of a launch, which runs on a
+/// thread of its own (see `playback_trace::watch_the_engine`), so the patience it is willing to spend
+/// is a patience the preview loop never pays.
+pub(super) fn get_property_within(
+    pid: u32,
+    property: &str,
+    within: std::time::Duration,
+) -> Option<String> {
+    #[cfg(test)]
+    if !WRITE_TO_A_REAL_PIPE.load(Ordering::Acquire) {
+        return held_player(pid).and_then(|_| noted_answer(pid, property));
+    }
+
+    let held = held_player(pid)?;
+    let pipe = open_for_a_question(&held.pipe, within, worth_offering_again)?;
+    the_answer_to(pipe, property_request(property))
 }
 
 /// The one line a property is asked with: the command, the property, and the newline the JSON IPC
@@ -503,25 +581,8 @@ fn property_request(property: &str) -> String {
 /// costs one look a millisecond and nothing else — where a read would be this thread stopped until
 /// the player spoke, on a pipe that player will not hand to anyone else meanwhile. The pipe is
 /// dropped at the end, which takes the line with it: nothing here is a conversation.
-fn read_reply(name: &str, request: String) -> Option<String> {
+fn the_answer_to(mut pipe: std::fs::File, request: String) -> Option<String> {
     use std::io::Write;
-
-    let path = format!(r"\\.\pipe\{name}");
-    let mut offers = PIPE_OFFERS;
-    let mut pipe = loop {
-        offers -= 1;
-        match std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-        {
-            Ok(pipe) => break pipe,
-            Err(error) if offers > 0 && error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
-                std::thread::sleep(PIPE_OFFER_WAIT);
-            }
-            Err(_) => return None,
-        }
-    };
 
     if pipe.write_all(request.as_bytes()).is_err() {
         return None;
@@ -561,6 +622,35 @@ fn read_reply(name: &str, request: String) -> Option<String> {
             return None;
         }
         std::thread::sleep(READ_POLL);
+    }
+}
+
+/// Open a player's pipe to ask one question down it, offering the open again while `worth_it` says a
+/// failed open is one worth waiting for and `within` has not run out.
+///
+/// The two things a failed open can mean are the two readings of `worth_it`: a pipe whose every
+/// instance is taken is a player serving somebody else for a moment, and a pipe that is not there yet
+/// is a player that has not got to it (see `get_property` and `get_property_within`, which are the two
+/// patiences).
+fn open_for_a_question(
+    name: &str,
+    within: std::time::Duration,
+    worth_it: fn(&std::io::Error) -> bool,
+) -> Option<std::fs::File> {
+    let path = format!(r"\\.\pipe\{name}");
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+        {
+            Ok(pipe) => return Some(pipe),
+            Err(error) if worth_it(&error) && std::time::Instant::now() < deadline => {
+                std::thread::sleep(PIPE_OFFER_WAIT);
+            }
+            Err(_) => return None,
+        }
     }
 }
 
@@ -810,6 +900,8 @@ mod tests {
         assert!(set_paused(7, true));
         assert!(set_paused(7, false));
         assert!(set_ontop(7, false));
+        assert!(set_muted(7, false));
+        assert!(set_muted(7, true));
         assert!(cycle_subtitles(7));
         assert!(add_subtitles(
             7,
@@ -834,6 +926,14 @@ mod tests {
                 format!(
                     "{}\n",
                     r#"{"command":["set_property","ontop",false],"async":true}"#
+                ),
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","mute",false],"async":true}"#
+                ),
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","mute",true],"async":true}"#
                 ),
                 format!("{}\n", r#"{"command":["cycle","sub"],"async":true}"#),
                 format!(
@@ -1199,6 +1299,7 @@ mod tests {
         let name = next_pipe_name();
         let args = video_launch::mpv_args(
             &picture, 0, 0, 320, 240, 0.0, false, 0, None, false, false, None, &name, false, true,
+            false,
         );
         let audio_file = format!("--audio-file={}", soundtrack.to_string_lossy());
         let started = engine_processes::hidden_command(&program)

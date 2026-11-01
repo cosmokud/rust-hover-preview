@@ -23,6 +23,14 @@
 //! It is gated on the caret being in one of *this pin's* two windows, so a key typed into whatever
 //! is behind the pin is still that window's key — the hook is not a global remap, and a pin up
 //! over Explorer does not steal the arrows from Explorer.
+//!
+//! **A find bar is the one state in which none of that happens.** A bar floats over a pinned page and
+//! the query it holds is a text field, and a field's characters are the `WM_CHAR` that
+//! `TranslateMessage` makes *after* every low-level hook has returned: a `Space` or a `T` swallowed
+//! here is a character the query can never hold. So while a bar is up over the focused pin, that
+//! pin's keys are not taken at all — nothing is counted and nothing swallowed, and the pin's own
+//! window answers them, which is where the bar's one key table lives (see `PIN_FIND_BAR_UP` and
+//! `text_find::key_edit_with`).
 
 use crate::CONFIG;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -80,28 +88,34 @@ static PIN_KEYS_TOPMOST: AtomicBool = AtomicBool::new(false);
 /// `VK_RIGHT`/`VK_DOWN` used to be the same command and `VK_LEFT`/`VK_UP` the other, which was
 /// right while a pin only ever held a file: an up arrow had nowhere to walk to. A pin that holds a
 /// page of text has somewhere for the two of them to go, and which of the two a window means is
-/// asked where the file is known rather than here (see `PinCommand::PageBack`).
+/// asked where the file is known rather than here (see `PinCommand::CaretUp`).
+///
+/// **The arrows and the page keys are four commands rather than two**, for that reason: a page's
+/// caret moves a line and a page key moves a screenful, and a table that gave them one command each
+/// would leave the caret's line moves indistinguishable from the folder's walk. A pin holding no
+/// page still walks on `VK_UP`/`VK_DOWN` — that is the loop's answer rather than this table's (see
+/// `pin_command_request`).
 pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 12] = [
-    (0x25, 0), // VK_LEFT  -> Previous
-    (0x27, 1), // VK_RIGHT -> Next
-    (0x1B, 2), // VK_ESCAPE -> Close
-    (0x20, 3), // VK_SPACE -> TogglePlayback
-    (0x54, 4), // VK_T     -> NextSubtitle
-    (0x26, 5), // VK_UP    -> PageBack
-    (0x21, 5), // VK_PRIOR  -> PageBack
-    (0x28, 6), // VK_DOWN  -> PageOn
-    (0x22, 6), // VK_NEXT   -> PageOn
-    (0x24, 7), // VK_HOME  -> PageTop
-    (0x23, 8), // VK_END   -> PageBottom
-    (0x72, 9), // VK_F3    -> FindNext
+    (0x25, 0),  // VK_LEFT   -> Previous
+    (0x27, 1),  // VK_RIGHT  -> Next
+    (0x1B, 2),  // VK_ESCAPE -> Close
+    (0x20, 3),  // VK_SPACE  -> TogglePlayback
+    (0x54, 4),  // VK_T      -> NextSubtitle
+    (0x26, 5),  // VK_UP     -> CaretUp
+    (0x21, 6),  // VK_PRIOR  -> PageBack
+    (0x28, 7),  // VK_DOWN   -> CaretDown
+    (0x22, 8),  // VK_NEXT   -> PageOn
+    (0x24, 9),  // VK_HOME   -> PageTop
+    (0x23, 10), // VK_END   -> PageBottom
+    (0x72, 11), // VK_F3    -> FindNext
 ];
 
 /// How many commands `PIN_KEY_COMMANDS` names, which is how many counters are kept for them.
 ///
-/// Named rather than written as the `10` of an array length so that a command added to the table
+/// Named rather than written as the `12` of an array length so that a command added to the table
 /// above is a command this count has to be told about, rather than a command whose presses are
 /// counted into a counter that was never reserved for it.
-const PIN_COMMAND_COUNT: usize = 10;
+const PIN_COMMAND_COUNT: usize = 12;
 
 /// The command that means `PinCommand::TogglePlayback`, which is the one row of
 /// `PIN_KEY_COMMANDS` whose repeats are not commands.
@@ -161,6 +175,8 @@ static PIN_KEY_PRESSES: [AtomicU32; PIN_COMMAND_COUNT] = [
     AtomicU32::new(0),
     AtomicU32::new(0),
     AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
 ];
 
 /// Whether the toggle is held, which is what tells a Space press from a Space still held down.
@@ -179,6 +195,18 @@ pub(crate) fn take_pin_key_presses() -> Vec<u8> {
             std::iter::repeat_n(command as u8, count.swap(0, Ordering::AcqRel) as usize)
         })
         .collect()
+}
+
+/// How many commands this hook has counted since the process started, which is the one thing a
+/// reader of the two roads a pin's key can travel can tell apart: a key this hook counted never
+/// became a message, and a key the pin's own window answered never came here (see `pin_owns_caret`).
+#[cfg(test)]
+static PIN_KEY_COUNTED: AtomicU64 = AtomicU64::new(0);
+
+/// The number of commands this hook has counted (see `PIN_KEY_COUNTED`).
+#[cfg(test)]
+pub(crate) fn pin_key_counted() -> u64 {
+    PIN_KEY_COUNTED.load(Ordering::Relaxed)
 }
 
 /// Whether a key-down is a command, from the command it means and whether the toggle was already
@@ -211,6 +239,53 @@ fn pin_key_press_is_a_command(command: u8, toggle_was_down: bool) -> bool {
 /// `preview_window::pinned_key_message_command`).
 pub(crate) fn pin_key_message_acts(message: u32) -> bool {
     message == WM_KEYDOWN
+}
+
+/// What the hook does with one message about a key of `PIN_KEY_COMMANDS`, once the caret is known to
+/// be in one of the pin's two windows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PinKeyAnswer {
+    /// Let through to the window the caret is in, counting nothing.
+    PassedOn,
+    /// Swallowed, and counted as one press of this command.
+    Command(u8),
+    /// Swallowed and counted by nothing: a chord the pin's own window throws away, or a release that
+    /// lets a held key go.
+    Swallowed,
+}
+
+/// What the pin does with one message about a key of its own, asked once so that the callback below
+/// is the only place the answer is acted on.
+///
+/// **A find bar that is up answers `PassedOn` to every message, the key that holds a film included.**
+/// The bar's field is a text field, its characters arrive as `WM_CHAR`, and `TranslateMessage` only
+/// makes one from a key-down nothing swallowed: a `Space` or a `T` taken here is a query that can
+/// hold neither (see `PIN_FIND_BAR_UP`). Everything else is the arrangement it always was — a key the
+/// pin answers is counted and swallowed, a chord and a release are swallowed and counted by nothing
+/// (see `pin_key_message_acts` and `pin_key_press_is_a_command`).
+fn the_pin_answers_key(
+    command: u8,
+    message: u32,
+    find_bar_up: bool,
+    toggle_was_down: bool,
+) -> PinKeyAnswer {
+    if find_bar_up {
+        return PinKeyAnswer::PassedOn;
+    }
+
+    if pin_key_message_acts(message) {
+        return if pin_key_press_is_a_command(command, toggle_was_down) {
+            PinKeyAnswer::Command(command)
+        } else {
+            PinKeyAnswer::Swallowed
+        };
+    }
+
+    if matches!(message, WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP) {
+        return PinKeyAnswer::Swallowed;
+    }
+
+    PinKeyAnswer::PassedOn
 }
 
 /// What the flag saying the pin's own play/pause key is held stands once one message about one of
@@ -281,6 +356,22 @@ fn pin_toggle_held_after(
 /// it is a window of FFmpeg's that this app has no business taking keys from.
 fn pin_owns_caret(owner: u64, video: u64, foreground: u64) -> bool {
     owner != 0 && foreground != 0 && (foreground == owner || (video != 0 && foreground == video))
+}
+
+/// Whether a find bar is up over the standing pin's page, published beside the two handles and for
+/// the same reason: `text_find::is_open` takes the media lock, and a `WH_KEYBOARD_LL` callback may
+/// take none. It is also the one question that changes what this hook may do at all — a bar that is
+/// up takes every key the pin would have answered, by passing it on.
+static PIN_FIND_BAR_UP: AtomicBool = AtomicBool::new(false);
+
+/// Tell the hook whether a find bar is up over the pin's page.
+///
+/// **A swallowed key never becomes a character.** `TranslateMessage` runs after every low-level hook
+/// has returned, so the `WM_CHAR` a text field types from exists only for a key-down the hook let
+/// through. That is why a bar is not another reader of this hook's commands: while it is up the
+/// pin's keys are the field's, and the field's road is a message (see `text_find::key_edit_with`).
+pub(crate) fn publish_find_bar_up(open: bool) {
+    PIN_FIND_BAR_UP.store(open, Ordering::Release);
 }
 
 /// The same question asked of the published handles rather than of numbers: whether the pin is the
@@ -552,7 +643,11 @@ pub(crate) fn request_stop() {
     super::hook_thread::request_stop(&KEY_THREAD_ID)
 }
 
-unsafe extern "system" fn key_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+pub(crate) unsafe extern "system" fn key_hook_proc(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     // Keep this callback cheap: every keystroke on the desktop waits for it to
     // return, and a hook that answers too slowly is removed by Windows. It reads a
     // few numbers, touches a few atomics, and mostly passes the message on — the
@@ -631,26 +726,28 @@ unsafe extern "system" fn key_hook_proc(code: i32, wparam: WPARAM, lparam: LPARA
         }
 
         if owns_caret {
-            // The one class the pin's own window acts on, read from its own rule rather than from
-            // the arm this hook happens to match on (see `pin_key_message_acts`).
-            if pin_key_message_acts(message) {
-                // The flag is only read for the toggle, so an arrow held down cannot clear a Space
-                // that is still held (see `pin_key_press_is_a_command`).
-                if pin_key_press_is_a_command(command, toggle_was_down) {
-                    PIN_KEY_PRESSES[command as usize].fetch_add(1, Ordering::AcqRel);
+            // The answer is one value because the gate that matters is the first arm: a key the pin
+            // would have answered is passed on whole while a find bar is up, so the field's
+            // `WM_CHAR` can exist at all (see `the_pin_answers_key`).
+            match the_pin_answers_key(
+                command,
+                message,
+                PIN_FIND_BAR_UP.load(Ordering::Acquire),
+                toggle_was_down,
+            ) {
+                PinKeyAnswer::PassedOn => {}
+                PinKeyAnswer::Command(counted) => {
+                    PIN_KEY_PRESSES[counted as usize].fetch_add(1, Ordering::AcqRel);
+                    #[cfg(test)]
+                    PIN_KEY_COUNTED.fetch_add(1, Ordering::Relaxed);
+                    // The count is an atomic and nothing else, so the loop is woken for it: a press
+                    // read at the end of a pinned static page's wait is 50 ms late, rounded up to
+                    // the system timer's own 15.6 ms tick, and the caret is a mark the reader who
+                    // pressed the key is watching for (see `wake_preview_loop`).
+                    crate::ui::preview_window::wake_preview_loop();
+                    return LRESULT(1);
                 }
-                return LRESULT(1);
-            }
-
-            // A chord and a release are both swallowed and neither is counted. The chord is
-            // swallowed exactly as the pin's own window swallows it — it is what keeps `Alt+F4` and
-            // `Alt+Tab` away from a window that must not be closed or left — and it is counted by
-            // nothing, because that window answers no chord either and a `Ctrl`+Left answered here
-            // is a walk of a folder the user did not ask to walk. The release is taken so that
-            // letting go over the pin and pressing Space again somewhere else leaves no Space stuck
-            // down in the table.
-            if matches!(message, WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP) {
-                return LRESULT(1);
+                PinKeyAnswer::Swallowed => return LRESULT(1),
             }
         }
     }
@@ -694,13 +791,14 @@ mod tests {
         assert_eq!(
             pin_key_command(0x26),
             Some(5),
-            "VK_UP takes a page back, and a window with no page in it walks the folder for it"
+            "VK_UP is the page's caret a line back, which is a walk of the folder to a window with \
+             no page in it"
         );
         assert_eq!(pin_key_command(0x27), Some(1), "VK_RIGHT is the next file");
         assert_eq!(
             pin_key_command(0x28),
-            Some(6),
-            "VK_DOWN takes a page on, and the same window walks on for it"
+            Some(7),
+            "VK_DOWN is the page's caret a line on, and the same window walks on for it"
         );
         assert_eq!(pin_key_command(0x1B), Some(2), "VK_ESCAPE closes the pin");
         assert_eq!(
@@ -715,23 +813,27 @@ mod tests {
         );
         assert_eq!(
             pin_key_command(0x21),
-            Some(5),
-            "VK_PRIOR is VK_UP's command, because both take a page of text back"
+            Some(6),
+            "VK_PRIOR is the page key: a screenful back, where an arrow is a line"
         );
-        assert_eq!(pin_key_command(0x22), Some(6), "and VK_NEXT is VK_DOWN's");
+        assert_eq!(
+            pin_key_command(0x22),
+            Some(8),
+            "and VK_NEXT is the screenful on"
+        );
         assert_eq!(
             pin_key_command(0x24),
-            Some(7),
+            Some(9),
             "VK_HOME is the beginning of the page in the window"
         );
         assert_eq!(
             pin_key_command(0x23),
-            Some(8),
+            Some(10),
             "and VK_END is the last screenful of it"
         );
         assert_eq!(
             pin_key_command(0x72),
-            Some(9),
+            Some(11),
             "VK_F3 takes the page to the next place its selection appears"
         );
 
@@ -867,6 +969,65 @@ mod tests {
         assert!(
             !pin_key_message_acts(WM_SYSKEYUP),
             "nor is the release of a chord"
+        );
+    }
+
+    /// **A find bar that is up takes every key the pin answers by passing it on.** A key swallowed
+    /// here never becomes the `WM_CHAR` a text field types from, so `Space` and `T` — a play/pause
+    /// and a subtitle step to a film — used to be characters a query could not hold. The bar's own
+    /// table reads them where they land instead (see `text_find::key_edit_with`).
+    #[test]
+    fn a_find_bar_that_is_up_passes_on_every_key_the_pin_answers() {
+        for (vk, command) in PIN_KEY_COMMANDS {
+            assert_eq!(
+                the_pin_answers_key(command, WM_KEYDOWN, true, false),
+                PinKeyAnswer::PassedOn,
+                "`{vk:#x}` is the field's while a bar is up, so the key-down has to reach the \
+                 window the field lives in or the character it types never exists"
+            );
+            assert_eq!(
+                the_pin_answers_key(command, WM_KEYDOWN, false, false),
+                PinKeyAnswer::Command(command),
+                "and with no bar up `{vk:#x}` is swallowed and counted exactly as it always was"
+            );
+        }
+
+        // Which is not the same as the pin's other two arms: a chord and a release are swallowed
+        // by the pin and let through by the bar, and a Space still held counts nothing either way.
+        for message in [WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP] {
+            assert_eq!(
+                the_pin_answers_key(0, message, true, false),
+                PinKeyAnswer::PassedOn,
+                "{message:#x} is the field's too: a bar cannot leave the key that let go of it \
+                 behind in a window it never saw"
+            );
+            assert_eq!(
+                the_pin_answers_key(0, message, false, false),
+                PinKeyAnswer::Swallowed,
+                "while the pin's own window throws it away, and the hook does the same"
+            );
+        }
+
+        assert_eq!(
+            the_pin_answers_key(
+                PIN_COMMAND_TOGGLE_PLAYBACK as u8,
+                WM_KEYDOWN,
+                true,
+                true
+            ),
+            PinKeyAnswer::PassedOn,
+            "a Space typed into a query is a Space, whether or not a film would have counted it as \
+             the repeat of one held"
+        );
+        assert_eq!(
+            the_pin_answers_key(PIN_COMMAND_TOGGLE_PLAYBACK as u8, WM_KEYDOWN, false, true),
+            PinKeyAnswer::Swallowed,
+            "and with the bar away the held toggle is still swallowed rather than answered twice"
+        );
+        assert_eq!(
+            the_pin_answers_key(PIN_COMMAND_TOGGLE_PLAYBACK as u8, WM_KEYDOWN, false, false),
+            PinKeyAnswer::Command(PIN_COMMAND_TOGGLE_PLAYBACK as u8),
+            "and a first Space is the hold it always was"
         );
     }
 

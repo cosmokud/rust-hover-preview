@@ -1355,11 +1355,13 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
 /// new box — the same answer a resized video is given for as long as the engine's next frame is
 /// on its way (see `compose_media_into_band`).
 ///
-/// **`road` is what tells the one kind whose answer differs which of the roads is asking** (see
-/// `PinRelayoutRoad`): every other kind lays its media out again wherever the box came from,
-/// but a video's box change is a player being ended and begun again, and that is the one thing a
-/// take-up is not doing. It is also what says what the box is a box *of* — a window's own room, or the
-/// size a picture has been zoomed to — and so what scale the file is decoded at.
+/// **`road` is what tells the kinds whose answer differs which of the roads is asking** (see
+/// `PinRelayoutRoad`): every other kind lays its media out again wherever the box came from, but a
+/// video's box change is a player being ended and begun again, and that is the one thing a take-up is
+/// not doing — and a page of text's box change owes no read at all, where its take-up is owed the one
+/// that draws it in full mode (see the arms below). It is also what says what the box is a box *of* —
+/// a window's own room, or the size a picture has been zoomed to — and so what scale the file is
+/// decoded at.
 pub(super) fn relayout_pinned_media(
     path: &Path,
     content: ScreenRegion,
@@ -1461,6 +1463,22 @@ pub(super) fn relayout_pinned_media(
             }
             None
         }
+        // **A page of text answers its own box, and the seat of the box change has already laid it
+        // out.** `relayout_text_for_the_box` draws the page again for the box the window has just
+        // been given, at the line the reader was on, keeping the selection and the size they put it
+        // to — and it runs on the same box before this question is answered. A read here would begin
+        // at the first line, because nothing carries `first_line` into a frame that is not the one
+        // being replaced, so the load is that page laid out a second time from the top;
+        // `keep_text_place` then copies the reader's line back onto a frame still showing the first
+        // one, and the next notch — which scrolls from the state's line — is the jump back to where
+        // they were. So the frame and the state are left alone instead, both of them the page the
+        // seat drew.
+        //
+        // The road is what decides this rather than the kind. A take-up still owes the read, because
+        // the pin is being built whole for a file it has not stood on, the page is drawn in full mode
+        // with the gutter, and the take-up's own arm asks for exactly that (see
+        // `PinRelayoutRoad::TakeUp`). And a zoom never reaches a page at all.
+        Some(MediaType::Text) if matches!(road, PinRelayoutRoad::BoxChange) => None,
         // And a box change that the frame on screen already covers owes nothing at all: the band is
         // the window's own box and stretches whatever frame is there into it, so a decode here would
         // be paid to *replace* pixels the smaller box already has — and it is those pixels that
@@ -1501,11 +1519,13 @@ pub(super) fn relayout_pinned_media(
 /// so is a page: a PDF, the page Office, the render engine or Calibre drew, and a plate out of a
 /// comic are each a page rasterized at the box it is shown in, and what that box decides is how many
 /// pixels the page is drawn at rather than what is on it — so the pixels a bigger frame already
-/// holds are every one the smaller box would have been given. What is left out is the three kinds a
-/// box lays out again rather than scales: a page of text in half the box is half the lines at the
-/// same size, a listing is another page of rows, and a sound's card is another card, so a frame of
-/// one stretched into a box it was not laid out for is a different pageful rather than the same one
-/// smaller — and each is answered below as it always was.
+/// holds are every one the smaller box would have been given. What is left out is the kinds a box
+/// lays out again rather than scales, so that a frame of one stretched into a box it was not laid out
+/// for is a different pageful rather than the same one smaller. A page of text is the one of those
+/// that is not answered below: half the box is half the lines at the same size, and the seat of the
+/// box change has already drawn it at those lines, so no read is owed at all (see the arm above). A
+/// listing and a sound's card are the others, and each is laid out again as it always was — the card
+/// above, where its clock is, and the listing below.
 ///
 /// A *take-up* is never covered, whatever the frame says: the media on screen is the file the pin is
 /// leaving, and the size of its frame says nothing about the file arriving (see `PinRelayoutRoad`).
@@ -1533,13 +1553,15 @@ fn box_is_covered(
             .is_some_and(|(held_width, held_height)| held_width >= width && held_height >= height)
 }
 
-/// Which of the roads asked for a relayout, for the one kind of media whose answer differs and for the
-/// one size it is asked at.
+/// Which of the roads asked for a relayout, for the kinds of media whose answer differs and for the one
+/// size it is asked at.
 ///
-/// Every kind lays its media out again in whatever box it is given, so the road is a fact only a video
-/// needs — and what a video needs it for is the one *size* the file is decoded at. A box change for a
-/// film is the host fitted to the new box and nothing else; no player is ended for it (see
-/// `pin_film_thumbnail`).
+/// Every kind lays its media out again in whatever box it is given, so for most of them the road
+/// decides nothing — a video needs it for the one *size* the file is decoded at, and a box change for
+/// a film is the host fitted to the new box and nothing else, no player ended for it (see
+/// `pin_film_thumbnail`). A page of text needs it for whether it is laid out here at all: the box
+/// change has already been drawn by its own seat, at the line the reader was on, and a take-up is the
+/// road that still owes the read (see `relayout_pinned_media`).
 ///
 /// The box a zoom is laid out for is the other thing a road decides, and it is the only one the scale
 /// below is read from (see `relayout_pinned_media`).
@@ -1630,15 +1652,24 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
 /// Carry where a page of text was up to — the line its frame starts at, what was selected, and the
 /// size the reader put it to — from the media being replaced onto the one that replaces it.
 ///
-/// A pinned text preview is laid out again whenever its window is given another box, and a box is
-/// what the document is wrapped for: without this, resizing the window of a document someone is
-/// reading would put them back at the top of it. The two positions survive being carried because
-/// they are places in the document rather than points on the screen (see `Selection`), and the size
-/// is carried because it is the reader's own rather than the file's — the next file of a walk is
-/// drawn at it too, and only closing the pin or picking the tray's own `Font Size` row gives it up
-/// (see `step_pinned_text_size` and `redraw_pinned_page`). The rest of
-/// the state — the lines, the scrollbar, what can be reached — belongs to the box the new media was
-/// laid out in.
+/// A pinned text preview is still laid out again on the roads that are not a box — a take-up, and the
+/// walk or step onto another file, which takes one (see `PinRelayoutRoad`) — and each of those
+/// installs a page read from the first line of its document. A box no longer comes through here: the
+/// seat of the box change lays the page out for the new box itself, at the line the reader is on (see
+/// `relayout_text_for_the_box`). So without this a pin stepped onto another document would put the
+/// reader back at the top of it. The place and the selection survive being carried because they are
+/// places in the document rather than points on the screen (see `Selection`), and the size is carried
+/// because it is the reader's own rather than the file's — the next file of a walk is drawn at it
+/// too, and only closing the pin or picking the tray's own `Font Size` row gives it up (see
+/// `step_pinned_text_size` and `redraw_pinned_page`). The rest of the state — the lines, the
+/// scrollbar, what can be reached — belongs to the box the new media was laid out in.
+///
+/// **What is deliberately not carried is the find bar.** A match is a place in the document that was
+/// searched, and the next file of a walk is another document: a bar standing over it at a query it
+/// never searched would say the reader had found something in a file they had not read yet. So the
+/// bar goes with the file it was opened on — the state the new media arrives with has it closed, at
+/// no query and no matches — and only a box change, which is the same document laid out again, keeps
+/// it (see `FindState` and `relayout_text_for_the_box`).
 ///
 /// It takes the lock itself and is called *before* the one above is taken, for the reason the
 /// deadlock in `pin_media_is_alive` is written down as: a lock this thread already holds is not a
