@@ -575,9 +575,9 @@ pub(super) struct PinnedPreview {
     pub(super) audio_hovered: Option<CardControl>,
     pub(super) audio_pressed: Option<CardControl>,
     /// Whether the card's two window buttons are showing, which is what the card
-    /// is painted from: a hand near the window's top border or near the buttons
-    /// themselves, asked on every move and every tick (see `pinned_mouse_move`
-    /// and `pin_audio_hover_refresh`).
+    /// is painted from: a hand near the buttons themselves — in their band and
+    /// across their columns, asked on every move and every tick (see
+    /// `pinned_mouse_move` and `pin_audio_hover_refresh`).
     pub(super) audio_window_buttons: bool,
     /// The card's own menu: whether its panel is up, and
     /// whether the Seek row's flyout is (see `PinMenu`).

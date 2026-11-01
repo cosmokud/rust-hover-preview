@@ -712,15 +712,25 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
     );
 
     // The window buttons' band is the anchor's: a hand in the
-    // band the anchor's buttons stand in is a hand near the top
-    // border, and a hand one row past it is not.
+    // band the anchor's buttons stand in and across their columns
+    // is a hand near the buttons, and a hand one row past it is
+    // not.
     let band = audio_preview::window_button_band(pin.dpi, audio_options_of(anchor));
+    let on_a_button = audio_preview::control_box(
+        CardControl::AlwaysOnTop,
+        (pin.content.2 - pin.content.0).max(1) as u32,
+        pin.dpi,
+        audio_options_of(anchor),
+        true,
+    )
+    .expect("a box on a card that carries its controls");
+    let x = (on_a_button.left + on_a_button.right) / 2;
     assert!(
-        pin_audio_window_buttons(&pin, band - 1),
-        "a hand in the anchor's band is a hand near the top border"
+        pin_audio_window_buttons_at(&pin, x, band - 1),
+        "a hand at a button's own column and in the anchor's band is a hand near the buttons"
     );
     assert!(
-        !pin_audio_window_buttons(&pin, band),
+        !pin_audio_window_buttons_at(&pin, x, band),
         "while a hand one row below it is a hand past the buttons"
     );
 
@@ -1681,9 +1691,9 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
         (CardControl::Close, PinCommand::Close),
     ] {
         // The window buttons are controls only while they are
-        // showing, which is the state a hand near the window's
-        // top border — the hand that is about to press one —
-        // leaves the pin in (see `pin_audio_window_buttons`).
+        // showing, which is the state a hand near the buttons
+        // themselves — the hand that is about to press one —
+        // leaves the pin in (see `pin_audio_window_buttons_at`).
         let mut shown = sound_pin();
         shown.audio_window_buttons = true;
         stand_pin(Some(shown));
@@ -1767,11 +1777,11 @@ fn a_sounds_always_on_top_button_toggles_pin_always_on_top() {
     stand_pin(previous_pin);
 }
 
-/// The two window buttons come and go with the hand's every move: a
-/// pointer move into the top band — the band as tall as the buttons'
-/// own hit boxes, which is the window's own top border and the buttons
-/// both — brings them up and asks for the card again, and a move below
-/// the band puts them away and asks for it again too.
+/// The two window buttons come and go with the hand's every move, on both
+/// axes: a pointer move onto them — in the top band, the band as tall as the
+/// buttons' own hit boxes, and across the columns they stand in — brings them
+/// up and asks for the card again, and a move off them puts them away and asks
+/// for it again too.
 #[test]
 fn a_hand_near_the_top_border_brings_a_sounds_window_buttons_up() {
     let _room = the_room_to_itself();
@@ -1779,28 +1789,42 @@ fn a_hand_near_the_top_border_brings_a_sounds_window_buttons_up() {
     let previous_pin = take_pin_for_a_test();
 
     stand_pin(Some(sound_pin()));
+    let pin = sound_pin();
     let band = audio_preview::window_button_band(96, current_audio_options());
-    let (width, _) = sound_pin().window_size();
-    let middle = width / 2;
+    let (x, on_a_button) = a_sound_window_button_point(&pin, CardControl::AlwaysOnTop);
 
-    // A hand on the window's own top row: in the band, and away
-    // from the buttons themselves, so what changes is the buttons
-    // alone.
+    // A hand in the top band but hard against the card's own left
+    // border: the band is the whole width and the buttons are not, so
+    // this is a hand near neither and nothing changes.
     AUDIO_CARD_DIRTY.store(false, Ordering::Release);
-    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), middle, 0) };
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), 1, 1) };
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_window_buttons)),
+        Some(false),
+        "a hand in the top band at the card's left is a hand near no button"
+    );
+    assert!(
+        !AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+        "and asks the card for nothing"
+    );
+
+    // A hand on the buttons themselves: they come up, and the card is
+    // asked for again, which is what shows them.
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, on_a_button) };
     assert_eq!(
         pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_window_buttons)),
         Some(true),
-        "a hand in the top band is a hand asking for the two window buttons"
+        "a hand on a window button's own box is a hand asking for the two window buttons"
     );
     assert!(
         AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
         "and the buttons coming up is a change of the card, which is what shows them"
     );
 
-    // A hand one row below the band: out of it, so the buttons go
-    // away and the name's corner is the card's own again.
-    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), middle, band) };
+    // A hand one row below the band, at the buttons' own column: out of
+    // it, so the buttons go away and the name's corner is the card's own
+    // again.
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), x, band) };
     assert_eq!(
         pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_window_buttons)),
         Some(false),
@@ -1815,9 +1839,9 @@ fn a_hand_near_the_top_border_brings_a_sounds_window_buttons_up() {
 }
 
 /// The tick asks the same question of the pointer the move asks: a
-/// screen cursor in the top band brings a sound's two window buttons
-/// up, and a cursor below the band — or off the window — puts them
-/// away.
+/// screen cursor on the buttons brings a sound's two window buttons
+/// up, and a cursor in the top band at the card's own left — or below
+/// the band, or off the window — puts them away.
 #[test]
 fn the_tick_asks_for_the_window_buttons_where_a_hand_is_near_the_top_border() {
     let _room = the_room_to_itself();
@@ -1827,11 +1851,13 @@ fn the_tick_asks_for_the_window_buttons_where_a_hand_is_near_the_top_border() {
     let pin = sound_pin();
     let window = pin.window_box();
     let band = audio_preview::window_button_band(96, current_audio_options());
+    let (x, y) = a_sound_window_button_point(&pin, CardControl::AlwaysOnTop);
+    let on_a_button = (window.0 + x, window.1 + y);
     stand_pin(Some(pin));
 
     // A screen cursor in the top band, in the window's own left
-    // margin: near the top border, and away from the buttons
-    // themselves, so what changes is the buttons alone.
+    // margin: in the band and across the card from the buttons, so
+    // nothing changes.
     let in_the_band = (window.0 + 10, window.1 + 1);
     AUDIO_CARD_DIRTY.store(false, Ordering::Release);
     let changed = pin_state().and_then(|mut pinned| {
@@ -1840,8 +1866,22 @@ fn the_tick_asks_for_the_window_buttons_where_a_hand_is_near_the_top_border() {
     });
     assert_eq!(
         pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_window_buttons)),
+        Some(false),
+        "a screen cursor in the top band at the card's left is near no button"
+    );
+    assert_eq!(changed, Some(false), "and nothing is asked of the card");
+
+    // A cursor on the buttons themselves is a hand near them: they come
+    // up and the card is asked for.
+    AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+    let changed = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(pin_audio_hover_refresh(pin, Some(on_a_button)))
+    });
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_window_buttons)),
         Some(true),
-        "a screen cursor in the top band is a hand near the top border"
+        "a screen cursor on a window button is a hand near the buttons"
     );
     assert_eq!(
         changed,
@@ -1856,7 +1896,7 @@ fn the_tick_asks_for_the_window_buttons_where_a_hand_is_near_the_top_border() {
     // The same cursor resting there is not a change worth a repaint.
     let changed = pin_state().and_then(|mut pinned| {
         let pin = pinned.pin_mut()?;
-        Some(pin_audio_hover_refresh(pin, Some(in_the_band)))
+        Some(pin_audio_hover_refresh(pin, Some(on_a_button)))
     });
     assert_eq!(
         changed,
@@ -1868,9 +1908,9 @@ fn the_tick_asks_for_the_window_buttons_where_a_hand_is_near_the_top_border() {
         "and nothing is asked of the card"
     );
 
-    // A cursor one row below the band, in the window: the buttons
-    // go away.
-    let below_the_band = (window.0 + 10, window.1 + band);
+    // A cursor one row below the band, at the buttons' own column: the
+    // buttons go away.
+    let below_the_band = (window.0 + x, window.1 + band);
     let changed = pin_state().and_then(|mut pinned| {
         let pin = pinned.pin_mut()?;
         Some(pin_audio_hover_refresh(pin, Some(below_the_band)))
@@ -1902,6 +1942,58 @@ fn the_tick_asks_for_the_window_buttons_where_a_hand_is_near_the_top_border() {
     stand_pin(previous_pin);
 }
 
+/// The two axes a hand asks for a sound's card window buttons on, at a display's own
+/// scale: the band as tall as the buttons' own hit boxes, and the columns from the
+/// leftmost button to the rightmost widened by a hand's margin. A hand in the band at
+/// the card's own left is near neither; a hand on a button is near both; and a hand a
+/// pixel past the margin is past the buttons, whatever its row.
+#[test]
+fn a_sounds_window_buttons_are_asked_for_on_both_axes() {
+    for dpi in [96u32, 192] {
+        let mut pin = sound_pin();
+        pin.dpi = dpi;
+
+        let width = (pin.content.2 - pin.content.0).max(1);
+        let options = pinned_audio_options(&pin);
+        let band = audio_preview::window_button_band(dpi, options);
+        let (left, right) = audio_preview::window_button_span(dpi, options, width);
+        let button =
+            audio_preview::control_box(CardControl::AlwaysOnTop, width as u32, dpi, options, true)
+                .expect("a box on a card that carries its controls");
+        let x = (button.left + button.right) / 2;
+        let y = (button.top + button.bottom) / 2;
+
+        assert!(
+            !pin_audio_window_buttons_at(&pin, 1, 1),
+            "at {dpi} dpi: the card's top-left is in the band and across the card from the buttons"
+        );
+        assert!(
+            pin_audio_window_buttons_at(&pin, x, y),
+            "at {dpi} dpi: the always-on-top button's own box is near the buttons"
+        );
+        assert!(
+            pin_audio_window_buttons_at(&pin, left, 1),
+            "at {dpi} dpi: the margin's own edge is still near them"
+        );
+        assert!(
+            !pin_audio_window_buttons_at(&pin, left - 1, 1),
+            "at {dpi} dpi: a pixel past the margin is past the buttons"
+        );
+        assert!(
+            pin_audio_window_buttons_at(&pin, right - 1, 1),
+            "at {dpi} dpi: the other margin's own edge is still near them"
+        );
+        assert!(
+            !pin_audio_window_buttons_at(&pin, right, 1),
+            "at {dpi} dpi: and a pixel past it is past the buttons"
+        );
+        assert!(
+            !pin_audio_window_buttons_at(&pin, x, band),
+            "at {dpi} dpi: a hand at the buttons' column but below the band is past them"
+        );
+    }
+}
+
 /// A press on a window button that slides off it asks for nothing: the
 /// release is answered where the pointer is rather than where the press
 /// was, and no pressed state is left standing.
@@ -1911,9 +2003,9 @@ fn a_press_that_slides_off_a_sounds_window_button_asks_for_nothing() {
     let previous_pin = take_pin_for_a_test();
 
     // The window buttons are controls only while they are
-    // showing, which is the state a hand near the window's
-    // top border — the hand that is about to press one —
-    // leaves the pin in (see `pin_audio_window_buttons`).
+    // showing, which is the state a hand near the buttons
+    // themselves — the hand that is about to press one —
+    // leaves the pin in (see `pin_audio_window_buttons_at`).
     let mut shown = sound_pin();
     shown.audio_window_buttons = true;
     stand_pin(Some(shown));

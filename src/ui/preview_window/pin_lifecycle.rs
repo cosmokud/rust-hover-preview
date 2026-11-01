@@ -2859,14 +2859,24 @@ pub(super) fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Optio
     )
 }
 
-/// Whether the card's two window buttons are showing at `y`, the pointer's row in
-/// the window's own coordinates: the top band as tall as the buttons' own hit boxes,
-/// which is the one band of the window a hand in is a hand near the window's top
-/// border or near the buttons themselves — the one thing on a sound's card that
-/// comes and goes, because a button twice the margin's own side stands in the name's
-/// own rows (see `audio_preview::window_button_band`).
-pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
-    y < audio_preview::window_button_band(pin.dpi, pinned_audio_options(pin))
+/// Whether the card's two window buttons are showing at the window's own point: the top band as
+/// tall as the buttons' own hit boxes (see `audio_preview::window_button_band`) *and* the columns
+/// from the leftmost button to the rightmost widened by a hand's margin (see
+/// `audio_preview::window_button_span`). Both axes are needed: the band alone spans the window's
+/// whole width, so a hand in the card's top-left would ask for buttons standing at its top-right.
+///
+/// The x is the window's own, which is the card's own: the card fills the pin's media box and is
+/// drawn at the media band's row, so only y is offset (see `pin_audio_control_at`).
+pub(super) fn pin_audio_window_buttons_at(pin: &PinnedPreview, x: i32, y: i32) -> bool {
+    if y >= audio_preview::window_button_band(pin.dpi, pinned_audio_options(pin)) {
+        return false;
+    }
+
+    let width = (pin.content.2 - pin.content.0).max(1);
+    let (left, right) =
+        audio_preview::window_button_span(pin.dpi, pinned_audio_options(pin), width);
+
+    x >= left && x < right
 }
 
 /// How far above and below the card's command bar a hand still asks it out, in logical pixels:
@@ -2906,7 +2916,7 @@ pub(super) fn pin_audio_command_bar_band(pin: &PinnedPreview) -> Option<(i32, i3
 /// Whether a pointer at `y`, the window's own row, is near enough the card's command bar to light
 /// `control`: the row's controls only inside the bar's band, and the two window buttons wherever
 /// they are answered — they stand in a band of their own at the top of the card (see
-/// `pin_audio_command_bar_band` and `pin_audio_window_buttons`).
+/// `pin_audio_command_bar_band` and `pin_audio_window_buttons_at`).
 pub(super) fn pin_audio_control_revealed(
     pin: &PinnedPreview,
     y: i32,
