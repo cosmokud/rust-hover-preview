@@ -82,6 +82,7 @@ use crate::engines::libreoffice_render;
 use crate::engines::webview_preview;
 use crate::formats::codecs::{self, refresh as refresh_codecs};
 use crate::text::text_theme;
+use crate::ui::preview_window::publish_tray_volume;
 use crate::{app::startup, CONFIG};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
@@ -93,8 +94,25 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let menu = CreatePopupMenu().unwrap();
+    let levels = || CONFIG.lock().ok().map(|c| (c.video_volume, c.audio_volume));
+    // Lock released before the reload and the publish: the message a publish sends locks
+    // `CONFIG` again on the preview loop.
+    let before = levels();
     if let Ok(mut config) = CONFIG.lock() {
         config.reload_from_disk();
+    }
+    let after = levels();
+
+    // A level hand-edited into config.ini reaches a pin already playing, which holds a level of
+    // its own; an unchanged half is left alone so opening the menu does not push the file's
+    // level onto a knob dragged elsewhere (see `tray_volume_moved`).
+    if let (Some(before), Some(after)) = (before, after) {
+        if before.0 != after.0 {
+            publish_tray_volume(false);
+        }
+        if before.1 != after.1 {
+            publish_tray_volume(true);
+        }
     }
 
     // The menu is also where the check for a newer release is asked for, after the one
