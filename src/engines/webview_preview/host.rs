@@ -13,7 +13,8 @@ use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW, KillTimer, SetTimer,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE, HWND_NOTOPMOST,
-    HWND_TOPMOST, MSG, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    HWND_TOPMOST, MSG, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
 };
 
 use super::api::{
@@ -367,23 +368,22 @@ impl Host {
     /// in and the pin stands under it, and what the pin loses by it is the presses that land on the
     /// page — which are the pin's own and raise it anyway (see `settle_pinned_press`).
     pub(super) fn put_window(&self, area: Area) {
-        let insert_after = if crate::ui::preview_window::pinned()
-            && !crate::ui::preview_window::pin_holds_the_front()
-        {
-            HWND_NOTOPMOST
-        } else {
-            HWND_TOPMOST
-        };
+        let raises = raises(
+            crate::ui::preview_window::pinned(),
+            crate::ui::preview_window::pin_holds_the_front(),
+        );
         unsafe {
-            let _ = SetWindowPos(
-                self.hwnd,
-                insert_after,
-                area.x,
-                area.y,
-                area.width,
-                area.height,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
+            for raise in raises.into_iter().flatten() {
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    raise.insert_after,
+                    area.x,
+                    area.y,
+                    area.width,
+                    area.height,
+                    raise.flags,
+                );
+            }
         }
     }
 
@@ -886,5 +886,40 @@ impl Drop for Host {
                 engine_processes::forget(self.browser_pid);
             }
         }
+    }
+}
+
+/// One `SetWindowPos` a placement makes: the band it inserts after, and the flags that carry it.
+///
+/// The box is passed to every call; `SWP_NOMOVE|SWP_NOSIZE` is what makes a call ignore it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Raise {
+    pub(super) insert_after: HWND,
+    pub(super) flags: SET_WINDOW_POS_FLAGS,
+}
+
+/// The calls that put the page in front, in the order they are made, absent where there is none.
+///
+/// `HWND_NOTOPMOST` is a no-op on a window that is not already topmost, so it does not raise a
+/// pinned page with Always On Top off — measured: the pin reached the foreground and the page
+/// stayed under Explorer. Claiming topmost and then giving it up is the pair a background process
+/// may make, and the second call is what drops the window to the *top* of the ordinary band
+/// instead of leaving it where it was.
+pub(super) fn raises(pinned: bool, holds_front: bool) -> [Option<Raise>; 2] {
+    let topmost = Raise {
+        insert_after: HWND_TOPMOST,
+        flags: SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    };
+
+    if pinned && !holds_front {
+        [
+            Some(topmost),
+            Some(Raise {
+                insert_after: HWND_NOTOPMOST,
+                flags: SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            }),
+        ]
+    } else {
+        [Some(topmost), None]
     }
 }
