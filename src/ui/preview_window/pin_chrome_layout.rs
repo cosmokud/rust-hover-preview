@@ -217,13 +217,32 @@ pub(super) fn pin_level_is_remembered(audio: bool) -> bool {
 /// is a hover's player's instead, which is FFmpeg's and is told at the mixer (see
 /// `ask_the_ffplay_its_level`).
 pub(super) fn tray_volume_moved(audio: bool) {
+    let held = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.volume.dragging));
+    let row_level = if audio {
+        current_audio_volume()
+    } else {
+        current_video_volume()
+    };
+    note_playback_trace!(
+        "volume tray audio {} level {} dragging {}",
+        u8::from(audio),
+        row_level,
+        u8::from(held == Some(true))
+    );
+    // A hand holding the knob owns the level: a publisher of any kind — the config watcher, the
+    // tray's own reload, a wheel notch — must not move the thumb under the pointer.
+    if held == Some(true) {
+        note_playback_trace!(
+            "volume tray audio {} level {} dragging 1 left to the hand",
+            u8::from(audio),
+            row_level
+        );
+        return;
+    }
+
     let kind = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.volume.audio));
     if kind == Some(audio) {
-        set_pin_volume(if audio {
-            current_audio_volume()
-        } else {
-            current_video_volume()
-        });
+        set_pin_volume(row_level);
         settle_pin_volume();
         return;
     }
@@ -237,11 +256,7 @@ pub(super) fn tray_volume_moved(audio: bool) {
         Some(MediaType::Video)
     };
     if !pinned() && on_screen == row {
-        ask_the_ffplay_its_level(if audio {
-            current_audio_volume()
-        } else {
-            current_video_volume()
-        });
+        ask_the_ffplay_its_level(row_level);
     }
 }
 

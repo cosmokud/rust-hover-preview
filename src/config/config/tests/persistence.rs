@@ -449,6 +449,66 @@ fn what_a_save_wrote_the_next_start_reads_back() {
     assert_eq!(read_back.hover_delay_ms, 137);
 }
 
+/// The app's own save is not an edit: the watcher sees the file change, and the level it finds
+/// there is one a hand may have moved past since. A half the file holds at what this process
+/// last wrote is kept as the app has it, and is not reported as changed.
+#[test]
+fn a_level_this_process_wrote_is_not_read_back_over_the_one_in_hand() {
+    let _file = ConfigFileAsItWas::take();
+
+    let mut config = AppConfig {
+        video_volume: 44,
+        audio_volume: 44,
+        ..Default::default()
+    };
+    config.save();
+
+    config.video_volume = 21;
+    config.audio_volume = 21;
+
+    assert_eq!(
+        config.reload_from_disk_keeping_our_own_levels(),
+        (false, false),
+        "a level this process wrote is not an edit to report"
+    );
+    assert_eq!(
+        (config.video_volume, config.audio_volume),
+        (21, 21),
+        "and the level in hand is kept rather than the file's older one"
+    );
+}
+
+/// A level written by something else is still an edit: the file holds one this process never
+/// wrote, so it is read and reported.
+#[test]
+fn a_level_written_by_something_else_is_still_read_back() {
+    let file = ConfigFileAsItWas::take();
+
+    let ours = AppConfig {
+        video_volume: 44,
+        audio_volume: 44,
+        ..Default::default()
+    };
+    ours.save();
+
+    // Written straight to the file rather than through a save, which is what an edit by hand
+    // is: there is nobody's own write for the reload to recognise.
+    let edited = AppConfig {
+        video_volume: 88,
+        audio_volume: 88,
+        ..Default::default()
+    };
+    fs::write(&file.path, ordered_text(&edited.to_ini())).expect("the edit on disk");
+
+    let mut config = ours;
+    assert_eq!(
+        config.reload_from_disk_keeping_our_own_levels(),
+        (true, true),
+        "an edit somebody else made is a change on both halves"
+    );
+    assert_eq!((config.video_volume, config.audio_volume), (88, 88));
+}
+
 /// The folder a test has the app read and write is one of the test's own, and never the
 /// machine's. A run of the app watches the machine's file every second and takes what it finds
 /// in it, so a test that wrote there would change what that run had: the rest of what a start

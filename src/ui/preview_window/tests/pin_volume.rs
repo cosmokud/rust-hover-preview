@@ -797,6 +797,57 @@ fn a_level_moved_in_the_tray_is_given_to_the_pin_that_is_up() {
     clear_restart_count();
 }
 
+/// A hand holding the knob owns the level: no publisher moves the thumb under the pointer, the
+/// tray's own `Volume` row included (see `tray_volume_moved`).
+#[test]
+fn a_tray_row_moved_while_the_knob_is_held_leaves_the_level_in_hand() {
+    let _room = the_room_to_itself();
+
+    let mut levels = PinLevels::set(10, 50);
+    levels.remembering(false, false);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+
+    let mut pin = overlay_pin((100, 100, 420, 340), PinChrome::always());
+    pin.path = PathBuf::from("tray-held-volume-film.mkv");
+    pin.transport.begun(30.0, true, false);
+    pin.transport.duration = Some(200.0);
+    pin.volume.level = 37;
+    pin.volume.playing_at = 37;
+    pin.volume.open = true;
+    pin.volume.dragging = true;
+    stand_pin(Some(pin));
+
+    levels.set_levels(80, 50);
+    tray_volume_moved(false);
+
+    assert_eq!(
+        pinned_volume_level(),
+        37,
+        "a knob being dragged is the level in hand, not the row's"
+    );
+    assert_eq!(
+        pinned_playback_state().map(|(_, _, _, volume)| volume.playing_at),
+        Some(37),
+        "and the level the player was told is the one the drag took it to"
+    );
+    assert!(
+        pin_volume_open(),
+        "the popup in hand is left open where the drag put it"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
 /// The media behind the pin, as the machine's own engine rather than a player of its own: the
 /// native arms of `set_pin_volume` and `settle_pin_volume` are read off the media's kind, so this
 /// is what a test about the other routes pins them with.
