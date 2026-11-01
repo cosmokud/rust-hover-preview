@@ -139,60 +139,11 @@ pub(super) enum NestedCall {
     RaiseChrome,
 }
 
-/// Whether a placement has anything to do: the page is placed again for a box that changed and for
-/// a page that changed which window it stands in, and for nothing else.
-///
-/// A placement arrives on every pointer move of a drag, and a page put in the box it already has —
-/// and the chrome raised over it again — is four z-order changes and a recomposited layered pin per
-/// tick (see `Host::put_window`).
-pub(super) fn the_page_is_placed(
-    change: NestingChange,
-    last_placed: Option<(i32, i32, i32, i32)>,
-    box_: (i32, i32, i32, i32),
-) -> bool {
-    change != NestingChange::Stayed || last_placed != Some(box_)
-}
-
 pub(super) fn nested_calls(over_pin: bool) -> [Option<NestedCall>; 2] {
     [
         Some(NestedCall::PlacePage),
         over_pin.then_some(NestedCall::RaiseChrome),
     ]
-}
-
-/// What putting the page back on the desktop does, in the order it must happen.
-///
-/// **The parent is given up before the style is.** A window styled `WS_POPUP` while it is still the
-/// owned child of the pin is a popup the pin owns, and it hides with the pin for the rest of the
-/// run: the parent goes first, the popup style after it, and the style it wore on the desktop last.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum UnnestCall {
-    LeaveParent,
-    PopupStyle,
-    DesktopExStyle,
-}
-
-pub(super) fn unnest_calls() -> [Option<UnnestCall>; 3] {
-    [
-        Some(UnnestCall::LeaveParent),
-        Some(UnnestCall::PopupStyle),
-        Some(UnnestCall::DesktopExStyle),
-    ]
-}
-
-/// The parent a page is to be settled in, and whether the one it stands in was taken away under it.
-///
-/// A pin's window is destroyed when the display arrangement changes, and a page left a child of a
-/// destroyed window is a page nobody shows again: what is recorded is forgotten rather than stood
-/// in, and the page is put back on the desktop (see `Nesting::settle`). `alive` is `IsWindow`, taken
-/// as a parameter so the decision is a thing a test can hold.
-pub(super) fn settle_parents(
-    recorded: Option<HWND>,
-    requested: Option<HWND>,
-    alive: impl Fn(HWND) -> bool,
-) -> (Option<HWND>, bool) {
-    let orphaned = recorded.is_some_and(|parent| !alive(parent));
-    (requested.filter(|parent| alive(*parent)), orphaned)
 }
 
 #[cfg(test)]
@@ -329,90 +280,5 @@ mod tests {
             [Some(NestedCall::PlacePage), None],
             "a hover's window has no chrome strips to raise"
         );
-    }
-
-    /// Coming out is the other way round from going in: a page whose style says `WS_POPUP` while it
-    /// is still the pin's owned child hides with the pin for the rest of the run.
-    #[test]
-    fn the_parent_is_given_up_before_the_popup_style_is_put_back() {
-        assert_eq!(
-            unnest_calls(),
-            [
-                Some(UnnestCall::LeaveParent),
-                Some(UnnestCall::PopupStyle),
-                Some(UnnestCall::DesktopExStyle),
-            ]
-        );
-    }
-
-    /// A parent Windows no longer has is never stood in, and the page it held is a page of the
-    /// desktop's again — asked for the same dead parent or for nothing at all.
-    #[test]
-    fn a_destroyed_parent_is_forgotten_rather_than_stood_in() {
-        let pin = a_window(0x1000);
-        let alive = |window: HWND| window != pin;
-
-        assert_eq!(
-            settle_parents(Some(pin), Some(pin), alive),
-            (None, true),
-            "a page in a pin that is gone is put back on the desktop"
-        );
-        assert_eq!(
-            settle_parents(Some(pin), None, alive),
-            (None, true),
-            "and leaving a parent that is gone is still its parent being gone"
-        );
-        assert_eq!(
-            settle_parents(None, Some(pin), alive),
-            (None, false),
-            "a pin asked for that is not there is not a parent either"
-        );
-        assert_eq!(
-            settle_parents(Some(pin), Some(pin), |_| true),
-            (Some(pin), false),
-            "and a pin that is still there is the parent the page stands in"
-        );
-        assert_eq!(
-            settle_parents(None, None, |_| true),
-            (None, false),
-            "a page already on the desktop is nobody's orphan"
-        );
-    }
-
-    /// A tick that asks for the box the page is already in places nothing, and one that moved the
-    /// page does: a drag of any length costs one placement per box, not one per tick.
-    #[test]
-    fn a_stayed_placement_in_the_same_box_places_nothing() {
-        let box_ = (100, 200, 640, 480);
-
-        assert!(!the_page_is_placed(NestingChange::Stayed, Some(box_), box_));
-        assert!(the_page_is_placed(
-            NestingChange::Stayed,
-            Some(box_),
-            (101, 200, 640, 480)
-        ));
-        assert!(the_page_is_placed(NestingChange::Stayed, None, box_));
-        assert!(the_page_is_placed(NestingChange::Entered, Some(box_), box_));
-        assert!(the_page_is_placed(NestingChange::Moved, Some(box_), box_));
-    }
-
-    /// Settling into the parent it is already in is answered as `Stayed`, which is what makes a
-    /// placement that only moved nothing to do — the tick asks again on every pointer move.
-    #[test]
-    fn a_settle_into_the_same_parent_with_a_live_one_changes_nothing() {
-        let pin = a_window(0x1000);
-        let mut nesting = Nesting::new();
-
-        nesting.settle(Some(pin), 0x1234);
-        for _ in 0..10 {
-            let (parent, orphaned) = settle_parents(nesting.parent(), Some(pin), |_| true);
-            assert!(!orphaned);
-            assert_eq!(
-                nesting.settle(parent, 0x1234),
-                NestingChange::Stayed,
-                "the same parent asked for again is nothing to do"
-            );
-        }
-        assert_eq!(nesting.parent(), Some(pin));
     }
 }

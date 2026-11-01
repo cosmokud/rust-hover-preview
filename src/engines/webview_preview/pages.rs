@@ -523,7 +523,7 @@ pub(crate) fn place(path: &Path, area: Area, background: TransparentBackground) 
         // asked for by a placement rather than by a `show` (see `ask_place`, `Host::place`).
         BoxChange::Window => {
             wanted_here(path, area);
-            ask_place(path, area, background, false);
+            ask_place(path, area, background);
         }
         // A box that did not move, or a file the engine neither holds nor is owed: nothing to
         // move, and nothing asked (see `box_change`).
@@ -544,7 +544,7 @@ pub(crate) fn place(path: &Path, area: Area, background: TransparentBackground) 
 /// box it will arrive in.
 pub(crate) fn raise(path: &Path, area: Area, background: TransparentBackground) {
     wanted_here(path, area);
-    ask_place(path, area, background, true);
+    ask_place(path, area, background);
 }
 
 /// Publish a box for the engine's thread to move a held document's window into, and ask for it
@@ -560,18 +560,12 @@ pub(crate) fn raise(path: &Path, area: Area, background: TransparentBackground) 
 /// A send that finds no engine, or an engine whose thread has gone, is a placement nothing will
 /// ever take up, so the flag is given back rather than left owed: a flag left owed is a window
 /// that stops following the hand for the rest of the run (see `PLACE_ASKED`).
-pub(super) fn ask_place(
-    path: &Path,
-    area: Area,
-    background: TransparentBackground,
-    re_raise: bool,
-) {
+pub(super) fn ask_place(path: &Path, area: Area, background: TransparentBackground) {
     if let Ok(mut placed) = PLACED.lock() {
         *placed = Some(Placement {
             path: path.to_path_buf(),
             background,
             area,
-            re_raise,
         });
     } else {
         return;

@@ -375,12 +375,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                             exact,
                         },
                     );
-                } else if film_band_is_hit_testable(media.media_type)
-                    || super::pin_page_input::page_claims_the_band(
-                        media.media_type,
-                        crate::engines::webview_preview::page_is_nested(),
-                    )
-                {
+                } else if film_band_is_hit_testable(media.media_type) {
                     // Nothing is composed into this band — the film is in a window under it — so
                     // what is written here is only ever the pin's own claim on the pixel (see
                     // `film_band_is_hit_testable`). A hosted film with no first frame in the host
