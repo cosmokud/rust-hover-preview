@@ -370,7 +370,7 @@ fn a_drag_publishes_one_box_rather_than_a_queue_of_them() {
     }
 
     // A first box is published, and it is the one left behind.
-    ask_place(path, area(10), TransparentBackground::Black);
+    ask_place(path, area(10), TransparentBackground::Black, false);
     assert_eq!(
         published_area(),
         Some(area(10)),
@@ -382,8 +382,8 @@ fn a_drag_publishes_one_box_rather_than_a_queue_of_them() {
     // asked of the engine — which is the bound, and it is what a drag of a thousand moves
     // now costs.
     PLACE_ASKED.store(true, Ordering::Release);
-    ask_place(path, area(20), TransparentBackground::Black);
-    ask_place(path, area(30), TransparentBackground::Black);
+    ask_place(path, area(20), TransparentBackground::Black, false);
+    ask_place(path, area(30), TransparentBackground::Black, false);
 
     let published = published_area();
     assert_eq!(
@@ -409,7 +409,7 @@ fn a_drag_publishes_one_box_rather_than_a_queue_of_them() {
     // A hide throws the box away with the flag, so a box asked for before the window went
     // down is not carried out against whatever is put up next.
     drop_placement();
-    ask_place(path, area(40), TransparentBackground::Black);
+    ask_place(path, area(40), TransparentBackground::Black, false);
     drop_placement();
     assert!(
         published_area().is_none(),

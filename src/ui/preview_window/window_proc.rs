@@ -442,6 +442,12 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_SETCURSOR => {
+            // A page nested in the pin's band is a window of the browser's, and what it says the
+            // pointer is over is its own answer rather than this procedure's (see `pin_page_input`).
+            if pin_page_input::forward(hwnd, msg, wparam, lparam) {
+                return LRESULT(1);
+            }
+
             // What the pointer is over on a pinned window, said with the pointer itself: an edge
             // of one is a resize, and a resize is the one thing a window has no other way of
             // announcing (see `pinned_set_cursor`). The point is not in this message: its `lParam`
@@ -461,6 +467,13 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(1)
         }
         WM_LBUTTONDOWN => {
+            // A press on the nested page's band is the page's before it is the pin's: the media is a
+            // window of somebody else's standing in this one, and it must not carry the window (see
+            // `pin_page_input`, `begin_pin_drag`).
+            if pin_page_input::forward(hwnd, msg, wparam, lparam) {
+                return LRESULT(0);
+            }
+
             let (x, y) = message_point(lparam);
             // The point on the screen the press landed at, which is what the card's menu is
             // asked in: its panels are drawn in a window of their own over the screen rather
@@ -528,6 +541,10 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
+            if pin_page_input::forward(hwnd, msg, wparam, lparam) {
+                return LRESULT(0);
+            }
+
             let (x, y) = message_point(lparam);
             if pinned() {
                 pinned_mouse_move(hwnd, x, y);
@@ -550,6 +567,10 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            if pin_page_input::forward(hwnd, msg, wparam, lparam) {
+                return LRESULT(0);
+            }
+
             let (x, y) = message_point(lparam);
             // A press the find bar's card answered is released here, before the pin's own arms: the
             // card owns the press from the moment it takes it, and a chevron held down stops where it
@@ -594,6 +615,12 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_RBUTTONDOWN => {
+            // The page's own right-click menu is the page's, the way a press on it is (see
+            // `pin_page_input`).
+            if pin_page_input::forward(hwnd, msg, wparam, lparam) {
+                return LRESULT(0);
+            }
+
             // A right-click on a pinned window asks for the window's own menu, at
             // the point it was asked for: a sound's card carries the card's own rows
             // and every other kind the rows a bubble's menu holds (see
@@ -626,6 +653,10 @@ pub(super) unsafe extern "system" fn window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_MBUTTONDOWN => {
+            if pin_page_input::forward(hwnd, msg, wparam, lparam) {
+                return LRESULT(0);
+            }
+
             // A middle press while the menu is up puts it away wherever it
             // landed: the menu is answered press by press, and no middle press
             // is a row's own.
@@ -636,6 +667,10 @@ pub(super) unsafe extern "system" fn window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_RBUTTONUP => {
+            if pin_page_input::forward(hwnd, msg, wparam, lparam) {
+                return LRESULT(0);
+            }
+
             // The menu is the preview's own, so it opens where it was asked for,
             // and the press that asks for it does not dismiss the preview.
             let (x, y) = message_point(lparam);
@@ -647,6 +682,15 @@ pub(super) unsafe extern "system" fn window_proc(
                 show_text_preview_menu(hwnd, x, y);
             }
             LRESULT(0)
+        }
+        WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+            // A wheel over the nested page's band is the page's rather than the pin's, and the
+            // coordinates it carries are the screen's rather than this window's (see
+            // `pin_page_input`).
+            if pin_page_input::forward(hwnd, msg, wparam, lparam) {
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_POWERBROADCAST => {
             let power_event = wparam.0 as u32;
