@@ -50,13 +50,15 @@ mod pages;
 
 pub(crate) use api::{
     browser_pid, can_draw, draws, is_available, is_behind, is_showing, page_runs, screen_rect,
-    showing_hwnd, showing_path, take_failure_notice, Area,
+    showing_hwnd, showing_path, take_failure_notice, the_shown_page_runs, Area,
 };
 pub(crate) use environment::{clear_stale_profiles, stale_profile_pids};
 pub(crate) use pages::{hide, hide_html_preview, place, raise, show, shutdown, wanted_here};
 
 // What the tests below and the pinned-preview tests elsewhere reach for, out of the five
 // submodules this is split across.
+#[cfg(test)]
+pub(crate) use api::stand_the_shown_page_in;
 #[cfg(test)]
 use api::{drop_placement, take_placement, ENGINE, PLACED, PLACE_ASKED};
 #[cfg(test)]

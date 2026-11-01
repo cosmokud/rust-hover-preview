@@ -179,6 +179,22 @@ pub(super) fn film_band_is_hit_testable(media: MediaType) -> bool {
     matches!(media, MediaType::Video)
 }
 
+/// Whether the band of a pinned window is the pin's own claim because the picture in it is a page the
+/// pin *carries* rather than a page the user works in.
+///
+/// A document or a specimen the browser draws stands in the pin's band as a window of its own, invisible
+/// and click-through while the pin draws it through the Shell's thumbnail (see
+/// `webview_preview`'s `ex_style_for`), and the pin's picture of it is that thumbnail — so a press on it
+/// means the pin, and the band is given the least coverage a pixel can have for the press to land on
+/// (see `fill_band_hit_testable`). **A page that runs is the exception**: it is clicked into, and a band
+/// that claimed its pixels would be a page whose links, selection and wheel the user never reached.
+///
+/// Asked of the page rather than of the kind, because the kind does not carry the difference: an SVG, a
+/// specimen and a page of HTML all arrive as `EngineSvg` or `EngineFont` (see `pinned_engine_media`).
+pub(super) fn a_pages_band_is_hit_testable(media: MediaType, runs: bool) -> bool {
+    media.is_engine() && !runs
+}
+
 /// Whether the chrome's own rows of a pinned window are the pin's claim rather than its chrome:
 /// they always are where they are not the media's own. The strips carry the chrome on every road,
 /// so the bitmap owes those rows only the least pixel a press can land on — the same one part in
@@ -375,6 +391,14 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                             exact,
                         },
                     );
+                } else if a_pages_band_is_hit_testable(
+                    media.media_type,
+                    webview_preview::the_shown_page_runs(),
+                ) {
+                    // A page the pin carries: what this window draws there is nothing but the claim on
+                    // the pixel, and the picture itself is the Shell's thumbnail of the page (see
+                    // `a_pages_band_is_hit_testable` and `pin_page_thumbnail`).
+                    fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
                 } else if film_band_is_hit_testable(media.media_type) {
                     // Nothing is composed into this band — the film is in a window under it — so
                     // what is written here is only ever the pin's own claim on the pixel (see

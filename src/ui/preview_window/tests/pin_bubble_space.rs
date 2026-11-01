@@ -2749,11 +2749,71 @@ unsafe fn a_put_behind_pin(kind: MediaType, path: &Path) -> (HWND, HWND, ScreenR
     (in_front, pin_hwnd, box_)
 }
 
-/// A press on the band of an engine-drawn pin takes the band for the pair and places the page last:
-/// the raise is what Windows does not refuse to a background process, and the page ends above the
-/// pin so both the chrome and the document are on top again (see `put_pin_at_the_front`).
+/// A press on the band of a pin of a page that *runs* takes the band for the pair and places the page
+/// last: the page is a window of the desktop's in front of the pin, so the click activated that window
+/// rather than the pin, and the raise is what Windows does not refuse to a background process
+/// (see `put_pin_at_the_front`).
 #[test]
-fn an_engine_pins_press_takes_the_band_and_puts_the_page_back_above_it() {
+fn a_running_pages_press_takes_the_band_and_puts_the_page_back_above_it() {
+    let _room = the_room_to_itself();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_own = pin_is_its_own_window();
+    let before = pin_always_on_top();
+
+    let (in_front, pin_hwnd, content) =
+        unsafe { a_put_behind_pin(MediaType::EngineSvg, Path::new("a-page.html")) };
+    // A page that runs is the one document the engine hands the pointer and the keyboard, which is what
+    // its window standing in front of the pin means (see `ex_style_for`).
+    webview_preview::stand_the_shown_page_in(true);
+    webview_preview::clear_placement_for_test();
+
+    unsafe { put_pin_at_the_front(pin_hwnd) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a press on a page raised the pin over the window the pair was behind"
+    );
+    let (path, area) = webview_preview::placed_for_test()
+        .expect("the page is placed again after the pin is raised");
+    assert_eq!(path, Path::new("a-page.html"));
+    assert_eq!(
+        (area.x, area.y, area.width, area.height),
+        (
+            content.0,
+            content.1,
+            content.2 - content.0,
+            content.3 - content.1
+        ),
+        "the page is put in the band the raised pin frames"
+    );
+
+    unsafe {
+        put_away_a_window_of_the_suite(in_front);
+        put_away_a_window_of_the_suite(pin_hwnd);
+    }
+    webview_preview::stand_the_shown_page_in(false);
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    pin_stands_in_its_own_window(previous_own);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    stand_pin(previous_pin);
+}
+
+/// **A drawing or a specimen takes no band, and that is the whole of what it shares with every other
+/// pin.** The page it shows is a source the pin draws through the Shell's own thumbnail of it — at the
+/// bottom of the order, invisible and click-through — so the press on the band lands on the pin itself,
+/// and the click that raised the pin is Windows' own activation rather than a band taken for a window of
+/// somebody else's (see `pin_page_thumbnail` and `paint::a_pages_band_is_hit_testable`).
+///
+/// What is still owed is the placement: the page moves with the band the raised pin frames, and the
+/// registration is re-pointed at it.
+#[test]
+fn a_drawing_pins_press_takes_no_band_and_still_places_the_page() {
     let _room = the_room_to_itself();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -2767,8 +2827,8 @@ fn an_engine_pins_press_takes_the_band_and_puts_the_page_back_above_it() {
     unsafe { put_pin_at_the_front(pin_hwnd) };
     unsafe { settle_z_order() };
     assert!(
-        unsafe { stands_over(pin_hwnd, in_front) },
-        "a press on a page raised the pin over the window the pair was behind"
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "a drawing pin is left where Windows put it, with no band taken for it"
     );
     let (path, area) = webview_preview::placed_for_test()
         .expect("the page is placed again after the pin is raised");

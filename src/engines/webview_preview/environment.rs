@@ -15,8 +15,8 @@ use windows::core::{w, Interface, PCWSTR};
 use windows::Win32::Foundation::{E_POINTER, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, PeekMessageW, RegisterClassW,
-    TranslateMessage, MSG, PM_REMOVE, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    TranslateMessage, MSG, PM_REMOVE, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use super::api::{BROWSER_ARGUMENTS, RUNNING_DOCUMENT, WEBVIEW_CLASS};
@@ -116,15 +116,34 @@ pub(super) fn mouse_activate_answers(runs: bool) -> LRESULT {
 /// the alt-tab, and stays topmost, since it is a preview the pointer is on top of. A style
 /// that has come off for a page is put back for the next document, which is not one — so the
 /// refusal is the default and the allowance is the exception made and taken away again.
-pub(super) fn ex_style_for(style: isize, runs: bool) -> isize {
+///
+/// **`source` is the pin's picture in a window that is nobody's window of the desktop's**, and
+/// it is the film road's own pair instead (see `pin_film_thumbnail::source_ex_style`):
+/// `WS_EX_LAYERED` at one part in 255 is a window that keeps drawing — and so keeps being a
+/// thumbnail — while nothing of it reaches the screen, and `WS_EX_TRANSPARENT` is a press
+/// falling through it to the pin whose band it fills. It is never a page that runs: that one
+/// is clicked into, and a click into a window no hand can reach is a page nobody can use.
+pub(super) fn ex_style_for(style: isize, runs: bool, source: bool) -> isize {
     let noactivate = WS_EX_NOACTIVATE.0 as isize;
+    let invisible = WS_EX_LAYERED.0 as isize | WS_EX_TRANSPARENT.0 as isize;
 
-    if runs {
+    let style = if runs {
         style & !noactivate
     } else {
         style | noactivate
+    };
+
+    if source {
+        style | invisible
+    } else {
+        style & !invisible
     }
 }
+
+/// The alpha a source is composited at, one part in 255: a window the Shell draws the pin's picture from
+/// while nothing of it reaches the screen itself (see `ex_style_for`, and
+/// `pin_film_thumbnail::INVISIBLE_ALPHA`, which is the same number for the same reason).
+pub(super) const SOURCE_ALPHA: u8 = 1;
 
 /// Retrieve and dispatch whatever is waiting, without blocking.
 pub(super) fn pump_messages() {

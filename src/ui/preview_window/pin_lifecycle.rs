@@ -1895,25 +1895,24 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
     // `lower_pinned_preview`). Everything below is the stand-in the kinds still standing in the preview's
     // window need, because a window the Shell does not own is never raised by a click.
     if pin_is_its_own_window() {
-        // **A press on an engine-drawn pin is a press on the page, and the page is a window of
-        // its own in front of the pin.** Windows activates the pin from that click, but with
-        // `Always On Top` off the pair is behind whatever was in front, and the pin comes forward
-        // only by the band a process without the foreground can take (see
-        // `take_the_band_and_give_it_back`). The page is then placed last so it ends above the
-        // raised pin, which is the only order that leaves both the chrome and the page on top.
+        // **A press on a running page is a press on the page, and the page is a window of its own in
+        // front of the pin.** Windows activates the pin from that click, but with `Always On Top` off the
+        // pair is behind whatever was in front, and the pin comes forward only by the band a process
+        // without the foreground can take (see `take_the_band_and_give_it_back`). The page is then placed
+        // last so it ends above the raised pin, which is the only order that leaves both the chrome and
+        // the page on top.
         //
-        // Every other own-window kind is left to Windows: the press that lands on it activates it.
-        if engine_page_in_the_band().is_some()
-            && !pin_always_on_top()
-            && GetForegroundWindow() != hwnd
+        // **Every other own-window kind is left to Windows**: the press that lands on it activates it, and a
+        // page the pin draws is the pin's own point to win (see `a_running_page_holds_the_band`,
+        // `paint::a_pages_band_is_hit_testable`).
+        if a_running_page_holds_the_band() && !pin_always_on_top() && GetForegroundWindow() != hwnd
         {
             take_the_band_and_give_it_back(hwnd);
         }
 
-        // What stands in this window's band is placed again after the raise: a page the engine
-        // draws is a window of its own in front of the pin, so raising the pin alone leaves the
-        // page where it was — over the listing, or under the window that has just gone over both
-        // (see `place_pinned_siblings`).
+        // What stands in this window's band is placed again after the raise: a page that runs is a window
+        // of its own in front of the pin, so raising the pin alone leaves the page where it was — over the
+        // listing, or under the window that has just gone over both (see `place_pinned_siblings`).
         place_pinned_siblings();
         return;
     }
@@ -2743,11 +2742,15 @@ pub(super) fn place_pinned_siblings() {
 }
 
 /// The engine-drawn page a pin of its own is framing, and the band it stands in: what every road
-/// that raises the pin has to place again, because the page is a window of its own in front of it.
+/// that raises the pin asks before it decides what the band owes.
 ///
 /// Some only for a pin that is up, not collapsed, standing in its own window and showing an
 /// engine-drawn page (an SVG, a font specimen, or the HTML page the engine is handed as
 /// `EngineSvg`, see `engine_svg_media`). Every other kind has nothing of the browser's in its band.
+///
+/// **Which of the two roads the page is on is `a_running_page_holds_the_band`'s answer**, not this one's:
+/// a page that runs is a window of the desktop's in front of the pin, and every other page is a source the
+/// pin draws through the Shell's thumbnail and never raises (see `pin_page_thumbnail`).
 pub(super) fn engine_page_in_the_band() -> Option<(PathBuf, ScreenRegion)> {
     if !pin_is_its_own_window() {
         return None;
@@ -2765,6 +2768,18 @@ pub(super) fn engine_page_in_the_band() -> Option<(PathBuf, ScreenRegion)> {
     let content = pinned_content()?;
     let (path, _) = pinned_media_owner()?;
     Some((path, content))
+}
+
+/// Whether the page in the pin's band stands **in front of** the pin: a page that runs is the user's to
+/// click, so its window keeps the band above the pin's and a press on the band never reaches the pin at
+/// all — the one thing a pin of a page owes the band dance every other pin does not (see
+/// `put_pin_at_the_front`).
+///
+/// Every other page is the pin's *picture*: a source at the bottom of the order, invisible and
+/// click-through, drawn into the pin by the Shell's thumbnail of it (see `pin_page_thumbnail`), so a press
+/// on it is the pin's own and the pin is raised by the click that landed on it like any other kind.
+pub(super) fn a_running_page_holds_the_band() -> bool {
+    engine_page_in_the_band().is_some() && webview_preview::the_shown_page_runs()
 }
 
 /// The media box of the pin that is up, or nothing when there is no pin or it is collapsed: a
