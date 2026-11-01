@@ -2263,7 +2263,7 @@ unsafe fn create() -> Option<HWND> {
     // button's hover is drawn of — this window's own rows are the black it erases to, not the film the
     // Shell composes over them (see `keep_the_pins_picture_for_the_taskbar`).
     unsafe { pin_taskbar::set_pin_taskbar_title(host) };
-    unsafe { pin_taskbar::supply_the_stills_of_this_window(host, true) };
+    unsafe { pin_taskbar::supply_the_stills_of_this_window(host) };
     // And the chrome is put back over it: making the host puts it on top of the strips, which are
     // the pin's window's and were standing before it, so the order is re-asserted here (see
     // `pin_chrome_strips`).
