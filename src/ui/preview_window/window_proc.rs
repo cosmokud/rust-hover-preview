@@ -238,6 +238,24 @@ pub(super) unsafe extern "system" fn window_proc(
     pin_film_host::note_the_app_was_taken_away_while_the_pin_held_the_keyboard(msg, wparam, lparam);
 
     match msg {
+        // The Shell's asks for the still and the live preview of the pin's own button — sent only
+        // once `sync_the_pins_own_still` has told it the window supplies them, which is a pin whose
+        // band holds the browser's page. Both are a picture of the whole pin box taken off the
+        // desktop at ask time, because neither the pin's rows nor the page alone is the pin (see
+        // `answer_the_pins_own_thumbnail_ask`). A window that is not such a pin gets the ordinary
+        // answer, as it did before.
+        WM_DWMSENDICONICTHUMBNAIL => {
+            match pin_taskbar_mirror::answer_the_pins_own_thumbnail_ask(hwnd, lparam) {
+                Some(answer) => answer,
+                None => DefWindowProcW(hwnd, msg, wparam, lparam),
+            }
+        }
+        WM_DWMSENDICONICLIVEPREVIEWBITMAP => {
+            match pin_taskbar_mirror::answer_the_pins_own_live_preview_ask(hwnd) {
+                Some(answer) => answer,
+                None => DefWindowProcW(hwnd, msg, wparam, lparam),
+            }
+        }
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
             reset_preview_after_display_change(hwnd);
             DISPLAY_RESET.store(true, Ordering::Release);
