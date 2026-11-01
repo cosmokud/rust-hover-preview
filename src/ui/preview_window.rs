@@ -125,7 +125,6 @@ mod pin_lifecycle;
 mod pin_menu;
 mod pin_menu_window;
 mod pin_model;
-mod pin_page_input;
 mod pin_playback;
 mod pin_real_window;
 mod pin_resize_probe;
@@ -291,9 +290,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
     ULW_ALPHA, WA_ACTIVE, WA_CLICKACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
     WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_POWERBROADCAST, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+    WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 #[cfg(test)]
@@ -331,7 +330,6 @@ pub(crate) use pin_lifecycle::PinCommand;
 pub(crate) use pin_menu_window::PIN_MENU_HWND;
 pub(crate) use pin_model::pin_is_focused;
 pub(crate) use pin_model::pin_zoom_keep_alive_try;
-pub(crate) use pin_page_input::the_wheel_is_the_pages;
 pub(crate) use pin_walk::PinPlanned;
 pub(crate) use pin_walk::PinStep;
 pub(crate) use pixels::rgba_to_bgra;
