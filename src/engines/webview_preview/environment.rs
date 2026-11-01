@@ -26,10 +26,11 @@ use crate::app::engine_processes;
 use crate::config::config::TransparentBackground;
 use crate::paths::plain_path;
 
-/// The window the engine draws into: a popup of its own, topmost, tool-windowed and
-/// refusing activation to begin with. The refusal is put on here rather than answered here
-/// alone because it is the style that makes a click refuse as well, and it comes off for the
-/// one document that runs (see `ex_style_for`).
+/// The window the engine draws into: made a popup of its own, topmost, tool-windowed and
+/// refusing activation to begin with. It does not stay one: a page that is shown is made a child
+/// of the window the preview stands in, which is the pin's while one is up (see `nesting`). The
+/// refusal is put on here rather than answered here alone because it is the style that makes a
+/// click refuse as well, and it comes off for the one document that runs (see `ex_style_for`).
 pub(super) fn create_host_window() -> Option<HWND> {
     unsafe {
         CreateWindowExW(
