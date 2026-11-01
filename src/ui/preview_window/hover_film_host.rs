@@ -334,7 +334,7 @@ unsafe fn create() -> Option<HWND> {
     // The still its button's hover is drawn of is this app's own picture, taken when a pin puts it away
     // into the taskbar: this window is composed of a thumbnail the Shell draws *over* it, so its own
     // rows are no picture of the film (see `pin_taskbar::supply_the_stills_of_this_window`).
-    unsafe { pin_taskbar::supply_the_stills_of_this_window(host) };
+    unsafe { pin_taskbar::supply_the_stills_of_this_window(host, true) };
     HOVER_FILM_HOST.store(host.0 as isize, Ordering::SeqCst);
     HOVER_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
     HOVER_FILM_HOST_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);

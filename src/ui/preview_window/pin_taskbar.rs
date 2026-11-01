@@ -463,7 +463,7 @@ pub(super) unsafe fn pin_taskbar_window() -> Option<HWND> {
     // made: what the still *is* is answered when the Shell asks for it, since that is the only moment
     // the app is asked to supply one, and whether the Shell is to use it at all is read from where the
     // pin is (see `the_buttons_still_is_the_apps_own`).
-    unsafe { supply_the_stills_of_this_window(hwnd) };
+    unsafe { supply_the_stills_of_this_window(hwnd, true) };
 
     Some(hwnd)
 }
@@ -477,8 +477,8 @@ pub(super) unsafe fn pin_taskbar_window() -> Option<HWND> {
 /// `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
 ///
 /// Safety: `hwnd` is a window of this app's own.
-pub(super) unsafe fn supply_the_stills_of_this_window(hwnd: HWND) {
-    let supplies_its_own_still = BOOL(1);
+pub(super) unsafe fn supply_the_stills_of_this_window(hwnd: HWND, supplies: bool) {
+    let supplies_its_own_still = BOOL(supplies as i32);
     let _ = unsafe {
         DwmSetWindowAttribute(
             hwnd,
