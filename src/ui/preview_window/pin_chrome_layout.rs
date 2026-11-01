@@ -42,8 +42,18 @@ pub(super) struct PinVolume {
     /// is holding. One knob and one bar serve both, and the bar a hand moved is a hand on the file
     /// under it, not on the file that comes to it next (see `pinned_level`).
     pub(super) audio: bool,
-    /// The level this pin is playing at, 0-100.
+    /// The level this pin is playing at, 0-100: the *applied* level, which the popup is drawn at
+    /// and the engine is told. A wheel notch moves `target` and this glides there (see
+    /// `ramp_pin_volume`).
     pub(super) level: u32,
+    /// The level a wheel notch asked for, in the wheel's own fine units (1/24 percent, 120 to a
+    /// notch), while the applied level is still on its way there, and nothing once it has landed.
+    ///
+    /// Fine units rather than whole percent because that is where a notch is exact: a 5% notch is
+    /// 120 units and the applied level settles on it precisely.
+    pub(super) target: Option<u32>,
+    /// Where the glide has got to, in `target`'s units; only meaningful while `target` is set.
+    pub(super) applied: u32,
     /// The level this pin was playing a file of the *other* kind at, and which kind that was:
     /// the level one slot cannot hold across a walk from a sound onto a film and back.
     ///
@@ -402,6 +412,11 @@ pub(super) fn refresh_pin_chrome(
     // every kind: it is the transport bar's own, and a kind whose chrome is never hidden still has
     // a popup that belongs on screen only while it is being used (see `refresh_pin_volume`).
     let closed = refresh_pin_volume(pin, cursor);
+
+    // The box a wheel notch over the volume control belongs to is published on this clock as well,
+    // because the tick is where the panel's own state is asked of the pin rather than of a lock the
+    // hook cannot take (see `publish_pin_volume_region`).
+    publish_pin_volume_region(Some(pin));
 
     // The card's menu is asked about on this clock as well: it is a panel over the card, and
     // where the pointer is on it is a question the same tick answers — the row under the hand
@@ -1000,15 +1015,14 @@ pub(super) fn volume_from_wheel_units(level_units: i64) -> u32 {
 pub(super) fn set_pin_volume(level: u32) {
     let level = level.min(100);
     let audio = matches!(current_media_type(), Some(MediaType::Audio));
-    let immediate = match current_media_type() {
-        Some(MediaType::NativeVideo) => true,
-        Some(MediaType::Audio) => audio_preview_level_is_owed_to_the_engine(),
-        Some(MediaType::Video) => mpv_takes_a_level_as_it_moves(),
-        _ => false,
-    };
+    let immediate = pin_level_is_immediate();
     with_pin(|pin| {
         pin.volume.level = level;
         pin.volume.audio = audio;
+        // A drag, a tray row or a key is a level in hand: it is heard at once, and no glide left over
+        // from a wheel notch before it is carried on with (see `ramp_pin_volume`).
+        pin.volume.target = None;
+        pin.volume.applied = level * WHEEL_LEVEL_UNITS_PER_PERCENT as u32;
         // A level a running player can be told is coalesced: the knob and the bar move now, the
         // engine hears the latest level once on the next tick (see `flush_pin_volume_level`).
         pin.volume.pending |= immediate;
@@ -1022,6 +1036,122 @@ pub(super) fn set_pin_volume(level: u32) {
     // it. A video's level is drawn in the strip, which the repaint does reach (see
     // `pin_audio_hover_refresh`).
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+}
+
+/// Whether the player behind the pin takes a level while it runs, which is what decides whether a
+/// moved level is owed the engine on the next tick (see `flush_pin_volume_level`).
+fn pin_level_is_immediate() -> bool {
+    match current_media_type() {
+        Some(MediaType::NativeVideo) => true,
+        Some(MediaType::Audio) => audio_preview_level_is_owed_to_the_engine(),
+        Some(MediaType::Video) => mpv_takes_a_level_as_it_moves(),
+        _ => false,
+    }
+}
+
+/// How much of the gap between the applied level and a wheel's target one tick closes: about a
+/// third, which is a glide of a handful of 16 ms ticks per notch (see `ramp_pin_volume`).
+pub(super) const PIN_VOLUME_RAMP_SHARE: f32 = 0.35;
+
+/// Ask the pin's level to go to `units`, a wheel's request in its own fine units (1/24 percent,
+/// 120 to a notch): the popup is drawn at once from where the level is and the applied level glides
+/// there on the next ticks (see `ramp_pin_volume`).
+pub(super) fn set_pin_volume_target(units: i64) {
+    let target = units.clamp(0, 100 * WHEEL_LEVEL_UNITS_PER_PERCENT) as u32;
+    let audio = matches!(current_media_type(), Some(MediaType::Audio));
+    with_pin(|pin| {
+        pin.volume.audio = audio;
+        pin.volume.target = Some(target);
+        pin.volume.applied = pin.volume.level * WHEEL_LEVEL_UNITS_PER_PERCENT as u32;
+        // Every notch is a hand still turning, so the FFmpeg settle waits for the last of them (see
+        // `settle_pin_volume_after_quiet`).
+        pin.volume.quiet = PIN_VOLUME_SETTLE_TICKS;
+    });
+
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+}
+
+/// Step the applied level one tick toward a wheel's target, never past it and never backwards.
+///
+/// The point of the glide is that a notch is heard as a short ramp rather than as a step of five
+/// percent: the engine is told the applied level once a tick (see `flush_pin_volume_level`) and the
+/// popup is drawn at it, so the thumb moves continuously. The last tick writes the exact target, so
+/// a whole notch settles on precisely `VOLUME_WHEEL_STEP` percent rather than near it.
+pub(super) fn ramp_pin_volume() {
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    let immediate = pin_level_is_immediate();
+    let level = {
+        let Some(mut pinned) = pin_state() else {
+            return;
+        };
+        let Some(pin) = pinned.pin_mut() else {
+            return;
+        };
+        let volume = &mut pin.volume;
+        let Some(target) = volume.target else {
+            return;
+        };
+
+        let gap = i64::from(target) - i64::from(volume.applied);
+        if gap == 0 {
+            volume.target = None;
+            return;
+        }
+
+        // A share of the gap, and at least one fine unit while any gap is left: a small gap would
+        // otherwise round to no step at all and the level would stick short of its target.
+        let share = (gap as f32 * PIN_VOLUME_RAMP_SHARE).round() as i64;
+        let step = share.abs().max(1) * gap.signum();
+        // Never past the target: the share is under the gap, and the floor above only fires on a gap
+        // it cannot overshoot.
+        let applied = (i64::from(volume.applied) + step).clamp(0, 100 * per) as u32;
+        volume.applied = applied;
+        let landed = applied == target;
+        volume.level = volume_from_wheel_units(if landed {
+            i64::from(target)
+        } else {
+            i64::from(applied)
+        });
+        if landed {
+            volume.target = None;
+        }
+        // Told to a player that takes a level while it runs, once for every tick of the glide (see
+        // `flush_pin_volume_level`).
+        volume.pending |= immediate;
+        volume.level
+    };
+
+    remember_pin_volume(level);
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+}
+
+/// Whether a level is still on its way: a wheel's target not yet reached, a level the engine is
+/// still owed, a wheel notch waiting to be read, or FFmpeg's settle window running.
+///
+/// It is what keeps the loop at the frame cadence while a wheel is turning the volume — the glide
+/// and the flush are only as smooth as the ticks they land on — and what lets it drop back to the
+/// pin's own slower wait once the level has settled (see `wait_before_the_next_tick`).
+pub(super) fn pin_volume_is_moving() -> bool {
+    if crate::shell::wheel_input::pin_volume_delta_pending() {
+        return true;
+    }
+
+    pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                pin.volume.target.is_some() || pin.volume.pending || pin.volume.quiet > 0
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Whether a wheel's target is still waiting for the glide, which is what says a knob that moved
+/// the level between ticks was a hand other than the wheel's (see the wheel's own carry in the
+/// preview loop).
+pub(super) fn pin_volume_target_pending() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.target.is_some()))
+        .unwrap_or(false)
 }
 
 /// Tell the engine the latest level a knob or wheel asked for, at most once per preview tick.
@@ -1308,6 +1438,12 @@ pub(super) fn settle_pin_volume_after_quiet() {
     }
     if quiet > 1 {
         with_pin(|pin| pin.volume.quiet = quiet - 1);
+        return;
+    }
+    // The last tick is held while a wheel's level is still gliding: settling FFmpeg's player on a
+    // level the glide has not reached yet would leave it playing at one level and the bar claiming
+    // another, with nothing left to settle the rest (see `ramp_pin_volume`).
+    if pin_volume_target_pending() {
         return;
     }
     with_pin(|pin| pin.volume.quiet = 0);

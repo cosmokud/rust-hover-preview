@@ -141,6 +141,12 @@ pub fn take_pin_volume_delta() -> i32 {
     PIN_VOLUME_DELTA.swap(0, Ordering::AcqRel)
 }
 
+/// Whether a volume notch is waiting to be read, so the preview loop can keep its frame cadence
+/// for it rather than let the level land on its own slow wait (see `wait_before_the_next_tick`).
+pub fn pin_volume_delta_pending() -> bool {
+    PIN_VOLUME_DELTA.load(Ordering::Acquire) != 0
+}
+
 /// Starts the hook thread; `main` joins the returned handle after `request_stop`.
 pub fn spawn_wheel_watcher() -> std::thread::JoinHandle<()> {
     super::hook_thread::spawn(

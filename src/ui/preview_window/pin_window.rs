@@ -377,6 +377,10 @@ pub(super) fn install(pin: PinnedPreview) {
             .filter(|(path, _)| super::pin_navigation::same_folder(path, &pin.path))
             .and_then(|(_, walk)| walk);
 
+        // The box a wheel notch over the volume button belongs to is published with the pin, so the
+        // first notch after a take-up is answered rather than waiting for the tick to publish it
+        // (see `publish_pin_volume_region`).
+        super::pin_input::publish_pin_volume_region(Some(&pin));
         *state = PinState::Up(PinUp {
             pin,
             keyboard: None,
@@ -497,6 +501,10 @@ impl PinState {
     /// the window different work in the two cases and the claim alone cannot tell them apart (see
     /// [`PinEnded`]).
     fn end(&mut self, reason: Reason) -> PinEnded {
+        // The published wheel box goes with the pin, before the state does: the hook reads it
+        // without this lock, and a box left standing takes notches meant for whatever is behind it
+        // (see `publish_pin_volume_region`).
+        super::pin_input::clear_pin_volume_region();
         let PinState::Up(mut up) = std::mem::replace(self, PinState::Ending(reason)) else {
             // A pin that is not up is already over, and the end it is being given is recorded
             // rather than refused: two roads racing on the same pin is normal (the watchdog and
@@ -892,8 +900,11 @@ pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
     // give it back, and every one that does not begins without it (see `arm_pin_to_the_front`).
     super::PIN_FRONT_OWED.store(false, Ordering::SeqCst);
     match pin {
+        // `install` publishes the box the wheel hook reads, so a notch can be handed to the hook
+        // without a preview loop having turned (see `pin_volume_keep_alive_try`).
         Some(pin) => install(pin),
         None => {
+            super::pin_input::clear_pin_volume_region();
             if let Some(mut state) = pin_state() {
                 *state = PinState::Down;
                 PIN_UP.store(false, Ordering::Release);
