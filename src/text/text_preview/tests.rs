@@ -1,6 +1,7 @@
 use super::frame::TextFrame;
 use super::*;
 use crate::config::config::{MarkdownMode, TextTheme};
+use crate::text::text_paint::luminance;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -64,7 +65,8 @@ fn draws_pages_of_text() {
         };
 
         let (width, height) = measure(path, 1_920, 1_200, 96, options).expect("a measured page");
-        let frame = render_scrolled(path, 0, width, height, 96, options, None).expect("a page");
+        let frame =
+            render_scrolled(path, 0, width, height, 96, options, None, None).expect("a page");
 
         assert!(frame.width > 0 && frame.height > 0, "{name}");
         assert!(
@@ -97,6 +99,7 @@ fn a_line(text: &str) -> Vec<FrameLine> {
     vec![FrameLine {
         top: 0,
         height: 20,
+        left: 0,
         runs: vec![FrameRun {
             x: 0,
             width: text.chars().count() as i32 * 10,
@@ -117,7 +120,7 @@ fn a_wrapped_line_says_which_characters_each_of_its_parts_holds() {
     let long: String = (0..60).map(|n| format!("{n:02} ")).collect();
     fs::write(&source, format!("{long}\nsecond\n")).expect("a written page");
 
-    let frame = render_scrolled(&source, 0, 140, 200, 96, options(), None).expect("a page");
+    let frame = render_scrolled(&source, 0, 140, 200, 96, options(), None, None).expect("a page");
 
     let wrapped: Vec<&FrameLine> = frame
         .lines
@@ -215,7 +218,7 @@ fn a_copy_is_the_text_the_document_has() {
 
     // The box this is copied out of does not hold the whole page: what a copy takes is the
     // document's, not the frame's.
-    let frame = render_scrolled(&source, 0, 120, 40, 96, options(), None).expect("a page");
+    let frame = render_scrolled(&source, 0, 120, 40, 96, options(), None, None).expect("a page");
     assert!(
         frame.visible_lines < 3,
         "the box shows less of the page than the page has, so the copy above came from the document"
@@ -291,6 +294,7 @@ fn a_third_press_takes_the_whole_of_the_line_under_the_hand() {
     let painted = |top: i32, text: &str, source: (usize, usize)| FrameLine {
         top,
         height: 20,
+        left: 0,
         runs: vec![FrameRun {
             x: 0,
             width: text.chars().count() as i32 * 10,
@@ -503,6 +507,166 @@ fn a_find_walks_the_document_from_just_after_what_is_selected() {
     );
 }
 
+/// A search lists every place the query is found, in the order the document is read, and it is the
+/// query that is looked for rather than a selection: nothing found is an empty list rather than a
+/// page that has moved, and an empty query is nothing to look for (see `find_all`).
+#[test]
+fn a_search_lists_every_place_the_query_is_found() {
+    let dir = scratch("find-all");
+    let source = dir.join("find-all.txt");
+    fs::write(&source, "alpha beta\ngamma alpha\ndelta alpha\nepsilon\n").expect("a written page");
+
+    let alpha = |line: usize, from: usize| Selection {
+        anchor: (line, from),
+        caret: (line, from + 5),
+    };
+
+    assert_eq!(
+        find_all(&source, options(), "alpha", true, false),
+        vec![alpha(0, 0), alpha(1, 6), alpha(2, 6)],
+        "every occurrence, in the order the document is read"
+    );
+    assert_eq!(
+        find_all(&source, options(), "omega", true, false),
+        Vec::new(),
+        "a query the document does not hold is nowhere to be found"
+    );
+    assert_eq!(
+        find_all(&source, options(), "", true, false),
+        Vec::new(),
+        "and an empty query is nothing to look for"
+    );
+}
+
+/// Whether a search minds case is one of the bar's two switches, and the document is searched as it
+/// is written either way: the same query finds one occurrence with the switch on and all of them
+/// with it off (see `find_all`).
+#[test]
+fn a_case_blind_search_matches_a_query_in_any_case() {
+    let dir = scratch("find-all-case");
+    let source = dir.join("case.txt");
+    fs::write(&source, "Alpha alpha ALPHA\n").expect("a written page");
+
+    assert_eq!(
+        find_all(&source, options(), "alpha", true, false).len(),
+        1,
+        "a search that minds case finds the one occurrence written as asked"
+    );
+    assert_eq!(
+        find_all(&source, options(), "alpha", false, false).len(),
+        3,
+        "and one that does not finds all three"
+    );
+    assert_eq!(
+        find_all(&source, options(), "ALPHA", false, false).len(),
+        3,
+        "whichever case the query itself is written in"
+    );
+}
+
+/// A whole-word search takes only the occurrences that stand as words: `cat` in `concat` and inside
+/// a `cat_cat` run is not one, while the same query before a full stop is (see `find_all`).
+#[test]
+fn a_whole_word_search_takes_only_the_words() {
+    let dir = scratch("find-all-word");
+    let source = dir.join("words.txt");
+    fs::write(&source, "cat concat cat_cat cat.\n").expect("a written page");
+
+    assert_eq!(
+        find_all(&source, options(), "cat", true, false).len(),
+        5,
+        "every occurrence of the letters, wherever they stand"
+    );
+    assert_eq!(
+        find_all(&source, options(), "cat", true, true),
+        vec![
+            Selection {
+                anchor: (0, 0),
+                caret: (0, 3),
+            },
+            Selection {
+                anchor: (0, 19),
+                caret: (0, 22),
+            },
+        ],
+        "the word alone and the one a full stop ends, and not the three inside longer runs"
+    );
+}
+
+/// A query made of punctuation ends in no word character, so a whole-word search asks for no
+/// boundary at that end and finds it wherever it stands — `->` is found inside `a->b` as well as on
+/// its own (see `find_all` and `word_boundaries_hold`).
+#[test]
+fn a_whole_word_search_of_punctuation_asks_for_no_boundary_of_its_own() {
+    let dir = scratch("find-all-punctuation");
+    let source = dir.join("arrows.txt");
+    fs::write(&source, "a->b -> c\n").expect("a written page");
+
+    assert_eq!(
+        find_all(&source, options(), "->", true, true),
+        vec![
+            Selection {
+                anchor: (0, 1),
+                caret: (0, 3),
+            },
+            Selection {
+                anchor: (0, 5),
+                caret: (0, 7),
+            },
+        ],
+        "punctuation is not a word, so a query made of it looks for itself wherever it stands"
+    );
+}
+
+/// The search advances past each occurrence it finds rather than a character at a time, so two
+/// overlapping readings of the same run are one answer and not two (see `find_all`).
+#[test]
+fn a_search_advances_past_each_hit_rather_than_counting_it_twice() {
+    let dir = scratch("find-all-overlap");
+    let source = dir.join("runs.txt");
+    fs::write(&source, "aaaa\n").expect("a written page");
+
+    assert_eq!(
+        find_all(&source, options(), "aa", true, false),
+        vec![
+            Selection {
+                anchor: (0, 0),
+                caret: (0, 2),
+            },
+            Selection {
+                anchor: (0, 2),
+                caret: (0, 4),
+            },
+        ],
+        "`aaaa` holds two `aa`, not the three a character-by-character walk would find"
+    );
+}
+
+/// A search reads the document from its first line to its last and then stops: the occurrence on the
+/// last line is found, and the ones before it are not found a second time on the way round — a list
+/// of every place is not a walk that wraps (see `find_all`).
+#[test]
+fn a_search_reads_the_whole_document_and_never_wraps_into_its_first_hit_again() {
+    let dir = scratch("find-all-order");
+    let source = dir.join("order.txt");
+    fs::write(&source, "omega\nbeta\nomega\n").expect("a written page");
+
+    assert_eq!(
+        find_all(&source, options(), "omega", true, false),
+        vec![
+            Selection {
+                anchor: (0, 0),
+                caret: (0, 5),
+            },
+            Selection {
+                anchor: (2, 0),
+                caret: (2, 5),
+            },
+        ],
+        "the last line is read, and the first is not read again after it"
+    );
+}
+
 /// One pixel of a painted frame, in the frame's own bytes: four to a pixel, blue first.
 fn frame_pixel(frame: &TextFrame, x: u32, y: u32) -> [u8; 4] {
     let at = ((y * frame.width + x) * 4) as usize;
@@ -511,18 +675,185 @@ fn frame_pixel(frame: &TextFrame, x: u32, y: u32) -> [u8; 4] {
     [pixel[0], pixel[1], pixel[2], pixel[3]]
 }
 
-/// A pinned page of a file drawn through a syntax definition keeps a column down its left for the
-/// document's own line numbers; the same file hovered does not, and neither does a page of prose,
-/// because a line of code is cited by its number where prose is read rather than cited (see
-/// `gutter_width` and `wants_line_numbers`).
+/// A find's places are drawn into the frame rather than over it: the page without a find is not the
+/// page with one, every place the query was found is marked, and the one the reader is on is drawn
+/// apart from the rest — which is what lets the count be read off the page as well as off the card
+/// (see `FindHighlights` and `paint`).
 #[test]
-fn a_pinned_page_of_code_keeps_a_column_for_its_line_numbers() {
+fn a_find_highlights_every_place_and_the_current_one_apart() {
+    let dir = scratch("find-highlight");
+    let source = dir.join("highlight.txt");
+    fs::write(&source, "needle here\nnothing\nneedle again\n").expect("a written page");
+
+    let at = |line: usize, from: usize| Selection {
+        anchor: (line, from),
+        caret: (line, from + 6),
+    };
+    let matches = vec![at(0, 0), at(2, 2)];
+    let render = |find: Option<FindHighlights>| {
+        render_scrolled(&source, 0, 320, 160, 96, options(), None, find).expect("a page")
+    };
+
+    let plain = render(None);
+    let first = render(Some(FindHighlights {
+        matches: matches.clone(),
+        current: Some(0),
+    }));
+    let second = render(Some(FindHighlights {
+        matches,
+        current: Some(1),
+    }));
+    let nothing = render(Some(FindHighlights::default()));
+
+    let differing = |a: &TextFrame, b: &TextFrame| {
+        a.pixels
+            .iter()
+            .zip(&b.pixels)
+            .filter(|(a, b)| a != b)
+            .count()
+    };
+
+    assert!(
+        differing(&plain, &first) > 0,
+        "the page with a find on it is not the page without one"
+    );
+    assert!(
+        differing(&first, &second) > 0,
+        "which match is current is drawn on the page"
+    );
+    assert_eq!(
+        differing(&plain, &nothing),
+        0,
+        "and a find that found nothing is the page exactly as it was"
+    );
+}
+
+/// **A find's mark is stronger than the selection band, and its glyphs survive it** — in both the
+/// bundled themes. Neither theme names a selection or a find colour, so both are derived from the
+/// page; a find that was only a slightly different wash of the same page read as part of the text
+/// (see `paint` and `find_ink`).
+#[test]
+fn a_find_stands_out_from_the_selection_and_keeps_its_glyphs_readable() {
+    let dir = scratch("find-strength");
+    let source = dir.join("strength.txt");
+    fs::write(&source, "needle here\nneedle again\n").expect("a written page");
+
+    let at = |line: usize| Selection {
+        anchor: (line, 0),
+        caret: (line, 6),
+    };
+
+    // The band drawn across the first six characters of `line`: the most common pixel of the region
+    // is the band, and the furthest pixel from it is the ink laid over it.
+    let band = |frame: &TextFrame, line: usize| {
+        let line = frame
+            .lines
+            .iter()
+            .find(|painted| painted.source.0 == line)
+            .expect("a painted line");
+        let run = line.runs.first().expect("a run of text");
+        let characters = run.text.chars().count() as i32;
+        let right = run.x + 6 * run.width / characters.max(1);
+
+        let mut counts: std::collections::HashMap<[u8; 4], usize> =
+            std::collections::HashMap::new();
+        for y in line.top..line.top + line.height {
+            for x in run.x..right {
+                *counts
+                    .entry(frame_pixel(frame, x as u32, y as u32))
+                    .or_default() += 1;
+            }
+        }
+        let mut pixels: Vec<([u8; 4], usize)> = counts.into_iter().collect();
+        pixels.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        let grey = |pixel: [u8; 4]| luminance([pixel[2], pixel[1], pixel[0]]);
+        let background = grey(pixels[0].0);
+        let ink = pixels
+            .iter()
+            .map(|(pixel, _)| (grey(*pixel) - background).abs())
+            .max_by(f32::total_cmp)
+            .expect("a pixel");
+
+        (background, ink)
+    };
+
+    for theme in [TextTheme::Light, TextTheme::Dark] {
+        let options = TextPreviewOptions { theme, ..options() };
+        let render = |selection, find| {
+            render_scrolled(&source, 0, 320, 160, 96, options, selection, find).expect("a page")
+        };
+        let searched = FindHighlights {
+            matches: vec![at(0), at(1)],
+            current: Some(1),
+        };
+
+        let selection = render(Some(at(0)), None);
+        let marks = render(None, Some(searched));
+        let plain = render(None, None);
+        let page = band(&plain, 0).0;
+        let (selection_band, _) = band(&selection, 0);
+        let (found_band, found_ink) = band(&marks, 0);
+        let (current_band, current_ink) = band(&marks, 1);
+
+        assert!(
+            (found_band - selection_band).abs() >= 0.10,
+            "{theme:?}: a find's band is a real step away from the selection's, not the same wash"
+        );
+        assert!(
+            (current_band - found_band).abs() >= 0.03,
+            "{theme:?}: the current match is the colour itself, the rest are a wash of it"
+        );
+        assert!(
+            (current_band - page).abs() > (found_band - page).abs(),
+            "{theme:?}: the current match is drawn opaque rather than mixed towards the page"
+        );
+        for (kind, ink) in [("find", found_ink), ("current", current_ink)] {
+            assert!(
+                ink >= 0.20,
+                "{theme:?}: the glyphs on a {kind} mark stand clear of the band they are drawn on"
+            );
+        }
+    }
+}
+
+/// **A pinned page keeps a column down its left for its own line numbers, and a hover does not** —
+/// whatever the file is: source, prose, or a document drawn from its Markdown. The pin is the page a
+/// reader works in, where a line is referred to by its number; a hover is something looked at on the
+/// way past (see `gutter_width` and the layout's gutter).
+#[test]
+fn a_pinned_page_keeps_a_column_for_its_line_numbers_and_a_hover_does_not() {
     let dir = scratch("gutter");
     let source = dir.join("numbered.rs");
-    fs::write(&source, "fn main() {\n    let answer = 42;\n}\n").expect("a source file");
+    fs::write(
+        &source,
+        "fn main() {
+    let answer = 42;
+}
+",
+    )
+    .expect("a source file");
 
     let prose = dir.join("prose.txt");
-    fs::write(&prose, "a page of prose\nwith two lines\n").expect("a page of prose");
+    fs::write(
+        &prose,
+        "a page of prose
+with two lines
+",
+    )
+    .expect("a page of prose");
+
+    let document = dir.join("numbered.md");
+    fs::write(
+        &document,
+        "# Heading
+
+A paragraph, and a list:
+
+- one
+- two
+",
+    )
+    .expect("a rendered document");
 
     let pinned = TextPreviewOptions {
         full_mode: true,
@@ -534,7 +865,7 @@ fn a_pinned_page_of_code_keeps_a_column_for_its_line_numbers() {
     };
 
     let text_column = |path: &Path, options: TextPreviewOptions| {
-        render_scrolled(path, 0, 400, 300, 96, options, None)
+        render_scrolled(path, 0, 400, 300, 96, options, None, None)
             .expect("a page")
             .lines
             .first()
@@ -542,15 +873,13 @@ fn a_pinned_page_of_code_keeps_a_column_for_its_line_numbers() {
             .expect("a painted line of text")
     };
 
-    assert!(
-        text_column(&source, pinned) > text_column(&source, hover),
-        "a pinned page of code keeps a column for its numbers that the same file hovered does not"
-    );
-    assert_eq!(
-        text_column(&prose, pinned),
-        text_column(&prose, hover),
-        "a page of prose is read rather than cited, so it is numbered no more than a hover is"
-    );
+    for path in [&source, &prose, &document] {
+        assert!(
+            text_column(path, pinned) > text_column(path, hover),
+            "a pinned page keeps a column for its numbers that the same file hovered does not: {}",
+            path.display()
+        );
+    }
 }
 
 /// A number is drawn once per document line rather than once per painted line: a line too long for
@@ -567,7 +896,7 @@ fn a_wrapped_line_is_numbered_once() {
         full_mode: true,
         ..options()
     };
-    let frame = render_scrolled(&source, 0, 200, 400, 96, options, None).expect("a page");
+    let frame = render_scrolled(&source, 0, 200, 400, 96, options, None, None).expect("a page");
 
     let column = frame
         .lines
@@ -654,5 +983,524 @@ fn a_window_kept_for_a_short_document_answers_a_request_longer_than_it() {
         "the same window asked for twice was styled twice: a window of {} lines does not cover a \
          request for 500",
         asked.lines.len()
+    );
+}
+
+/// The page is a document, so its caret moves the way a document's does: a line at a time with the
+/// column kept over the short lines in between, a character at a time across the ends of lines, a run
+/// at a time by the page's own run rule, and the two pairs of ends — the line's and the document's
+/// (see `Motion` and `moved`).
+fn page_of(lines: &[&str]) -> Vec<String> {
+    lines.iter().map(|line| line.to_string()).collect()
+}
+
+#[test]
+fn a_vertical_move_keeps_the_column_over_a_short_line() {
+    let page = page_of(&["abcdefgh", "ab", "abcdefgh"]);
+
+    let (short, goal) = moved(&page, (0, 6), Motion::Down, None);
+    assert_eq!(
+        short,
+        (1, 2),
+        "a line too short for the column takes the caret to its own end"
+    );
+    assert_eq!(goal, Some(6), "and the column it was aiming at is kept");
+
+    let (long, _) = moved(&page, short, Motion::Down, goal);
+    assert_eq!(
+        long,
+        (2, 6),
+        "the line below is long enough for the column again, which is the whole of what a goal \
+         column is for: `↓` over a short line and `↓` again must not walk the caret to the margin"
+    );
+}
+
+#[test]
+fn a_character_move_crosses_the_end_of_a_line() {
+    let page = page_of(&["one", "two"]);
+
+    assert_eq!(
+        moved(&page, (0, 3), Motion::Right, None),
+        ((1, 0), None),
+        "the character after a line's last is the first of the line below"
+    );
+    assert_eq!(
+        moved(&page, (1, 0), Motion::Left, None),
+        ((0, 3), None),
+        "and the one before a line's first is the last of the line above"
+    );
+    assert_eq!(
+        moved(&page, (0, 0), Motion::Left, None),
+        ((0, 0), None),
+        "the beginning of the document is as far back as the caret goes"
+    );
+    assert_eq!(
+        moved(&page, (1, 3), Motion::Right, None),
+        ((1, 3), None),
+        "and its end as far on"
+    );
+}
+
+#[test]
+fn the_two_pairs_of_ends_are_the_line_s_and_the_document_s() {
+    let page = page_of(&["one", "two", "three"]);
+
+    assert_eq!(moved(&page, (1, 2), Motion::LineStart, None).0, (1, 0));
+    assert_eq!(moved(&page, (1, 0), Motion::LineEnd, None).0, (1, 3));
+    assert_eq!(
+        moved(&page, (1, 2), Motion::DocumentStart, None).0,
+        (0, 0),
+        "the document's beginning is the line's begin where the line is the first"
+    );
+    assert_eq!(
+        moved(&page, (1, 2), Motion::DocumentEnd, None).0,
+        (2, 5),
+        "and its end is the end of the last line, not the line past it"
+    );
+}
+
+#[test]
+fn a_screenful_keeps_the_column_over_the_lines_it_passes() {
+    let page: Vec<String> = (0..30)
+        .map(|line| format!("line {line:02} of thirty"))
+        .collect();
+
+    let (turned, goal) = moved(&page, (0, 6), Motion::ScreenDown(20), None);
+    assert_eq!(turned, (20, 6), "a page turned lands twenty lines on");
+    assert_eq!(goal, Some(6), "at the column it was standing in");
+
+    assert_eq!(
+        moved(&page, turned, Motion::ScreenUp(20), goal).0,
+        (0, 6),
+        "and a page back is where the page was turned from"
+    );
+}
+
+#[test]
+fn a_move_past_either_end_leaves_the_caret_where_it_is() {
+    let page = page_of(&["one", "two"]);
+
+    assert_eq!(
+        moved(&page, (0, 1), Motion::Up, None),
+        ((0, 1), Some(1)),
+        "an up arrow on the first line has nowhere to go"
+    );
+    assert_eq!(
+        moved(&page, (1, 1), Motion::Down, None),
+        ((1, 1), Some(1)),
+        "and a down arrow on the last"
+    );
+}
+
+#[test]
+fn a_move_that_is_not_vertical_puts_the_goal_column_down() {
+    let page = page_of(&["abcdefgh", "ab", "abcdefgh"]);
+
+    assert_eq!(
+        moved(&page, (0, 6), Motion::Right, Some(6)),
+        ((0, 7), None),
+        "a character move leaves the caret where the reader put it, so the next vertical move \
+         aims from there rather than from the column a previous run began at"
+    );
+}
+
+/// A document's lines are kept, bounded and uncoloured: a page can only scroll `MAX_DOC_LINES` of a
+/// file, so nothing past that is read, and a file nothing renders is sliced out of the text the parse
+/// already holds rather than taken through the highlighter.
+///
+/// Both halves are the whole of what makes a caret's arrow cheap: without the bound a press on a long
+/// log styled the file past the lines it could ever show, and without the plain road every press of
+/// every arrow was a document through syntect (see `drawn_lines`).
+#[test]
+fn the_lines_a_caret_reads_are_bounded_and_are_the_files_own() {
+    let reach = crate::text::text_preview::document::MAX_DOC_LINES;
+    let root = scratch("drawn");
+    let path = root.join("a-long-page.txt");
+    let text: String = (0..(reach + 500))
+        .map(|line| format!("line {line}\n"))
+        .collect();
+    fs::write(&path, &text).expect("a written page");
+
+    let options = TextPreviewOptions {
+        theme: TextTheme::Dark,
+        markdown_mode: MarkdownMode::Source,
+        font_scale_percent: 100,
+        full_mode: true,
+    };
+    let lines = drawn_lines(&path, options);
+
+    assert_eq!(
+        lines.len(),
+        reach,
+        "a page reads the lines it can reach and no more: the rest is a document no frame can show"
+    );
+    assert_eq!(
+        lines[0], "line 0",
+        "and a file nothing renders is its own lines, taken whole"
+    );
+    assert_eq!(
+        lines[reach - 1],
+        format!("line {}", reach - 1),
+        "to the last line it reaches"
+    );
+}
+
+/// A page moved under the reader is the page the frame after it would have been painted as: the
+/// frame already on screen with its rows shifted, and only the rows that came in from an edge
+/// painted (see `PaintedFrame`).
+///
+/// Every pixel is compared, not just the lines: a band that is one row short leaves the page above it
+/// a row of the page before, and a scrollbar's thumb is the one thing about a page that moves
+/// *without* the text moving, so a shifted frame owes it painted too.
+#[test]
+fn a_page_scrolled_is_the_page_the_frame_after_it_would_have_painted() {
+    let dir = scratch("shifted");
+    let path = dir.join("scrolled.txt");
+    let text: String = (0..400)
+        .map(|line| format!("    let value_{line} = compute({line}) * 3;\n"))
+        .collect();
+    fs::write(&path, &text).expect("a page to scroll");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+    let (width, height) = (240, 200);
+
+    fn painted(frame: &TextFrame) -> PaintedFrame<'_> {
+        PaintedFrame {
+            pixels: &frame.pixels,
+            width: frame.width,
+            height: frame.height,
+            first_line: frame.first_line,
+            lines: &frame.lines,
+            selection: None,
+            find: None,
+        }
+    }
+
+    // Down the page, and back up it: a shift either way is the same rows moved towards the edge the
+    // page is going.
+    for (from, to) in [(0usize, 1usize), (0, 3), (3, 1)] {
+        let before = render_scrolled(&path, from, width, height, 96, options, None, None)
+            .expect("a page at the place it is scrolled from");
+
+        let shifted_before = shifted_frame_count();
+        let shifted = render_scrolled_held(
+            Some(painted(&before)),
+            &path,
+            to,
+            width,
+            height,
+            96,
+            options,
+            None,
+            None,
+        )
+        .expect("the page moved");
+        let fresh = render_scrolled(&path, to, width, height, 96, options, None, None)
+            .expect("the page painted afresh");
+
+        assert!(
+            shifted_frame_count() > shifted_before,
+            "the frame on screen was moved rather than painted again, {from} to {to}"
+        );
+        assert_eq!(
+            shifted.lines, fresh.lines,
+            "the rows land where the page after it puts them, {from} to {to}"
+        );
+        assert_eq!(
+            shifted.scrollbar, fresh.scrollbar,
+            "the thumb is drawn where the page after it draws it, {from} to {to}"
+        );
+        assert_eq!(
+            shifted.pixels, fresh.pixels,
+            "and every pixel is the pixel that page would have been painted, {from} to {to}"
+        );
+    }
+
+    // A page painted with something else in it is not a page that can be moved: a selection is a wash
+    // laid under the text, and the pixels of a page without one are not the pixels of a page with it.
+    let plain = render_scrolled(&path, 0, width, height, 96, options, None, None).expect("a page");
+    let selected = Selection {
+        anchor: (0, 0),
+        caret: (2, 8),
+    };
+    let shifted_before = shifted_frame_count();
+    let shifted = render_scrolled_held(
+        Some(painted(&plain)),
+        &path,
+        1,
+        width,
+        height,
+        96,
+        options,
+        Some(selected),
+        None,
+    )
+    .expect("a page with a selection on it");
+    let fresh = render_scrolled(&path, 1, width, height, 96, options, Some(selected), None)
+        .expect("the page painted afresh");
+
+    assert_eq!(
+        shifted_frame_count(),
+        shifted_before,
+        "a page whose selection has changed is painted rather than moved"
+    );
+    assert_eq!(
+        shifted.pixels, fresh.pixels,
+        "and it is the page it would have been painted as"
+    );
+}
+
+/// A pinned page's caret stands where the glyph it precedes is painted, at every display scale, and
+/// the room between the numbers and the text is the display's rather than a literal.
+///
+/// The gutter is the one part of a page whose arithmetic is pure geometry: the numbers are as wide as
+/// the widest number the page can reach, the gap between them and the text is that gap *at the
+/// display's own scale*, and the text — and so the caret that stands in it — begins after both. A
+/// number written for 100% is a caret that is right at 96 dpi and a few pixels off the glyph at 144,
+/// and nothing here fails at 96 (see `gutter_width` and `gutter_gap`).
+#[test]
+fn the_caret_of_a_pinned_page_stands_on_the_glyph_it_precedes_at_any_scale() {
+    let dir = scratch("gutter-dpi");
+    let source = dir.join("scaled.txt");
+    let text: String = (0..40)
+        .map(|line| format!("line {line} of a page drawn at every scale\n"))
+        .collect();
+    fs::write(&source, text).expect("a page to draw");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+
+    let room_between_the_numbers_and_the_text = |frame: &TextFrame| {
+        let first = frame.lines.first().expect("a painted line");
+        let text_column = first.runs.first().expect("a run of text").x;
+        let background = frame_pixel(frame, frame.width - 1, frame.height - 1);
+        let number_ink: Vec<i32> = (first.top..first.top + first.height)
+            .flat_map(|y| (0..text_column).map(move |x| (x, y)))
+            .filter(|(x, y)| frame_pixel(frame, *x as u32, *y as u32) != background)
+            .map(|(x, _)| x)
+            .collect();
+
+        let rightmost = number_ink.iter().copied().max().expect("a number's ink");
+        text_column - rightmost - 1
+    };
+
+    let mut gaps = Vec::new();
+    for dpi in [96u32, 144, 192] {
+        let frame =
+            render_scrolled(&source, 0, 400, 300, dpi, options, None, None).expect("a page");
+        let text_column = frame
+            .lines
+            .first()
+            .and_then(|line| line.runs.first().map(|run| run.x))
+            .expect("a painted line of text");
+
+        // The caret stands before character 0 of the first line, which is the left edge of the run
+        // the text starts in — the glyph's own column, not the frame's.
+        let caret = caret_rect(&frame.lines, (0, 0)).expect("a caret in the page");
+        assert_eq!(
+            caret.left, text_column,
+            "at {dpi} dpi the caret is where the text begins rather than where the numbers do"
+        );
+
+        gaps.push(room_between_the_numbers_and_the_text(&frame));
+    }
+
+    assert!(
+        gaps[0] > 0 && gaps[1] > gaps[0] && gaps[2] > gaps[1],
+        "the room between the numbers and the text is the display's own gap: {gaps:?}"
+    );
+}
+
+/// A caret on an empty line stands where that line's text would begin, not at the frame's edge.
+///
+/// An empty line is a painted line with no run on it, so there is nothing on it for a place to be
+/// measured against — and the place is the left edge of the column the text is drawn in, past the
+/// numbers the page keeps beside it, rather than the frame's own edge, which is inside the numbers
+/// (see `x_within_line` and `FrameLine::left`). It is the same answer at a display scale, where the
+/// gutter is wider than the number standing in it (see `gutter_width`).
+#[test]
+fn a_caret_on_an_empty_line_stands_at_the_text_column_and_never_on_the_numbers() {
+    let dir = scratch("gutter-empty-line");
+    let source = dir.join("empty-lines.txt");
+    fs::write(&source, "21 the line above\n\n\n22 the line below\n").expect("a page to draw");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+
+    for dpi in [96u32, 144] {
+        let frame =
+            render_scrolled(&source, 0, 400, 300, dpi, options, None, None).expect("a page");
+        let background = frame_pixel(&frame, frame.width - 1, frame.height - 1);
+
+        // The column the text is drawn in, said by a line that has some on it.
+        let text_column = frame.lines[0].runs[0].x;
+        assert!(
+            text_column > 0,
+            "the page keeps a column for its numbers before the text begins"
+        );
+
+        // Lines 1 and 2 of the file are the empty ones: painted, numbered, and with no run at all.
+        let empty: Vec<&FrameLine> = frame
+            .lines
+            .iter()
+            .filter(|line| line.source.0 == 1 || line.source.0 == 2)
+            .collect();
+        assert_eq!(
+            empty.len(),
+            2,
+            "an empty line still takes a line of the page"
+        );
+
+        for line in empty {
+            assert!(
+                line.runs.is_empty(),
+                "an empty line has nothing on it to measure a place against"
+            );
+
+            let caret = caret_rect(&frame.lines, (line.source.0, 0)).expect("a caret on the line");
+            assert_eq!(
+                caret.left, text_column,
+                "at {dpi} dpi a caret on an empty line stands where the line's text would begin"
+            );
+
+            // The line's number is drawn in the gutter beside it, and the caret is past all of it:
+            // no part of the bar is laid over the numbers.
+            let number_ink_right = (line.top..line.top + line.height)
+                .flat_map(|y| (0..text_column).map(move |x| (x, y)))
+                .filter(|(x, y)| frame_pixel(&frame, *x as u32, *y as u32) != background)
+                .map(|(x, _)| x)
+                .max();
+            assert!(
+                number_ink_right.is_some_and(|number| caret.left > number),
+                "at {dpi} dpi the caret stands clear of the number drawn beside it"
+            );
+        }
+    }
+}
+
+/// A copy of a pinned page is the document's text and never the numbers drawn beside it.
+///
+/// The gutter is painted into the frame and nothing else: the lines a selection is cut from are the
+/// document's own, so a reader who selects the whole page and copies it gets the file rather than the
+/// file with a column of numbers in front of every line (see `text_of` and `drawn_lines`).
+#[test]
+fn a_copy_of_a_pinned_page_is_the_text_and_never_its_numbers() {
+    let dir = scratch("gutter-copy");
+    let source = dir.join("copied.txt");
+    let text: String = (0..12)
+        .map(|line| format!("line {line} of a page with numbers\n"))
+        .collect();
+    fs::write(&source, &text).expect("a page to copy");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+    let frame = render_scrolled(&source, 0, 400, 300, 96, options, None, None).expect("a page");
+    let hovered = render_scrolled(
+        &source,
+        0,
+        400,
+        300,
+        96,
+        TextPreviewOptions {
+            full_mode: false,
+            ..options
+        },
+        None,
+        None,
+    )
+    .expect("the same page hovered");
+    assert!(
+        frame.lines[0].runs[0].x > hovered.lines[0].runs[0].x,
+        "the page keeps a column for its numbers, which is what makes the copy worth asking about"
+    );
+
+    let whole = Selection {
+        anchor: (0, 0),
+        caret: (usize::MAX, usize::MAX),
+    };
+    let copied = text_of(&source, options, whole).expect("the page's text");
+
+    // A copy joins the lines the way Windows does, so the lines are what is compared.
+    assert_eq!(
+        copied.lines().collect::<Vec<&str>>(),
+        text.lines().collect::<Vec<&str>>(),
+        "a copy is the file as it was read, not the page as it was drawn: no number is in it"
+    );
+}
+
+/// A find's marks are laid over the text and never over the numbers: the column the numbers stand in
+/// is the same page before and after a search, whatever the query found.
+#[test]
+fn a_find_is_drawn_over_the_text_and_never_over_the_numbers() {
+    let dir = scratch("gutter-find");
+    let source = dir.join("searched.txt");
+    fs::write(&source, "a first line\nneedle on this line\na third line\n")
+        .expect("a page to search");
+
+    let options = TextPreviewOptions {
+        full_mode: true,
+        ..options()
+    };
+    let plain = render_scrolled(&source, 0, 400, 300, 96, options, None, None).expect("a page");
+    let found = render_scrolled(
+        &source,
+        0,
+        400,
+        300,
+        96,
+        options,
+        None,
+        Some(FindHighlights {
+            matches: vec![Selection {
+                anchor: (1, 0),
+                caret: (1, 6),
+            }],
+            current: Some(0),
+        }),
+    )
+    .expect("a page with its find on it");
+
+    let column = found.lines[1]
+        .runs
+        .first()
+        .map(|run| run.x)
+        .expect("the line's text");
+    assert!(
+        column > 0,
+        "the page keeps a column for its numbers before the text begins"
+    );
+
+    let mut marks_over_the_numbers = 0;
+    let mut marks_over_the_text = 0;
+    for y in found.lines[1].top..found.lines[1].top + found.lines[1].height {
+        for x in 0..found.width {
+            if frame_pixel(&plain, x, y as u32) == frame_pixel(&found, x, y as u32) {
+                continue;
+            }
+
+            if (x as i32) < column {
+                marks_over_the_numbers += 1;
+            } else {
+                marks_over_the_text += 1;
+            }
+        }
+    }
+
+    assert!(
+        marks_over_the_text > 0,
+        "the place the query was found is painted on the page"
+    );
+    assert_eq!(
+        marks_over_the_numbers, 0,
+        "and nothing of the mark reaches the numbers standing beside the text"
     );
 }

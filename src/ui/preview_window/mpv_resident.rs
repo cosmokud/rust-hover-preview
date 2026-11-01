@@ -122,16 +122,34 @@ static RESIDENT: Mutex<Option<Resident>> = Mutex::new(None);
 /// `a_pin_took_it_over`).
 static RE_WARM: AtomicBool = AtomicBool::new(false);
 
-/// Whether the hover road keeps a resident at all: on in a run, and in a test only where the test
-/// asks for it.
+/// **A prototype's knob, and not a setting: `RHP_NO_RESIDENT`.**
+///
+/// The hover road keeps one mpv warm and hands it file after file (see the module note). This takes
+/// that whole road out of a run — every hover begins a player of its own and ends it with the hover,
+/// which is the road the app had before the resident existed — so that the one architecture can be
+/// A/B'd against the other while a fault is hunted: a film that plays with **no sound at all and no
+/// session in Windows' Volume Mixer**, intermittent and not reproducible on `v0.4.5`, the tag the
+/// resident came after. **Presence is the whole switch**, as it is for `RHP_PLAYBACK_TRACE`: the
+/// variable being there at all is the run with no resident, and whatever it holds is not read.
+pub(super) const NO_RESIDENT_VARIABLE: &str = "RHP_NO_RESIDENT";
+
+/// Whether the hover road keeps a resident at all: on in a run unless the knob above is set, and in
+/// a test only where the test asks for it.
 ///
 /// **The suite's other hover tests must keep the launch they were written for**, and one of them
 /// sharing a resident with the next is one noted player standing in for two launches — so the seam
 /// is off by default and the tests that are about the resident turn it on (see
-/// `keep_a_resident_in_a_test`). The release binary carries no part of it.
+/// `keep_a_resident_in_a_test`). The release binary reads the machine's answer instead, and carries
+/// no part of the seam.
 #[cfg(not(test))]
 fn keeping_a_resident() -> bool {
-    true
+    keeping_a_resident_from(std::env::var_os(NO_RESIDENT_VARIABLE).as_deref())
+}
+
+/// The knob's answer for one environment: a resident is kept unless the variable is there at all,
+/// which is the whole of what it says.
+pub(super) fn keeping_a_resident_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_none()
 }
 
 #[cfg(test)]
@@ -275,6 +293,9 @@ fn begun(signature: LaunchSignature, volume: u32, audio_off: bool) -> Option<Res
         // layered to keep it off the screen, and a layered window cannot have a flip-model one.
         false,
         !signature.behind_the_host,
+        // The resident is a player like any other, so its command line is the one an ordinary
+        // launch builds unless a trace asks for the two log flags (see `playback_trace::asked`).
+        playback_trace::asked(),
     );
     args.remove(0);
     // The two that make it a resident rather than a player: no file to play, and a window to draw
@@ -408,7 +429,11 @@ pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<S
         Some(within) => mpv_ipc::load_file_within(pid, path, within),
         None => mpv_ipc::load_file(pid, path),
     };
+    // **The guard's record of this level is the arming that follows the serve, and not a second write
+    // here** (see `audio_guard::the_level_moved`): the caller arms the guard with this very level the
+    // moment this returns, so a call of its own would be one fact written twice.
     let asked = offered && mpv_ipc::set_volume(pid, volume);
+
     // A file is not held where the last one was left: a hover shows its film playing, from its
     // beginning, which is what `loadfile ... replace` and this one ask say together.
     let asked = asked && mpv_ipc::set_paused(pid, false);
@@ -491,6 +516,10 @@ pub(super) fn finish(pid: u32) -> bool {
     };
 
     let _ = mpv_ipc::stop_playing(pid);
+    // **The film a guard was armed for is over, though the player stands by.** A serve is an episode
+    // of the resident, and a probe that woke after this one would write an audio property on an idle
+    // player and call it a cure; the next serve arms a ladder of its own (see `audio_guard::arm`).
+    audio_guard::a_player_ended(pid);
     resident.serving = false;
     resident.idle_since = Some(Instant::now());
     true

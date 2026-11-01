@@ -96,12 +96,96 @@ fn write_input_conf(file: &Path) -> bool {
 /// Whether a launch at `volume` is given no audio at all rather than a level of zero, which is
 /// `--aid=no` and nothing else — no track at all, so the decoder is saved the whole soundtrack.
 ///
-/// It is one rule asked in two places, and it is one function so that the two cannot come apart:
-/// `mpv_args`, which pushes the flag from it, and the launch itself, which records the answer
-/// beside the pipe so that a level moved on to such a player has a track to ask back for before it
-/// can be heard (see `mpv_ipc::set_volume`).
+/// It is one rule asked in three places, and it is one function so that the three cannot come
+/// apart: `AudioForm::of`, which both routes' arguments are built from and which a traced launch
+/// writes down (see `playback_trace`); `mpv_args`, which pushes the flag from it; and the launch
+/// itself, which records the answer beside the pipe so that a level moved on to such a player has a
+/// track to ask back for before it can be heard (see `mpv_ipc::set_volume`).
 pub(super) fn mpv_launched_without_audio(volume: u32) -> bool {
     volume == 0
+}
+
+/// Which of the two players a launch begins: the fact a line about a launch names first, and the
+/// one thing that makes the two spellings of a film's sound one decision (see `AudioForm`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Engine {
+    /// mpv, the player this app can talk to while it runs (see `mpv_ipc`).
+    Mpv,
+    /// FFmpeg's `ffplay`, the player nothing can be told once it is going.
+    Ffplay,
+}
+
+impl Engine {
+    /// The word a line about a launch names the engine by.
+    pub(super) fn word(self) -> &'static str {
+        match self {
+            Self::Mpv => "mpv",
+            Self::Ffplay => "ffplay",
+        }
+    }
+}
+
+/// The sound a launch gives its film: one decision, spelled the way each player spells it.
+///
+/// **A film at a level of nothing is given no track at all** rather than a level of nothing, which
+/// is mpv's `--aid=no` and FFmpeg's `-an` — the decoder is saved the whole soundtrack, and `aid` is
+/// what a later level is asked back through (see `mpv_launched_without_audio` and
+/// `mpv_ipc::set_volume`). Everything above nothing is the level, with the file's own measured gain
+/// folded into it where one has been measured.
+///
+/// It is one value that both launches are built from, so that the two cannot disagree about what a
+/// level of nothing means — and so that the line a traced launch writes cannot say one thing while
+/// the player was handed another (see `playback_trace`). Which of the two *did* happen is the
+/// engine's own answer, and it is read separately for exactly that reason.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum AudioForm {
+    /// No audio track is selected at all: `--aid=no` on mpv, `-an` on FFmpeg's player.
+    NoTrack,
+    /// The level the film plays at, 0–100, and the gain the file's own loudness was measured to.
+    Level { level: u32, gain: Option<f64> },
+}
+
+impl AudioForm {
+    /// The form a launch at `volume` with `gain` in hand takes — the whole of the rule, which both
+    /// routes' arguments and the trace's own line are read from.
+    pub(super) fn of(volume: u32, gain: Option<f64>) -> Self {
+        if mpv_launched_without_audio(volume) {
+            Self::NoTrack
+        } else {
+            Self::Level {
+                level: volume,
+                gain,
+            }
+        }
+    }
+
+    /// This form in the words a traced launch writes: the flag the player is actually given, or the
+    /// level and the gain it is given instead — the two facts a silent film is read against.
+    pub(super) fn word(self, engine: Engine) -> String {
+        match self {
+            Self::NoTrack => match engine {
+                Engine::Mpv => "aid=no".to_string(),
+                Engine::Ffplay => "-an".to_string(),
+            },
+            Self::Level { level, gain } => match gain {
+                Some(gain) => format!("volume={level} gain={gain:.4}"),
+                None => format!("volume={level} gain=none"),
+            },
+        }
+    }
+
+    /// The filter FFmpeg's player is given for this form, and nothing where it is given none: the
+    /// level as the share of full the `volume` filter takes, with the measured gain multiplied into
+    /// it — the same product a sound file's player is given (see `start_audio_player`).
+    pub(super) fn ffplay_filter(self) -> Option<String> {
+        match self {
+            Self::NoTrack => None,
+            Self::Level { level, gain } => Some(match gain {
+                Some(gain) => format!("volume={:.4}", level as f64 / 100.0 * gain),
+                None => format!("volume={:.2}", level as f64 / 100.0),
+            }),
+        }
+    }
 }
 
 /// The arguments an mpv video is begun with, which is the command line the spec settles on. A video
@@ -123,6 +207,12 @@ pub(super) fn mpv_launched_without_audio(volume: u32) -> bool {
 /// thread of its own (see `spawn_gain_scan`). What that first half leaves for a later hand is
 /// `mpv_launched_without_audio`, which the launch records beside the pipe as well (see
 /// `mpv_ipc::set_volume`).
+///
+/// **`traced` is the one thing the playback trace adds to a launch**, and it is passed in rather
+/// than read here for the reason every other switch is: an ordinary launch builds exactly the
+/// command line this app had before there was a trace — no `--terminal`, no `--msg-level` — and a
+/// run that asks for the trace gets the two flags that make the player's own log readable (see
+/// `playback_trace::asked`).
 #[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 pub(super) fn mpv_args(
     path: &Path,
@@ -140,6 +230,7 @@ pub(super) fn mpv_args(
     ipc: &str,
     flip: bool,
     ontop: bool,
+    traced: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         // Read before the configuration and before any file the user has: the app's own command
@@ -148,6 +239,31 @@ pub(super) fn mpv_args(
         path.to_string_lossy().into_owned(),
         "--no-config".to_string(),
     ];
+
+    // **The two flags that make the player's own log readable, and only where a trace asks for
+    // them.** `--terminal=yes` asks mpv to write its log lines whether or not it has a console to
+    // write them on, and on Windows that is the standard *output*: measured on mpv 0.41 with both
+    // streams redirected, a missing file printed `[file] Cannot open file '…': Invalid argument`
+    // into the standard output (134 bytes) and nothing into the standard error (0 bytes), with
+    // `--terminal=yes` and with the default alike — which is why the pipe a traced launch drains is
+    // the standard output (see `player_logs`). `all=warn` is the level every module's lines are
+    // written at and the ceiling on how many of them a player produces: `info` is a line per track,
+    // per filter and per device, and most of it is about nothing that went wrong.
+    //
+    // **Two modules are widened past that ceiling, and they are the two that name a device.** mpv
+    // reports an audio output that will not initialise, that retries, that falls back to `null` or
+    // that is invalidated at `ao` and `audio` verbosity and nowhere else — `all=warn` above those
+    // two modules is a launch that plays silently with nothing at all in the log, which is what three
+    // captured traced runs of this fault left behind: the answers, and no reason. `v` is the level
+    // they are raised to, so the driver's own HRESULT is in the drained stream beside the read-back
+    // that gave up on it (see `playback_trace` and `audio_guard`).
+    //
+    // An ordinary launch is given neither flag, which is the command line this app had before there
+    // was a trace — the widening is the trace's alone, and its argv is byte for byte what it was.
+    if traced {
+        args.push("--terminal=yes".to_string());
+        args.push("--msg-level=all=warn,ao=v,audio=v".to_string());
+    }
 
     // The mouse: mpv's own bindings are what a hover overlay must not have, and they survive
     // `--input-conf` on their own — see `MPV_PAUSE_BINDING`, which is where both flags are
@@ -288,19 +404,22 @@ pub(super) fn mpv_args(
         args.push("--pause".to_string());
     }
 
-    if mpv_launched_without_audio(volume) {
-        args.push("--aid=no".to_string());
-    } else {
-        args.push(format!("--volume={volume}"));
+    // The sound, in whichever of its two forms this launch takes (see `AudioForm`, which is the
+    // same rule FFmpeg's player is given its `-an` or its filter from).
+    match AudioForm::of(volume, gain) {
+        AudioForm::NoTrack => args.push("--aid=no".to_string()),
+        AudioForm::Level { level, gain } => {
+            args.push(format!("--volume={level}"));
 
-        // The measured gain, as the same libavfilter `volume` filter the ffplay route applies it
-        // with — named through mpv's bridge to libavfilter, which is the documented spelling of a
-        // libavfilter graph: the bare `--af=volume=` reaches the same filter, but only through
-        // mpv's automatic bridge for a name it has no filter of its own for, and the manual says
-        // that bridge neither verifies its arguments nor answers for them (see `--vf`'s `lavfi`).
-        // A muted film is not normalised, since there is nothing to hear.
-        if let Some(gain) = gain {
-            args.push(format!("--af=lavfi=[volume={gain:.4}]"));
+            // The measured gain, as the same libavfilter `volume` filter the ffplay route applies it
+            // with — named through mpv's bridge to libavfilter, which is the documented spelling of a
+            // libavfilter graph: the bare `--af=volume=` reaches the same filter, but only through
+            // mpv's automatic bridge for a name it has no filter of its own for, and the manual says
+            // that bridge neither verifies its arguments nor answers for them (see `--vf`'s `lavfi`).
+            // A muted film is not normalised, since there is nothing to hear.
+            if let Some(gain) = gain {
+                args.push(format!("--af=lavfi=[volume={gain:.4}]"));
+            }
         }
     }
 
@@ -1520,6 +1639,9 @@ mod tests {
         );
     }
 
+    /// **The command line the spec settles on, and the command line this app had before there was a
+    /// playback trace** — the two are the same list, which is the acceptance for an untraced run: no
+    /// `--terminal`, no `--msg-level`, and nothing else that a trace would have added.
     #[test]
     fn the_mpv_route_is_launched_with_the_command_line_the_spec_settles_on() {
         assert_eq!(
@@ -1538,7 +1660,8 @@ mod tests {
                 Some(Path::new("scratch/mpv-input.conf")),
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "films/episode.mkv",
@@ -1563,7 +1686,102 @@ mod tests {
             "the film, then the configuration off, the mouse off, the chrome off, the order it is\
              held up in, the box, the video output being measured, the three Direct3D options \
              and the level — the output is named at all only as a measurement, and no \
-             `--start` is asked for at the beginning of a file (see `mpv_args`)"
+             `--start` is asked for at the beginning of a file (see `mpv_args`). This is the\
+             argv of a run without `RHP_PLAYBACK_TRACE`, byte for byte: the two flags a traced\
+             launch adds are the whole of what the trace changes about a command line"
+        );
+    }
+
+    /// **The whole of what a trace adds to a launch is the two flags that make the player's own log
+    /// readable**, and they are the same argv in the same order with those two lines inserted. The
+    /// untraced list is asserted above, in full, so the pair pins both halves: a run that does not
+    /// ask for the trace pays one cached atomic and hands its player exactly what it always did.
+    #[test]
+    fn a_traced_launch_is_the_untraced_command_line_plus_the_two_log_flags() {
+        let launch = |traced| {
+            mpv_args(
+                Path::new("films/episode.mkv"),
+                10,
+                20,
+                640,
+                360,
+                0.0,
+                false,
+                80,
+                None,
+                true,
+                true,
+                Some(Path::new("scratch/mpv-input.conf")),
+                IPC,
+                false,
+                true,
+                traced,
+            )
+        };
+
+        let untraced = launch(false);
+        assert!(
+            !untraced
+                .iter()
+                .any(|arg| arg.starts_with("--terminal") || arg.starts_with("--msg-level")),
+            "an untraced launch is given neither flag: {untraced:?}"
+        );
+
+        let mut traced = untraced.clone();
+        traced.insert(2, "--terminal=yes".to_string());
+        traced.insert(3, "--msg-level=all=warn,ao=v,audio=v".to_string());
+        assert_eq!(
+            launch(true),
+            traced,
+            "a traced launch is the untraced command line with the two log flags after \
+             `--no-config`, and nothing else"
+        );
+    }
+
+    /// **The level a traced launch reads its player's own lines at, and the two modules raised past it**:
+    /// a device that refuses is reported at `ao` and `audio` verbosity and nowhere else, so `all=warn`
+    /// alone is a traced run with no line about the sound in it at all — which is what three captured
+    /// traced runs of the silent-film fault left behind, the state and no reason. The spelling is mpv's
+    /// own: a comma-separated list of `module=level`, with the ceiling still beside the two raised
+    /// modules for everything else the player has to say.
+    #[test]
+    fn a_traced_launch_asks_the_audio_output_and_the_audio_filter_what_would_not_open() {
+        let traced = mpv_args(
+            Path::new("a.mkv"),
+            0,
+            0,
+            640,
+            360,
+            0.0,
+            false,
+            80,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+            false,
+            true,
+            true,
+        );
+        let level = traced
+            .iter()
+            .find(|arg| arg.starts_with("--msg-level"))
+            .map(String::as_str)
+            .expect("a traced launch is given a level at all");
+        assert_eq!(
+            level, "--msg-level=all=warn,ao=v,audio=v",
+            "the audio output and the audio filter are the two modules a refused device speaks \
+             through, so they are at `v` and everything else stays at `warn`"
+        );
+        assert_eq!(
+            traced
+                .iter()
+                .filter(|arg| arg.starts_with("--msg-level"))
+                .count(),
+            1,
+            "and the level is written once: a second spelling of one decision is a launch whose \
+             verbosity is read out of the order of two flags"
         );
     }
 
@@ -1589,6 +1807,7 @@ mod tests {
             None,
             IPC,
             true,
+            false,
             false,
         );
         assert!(
@@ -1660,6 +1879,7 @@ mod tests {
             IPC,
             false,
             true,
+            false,
         );
         assert!(
             args.iter().any(|arg| arg == "--window-dragging=no"),
@@ -1691,7 +1911,8 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
@@ -1738,7 +1959,8 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
@@ -1784,7 +2006,8 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
@@ -1839,7 +2062,8 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
@@ -1884,7 +2108,8 @@ mod tests {
                 None,
                 IPC,
             false,
-            true
+            true,
+            false,
             ),
             [
                 "a.mkv",
@@ -1933,6 +2158,7 @@ mod tests {
             IPC,
             false,
             true,
+            false,
         );
         assert!(
             held.contains(&"--start=12.500".to_string()),
@@ -1965,6 +2191,7 @@ mod tests {
             IPC,
             false,
             true,
+            false,
         );
         assert!(
             !playing
@@ -2005,7 +2232,8 @@ mod tests {
                     None,
                     IPC,
                     false,
-                    true
+                    true,
+                    false,
                 ),
                 [
                     "a.mkv",
@@ -2047,7 +2275,8 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             )
             .contains(&"--geometry=640x360+0+0".to_string()),
             "a box at the primary display's own origin is passed as it stands"
@@ -2097,7 +2326,8 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",
@@ -2165,7 +2395,8 @@ mod tests {
                 None,
                 IPC,
                 false,
-                true
+                true,
+                false,
             ),
             [
                 "a.mkv",

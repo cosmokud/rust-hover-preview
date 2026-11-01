@@ -34,6 +34,11 @@ pub(super) fn begin_text_selection(x: i32, y: i32) -> bool {
     state.click_run = Some((now, (x, y), run));
     state.drag_pointer = Some((x, y));
 
+    // A press in the page is the page focused, whether or not a find bar is up over it: a `Ctrl`+`C`
+    // after it copies what the reader selected here rather than a query they left selected in the bar
+    // (see `FindFocus`).
+    state.find.focused = FindFocus::Page;
+
     // What a double click takes is kept for as long as the drag that follows it runs: the word
     // under the hand is what that drag is grown from, and it is grown by whole runs of characters
     // rather than by the one the hand has reached, so the first small move of a hand still on the
@@ -51,6 +56,15 @@ pub(super) fn begin_text_selection(x: i32, y: i32) -> bool {
             caret: at,
         },
     });
+    // And the press puts the page's caret down where the selection left it, which is the mark that
+    // blinks between presses and the column the next vertical move aims from. It is written here
+    // rather than by a road of its own because the media lock is already in this hand and is not one
+    // this thread may wait for twice (see `text_caret`).
+    if let Some(selection) = state.selection {
+        state.caret = Some(selection.caret);
+        state.caret_goal = None;
+        state.caret_blink.restart(now, text_find::caret_blink());
+    }
     state.word_drag = word;
     // Every press but the third arms a drag, a double click's included, and the word above is what
     // that one is the drag of. The third takes a line, which is whole already: arming a drag there
@@ -75,9 +89,18 @@ pub(super) fn anchor_for_press(
 
 /// Whether either Shift is held, asked the way Ctrl+C and Ctrl+A are rather than from a message:
 /// a pinned preview is never sent its own keystrokes, so a modifier is a question about the
-/// keyboard at the moment of the press (see `text_preview_copy_requested`).
-fn shift_is_down() -> bool {
+/// keyboard at the moment of the press (see `text_preview_copy_requested`). A find bar's
+/// `Shift`+`Enter` asks the same question of the same keyboard (see `text_find::key_edit`).
+pub(super) fn shift_is_down() -> bool {
     unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000 != 0 }
+}
+
+/// Whether either Ctrl is held, asked the same way Shift is. The find bar's field reads it for the
+/// chords it owns — `Ctrl`+`A`, `C`, `X`, `V`, `Z`, `Y` and the two word-wise caret moves and
+/// deletes — because a modifier is polled rather than carried by the message that brings the key
+/// (see `text_find::key_edit`).
+pub(super) fn control_is_down() -> bool {
+    unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0 }
 }
 
 /// Move the end of a selection to a point. Answers whether a drag is running, so
@@ -91,6 +114,10 @@ pub(super) fn extend_text_selection(x: i32, y: i32) -> Option<bool> {
     if !state.selecting {
         return Some(false);
     }
+
+    // A drag in the page is the page focused, for the reason the press that began it was (see
+    // `begin_text_selection`).
+    state.find.focused = FindFocus::Page;
 
     // Where the pointer is is remembered on every move of a drag, whether or not the caret moves
     // with it: a drag carried past the edge of the box is one the page has to follow, and a page
@@ -218,6 +245,19 @@ pub(super) unsafe fn copy_text_preview(hwnd: HWND) -> bool {
         return false;
     };
 
+    write_clipboard_text(hwnd, &text)
+}
+
+/// Put a run of text on the clipboard, answering whether it was taken.
+///
+/// **The one clipboard writer this window has.** A copy of the page's selection and a copy or a cut
+/// in a find bar's query are the same act on the same clipboard, and a second writer would be a
+/// second place for the global block's ownership to be got wrong: the clipboard owns the block once
+/// `SetClipboardData` takes it, and only the failure paths may free it.
+///
+/// The clipboard is owned by one window at a time, so this opens it, hands over a movable block of
+/// UTF-16, and closes it again; a failure at any step leaves the previous clipboard contents alone.
+pub(super) unsafe fn write_clipboard_text(hwnd: HWND, text: &str) -> bool {
     if OpenClipboard(hwnd).is_err() {
         return false;
     }
@@ -248,6 +288,38 @@ pub(super) unsafe fn copy_text_preview(hwnd: HWND) -> bool {
     copied
 }
 
+/// What the clipboard holds, as text, or nothing where it holds none.
+///
+/// This is the thin half of the find bar's paste: it opens the clipboard, takes the Unicode text in
+/// it and closes it again, and what it hands back is the clipboard's text as it stands — a block of
+/// several lines, a byte-order mark and all. Turning that into one line a query can hold is
+/// `text_find_field::sanitize_pasted`, which is pure and asked by its own tests; a clipboard cannot
+/// be mocked without the test becoming a test of the mock, so this door is left untested and as
+/// small as it can be.
+pub(super) unsafe fn clipboard_text(hwnd: HWND) -> Option<String> {
+    if IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_err() || OpenClipboard(hwnd).is_err()
+    {
+        return None;
+    }
+
+    let mut text = None;
+    if let Ok(block) = GetClipboardData(CF_UNICODETEXT.0 as u32) {
+        let block = HGLOBAL(block.0);
+        let units = GlobalLock(block) as *const u16;
+        if !units.is_null() {
+            let mut length = 0usize;
+            while *units.add(length) != 0 {
+                length += 1;
+            }
+            text = String::from_utf16(std::slice::from_raw_parts(units, length)).ok();
+            let _ = GlobalUnlock(block);
+        }
+    }
+
+    let _ = CloseClipboard();
+    text
+}
+
 /// Ask for Ctrl+C to copy the preview's selection.
 ///
 /// The preview never takes focus, so a keystroke never arrives as a message: it is
@@ -258,6 +330,13 @@ pub(super) unsafe fn copy_text_preview(hwnd: HWND) -> bool {
 /// user is in is skipped for the same reason, since a chord read from the keyboard is
 /// otherwise a chord pressed in whatever window is in front (see `pin_is_focused`).
 pub(super) fn text_preview_copy_requested() -> bool {
+    // A find bar that is up owns the keyboard: a `Ctrl`+`C` typed into a query is not a copy of the
+    // page's selection, and the selection it would copy is the one the bar has covered (see
+    // `text_find`).
+    if text_find::is_open() {
+        return false;
+    }
+
     if !has_text_selection() {
         return false;
     }
@@ -285,6 +364,12 @@ pub(super) fn text_preview_copy_requested() -> bool {
 /// Ctrl+A pressed in another window is otherwise read as one meant for a pin standing behind it
 /// (see `pin_is_focused`).
 pub(super) fn pinned_select_all_requested() -> bool {
+    // And the same for a find bar that is up: `Ctrl`+`A` under a query is a key the bar swallowed
+    // whole, not a request for the page behind it (see `text_find`).
+    if text_find::is_open() {
+        return false;
+    }
+
     if !pin_is_focused() || !has_text_document() {
         return false;
     }
@@ -327,22 +412,22 @@ const FIND_LEAD_LINES: usize = 2;
 /// The reader asked for the occurrence after this one, and a page that jumped back to the top of the
 /// document for nothing would be a find that lost their place.
 pub(super) unsafe fn find_next_in_text_preview(hwnd: HWND) {
-    let Some((path, options, selection, first_line, visible, max_first_line)) =
-        CURRENT_MEDIA.lock().ok().and_then(|media| {
-            media.as_ref().and_then(|media| {
-                media.text_state.as_ref().map(|state| {
-                    (
-                        state.path.clone(),
-                        state.options,
-                        state.selection,
-                        state.first_line,
-                        state.visible_lines,
-                        state.max_first_line(),
-                    )
-                })
-            })
+    // A find bar that is up is the find this asks: the reader is stepping through the query they
+    // typed, and the selection the page holds is their own rather than the search's — so the step
+    // is the bar's, and the page's selection is left exactly as it is (see `text_find`).
+    if text_find::is_open() {
+        text_find::note(FindEdit::Step(1));
+        return;
+    }
+
+    let Some((path, options, selection)) = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media.as_ref().and_then(|media| {
+            media
+                .text_state
+                .as_ref()
+                .map(|state| (state.path.clone(), state.options, state.selection))
         })
-    else {
+    }) else {
         return;
     };
 
@@ -361,8 +446,34 @@ pub(super) unsafe fn find_next_in_text_preview(hwnd: HWND) {
         }
     }
 
-    // A page that is already showing the line stays where it is: the page does not move for a find
-    // that landed on it, and what moved is the selection.
+    show_found_in_text_preview(hwnd, found);
+}
+
+/// Take the page to a place that has been found and draw it there: the one road both finds take once
+/// they have a place — `F3` and `Find Next` from the page's own selection, and a step through a find
+/// bar's query (see `text_find::settle`).
+///
+/// A page that is already showing the line stays where it is: the page does not move for a find that
+/// landed on it, and what moved is the match. Answers whether it asked for a paint, so that a caller
+/// with nothing else to draw can leave the card over the page alone.
+pub(super) unsafe fn show_found_in_text_preview(
+    hwnd: HWND,
+    found: text_preview::Selection,
+) -> bool {
+    let Some((first_line, visible, max_first_line)) = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media.as_ref().and_then(|media| {
+            media.text_state.as_ref().map(|state| {
+                (
+                    state.first_line,
+                    state.visible_lines,
+                    state.max_first_line(),
+                )
+            })
+        })
+    }) else {
+        return false;
+    };
+
     if (first_line..first_line + visible).contains(&found.anchor.0) {
         repaint_text_preview(hwnd);
     } else {
@@ -372,6 +483,8 @@ pub(super) unsafe fn find_next_in_text_preview(hwnd: HWND) {
         let line = found.anchor.0.saturating_sub(lead).min(max_first_line);
         scroll_text_preview(hwnd, line);
     }
+
+    true
 }
 
 /// Show the preview's context menu at a point in window coordinates and act on

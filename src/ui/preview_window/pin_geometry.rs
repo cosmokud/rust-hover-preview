@@ -549,83 +549,143 @@ pub(super) unsafe fn pin_command_request(
     navigating: bool,
     anchor: Option<NavCategory>,
 ) -> Option<PinStep> {
-    let step = match take_pin_command() {
-        Some(PinCommand::Close) => {
-            *request = Some(end_pin_state(Reason::Closed));
-            None
+    // Every command left since the last tick, drained now rather than one per tick: a key held down
+    // repeats faster than a page is drawn, and a queue answered one command a turn is a caret still
+    // moving after the hand has let go. The page's own moves are all answered — each is a place
+    // written down for one `settle` and one paint (see `text_caret::settle`) — and the first command
+    // that is not one of them is answered on its own, with the rest put back for the next tick. Two
+    // presses of `Next` are two files along, and one walk a tick is what keeps them two.
+    let mut step = None;
+    let mut commands = take_pin_commands();
+    while let Some(command) = commands.first().copied() {
+        commands.remove(0);
+
+        let the_caret_took_it = matches!(
+            command,
+            PinCommand::Previous
+                | PinCommand::Next
+                | PinCommand::CaretUp
+                | PinCommand::CaretDown
+                | PinCommand::PageBack
+                | PinCommand::PageOn
+                | PinCommand::PageTop
+                | PinCommand::PageBottom
+        ) && text_caret::command_move(command).is_some();
+
+        if the_caret_took_it {
+            continue;
         }
-        Some(PinCommand::Minimize) => {
-            collapse_pin();
-            None
-        }
-        Some(PinCommand::MinimizeTo(target)) => {
-            collapse_pin_to(target);
-            None
-        }
-        Some(PinCommand::Restore) => {
-            restore_pin(&Win32PinWindow, PinRestore::Pressed);
-            None
-        }
-        Some(PinCommand::CameBack) => {
-            restore_pin(&Win32PinWindow, PinRestore::TheShell);
-            None
-        }
-        Some(PinCommand::Maximize) => {
-            toggle_pin_maximized(request);
-            None
-        }
-        Some(PinCommand::ResetSize) => {
-            reset_pinned_size(request);
-            None
-        }
-        Some(PinCommand::Previous) => step_pinned_file(-1, wait, anchor),
-        Some(PinCommand::Next) => step_pinned_file(1, wait, anchor),
-        // An up arrow, a down arrow, and the two page keys are the page's own where the pin holds
-        // one, and the walk they have always been where it does not: which of the two a key is is
-        // the file in the window's answer, read here rather than where the key was mapped (see
-        // `pinned_key_command` and `text_scroll_line`).
-        Some(command @ (PinCommand::PageBack | PinCommand::PageOn)) => {
-            match text_scroll_line(command) {
-                Some(line) => {
-                    scroll_text_preview(hwnd, line);
-                    None
-                }
-                None => {
-                    let step = if matches!(command, PinCommand::PageBack) {
-                        -1
-                    } else {
-                        1
-                    };
-                    step_pinned_file(step, wait, anchor)
+
+        step = match command {
+            PinCommand::Close => {
+                *request = Some(end_pin_state(Reason::Closed));
+                None
+            }
+            PinCommand::Minimize => {
+                collapse_pin();
+                None
+            }
+            PinCommand::MinimizeTo(target) => {
+                collapse_pin_to(target);
+                None
+            }
+            PinCommand::Restore => {
+                restore_pin(&Win32PinWindow, PinRestore::Pressed);
+                None
+            }
+            PinCommand::CameBack => {
+                restore_pin(&Win32PinWindow, PinRestore::TheShell);
+                None
+            }
+            PinCommand::Maximize => {
+                toggle_pin_maximized(request);
+                None
+            }
+            PinCommand::ResetSize => {
+                reset_pinned_size(request);
+                None
+            }
+            PinCommand::Previous => {
+                // The page's caret where the pin holds one, and the walk the arrows have always been
+                // where it does not: which of the two a key is is the file in the window's answer, read
+                // here rather than where the key was mapped (see `text_caret::command_move`).
+                match text_caret::command_move(PinCommand::Previous) {
+                    Some(()) => None,
+                    None => step_pinned_file(-1, wait, anchor),
                 }
             }
-        }
-        // And the two ends of the page, which are nothing at all to a pin that holds no page: a
-        // picture has no beginning to go back to, so `Home` is swallowed rather than answered by a
-        // walk the user did not ask for.
-        Some(command @ (PinCommand::PageTop | PinCommand::PageBottom)) => {
-            if let Some(line) = text_scroll_line(command) {
-                scroll_text_preview(hwnd, line);
+            PinCommand::Next => match text_caret::command_move(PinCommand::Next) {
+                Some(()) => None,
+                None => step_pinned_file(1, wait, anchor),
+            },
+            // An up arrow and a down arrow are the same answer one line at a time: the page's caret where
+            // the pin holds one, and the walk where it does not.
+            //
+            // The caret's own moves are queued rather than made here for the same reason a find bar's
+            // edits are: this is the tick that may take the page's lock, but a move styles a document
+            // and paints a frame, and that is the work a tick of its own owns (see
+            // `text_caret::settle`).
+            command @ (PinCommand::CaretUp | PinCommand::CaretDown) => {
+                match text_caret::command_move(command) {
+                    Some(()) => None,
+                    None => step_pinned_file(
+                        if matches!(command, PinCommand::CaretUp) {
+                            -1
+                        } else {
+                            1
+                        },
+                        wait,
+                        anchor,
+                    ),
+                }
             }
-            None
-        }
-        // A find is the page's own as well: it looks for what the page has selected in the document
-        // behind it, and it is nothing at all to a window with no page or with nothing selected
-        // (see `find_next_in_text_preview`).
-        Some(PinCommand::FindNext) => {
-            find_next_in_text_preview(hwnd);
-            None
-        }
-        Some(PinCommand::TogglePlayback) => {
-            toggle_pinned_by_key(audio_started, audio_start_offset, audio_paused);
-            None
-        }
-        Some(PinCommand::NextSubtitle) => {
-            step_pinned_subtitle();
-            None
-        }
-        None => None,
-    };
+            // And the two page keys, which are a screenful of the caret's where the pin holds a page and
+            // the same walk where it does not.
+            command @ (PinCommand::PageBack | PinCommand::PageOn) => {
+                match text_caret::command_move(command) {
+                    Some(()) => None,
+                    None => step_pinned_file(
+                        if matches!(command, PinCommand::PageBack) {
+                            -1
+                        } else {
+                            1
+                        },
+                        wait,
+                        anchor,
+                    ),
+                }
+            }
+            // And the two ends, which are the line's where the page holds a caret and nothing at all to
+            // a pin that holds no page: a picture has no beginning to go back to, so `Home` is swallowed
+            // rather than answered by a walk the user did not ask for. `Ctrl` makes them the document's,
+            // which is the same question asked of the frame's end rather than the line's.
+            command @ (PinCommand::PageTop | PinCommand::PageBottom) => {
+                let _ = text_caret::command_move(command);
+                None
+            }
+            // A find is the page's own as well: it looks for what the page has selected in the document
+            // behind it, and it is nothing at all to a window with no page or with nothing selected
+            // (see `find_next_in_text_preview`).
+            PinCommand::FindNext => {
+                find_next_in_text_preview(hwnd);
+                None
+            }
+            PinCommand::TogglePlayback => {
+                toggle_pinned_by_key(audio_started, audio_start_offset, audio_paused);
+                None
+            }
+            PinCommand::NextSubtitle => {
+                step_pinned_subtitle();
+                None
+            }
+        };
+
+        break;
+    }
+
+    if !commands.is_empty() {
+        return_pin_commands(commands);
+    }
 
     // The thing the pin is a window onto came apart: the player's process is gone, or the engine
     // took a document and never drew it. This is the half of "until it is closed, or it comes

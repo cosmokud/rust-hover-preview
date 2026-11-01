@@ -367,8 +367,8 @@ fn a_pin_taken_up_over_another_one_keeps_the_window_s_own_queue_and_drops_its_cl
 
     assert!(pin_is_up(), "the swap is a pin up like any other");
     assert_eq!(
-        take_pin_command(),
-        Some(PinCommand::Next),
+        take_pin_commands(),
+        vec![PinCommand::Next],
         "the command the caption had left is a press on this window, and this window is \
          still here"
     );
@@ -403,8 +403,8 @@ fn every_command_a_caption_asks_for_comes_back_to_the_loop() {
     ] {
         ask_pin(command);
         assert_eq!(
-            take_pin_command(),
-            Some(command),
+            take_pin_commands(),
+            vec![command],
             "{command:?} does not survive being left for the loop"
         );
     }
@@ -414,9 +414,12 @@ fn every_command_a_caption_asks_for_comes_back_to_the_loop() {
     // what double-clicking a `Next` is for.
     ask_pin(PinCommand::Previous);
     ask_pin(PinCommand::Next);
-    assert_eq!(take_pin_command(), Some(PinCommand::Previous));
-    assert_eq!(take_pin_command(), Some(PinCommand::Next));
-    assert_eq!(take_pin_command(), None, "a command is taken once");
+    assert_eq!(
+        take_pin_commands(),
+        vec![PinCommand::Previous, PinCommand::Next],
+        "both are there, in the order they were asked for"
+    );
+    assert!(take_pin_commands().is_empty(), "a command is taken once");
 
     stand_pin(None);
 }
@@ -434,10 +437,7 @@ fn a_command_queue_drops_the_oldest_rather_than_growing_without_end() {
         ask_pin(PinCommand::Next);
     }
 
-    let mut drained = Vec::new();
-    while let Some(command) = take_pin_command() {
-        drained.push(command);
-    }
+    let drained = take_pin_commands();
 
     assert_eq!(
         drained.len(),
@@ -718,9 +718,8 @@ fn every_reason_reaches_the_same_teardown() {
             "{reason:?}: the keyboard went with it, so there is nothing for a later pin to \
              inherit and nothing for a reader to find"
         );
-        assert_eq!(
-            take_pin_command(),
-            None,
+        assert!(
+            take_pin_commands().is_empty(),
             "{reason:?}: so did the queue — a command left behind is a command about a window \
              that is gone, fired against whatever pin comes next"
         );
@@ -1048,7 +1047,7 @@ fn a_collapsed_pin_is_still_a_pin_and_still_goes_down_the_same_way() {
 
     assert!(!pin_is_up());
     assert_eq!(keyboard(), None);
-    assert_eq!(take_pin_command(), None);
+    assert!(take_pin_commands().is_empty());
     assert!(
         window.calls().contains(&PinWindowCall::SetForeground),
         "a bubble does not hold the keyboard, so a pin collapsed with the caret on it still \

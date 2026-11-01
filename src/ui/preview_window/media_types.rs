@@ -625,6 +625,25 @@ pub(super) struct TextPreviewState {
     /// extending it.
     pub(super) selection: Option<text_preview::Selection>,
     pub(super) selecting: bool,
+    /// Where the page's caret stands, and the column a vertical move is aimed at.
+    ///
+    /// The page is a document the reader moves through rather than a box they scroll, so the caret
+    /// is the page's own mark and outlives a key that did not move it. `caret` is `None` until a key
+    /// or a press has put one down: a page that has just been drawn has no caret to blink, which is
+    /// what keeps a pinned page from looking like a field nobody has clicked into. `goal` is the
+    /// column the last vertical move aimed at, dropped by every move that is not one — a `←` after a
+    /// `↓` over a short line is a caret the reader put somewhere, and the next `↓` aims from there
+    /// (see `text_preview::Motion::is_vertical`).
+    pub(super) caret: Option<text_preview::Place>,
+    pub(super) caret_goal: Option<usize>,
+    /// The caret's blink: whether it is drawn this half of its phase and when that turns over. A
+    /// caret goes solid on every move and on a selection, and only a phase change asks for a repaint
+    /// (see `text_find_field::CaretBlink`).
+    pub(super) caret_blink: text_find_field::CaretBlink,
+    /// The caret moves the page was told while the message that brought them was being delivered,
+    /// in the order they were pressed: a window procedure may not read a document and may not paint
+    /// one, so the move is written down here and run by the tick (see `text_caret::settle`).
+    pub(super) pending_caret: Vec<text_caret::CaretMove>,
     /// The word a double press took, kept for as long as the drag that followed it runs: a drag is
     /// grown by whole runs of characters while this is set, and by the character under the hand
     /// otherwise (see `begin_text_selection` and `extend_word_selection`).
@@ -640,6 +659,139 @@ pub(super) struct TextPreviewState {
     /// one the page has to follow, and where the pointer is is the whole of what says so (see
     /// `text_drag_step`).
     pub(super) drag_pointer: Option<(i32, i32)>,
+    /// The find bar over the page: whether it is up, the query it holds, the two switches under it
+    /// and where that query was found (see `text_find`).
+    pub(super) find: FindState,
+}
+
+/// What a pinned page's find bar holds, and what has been asked of it since the tick last looked.
+///
+/// The query outlives the bar — a bar closed with `Esc` and opened again comes back at the query it
+/// was left with, and `Ctrl`+`F` over an open bar is a bar asked for rather than a query thrown
+/// away — while the matches do not: a bar that is not up draws no highlights, so closing it clears
+/// the places it had found and reopening searches for them again (see `text_find::settle`).
+#[derive(Default)]
+pub(super) struct FindState {
+    /// Whether the bar is up and owns the keyboard.
+    pub(super) open: bool,
+    /// The query, the caret in it and the selection between the caret and its anchor, with the
+    /// undo and redo the field keeps: every edit is written down in the field rather than in a
+    /// bare string, because an append-only box is not a text field a hand can correct (see
+    /// `text_find_field`).
+    pub(super) field: text_find_field::Field,
+    /// Whether the search minds case, and whether it takes only whole words. Both are off as the
+    /// bar opens, which is the ordinary find every reader expects.
+    pub(super) case_sensitive: bool,
+    pub(super) whole_word: bool,
+    /// Every place the query is found, in document order, and which of them the reader is on. The
+    /// current one is an index into `matches`, and nothing while the query is empty or found nowhere.
+    pub(super) matches: Vec<text_preview::Selection>,
+    pub(super) current: Option<usize>,
+    /// What the bar was told while the message that brought it was being delivered, kept in the
+    /// order it arrived for the tick that can run the search it asks for: a window procedure may not
+    /// style a document, and a low-level hook may not take a lock at all (see `text_find::settle`).
+    pub(super) pending: Vec<FindEdit>,
+    /// The card's control the pointer is over and the one a press is holding, which is what draws a
+    /// button lit and stepped in (see `text_find::hover` and `text_find::press`).
+    pub(super) hovered: Option<pin_chrome::FindBarPart>,
+    pub(super) pressed: Option<pin_chrome::FindBarPart>,
+    /// The repeat a chevron held down owes, or nothing while none is held (see `Hold`).
+    pub(super) hold: Option<Hold>,
+    /// Whether a press in the field is being dragged, which is what keeps the pointer captured until
+    /// the release and what grows the selection while the hand moves (see `text_find::drag`).
+    pub(super) dragging: bool,
+    /// When and where the pointer last pressed in the field, and how many presses of that place have
+    /// run together: the second one takes the word under the pointer (see `text_find::press`).
+    pub(super) click_run: Option<(Instant, (i32, i32), u8)>,
+    /// Whether the caret is drawn at this moment, and when its blink turns over (see `CaretBlink`).
+    pub(super) blink: text_find_field::CaretBlink,
+    /// Which surface the keyboard is aimed at, which is what a `Ctrl`+`C` under the bar copies from
+    /// (see `FindFocus` and `text_find::copy_target`).
+    pub(super) focused: FindFocus,
+}
+
+/// The two surfaces a pinned page with a find bar over it has, and which of them was focused last.
+///
+/// **Focus follows the hand, and the bar opens with the field focused.** A click in the query is the
+/// field, a click in the page under the bar is the page — that is a selection made in the page, and
+/// it is made whether or not a bar is up — and `Ctrl`+`F` over either is the bar asking for its
+/// field. What it decides is which selection a `Ctrl`+`C` copies: a reader who selected a word in
+/// the page and then clicked into the query to search for it is copying the query, and one who typed
+/// a query and then clicked into the page is copying the page.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(super) enum FindFocus {
+    /// The bar's query.
+    #[default]
+    Field,
+    /// The page under the bar.
+    Page,
+}
+
+/// A step button of the find bar held down: which one it is, the way it steps, and when the next step
+/// is due.
+///
+/// The press itself is a step of its own, so this is only ever the one after it: a hand that lets go
+/// inside the delay has stepped once, and one that stays has stepped again on the tick that comes
+/// after it (see `text_find::settle` and `text_find::release`).
+pub(super) struct Hold {
+    pub(super) delta: i32,
+    pub(super) due: Instant,
+}
+
+/// One thing a find bar was told, in the order it was told it (see `FindState::pending`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FindEdit {
+    /// A character typed into the query at the caret, replacing whatever is selected.
+    Typed(char),
+    /// The selection, or the character before the caret, taken back out of the query.
+    Backspace,
+    /// The selection, or the character after the caret, taken out of the query.
+    DeleteForward,
+    /// The selection, or the word before the caret, taken out of the query.
+    DeleteWordLeft,
+    /// The selection, or the word after the caret, taken out of the query.
+    DeleteWordRight,
+    /// The caret moved, extending the selection rather than collapsing it where the flag is set.
+    Move(text_find_field::Motion, bool),
+    /// The whole query selected: `Ctrl`+`A`, and `Ctrl`+`F` over a bar that is already up.
+    SelectAll,
+    /// The selection put on the clipboard, which is `Ctrl`+`C` and nothing where nothing is selected.
+    Copy,
+    /// The selection put on the clipboard and taken out of the query: `Ctrl`+`X`.
+    Cut,
+    /// The clipboard pasted at the caret: `Ctrl`+`V`, one line of it (see `sanitize_pasted`).
+    Paste,
+    /// The last edit put back: `Ctrl`+`Z`.
+    Undo,
+    /// The edit an undo took away put back: `Ctrl`+`Y` and `Ctrl`+`Shift`+`Z`.
+    Redo,
+    /// The reader stepped forward or back through the matches, wrapping at either end.
+    Step(i32),
+    /// The case switch flipped, and the search is to run again under it (see `text_find::press`).
+    ToggleCase,
+    /// The whole-word switch flipped, and the search is to run again under it.
+    ToggleWholeWord,
+    /// The bar was opened over a query it already held: nothing changed, and the document is to be
+    /// searched for that query again from the line the reader is on.
+    SearchAgain,
+    /// `Esc`: a query with text is emptied and the bar left standing, and a query already empty is
+    /// the bar going away (see `text_find::settle`).
+    ClearOrClose,
+    /// The bar is to be put away outright, with the page left exactly where it is: the cross, and
+    /// nothing `Esc` does to a query that still has something in it.
+    Close,
+}
+
+impl FindState {
+    /// What a frame is to draw of the bar: every place its query was found, and which of them the
+    /// reader is on — or nothing while the bar is down, or while the query was found nowhere, which is
+    /// a page with no highlights on it (see `text_preview::FindHighlights`).
+    pub(super) fn highlights(&self) -> Option<text_preview::FindHighlights> {
+        (self.open && !self.matches.is_empty()).then(|| text_preview::FindHighlights {
+            matches: self.matches.clone(),
+            current: self.current,
+        })
+    }
 }
 
 impl TextPreviewState {
@@ -652,13 +804,32 @@ impl TextPreviewState {
         (self.first_line as i64 + lines).clamp(0, self.max_first_line() as i64) as usize
     }
 
-    /// A screenful of the page: the document lines the box shows, less one, so that the line the
-    /// reader was on when a page turned is still on it (see `scrolled_by`).
+    /// The line the page is to be scrolled to so that `caret` is on screen, or `None` where it
+    /// already is.
     ///
-    /// `shortcut:` a screenful is counted in document lines, so a page of wrapped lines carries
-    /// more than a boxful of them; upgrade by measuring the painted lines the frame holds.
-    pub(super) fn page_lines(&self) -> i64 {
-        self.visible_lines.saturating_sub(1).max(1) as i64
+    /// **The page moves only to keep the caret in view.** A move that lands inside the screenful
+    /// draws no scroll at all, and one that leaves it takes the page just far enough that the caret
+    /// is a couple of lines clear of the edge — the same lead a find gives the line it found (see
+    /// `FIND_LEAD_LINES`), and the same rule a text editor's own caret keeps. Without the lead a
+    /// caret walked down the page would sit on the very last row, which is a line the reader cannot
+    /// see what comes after.
+    pub(super) fn scroll_to_show(&self, caret: text_preview::Place) -> Option<usize> {
+        let lead = 2usize.min(self.visible_lines.saturating_sub(1));
+        let line = caret.0;
+
+        if line < self.first_line {
+            return Some(line.saturating_sub(lead).min(self.max_first_line()));
+        }
+
+        // The last line the frame shows is one before its first plus the lines it holds: a caret on
+        // the row past that is a caret the reader cannot see.
+        let last = self.first_line + self.visible_lines.saturating_sub(1);
+        if line > last {
+            let wanted = line + lead + 1 - self.visible_lines;
+            return Some(wanted.min(self.max_first_line()));
+        }
+
+        None
     }
 
     pub(super) fn can_scroll(&self) -> bool {

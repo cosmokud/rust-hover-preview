@@ -425,8 +425,24 @@ impl DibSurface {
     pub(crate) fn pixels(&self) -> Vec<u8> {
         let length = self.width as usize * self.height as usize * 4;
         let mut pixels = unsafe { std::slice::from_raw_parts(self.bits, length) }.to_vec();
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            pixel[3] = 255;
+        // Two pixels at a time, because a pixel is four bytes and the alpha is one of them: what is
+        // OR-ed in is two alphas in the two words' own places, so the bytes a pixel is made of are
+        // never shifted — the same operation on a little-endian machine and a big-endian one. GDI
+        // leaves the alpha alone where it draws text over the page colour and writes zero into the
+        // inside of a ClearType glyph, which is why every pixel is said to be there rather than
+        // trusted. The byte loop this was cost 1.1 ms of a screenful's 6.8, on every frame of every
+        // hover.
+        let alpha = u64::from_ne_bytes([0, 0, 0, 255, 0, 0, 0, 255]);
+        let pairs = length / 8;
+        let words =
+            unsafe { std::slice::from_raw_parts_mut(pixels.as_mut_ptr() as *mut u64, pairs) };
+        for word in words.iter_mut() {
+            *word |= alpha;
+        }
+        if !length.is_multiple_of(8) {
+            for pixel in pixels[length - 4..].as_chunks_mut::<4>().0 {
+                pixel[3] = 255;
+            }
         }
         pixels
     }
@@ -657,18 +673,16 @@ pub(crate) fn fill_rect(surface: &DibSurface, rect: RECT, color: [u8; 3]) {
         return;
     }
 
-    let pixels = unsafe {
-        std::slice::from_raw_parts_mut(surface.bits(), width as usize * height as usize * 4)
+    // A row at a time, as words: the surface is BGRA and one pixel is one `u32`, so the four bytes a
+    // pixel carries are one value and a row is a `fill` rather than four stores per pixel. The byte
+    // loop this was took 5.0 ms of a screenful's 6.8 ms — a page scrolled a line, and every frame of
+    // a hover, paid it for a colour that is not the surface's own.
+    let pixel = u32::from_ne_bytes([color[2], color[1], color[0], 255]);
+    let words = unsafe {
+        std::slice::from_raw_parts_mut(surface.bits() as *mut u32, (width * height) as usize)
     };
-
     for y in top..bottom {
-        let row = y as usize * width as usize * 4;
-        for x in left..right {
-            let index = row + x as usize * 4;
-            pixels[index] = color[2];
-            pixels[index + 1] = color[1];
-            pixels[index + 2] = color[0];
-            pixels[index + 3] = 255;
-        }
+        let row = &mut words[y as usize * width as usize..(y as usize + 1) * width as usize];
+        row[left as usize..right as usize].fill(pixel);
     }
 }

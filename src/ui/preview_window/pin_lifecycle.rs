@@ -286,10 +286,21 @@ pub(crate) enum PinCommand {
     /// previous file, which is what an up arrow has always meant to every other kind of pin.
     ///
     /// Which of the two it is, is the file in the window's answer rather than the key's, the way a
-    /// Space is a hold of a video, a sound, or nothing at all (see `pin_command_request`).
+    /// Space is a hold of a video, a sound, or nothing at all (see `pin_command_request`). It is
+    /// `Page Up` and no longer an arrow: the arrows are the page's caret's (see `CaretUp`).
     PageBack,
     /// The same, a screenful on, and the next file where there is no page to move.
     PageOn,
+    /// Take a pinned page's caret one line up, and — where the window holds no page — the previous
+    /// file, which is what an up arrow has always meant to every other kind of pin.
+    ///
+    /// **The two are one command rather than two.** A caret is the page's, and a folder is the
+    /// pin's: which of the two an up arrow is is the file in the window's answer, asked where that
+    /// file is known (see `pin_command_request`), so a pin of a picture still walks on the same key
+    /// it always did and a pin of a page moves its caret instead.
+    CaretUp,
+    /// The same, a line down, and the next file where there is no page.
+    CaretDown,
     /// The beginning of the page in the window, for a window that holds one, and nothing at all for
     /// one that does not: a picture has no beginning to go back to.
     PageTop,
@@ -304,7 +315,7 @@ pub(crate) enum PinCommand {
 
 // The commands the window procedure has left for the preview loop are a field of the pin's own
 // state, beside the window they are about (see `pin_window::ask_pin` and
-// `pin_window::take_pin_command`).
+// `pin_window::take_pin_commands`).
 
 /// Whether the pin key is watched, as the configuration has it.
 pub(super) fn pin_enabled() -> bool {

@@ -208,11 +208,21 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
                 // preview does not move as well. `Ctrl` held makes it the page's own size rather
                 // than its place, which is the one grip a reader has on how large a pinned page is
                 // drawn (see `PIN_TEXT_SIZE_DELTA`).
+                //
+                // The loop that reads the count is woken for it, because the count is an atomic and
+                // nothing else: a notch turned while that loop is in its own wait for a pin would be
+                // read at the end of it — 62 ms, measured, which is four frames of a 144 Hz display
+                // and the whole of what makes a scroll start unevenly (see `wake_preview_loop`). Both
+                // counts are owed the same wake: a `Ctrl` notch is the page resized rather than moved,
+                // which waits on the same tick.
                 if wparam.0 == WM_MOUSEWHEEL as usize {
                     if control_is_down() {
                         PIN_TEXT_SIZE_DELTA.fetch_add(notches, Ordering::AcqRel);
                     } else {
                         TEXT_SCROLL_DELTA.fetch_add(notches, Ordering::AcqRel);
+                    }
+                    if notches != 0 {
+                        crate::ui::preview_window::wake_preview_loop();
                     }
                 }
                 return LRESULT(1);

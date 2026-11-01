@@ -3,20 +3,39 @@
 
 use super::dimensions::audio_font_scale_percent;
 use super::*;
-
+use crate::config::config::{DEFAULT_AUDIO_VOLUME, DEFAULT_VIDEO_VOLUME};
 use crate::formats::routing::NavCategory;
 
 /// How loud a video is played, which is read when one is started rather than when the
 /// setting changes: a preview is a few seconds long, and the next one is played at
 /// whatever the volume is by then.
+///
+/// **A level this cannot read is the setting's own default and never a bare `0`**, which is not the
+/// same statement: `0` is the *no-audio form* a launch is built from (see `video_launch::AudioForm`),
+/// so a lock that failed would otherwise be a film asked for with no soundtrack at all — silence
+/// decided by a poisoned mutex rather than by anything the user set. `DEFAULT_VIDEO_VOLUME` is
+/// itself zero, which is a film an untouched tray plays silently on purpose; what this changes is
+/// that a failed read answers the same number for the same reason the file does, rather than a
+/// number that happens to mean the same thing.
 pub(super) fn current_video_volume() -> u32 {
-    CONFIG.lock().map(|cfg| cfg.video_volume).unwrap_or(0)
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.video_volume)
+        .unwrap_or(DEFAULT_VIDEO_VOLUME)
 }
 
 /// The volume a sound is previewed at, read the way the video's is: from the configuration at
 /// the moment a player is started, so a change in the tray reaches the next hover.
+///
+/// The same default rather than a bare `0`, and here it is the half that really heals: a sound is
+/// previewed at `DEFAULT_AUDIO_VOLUME` — quiet, and not silent — so a failed read that answered zero
+/// would be a sound file played as a film with no audio track is, which is a card with nothing behind
+/// it.
 pub(super) fn current_audio_volume() -> u32 {
-    CONFIG.lock().map(|cfg| cfg.audio_volume).unwrap_or(0)
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.audio_volume)
+        .unwrap_or(DEFAULT_AUDIO_VOLUME)
 }
 
 /// Where a sound starts, read the way the volume is and at the same moment: from the

@@ -10,8 +10,9 @@
 
 use crate::text::text_paint::{self, DibSurface};
 use crate::CONFIG;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{RECT, SIZE};
-use windows::Win32::Graphics::Gdi::{GetTextExtentPoint32W, SelectObject};
+use windows::Win32::Graphics::Gdi::{GetTextExtentExPointW, GetTextExtentPoint32W, SelectObject};
 
 /// The colors a caption and a bubble are painted in: the theme's page, its text, and one it
 /// spends on something else, which is drawn as the accent.
@@ -483,6 +484,46 @@ fn point_in_polygon(point: (f32, f32), points: &[(f32, f32)]) -> bool {
     }
 
     inside
+}
+
+/// The upper half of a ring: the shackle of a read-only pill's padlock (see `page_marks`).
+///
+/// It is the band `fill_ring` draws, cut at the horizontal through its center and drawn only above
+/// it, with a ramp at the two ends so that a half ring ends on the line rather than in a stair step.
+/// A whole ring is a button; half of one standing on a box is a lock.
+pub(super) fn stroke_top_arc(
+    buffer: &mut [u8],
+    width: i32,
+    center: (f32, f32),
+    radius: f32,
+    thickness: f32,
+    color: [u8; 3],
+    coverage: f32,
+) {
+    let half = (thickness / 2.0).max(0.5);
+    let reach = radius + half + 1.0;
+    let left = (center.0 - reach).floor() as i32;
+    let right = (center.0 + reach).ceil() as i32;
+    let top = (center.1 - reach).floor() as i32;
+    let bottom = center.1.floor() as i32;
+
+    for y in top..=bottom {
+        for x in left..=right {
+            let dx = x as f32 + 0.5 - center.0;
+            let dy = y as f32 + 0.5 - center.1;
+            let distance = (dx * dx + dy * dy).sqrt();
+            let radial = (half + 0.5 - (distance - radius).abs()).clamp(0.0, 1.0);
+            if radial <= 0.0 {
+                continue;
+            }
+
+            // The two ends, faded over the last pixel above the line the half ring stands on.
+            let end = (-dy / half).clamp(0.0, 1.0);
+            if end > 0.0 {
+                put(buffer, width, x, y, color, coverage * radial * end);
+            }
+        }
+    }
 }
 
 /// One band of a circle, drawn as the pixels a given distance from a center and within the spread
@@ -964,6 +1005,69 @@ pub(super) fn paint_time(
         palette.foreground,
         palette.background,
     );
+}
+
+/// The width of every character of a run at a style, as the columns the characters end at: the first
+/// element is zero, each later one is the width of the run up to and including that character, and
+/// the last is the run's whole width.
+///
+/// **One call rather than one per prefix.** The find bar's query is measured on every blink of its
+/// caret and on every move of a drag, and a query of a few hundred characters measured a few hundred
+/// times would be a few hundred font selections for one answer (see `measure_text`, which is the
+/// same question asked for a whole run).
+///
+/// `GetTextExtentExPointW` fills one partial extent per UTF-16 code unit, and a character outside the
+/// basic plane is two units: the units of a character are folded into the one column that character
+/// ends at, so a caller counting columns is counting characters and not code units.
+pub(super) fn measure_run(
+    surface: &DibSurface,
+    style: &text_paint::TextStyle,
+    text: &str,
+    scale: f32,
+) -> Vec<i32> {
+    let mut columns = vec![0];
+    if text.is_empty() {
+        return columns;
+    }
+
+    unsafe {
+        let font = text_paint::create_font(
+            text_paint::scaled(text_paint::LEVEL_FONT_PIXELS[style.level as usize], scale),
+            style,
+        );
+        if font.0.is_null() {
+            return columns;
+        }
+
+        let previous = SelectObject(surface.dc, font);
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let mut partial = vec![0i32; wide.len()];
+        let mut extent = SIZE::default();
+        let measured = GetTextExtentExPointW(
+            surface.dc,
+            PCWSTR(wide.as_ptr()),
+            wide.len() as i32,
+            i32::MAX,
+            None,
+            Some(partial.as_mut_ptr()),
+            &mut extent,
+        )
+        .as_bool();
+        let _ = SelectObject(surface.dc, previous);
+        let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
+
+        if !measured {
+            return columns;
+        }
+
+        let mut units = 0usize;
+        for character in text.chars() {
+            units += character.len_utf16();
+            columns.push(partial[units - 1]);
+        }
+    }
+
+    columns
 }
 
 /// How a number of seconds is written on a transport bar: minutes and seconds, hours where there

@@ -36,8 +36,8 @@ thread_local! {
     /// thread: the preview — which is the pinned window while a pin is up — the round bubble a
     /// collapsed pin leaves, the window of the card's own over the screen, and the three strips a
     /// hosted film's pin carries over its film — the caption's, the transport's, and the volume
-    /// popup's while it is open (see `pin_chrome_strips`). A surface rebuilt per repaint would be
-    /// a display's worth of pixels allocated for every frame of a video.
+    /// popup's while it is open (see `pin_chrome_strips`). A surface rebuilt per repaint would be a
+    /// display's worth of pixels allocated for every frame of a video.
     pub(super) static LAYERED_SURFACES: RefCell<Vec<(isize, LayeredSurface)>> = const { RefCell::new(Vec::new()) };
     /// Mutable box for the corner spinner: the small piece of a frame the arc is drawn into
     /// and then composed back over the frame's own pixels, so that drawing the spinner costs
@@ -82,6 +82,12 @@ thread_local! {
     /// each of them is one made and thrown away on every repaint of either. It is cleared
     /// before each use, for the reason the tooltip's is.
     pub(super) static MENU_WINDOW_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+    /// The membrane a pinned page's find bar is written on, for the reason the tooltip's is: its
+    /// query, its count and its two switch names are measured and drawn through GDI, which needs a
+    /// device context of its own. It is the card's own size rather than the window's, because the card
+    /// is all that is carried off it, and it is cleared before each use for the reason the tooltip's
+    /// is.
+    pub(super) static FIND_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
 }
 
 /// The pixels the desktop is showing in a screen rectangle, or nothing where there is no picture to

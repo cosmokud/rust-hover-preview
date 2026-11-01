@@ -294,6 +294,12 @@ pub fn run_preview_window() {
         // measured against: a release is written in seconds, and the loop is the one thing here that
         // knows how long its own last tick was (see `step_pin_zoom`).
         let mut last_zoom_frame = Instant::now();
+        // The wheel's own travel a page has been given that has not come to a whole notch yet. A
+        // high-resolution wheel — a precision touchpad, a smooth-scrolling mouse — reports less than
+        // a notch per message, and the count is drained as it arrives; what is truncated away here
+        // would be most of that wheel's travel, so the remainder is carried into the tick after it
+        // (see `WHEEL_DELTA` and the zoom road's own `notch_step`).
+        let mut text_scroll_carry = 0i32;
         // A walk a pin's own caption button stepped, held for as long as the walk has files
         // left to offer rather than for the length of the tick that started it: a file the pin
         // cannot be shown is stepped over rather than stopped at, and the file after it is
@@ -681,9 +687,11 @@ pub fn run_preview_window() {
                 // and would otherwise have reached FFmpeg rather than this app. The commands are
                 // the same ones the pin's own window procedure queues, so they go on the same
                 // queue: a walk of the folder is a walk of the folder whether the arrow arrived as
-                // a message to this window or was swallowed before it could become one.
-                for taken in crate::shell::key_input::take_pin_key_presses() {
-                    if let Some(command) = hook_pin_key_command(taken) {
+                // a message to this window or was swallowed before it could become one. A find
+                // bar's keys never arrive here — the hook stands down for one, and the bar reads
+                // them where they land (see `key_input::publish_find_bar_up`).
+                for press in crate::shell::key_input::take_pin_key_presses() {
+                    if let Some(command) = hook_pin_key_command(press) {
                         ask_pin(command);
                     }
                 }
@@ -876,6 +884,41 @@ pub fn run_preview_window() {
                     select_all_text_preview(hwnd);
                 }
 
+                // The find bar's own key, `Ctrl`+`F`, polled the same way and for the same reason:
+                // the chord is the keyboard's rather than a message a window nobody is in would
+                // ever be sent (see `pinned_find_requested`). A bar that is already up is asked
+                // for again rather than emptied, and its query is searched again from the line the
+                // reader is on.
+                if text_find::pinned_find_requested() {
+                    text_find::open_text_find();
+                }
+
+                // And what the bar was told since the last tick — a character, a backspace, a step,
+                // a switch, a close, or a `Find Next` the menu row asked for — is run here, where a
+                // search may style the document from its first line and a scroll may paint it (see
+                // `text_find::settle`).
+                text_find::settle(hwnd);
+
+                // The page's caret moves take the same road for the same reason: a key that asked for
+                // one wrote it down where it landed, and this is the tick that may read the document
+                // it moves through and paint the frame it is drawn in (see `text_caret::settle`).
+                text_caret::settle(hwnd);
+
+                // And the caret's blink, which is the one thing about a page that changes with
+                // nothing else having happened: a page holding a caret is painted twice a blink, and
+                // one holding none asks for nothing at all (see `CaretBlink`).
+                if text_caret::the_caret_turned() {
+                    render_layered_preview(hwnd);
+                }
+
+                // Whether a bar is up over the pin's page is told to the hook here, after the bar
+                // has been opened or settled, rather than with the windows above: a `Ctrl`+`F`
+                // arrives on this tick, and a hook told a tick later swallows the first character
+                // typed into the field — which is the whole of what a swallowed key costs a text
+                // field, whose characters are the `WM_CHAR` `TranslateMessage` only makes from a
+                // key-down nothing swallowed (see `key_input::publish_find_bar_up`).
+                crate::shell::key_input::publish_find_bar_up(pinned() && text_find::is_open());
+
                 // A window dragged by an edge owes its media a layout at the box it ended up
                 // with: the window procedure owns the drag and asks for it here, because the
                 // media is this thread's.
@@ -985,6 +1028,18 @@ pub fn run_preview_window() {
             // nothing of the pin is left to ask. Asked of every tick and not of a pinned one for
             // exactly that reason (see `settle_video_retirement`).
             settle_video_retirement();
+
+            // **A pinned film begun at a level and playing with no sound is healed here**, on the tick
+            // rather than on the thread that read the player: the ladder's last rung is a player begun
+            // again, and everything that touches — the pin's picture, its clock, its transport — is this
+            // loop's (see `audio_guard`). A rung decided on a tick with a swap still held is kept for a
+            // tick without one: a picture changing hands is not a player to be begun under it.
+            if let Some(film) = audio_guard::tick(pin_swap_hold.is_none()) {
+                // shortcut: a player that declines the relaunch — the pin walked off the film between the
+                // read and this tick — spends the ladder's last rung on nothing and the film stays silent;
+                // upgrade to asking the pin's own state before the rung is recorded.
+                let _ = pin_playback::begin_the_pinned_film_again_for_its_sound(&film);
+            }
 
             // **And the two settles that were only asked of a pin are asked of every tick**, for the
             // reason the retirement above is: each has a "the pin is gone" half that nothing on a
@@ -1217,7 +1272,6 @@ pub fn run_preview_window() {
                 let _ = pin_ask_keyboard_back(hwnd);
             }
 
-            // Advance animation frames if needed
             let mut needs_repaint = false;
             // Whether this tick takes a full look at the media behind the preview: a
             // swap, a load, a wait or a player forces one, a dynamic hint keeps the fast
@@ -2173,10 +2227,17 @@ pub fn run_preview_window() {
             // the ticks here. Rotating the wheel forward scrolls back towards the
             // start of the document, which is the opposite of the sign the
             // message carries.
+            //
+            // The count is in the wheel's own units — 120 to a notch — and what has not come to a
+            // whole notch stays in `text_scroll_carry` for the tick after it, because a truncated
+            // count is most of a high-resolution wheel's travel thrown away (see `notch_step` for
+            // the same bargain made on the zoom road below).
             let scroll_delta = wheel_input::take_text_scroll_delta();
             if scroll_delta != 0 {
-                let notches = (scroll_delta / WHEEL_DELTA) as i64;
+                text_scroll_carry += scroll_delta;
+                let notches = (text_scroll_carry / WHEEL_DELTA) as i64;
                 if notches != 0 {
+                    text_scroll_carry -= notches as i32 * WHEEL_DELTA;
                     let lines = -notches * TEXT_SCROLL_LINES_PER_NOTCH;
                     if let Some(first_line) = text_scroll_target(lines) {
                         scroll_text_preview(hwnd, first_line);
@@ -4058,10 +4119,13 @@ pub fn run_preview_window() {
                         }
                         // A page is the one kind a box is *laid out* for rather than scaled into, so
                         // the box it has just been given is the box it is drawn for now — ahead of the
-                        // window being put up around it, and ahead of the answer the load above will
-                        // bring. It is the kind that answers that, and it answers for no other, which
-                        // leaves every other kind drawn into the new box from the frame in hand (see
-                        // `relayout_text_for_the_box`).
+                        // window being put up around it. It is the kind that answers that, and it
+                        // answers for no other, which leaves every other kind drawn into the new box
+                        // from the frame in hand (see `relayout_text_for_the_box`).
+                        //
+                        // And it is the whole of what this box asks of a page: no read is owed one
+                        // behind it, because a read begins at the document's first line and would
+                        // land over the line this has just drawn (see `relayout_pinned_media`).
                         relayout_text_for_the_box(content);
                         show_pinned_window(hwnd);
                         place_pinned_siblings();

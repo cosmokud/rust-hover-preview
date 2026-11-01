@@ -119,6 +119,68 @@ fn a_resident_never_serves_while_a_pin_stands() {
     );
 }
 
+/// **The A/B knob answers what the environment says, and presence is the whole of it**: the resident
+/// is kept where the variable is not there, and is not kept where it is — whatever it holds, and
+/// including a value that names no road (see `keeping_a_resident_from`).
+#[test]
+fn the_no_resident_knob_is_read_by_presence_and_nothing_else() {
+    assert_eq!(mpv_resident::NO_RESIDENT_VARIABLE, "RHP_NO_RESIDENT");
+    let said = |value: Option<&str>| {
+        mpv_resident::keeping_a_resident_from(value.map(std::ffi::OsStr::new))
+    };
+
+    assert!(
+        said(None),
+        "a run that says nothing is the resident road, byte for byte"
+    );
+    assert!(
+        !said(Some("1")),
+        "the variable being there is the run with no resident"
+    );
+    assert!(
+        !said(Some("")),
+        "and no value is read, so even an empty one is the switch"
+    );
+    assert!(
+        !said(Some("0")),
+        "nothing spells the resident road back on: unset is the only way back"
+    );
+    assert!(!said(Some("no-resident")));
+}
+
+/// **With no resident kept, `serve` declines every hover** — which is the whole of how the A/B puts
+/// a player per hover back: the decline is the launch's own fallback, so no resident is begun, no
+/// player is begun for this ask, and nothing is written down a pipe.
+#[test]
+fn a_run_with_no_resident_kept_serves_no_hover() {
+    let _room = the_room_to_itself();
+    stand_pin(None);
+    mpv_resident::keep_a_resident_in_a_test(false);
+    mpv_ipc::clear_noted();
+    let _ = take_last_spawned_command();
+
+    let served = mpv_resident::serve(&a_film(), 55, false);
+
+    assert!(
+        served.is_none(),
+        "a hover the resident road does not answer is a player begun for it"
+    );
+    assert_eq!(
+        mpv_resident::the_resident_pid(),
+        None,
+        "and no resident was begun for it either"
+    );
+    assert!(
+        take_last_spawned_command().is_none(),
+        "nothing at all was begun: the launch's own fallback is what begins the player"
+    );
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "and no line was offered down a pipe: {:?}",
+        mpv_ipc::noted_lines()
+    );
+}
+
 /// The command a served hover is, exactly: the file and the hover's own level, and nothing else.
 #[test]
 fn loadfile_asks_for_the_file_and_the_hover_volume() {
