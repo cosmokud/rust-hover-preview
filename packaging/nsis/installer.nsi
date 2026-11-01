@@ -112,8 +112,11 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 !endif
 
 ; installer icon
+; The uninstaller is compiled into the installer as its own EXE, so without
+; MUI_UNICON it keeps NSIS's stock uninstall glyph no matter what MUI_ICON says.
 !if "${INSTALLERICON}" != ""
   !define MUI_ICON "${INSTALLERICON}"
+  !define MUI_UNICON "${INSTALLERICON}"
 !endif
 
 ; installer sidebar image
@@ -434,6 +437,12 @@ Section Install
     File /a "/oname={{this}}" "{{@key}}"
   {{/each}}
 
+  ; Installed apps draws DisplayIcon from a file that stays put: the exe is
+  ; replaced by an update mid-draw, which is how the entry lost its icon.
+  !if "${INSTALLERICON}" != ""
+    File /oname=app.ico "${INSTALLERICON}"
+  !endif
+
   ; Create file associations
   {{#each file_associations as |association| ~}}
     {{#each association.extensions as |ext| ~}}
@@ -463,7 +472,11 @@ Section Install
 
   ; Registry information for add/remove programs
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "${PRODUCTNAME}"
-  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayIcon" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\""
+  !if "${INSTALLERICON}" != ""
+    WriteRegStr SHCTX "${UNINSTKEY}" "DisplayIcon" "$\"$INSTDIR\app.ico$\",0"
+  !else
+    WriteRegStr SHCTX "${UNINSTKEY}" "DisplayIcon" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\",0"
+  !endif
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr SHCTX "${UNINSTKEY}" "Publisher" "${MANUFACTURER}"
   WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$\"$INSTDIR$\""
@@ -543,6 +556,9 @@ Section Uninstall
   ; Delete the app directory and its content from disk
   ; Copy main executable
   Delete "$INSTDIR\${MAINBINARYNAME}.exe"
+  !if "${INSTALLERICON}" != ""
+    Delete "$INSTDIR\app.ico"
+  !endif
 
   ; Delete resources
   {{#each resources}}
