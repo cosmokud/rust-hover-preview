@@ -70,6 +70,11 @@ pub(super) struct PinVolume {
     /// Whether the knob is being held: a drag is a hand on the level, and what a drag must not be
     /// mistaken for is the pointer having gone away from the popup (see `refresh_pin_volume`).
     pub(super) dragging: bool,
+    /// The popup's box as it stood when the drag began, held so the panel and the groove the hand is
+    /// measured against are the ones that were drawn under it: a pin whose chrome or card re-lays
+    /// out mid-drag would otherwise move the groove out from under the pointer and the thumb would
+    /// jump (see `pinned_volume_panel`).
+    pub(super) held: Option<pin_chrome::VolumePopup>,
     /// Whether the level in hand is still owed to the engine, which one write per preview tick
     /// coalesces a drag or wheel burst to the latest level (see `flush_pin_volume_level`).
     pub(super) pending: bool,
@@ -273,6 +278,7 @@ pub(super) fn close_pin_volume() -> bool {
             closed = pin.volume.open;
             pin.volume.open = false;
             pin.volume.dragging = false;
+            pin.volume.held = None;
         }
     }
 
@@ -1061,8 +1067,10 @@ pub(super) fn set_pin_volume(level: u32) {
 fn pin_level_is_immediate() -> bool {
     match current_media_type() {
         Some(MediaType::NativeVideo) => true,
-        Some(MediaType::Audio) => audio_preview_level_is_owed_to_the_engine(),
-        Some(MediaType::Video) => mpv_takes_a_level_as_it_moves(),
+        Some(MediaType::Audio) => {
+            audio_preview_level_is_owed_to_the_engine() || ffplay_holds_the_level()
+        }
+        Some(MediaType::Video) => mpv_takes_a_level_as_it_moves() || ffplay_holds_the_level(),
         _ => false,
     }
 }
@@ -1209,9 +1217,26 @@ pub(super) fn flush_pin_volume_level() {
     let told = match current_media_type() {
         Some(MediaType::NativeVideo) => video_player::set_volume(pending),
         Some(MediaType::Audio) => {
-            audio_preview_level_is_owed_to_the_engine() && video_player::set_volume(pending)
+            if audio_preview_level_is_owed_to_the_engine() {
+                video_player::set_volume(pending)
+            } else if ffplay_holds_the_level() {
+                // One-slot last-write-wins ask to the `mixer-level` thread, cheap enough at 60 Hz.
+                ask_the_ffplay_its_level(pending);
+                true
+            } else {
+                false
+            }
         }
-        Some(MediaType::Video) => set_the_pin_players_level(pending),
+        Some(MediaType::Video) => {
+            if mpv_takes_a_level_as_it_moves() {
+                set_the_pin_players_level(pending)
+            } else if ffplay_holds_the_level() {
+                ask_the_ffplay_its_level(pending);
+                true
+            } else {
+                false
+            }
+        }
         _ => false,
     };
     // The claim of what the player is playing at moves only where the player was actually told:

@@ -1484,3 +1484,169 @@ fn a_wheel_notch_on_a_film_owes_one_chrome_repaint_a_tick() {
         *media = previous_media;
     }
 }
+
+/// **A dragged knob on a pin FFmpeg plays is heard on every tick of the drag**, a film's and a
+/// sound's alike: the level is owed the mixer session while the hand is still moving rather than
+/// only from the release, so `PinVolume::pending` is set by each step, `flush_pin_volume_level`
+/// spends it, and the claim follows it (see `pin_level_is_immediate` and `ffplay_holds_the_level`).
+///
+/// The player is a noted one that never ends, which is what `is_video_process_running` needs of it,
+/// and nothing is begun at either end of the drag: the level is a session's.
+#[test]
+fn a_dragged_level_on_a_pin_ffmpeg_plays_reaches_it_tick_by_tick() {
+    let _room = the_room_to_itself();
+
+    let mut levels = PinLevels::set(100, 50);
+    levels.remembering(false, false);
+    let previous_image = video_process_image();
+    let previous_pid = VIDEO_PID.load(Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    video.video_process = Some(video_playback::PlayerProcess::Noted(101));
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+    note_player_process(101, FFPLAY_IMAGE_NAME);
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    clear_restart_count();
+
+    let held = || pin_holding().expect("the pin the test stands");
+    let mut pin = overlay_pin((100, 100, 420, 340), PinChrome::always());
+    pin.path = PathBuf::from("pin-ffplay-dragged-level-film.mkv");
+    pin.transport.begun(30.0, true, false);
+    pin.transport.duration = Some(200.0);
+    pin.volume.level = 40;
+    pin.volume.playing_at = 40;
+    stand_pin(Some(pin));
+
+    assert!(
+        ffplay_holds_the_level(),
+        "the player on screen is FFmpeg's and still holds a process"
+    );
+
+    // Three steps of one drag, each with its own tick between them.
+    for level in [45, 55, 70] {
+        set_pin_volume(level);
+        assert_eq!(held().level, level, "the step {level} is heard at once");
+        assert!(
+            held().pending,
+            "and the tick is owed it, rather than the release being"
+        );
+        flush_pin_volume_level();
+        assert!(!held().pending, "the tick spends what it was owed");
+        assert_eq!(
+            held().playing_at,
+            level,
+            "the claim follows the level the mixer was asked for"
+        );
+    }
+
+    // A sound's card is the other FFmpeg route, and the level is its session's just the same.
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            media.media_type = MediaType::Audio;
+        }
+    }
+    let mut sound = sound_pin();
+    sound.path = PathBuf::from("pin-ffplay-dragged-level-sound.mp3");
+    sound.volume = PinVolume {
+        audio: true,
+        level: 40,
+        playing_at: 40,
+        ..Default::default()
+    };
+    stand_pin(Some(sound));
+    for level in [50, 60] {
+        set_pin_volume(level);
+        assert!(held().pending, "a sound's card is owed its level live too");
+        flush_pin_volume_level();
+        assert_eq!(held().playing_at, level, "and it is told on the same tick");
+    }
+
+    assert_eq!(
+        restart_count(),
+        0,
+        "the level is a session's, so the drag begins, ends and restarts nothing"
+    );
+    settle_pin_volume();
+    assert_eq!(
+        restart_count(),
+        0,
+        "and a release the claim already agrees with begins nothing either"
+    );
+
+    note_player_process(previous_pid, previous_image);
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
+/// A drag measures the hand against the panel it began on, whatever the pin's chrome or card does
+/// under it: the box is frozen at the press, so the groove and the thumb drawn in it stay where the
+/// pointer found them, and the freeze goes with the release (see `PinVolume::held`).
+#[test]
+fn a_drag_keeps_the_popup_it_began_on_while_the_pins_chrome_relays_out() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let mut pin = overlay_pin((100, 100, 500, 400), PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume = PinVolume {
+        level: 50,
+        playing_at: 50,
+        open: true,
+        ..Default::default()
+    };
+    let frozen = pinned_volume_panel(&pin).expect("a strip carries a volume panel");
+    stand_pin(Some(pin));
+
+    // The press takes hold of this box and the strip it hung from goes away under the hand.
+    with_pin(|pin| {
+        pin.volume.dragging = true;
+        pin.volume.held = Some(frozen);
+        pin.chrome = PinChrome {
+            caption: false,
+            bar: false,
+            until: None,
+        };
+        pin.transport_bar = false;
+    });
+    let dragging_panel = pin_state()
+        .and_then(|pinned| pinned.pin().map(pinned_volume_panel))
+        .flatten()
+        .expect("a held drag always answers a panel");
+    assert_eq!(
+        dragging_panel, frozen,
+        "the panel and the groove the hand is measured against are the press's own"
+    );
+
+    // What the layout would answer unfrozen is another box altogether, which is the jump this
+    // freeze is for.
+    with_pin(|pin| pin.volume.dragging = false);
+    let unfrozen = pin_state()
+        .and_then(|pinned| pinned.pin().map(pinned_volume_panel))
+        .flatten();
+    assert_ne!(
+        unfrozen,
+        Some(frozen),
+        "the chrome's own layout has moved the panel out from under the hand"
+    );
+
+    // Letting go of the knob drops the freeze with it, so the next press takes the box it finds.
+    assert!(close_pin_volume(), "the popup was open");
+    let after = pin_holding().expect("the pin the test stands");
+    assert!(!after.dragging, "and the knob is no longer held");
+    assert_eq!(after.held, None, "the frozen box goes with the drag");
+
+    stand_pin(previous);
+}

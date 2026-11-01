@@ -178,6 +178,7 @@ pub(crate) fn transport_part_at(
 
 /// Where a volume popup is, in the window's own coordinates: the panel it floats in, and the
 /// groove inside it the level is drawn against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VolumePopup {
     pub(crate) panel: RECT,
     pub(crate) track: RECT,

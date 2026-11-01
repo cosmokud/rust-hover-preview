@@ -506,6 +506,12 @@ pub(super) fn pinned_volume_geometry() -> Option<pin_chrome::VolumePopup> {
 /// against a window other than the one under the hand is a panel that closes when it should not
 /// (see `refresh_pin_volume`).
 pub(super) fn pinned_volume_panel(pin: &PinnedPreview) -> Option<pin_chrome::VolumePopup> {
+    // A drag holds the box it began on: chrome and card re-lay out under the hand, and a groove that
+    // moved would draw the thumb away from the pointer (see `PinVolume::held`).
+    if pin.volume.dragging {
+        return pin.volume.held;
+    }
+
     let (width, _) = pin.window_size();
     Some(pin_chrome::volume_popup_from_button(
         pinned_volume_button(pin)?,
@@ -699,7 +705,10 @@ pub(super) unsafe fn pinned_volume_press(hwnd: HWND, x: i32, y: i32) -> bool {
     }
 
     let _ = SetCapture(hwnd);
-    with_pin(|pin| pin.volume.dragging = true);
+    with_pin(|pin| {
+        pin.volume.dragging = true;
+        pin.volume.held = Some(popup);
+    });
     // **The press does nothing to the player.** FFmpeg's player cannot be told a level, so the
     // player that plays at the new one is begun at the release — one relaunch for the change
     // (see `settle_pin_volume`), and the film plays on under the hand until then.
@@ -738,6 +747,7 @@ pub(super) unsafe fn pinned_volume_release(hwnd: HWND, window: &dyn PinWindow) -
 
         let dragging = pin.volume.dragging;
         pin.volume.dragging = false;
+        pin.volume.held = None;
         dragging
     };
 
@@ -799,6 +809,7 @@ unsafe fn set_pin_volume_open(hwnd: HWND, open: bool) {
         pin.volume.open = open;
         if !open {
             pin.volume.dragging = false;
+            pin.volume.held = None;
         }
         // The hook reads the published box rather than this lock, so the panel's own box has to be
         // out before the next notch arrives (see `publish_pin_volume_region`).
