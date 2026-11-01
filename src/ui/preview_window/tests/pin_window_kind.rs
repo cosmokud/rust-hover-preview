@@ -1,12 +1,16 @@
-//! Which window a taken-up pin stands in: every kind this app draws the whole way stands in the
-//! pin's own window, and the three kinds something else draws in a window of its own keep the
-//! preview's.
+//! Which window a taken-up pin stands in: every kind stands in the pin's own window, and what
+//! another process draws — a film's window or the browser's page — is placed in that pin's band.
 
 use super::*;
 
+/// Every kind stands in the pin's own window — the browser's two included, whose page is a window
+/// of this app's placed at the pin's content box rather than a picture the preview window is
+/// blended around (see `place_pinned_siblings`). Only a film's route decides otherwise, because a
+/// film a player of its own draws is a window of the desktop's standing under the band.
+///
 /// The kinds a pin draws itself are the ones Windows may activate, list in Alt+Tab and give a
-/// taskbar button to. Only a film a player of its own draws and the browser's two keep the
-/// preview's window, because what fills their band is somebody else's window.
+/// taskbar button to; a document and a specimen get that button for the same reason, with their
+/// page standing in the band the pin's window frames.
 #[test]
 fn every_kind_the_pin_draws_whole_stands_in_the_pins_own_window() {
     for kind in [
@@ -39,10 +43,52 @@ fn every_kind_the_pin_draws_whole_stands_in_the_pins_own_window() {
 
     for kind in [MediaType::EngineSvg, MediaType::EngineFont] {
         assert!(
-            !pin_should_stand_in_its_own_window(Some(kind), Path::new("a-file")),
-            "{kind:?} is drawn in a window of somebody else's, so its pin keeps the preview's"
+            pin_should_stand_in_its_own_window(Some(kind), Path::new("a-file")),
+            "{kind:?}'s page is a window of somebody else's placed in the pin's band, and the \
+             pin's own window is the frame around it"
         );
     }
+}
+
+/// The three the browser draws are the pin's own window, and the page of HTML the switch hands to
+/// the engine is one of them: its pin media is the engine's document kind, so the kind the
+/// placement and the lowering match is the one a document's is, and there is no separate arm to
+/// forget.
+#[test]
+fn every_page_the_browser_draws_stands_in_the_pins_own_window() {
+    assert_eq!(
+        engine_svg_media().media_type,
+        MediaType::EngineSvg,
+        "an engine-drawn page of HTML is carried as the engine's document kind, which is what the \
+         pin's own arms match (see `pinned_engine_media`)"
+    );
+
+    for kind in [
+        Some(MediaType::EngineSvg),
+        Some(MediaType::EngineFont),
+        None,
+        Some(MediaType::Loading),
+        Some(MediaType::Unplayable),
+    ] {
+        for path in ["a drawing.svg", "a specimen.ttf", "a page.html"] {
+            assert!(
+                pin_should_stand_in_its_own_window(kind, Path::new(path)),
+                "{path} drawn by the browser is the pin's own window with {kind:?} in the slot"
+            );
+        }
+    }
+
+    // And the page of HTML is the browser's by its route even with nothing in the slot, whatever
+    // the switch says: the route names the page, and the switch is what decides whether the engine
+    // draws it (see `HoverFacts::html_drawn_by_the_engine`).
+    let page = Path::new("a page.html");
+    assert!(
+        matches!(
+            HoverFacts::read(page).route.drawn_by,
+            crate::formats::routing::DrawnBy::WebView(crate::formats::routing::WebPage::Html)
+        ),
+        "the fixture is a page of HTML by its route"
+    );
 }
 
 /// A film is drawn into a host this app owns under the pin's own window, whichever player draws
@@ -197,7 +243,8 @@ fn a_known_kind_is_not_re_read_from_the_path() {
 /// A pin whose media is a placeholder — the spinner before a file is read, or the cross a failed
 /// file leaves — is still a pin of the file under it, so the file's own route says whose window
 /// the band is: a picture, a page, a card and a film the media engine draws are this app's to
-/// host, while a film a player of its own draws and the browser's three are not.
+/// host, and so is a document, a specimen or a page of HTML the browser draws — that page is a
+/// window placed in the pin's band, so a placeholder pin of one is the pin's own window too.
 #[test]
 fn a_placeholder_pin_stands_where_its_files_route_says() {
     for path in [
@@ -214,13 +261,15 @@ fn a_placeholder_pin_stands_where_its_files_route_says() {
 
     // A page of HTML is the browser's only while the browser is drawing it: with `Render HTML`
     // off it is this app's own text preview, and a pin of it belongs in the pin's window with
-    // every other app-drawn kind. So only the two the engine always draws are named here.
-    for path in ["a.svg", "a.ttf"] {
+    // every other app-drawn kind. The route names the page either way, and a pin of a page the
+    // engine draws is the pin's own window like any other — the browser's window is placed in its
+    // band (see `place_pinned_siblings`).
+    for path in ["a.svg", "a.ttf", "a page.html"] {
         for kind in [None, Some(MediaType::Loading), Some(MediaType::Unplayable)] {
             assert!(
-                !pin_should_stand_in_its_own_window(kind, Path::new(path)),
-                "{path} is drawn in a window of somebody else's, so a placeholder pin of it keeps \
-                 the preview's"
+                pin_should_stand_in_its_own_window(kind, Path::new(path)),
+                "{path} is drawn into a band the pin's own window frames, so a placeholder pin of \
+                 it is the pin's own window too"
             );
         }
     }

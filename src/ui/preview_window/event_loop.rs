@@ -612,7 +612,7 @@ pub fn run_preview_window() {
                 // one thing on a pinned window the window procedure cannot be told about: the
                 // band is a browser's window over this one, so the press is read here and the
                 // drag it means begun here (see `settle_pinned_engine_press`).
-                settle_pinned_engine_press(hwnd, &mut engine_press_seen);
+                settle_pinned_engine_press(pinned_window(), &mut engine_press_seen);
 
                 // And a press on any of the preview's windows is the preview being asked for: the
                 // window comes forward whether or not Windows granted it the foreground, and
@@ -627,7 +627,7 @@ pub fn run_preview_window() {
                 // `settle_pinned_engine_drag`). And then followed at the hand's own rate rather
                 // than at the tick's, since nothing this window is sent will ever carry it (see
                 // `carry_pin_drag_with_the_hand`).
-                settle_pinned_engine_drag(hwnd);
+                settle_pinned_engine_drag(pinned_window());
 
                 // Followed at the hand's own rate rather than at the tick's, since nothing this
                 // window is sent will ever carry it. What the carry found on the channel goes to
@@ -636,7 +636,7 @@ pub fn run_preview_window() {
                 // line this loop is inside, so without this a hand that kept moving left every
                 // one of them standing — which is the caption going deaf for the length of the
                 // drag (see `Carry`).
-                carried_preview_messages.extend(carry_pin_drag_with_the_hand(hwnd, &rx));
+                carried_preview_messages.extend(carry_pin_drag_with_the_hand(pinned_window(), &rx));
 
                 // A file the pin was shown and its player cannot draw is not a pin that
                 // came apart — it is a pin that is about to be shown something else, and the
@@ -3509,6 +3509,10 @@ pub fn run_preview_window() {
             // `foreground_is_the_desktop` for the one answer it refuses).
             if the_pin_owes_a_show(pinned_window(), GetForegroundWindow()) {
                 show_pinned_window(pinned_window());
+                // A pin of the engine's kinds is put up with nothing in its band unless the page
+                // is placed with it: the engine's window is a window of its own and the show
+                // above raises only the pin (see `place_pinned_siblings`).
+                place_pinned_siblings();
             }
 
             // A pin that has just answered a pick keeps answering for the front of its band for a
@@ -3579,6 +3583,10 @@ pub fn run_preview_window() {
                     hwnd,
                     pinned_window(),
                     pin_film_host::the_pin_window_that_holds_the_band(pinned_window()),
+                    // **And the page the engine draws, which holds the band itself.** Left in the
+                    // topmost band it is a document floating over every program the user works in,
+                    // with `Always On Top` off and the pin itself demoted under it.
+                    HWND(webview_preview::showing_hwnd() as *mut _),
                 ] {
                     if window_holds_the_topmost_band(window) {
                         let _ = SetWindowPos(

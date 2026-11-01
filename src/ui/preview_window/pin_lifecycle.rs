@@ -57,7 +57,14 @@ pub(super) unsafe fn take_the_hover_down(
         unsafe { pin_real_window::hide_real_pin_window() };
     }
     clear_pointer_hold();
-    webview_preview::hide();
+    // **A page the pin is drawing is not the hover's to take down.** A hide posted before the
+    // take-up can arrive while a pin of a document, a specimen or a page of HTML is already up in a
+    // window of its own, and its band is that page: hiding it here is a pin standing on an empty
+    // band for the rest of its life (see `take_up_pinned_window`, which installs the engine kind
+    // before the own-window answer is read).
+    if !(pin_owns_the_window && current_media_type().is_some_and(|kind| kind.is_engine())) {
+        webview_preview::hide();
+    }
 
     if pin_owns_the_window {
         return;
@@ -1333,13 +1340,17 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
 /// Whether the pin taken up on a file stands in the pin's own window, decided once at the
 /// take-up and written by [`pin_stands_in_its_own_window`].
 ///
-/// Asked of the media in hand where it has a kind: what fills the pin's band is the kind's
-/// answer, and every kind this app draws the whole way stands in the pin's own window (see
-/// `MediaType::draws_in_a_window_of_its_own`). A film's answer there is its live route, so a pin
-/// shown a film of another route after the engine row changed is answered for the film it is
-/// showing now. The two placeholder kinds — a spinner and the cross a failed file leaves — are not
-/// the file, so they ask the file's route instead, as a pin taken up with no kind at all does (see
-/// [`a_pin_of_this_file_stands_in_its_own_window`]).
+/// **Every kind stands in the pin's own window, and the band's window is a window placed in it.**
+/// The browser that draws a document, a specimen or a page of HTML is a top-level window of this
+/// app's standing at the pin's content box, in front of the pin rather than behind it (see
+/// `place_pinned_siblings`, `Host::put_window`), so the pin's own window — the one Windows
+/// activates, lists and gives a button — is the frame that page stands in (see
+/// `MediaType::draws_in_a_window_of_its_own`, which stays the answer to whether what fills the band
+/// is another window's picture — the question a pin taskbar mirror asks). A film's answer is its
+/// live route, so a pin shown a film of another route after the engine row changed is answered for
+/// the film it is showing now. The two placeholder kinds — a spinner and the cross a failed file
+/// leaves — are not the file, so they ask the file's route instead, as a pin taken up with no kind
+/// at all does (see [`a_pin_of_this_file_stands_in_its_own_window`]).
 pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: &Path) -> bool {
     match kind {
         // **A film is drawn through a host of the pin's own, whichever engine plays it** — and the
@@ -1348,7 +1359,12 @@ pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: 
         // this answer, and a film's host road would otherwise be refused by its own consequence.
         Some(MediaType::Video) => matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay),
         Some(kind) if !matches!(kind, MediaType::Loading | MediaType::Unplayable) => {
-            !kind.draws_in_a_window_of_its_own(path)
+            // A kind that draws its picture in a window of somebody else's — the browser's three,
+            // all of them `MediaType::EngineSvg` or `EngineFont` — is still the pin's own window:
+            // that window is placed in the pin's band, and the pin's window is the frame around
+            // it. A placeholder asks the file's own route instead, as a pin taken up with no kind
+            // at all does.
+            true
         }
         _ => a_pin_of_this_file_stands_in_its_own_window(path),
     }
@@ -1357,21 +1373,15 @@ pub(super) fn pin_should_stand_in_its_own_window(kind: Option<MediaType>, path: 
 /// Whether a file whose media is not in hand belongs in the pin's own window.
 ///
 /// A placeholder is still a pin of the file under it, so the file's own route is asked rather
-/// than the spinner or the cross. Every route this app draws the whole way — a reader of its
-/// own, a card, or the page an engine writes into this app's frame — belongs here; the browser's
-/// three do not. A film is the pin's own window where mpv draws it into the pin's own host, and
-/// the preview's where FFmpeg's player draws a window of the desktop's; the media engine's film is
-/// drawn into this app's own surface like any other frame (see `engine_kind_of`,
-/// `MediaType::draws_in_a_window_of_its_own` and `pin_film_host`).
+/// than the spinner or the cross. Every route belongs here — a reader of this app's own, a card,
+/// the page an engine writes into this app's frame, and the three the browser draws, whose window
+/// is placed in the band the pin's own window frames (see `place_pinned_siblings`). A film is the
+/// pin's own window where mpv draws it into the pin's own host, and the preview's where FFmpeg's
+/// player draws a window of the desktop's; the media engine's film is drawn into this app's own
+/// surface like any other frame (see `MediaType::draws_in_a_window_of_its_own` and
+/// `pin_film_host`).
 fn a_pin_of_this_file_stands_in_its_own_window(path: &Path) -> bool {
     use crate::formats::routing::DrawnBy;
-
-    // The engine's three are the browser's window, and the engine's own answer is what says it
-    // is really drawing this file: the route names a page of HTML whatever the tray's switch
-    // says, while the engine with the switch off draws the text preview instead.
-    if engine_kind_of(path).is_some() {
-        return false;
-    }
 
     match HoverFacts::read(path).route.drawn_by {
         DrawnBy::MediaEngine => matches!(
@@ -1823,6 +1833,10 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND, keep_the_band: bool) {
                 take_the_band_and_give_it_back(hwnd);
             }
         }
+        // The band is the band of every window of the pin's, so what stands in it is placed again
+        // after the raise: a page the engine draws holds the band itself and is left behind by a
+        // raise of the pin alone (see `place_pinned_siblings`).
+        place_pinned_siblings();
         return;
     }
 
@@ -1872,6 +1886,11 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
     // `lower_pinned_preview`). Everything below is the stand-in the kinds still standing in the preview's
     // window need, because a window the Shell does not own is never raised by a click.
     if pin_is_its_own_window() {
+        // What stands in this window's band is placed again after the raise: a page the engine
+        // draws is a window of its own in front of the pin, so raising the pin alone leaves the
+        // page where it was — over the listing, or under the window that has just gone over both
+        // (see `place_pinned_siblings`).
+        place_pinned_siblings();
         return;
     }
 
