@@ -300,10 +300,10 @@ pub fn run_preview_window() {
         // would be most of that wheel's travel, so the remainder is carried into the tick after it
         // (see `WHEEL_DELTA` and the zoom road's own `notch_step`).
         let mut text_scroll_carry = 0i32;
-        // The same carry for the notches over a pin's volume control, and whether the level they
-        // left still owes FFmpeg's player the relaunch that takes it (see `settle_pin_volume`).
-        let mut volume_wheel_carry = 0i32;
-        let mut volume_owes_a_settle = false;
+        // The level a wheel has asked for over a pin's volume control, in the wheel's own sub-notch
+        // units so that a smooth wheel's messages move it too; `None` until the wheel is first
+        // turned (see `volume_after_wheel_delta`).
+        let mut volume_wheel_units: Option<i64> = None;
         // A walk a pin's own caption button stepped, held for as long as the walk has files
         // left to offer rather than for the length of the tick that started it: a file the pin
         // cannot be shown is stepped over rather than stopped at, and the file after it is
@@ -2228,27 +2228,32 @@ pub fn run_preview_window() {
 
             // A wheel notch over a pin's volume control is the level: the hook swallowed it and
             // left the count here, and the popup is opened after the level moves, so the frame it
-            // paints is the level the notch asked for. What has not come to a whole notch is carried
-            // into the tick after it, as the page's scroll is below.
+            // paints is the level the notch asked for. The requested level is carried in the
+            // wheel's sub-notch units, so a smooth wheel's messages move it too, and a whole notch
+            // is still exactly `VOLUME_WHEEL_STEP` percent (see `volume_after_wheel_delta`).
             let volume_delta = wheel_input::take_pin_volume_delta();
             if volume_delta != 0 {
-                volume_wheel_carry += volume_delta;
-                let notches = (volume_wheel_carry / WHEEL_DELTA) as i64;
-                if notches != 0 {
-                    volume_wheel_carry -= notches as i32 * WHEEL_DELTA;
-                    if let Some(level) = pin_volume_level() {
-                        set_pin_volume(volume_after_notches(level, notches));
-                        open_pin_volume(pinned_window());
-                        volume_owes_a_settle = true;
-                    }
+                if let Some(level) = pin_volume_level() {
+                    let base = volume_wheel_units
+                        .unwrap_or(i64::from(level) * WHEEL_LEVEL_UNITS_PER_PERCENT);
+                    let units = volume_after_wheel_delta(base, volume_delta);
+                    volume_wheel_units = Some(units);
+                    set_pin_volume(volume_from_wheel_units(units));
+                    open_pin_volume(pinned_window());
                 }
-            } else if volume_owes_a_settle {
-                // FFmpeg's player takes a level only by being begun at it, so the settle waits
-                // for the tick the wheel has stopped on: one relaunch per turn rather than one
-                // per notch (see `settle_pin_volume`).
-                settle_pin_volume();
-                volume_owes_a_settle = false;
+            } else if let Some(level) = pin_volume_level() {
+                // A knob moved by the drag or the tray between wheel ticks re-bases the carry, so
+                // sub-notch travel is not applied twice to the old level.
+                if volume_wheel_units.is_some_and(|units| volume_from_wheel_units(units) != level) {
+                    volume_wheel_units = Some(i64::from(level) * WHEEL_LEVEL_UNITS_PER_PERCENT);
+                }
             }
+
+            // One engine command per tick, always the latest level, and FFmpeg's player begun
+            // again only after the wheel or drag has been quiet (see `flush_pin_volume_level`
+            // and `settle_pin_volume_after_quiet`).
+            flush_pin_volume_level();
+            settle_pin_volume_after_quiet();
 
             // A wheel notch over a scrollable text preview belongs to the preview:
             // the wheel hook swallowed it so Explorer does not scroll, and left

@@ -60,6 +60,12 @@ pub(super) struct PinVolume {
     /// Whether the knob is being held: a drag is a hand on the level, and what a drag must not be
     /// mistaken for is the pointer having gone away from the popup (see `refresh_pin_volume`).
     pub(super) dragging: bool,
+    /// Whether the level in hand is still owed to the engine, which one write per preview tick
+    /// coalesces a drag or wheel burst to the latest level (see `flush_pin_volume_level`).
+    pub(super) pending: bool,
+    /// Ticks left before a level is quiet enough to settle, FFmpeg's player taking one only by
+    /// being begun again (see `settle_pin_volume_after_quiet`).
+    pub(super) quiet: u32,
 }
 
 /// Answer about the pin that is up with a change to it, where there is one.
@@ -969,47 +975,45 @@ fn set_the_pin_players_level(level: u32) -> bool {
 /// five percent, which is the smallest step a hand turning a wheel can aim at.
 pub(super) const VOLUME_WHEEL_STEP: u32 = 5;
 
-/// The level a wheel notch leaves behind: `notches` steps of `VOLUME_WHEEL_STEP` from
-/// `level`, clamped to the range the popup draws (see `set_pin_volume`).
-pub(super) fn volume_after_notches(level: u32, notches: i64) -> u32 {
-    (level as i64 + notches * i64::from(VOLUME_WHEEL_STEP)).clamp(0, 100) as u32
+/// How many ticks a level must be quiet for before FFmpeg's player is begun again at it — the
+/// ~250 ms a hand needs to stop turning, at the loop's ~60 ticks a second (see
+/// `settle_pin_volume_after_quiet`).
+pub(super) const PIN_VOLUME_SETTLE_TICKS: u32 = 15;
+
+/// A wheel's own units per percent of the level: one 120-unit notch is still exactly
+/// `VOLUME_WHEEL_STEP` percent (`WHEEL_DELTA / VOLUME_WHEEL_STEP`).
+pub(super) const WHEEL_LEVEL_UNITS_PER_PERCENT: i64 = WHEEL_DELTA as i64 / VOLUME_WHEEL_STEP as i64;
+
+/// One wheel message's travel added to a requested level held in wheel units, so that a smooth
+/// wheel or a precision touchpad moves the level continuously rather than only once a whole
+/// notch has accumulated. The units are exact — no travel is dropped or rounded per message.
+pub(super) fn volume_after_wheel_delta(level_units: i64, delta: i32) -> i64 {
+    (level_units + i64::from(delta)).clamp(0, 100 * WHEEL_LEVEL_UNITS_PER_PERCENT)
+}
+
+/// The integer level a wheel-unit request is drawn and played at, rounded to the nearest percent.
+pub(super) fn volume_from_wheel_units(level_units: i64) -> u32 {
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    ((level_units + per / 2) / per).clamp(0, 100) as u32
 }
 
 pub(super) fn set_pin_volume(level: u32) {
     let level = level.min(100);
     let audio = matches!(current_media_type(), Some(MediaType::Audio));
-    with_pin(|pin| {
-        pin.volume.level = level;
-        pin.volume.audio = audio;
-    });
-
     let immediate = match current_media_type() {
         Some(MediaType::NativeVideo) => true,
         Some(MediaType::Audio) => audio_preview_level_is_owed_to_the_engine(),
         Some(MediaType::Video) => mpv_takes_a_level_as_it_moves(),
         _ => false,
     };
-    if immediate {
-        let told = if current_media_type() == Some(MediaType::Video) {
-            // mpv is told the level as the knob moves, which is the whole of what the mpv route is
-            // for here: FFmpeg's player would have to be ended and begun again at it instead (see
-            // `settle_pin_volume`). The guard's record moves with the level it was told (see
-            // `set_the_pin_players_level`).
-            set_the_pin_players_level(level)
-        } else {
-            // The engine answers for itself whether there was a session to take the level, rather
-            // than this arm assuming one: the claim of what the player is playing at may move only
-            // where the player was actually told (see `video_player::set_volume`).
-            video_player::set_volume(level)
-        };
-        // The claim of what the player is playing at moves only where the player was actually
-        // told: writing it for a command that never reached one would leave the bar claiming a
-        // level the film never took, and the player that begins next owed nothing (see
-        // `settle_pin_volume`).
-        if told {
-            with_pin(|pin| pin.volume.playing_at = level);
-        }
-    }
+    with_pin(|pin| {
+        pin.volume.level = level;
+        pin.volume.audio = audio;
+        // A level a running player can be told is coalesced: the knob and the bar move now, the
+        // engine hears the latest level once on the next tick (see `flush_pin_volume_level`).
+        pin.volume.pending |= immediate;
+        pin.volume.quiet = PIN_VOLUME_SETTLE_TICKS;
+    });
 
     remember_pin_volume(level);
 
@@ -1018,6 +1022,46 @@ pub(super) fn set_pin_volume(level: u32) {
     // it. A video's level is drawn in the strip, which the repaint does reach (see
     // `pin_audio_hover_refresh`).
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+}
+
+/// Tell the engine the latest level a knob or wheel asked for, at most once per preview tick.
+///
+/// A drag and a smooth wheel ask for a level on every message; opening, writing and closing mpv's
+/// pipe on each of those is what made the knob stutter. The level stays in `PinVolume::level` — so
+/// the popup is drawn at it at once — and only the engine command waits here for the tick.
+pub(super) fn flush_pin_volume_level() {
+    let pending = {
+        let Some(mut pinned) = pin_state() else {
+            return;
+        };
+        let Some(pin) = pinned.pin_mut() else {
+            return;
+        };
+        if !pin.volume.pending {
+            return;
+        }
+        pin.volume.pending = false;
+        pin.volume.level
+    };
+
+    let told = match current_media_type() {
+        Some(MediaType::NativeVideo) => video_player::set_volume(pending),
+        Some(MediaType::Audio) => {
+            audio_preview_level_is_owed_to_the_engine() && video_player::set_volume(pending)
+        }
+        Some(MediaType::Video) => set_the_pin_players_level(pending),
+        _ => false,
+    };
+    // The claim of what the player is playing at moves only where the player was actually told:
+    // writing it for a command that never reached one would leave the bar claiming a level the
+    // film never took, and the player that begins next owed nothing (see `settle_pin_volume`).
+    if told {
+        with_pin(|pin| {
+            if pin.volume.level == pending {
+                pin.volume.playing_at = pending;
+            }
+        });
+    }
 }
 
 /// Whether the film on screen is mpv's, the one player here that takes a level while it runs.
@@ -1182,6 +1226,11 @@ pub(super) fn pin_level_settled_by(playing: bool, running: bool, held: bool) -> 
 /// where the knob is let go of, and it is the one moment a drag is over (see
 /// `save_remembered_pin_volume`).
 pub(super) fn settle_pin_volume() {
+    // A release settles what it was dragging, so any wheel's quiet countdown is over too, and the
+    // latest level is told before anything asks whether the player already has it.
+    with_pin(|pin| pin.volume.quiet = 0);
+    flush_pin_volume_level();
+
     let Some((path, content, transport, volume)) = pinned_playback_state() else {
         return;
     };
@@ -1245,6 +1294,24 @@ pub(super) fn settle_pin_volume() {
         }
         _ => {}
     }
+}
+
+/// Settle a level once the wheel or drag has left it alone for `PIN_VOLUME_SETTLE_TICKS`: FFmpeg's
+/// player takes a level only by being begun again, so a relaunch per notch would replace it for
+/// every notch of a normal wheel — one relaunch when the hand stops is the whole point.
+pub(super) fn settle_pin_volume_after_quiet() {
+    let quiet = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.quiet))
+        .unwrap_or(0);
+    if quiet == 0 {
+        return;
+    }
+    if quiet > 1 {
+        with_pin(|pin| pin.volume.quiet = quiet - 1);
+        return;
+    }
+    with_pin(|pin| pin.volume.quiet = 0);
+    settle_pin_volume();
 }
 
 /// That a pin's level has been settled for a sound, which the loop answers on its next tick

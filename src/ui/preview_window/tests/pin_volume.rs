@@ -490,6 +490,7 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     mpv_ipc::remember_pipe(101, "test-pipe", false);
     stand(70, 40);
     set_pin_volume(70);
+    flush_pin_volume_level();
     assert_eq!(
         mpv_ipc::noted_lines(),
         vec![format!(
@@ -592,6 +593,7 @@ fn a_level_moved_up_from_nothing_on_a_pinned_mpv_asks_the_track_back() {
     // A hand takes the knob up, and the level is heard: the property first, and the track the
     // level opens at asked for after it.
     set_pin_volume(60);
+    flush_pin_volume_level();
     assert_eq!(
         mpv_ipc::noted_lines(),
         vec![
@@ -615,6 +617,7 @@ fn a_level_moved_up_from_nothing_on_a_pinned_mpv_asks_the_track_back() {
     // The rest of the drag is the level alone — the track is a fact of the player now — and the
     // release begins nothing: mpv took the level as it played.
     set_pin_volume(80);
+    flush_pin_volume_level();
     assert_eq!(
         mpv_ipc::noted_lines()[2..],
         [format!(
@@ -976,17 +979,214 @@ fn a_volume_popup_opened_over_a_sounds_button_is_kept_while_the_pointer_is_on_it
     assert!(sound.volume.open, "and the panel the notch opened stays up");
 }
 
-/// A notch moves the level by five percent of the range and stops at the ends set_pin_volume
-/// draws, whichever way the wheel was turned (see `volume_after_notches`).
+/// A notch moves the level by five percent of the range, a smooth wheel's smaller messages add up
+/// to the same, and both stop at the ends `set_pin_volume` draws (see `volume_after_wheel_delta`).
 #[test]
 fn a_wheel_notch_steps_the_level_by_five_percent_and_stops_at_the_ends() {
-    assert_eq!(volume_after_notches(50, 1), 55, "up is louder");
-    assert_eq!(volume_after_notches(50, -1), 45, "and down is quieter");
-    assert_eq!(volume_after_notches(98, 1), 100, "the top holds");
-    assert_eq!(volume_after_notches(2, -1), 0, "and so does nothing");
+    let notch = |level: u32, notches: i64| {
+        let units = (0..notches.abs()).fold(
+            i64::from(level) * WHEEL_LEVEL_UNITS_PER_PERCENT,
+            |units, _| volume_after_wheel_delta(units, WHEEL_DELTA * notches.signum() as i32),
+        );
+        volume_from_wheel_units(units)
+    };
+    assert_eq!(notch(50, 1), 55, "up is louder");
+    assert_eq!(notch(50, -1), 45, "and down is quieter");
+    assert_eq!(notch(98, 1), 100, "the top holds");
+    assert_eq!(notch(2, -1), 0, "and so does nothing");
+    assert_eq!(notch(50, -100), 0, "however far the wheel turns");
+
+    // Twelve 10-unit messages are one notch, exactly: a smooth wheel's travel is not lost to a
+    // whole-notch carry, and does not overshoot the +5% a notched wheel lands on.
+    let mut units = 50 * WHEEL_LEVEL_UNITS_PER_PERCENT;
+    for _ in 0..(WHEEL_DELTA / 10) {
+        units = volume_after_wheel_delta(units, 10);
+    }
     assert_eq!(
-        volume_after_notches(50, -100),
-        0,
-        "however far the wheel turns"
+        units,
+        50 * WHEEL_LEVEL_UNITS_PER_PERCENT + WHEEL_DELTA as i64,
+        "twelve sub-notch messages carry exactly one notch, with nothing dropped"
     );
+    assert_eq!(
+        volume_from_wheel_units(units),
+        55,
+        "and exactly one notch on"
+    );
+    assert_eq!(
+        volume_from_wheel_units(volume_after_wheel_delta(
+            100 * WHEEL_LEVEL_UNITS_PER_PERCENT - 1,
+            10
+        )),
+        100,
+        "the top clamps the fine carry too"
+    );
+    assert_eq!(
+        volume_from_wheel_units(volume_after_wheel_delta(1, -10)),
+        0,
+        "and so does nothing"
+    );
+}
+
+/// A drag or a wheel burst asks for a level on every message, but the engine hears it once per
+/// preview tick, and what it hears is the level the hand stopped on — never a queue of stale ones
+/// (see `flush_pin_volume_level`).
+#[test]
+fn a_level_burst_reaches_mpv_once_per_tick_with_the_latest_level() {
+    let _room = the_room_to_itself();
+
+    let mut levels = PinLevels::set(100, 50);
+    levels.remembering(false, false);
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+
+    let content = (100, 100, 420, 340);
+    let film = PathBuf::from("pin-coalesced-volume-film.mkv");
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = film;
+    pin.transport.begun(30.0, true, false);
+    pin.transport.duration = Some(200.0);
+    pin.volume.level = 40;
+    pin.volume.playing_at = 40;
+    stand_pin(Some(pin));
+
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    mpv_ipc::remember_pipe(101, "coalesced-volume-pipe", false);
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+
+    // Three steps of one drag, one tick.
+    set_pin_volume(41);
+    set_pin_volume(55);
+    set_pin_volume(70);
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "nothing is written while the hand is still moving"
+    );
+
+    flush_pin_volume_level();
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![format!(
+            "{}\n",
+            r#"{"command":["set_property","volume",70],"async":true}"#
+        )],
+        "one command, and it is the latest level"
+    );
+    assert_eq!(
+        pinned_playback_state().map(|(_, _, _, volume)| volume.playing_at),
+        Some(70),
+        "the claim follows the one level that was actually told"
+    );
+
+    // A second flush in the same tick sends nothing: the burst is spent.
+    flush_pin_volume_level();
+    assert_eq!(mpv_ipc::noted_lines().len(), 1, "no second command");
+
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
+/// FFmpeg's player takes a level only by being begun again, so a wheel burst must not begin one per
+/// notch: the relaunch waits for `PIN_VOLUME_SETTLE_TICKS` quiet ticks and then happens once, while
+/// a drag released still settles at once (see `settle_pin_volume_after_quiet` and
+/// `settle_pin_volume`).
+#[test]
+fn a_wheel_burst_relaunches_ffplay_only_after_the_quiet_window() {
+    let _room = the_room_to_itself();
+
+    let mut levels = PinLevels::set(100, 50);
+    levels.remembering(false, false);
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+
+    let content = (100, 100, 420, 340);
+    let film = PathBuf::from("pin-quiet-volume-film.mkv");
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = film;
+    pin.transport.begun(30.0, true, false);
+    pin.transport.duration = Some(200.0);
+    pin.volume.level = 40;
+    pin.volume.playing_at = 40;
+    stand_pin(Some(pin));
+
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    clear_restart_count();
+
+    // A normal wheel's notches arrive with gaps between ticks; every one resets the countdown.
+    for level in [45, 50, 55, 60, 65] {
+        set_pin_volume(level);
+        settle_pin_volume_after_quiet();
+        assert_eq!(
+            restart_count(),
+            0,
+            "the player is not replaced while the wheel is still turning"
+        );
+    }
+    assert_eq!(restart_count(), 0, "a burst of notches begins nothing");
+
+    // Then the hand stops, the quiet window passes, and one player takes the level.
+    for _ in 0..PIN_VOLUME_SETTLE_TICKS {
+        settle_pin_volume_after_quiet();
+    }
+    assert_eq!(
+        restart_count(),
+        1,
+        "one relaunch once the level has been quiet"
+    );
+
+    // And the ticks after it begin nothing more.
+    for _ in 0..PIN_VOLUME_SETTLE_TICKS {
+        settle_pin_volume_after_quiet();
+    }
+    assert_eq!(
+        restart_count(),
+        1,
+        "the quiet window is spent, not repeated"
+    );
+
+    // A release still settles at once, however recently the knob moved.
+    set_pin_volume(80);
+    settle_pin_volume();
+    assert_eq!(
+        restart_count(),
+        2,
+        "a release is the end of the drag and settles immediately"
+    );
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
 }
