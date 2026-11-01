@@ -220,7 +220,7 @@ pub(super) unsafe fn take_the_strips_up(parent: HWND) {
 /// The caption first, the transport after it, and the volume popup last — which is the order the
 /// take-up made them in: the popup stands nearest the top, the transport under it, and the caption
 /// under that.
-pub(crate) unsafe fn raise_the_chrome_strips_over_the_host() {
+pub(super) unsafe fn raise_the_chrome_strips_over_the_host() {
     for strip in [caption_strip(), transport_strip(), volume_strip()]
         .into_iter()
         .flatten()
