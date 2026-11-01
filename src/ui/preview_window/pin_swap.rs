@@ -671,6 +671,12 @@ pub(super) fn take_down_pinned_media() {
     // it (see `pin_film_host` and `swap_pinned_media`). A take-down of a *player* is not this road:
     // a relaunch keeps the host and the source standing in it (see `relaunch_pinned_player`).
     unsafe { pin_film_host::take_the_film_off_the_band() };
+
+    // **And the page's registration goes with it**, for the same reason and by the same rule: a hidden
+    // source is a thumbnail the Shell stops drawing rather than one it freezes, so a registration left
+    // standing while the incoming file is painted into the band is a black rectangle over that file (see
+    // `pin_page_thumbnail`).
+    pin_page_thumbnail::forget_the_page_thumbnail_because("the pin's media is going for a swap");
 }
 
 /// Take the media the pin is showing down for the file replacing it — unless the pin is a bubble.

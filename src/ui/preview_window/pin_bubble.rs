@@ -1569,6 +1569,10 @@ pub(super) unsafe fn hide_pinned_siblings() {
     if webview_preview::is_showing() {
         webview_preview::hide();
     }
+
+    // The Shell's registration of the page goes with the window it drew: a pin put away, or one swapping a
+    // page for a picture, is a pin whose band nothing of a page stands in (see `pin_page_thumbnail`).
+    pin_page_thumbnail::forget_the_page_thumbnail_because("the pin's siblings went down");
 }
 
 /// Hide every visible window belonging to `pid`: what `hide_pinned_windows` enumerates with.
