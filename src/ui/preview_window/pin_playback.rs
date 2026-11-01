@@ -1488,6 +1488,10 @@ pub(super) fn restart_pinned_audio(path: &Path, from: f64) -> Option<Instant> {
 /// The engine's own session is moved by `play_audio`, which stops whatever is there and begins
 /// the sound at a second with the engine's own loop mode: a sound the engine Windows has is
 /// looped by that mode and by nothing this side can set later (see `video_player::play_audio`).
+///
+/// Beginning it again where the file has a long way to go is a player killed and rebuilt in the
+/// middle of a phrase, which is heard. So that case owes the end of the pass instead, and the pin's
+/// rule is applied at the seam (see `a_pass_end_is_owed` and `owe_a_pass_end`).
 pub(super) fn take_up_pinned_audio(
     path: &Path,
     started: &mut Option<Instant>,
@@ -1508,6 +1512,21 @@ pub(super) fn take_up_pinned_audio(
     }
 
     let played = audio_clock(path, *started, *offset, None).0.unwrap_or(0.0);
+
+    // A sound with most of its file still to play is played out rather than begun again: a player
+    // begun in the middle of a phrase is the gap the first pin of a file was heard as, and the
+    // pin's `End of File` can be applied at the seam just as well (see `owe_a_pass_end`). What is
+    // begun again is a file with no pass left, or one whose end nothing here can name.
+    if a_pass_end_is_owed(
+        current_audio_loop(),
+        pin_audio_loops(),
+        *offset,
+        played,
+        track.duration,
+    ) {
+        owe_a_pass_end(path, played);
+        return;
+    }
 
     match playing_player(path, &track) {
         Player::Native => {

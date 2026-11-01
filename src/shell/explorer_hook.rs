@@ -63,7 +63,8 @@ use crate::ui::preview_window::{
     pinned_path, pointer_item_box, pointer_item_holds, press_pinned_preview, preview_pointer_hold,
     preview_screen_rect, preview_stall_ms, preview_window_rect, publish_pin_media_press,
     publish_pointer_item_box, request_pin_end, request_pin_menu_dismiss, show_preview,
-    show_preview_keyboard, take_pin_resumed, update_pinned_preview, PreviewCursorHover,
+    show_preview_keyboard, take_pin_handed_off, take_pin_resumed, update_pinned_preview,
+    PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;

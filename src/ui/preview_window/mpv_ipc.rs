@@ -159,10 +159,12 @@ fn write_within(pid: u32, line: String, within: std::time::Duration) -> bool {
 /// rewind is (see `video_loop_tick`) — can have the *second* refused with `ERROR_PIPE_BUSY`.
 /// Measured against mpv 0.41.0 with a film playing: 60 such pairs written back to back the way
 /// `deliver` writes them had the second line refused 3 times, and none at all with a millisecond
-/// between the two. A few milliseconds of patience is many times the moment it takes, and only a
-/// refused line ever pays it.
-const PIPE_OFFERS: usize = 6;
-const PIPE_OFFER_WAIT: std::time::Duration = std::time::Duration::from_millis(2);
+/// between the two. A couple of milliseconds of patience covers that moment, and only a refused
+/// line ever pays it; anything still busy is dropped rather than blocking the UI thread, and a
+/// coalesced level is re-asserted by the next tick or by the release's settle (see
+/// `flush_pin_volume_level`).
+const PIPE_OFFERS: usize = 3;
+const PIPE_OFFER_WAIT: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Windows' own `ERROR_PIPE_BUSY`, which is what an open that finds every instance of the pipe
 /// taken answers — the one failure worth waiting for rather than reporting.

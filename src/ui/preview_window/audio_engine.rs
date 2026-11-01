@@ -811,6 +811,10 @@ pub(super) fn start_audio_playback_at(
         return false;
     };
 
+    // Any fresh start supersedes a pass end that was owed the sound the pin took up: what the debt
+    // was left for is a player already going round this file (see `owe_a_pass_end`).
+    drop_the_owed_pass_end();
+
     // A player the hover before this one left behind is ended before this one starts, which is
     // the check the video path makes before it spawns its own: a sound must not go on playing
     // over the sound of the file the pointer has moved to. The engine's own session is stopped
@@ -1237,6 +1241,170 @@ pub(super) fn wrap_audio_player(
     // side's clock no longer wraps itself, so nothing would ask for it again until the next of
     // its own repaints: a card sitting at the whole of a file for a quarter of a second after
     // the sound has gone round (see `AUDIO_CARD_DIRTY`).
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+}
+
+/// A pass end a take-up owes the sound it came up on: the file, and the second it stood at when
+/// the pin took it up.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct OwedEnd {
+    pub(super) path: PathBuf,
+    pub(super) from: f64,
+}
+
+/// The pass end a take-up owes, if there is one (see [`owe_a_pass_end`]).
+///
+/// A pin comes up on the sound the hover was already playing, and no player is begun for it at the
+/// take-up, so a player the hover left taking its file round on its own (`player_loops_itself`) is
+/// left running: it never exits, so no pass of it ever ends for the pin's `End of File` to be read
+/// at. Beginning the sound again is what tells a player anything, and it is what killed and
+/// rebuilt the player in the middle of a phrase — the audible gap the *first* pin of a file had,
+/// and only the first, because a file with a remembered position is begun at that position and is
+/// given no loop of its own. So the rule the pin asks for is applied at the seam instead: the
+/// pass is played out, and its end is answered where the clock says the file has come round (see
+/// [`end_a_sound_a_pin_took_up`]).
+static A_PASS_END_IS_OWED: Lazy<Mutex<Option<OwedEnd>>> = Lazy::new(|| Mutex::new(None));
+
+/// How near the end of its file a sound has to be for its pass to be read as ended.
+///
+/// A player that loops itself never exits, so the clock is the only thing that can say the file has
+/// come round, and it is read on the tick: a seam fifty milliseconds short is a read that does not
+/// miss, where an exact one can fall between two ticks — and the pass of a looping player is
+/// already going round at that moment, so the little that is cut is the tail the next pass would
+/// have repeated anyway.
+pub(super) const A_PASS_END_SEAM: f64 = 0.05;
+
+/// How far a clock has to fall below the second a sound was taken up at before that fall is read
+/// as the file going round rather than as the clock being a little out.
+pub(super) const A_PASS_END_MARGIN: f64 = 0.5;
+
+/// Whether a pin taking a sound up has to leave the rule change to the end of the pass instead of
+/// beginning the player again: the two rules disagree, *and* the file's end is a moment this side
+/// can name, *and* it is not already at hand.
+///
+/// Where no end can be named — a file whose length nothing has read — there is no seam to apply
+/// the pin's rule at, and where the end is a moment away the seam is the next tick: both are begun
+/// again exactly as they always were (see [`take_up_pinned_audio`]).
+pub(super) fn a_pass_end_is_owed(
+    hover_loops: bool,
+    pin_loops: bool,
+    from: f64,
+    played: f64,
+    duration: Option<f64>,
+) -> bool {
+    if !a_taken_up_sound_is_begun_again(hover_loops, pin_loops, from) {
+        return false;
+    }
+
+    duration.is_some_and(|duration| duration - played > A_PASS_END_MARGIN)
+}
+
+/// Whether the pass of a sound has come round: the clock stands at the end of the file, or it has
+/// fallen back past the second the sound was taken up at.
+///
+/// The two are the two shapes a player's clock takes at the seam — this app's own player is
+/// counted up to the length of the file and is held there (`audio_clock`), while the engine
+/// Windows has reports a clock of its own that wraps back to the beginning of the file — and the
+/// fall is measured against the second of the take-up rather than against zero because that is the
+/// only second both clocks were seen at.
+pub(super) fn a_sound_has_gone_round(position: f64, from: f64, duration: f64) -> bool {
+    position + A_PASS_END_MARGIN < from || position >= duration - A_PASS_END_SEAM
+}
+
+/// Record that the sound a pin has just taken up is owed the end of its pass (see
+/// [`A_PASS_END_IS_OWED`]).
+pub(super) fn owe_a_pass_end(path: &Path, from: f64) {
+    *A_PASS_END_IS_OWED
+        .lock()
+        .unwrap_or_else(|owed| owed.into_inner()) = Some(OwedEnd {
+        path: path.to_path_buf(),
+        from,
+    });
+}
+
+/// Forget a pass end that was owed: it has been answered, or the sound it was owed to is gone.
+pub(super) fn drop_the_owed_pass_end() {
+    if let Ok(mut owed) = A_PASS_END_IS_OWED.lock() {
+        *owed = None;
+    }
+}
+
+/// The pass end owed, if any — the record a test reads rather than a question the app asks.
+#[cfg(test)]
+pub(super) fn owed_pass_end() -> Option<OwedEnd> {
+    A_PASS_END_IS_OWED.lock().ok().and_then(|owed| owed.clone())
+}
+
+/// Answer the end of the pass a pin's take-up owed the sound it came up on, on the tick the clock
+/// says the file has come round (see [`A_PASS_END_IS_OWED`]).
+///
+/// The player is ended exactly where the end of its own pass would have ended it, and the pin's
+/// `End of File` is enacted the way the other file-end roads enact it — the walk's next file, or
+/// the card left held at the beginning — so the same setting means the same thing whichever way a
+/// sound reached the end of its file. Nothing here begins a player in the middle of a phrase.
+pub(super) fn end_a_sound_a_pin_took_up(
+    media: &mut MediaData,
+    path: &Path,
+    started: &mut Option<Instant>,
+    offset: &mut f64,
+    paused: &mut Option<f64>,
+    wait: &mut Option<PinWait>,
+    anchor: Option<NavCategory>,
+) {
+    let Some(owed) = A_PASS_END_IS_OWED.lock().ok().and_then(|owed| owed.clone()) else {
+        return;
+    };
+
+    // A debt is owed to the sound the pin took up and no other: a hover that ended, a pin taken
+    // down and a file stepped off from each leave a debt nothing is owed to, and the record goes
+    // with it (a fresh start drops it too, see `start_audio_playback_at`).
+    if !(pinned() && pinned_path().as_deref() == Some(path) && owed.path == path) {
+        drop_the_owed_pass_end();
+        return;
+    }
+
+    // A pin that now asks for a loop is asking for what the running player already does.
+    let end = current_pin_pass_end();
+    if end == PinPassEnd::Wrap {
+        drop_the_owed_pass_end();
+        return;
+    }
+
+    // A held sound is a sound whose player has been ended: the second it is held at is not a
+    // reading of a pass, and a sound that is going again is begun by its own road.
+    if paused.is_some() {
+        return;
+    }
+
+    let Some(track) = audio_track::playable(path) else {
+        return;
+    };
+    let (position, duration) = audio_clock(path, *started, *offset, None);
+    let (Some(position), Some(duration)) = (position, duration) else {
+        return;
+    };
+    if !a_sound_has_gone_round(position, owed.from, duration) {
+        return;
+    }
+
+    drop_the_owed_pass_end();
+
+    match playing_player(path, &track) {
+        Player::Native => video_player::stop(),
+        Player::Ffmpeg => kill_player_process(media),
+    }
+    *started = None;
+    *offset = 0.0;
+
+    match end {
+        PinPassEnd::Walk => {
+            ask_pin_walk(path.to_path_buf(), 1, anchor);
+            *wait = Some(PinWait::new());
+        }
+        PinPassEnd::Held => *paused = Some(0.0),
+        PinPassEnd::Wrap => return,
+    }
+
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
 }
 

@@ -300,9 +300,9 @@ use displays::RecordedDisplays;
 use displays::{dpi_at, work_area_at, Displays, DESKTOPS};
 
 use pin_window::{
-    ask_pin, end_pin, give_the_keyboard_back, install, pin_state, release_keyboard,
-    return_pin_commands, take_keyboard, take_pin_commands, PinHide, PinWindow, Reason,
-    WM_PIN_RELEASE_POINTER,
+    ask_pin, end_pin, give_the_keyboard_back, install, note_pin_handed_off, pin_state,
+    release_keyboard, return_pin_commands, take_keyboard, take_pin_commands, PinHide, PinWindow,
+    Reason, WM_PIN_RELEASE_POINTER,
 };
 #[cfg(test)]
 use pin_window::{
@@ -321,6 +321,7 @@ pub(crate) use media_types::PreviewMessage;
 pub(crate) use mpv_resident::shut_down_the_resident;
 pub(crate) use pin_bubble::PIN_BUBBLE_HWND;
 pub(crate) use pin_drag::publish_pin_media_press;
+pub(crate) use pin_input::pin_volume_keep_alive_try;
 pub(crate) use pin_lifecycle::band_place;
 pub(crate) use pin_lifecycle::pin_always_on_top;
 pub(crate) use pin_lifecycle::pin_holds_the_front;
@@ -413,6 +414,7 @@ pub(crate) fn note_a_playback_trace_line(line: &str) {
     #[cfg(test)]
     playback_trace::note_a_line_for_a_test(line.to_string());
 }
+pub(crate) use pin_window::take_pin_handed_off;
 pub(crate) use requests::is_preview_window;
 pub(crate) use requests::notify_magick_ready;
 pub(crate) use requests::notify_office_render;

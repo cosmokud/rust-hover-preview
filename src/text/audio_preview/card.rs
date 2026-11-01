@@ -87,6 +87,11 @@ pub(super) const WINDOW_BUTTON_GAP_PIXELS: i32 = 2;
 /// `window_button_boxes`).
 pub(super) const WINDOW_BUTTON_CUSHION_PIXELS: i32 = 3;
 
+/// How far left of the leftmost window button and right of the rightmost one a hand still
+/// asks for them, in logical pixels: the buttons' own cluster is tight, and a hand aiming at
+/// one stands a little outside it.
+pub(super) const WINDOW_BUTTON_REVEAL_PIXELS: i32 = 16;
+
 /// How long the block takes to cross a bar of unknown length, in seconds, and the share of the
 /// bar it takes.
 pub(super) const CHASE_SECONDS: f64 = 2.0;
@@ -203,7 +208,7 @@ pub(crate) struct CardChrome {
     pub hovered: Option<CardControl>,
     pub pressed: Option<CardControl>,
     /// Whether the three window buttons are showing, which is what the card is painted
-    /// from: a hand near the window's top border or near the buttons themselves.
+    /// from: a hand near the buttons themselves.
     pub window_buttons: bool,
 }
 
