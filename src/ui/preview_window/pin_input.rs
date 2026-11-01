@@ -1,6 +1,7 @@
 //! A hand on a pinned window: the move that carries it, the press that begins a drag, and the
 //! caption, transport bar and volume button a press can land on.
 
+use super::playback_trace::note_playback_trace;
 use super::*;
 
 /// The point the pointer is at, in screen coordinates: what a drag is measured in, since a
@@ -712,7 +713,15 @@ pub(super) unsafe fn pinned_volume_press(hwnd: HWND, x: i32, y: i32) -> bool {
     // **The press does nothing to the player.** FFmpeg's player cannot be told a level, so the
     // player that plays at the new one is begun at the release — one relaunch for the change
     // (see `settle_pin_volume`), and the film plays on under the hand until then.
-    set_pin_volume((pin_chrome::volume_share_at(y, popup.track) * 100.0).round() as u32);
+    let level = (pin_chrome::volume_share_at(y, popup.track) * 100.0).round() as u32;
+    note_playback_trace!(
+        "volume press y {} level {} track {}..{}",
+        y,
+        level,
+        popup.track.top,
+        popup.track.bottom
+    );
+    set_pin_volume(level);
     render_layered_preview(hwnd);
     true
 }
@@ -727,7 +736,11 @@ pub(super) unsafe fn pinned_volume_drag(hwnd: HWND, y: i32) -> bool {
         return false;
     };
 
-    set_pin_volume((pin_chrome::volume_share_at(y, popup.track) * 100.0).round() as u32);
+    let level = (pin_chrome::volume_share_at(y, popup.track) * 100.0).round() as u32;
+    if pin_volume_level() != Some(level) {
+        note_playback_trace!("volume drag y {} level {}", y, level);
+    }
+    set_pin_volume(level);
     render_layered_preview(hwnd);
     true
 }

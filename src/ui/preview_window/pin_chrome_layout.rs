@@ -2,6 +2,7 @@
 //! are drawn at, and the level they are at.
 
 use super::pin_trace::note_pin_trace;
+use super::playback_trace::note_playback_trace;
 use super::*;
 
 /// What a pinned preview adds to the box its media is in, in the units every other margin
@@ -160,13 +161,20 @@ pub(super) fn pin_volume_taken_up(holding: Option<PinVolume>, audio: bool) -> Pi
         pin_level_is_remembered(holding.audio).then_some((holding.audio, holding.level))
     });
 
-    PinVolume {
+    let taken = PinVolume {
         audio,
         level,
         playing_at: level,
         kept,
         ..Default::default()
-    }
+    };
+    note_playback_trace!(
+        "volume takeup audio {} level {} kept {}",
+        u8::from(audio),
+        taken.level,
+        u8::from(taken.kept.is_some())
+    );
+    taken
 }
 
 /// Whether a level moved on a pin's own knob is the level the next file of that kind is played at:
@@ -1036,9 +1044,29 @@ pub(super) fn volume_from_wheel_units(level_units: i64) -> u32 {
     ((level_units + per / 2) / per).clamp(0, 100) as u32
 }
 
+/// Which wheel-unit level a notch in hand is added to: the carry it kept, but only where the carry
+/// still belongs to the level the pin is at.
+///
+/// A carry is sub-notch travel on top of a level, so the level it was built from is
+/// `volume_from_wheel_units(carry)` within a percent. A drag, a tray row or a key moved the level
+/// since, and applying the notch to that carry would move the thumb back to where the older level
+/// was — the jump a wheel turned straight after a drag used to make.
+///
+/// A glide in flight is the pin's own level still on its way to where the wheel asked, so its carry
+/// is where the wheel is going and is kept whole rather than re-based on a level it has already
+/// passed through (see `ramp_pin_volume`).
+pub(super) fn wheel_base_units(carry: Option<i64>, level: u32, glide_pending: bool) -> i64 {
+    let fresh = i64::from(level) * WHEEL_LEVEL_UNITS_PER_PERCENT;
+    match carry {
+        Some(units) if glide_pending || volume_from_wheel_units(units) == level => units,
+        _ => fresh,
+    }
+}
+
 pub(super) fn set_pin_volume(level: u32) {
     let level = level.min(100);
     let audio = matches!(current_media_type(), Some(MediaType::Audio));
+    note_playback_trace!("volume set {} audio {}", level, u8::from(audio));
     let immediate = pin_level_is_immediate();
     with_pin(|pin| {
         pin.volume.level = level;
@@ -1085,6 +1113,7 @@ pub(super) const PIN_VOLUME_RAMP_SHARE: f32 = 0.35;
 pub(super) fn set_pin_volume_target(units: i64) {
     let target = units.clamp(0, 100 * WHEEL_LEVEL_UNITS_PER_PERCENT) as u32;
     let audio = matches!(current_media_type(), Some(MediaType::Audio));
+    note_playback_trace!("volume target {}", target);
     with_pin(|pin| {
         pin.volume.audio = audio;
         pin.volume.target = Some(target);
@@ -1131,6 +1160,7 @@ pub(super) fn ramp_pin_volume() {
         // Never past the target: the share is under the gap, and the floor above only fires on a gap
         // it cannot overshoot.
         let applied = (i64::from(volume.applied) + step).clamp(0, 100 * per) as u32;
+        let before = volume.applied;
         volume.applied = applied;
         let landed = applied == target;
         volume.level = volume_from_wheel_units(if landed {
@@ -1144,8 +1174,17 @@ pub(super) fn ramp_pin_volume() {
         // Told to a player that takes a level while it runs, once for every tick of the glide (see
         // `flush_pin_volume_level`).
         volume.pending |= immediate;
-        volume.level
+        (volume.level, applied != before, volume.target)
     };
+    let (level, moved, target) = level;
+    if moved {
+        note_playback_trace!(
+            "volume ramp applied {} level {} target {}",
+            level,
+            level,
+            target.map_or_else(|| "none".to_string(), |units| units.to_string())
+        );
+    }
 
     remember_pin_volume(level);
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
@@ -1402,6 +1441,11 @@ pub(super) fn settle_pin_volume() {
     let Some((path, _content, transport, volume)) = pinned_playback_state() else {
         return;
     };
+    note_playback_trace!(
+        "volume settle level {} playing_at {}",
+        volume.level,
+        volume.playing_at
+    );
     save_remembered_pin_volume(volume.level);
     if volume.playing_at == volume.level {
         return;
@@ -1531,6 +1575,7 @@ pub(super) fn settle_pinned_audio_volume() {
     }
 
     if let Some(level) = pin_volume_level() {
+        note_playback_trace!("volume audio settle {}", level);
         ask_the_ffplay_its_level(level);
     }
 
