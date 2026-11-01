@@ -25,3 +25,4 @@ target/
 
 # Machine-local cargo config holding the shared absolute target dir (never commit)
 /.cargo/target-dir.local.toml
+/state

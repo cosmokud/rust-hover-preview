@@ -116,8 +116,6 @@ Each release provides two options:
 - `rust-hover-preview_<version>_x64-setup.exe` — NSIS installer. Installs to `%LOCALAPPDATA%\rust-hover-preview` with an optional startup entry.
 - `rust-hover-preview.exe` — portable standalone binary. Run it from any folder.
 
-The installer also puts `app.ico` beside the executable, and the Installed apps entry draws its icon from that file rather than from the exe an update replaces.
-
 1. Open [Releases](../../releases).
 2. Download your preferred asset.
 3. Run the installer, or place the portable binary wherever you like.
