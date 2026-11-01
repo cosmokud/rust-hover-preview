@@ -800,6 +800,7 @@ pub(super) fn collapse_pin_to_at(target: PinMinimizeTo, point: Option<(i32, i32)
         // drawn over, and a pin put back up is put back up without it.
         pin.volume.open = false;
         pin.volume.dragging = false;
+        pin.volume.held = None;
 
         anchor
     };

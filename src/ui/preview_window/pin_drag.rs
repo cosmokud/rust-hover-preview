@@ -799,6 +799,7 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
             // elsewhere is not a hand still on the level, and the popup is put away by the tick that
             // finds the pointer away from it (see `refresh_pin_volume`).
             pin.volume.dragging = false;
+            pin.volume.held = None;
         }
     }
 

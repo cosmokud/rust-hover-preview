@@ -65,11 +65,17 @@ pub(super) fn video_process_image() -> &'static str {
 /// by a player that has ended is not one to write to. Nothing is begun, ended or restarted here: the
 /// level is a session's (see `audio_session::ask_the_mixer`).
 pub(super) fn ask_the_ffplay_its_level(level: u32) {
-    if video_process_image() != FFPLAY_IMAGE_NAME || !is_video_process_running() {
+    if !ffplay_holds_the_level() {
         return;
     }
 
     audio_session::ask_the_mixer(VIDEO_PID.load(Ordering::SeqCst), level);
+}
+
+/// Whether the player on screen is FFmpeg's and still holds a process, which is what says a level
+/// can be written to its mixer session at all (see `ask_the_ffplay_its_level`).
+pub(super) fn ffplay_holds_the_level() -> bool {
+    video_process_image() == FFPLAY_IMAGE_NAME && is_video_process_running()
 }
 
 /// The image name the player of a route is begun, recorded and verified under.
