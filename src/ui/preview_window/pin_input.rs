@@ -165,7 +165,8 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let audio_changed = pin_state()
         .and_then(|mut pinned| {
             let pin = pinned.pin_mut()?;
-            let hovered = pin_audio_control_at(pin, x, y);
+            let hovered = pin_audio_control_at(pin, x, y)
+                .filter(|control| pin_audio_control_revealed(pin, y, *control));
             let shown = pin_audio_window_buttons(pin, y);
             let changed = pin.audio_hovered != hovered || pin.audio_window_buttons != shown;
             pin.audio_hovered = hovered;
