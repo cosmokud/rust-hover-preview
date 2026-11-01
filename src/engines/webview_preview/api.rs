@@ -68,29 +68,6 @@ pub(super) static SHOWING: AtomicBool = AtomicBool::new(false);
 /// clicked into, so the next document to be put up is what sets it again.
 pub(super) static RUNNING_DOCUMENT: AtomicBool = AtomicBool::new(false);
 
-/// Whether the document on screen is one the user clicks into rather than a picture the engine
-/// renders. Read by the pin's window procedure, which hands the pointer to the first and carries
-/// itself by the second (see `pin_page_input::page_takes_the_pointer`): the media kind cannot answer
-/// it, because every page of this engine's arrives as `EngineSvg` or `EngineFont`.
-pub(crate) fn page_is_interactive() -> bool {
-    RUNNING_DOCUMENT.load(Ordering::Acquire)
-}
-
-/// Whether the pin is in its own move/size loop.
-///
-/// A page nested in the pin is a child of it and is carried by it, so a placement asked for while
-/// the loop runs is a recomposite of the layered pin for a box that did not change (see
-/// `Host::put_window`). Nothing of the page's is placed until the loop has ended.
-static PIN_IN_MOVE_LOOP: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn note_pin_move_loop(in_the_loop: bool) {
-    PIN_IN_MOVE_LOOP.store(in_the_loop, Ordering::Release);
-}
-
-pub(crate) fn pin_in_move_loop() -> bool {
-    PIN_IN_MOVE_LOOP.load(Ordering::Acquire)
-}
-
 /// Where the engine's window is while it is on screen, in screen coordinates: the box
 /// the document was last handed over in. Kept as a rectangle rather than as the window
 /// handle, because a rectangle is what the preview loop asks about a preview.

@@ -252,25 +252,6 @@ pub(super) unsafe extern "system" fn window_proc(
             release_pin_capture(hwnd);
             LRESULT(0)
         }
-        windows::Win32::UI::WindowsAndMessaging::WM_ENTERSIZEMOVE => {
-            // The page is the pin's child and the whole of a move or a size carries it, so nothing is
-            // placed and the chrome is not raised again under the pointer for the length of the loop
-            // (see `Host::put_window`). Only a pinned window has a page to hold back, and only it can
-            // be in a loop this app did not begin itself.
-            if pinned() {
-                webview_preview::note_pin_move_loop(true);
-            }
-            LRESULT(0)
-        }
-        windows::Win32::UI::WindowsAndMessaging::WM_EXITSIZEMOVE => {
-            webview_preview::note_pin_move_loop(false);
-            // One settling placement on the box the loop ended in, and only where a page stands in
-            // the band: nothing was recorded while the loop ran, so the gate takes it.
-            if engine_page_in_the_band().is_some() {
-                place_pinned_siblings();
-            }
-            LRESULT(0)
-        }
         WM_ACTIVATE => {
             // **A press on the pair's taskbar button while the pin is in front is this pin going away**,
             // and on the road the Shell takes for it the click arrives at this window rather than at the
