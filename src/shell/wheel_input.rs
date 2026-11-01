@@ -51,6 +51,11 @@ static TEXT_SCROLL_DELTA: AtomicI32 = AtomicI32::new(0);
 /// to only where the pointer is inside the box the pin published.
 static PIN_ZOOM_DELTA: AtomicI32 = AtomicI32::new(0);
 
+/// Wheel notches handed to a pin's volume control, on the same terms as the counts
+/// above: signed (up is louder), swapped to zero by the reader, and added to only
+/// where the pointer is over the volume popup or the button that opens it.
+static PIN_VOLUME_DELTA: AtomicI32 = AtomicI32::new(0);
+
 /// Wheel notches handed to a pinned page's own text size, on the same terms again: a notch turned
 /// over a page with `Ctrl` held is how large that page is drawn rather than where it is (see
 /// `text_size_after_notches`).
@@ -130,6 +135,12 @@ pub fn take_pin_zoom_delta() -> i32 {
     PIN_ZOOM_DELTA.swap(0, Ordering::AcqRel)
 }
 
+/// Wheel notches a pin's volume control has been given since this was last called, in
+/// wheel units (120 to a notch). Signed, up being louder.
+pub fn take_pin_volume_delta() -> i32 {
+    PIN_VOLUME_DELTA.swap(0, Ordering::AcqRel)
+}
+
 /// Starts the hook thread; `main` joins the returned handle after `request_stop`.
 pub fn spawn_wheel_watcher() -> std::thread::JoinHandle<()> {
     super::hook_thread::spawn(
@@ -196,6 +207,19 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // and is passed through rather than counted: nothing this app owns moves sideways.
         let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
         let notches = (info.mouseData >> 16) as u16 as i16 as i32;
+
+        // A notch over the volume popup or the button that opens it is the level's, and it is
+        // asked before the two regions below: the button sits inside the pin's own box, which
+        // the zoom road claims whole, and the popup can float over a page that scrolls.
+        if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
+            if let Some(region) = crate::ui::preview_window::pin_volume_keep_alive_try() {
+                if point_in_region(info.pt, region) && preview_takes_the_wheel() {
+                    PIN_VOLUME_DELTA.fetch_add(notches, Ordering::AcqRel);
+                    crate::ui::preview_window::wake_preview_loop();
+                    return LRESULT(1);
+                }
+            }
+        }
 
         if let Some(region) = crate::ui::preview_window::text_scroll_keep_alive_try() {
             // The box the preview published is asked first, and what owns the wheel second: in that

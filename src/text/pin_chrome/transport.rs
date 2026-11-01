@@ -191,6 +191,7 @@ pub(crate) struct VolumePopup {
 /// `strip_top` is the row the transport bar begins at in the window and `strip_height` how tall
 /// that strip is, which is what the button's own box is computed from, so the popup and the
 /// button cannot drift apart: what opens it is drawn where it was pressed.
+#[cfg(test)]
 pub(crate) fn volume_popup_layout(
     width: i32,
     strip_top: i32,

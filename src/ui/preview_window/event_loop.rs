@@ -300,6 +300,10 @@ pub fn run_preview_window() {
         // would be most of that wheel's travel, so the remainder is carried into the tick after it
         // (see `WHEEL_DELTA` and the zoom road's own `notch_step`).
         let mut text_scroll_carry = 0i32;
+        // The same carry for the notches over a pin's volume control, and whether the level they
+        // left still owes FFmpeg's player the relaunch that takes it (see `settle_pin_volume`).
+        let mut volume_wheel_carry = 0i32;
+        let mut volume_owes_a_settle = false;
         // A walk a pin's own caption button stepped, held for as long as the walk has files
         // left to offer rather than for the length of the tick that started it: a file the pin
         // cannot be shown is stepped over rather than stopped at, and the file after it is
@@ -2220,6 +2224,30 @@ pub fn run_preview_window() {
                 if let Ok(mut current) = CURRENT_MEDIA.lock() {
                     *current = None;
                 }
+            }
+
+            // A wheel notch over a pin's volume control is the level: the hook swallowed it and
+            // left the count here, and the popup is opened after the level moves, so the frame it
+            // paints is the level the notch asked for. What has not come to a whole notch is carried
+            // into the tick after it, as the page's scroll is below.
+            let volume_delta = wheel_input::take_pin_volume_delta();
+            if volume_delta != 0 {
+                volume_wheel_carry += volume_delta;
+                let notches = (volume_wheel_carry / WHEEL_DELTA) as i64;
+                if notches != 0 {
+                    volume_wheel_carry -= notches as i32 * WHEEL_DELTA;
+                    if let Some(level) = pin_volume_level() {
+                        set_pin_volume(volume_after_notches(level, notches));
+                        open_pin_volume(pinned_window());
+                        volume_owes_a_settle = true;
+                    }
+                }
+            } else if volume_owes_a_settle {
+                // FFmpeg's player takes a level only by being begun at it, so the settle waits
+                // for the tick the wheel has stopped on: one relaunch per turn rather than one
+                // per notch (see `settle_pin_volume`).
+                settle_pin_volume();
+                volume_owes_a_settle = false;
             }
 
             // A wheel notch over a scrollable text preview belongs to the preview:

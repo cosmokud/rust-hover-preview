@@ -1,5 +1,9 @@
 use super::*;
 
+// What the wheel hook is handed a message as (see `wheel_hook_proc`).
+use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{HC_ACTION, MSLLHOOKSTRUCT, WM_MOUSEWHEEL};
+
 /// The volume popup belongs to the button that opened it and to nothing else: it is kept while
 /// the pointer is anywhere in that control — the panel itself, or the strip the button sits in
 /// — held while the knob is being dragged, and put away once the pointer has left the whole of
@@ -805,4 +809,184 @@ fn a_sounds_level_reaches_the_filter_at_every_level_including_the_top() {
         "silence that still plays, so the card's clock moves and the file stays seekable"
     );
     assert_eq!(audio_volume_filter(100, Some(1.5)), "volume=1.5000");
+}
+
+/// The box on screen a wheel notch over the volume control belongs to: the transport strip's
+/// button while the popup is closed, that button and the panel above it once it is open, and a
+/// sound's card button where the pin has no strip at all (see `pin_volume_keep_alive_try`).
+#[test]
+fn a_wheel_notch_over_the_volume_control_is_answered_by_the_box_that_control_is_drawn_in() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    let window = pin.window_box();
+    let button = pinned_volume_button(&pin).expect("a strip carries a volume button");
+    stand_pin(Some(pin));
+
+    assert_eq!(
+        pin_volume_keep_alive_try(),
+        Some((
+            window.0 + button.left,
+            window.1 + button.top,
+            window.0 + button.right,
+            window.1 + button.bottom,
+        )),
+        "a closed popup leaves the notch the button's own box"
+    );
+
+    // And opening the panel widens the answer to take it in: the level is turned on the panel
+    // above the button without the hand having to find the button again.
+    let mut pin = take_pin_for_a_test().expect("the pin the test stands");
+    pin.volume.open = true;
+    let popup = pinned_volume_panel(&pin).expect("a panel to hang off the button");
+    stand_pin(Some(pin));
+
+    assert_eq!(
+        pin_volume_keep_alive_try(),
+        Some((
+            window.0 + button.left.min(popup.panel.left),
+            window.1 + button.top.min(popup.panel.top),
+            window.0 + button.right.max(popup.panel.right),
+            window.1 + button.bottom.max(popup.panel.bottom),
+        )),
+        "an open popup is the panel and the button it hangs from"
+    );
+
+    // A sound has no strip, and its card's own button is the control the same panel hangs off.
+    let sound = PinnedPreview {
+        content,
+        zoom: Some(PinZoom::filling(content)),
+        frame: PinFrame::None,
+        overlay: false,
+        hides_chrome: false,
+        caption: 0,
+        ..PinnedPreview::for_test()
+    };
+    let sound_window = sound.window_box();
+    let sound_button = pinned_volume_button(&sound).expect("a card carries a volume button");
+    stand_pin(Some(sound));
+
+    assert_eq!(
+        pin_volume_keep_alive_try(),
+        Some((
+            sound_window.0 + sound_button.left,
+            sound_window.1 + sound_button.top,
+            sound_window.0 + sound_button.right,
+            sound_window.1 + sound_button.bottom,
+        )),
+        "a sound's card button is the control with no transport strip to carry one"
+    );
+
+    stand_pin(None);
+    assert_eq!(pin_volume_keep_alive_try(), None, "and no pin is no box");
+    stand_pin(previous);
+}
+
+/// A notch over the volume control is the level's before it is the pin's zoom: the button sits
+/// inside the box the zoom road claims whole, and the panel can float over a page that scrolls,
+/// so the hook has to ask the volume first and leave neither count behind (see
+/// `wheel_hook_proc`).
+#[test]
+fn a_wheel_notch_over_the_volume_control_is_the_levels_and_not_the_pins_zoom() {
+    let _room = the_room_to_itself();
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume.open = true;
+    let button = pinned_volume_button(&pin).expect("a strip carries a volume button");
+    let window = pin.window_box();
+    stand_pin(Some(pin));
+
+    crate::shell::key_input::publish_pin_always_on_top(true);
+    crate::shell::wheel_input::publish_preview_under_the_pointer(false);
+    let _ = wheel_input::take_pin_volume_delta();
+    let _ = wheel_input::take_pin_zoom_delta();
+
+    let info = MSLLHOOKSTRUCT {
+        pt: POINT {
+            x: window.0 + (button.left + button.right) / 2,
+            y: window.1 + (button.top + button.bottom) / 2,
+        },
+        mouseData: (WHEEL_DELTA as u32) << 16,
+        flags: 0,
+        time: 0,
+        dwExtraInfo: 0,
+    };
+    let swallowed = unsafe {
+        wheel_input::wheel_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_MOUSEWHEEL as usize),
+            LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
+        )
+    };
+
+    assert_eq!(
+        wheel_input::take_pin_volume_delta(),
+        WHEEL_DELTA,
+        "the notch over the button is the level being turned"
+    );
+    assert_eq!(
+        wheel_input::take_pin_zoom_delta(),
+        0,
+        "and it is not also the picture being zoomed"
+    );
+    assert_eq!(
+        swallowed,
+        LRESULT(1),
+        "and the notch is not left for the listing behind the pin"
+    );
+
+    crate::shell::key_input::publish_pin_always_on_top(false);
+    stand_pin(None);
+    stand_pin(previous);
+}
+
+/// A wheel turned over the sound card's own volume button opens the panel, and the panel does not
+/// close on the next tick while the pointer is still on the button that opened it (see
+/// `refresh_pin_volume`).
+#[test]
+fn a_volume_popup_opened_over_a_sounds_button_is_kept_while_the_pointer_is_on_it() {
+    let content = (100, 100, 500, 400);
+    let mut sound = PinnedPreview {
+        content,
+        zoom: Some(PinZoom::filling(content)),
+        frame: PinFrame::None,
+        overlay: false,
+        hides_chrome: false,
+        caption: 0,
+        ..PinnedPreview::for_test()
+    };
+    sound.volume.open = true;
+    let button = pinned_volume_button(&sound).expect("a card carries a volume button");
+    let window = sound.window_box();
+    let cursor = Some((
+        window.0 + (button.left + button.right) / 2,
+        window.1 + (button.top + button.bottom) / 2,
+    ));
+
+    assert!(
+        !refresh_pin_volume(&mut sound, cursor),
+        "the pointer on the button that opened the panel does not put it away"
+    );
+    assert!(sound.volume.open, "and the panel the notch opened stays up");
+}
+
+/// A notch moves the level by five percent of the range and stops at the ends set_pin_volume
+/// draws, whichever way the wheel was turned (see `volume_after_notches`).
+#[test]
+fn a_wheel_notch_steps_the_level_by_five_percent_and_stops_at_the_ends() {
+    assert_eq!(volume_after_notches(50, 1), 55, "up is louder");
+    assert_eq!(volume_after_notches(50, -1), 45, "and down is quieter");
+    assert_eq!(volume_after_notches(98, 1), 100, "the top holds");
+    assert_eq!(volume_after_notches(2, -1), 0, "and so does nothing");
+    assert_eq!(
+        volume_after_notches(50, -100),
+        0,
+        "however far the wheel turns"
+    );
 }
