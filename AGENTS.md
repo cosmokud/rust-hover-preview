@@ -11,12 +11,12 @@ Windows 11 tray app. Hovering a file in Explorer previews it in-process or throu
 | Build | `cargo build` | links the debug binary the tray runs from |
 | Build to ship | `cargo build --release` | `build.rs::stop_running_app` runs `taskkill /F /IM rust-hover-preview.exe` before the link, release profile only |
 | Check every target | `cargo check --all-targets` | ~5 s warm; `--all-targets` is what reaches the `src/**/tests` modules |
-| Test everything | `cargo test` | 1459 passed, 37 ignored, ~10 s after compile |
+| Test everything | `cargo test` | 1644 passed, 38 ignored, ~12 s after compile |
 | Test a slice | `cargo test <filter>` | `cargo test pin_zoom` = 49 tests in 0.4 s; `cargo test config` = 106 in 0.36 s |
 | Path gate | `cargo test --test no_path_leaks` | every tracked file, and every commit message |
 | Lint | `cargo clippy --all-targets -- -D warnings` | ~0.3 s warm; the gate is `Cargo.toml`'s `[lints.clippy] all = "deny"`, so a bare `cargo clippy` denies the same lints and the flag adds rustc's warnings |
 | Format | `cargo fmt --all -- --check` | `--check` is the half that reports; without it rustfmt rewrites every file it reaches |
-| The whole gate | `pwsh -File scripts/verify.ps1` | the real file, not a recipe; `-Fast` = check + the three `tests/` targets (~1 s), `-Pure` = the suite without `ui::`/`shell::` (475 tests), `-Filter <name>`, `-NoTest`; runs the gates above in CI's order |
+| The whole gate | `pwsh -File scripts/verify.ps1` | the real file, not a recipe; `.github/workflows/ci.yml` runs the path gate, the formatter and the linter and no suite, so the suite is `manual-ci.yml`'s and this script's; `-Fast` = check + the three `tests/` targets (~1 s), `-Pure` = the suite without `ui::`/`shell::` (475 tests), `-Filter <name>` for one test, `-NoTest`; the default run names the desktop-dependent tests out with `--skip` |
 
 ## Run it
 
