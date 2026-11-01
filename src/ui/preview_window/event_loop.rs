@@ -1448,6 +1448,20 @@ pub fn run_preview_window() {
                                 pin_walk_anchor(&pin_walk),
                             );
 
+                            // A pass end a take-up owed this sound is answered here, on the
+                            // tick the clock says its file has come round — before the engine's
+                            // own end is read below, so a player ended here cannot answer for an
+                            // end twice (see `end_a_sound_a_pin_took_up`).
+                            end_a_sound_a_pin_took_up(
+                                media,
+                                path,
+                                &mut audio_started,
+                                &mut audio_start_offset,
+                                &mut audio_paused,
+                                &mut pin_walk_wait,
+                                pin_walk_anchor(&pin_walk),
+                            );
+
                             // A sound the engine Windows has was asked to play the pinned
                             // file once where the pin's end of file is not `Loop`, so the end
                             // the engine reports for it is the end of the sound. Where that
