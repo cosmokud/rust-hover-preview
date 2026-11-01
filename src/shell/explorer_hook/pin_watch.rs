@@ -256,6 +256,15 @@ impl PinUpdateWatch {
         let previous_was_chrome = previous_window.is_some_and(window_is_menu_popup_chrome);
         let clicked = focus_move.clicked;
 
+        // A press on one of the pin's caption buttons is the pin's own button, not a pick of the
+        // file the chrome is drawn over: the hook reads a press on this app's own window as a
+        // press on the listing underneath, and the Minimize or Close the user aimed at would
+        // otherwise arrive with whatever Explorer item is under it. Asked of the same geometry
+        // the button's own press is (see `pin_caption_button_covers`).
+        let on_a_caption_button =
+            clicked && pin_caption_button_covers((pointer.point.x, pointer.point.y));
+        let on_the_pins_chrome = press_is_the_pins_chrome(clicked, on_a_caption_button);
+
         // A press on one of this app's own panels spends the rest of the hand, so that the rest is not
         // read as a hover of the file the panel was covering (see `a_rest_is_a_hover`). Asked on both
         // ticks the press could be read on: while the panel is still up, and on the poll after the
@@ -269,11 +278,19 @@ impl PinUpdateWatch {
         //
         // Spent here rather than beside the press's own answer below, because the tick that reads the
         // press is the tick that would offer the file: the rest is measured from this, once, below.
-        if clicked
-            && (press_is_on_the_pins_own_menu(pointer.window)
-                || previous_window.is_some_and(press_is_on_the_pins_own_menu))
+        if on_the_pins_chrome
+            || (clicked
+                && (press_is_on_the_pins_own_menu(pointer.window)
+                    || previous_window.is_some_and(press_is_on_the_pins_own_menu)))
         {
             self.probed = true;
+        }
+
+        // A button press is not a pick, so nothing it did may be retried later: a click held from
+        // before it would else be answered out of the listing the chrome covers once the minimize
+        // has taken the pin off that listing (see the retry below).
+        if on_the_pins_chrome {
+            self.pending = None;
         }
 
         // Whether this tick looks at what the pointer is on, and why. A click is the pointer acting
@@ -316,6 +333,7 @@ impl PinUpdateWatch {
         // was covering. The hand does not move for either, and the file under it is not one it
         // picked (see `window_is_menu_popup_chrome`).
         let pick = clicked
+            && !on_the_pins_chrome
             && self.press_is_a_pick(pointer.point, threshold, now)
             && press_is_a_listing(
                 over_explorer,
@@ -375,12 +393,14 @@ impl PinUpdateWatch {
         //
         // A press on this app's own window is left out: it is the pin being used rather than the
         // listing under it being picked, and what the pin stands over is not changed by it.
-        if press_is_answered(
-            clicked,
-            over_explorer,
-            over_our_own,
-            window_is_gone(previous_window),
-        ) {
+        if !on_the_pins_chrome
+            && press_is_answered(
+                clicked,
+                over_explorer,
+                over_our_own,
+                window_is_gone(previous_window),
+            )
+        {
             // **The row the shell names can be a tick or ten behind the click**, so the file under the
             // point is read for every press rather than only for the presses the row answered: a click
             // the shell had not named yet is still the file the press picked, and answering it with "no

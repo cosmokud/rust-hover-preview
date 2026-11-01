@@ -363,6 +363,54 @@ fn every_caption_button_asks_its_command_on_a_press_and_a_release() {
     restore(previous_pin, previous_pid, previous_media);
 }
 
+/// The hook's own reading of a caption button: the same screen point the button's press lands on
+/// is on the pin's chrome, so the press is the button's and not a pick of the file the pin stands
+/// over. The media below the strip is not chrome, and the release still asks for the minimize —
+/// the suppression belongs to the hook's classification, not to the button (see
+/// `pin_caption_button_covers` and `press_is_the_pins_chrome`).
+#[test]
+fn the_caption_minimize_is_the_pins_chrome_and_not_a_file_under_it() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    stand_pin(Some(wide_banded_video_pin((100, 80, 420, 320), 30.0)));
+
+    let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Minimize);
+    let (left, top, caption) = pin_state()
+        .and_then(|pinned| {
+            let pin = pinned.pin()?;
+            let window = pin.window_box();
+            Some((window.0, window.1, pin.caption))
+        })
+        .expect("a pin is up");
+
+    assert!(
+        pin_caption_button_covers((left + x, top + y)),
+        "the Minimize button is the pin's own chrome"
+    );
+    assert!(
+        !pin_caption_button_covers((left + x, top + caption + y.max(1))),
+        "while the media below the caption is the listing's, not the chrome's"
+    );
+
+    take_pin_command();
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on Minimize is the caption's to act on"
+    );
+    let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
+    assert!(
+        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "and the release is the caption's own to answer"
+    );
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::Minimize),
+        "so the same press still minimizes the pin"
+    );
+
+    stand_pin(previous_pin);
+}
+
 #[test]
 fn the_always_on_top_caption_button_toggles_pin_always_on_top() {
     let _room = the_room_to_itself();
