@@ -1157,6 +1157,12 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
 /// refusal has to cost nothing at all. A press no arm owns is given back once, after every arm has
 /// declined, by the procedure's last resort (see `release_pin_capture`).
 pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn PinWindow) -> bool {
+    // A hand-off a press on the card's menu armed first: it is the one arm that raises another
+    // program, so it is the one that must have the release rather than the window it raises (see
+    // `pin_menu_hand_off_release`).
+    if pin_menu_hand_off_release(hwnd) {
+        return true;
+    }
     // A drag of the volume knob first, which is a hand on the level rather than on anything else:
     // it is the one press on a pinned window that is let go of somewhere other than where it began
     // (see `pinned_volume_press`).
