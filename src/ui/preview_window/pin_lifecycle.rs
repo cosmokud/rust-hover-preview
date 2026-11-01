@@ -241,10 +241,16 @@ pub(crate) enum PinCommand {
     Next,
     Minimize,
     /// Collapse the pin into a place of the asker's own choosing, rather than into the one
-    /// `Pin Mode → Minimize to` has it put: what the card's menu's `To Bubble` and
-    /// `To Taskbar` rows ask for, which say where the pin goes rather than where the next
-    /// minimize would take it (see `collapse_pin_to`).
+    /// `Pin Mode → Minimize to` has it put: what a menu's `To Taskbar` row asks for, which says
+    /// where the pin goes rather than where the next minimize would take it (see
+    /// `collapse_pin_to`). The `To Bubble` row is the same collapse with a place of its own to
+    /// stand in, and goes through `MinimizeToAt`.
     MinimizeTo(PinMinimizeTo),
+    /// The same collapse, with the bubble centred on `point` on the screen rather than on the
+    /// minimize button's own box: what a right-click menu's `To Bubble` row asks for, that row
+    /// being a press at a place the hand chose rather than a button the layout drew (see
+    /// `collapse_pin_to_at`).
+    MinimizeToAt(PinMinimizeTo, (i32, i32)),
     Maximize,
     /// Put the window back to the size the scaling settings ask for the kind it is showing, in the
     /// middle of the screen it stands on: what the second press of a double-click asks for where

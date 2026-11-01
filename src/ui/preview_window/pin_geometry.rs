@@ -589,6 +589,10 @@ pub(super) unsafe fn pin_command_request(
                 collapse_pin_to(target);
                 None
             }
+            PinCommand::MinimizeToAt(target, point) => {
+                collapse_pin_to_at(target, Some(point));
+                None
+            }
             PinCommand::Restore => {
                 restore_pin(&Win32PinWindow, PinRestore::Pressed);
                 None

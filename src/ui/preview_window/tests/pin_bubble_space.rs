@@ -393,6 +393,89 @@ fn a_pin_restored_from_a_bubble_that_was_never_carried_comes_back_at_its_own_box
     stand_pin(previous_pin);
 }
 
+/// A pin restored out of a carried bubble answers the carried claim, so the next restore comes back
+/// to the box the hand last left the window at rather than to the hidden bubble's old place.
+///
+/// The fault this is a regression test for: `PIN_BUBBLE_CARRIED` was cleared by the bubble's own
+/// teardown and never by a restore, so a pin dragged to the bubble, restored, then hand-moved and
+/// minimized came back beside the bubble instead of where the hand left it.
+#[test]
+fn a_pin_restored_twice_keeps_the_box_the_hand_last_left_it_at() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let previous_carried = PIN_BUBBLE_CARRIED.load(Ordering::Acquire);
+
+    // Safety: a window of this test's own, created and destroyed under the one-at-a-time lock.
+    let bubble = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            700,
+            500,
+            120,
+            120,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the bubble")
+    };
+    PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
+
+    let left_at = (100, 80, 420, 320);
+    let mut pin = overlay_pin(left_at, PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    PIN_BUBBLE_CARRIED.store(true, Ordering::Release);
+
+    restore_pin(&a_restored_window(), PinRestore::Pressed);
+
+    let carried_box = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.content));
+    assert_ne!(
+        carried_box,
+        Some(left_at),
+        "a carried bubble is the place the hand asked for, so the window is placed beside it"
+    );
+    assert!(
+        !PIN_BUBBLE_CARRIED.load(Ordering::Acquire),
+        "every restore answers the carried claim"
+    );
+
+    // The hand moves the window and minimizes it again: the box it left the window at is the one a
+    // later restore must come back to.
+    let moved_to = (600, 200, 900, 440);
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
+            pin.content = moved_to;
+            pin.collapsed = true;
+        }
+    }
+
+    restore_pin(&a_restored_window(), PinRestore::Pressed);
+
+    let restored =
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.collapsed, pin.content)));
+    assert_eq!(
+        restored,
+        Some((false, moved_to)),
+        "a restore with no carried bubble leaves the window where the hand last put it"
+    );
+
+    // Safety: the window is this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(bubble);
+    }
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    PIN_BUBBLE_CARRIED.store(previous_carried, Ordering::Release);
+    stand_pin(previous_pin);
+}
+
 /// Let the window server finish the placement just asked for before the z-order is read: a window
 /// put in a band and the band's own order are the compositor's to settle, so a test that reads them
 /// the instant the call returns is a test racing it — the same window reads as not yet topmost and
@@ -2560,5 +2643,61 @@ fn a_pin_that_is_a_window_of_its_own_takes_the_band_to_appear_and_gives_it_back(
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = before;
     }
+    stand_pin(previous_pin);
+}
+
+/// The bubble a right-click `To Bubble` row leaves stands on the place the hand pressed the row
+/// rather than on the minimize button the same collapse asked for by a button goes to: a bubble
+/// asked for at a point is centred on that point (see `collapse_pin_to_at`).
+#[test]
+fn a_bubble_asked_for_at_a_point_stands_centred_on_it() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+
+    // Safety: a window of this test's own, created and destroyed under the one-at-a-time lock.
+    let bubble = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            700,
+            500,
+            120,
+            120,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the bubble")
+    };
+    PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
+
+    stand_pin(Some(overlay_pin((100, 100, 420, 340), PinChrome::always())));
+
+    // A place the hand named rather than the one the minimize button would have given the bubble.
+    let point = (600, 400);
+    collapse_pin_to_at(PinMinimizeTo::Bubble, Some(point));
+
+    let mut rect = RECT::default();
+    assert!(
+        unsafe { GetWindowRect(bubble, &mut rect) }.is_ok(),
+        "the bubble the collapse stands the pin in is a window of its own"
+    );
+    assert_eq!(
+        ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2),
+        point,
+        "the circle a `To Bubble` press leaves is centred on the place the row was pressed"
+    );
+
+    // Safety: the window is this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(bubble);
+    }
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
     stand_pin(previous_pin);
 }
