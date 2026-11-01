@@ -1420,3 +1420,67 @@ fn a_burst_of_wheel_notches_moves_the_target_five_percent_a_notch() {
 
     stand_pin(previous);
 }
+
+/// A notch is chrome on every kind, and a film's thumb is drawn in the strip a repaint reaches:
+/// the flag a notch sets is drained once a tick, so the thumb steps at the cadence the wheel holds
+/// the loop at rather than on whatever incidental repaint comes next — and a sound's card, whose
+/// paint is the card rather than chrome, is left to its own arm (see `pin_chrome_owes_a_repaint`).
+#[test]
+fn a_wheel_notch_on_a_film_owes_one_chrome_repaint_a_tick() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+
+    let content = (100, 100, 500, 400);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.transport_bar = true;
+    pin.volume = PinVolume {
+        level: 50,
+        playing_at: 50,
+        ..Default::default()
+    };
+    stand_pin(Some(pin));
+    AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+
+    // Two notches inside the one tick: the level moves twice, and the tick still owes one paint.
+    let per = WHEEL_LEVEL_UNITS_PER_PERCENT;
+    set_pin_volume_target(50 * per);
+    set_pin_volume_target(55 * per);
+    assert!(
+        pin_chrome_owes_a_repaint(),
+        "a notch on a film asks for the chrome the thumb is drawn in"
+    );
+    assert!(
+        !pin_chrome_owes_a_repaint(),
+        "and the notch after it is the same repaint, not another"
+    );
+
+    // A sound's card is refreshed by its own arm before this one is asked: the drain here leaves
+    // its flag standing rather than repainting a card the window's paint does not rebuild.
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            media.media_type = MediaType::Audio;
+        }
+    }
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+    assert!(
+        !pin_chrome_owes_a_repaint(),
+        "a sound's card is not owed the film's chrome repaint"
+    );
+    assert!(
+        AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+        "and the flag is still the card's own to spend"
+    );
+
+    AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}

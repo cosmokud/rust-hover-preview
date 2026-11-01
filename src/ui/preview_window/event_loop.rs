@@ -1598,6 +1598,12 @@ pub fn run_preview_window() {
                     }
                 }
             }
+            // A pin's chrome is not a sound's card, so what a wheel notch sets on it is drained
+            // here rather than in that card's arm: one repaint a tick for the thumb the notch
+            // stepped, whatever number of them landed in the tick (see `pin_chrome_owes_a_repaint`).
+            if pin_chrome_owes_a_repaint() {
+                needs_repaint = true;
+            }
             if need_media_check {
                 last_full_media_check = Instant::now();
                 last_checked_generation = current_generation;

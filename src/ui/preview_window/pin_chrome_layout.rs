@@ -1145,6 +1145,20 @@ pub(super) fn pin_volume_is_moving() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a pinned preview owes its window one repaint for its chrome alone, spending the flag a
+/// wheel notch left: `AUDIO_CARD_DIRTY` is the pin's chrome as much as a sound's card, but only a
+/// sound's arm is where a card is refreshed, so without this drain a film's thumb stepped on
+/// whatever incidental repaint came next (see the preview loop's tick).
+///
+/// One flag per tick however many notches landed in it, and a sound's card is left to its own arm:
+/// its paint is the card rather than the chrome, which is the one thing a bare repaint cannot
+/// redraw.
+pub(super) fn pin_chrome_owes_a_repaint() -> bool {
+    pinned()
+        && current_media_kind() != Some(PreviewType::Audio)
+        && AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel)
+}
+
 /// Whether a wheel's target is still waiting for the glide, which is what says a knob that moved
 /// the level between ticks was a hand other than the wheel's (see the wheel's own carry in the
 /// preview loop).
