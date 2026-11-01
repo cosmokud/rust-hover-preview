@@ -94,25 +94,22 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let menu = CreatePopupMenu().unwrap();
-    let levels = || CONFIG.lock().ok().map(|c| (c.video_volume, c.audio_volume));
-    // Lock released before the reload and the publish: the message a publish sends locks
-    // `CONFIG` again on the preview loop.
-    let before = levels();
-    if let Ok(mut config) = CONFIG.lock() {
-        config.reload_from_disk();
-    }
-    let after = levels();
+    // Lock released before the publish: the message a publish sends locks `CONFIG` again on
+    // the preview loop. A level this process wrote itself is not an edit, and is not reported
+    // as one (see `reload_from_disk_keeping_our_own_levels`).
+    let changed = CONFIG
+        .lock()
+        .map(|mut config| config.reload_from_disk_keeping_our_own_levels())
+        .unwrap_or((false, false));
 
     // A level hand-edited into config.ini reaches a pin already playing, which holds a level of
     // its own; an unchanged half is left alone so opening the menu does not push the file's
     // level onto a knob dragged elsewhere (see `tray_volume_moved`).
-    if let (Some(before), Some(after)) = (before, after) {
-        if before.0 != after.0 {
-            publish_tray_volume(false);
-        }
-        if before.1 != after.1 {
-            publish_tray_volume(true);
-        }
+    if changed.0 {
+        publish_tray_volume(false);
+    }
+    if changed.1 {
+        publish_tray_volume(true);
     }
 
     // The menu is also where the check for a newer release is asked for, after the one

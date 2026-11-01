@@ -200,21 +200,17 @@ fn main() {
                 last_modified = modified;
                 // A level edited on disk reaches a live pin from here, or opening the menu is
                 // the first place its change is noticed (see `show_context_menu`). Unchanged
-                // halves publish nothing.
-                let levels = || CONFIG.lock().ok().map(|c| (c.video_volume, c.audio_volume));
-                let before = levels();
-                if let Ok(mut config) = CONFIG.lock() {
-                    config.reload_from_disk();
-                }
-                let after = levels();
+                // halves — and a level this process wrote itself — publish nothing.
+                let changed = CONFIG
+                    .lock()
+                    .map(|mut config| config.reload_from_disk_keeping_our_own_levels())
+                    .unwrap_or((false, false));
                 // Lock released first: the message a publish sends locks `CONFIG` again.
-                if let (Some(before), Some(after)) = (before, after) {
-                    if before.0 != after.0 {
-                        ui::preview_window::publish_tray_volume(false);
-                    }
-                    if before.1 != after.1 {
-                        ui::preview_window::publish_tray_volume(true);
-                    }
+                if changed.0 {
+                    ui::preview_window::publish_tray_volume(false);
+                }
+                if changed.1 {
+                    ui::preview_window::publish_tray_volume(true);
                 }
                 // The pin key is a number the keyboard hook reads rather than the
                 // configuration, so a spelling that changed on disk is handed to it here

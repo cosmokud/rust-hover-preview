@@ -15,7 +15,21 @@ use crate::config::theme_files;
 use crate::formats::lists;
 
 use super::app_config::AppConfig;
-use super::defaults::{CONFIG_SECTION, DEFAULT_VIDEO_ENGINE};
+use super::defaults::{sanitize_volume, CONFIG_SECTION, DEFAULT_VIDEO_ENGINE};
+
+/// The two levels this process last put on disk, in the order `(video, audio)`.
+///
+/// The watcher sees this process's own save as an edit, and the file then holds a level a knob
+/// may have moved past; a reload that took it back would put the thumb under the pointer
+/// (see `AppConfig::reload_from_disk_keeping_our_own_levels`).
+static LAST_WRITTEN_LEVELS: std::sync::Mutex<Option<(u32, u32)>> = std::sync::Mutex::new(None);
+
+/// The levels of the last successful `AppConfig::save`, or `None` before one.
+pub(crate) fn last_written_levels() -> Option<(u32, u32)> {
+    *LAST_WRITTEN_LEVELS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// The headings the settings section is written under, in the order the tray lists its
 /// menus: the menu a setting is changed from is the menu it is found under, so the file
@@ -626,6 +640,28 @@ impl AppConfig {
         }
     }
 
+    /// Read the file again, but not a level this process wrote and a hand has since moved past.
+    ///
+    /// A half the reloaded file holds at what the last `save` put there is one the app already
+    /// knows better than the file does: the level in hand is kept, and the half is not reported
+    /// as changed, so no publisher pushes the file's stale level onto a knob. A half the file
+    /// holds at anything else is an edit somebody made by hand, and it is taken whole.
+    pub fn reload_from_disk_keeping_our_own_levels(&mut self) -> (bool, bool) {
+        let before = (self.video_volume, self.audio_volume);
+        self.reload_from_disk();
+
+        if let Some((video, audio)) = last_written_levels() {
+            if self.video_volume == video && self.video_volume != before.0 {
+                self.video_volume = before.0;
+            }
+            if self.audio_volume == audio && self.audio_volume != before.1 {
+                self.audio_volume = before.1;
+            }
+        }
+
+        (self.video_volume != before.0, self.audio_volume != before.1)
+    }
+
     /// Write the configuration out: `to_ini` says what it holds, and `ordered_text` says what
     /// the text of the file is.
     ///
@@ -671,6 +707,16 @@ impl AppConfig {
                     let _ = fs::remove_file(&staged);
                     let _ = fs::write(&path, text);
                 }
+
+                // The levels this write put on disk: a watcher that sees the file change is
+                // seeing its own write, not an edit to read back (see
+                // `reload_from_disk_keeping_our_own_levels`).
+                *LAST_WRITTEN_LEVELS
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+                    sanitize_volume(self.video_volume),
+                    sanitize_volume(self.audio_volume),
+                ));
             } else {
                 let _ = fs::remove_file(&staged);
             }
