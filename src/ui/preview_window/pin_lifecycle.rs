@@ -1340,12 +1340,13 @@ pub(super) fn the_pin_owes_a_show(hwnd: HWND, foreground: HWND) -> bool {
 /// Whether the pin taken up on a file stands in the pin's own window, decided once at the
 /// take-up and written by [`pin_stands_in_its_own_window`].
 ///
-/// **Every kind stands in the pin's own window, and the band's window is a child placed in it.**
-/// The browser that draws a document, a specimen or a page of HTML is made a child of the pin's
-/// window at the pin's content box (see `place_pinned_siblings`, `Host::put_window`), so the pin's
-/// own window — the one Windows activates, lists and gives a button — is the frame that page stands
-/// in (see `MediaType::draws_in_a_window_of_its_own`, which stays the answer to whether what fills
-/// the band is another window's picture — the question a pin taskbar mirror asks). A film's answer is its
+/// **Every kind stands in the pin's own window, and the band's window is a window placed in it.**
+/// The browser that draws a document, a specimen or a page of HTML is a top-level window of this
+/// app's standing at the pin's content box, in front of the pin rather than behind it (see
+/// `place_pinned_siblings`, `Host::put_window`), so the pin's own window — the one Windows
+/// activates, lists and gives a button — is the frame that page stands in (see
+/// `MediaType::draws_in_a_window_of_its_own`, which stays the answer to whether what fills the band
+/// is another window's picture — the question a pin taskbar mirror asks). A film's answer is its
 /// live route, so a pin shown a film of another route after the engine row changed is answered for
 /// the film it is showing now. The two placeholder kinds — a spinner and the cross a failed file
 /// leaves — are not the file, so they ask the file's route instead, as a pin taken up with no kind
@@ -1964,9 +1965,9 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
 /// already inserts it below the pin (see `player_insert_after`), and is taken out of the topmost
 /// band first where it holds one; a page is put there here as well, because the engine's own
 /// placement is a message away and a page left in front of the listing for the length of it is the
-/// picture floating over the window the pin went behind. **A page is a child of the pin rather
-/// than a window of the desktop's**, so what it goes behind with is the pin itself (see
-/// `Host::put_window`). The next raise puts both where the band asks for them again
+/// picture floating over the window the pin went behind. **A page is put in front of the pin rather
+/// than behind it**, so the window it goes under is the same one the pin went under and not the pin
+/// itself (see `Host::put_window`). The next raise puts both where the band asks for them again
 /// (see `place_pinned_siblings`).
 pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
     // **A pin that is a window of its own is put behind by this road too, and here is why the Shell
@@ -2720,9 +2721,9 @@ pub(super) fn place_pinned_siblings() {
         // may have just been raised over the window that was covering the page as well, and a page
         // left behind would be a caption standing over the listing it was following.
         //
-        // What the ask puts the page in is the band the pin now holds, and as a child of the pin
-        //'s own window rather than a window of the desktop's: that is what puts it in the surface
-        // the Shell freezes for the pin's taskbar peek (see `Host::put_window`).
+        // What the ask puts the page in is the band the pin now holds, and in front of the pin
+        // rather than behind it: a browser's surface behind the band's hole is a resize that goes
+        // black and stutters (see `Host::put_window`).
         Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
             if let Some((path, content)) = engine_page_in_the_band() {
                 webview_preview::raise(

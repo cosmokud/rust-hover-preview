@@ -57,9 +57,7 @@ use windows::Win32::Graphics::Dwm::{
     DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{SetBrushOrgEx, SetStretchBltMode, StretchBlt, HALFTONE};
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetWindowLongPtrW, IsWindow, IsWindowVisible, GWL_STYLE, WS_CHILD,
-};
+use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow, IsWindowVisible};
 
 /// How large a mirrored pin may be on its longest side.
 ///
@@ -638,23 +636,7 @@ fn on_the_screen(hwnd: HWND) -> Option<HWND> {
 
     // Safety: the handle is one this app holds — its own window, its player's, or the engine's — and
     // both questions are about the window rather than changes to it.
-    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
-    unsafe {
-        (draws_in_a_surface_of_its_own(style)
-            && IsWindow(hwnd).as_bool()
-            && IsWindowVisible(hwnd).as_bool())
-        .then_some(hwnd)
-    }
-}
-
-/// Whether a window can be a thumbnail's source at all: a `WS_CHILD` is drawn into its parent's
-/// composition surface and has none of its own (`DwmRegisterThumbnail` against one draws nothing).
-///
-/// The page the engine draws is a child of the pin while a pin is up, which is what puts it in the
-/// peek of the pin itself — so it is not a source the stand-in can mirror, and a pin standing in a
-/// window of its own owes no stand-in anyway (see `pin_taskbar::a_button_is_owed`).
-fn draws_in_a_surface_of_its_own(style: isize) -> bool {
-    style & WS_CHILD.0 as isize == 0
+    unsafe { (IsWindow(hwnd).as_bool() && IsWindowVisible(hwnd).as_bool()).then_some(hwnd) }
 }
 
 /// The size the stand-in's client area is wanted at for a source's own size: the source's shape,
@@ -760,21 +742,6 @@ mod tests {
         assert!(
             !PinMirror::NOTHING.already_shows(0x1000, 40, (400, 300)),
             "a stand-in showing nothing is never already showing the pin"
-        );
-    }
-
-    /// A child has no composition surface of its own, so the Shell is never asked for a thumbnail of
-    /// one: the page the engine draws is a child of the pin while a pin is up, and what it is in the
-    /// peek of is the pin (see `draws_in_a_surface_of_its_own`).
-    #[test]
-    fn a_child_window_is_no_source_for_a_mirror() {
-        assert!(
-            draws_in_a_surface_of_its_own(WS_POPUP.0 as isize),
-            "a window of the desktop's is a source"
-        );
-        assert!(
-            !draws_in_a_surface_of_its_own(WS_POPUP.0 as isize | WS_CHILD.0 as isize),
-            "and a child of one is not, whatever else it wears"
         );
     }
 }

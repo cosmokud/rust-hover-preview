@@ -184,10 +184,9 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindowAsync, GWL_EXSTYLE,
-    GWL_STYLE, HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK, SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WS_CHILD,
-    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT,
+    HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK, SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 // Only the binary asks a window who owns it: a test has one process (see `the_source_is_up`).
 #[cfg(not(test))]
@@ -2557,12 +2556,6 @@ fn the_registration_wants(held: &Thumbnail, wanted: ThumbnailBox) -> bool {
     held.registration == 0 || held.shown != Some(wanted)
 }
 
-/// Whether the Shell can draw a thumbnail of a window: a `WS_CHILD` is drawn into its parent's
-/// composition surface and has none of its own.
-fn a_surface_of_its_own(style: isize) -> bool {
-    style & WS_CHILD.0 as isize == 0
-}
-
 /// Register the picture in the host's client area, or point the registration the host already wears at
 /// the rectangles it is drawn with **now**: the host's live client area, and the crop the picture
 /// adoption fixed gives the box's shape (see `the_thumbnail_box`).
@@ -2607,13 +2600,6 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
         return;
     }
     let source = HWND(number as *mut _);
-    // A `WS_CHILD` has no composition surface of its own — it is drawn into its parent's — so the
-    // Shell is never asked for a thumbnail of one. The page the engine draws is a child of the pin
-    // while a pin is up, and nothing on this road should ever name it as a source.
-    let source_style = unsafe { GetWindowLongPtrW(source, GWL_STYLE) };
-    if !a_surface_of_its_own(source_style) {
-        return;
-    }
     let Some(client) = (unsafe { client_size(host) }) else {
         return;
     };
@@ -3086,17 +3072,6 @@ unsafe fn window_box(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
 mod tests {
     use super::super::tests::the_room_to_itself;
     use super::*;
-
-    /// A child has no composition surface of its own, so a registration is never asked for one: the
-    /// engine's page is a child of the pin while a pin is up (see `a_surface_of_its_own`).
-    #[test]
-    fn a_thumbnail_is_never_taken_of_a_child_window() {
-        assert!(a_surface_of_its_own(0), "a window of the desktop's has one");
-        assert!(
-            !a_surface_of_its_own(WS_CHILD.0 as isize),
-            "and a child of one has not"
-        );
-    }
 
     /// **A captured frame is gated on the same grid the pin is measured with, and a dark scene passes
     /// it while an empty surface does not** — the gate that keeps a `dc` capture from painting the black
