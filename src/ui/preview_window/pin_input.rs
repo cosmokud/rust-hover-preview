@@ -506,24 +506,62 @@ pub(super) fn pinned_volume_geometry() -> Option<pin_chrome::VolumePopup> {
 /// against a window other than the one under the hand is a panel that closes when it should not
 /// (see `refresh_pin_volume`).
 pub(super) fn pinned_volume_panel(pin: &PinnedPreview) -> Option<pin_chrome::VolumePopup> {
+    let (width, _) = pin.window_size();
+    Some(pin_chrome::volume_popup_from_button(
+        pinned_volume_button(pin)?,
+        width,
+        pin.dpi,
+    ))
+}
+
+/// Where the pin's volume button is drawn, in the window's own coordinates: the
+/// transport strip's own where the pin has a strip, and the sound card's for a pin whose
+/// controls are the card's.
+///
+/// The button and not only the panel, because the wheel over the button is the same level
+/// being turned and the popup is kept open while the pointer is on it (see
+/// `pin_volume_keep_alive_try` and `refresh_pin_volume`).
+pub(super) fn pinned_volume_button(pin: &PinnedPreview) -> Option<RECT> {
     if pin.collapsed {
         return None;
     }
 
-    let strip = if pin.transport_bar {
+    if pin.transport_bar {
         let (width, height) = pin.window_size();
         let band = pinned_transport_height(pin.dpi, true);
-        Some(pin_chrome::volume_popup_layout(
-            width,
-            (height - band).max(0),
-            band,
-            pin.dpi,
-        ))
+        let strip_top = (height - band).max(0);
+        let in_strip = pin_chrome::transport_layout(width, band, pin.dpi, true).volume;
+        Some(RECT {
+            top: in_strip.top + strip_top,
+            bottom: in_strip.bottom + strip_top,
+            ..in_strip
+        })
     } else {
-        None
-    };
+        pinned_audio_volume_button(pin)
+    }
+}
 
-    strip.or_else(|| pinned_audio_volume_popup(pin))
+/// The box on screen a wheel notch over a pin's volume control belongs to: the open
+/// popup's panel and the button it hangs from, or just the button while it is closed.
+///
+/// Asked from the wheel hook, so it waits on no lock (see `pin_zoom_keep_alive_try`).
+pub(crate) fn pin_volume_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
+    let pinned = pin_window::pin_state_try()?;
+    let pin = pinned.pin()?;
+    let button = pinned_volume_button(pin)?;
+    let panel = if pin.volume.open {
+        pinned_volume_panel(pin)?.panel
+    } else {
+        button
+    };
+    let window = pin.window_box();
+
+    Some((
+        window.0 + button.left.min(panel.left),
+        window.1 + button.top.min(panel.top),
+        window.0 + button.right.max(panel.right),
+        window.1 + button.bottom.max(panel.bottom),
+    ))
 }
 
 /// Where a pinned sound's card's volume button opens its panel from, in the window's own
@@ -534,12 +572,22 @@ pub(super) fn pinned_volume_panel(pin: &PinnedPreview) -> Option<pin_chrome::Vol
 /// Nothing about the two windows standing in each other's place applies to it — the panel floats
 /// over this app's own card rather than over a player's window, so there is no window to put in
 /// front and no tick to hold off (see `pin_volume_open`).
+#[cfg(test)]
 pub(super) fn pinned_audio_volume_popup(pin: &PinnedPreview) -> Option<pin_chrome::VolumePopup> {
+    let (width, _) = pin.window_size();
+    Some(pin_chrome::volume_popup_from_button(
+        pinned_audio_volume_button(pin)?,
+        width,
+        pin.dpi,
+    ))
+}
+
+fn pinned_audio_volume_button(pin: &PinnedPreview) -> Option<RECT> {
     if !pin_shows_an_audio_card(pin) {
         return None;
     }
 
-    let (width, height) = pin.window_size();
+    let (_, height) = pin.window_size();
     let (top, _) = pinned_band_rows(
         height,
         pin.caption,
@@ -560,14 +608,10 @@ pub(super) fn pinned_audio_volume_popup(pin: &PinnedPreview) -> Option<pin_chrom
         true,
     )?;
 
-    Some(pin_chrome::volume_popup_from_button(
-        RECT {
-            top: button.top + top,
-            ..button
-        },
-        width,
-        pin.dpi,
-    ))
+    Some(RECT {
+        top: button.top + top,
+        ..button
+    })
 }
 
 /// Whether the popup's knob is being held.
@@ -670,23 +714,38 @@ pub(super) unsafe fn pinned_volume_release(hwnd: HWND, window: &dyn PinWindow) -
 /// harmless rather than necessary — which is why this function asks nothing about the kind (see
 /// `pinned_audio_volume_popup`).
 pub(super) unsafe fn toggle_pin_volume(hwnd: HWND) {
-    let opened = {
+    let open = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.open))
+        .unwrap_or(false);
+    set_pin_volume_open(hwnd, !open);
+}
+
+/// Open the volume popup where it is not already open: what a wheel notch over the
+/// volume button does before it moves the level, so the slider it is turning is the one
+/// the user sees (see `take_pin_volume_delta`).
+pub(super) unsafe fn open_pin_volume(hwnd: HWND) {
+    set_pin_volume_open(hwnd, true);
+}
+
+unsafe fn set_pin_volume_open(hwnd: HWND, open: bool) {
+    {
         let Some(mut pinned) = pin_state() else {
             return;
         };
         let Some(pin) = pinned.pin_mut() else {
             return;
         };
-
-        pin.volume.open = !pin.volume.open;
-        if !pin.volume.open {
-            pin.volume.dragging = false;
+        if pin.volume.open == open {
+            return;
         }
 
-        pin.volume.open
-    };
+        pin.volume.open = open;
+        if !open {
+            pin.volume.dragging = false;
+        }
+    }
 
-    if opened {
+    if open {
         raise_pinned_window(hwnd);
     }
 

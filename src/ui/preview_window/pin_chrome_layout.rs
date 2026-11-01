@@ -207,6 +207,12 @@ pub(super) fn pin_volume_open() -> bool {
         .unwrap_or(false)
 }
 
+/// The level the pin that is up is at, which is what a wheel notch over its volume control
+/// is taken from — the popup and the button are the same level (see `set_pin_volume`).
+pub(super) fn pin_volume_level() -> Option<u32> {
+    pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.volume.level))
+}
+
 /// Whether the pin that is up is showing any strip of its chrome — a pin that is up
 /// rather than collapsed into its bubble, with its caption or its transport bar drawn.
 /// This is the popup's hold-off, generalized: a strip is painted into the pin's own
@@ -593,15 +599,22 @@ pub(super) fn refresh_pin_volume(pin: &mut PinnedPreview, cursor: Option<(i32, i
     let Some(popup) = pinned_volume_panel(pin) else {
         return false;
     };
+    let Some(button) = pinned_volume_button(pin) else {
+        return false;
+    };
 
     let margin = logical_px(pin.dpi, PIN_CHROME_NEAR_PIXELS).max(1);
     let window = pin.window_box();
     let on_the_popup = cursor.is_some_and(|(x, y)| {
         let (x, y) = (x - window.0, y - window.1);
-        x >= popup.panel.left - margin
-            && x < popup.panel.right + margin
-            && y >= popup.panel.top - margin
-            && y < popup.panel.bottom + margin
+        // The button itself counts as the control it is, and not only what its margin
+        // reaches: a wheel notch there opens the panel, and one that closed it on the next
+        // tick would flash a panel the user is still turning.
+        (x >= button.left && x < button.right && y >= button.top && y < button.bottom)
+            || (x >= popup.panel.left - margin
+                && x < popup.panel.right + margin
+                && y >= popup.panel.top - margin
+                && y < popup.panel.bottom + margin)
     });
 
     let (near_caption, near_bar) = pin_chrome_near(pin, cursor);
@@ -952,6 +965,16 @@ fn set_the_pin_players_level(level: u32) -> bool {
 /// and not for the next file whatever it is (see `pinned_level`). A walk off a sound and onto a film
 /// is answered by the tray, and a knob turned on the film's bar afterwards makes the level the
 /// film's, again.
+/// How much of the full range one wheel notch over a pin's volume control moves the level:
+/// five percent, which is the smallest step a hand turning a wheel can aim at.
+pub(super) const VOLUME_WHEEL_STEP: u32 = 5;
+
+/// The level a wheel notch leaves behind: `notches` steps of `VOLUME_WHEEL_STEP` from
+/// `level`, clamped to the range the popup draws (see `set_pin_volume`).
+pub(super) fn volume_after_notches(level: u32, notches: i64) -> u32 {
+    (level as i64 + notches * i64::from(VOLUME_WHEEL_STEP)).clamp(0, 100) as u32
+}
+
 pub(super) fn set_pin_volume(level: u32) {
     let level = level.min(100);
     let audio = matches!(current_media_type(), Some(MediaType::Audio));
