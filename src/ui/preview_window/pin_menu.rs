@@ -295,16 +295,23 @@ pub(super) enum PinMenuRow {
     EndOfFile,
     /// The door the seeks are chosen through.
     Seek,
+    /// Hand the file to whatever the system has filed against it — the same hand-off the
+    /// card's own `Open With` button makes (see `open_path_with_default_app`).
+    OpenInDefaultApp,
+    /// The Shell's own list of programs, the same dialog the card's `Open With...` button
+    /// opens (see `show_open_with_dialog`).
+    OpenWithList,
 }
 
 /// The rows the card's menu holds, from the top of the panel to the bottom: the two ways out
-/// of the pin, the rule, the playback of the file in it, the rule again, and the three
+/// of the pin, the rule, the playback of the file in it, the rule again, the three
 /// settings the pin plays by — the shuffle that answers on the spot, and the two doors the
-/// flyouts hang from.
+/// flyouts hang from — and, below the last of them, the rule and the two ways out to another
+/// program, which are the card's own buttons by another name (see `card_menu_press`).
 ///
 /// The same two doors are what the hover timers watch and what a press on either opens (see
 /// `refresh_pin_menu`).
-const PIN_MENU_ROWS: [PinMenuRow; 11] = [
+const PIN_MENU_ROWS: [PinMenuRow; 14] = [
     PinMenuRow::ToBubble,
     PinMenuRow::ToTaskbar,
     PinMenuRow::Close,
@@ -316,6 +323,9 @@ const PIN_MENU_ROWS: [PinMenuRow; 11] = [
     PinMenuRow::Shuffle,
     PinMenuRow::EndOfFile,
     PinMenuRow::Seek,
+    PinMenuRow::Separator,
+    PinMenuRow::OpenInDefaultApp,
+    PinMenuRow::OpenWithList,
 ];
 
 impl PinMenuRow {
@@ -337,6 +347,8 @@ impl PinMenuRow {
             PinMenuRow::Shuffle => "Shuffle",
             PinMenuRow::EndOfFile => "End of File",
             PinMenuRow::Seek => "Seek",
+            PinMenuRow::OpenInDefaultApp => "Open in Default App",
+            PinMenuRow::OpenWithList => "Open With...",
         }
     }
 
@@ -352,7 +364,9 @@ impl PinMenuRow {
             | PinMenuRow::Close
             | PinMenuRow::Pause
             | PinMenuRow::NextFile
-            | PinMenuRow::PreviousFile => pin_chrome::MenuMark::None,
+            | PinMenuRow::PreviousFile
+            | PinMenuRow::OpenInDefaultApp
+            | PinMenuRow::OpenWithList => pin_chrome::MenuMark::None,
         }
     }
 }
@@ -811,7 +825,7 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
         .and_then(|pinned| pinned.pin().map(pin_shows_an_audio_card))
         .unwrap_or(false);
     let stays_up = match card {
-        true => card_menu_press(&paint, x, y),
+        true => card_menu_press(hwnd, &paint, x, y),
         false => shared_menu_press(hwnd, &paint, x, y),
     };
 
@@ -843,7 +857,7 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
 /// either flyout, so its first row is its first choice (see `pin_chrome::menu_row_at`).
 ///
 /// Answers whether the panel stays up.
-unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
+unsafe fn card_menu_press(hwnd: HWND, paint: &PinMenuPaint, x: i32, y: i32) -> bool {
     // The row the press landed on, if it landed on one: each panel's own
     // rows are what a press is answered against, and the pad around them
     // and everywhere outside both panels is not a row (see
@@ -906,6 +920,32 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
         }
         Some(PinMenuRow::PreviousFile) => {
             ask_pin(PinCommand::Previous);
+            false
+        }
+        // The two ways out to another program, answered the way the card's own two buttons
+        // answer them: the file is in hand here, so it is handed over where it was pressed,
+        // the pin comes down as the program or the dialog goes up, and nothing is left
+        // watching a window this app does not own (see `CaptionButton::OpenWith` in
+        // `pin_input`).
+        Some(PinMenuRow::OpenInDefaultApp) => {
+            if let Some(path) = pinned_path() {
+                open_path_with_default_app(&path, hwnd);
+                request_pin_end();
+            }
+            false
+        }
+        // The Shell's list, carried onto the pin's own display on a thread of its own for the
+        // same reason the button's is (see `carry_open_with_to`).
+        Some(PinMenuRow::OpenWithList) => {
+            if let Some(path) = pinned_path() {
+                let before = open_with_snapshot();
+                show_open_with_dialog(&path);
+                if let Some(box_) = window_origin(hwnd) {
+                    let at = (box_.0, box_.1, box_.0 + box_.2, box_.1 + box_.3);
+                    std::thread::spawn(move || carry_open_with_to(at, before));
+                }
+                request_pin_end();
+            }
             false
         }
         // A rule is not a row a hand answers, so a press on one is nothing at all: the menu

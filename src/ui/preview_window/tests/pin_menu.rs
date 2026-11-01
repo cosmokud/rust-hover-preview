@@ -190,6 +190,9 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
             "Shuffle",
             "End of File",
             "Seek",
+            "",
+            "Open in Default App",
+            "Open With...",
         ]
     );
     assert!(
@@ -378,6 +381,9 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
             "Shuffle",
             "End of File",
             "Seek",
+            "",
+            "Open in Default App",
+            "Open With...",
         ]
     );
     assert!(
@@ -1139,6 +1145,9 @@ fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
             "Shuffle",
             "End of File",
             "Seek",
+            "",
+            "Open in Default App",
+            "Open With...",
         ]
     );
 }
@@ -1719,6 +1728,9 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
             "Shuffle",
             "End of File",
             "Seek",
+            "",
+            "Open in Default App",
+            "Open With...",
         ]
     );
 }
