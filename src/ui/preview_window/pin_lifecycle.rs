@@ -2710,6 +2710,9 @@ pub(super) fn place_pinned_siblings() {
         .lock()
         .ok()
         .and_then(|media| media.as_ref().map(|media| media.media_type));
+    // Read once, so that the window the ask moves and the rectangle the registration is pointed at are
+    // the same band of the same pin (see `engine_page_in_the_band`).
+    let page = engine_page_in_the_band();
 
     match kind {
         Some(MediaType::Video) => ensure_pinned_sibling_box(content),
@@ -2720,25 +2723,32 @@ pub(super) fn place_pinned_siblings() {
         // may have just been raised over the window that was covering the page as well, and a page
         // left behind would be a caption standing over the listing it was following.
         //
-        // What the ask puts the page in is the band the pin now holds, and in front of the pin
-        // rather than behind it: a browser's surface behind the band's hole is a resize that goes
-        // black and stutters (see `Host::put_window`).
+        // Where the ask puts the page is `Host::put_window`'s answer and not the band's alone: a page
+        // that runs is put in front of the pin, and a page the pin draws is a source at the bottom of the
+        // order that the pin shows through the Shell's thumbnail of it (see `pin_page_thumbnail`).
         Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
-            if let Some((path, content)) = engine_page_in_the_band() {
+            if let Some((path, content)) = page.as_ref() {
                 webview_preview::raise(
-                    &path,
+                    path,
                     webview_preview::Area {
                         x: content.0,
                         y: content.1,
                         width: (content.2 - content.0).max(1),
                         height: (content.3 - content.1).max(1),
                     },
-                    engine_background(&path),
+                    engine_background(path),
                 );
             }
         }
         _ => {}
     }
+
+    // **The Shell's thumbnail of the page is re-pointed with the band, and it is a rectangle's work.** The
+    // page's own window is placed by the ask above and not here, and what the pin draws of it is the
+    // registration — so this is the call a band change of any kind (a drag, a resize, a display move) is
+    // owed, and the one a step of a drag costs nothing of, the band being the same rectangle in the pin's
+    // client wherever the pin stands (see `pin_page_thumbnail`).
+    pin_page_thumbnail::the_page_was_placed(page.map(|(_, content)| content));
 }
 
 /// The engine-drawn page a pin of its own is framing, and the band it stands in: what every road

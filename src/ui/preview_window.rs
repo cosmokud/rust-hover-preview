@@ -125,6 +125,7 @@ mod pin_lifecycle;
 mod pin_menu;
 mod pin_menu_window;
 mod pin_model;
+mod pin_page_thumbnail;
 mod pin_playback;
 mod pin_real_window;
 mod pin_resize_probe;
