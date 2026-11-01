@@ -31,6 +31,16 @@ pub(super) fn page_claims_the_band(media: MediaType, nested: bool) -> bool {
     nested && matches!(media, MediaType::EngineSvg | MediaType::EngineFont)
 }
 
+/// Whether what lands on the band is the page's: the page is nested in the pin, and it is a document
+/// that runs. A drawing or a font specimen is a picture — its band is still claimed (see
+/// `page_claims_the_band`), so the press is not the desktop's behind the pin, but it carries the pin
+/// and the pin drags by its content (see `begin_pin_drag`). The media kind cannot answer this half:
+/// every page of this engine's arrives as `EngineSvg` or `EngineFont` (see
+/// `webview_preview::page_is_interactive`).
+pub(super) fn page_takes_the_pointer(nested: bool, interactive: bool) -> bool {
+    nested && interactive
+}
+
 /// Whether a screen point is on a band, which is a box's left, top, width and height.
 pub(super) fn band_holds(band: (i32, i32, i32, i32), point: (i32, i32)) -> bool {
     let (x, y, width, height) = band;
@@ -76,6 +86,15 @@ pub(crate) fn the_wheel_is_the_pages(point: (i32, i32)) -> bool {
 /// band still arrive here and are still the page's: the page is what the press was for.
 pub(super) unsafe fn forward(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> bool {
     if !carried(msg) {
+        return false;
+    }
+
+    // A picture the engine renders takes nothing: the press falls through to the pin's own, which
+    // carries the window by its content, and the pointer keeps the arrow the pin set.
+    if !page_takes_the_pointer(
+        webview_preview::page_is_nested(),
+        webview_preview::page_is_interactive(),
+    ) {
         return false;
     }
 
@@ -226,6 +245,33 @@ mod tests {
         );
         assert!(!page_claims_the_band(MediaType::StaticImage, true));
         assert!(!page_claims_the_band(MediaType::Video, true));
+    }
+
+    /// The claim on the band and the hand-over of the pointer are two questions. A nested page keeps
+    /// its band whatever it is — so the press is not the desktop's behind the pin — and only a
+    /// document that runs takes what lands on it: a drawing or a specimen is a picture, and its press
+    /// falls through to the pin's own and drags the pin by its content (see `begin_pin_drag`).
+    #[test]
+    fn only_a_nested_page_that_runs_takes_the_pointer() {
+        for media in [MediaType::EngineSvg, MediaType::EngineFont] {
+            assert!(
+                page_claims_the_band(media, true),
+                "{media:?} keeps its band"
+            );
+            assert!(
+                !page_takes_the_pointer(true, false),
+                "but a {media:?} render takes no press: the pin carries itself by it"
+            );
+            assert!(
+                page_takes_the_pointer(true, true),
+                "a page of HTML the engine runs takes the press"
+            );
+        }
+
+        assert!(
+            !page_takes_the_pointer(false, true),
+            "a page on the desktop takes nothing: the pin claims no band for it"
+        );
     }
 
     /// What the pin hands the page is the mouse messages and nothing of its own: a key, a paint or

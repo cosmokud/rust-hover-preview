@@ -14,6 +14,7 @@
 
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{WS_CHILD, WS_EX_TOPMOST, WS_POPUP};
 
 use super::api::Area;
@@ -145,12 +146,50 @@ pub(super) enum NestedCall {
 /// A placement arrives on every pointer move of a drag, and a page put in the box it already has —
 /// and the chrome raised over it again — is four z-order changes and a recomposited layered pin per
 /// tick (see `Host::put_window`).
+///
+/// What is compared is `PlacedBand`, the page's box in its parent's client units: a nested page is a
+/// child and is carried by the pin, so a move of the pin leaves every part of it alone and the drag
+/// costs nothing (see `placement`).
 pub(super) fn the_page_is_placed(
     change: NestingChange,
-    last_placed: Option<(i32, i32, i32, i32)>,
-    box_: (i32, i32, i32, i32),
+    last_placed: Option<PlacedBand>,
+    band: PlacedBand,
 ) -> bool {
-    change != NestingChange::Stayed || last_placed != Some(box_)
+    change != NestingChange::Stayed || last_placed != Some(band)
+}
+
+/// Whether a placement is due at all: the box or the parent changed (see `the_page_is_placed`), and
+/// the pin is not in its own move/size loop.
+///
+/// A page nested in the pin is its child and the loop carries it: placing anything for the length of
+/// it is a recomposite per move, and a move is where a flicker is seen. Nothing is recorded while
+/// the loop runs, so the first placement after it is the box the loop ended in.
+pub(super) fn places_now(
+    change: NestingChange,
+    last_placed: Option<PlacedBand>,
+    band: PlacedBand,
+    in_move_loop: bool,
+) -> bool {
+    !in_move_loop && the_page_is_placed(change, last_placed, band)
+}
+
+/// What a nested placement is keyed on: the page's box in its parent's client units — its left and
+/// top, then its width and height — its parent's scale, and whether the document runs. A resize, a
+/// display scale, and a document of another kind are each a box that has to be placed again; the
+/// pin being carried is not.
+pub(super) type PlacedBand = (i32, i32, u32, u32, u32, bool);
+
+/// The key a placement is compared by: the band `area` stands in inside `parent`, and the two facts
+/// about the page in it that a placement still answers for.
+pub(super) fn placement(area: Area, parent_origin: (i32, i32), dpi: u32, runs: bool) -> PlacedBand {
+    let (x, y) = client_band(area, parent_origin);
+    (x, y, area.width as u32, area.height as u32, dpi, runs)
+}
+
+/// The scale of a window's display.
+pub(super) fn scale_of(window: HWND) -> u32 {
+    // Safety: the handle is a window this app holds, and a scale is a number it answers itself.
+    unsafe { GetDpiForWindow(window) }
 }
 
 pub(super) fn nested_calls(over_pin: bool) -> [Option<NestedCall>; 2] {
@@ -383,17 +422,84 @@ mod tests {
     /// page does: a drag of any length costs one placement per box, not one per tick.
     #[test]
     fn a_stayed_placement_in_the_same_box_places_nothing() {
-        let box_ = (100, 200, 640, 480);
+        let band = (100, 200, 640, 480, 96, false);
 
-        assert!(!the_page_is_placed(NestingChange::Stayed, Some(box_), box_));
+        assert!(!the_page_is_placed(NestingChange::Stayed, Some(band), band));
         assert!(the_page_is_placed(
             NestingChange::Stayed,
-            Some(box_),
-            (101, 200, 640, 480)
+            Some(band),
+            (101, 200, 640, 480, 96, false)
         ));
-        assert!(the_page_is_placed(NestingChange::Stayed, None, box_));
-        assert!(the_page_is_placed(NestingChange::Entered, Some(box_), box_));
-        assert!(the_page_is_placed(NestingChange::Moved, Some(box_), box_));
+        assert!(the_page_is_placed(NestingChange::Stayed, None, band));
+        assert!(the_page_is_placed(NestingChange::Entered, Some(band), band));
+        assert!(the_page_is_placed(NestingChange::Moved, Some(band), band));
+    }
+
+    /// A page nested in the pin is carried by it: a pin dragged from one place to another leaves the
+    /// page's box in the pin's client units, the pin's scale and the document's kind alone, so the
+    /// gate answers `Stayed` and the move costs no placement — and a resize, a scale, or another
+    /// kind of document is a box to place again.
+    #[test]
+    fn a_pure_move_of_the_pin_places_nothing_and_a_changed_band_does() {
+        let area = |x: i32, y: i32, width: i32, height: i32| Area {
+            x,
+            y,
+            width,
+            height,
+        };
+        let at_rest = placement(area(1000, 300, 600, 400), (20, 10), 96, false);
+
+        let carried = placement(area(1400, 900, 600, 400), (420, 610), 96, false);
+        assert_eq!(at_rest, carried, "the same band inside a pin that moved");
+        assert!(!the_page_is_placed(
+            NestingChange::Stayed,
+            Some(at_rest),
+            carried
+        ));
+
+        let resized = placement(area(1400, 900, 700, 400), (420, 610), 96, false);
+        assert!(the_page_is_placed(
+            NestingChange::Stayed,
+            Some(at_rest),
+            resized
+        ));
+
+        let scaled = placement(area(1400, 900, 600, 400), (420, 610), 144, false);
+        assert!(the_page_is_placed(
+            NestingChange::Stayed,
+            Some(at_rest),
+            scaled
+        ));
+
+        let runs = placement(area(1400, 900, 600, 400), (420, 610), 96, true);
+        assert!(the_page_is_placed(
+            NestingChange::Stayed,
+            Some(at_rest),
+            runs
+        ));
+    }
+
+    /// What a move or a size loop holds back: nothing is placed while it runs — not even for a box
+    /// that changed — and the first placement once it has ended settles on where it ended.
+    #[test]
+    fn a_move_loop_places_nothing_and_settles_after_it() {
+        let band = (100, 200, 640, 480, 96, false);
+
+        assert!(!places_now(NestingChange::Stayed, Some(band), band, true));
+        assert!(
+            !places_now(NestingChange::Entered, None, band, true),
+            "a box that changed waits for the loop to end"
+        );
+        assert!(!places_now(NestingChange::Stayed, None, band, true));
+
+        assert!(!places_now(NestingChange::Stayed, Some(band), band, false));
+        assert!(places_now(NestingChange::Entered, None, band, false));
+        assert!(places_now(
+            NestingChange::Stayed,
+            Some(band),
+            (0, 0, 640, 480, 96, false),
+            false
+        ));
     }
 
     /// Settling into the parent it is already in is answered as `Stayed`, which is what makes a

@@ -51,7 +51,8 @@ mod pages;
 
 pub(crate) use api::{
     browser_pid, can_draw, draws, is_available, is_behind, is_showing, nested_page_band,
-    page_is_nested, page_runs, screen_rect, showing_hwnd, showing_path, take_failure_notice, Area,
+    note_pin_move_loop, page_is_interactive, page_is_nested, page_runs, pin_in_move_loop,
+    screen_rect, showing_hwnd, showing_path, take_failure_notice, Area,
 };
 pub(crate) use environment::{clear_stale_profiles, stale_profile_pids};
 pub(crate) use pages::{hide, hide_html_preview, place, raise, show, shutdown, wanted_here};
