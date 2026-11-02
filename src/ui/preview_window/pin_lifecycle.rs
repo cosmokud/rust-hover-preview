@@ -2823,6 +2823,26 @@ pub(super) fn pinned_band_in_the_client() -> Option<(i32, i32, i32)> {
         pinned_transport_height(pin.dpi, pin.transport_bar),
         pin.overlay,
     );
+
+    // **A window and the box the pin says it stands at are one fact, and this is the one place that
+    // fault is said out loud.** What is handed to the Shell is the painted band, so a window larger
+    // than the box the paint was composed for is a strip of the pin's own alpha-1 rows standing
+    // around a page that is the right size — the desktop seen through the pin, under chrome that
+    // stops where the baked surface does. The row a resize drag paints its surface a row taller than
+    // the window is the one difference that is not a fault (see
+    // `paint::the_slack_a_resize_paints_with`), so both are allowed for and nothing else is.
+    if let Some(hwnd) = pin_real_window::real_pin_window() {
+        if let Some(client) = unsafe { pin_film_thumbnail::client_size(hwnd) } {
+            if client != (width, height) && client != (width, height + 1) {
+                note_pin_trace!(
+                    "page band: the pin stands at {width}x{height} and its client is {}x{}",
+                    client.0,
+                    client.1
+                );
+            }
+        }
+    }
+
     Some((width, top, rows))
 }
 
