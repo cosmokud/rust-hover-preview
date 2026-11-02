@@ -852,8 +852,8 @@ static WINDOW_AT_POINT_STAND_IN: Mutex<Option<isize>> = Mutex::new(None);
 ///
 /// Two things have to be true of a kind for that. The band has to be one this app can
 /// paint on: the page the browser draws an SVG or a font on is a window of somebody else's
-/// standing *in* the band, so a caption this app drew over one of those would be a caption
-/// underneath it. The window FFmpeg's player has is the other window of somebody else's, and it
+/// standing *in* the band while that page runs, so a caption this app drew over one of those would
+/// be a caption underneath it. The window FFmpeg's player has is the other window of somebody else's, and it
 /// is drawn over all the same: the pin's own window is the one on top for as long as any strip
 /// of its chrome is showing, and the player's own raise is held off for that while (see
 /// `pin_chrome_up`), so what this app paints in the band is what is seen. And the frame has to
@@ -865,8 +865,16 @@ static WINDOW_AT_POINT_STAND_IN: Mutex<Option<isize>> = Mutex::new(None);
 /// a sound's card are neither: the first two keep their bars the way they have always had them,
 /// the card is its own size with no band to fill, and a pin collapsed into its bubble has no
 /// chrome of either kind.
-pub(super) fn pin_overlay_chrome(kind: Option<MediaType>) -> bool {
+///
+/// **A page the browser draws is the two answers in one kind, and `page_runs` is the whole of
+/// which**: a document or a specimen is a picture the pin draws through the Shell's thumbnail of a
+/// source window, so its band is this app's to paint a strip over; a page that runs is a window of
+/// the user's standing in front of the pin, and a caption painted over one of those would be a
+/// caption underneath it (see `webview_preview`'s `put_window`). `page_runs` is read and unused by
+/// every other kind.
+pub(super) fn pin_overlay_chrome(kind: Option<MediaType>, page_runs: bool) -> bool {
     match kind {
+        Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => !page_runs,
         Some(kind) => !kind.is_engine() && pin_frame(Some(kind)) == PinFrame::Shaped,
         None => false,
     }

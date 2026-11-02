@@ -508,7 +508,8 @@ pub(super) struct PinnedPreview {
     pub(super) frame: PinFrame,
     /// Whether this kind's chrome is drawn over its media rather than in bands around it, decided
     /// when the pin was taken up for the same reason the two lines above are: it is a question about
-    /// the kind, and the window's own box is measured from the answer (see `pin_overlay_chrome`).
+    /// the kind — and, for a page the browser draws, about whether that page runs — and the window's
+    /// own box is measured from the answer (see `pin_overlay_chrome`).
     pub(super) overlay: bool,
     /// Whether the pointer can ask for this pin's chrome to come and go. It is true of the kinds
     /// whose chrome is drawn *over* their media, where a strip is in the way of the thing the
@@ -858,8 +859,11 @@ pub(super) fn pin_transport_live(kind: Option<MediaType>) -> bool {
 /// A strip in the way of the thing the window is for is what has to be asked for rather than always
 /// there, and nothing else is: a kind whose chrome is in bands around its media keeps those bands
 /// whatever the pointer is doing, and a sound has no chrome at all (see `pinned_caption_height`).
-pub(super) fn pin_hides_chrome(kind: Option<MediaType>) -> bool {
-    pin_overlay_chrome(kind)
+/// The browser's two kinds are asked of the page they are showing rather than of the kind: a page
+/// that does not run is a picture under this app's chrome, and one that runs is a window standing
+/// in front of it (see `pin_overlay_chrome`).
+pub(super) fn pin_hides_chrome(kind: Option<MediaType>, page_runs: bool) -> bool {
+    pin_overlay_chrome(kind, page_runs)
 }
 
 /// The box of the pinned picture the wheel zooms, or nothing where the pin is not one — asked

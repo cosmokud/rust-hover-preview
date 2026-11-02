@@ -444,6 +444,11 @@ impl Host {
     /// in and the pin stands under it, and what the pin loses by it is the presses that land on the
     /// page — which are the pin's own and raise it anyway (see `settle_pinned_press`).
     ///
+    /// **Which of the two a document gets is `page_runs`, and it is the pin's own chrome decision as
+    /// well**: a page the pin draws is a picture, so the caption floats over it, and a page that runs
+    /// keeps the pin's caption in a band of its own above it, because a caption painted in the band a
+    /// running page holds would be a caption underneath it (see `pin_overlay_chrome`).
+    ///
     /// **A page the pin draws is not a window of the desktop's at all, and it is the film road's own
     /// one placement** (see `pin_film_thumbnail::place_the_source`): invisible at one part in 255 and
     /// click-through, at the bottom of the order, placed at the band once and only *moved* after that.

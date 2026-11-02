@@ -1073,8 +1073,13 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         .unwrap_or((None, None));
     let dpi = dpi_at(rect.0, rect.1);
     let transport_bar = pin_transport_kind(kind);
-    let overlay = pin_overlay_chrome(kind);
-    let hides_chrome = pin_hides_chrome(kind);
+    // Asked only of the browser's two kinds, and only they read it: the question behind the
+    // overlay of an SVG or a specimen is whether the page in the band runs, and every other
+    // kind's answer is the kind's own (see `pin_overlay_chrome`).
+    let page_runs = matches!(kind, Some(MediaType::EngineSvg | MediaType::EngineFont))
+        && webview_preview::page_runs(path);
+    let overlay = pin_overlay_chrome(kind, page_runs);
+    let hides_chrome = pin_hides_chrome(kind, page_runs);
     let caption = pinned_caption_height(dpi, kind);
 
     // A sound's card is not the box its hover was: a hover's card carries no
