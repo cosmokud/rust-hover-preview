@@ -59,8 +59,9 @@ binary behind. The hook therefore writes the checkout's own path beside the dire
 package — and nothing else. With nothing set, cargo uses the checkout's own `target/`. The hook
 only runs where the repo's hooks are the configured ones (`git config core.hooksPath .githooks`).
 
-See [README.md](README.md) for app usage and [ARCHITECTURE.md](ARCHITECTURE.md)
-for a full system overview.
+See [README.md](README.md) for app usage, [docs/tray.md](docs/tray.md) for the tray menu and
+[docs/configuration.md](docs/configuration.md) for every `config.ini` setting, and
+[ARCHITECTURE.md](ARCHITECTURE.md) for a full system overview.
 
 ## Making changes
 
