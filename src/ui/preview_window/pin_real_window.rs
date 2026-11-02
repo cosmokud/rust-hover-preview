@@ -30,11 +30,11 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetWindowLongPtrW, IsWindowVisible, MoveWindow, RegisterClassExW,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX,
-    WS_POPUP, WS_SYSMENU,
+    CreateWindowExW, GetForegroundWindow, GetWindowLongPtrW, IsWindowVisible, MoveWindow,
+    RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
 use super::window_proc;
@@ -97,10 +97,45 @@ pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) 
             if let Ok(mut shown) = APPWINDOW_SHOWS.lock() {
                 shown.push(hwnd.0 as isize);
             }
+            // **The foreground the put-down costs is given straight back where the window put down
+            // is the one the user was in.** A window hidden by the process that owns it has its
+            // activation handed to the window next in the z-order — and the pin's own answer to the
+            // `WM_ACTIVATE` that follows hands that window the foreground for good (see
+            // `pin_release_focus`). On the click that turns `Always On Top` off, that window is the
+            // listing, raised over a pin that has just been taken out of the topmost band: the card
+            // vanished behind Explorer on the button the user had just pressed. The put-down is this
+            // app's own and only the Shell's button needs it, so the caret it costs is asked for
+            // again from the same place every press asks (see `pin_take_focus`).
+            let front_before = unsafe { GetForegroundWindow() };
             let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
             let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+            if a_put_down_owes_the_foreground_back(front_before, hwnd, the_pins_own_window(hwnd)) {
+                unsafe {
+                    super::pin_model::pin_take_focus(hwnd, &super::pin_lifecycle::Win32PinWindow);
+                }
+            }
         }
     }
+}
+
+/// Whether the show a taskbar bit costs owes the window the foreground back: only the pin's own
+/// window, and only where it was the window the user was in when it was put down.
+///
+/// A window that is not the one in front has no foreground to lose — the put-down is the show the
+/// Shell reads and nothing else — and neither has a host the pin's button is not the host's to wear
+/// (see `set_the_pin_window_appwindow`).
+fn a_put_down_owes_the_foreground_back(
+    the_front_before: HWND,
+    hwnd: HWND,
+    the_pins_own_window: bool,
+) -> bool {
+    the_pins_own_window && the_front_before == hwnd
+}
+
+/// Whether `hwnd` is the window a pin of this app's stands in right now, which is the one window a
+/// put-down owes the foreground back to (see `a_put_down_owes_the_foreground_back`).
+fn the_pins_own_window(hwnd: HWND) -> bool {
+    super::pinned() && super::pinned_window() == hwnd
 }
 
 /// The windows this run has put down and up again so that the Shell reads a taskbar bit: the one
@@ -351,6 +386,32 @@ mod tests {
             let _ = DestroyWindow(hwnd);
         }
         REAL_PIN_HWND.store(0, Ordering::SeqCst);
+    }
+
+    /// The foreground a taskbar bit's put-down costs is owed back only to the pin's own window, and
+    /// only where that window was the one the user was in.
+    ///
+    /// This is the answer the `Always On Top` button's own click turns on: Explorer getting the
+    /// caret the put-down dropped is Explorer raised over a pin that has just left the topmost band,
+    /// which is the card the user had just pressed vanishing behind the listing (see
+    /// `a_put_down_owes_the_foreground_back`).
+    #[test]
+    fn a_put_down_owes_the_foreground_back_only_to_the_window_that_had_it() {
+        let pin = HWND(0x1234 as *mut _);
+        let listing = HWND(0x5678 as *mut _);
+
+        assert!(
+            a_put_down_owes_the_foreground_back(pin, pin, true),
+            "the pin the user had just clicked is the window the put-down takes the caret from"
+        );
+        assert!(
+            !a_put_down_owes_the_foreground_back(listing, pin, true),
+            "a pin the user was not in has no caret to lose, and asking for it would be a raise"
+        );
+        assert!(
+            !a_put_down_owes_the_foreground_back(pin, pin, false),
+            "a window that is no pin's own keeps its hand-off: the caret is the Shell's answer"
+        );
     }
 
     /// The styles above are the styles of the window that is actually made: a plain `STATIC` window
