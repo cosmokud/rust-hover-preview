@@ -167,8 +167,10 @@ pub(super) unsafe fn show_pin_taskbar() {
 /// picture of the pin, and forcing the bitmap on it would freeze the film the user is watching in the
 /// button.
 ///
-/// Asked of both windows a pin can be put away as: the stand-in (see `show_pin_taskbar`), and the film
-/// host that owns a pin's chrome on a film a player draws (see `pin_film_host`).
+/// Asked of every window a pin can be put away as: the stand-in (see `show_pin_taskbar`), the film
+/// host that owns a pin's chrome on a film a player draws (see `pin_film_host`), and the window a pin
+/// that stands in its own — a picture, a page, a card — wears its button on (see
+/// `put_the_pins_window_in_the_taskbar`).
 pub(super) unsafe fn the_buttons_still_is_the_apps_own(hwnd: HWND, the_apps_own: bool) {
     #[cfg(test)]
     if the_apps_own {
