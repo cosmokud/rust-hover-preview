@@ -1224,11 +1224,15 @@ fn a_bound_does_not_halve_an_engine_drawn_file_below_the_box_its_own_preview_tak
     let _ = std::fs::remove_dir_all(&folder);
 }
 
-/// A page the engine draws that is larger than the bound the pin carries is clamped to that bound
-/// with its aspect kept: the bound is the window's ceiling, and a page fitted into it is a page
-/// drawn smaller rather than one drawn past the edge of its window (see `pin_update_box`).
+/// A bound the pin carries is the side an engine-drawn file's longer side takes, whichever way it
+/// goes: a file the bound is larger than is drawn *up* to it, and one the bound is smaller than is
+/// drawn down — never past it, and never at its own size in the middle of it, its aspect kept (see
+/// `pin_update_box` and `pinned_media_box`).
+///
+/// The old answer was a ceiling only: a file the bound could hold was left at its own box, so a
+/// small drawing into a window the hand had dragged out stayed small.
 #[test]
-fn an_engine_page_larger_than_the_bound_is_clamped_to_it() {
+fn a_bound_fills_an_engine_drawn_file_up_as_well_as_down() {
     let _room = the_room_to_itself();
 
     if !webview_preview::can_draw() {
@@ -1241,12 +1245,29 @@ fn an_engine_page_larger_than_the_bound_is_clamped_to_it() {
         PinChrome::always(),
     )));
 
-    let folder = std::env::temp_dir().join("rust-hover-preview-pin-engine-clamp");
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-engine-bound-fill");
     std::fs::create_dir_all(&folder).expect("a test folder");
 
-    let _on = RenderHtml::stood_at(true);
-    let page = folder.join("a page.html");
-    std::fs::write(&page, b"<!DOCTYPE html><p>a page of its own</p>").expect("a written page");
+    // The file's own box, one square and one taller than it is wide: `By Screen 100%` is the share
+    // that leaves each of them at what it measured at, so the bound is the only thing in play.
+    let _share = FontScale::stood_at(PreviewScale::Percent(100));
+    let square = folder.join("a square.ttf");
+    std::fs::write(&square, b"a specimen's own bytes").expect("a written specimen");
+    hold_box(
+        &square,
+        &file_version(&square),
+        &MeasureScope::File,
+        Some((500, 500)),
+    );
+
+    let tall = folder.join("a tall specimen.ttf");
+    std::fs::write(&tall, b"another specimen's own bytes").expect("a written specimen");
+    hold_box(
+        &tall,
+        &file_version(&tall),
+        &MeasureScope::File,
+        Some((2000, 4000)),
+    );
 
     let bounds = ScreenBounds {
         left: 0,
@@ -1264,38 +1285,45 @@ fn an_engine_page_larger_than_the_bound_is_clamped_to_it() {
         room: bounds,
     };
 
-    let shape = media_dimensions(&page, bounds, 96).expect("the page's shape");
-    let own = pinned_media_box(
-        shape,
-        bounds,
-        hover_preview_scale(&page, current_hover_scales()),
-    );
-    let bound = own.0 / 3;
-    assert!(
-        bound < own.0 && bound < own.1,
-        "the bound has to be smaller than the page for this to be a clamp"
-    );
+    let bound = 1000;
+    for (path, filled) in [(&square, (1000, 1000)), (&tall, (500, 1000))] {
+        let own = pinned_media_box(
+            media_dimensions(path, bounds, 96).expect("the file's own box"),
+            bounds,
+            hover_preview_scale(path, current_hover_scales()),
+        );
 
-    let Some(PinBox::Measured(laid_out)) =
-        pin_update_content(space(Some(bound)), &page, bounds, 96)
-    else {
-        panic!("the page was not laid out");
-    };
+        let Some(PinBox::Measured(laid_out)) =
+            pin_update_content(space(Some(bound)), path, bounds, 96)
+        else {
+            panic!("{} was not laid out", path.display());
+        };
 
-    let (width, height) = (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1);
-    assert!(
-        width <= bound && height <= bound,
-        "the page was drawn past the bound the pin carries"
-    );
-    assert_eq!(
-        width, bound,
-        "the page does not fill the bound it was fitted into"
-    );
-    assert_eq!(
-        height,
-        own.1 * bound / own.0,
-        "the page's aspect was not kept as it was fitted into the bound"
-    );
+        let size = (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1);
+        assert_eq!(
+            size,
+            filled,
+            "{} was not fitted into the bound's own side, filling it",
+            path.display()
+        );
+        assert!(
+            size.0 <= bound && size.1 <= bound,
+            "{} was drawn past the bound the pin carries",
+            path.display()
+        );
+        assert_eq!(
+            size.1,
+            own.1 * size.0 / own.0,
+            "{}'s aspect was not kept as it was fitted into the bound",
+            path.display()
+        );
+        assert_eq!(
+            size.0.max(size.1),
+            bound,
+            "{}'s longer side did not take the bound's side",
+            path.display()
+        );
+    }
 
     stand_pin(previous_pin);
     let _ = std::fs::remove_dir_all(&folder);
