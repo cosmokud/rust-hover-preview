@@ -400,14 +400,15 @@ fn pin_update_content_measured(
             // box the pin occupies: the size a take-up would have given it, and no ceiling to fit
             // into (see `pin_swap_room`).
             None => centred_at(own, pin_swap_centre(space)),
-            // A bound is a ceiling some other file's box gave this window, so the file's own box
-            // is fitted into the square of that bound rather than being the size on screen: the
-            // rule every later file is given, and never a share of its own size (see
-            // `pin_update_box`).
+            // A bound is a side some other file's box gave this window, so the file's own box is
+            // fitted into the square of that bound and fills it, up as well as down: its longer
+            // side takes the bound's side and never passes it, its aspect kept — the rule a
+            // maximize is given, and never a share of its own size (see `pin_update_box`,
+            // `pinned_media_box` and `reset_pinned_size`).
             Some(_) => pin_update_box(
                 pin_swap_room(space, bounds, dpi),
                 (own.0 as u32, own.1 as u32),
-                PreviewScale::Percent(100),
+                PreviewScale::FitToScreen,
             ),
         };
 
