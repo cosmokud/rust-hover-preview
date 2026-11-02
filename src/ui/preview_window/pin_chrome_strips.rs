@@ -22,7 +22,9 @@
 //! **Why they take no input.** They are made disabled, and a disabled child is skipped by
 //! `WindowFromPoint`, so a press on the chrome keeps landing on the pin and being answered by its
 //! coordinates — the same answer it had when the chrome was only paint (see the note over the
-//! host, which is disabled for the same reason).
+//! host, which is disabled for the same reason). The caption's popup is no child, and a disabled
+//! top-level window still takes the press, so it is made `WS_EX_TRANSPARENT` instead (see
+//! `the_caption_popup_at`).
 //!
 //! **Why `UpdateLayeredWindow` and never `SetLayeredWindowAttributes`.** The strips are carried by
 //! per-pixel alpha, because the pixels they carry are the pin's own — alpha and all — and the two
@@ -41,7 +43,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, RegisterClassExW,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_STYLE, HWND_TOP,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW,
-    WS_CHILD, WS_DISABLED, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    WS_CHILD, WS_DISABLED, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    WS_POPUP, WS_VISIBLE,
 };
 
 use super::*;
@@ -156,10 +159,12 @@ fn the_strips_state() -> Option<TheStripsState> {
 /// The caption's popup for `pin`, made the first time something asks for it and kept: a window is not
 /// made for every paint, and a popup owned by another pin is a caption standing over somebody else's box.
 ///
-///**`WS_DISABLED` is what keeps the press the pin's**: a disabled window is skipped by `WindowFromPoint`,
-/// so a press on the caption's rows lands on the pin and is answered by its coordinates — the drag, the
-/// buttons and the double-click reset all as they were when the caption was only paint (see the module
-/// doc).
+///**`WS_EX_TRANSPARENT` is what keeps the press the pin's**: a top-level popup is not skipped by
+/// `WindowFromPoint` for being disabled (measured: a disabled `WS_POPUP` ate every press), but a
+/// layered window wearing this bit is ignored by hit testing, so a press on the caption's rows falls
+/// to the pin underneath and is answered by its coordinates — the drag, the buttons and the
+/// double-click reset all as they were when the caption was only paint (see the module doc).
+/// `WS_DISABLED` and `WS_EX_NOACTIVATE` stay: the popup takes no keyboard and no focus either.
 ///
 /// The pin owns it through `GWLP_HWNDPARENT`, which is what keeps it over its owner without being
 /// raised, and nothing here ever asks for `HWND_TOP` or `HWND_TOPMOST`: a caption that takes the top of
@@ -181,7 +186,7 @@ unsafe fn the_caption_popup_at(pin: HWND) -> Option<HWND> {
         let hinstance = unsafe { GetModuleHandleW(None) }.ok()?;
         popup = unsafe {
             CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
                 STRIP_CLASS,
                 w!("caption popup"),
                 WS_POPUP | WS_DISABLED,
