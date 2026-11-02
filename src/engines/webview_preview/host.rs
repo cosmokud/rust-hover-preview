@@ -338,8 +338,18 @@ impl Host {
 
         // The bounds this window was given are recorded, so that a box which only moves from
         // here is not also re-laid-out (see `place`).
-        let before = self.last_area;
         self.last_area = Some((area.width, area.height));
+
+        // The client the window really has, read rather than taken from the record above: what a
+        // source window's client is the surface the pin's band samples, and the record is the box
+        // last *asked for*. A band maximized without resizing this window — which is what `place`
+        // does, a source being laid out once — leaves the record at one box and the client at the
+        // smaller one before it, and the swap that follows would skip the resize that is the whole
+        // of what puts the band right (see `the_window_takes_the_area`).
+        let mut client = RECT::default();
+        let client = unsafe { GetClientRect(self.hwnd, &mut client) }
+            .ok()
+            .map(|()| (client.right - client.left, client.bottom - client.top));
 
         unsafe {
             self.put_the_page_style();
@@ -347,10 +357,10 @@ impl Host {
             let _ = self.controller.SetIsVisible(true);
 
             // A source window's client is the surface the pin's band samples, so a document
-            // arriving at a size the window has not been given is the *window's* box to take,
+            // arriving at a size the window's client is not is the *window's* box to take,
             // and it is taken before the browser is told the box to lay the page out at: the
             // client is one box, and the page is laid out at the same one.
-            if self.the_page_is_a_source() && the_window_takes_the_area(before, area) {
+            if self.the_page_is_a_source() && the_window_takes_the_area(client, area) {
                 let _ = SetWindowPos(
                     self.hwnd,
                     HWND::default(),
@@ -367,19 +377,11 @@ impl Host {
             self.put_window(area);
         }
 
-        // The box asked for beside the client the window really has, and what it held before: a page
-        // the pin draws is sampled at its client, so the two disagreeing is a band drawn off its source.
-        let mut client = RECT::default();
-        let _ = unsafe { GetClientRect(self.hwnd, &mut client) };
+        // The box asked for beside the client the window really has: a page the pin draws is sampled
+        // at its client, so the two disagreeing is a band drawn off its source.
         trace(&format!(
-            "show client {}x{} area {}x{}+{}+{} before {before:?} source={} runs={runs}",
-            client.right - client.left,
-            client.bottom - client.top,
-            area.width,
-            area.height,
-            area.x,
-            area.y,
-            self.a_source
+            "show client {client:?} area {}x{}+{}+{} source={} runs={runs}",
+            area.width, area.height, area.x, area.y, self.a_source
         ));
 
         publish(Some((path.clone(), area)));
@@ -851,12 +853,20 @@ impl Host {
 /// Whether a document arriving at `area` is the *window's* box to take, or only the picture of it.
 ///
 /// A page a pin samples is its window's *client*, and that client is also the box the browser lays
-/// the document out at (see `show`), so a document arriving at a size this window has not been given
-/// is a page of one box drawn in a surface of another: the Shell fits the stale client into the
+/// the document out at (see `show`), so a document arriving at a size the client is not is a page of
+/// one box drawn in a surface of another: the Shell fits whatever client the window has into the
 /// band, which is the page small or squashed with the desktop showing in the band around it. A box
 /// that only *moved* is the same client elsewhere and changes no side of it.
-fn the_window_takes_the_area(last: Option<(i32, i32)>, area: Area) -> bool {
-    last != Some((area.width, area.height))
+///
+/// What is compared is the client the window has *now* rather than the box it was last asked for: a
+/// band that moved without resizing this window — a maximize, which `place` never resizes a source
+/// for — leaves a record of one box beside a client of another, and the swap that follows at the
+/// recorded box would otherwise skip the resize and leave the band sampling the older, smaller
+/// client as a magnified page.
+///
+/// `None` is a window with no client yet, which is the first box's to take.
+fn the_window_takes_the_area(client: Option<(i32, i32)>, area: Area) -> bool {
+    client != Some((area.width, area.height))
 }
 
 /// How a navigation ended, as the four things `Host::show` does something about.
@@ -1061,11 +1071,12 @@ pub(super) fn raises(pinned: bool, holds_front: bool) -> [Option<Raise>; 2] {
 mod tests {
     use super::{the_window_takes_the_area, Area};
 
-    /// The traced show: a source holding a page laid out at 2461x615 is asked for the 353x1410 band,
-    /// which is the window's own box to take; a drag step is the same box elsewhere and is not; and
-    /// a window given no box yet is the first one's. (see `the_window_takes_the_area`).
+    /// The traced show: a source whose client is still the 2461x615 the page was laid out at is asked
+    /// for the 353x1410 band, which is the window's own box to take; a client already of the band's
+    /// size is a window that only moved, which is not; and a window with no client yet is the first
+    /// box's (see `the_window_takes_the_area`).
     #[test]
-    fn a_document_arriving_at_another_size_is_the_window_s_box() {
+    fn a_client_of_another_size_is_the_window_s_box() {
         let band = Area {
             x: 1589,
             y: 194,

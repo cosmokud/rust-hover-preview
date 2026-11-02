@@ -4,8 +4,8 @@ use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetWindow, GetWindowRect, IsIconic, IsWindow, IsWindowVisible,
-    SendMessageW, ShowWindow, GW_HWNDPREV, SC_CLOSE, SC_MINIMIZE, SW_SHOWNOACTIVATE, WA_ACTIVE,
-    WINDOW_EX_STYLE, WM_ACTIVATE, WM_CLOSE, WM_SYSCOMMAND, WS_POPUP,
+    SendMessageW, ShowWindow, GW_HWNDPREV, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
+    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_CLOSE, WM_SYSCOMMAND, WS_POPUP,
 };
 
 /// A SPACE with a focused bubble holds a film or a sound, and nothing else.
@@ -2554,6 +2554,56 @@ fn the_shells_show_desktop_minimizes_a_pin_that_is_a_window_of_its_own() {
         box_,
         "and it comes back where it stood, which is not where a minimized window sits"
     );
+
+    // **A caption double-click is a system command too**, and the box the default procedure would give
+    // the window natively is one the pin's state never hears about: the pin's own maximize is queued
+    // instead (see `toggle_pin_maximized`).
+    unsafe {
+        let _ = SendMessageW(
+            pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_MAXIMIZE as usize),
+            LPARAM(0),
+        );
+    }
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::Maximize),
+        "the caption's maximize is the pin's own, so its box and its bound are the ones recorded"
+    );
+
+    // A restore while the pin is not maximized is the desktop's business and is passed on: nothing is
+    // queued for a toggle the pin has no box to come back from.
+    unsafe {
+        let _ = SendMessageW(
+            pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_RESTORE as usize),
+            LPARAM(0),
+        );
+    }
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "a restore of a pin that is not maximized asks the pin for nothing"
+    );
+
+    // And the same command while it *is* maximized is the toggle back, and again the pin's own.
+    with_pin(|pin| pin.restore = Some((0, 0, 400, 300)));
+    unsafe {
+        let _ = SendMessageW(
+            pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_RESTORE as usize),
+            LPARAM(0),
+        );
+    }
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::Maximize),
+        "the window's own restore of a maximized pin is the pin's restore"
+    );
+    with_pin(|pin| pin.restore = None);
 
     // A close is still a close: the button's own menu row.
     unsafe {
