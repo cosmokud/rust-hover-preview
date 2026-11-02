@@ -435,21 +435,11 @@ pub(super) unsafe fn sync_the_chrome_strips() {
     let Some(state) = the_strips_state() else {
         // No pin to read, or a pin collapsed into its bubble: whatever the strips are carrying,
         // nothing on screen is asking for any of it.
-        pin_page_thumbnail::the_caption_rows_are(0);
         let _ = unsafe { ShowWindow(caption, SW_HIDE) };
         let _ = unsafe { ShowWindow(transport, SW_HIDE) };
         let _ = unsafe { ShowWindow(volume, SW_HIDE) };
         return;
     };
-
-    // The page's own registration stands under the caption's rows: it gives them up while the caption
-    // is up, or the strip is a caption the Shell's thumbnail composites over (see
-    // `pin_page_thumbnail`). Nothing at all for every pin that has no page.
-    pin_page_thumbnail::the_caption_rows_are(if state.caption {
-        state.caption_height
-    } else {
-        0
-    });
 
     let caption_wanted = (
         state.width.max(1) as u32,
