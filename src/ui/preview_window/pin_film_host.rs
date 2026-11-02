@@ -61,18 +61,20 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW, GetClientRect, GetWindowLongPtrW,
-    GetWindowThreadProcessId, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST,
-    HWND_TOPMOST, ICON_BIG, ICON_SMALL, SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE,
-    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE,
-    WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLOSE,
-    WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT, WM_QUERYOPEN, WM_SETFOCUS,
-    WM_SETICON, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
-    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW, GetClientRect,
+    GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, RegisterClassExW,
+    SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE,
+    GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL, SC_CLOSE,
+    SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE,
+    WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLOSE, WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST,
+    WM_PAINT, WM_QUERYOPEN, WM_SETFOCUS, WM_SETICON, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
-use super::pin_trace::{note_a_message_of_a_window, note_pin_trace, window_name};
+use super::pin_trace::{
+    a_window_description, note_a_message_of_a_window, note_pin_trace, what_is_above, window_name,
+};
 use super::*;
 
 /// The class a film's host is made from. A class of its own rather than the pin window's: what a
@@ -1319,6 +1321,18 @@ pub(super) unsafe fn place_the_pin_in_the_band(pin: HWND, after: HWND) {
     if window != pin && !pin.is_invalid() {
         place(pin);
     }
+
+    // **Where the placement left the pair, beside the window that had the foreground when it was
+    // asked**: a band write is the one road of this app's that can come over whatever the user is
+    // working in, so the two are read together (see `pin_trace::what_is_above`).
+    if pin_trace::wanted() {
+        note_pin_trace!(
+            "band placed: above={} foreground={}",
+            what_is_above(pin),
+            // Safety: a question about the desktop's own bookkeeping (see `a_window_description`).
+            a_window_description(unsafe { GetForegroundWindow() })
+        );
+    }
 }
 
 /// Ask for the pair's taskbar button on the window of it the Shell can list, or give it up with the
@@ -1910,7 +1924,17 @@ fn trace_the_host_show(host: HWND, visible: bool) {
         return;
     }
     *last = Some((host.0 as isize, visible));
-    note_pin_trace!("host visible {} {:?}", visible as u8, host);
+    // **What the show left over the host, and where the foreground was when it was asked**: the two
+    // readings a run has of a host that came up over the user's work, or of one that was shown while
+    // something else had the front.
+    note_pin_trace!(
+        "host visible {} {:?} above={} foreground={}",
+        visible as u8,
+        host,
+        what_is_above(host),
+        // Safety: a question about the desktop's own bookkeeping (see `a_window_description`).
+        a_window_description(unsafe { GetForegroundWindow() })
+    );
 }
 
 /// How many times this run has asked the host to hide, for the tests that hold a relaunch to never

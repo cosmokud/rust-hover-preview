@@ -2105,7 +2105,14 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         );
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         trace_the_raised_film_with(hwnd.0 as isize, "topmost shown: player hwnd", || {
-            format!("topmost shown: player hwnd {hwnd:?}")
+            // **The player's window is the film's own and is shown by a process that may not hold the
+            // foreground**, so what it landed over and who held the front are written with the show: a
+            // spawn that took the front is read here rather than guessed at from the hole it left.
+            format!(
+                "topmost shown: player hwnd {hwnd:?} above={} foreground={}",
+                pin_trace::what_is_above(hwnd),
+                pin_trace::a_window_description(GetForegroundWindow())
+            )
         });
     }
 

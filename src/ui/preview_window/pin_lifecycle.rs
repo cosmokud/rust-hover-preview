@@ -437,7 +437,7 @@ pub(super) fn showing_takes_the_band_to_appear(on_the_screen: bool) -> bool {
 /// `Pin Mode → Always On Top` belongs in, reached in a way the foreground window cannot refuse.
 /// Nothing of the band is left held, so the next click on another window puts the pin behind it,
 /// exactly as any window behaves (see `pin_holds_the_front`).
-unsafe fn take_the_band_and_give_it_back(hwnd: HWND) {
+unsafe fn take_the_band_and_give_it_back(hwnd: HWND, why: &str) {
     // Nobody holds a band this road gives back, whatever it was held for: the window is in the ordinary
     // band from the second call on, and a flag left saying otherwise would have the next placement put it
     // back over every program for a hold that is over (see `PIN_BAND_HELD`).
@@ -448,6 +448,16 @@ unsafe fn take_the_band_and_give_it_back(hwnd: HWND) {
     unsafe {
         pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST);
         pin_film_host::place_the_pin_in_the_band(hwnd, HWND_NOTOPMOST);
+    }
+
+    // **Which road asked for the flip, and what it left over the window**, read after both writes:
+    // a flip is the one road of this app's that can put a pin somewhere the user did not, and where it
+    // landed is where the window it went under is named (see `pin_trace::what_is_above`).
+    if pin_trace::wanted() {
+        note_pin_trace!(
+            "band taken and given back: {why} above={}",
+            pin_trace::what_is_above(hwnd)
+        );
     }
 }
 
@@ -1595,7 +1605,7 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
             // is left after the band is given back is a window at the front of the ordinary one, which
             // the next click on another window puts behind it, exactly as any window behaves.
             // `Pin Mode → Always On Top` is still the only thing that keeps a pin over other programs.
-            take_the_band_and_give_it_back(hwnd);
+            take_the_band_and_give_it_back(hwnd, "the pin appeared");
         } else {
             // The kinds still standing in the preview's window keep the plain raise they have always
             // had: that window is a tool window that never takes the focus, and the press that lands
@@ -1644,6 +1654,9 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
             "pin window: {}",
             pin_trace::a_box((placed.left, placed.top, placed.right, placed.bottom))
         );
+        // Said once per show rather than per message: what the pin is standing over after it was put up
+        // is the one reading a run has of where the show left it (see `pin_trace::what_is_above`).
+        note_pin_trace!("pin above: {}", pin_trace::what_is_above(hwnd));
     }
 
     // **Nothing in this road asks for the foreground, on any road a pin arrives by.** That is a
@@ -1857,7 +1870,7 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND, keep_the_band: bool) {
                 // `PIN_BAND_HELD`).
                 PIN_BAND_HELD.store(true, Ordering::SeqCst);
             } else if GetForegroundWindow() != hwnd {
-                take_the_band_and_give_it_back(hwnd);
+                take_the_band_and_give_it_back(hwnd, "a preview update");
             }
         }
         // The band is the band of every window of the pin's, so what stands in it is placed again
@@ -1925,7 +1938,7 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
         // `paint::a_pages_band_is_hit_testable`).
         if a_running_page_holds_the_band() && !pin_always_on_top() && GetForegroundWindow() != hwnd
         {
-            take_the_band_and_give_it_back(hwnd);
+            take_the_band_and_give_it_back(hwnd, "a press on a running page");
         }
 
         // What stands in this window's band is placed again after the raise: a page that runs is a window
@@ -1948,7 +1961,7 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
 
     // Taken and given straight back: the band is the only way to the front of the ordinary one for a
     // window this process cannot ask the foreground for (see `take_the_band_and_give_it_back`).
-    take_the_band_and_give_it_back(hwnd);
+    take_the_band_and_give_it_back(hwnd, "a press");
     place_pinned_siblings();
 }
 
@@ -2410,17 +2423,32 @@ pub(super) unsafe fn pin_stands_over(hwnd: HWND, window: HWND) -> bool {
 /// Nothing is asked of a pin already in the topmost band, whatever holds it there: there is no
 /// ordinary window over such a pin, and the flip would give a held band back early (see `band_place`).
 pub(super) unsafe fn the_pin_takes_the_front_after_a_box_change() {
-    if pin_is_collapsed() || !pin_update_move_to_top() || band_place() == HWND_TOPMOST {
-        return;
-    }
-
     let hwnd = pinned_window();
-    let front = unsafe { front_ordinary_window(hwnd) };
-    if front.is_invalid() || unsafe { pin_stands_over(hwnd, front) } {
-        return;
-    }
+    // **Which road out of this one was taken**, written as it is taken: the whole of what a box change
+    // owes the front is the difference between a pin that flipped the band and one that did not, and a
+    // run cannot tell them apart from the desktop's own answer afterwards (see `band_place`).
+    let road = if pin_is_collapsed() {
+        "collapsed"
+    } else if !pin_update_move_to_top() {
+        "move-to-top off"
+    } else if band_place() == HWND_TOPMOST {
+        "band already topmost"
+    } else {
+        let front = unsafe { front_ordinary_window(hwnd) };
+        if front.is_invalid() || unsafe { pin_stands_over(hwnd, front) } {
+            "already in front"
+        } else {
+            unsafe { take_the_band_and_give_it_back(hwnd, "a box change") };
+            "flipped"
+        }
+    };
 
-    unsafe { take_the_band_and_give_it_back(hwnd) };
+    if pin_trace::wanted() {
+        note_pin_trace!(
+            "front after a box change: {road} above={}",
+            pin_trace::what_is_above(hwnd)
+        );
+    }
 }
 
 /// The front-most window a pin belongs behind: the first visible window in the z-order that is
