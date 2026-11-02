@@ -180,6 +180,10 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
 
             pin.restore = restore;
             pin.content = content;
+            // A maximize and its restore are boxes chosen for the whole of the window, so each is
+            // the ceiling the files that follow are fitted into, as a pulled edge is (see
+            // `PinnedPreview::bound`).
+            pin.bound = Some((content.2 - content.0).max(content.3 - content.1).max(1));
             reset_pin_zoom(pin);
             Some(())
         })
@@ -313,6 +317,11 @@ pub(super) struct PinMaximize {
 /// those it is must be read from the restore that came *in*, never from the one going out —
 /// the two are never the same value, and a button that checks its answer against itself is a
 /// button that does nothing.
+///
+/// Both boxes it answers are the pin's ceiling as well as its box: a maximize and a restore are
+/// boxes chosen for the whole of a window, so the files picked into the pin afterwards are fitted
+/// into the one the window is left in rather than into the size it had before (see
+/// `PinnedPreview::bound`).
 pub(super) fn pin_maximize_decided(asked: PinMaximize) -> (ScreenRegion, Option<ScreenRegion>) {
     let PinMaximize {
         frame,
