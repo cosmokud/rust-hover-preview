@@ -346,6 +346,22 @@ impl Host {
 
             let _ = self.controller.SetIsVisible(true);
 
+            // A source window's client is the surface the pin's band samples, so a document
+            // arriving at a size the window has not been given is the *window's* box to take,
+            // and it is taken before the browser is told the box to lay the page out at: the
+            // client is one box, and the page is laid out at the same one.
+            if self.the_page_is_a_source() && the_window_takes_the_area(before, area) {
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    HWND::default(),
+                    area.x,
+                    area.y,
+                    area.width,
+                    area.height,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+
             self.set_bounds(area);
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
             self.put_window(area);
@@ -832,6 +848,17 @@ impl Host {
     }
 }
 
+/// Whether a document arriving at `area` is the *window's* box to take, or only the picture of it.
+///
+/// A page a pin samples is its window's *client*, and that client is also the box the browser lays
+/// the document out at (see `show`), so a document arriving at a size this window has not been given
+/// is a page of one box drawn in a surface of another: the Shell fits the stale client into the
+/// band, which is the page small or squashed with the desktop showing in the band around it. A box
+/// that only *moved* is the same client elsewhere and changes no side of it.
+fn the_window_takes_the_area(last: Option<(i32, i32)>, area: Area) -> bool {
+    last != Some((area.width, area.height))
+}
+
 /// How a navigation ended, as the four things `Host::show` does something about.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Arrival {
@@ -1027,5 +1054,29 @@ pub(super) fn raises(pinned: bool, holds_front: bool) -> [Option<Raise>; 2] {
         ]
     } else {
         [Some(topmost), None]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{the_window_takes_the_area, Area};
+
+    /// The traced show: a source holding a page laid out at 2461x615 is asked for the 353x1410 band,
+    /// which is the window's own box to take; a drag step is the same box elsewhere and is not; and
+    /// a window given no box yet is the first one's. (see `the_window_takes_the_area`).
+    #[test]
+    fn a_document_arriving_at_another_size_is_the_window_s_box() {
+        let band = Area {
+            x: 1589,
+            y: 194,
+            width: 353,
+            height: 1410,
+        };
+        assert!(the_window_takes_the_area(Some((2461, 615)), band));
+
+        let moved = Area { x: 12, ..band };
+        assert!(!the_window_takes_the_area(Some((353, 1410)), moved));
+
+        assert!(the_window_takes_the_area(None, band));
     }
 }
