@@ -879,8 +879,24 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         if let Some(drag) = pin.dragging.as_mut() {
             drag.carried = point;
         }
-        was
+        (was, was == content)
     };
+    let (was, unchanged) = was;
+
+    // **A hand that has already asked for the box the window stands in has nothing to ask again.**
+    // The pointer keeps moving past the room a box is allowed — a pin pulled at its own smallest, at
+    // a display's edge, or at one of its own proportioned sides stops taking the side it is being
+    // pulled by, and every message after that asks for the box it already has. Such a step is a
+    // pointer move and nothing else: the window is where it belongs and the surface is the picture of
+    // it, so painting the same box again is a full repaint of the pin per message, which on a tall
+    // pin is eight milliseconds apiece and reads as a window that will not follow the hand (see the
+    // picture below, and `pin_resize_probe`, whose trace is where the count of them was read).
+    //
+    // What the step has done is recorded — the box it settled on, the bound it wrote and the
+    // carried point above — since those are the answers a hand is owed whatever the box came out as.
+    if unchanged {
+        return;
+    }
 
     let (width, height) = (window.2 - window.0, window.3 - window.1);
 
