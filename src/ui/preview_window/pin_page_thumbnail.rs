@@ -17,58 +17,92 @@
 //! roads are the ones a layered window answers with black (see `pin_taskbar_mirror`, and the film road's
 //! table of them in `ARCHITECTURE.md`).
 //!
-//! **The road follows `pin_film_thumbnail`'s rules and has this one difference: the destination is the
-//! pin, not a host of its own.** The pin's window is the caption and the transport as well as the band,
-//! so the destination rectangle is the band's own rect inside the pin's client, less the rows the
-//! caption stands in over it: a thumbnail composites over the destination window's own content, child
-//! windows included, so a caption whose rows were handed over would be a caption under the picture —
-//! invisible while its buttons still took the press (see `ARCHITECTURE.md`). The crop is a crop and not
-//! a scale: the source loses the same rows, scaled by the factor it already had. Everything else the
-//! pin draws is untouched by it. The source's client is a constant for as long as it is the pin's
-//! picture (the one placement, see `webview_preview`'s `put_window`), so a frame can only change with
-//! the pin's band — which on a drag changes in *screen* coordinates only, and so is the same rectangle
-//! in the pin's client: **a drag re-points nothing at all**.
+//! **The road follows `pin_film_thumbnail`'s rules and has this one difference: the destination is a
+//! child surface of the pin, not the pin.** The Shell composes a thumbnail **over its destination
+//! window's own content, child windows included**, so a pin as the destination is a pin whose layered
+//! surface — the caption, the transport, the alpha-1 claim — is painted *under* the page's picture,
+//! invisible while its pixels still took the press. The destination is therefore a child window of the
+//! pin, kept at the bottom of the pin's child order and under the chrome strips: the pin's own client,
+//! then the picture, then the caption, the transport and the volume popup, which float over a page
+//! because they are siblings above it. Nothing is cropped and nothing is scaled: the destination is the
+//! picture child's whole client and the source is the page's whole client.
+//!
+//! **A drag re-points nothing at all.** The source's client is a constant for as long as it is the
+//! pin's picture (the one placement, see `webview_preview`'s `put_window`), and the picture child is
+//! placed in the pin's *client* coordinates, which move with the pin: a band that moves on the screen is
+//! the same rectangle in its pin, and the Shell is handed the child's whole client either way.
 
 use super::*;
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::{Mutex, Once};
 
 use crate::ui::preview_window::pin_trace::note_pin_trace;
 
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
-    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE,
-    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
+    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY,
+    DWM_TNP_VISIBLE,
+};
+use windows::Win32::Graphics::Gdi::{GetStockObject, HBRUSH, NULL_BRUSH};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, IsWindow, RegisterClassExW,
+    SetWindowPos, ShowWindow, GWL_STYLE, HWND_BOTTOM, SWP_NOACTIVATE, SW_HIDE, SW_SHOWNOACTIVATE,
+    WNDCLASSEXW, WS_CHILD, WS_DISABLED, WS_VISIBLE,
 };
 
-/// The band a registration is pointed at: `left, top, width, height` in the client coordinates of the
-/// window the Shell draws into.
+/// The band a picture child is placed at: `left, top, width, height` in the client coordinates of the
+/// pin it belongs to.
 type Band = (i32, i32, i32, i32);
 
-/// The registration standing, the two windows it was made for and the rectangle pair it was last
-/// handed: `NOTHING` while no page is drawn.
+/// The class the picture child is made from: a window that draws nothing of its own and takes nothing,
+/// and whose whole surface is the Shell's thumbnail of the page (see the module note). Not layered — a
+/// layered destination is refused by the Shell — so it needs a class of its own rather than the pin's.
+const PICTURE_CLASS: PCWSTR = w!("RustHoverPreviewPinPagePicture");
+static PICTURE_CLASS_REGISTERED: Once = Once::new();
+
+/// The picture child standing, and the pin window it was made for: kept between placements like the
+/// chrome strips, and made again where the pin it belongs to has changed (see `the_picture_at`).
+static PICTURE: AtomicIsize = AtomicIsize::new(0);
+static PICTURE_PARENT: AtomicIsize = AtomicIsize::new(0);
+
+/// The registration standing, the two windows it was made for and the client size it was last handed:
+/// `NOTHING` while no page is drawn.
 static PAGE_THUMBNAIL: Mutex<Held> = Mutex::new(Held::NOTHING);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Held {
-    /// The pin window the Shell draws into, and the page window it draws.
-    pin: isize,
+    /// The picture child the Shell draws into, and the page window it draws.
+    picture: isize,
     page: isize,
     registration: isize,
-    /// The destination last handed, in the pin's client coordinates, and the caption rows cropped off
-    /// its top, or nothing where none stands: a placement that asks for the same pair is the Shell
-    /// asked nothing (see `the_page_was_placed`).
-    shown: Option<(Band, i32)>,
+    /// The picture child's client size last handed — a placement that asks for the same size and page
+    /// is the Shell asked nothing (see `the_page_was_placed`).
+    shown: Option<(i32, i32)>,
 }
 
 impl Held {
     const NOTHING: Self = Self {
-        pin: 0,
+        picture: 0,
         page: 0,
         registration: 0,
         shown: None,
     };
+}
+
+/// The default answer is the whole of what a picture child does: it draws nothing and takes nothing, and
+/// the pixels it shows are the Shell's thumbnail. The bindings expose `DefWindowProcW` as a
+/// Rust-callable function, so the class still needs a system-ABI shim around it.
+unsafe extern "system" fn the_default_answer(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 /// Draw the pin's page into it, for `content` — the media band the pin is showing, in screen
@@ -76,194 +110,216 @@ impl Held {
 ///
 /// It is asked wherever the band moves or changes (see `pin_lifecycle::place_pinned_siblings`) and it is
 /// cheap to ask: a page that is not the pin's picture is a registration let go of, and a pair that did not
-/// change hands the Shell nothing at all — **which is every step of a drag**, the destination being the
-/// band in the pin's own client coordinates rather than on the screen.
+/// change hands the Shell nothing at all — **which is every step of a drag**, the picture child riding
+/// the pin's own client coordinates rather than the screen.
 pub(super) fn the_page_was_placed(content: Option<ScreenRegion>) {
-    let Some((pin, page, destination)) = content.and_then(the_pair) else {
+    let Some((pin, page, band)) = content.and_then(the_pair) else {
         let_registration_go("the pin has no page in its band");
         return;
     };
 
-    // The band handed, the pin's client it is a rectangle in and the two windows it was made for: a
-    // band drawn off its source is one of these three disagreeing with the others (see the module note).
-    let client = unsafe { pin_film_thumbnail::client_size(HWND(pin as *mut _)) };
-    note_pin_trace!(
-        "page band: destination {}x{}+{}+{} pin client {client:?} pin={:#x} page={:#x}",
-        destination.2,
-        destination.3,
-        destination.0,
-        destination.1,
-        pin,
-        page
-    );
+    // The picture child is placed at the band before anything is handed over, so the destination it
+    // offers is the band's own rectangle: under the strips, which are siblings kept above it.
+    let Some(picture) = the_picture_at(pin, band) else {
+        let_registration_go("the pin has no picture child for its page");
+        return;
+    };
+    let Some(client) = (unsafe { pin_film_thumbnail::client_size(picture) }) else {
+        let_registration_go("the picture child has left");
+        return;
+    };
 
     let Ok(mut held) = PAGE_THUMBNAIL.lock() else {
         return;
     };
 
-    // **A registration is for one pair of windows**, so another pin, or a page the engine has replaced,
-    // is the picture given up and made again rather than a rectangle re-pointed at a window the Shell
-    // was never asked about.
-    if held.registration != 0 && (held.pin != pin || held.page != page) {
+    // **A registration is for one pair of windows**, so another picture child, or a page the engine has
+    // replaced, is the picture given up and made again rather than a rectangle re-pointed at a window
+    // the Shell was never asked about.
+    if held.registration != 0 && (held.picture != picture.0 as isize || held.page != page) {
         let registration = held.registration;
         *held = Held::NOTHING;
         let _ = unsafe { DwmUnregisterThumbnail(registration) };
+        hide_the_picture();
     }
-    held.pin = pin;
+    held.picture = picture.0 as isize;
     held.page = page;
     if held.registration == 0 {
-        match unsafe { DwmRegisterThumbnail(HWND(pin as *mut _), HWND(page as *mut _)) } {
+        match unsafe { DwmRegisterThumbnail(picture, HWND(page as *mut _)) } {
             Ok(registration) => held.registration = registration,
             Err(error) => {
                 // The Shell refuses a source that has made its window and not yet presented one, and nothing
                 // here asks a second time: the next placement of the band does (see `the_page_was_placed`).
                 *held = Held::NOTHING;
+                hide_the_picture();
                 note_pin_trace!("page band: register refused {error:?}");
                 return;
             }
         }
     }
 
-    // The caption rows the registration already keeps out of the picture: a band that moved is the
-    // same crop re-pointed, and the chrome road is what changes the crop itself
-    // (see `the_caption_rows_are`).
-    let caption = held.shown.map_or(0, |(_, caption)| caption);
-    if held.shown == Some((destination, caption)) {
+    // The destination is the picture child's whole client and its size is the band's: a band that moved
+    // inside the pin hands the Shell the same pair, and only a band that changed size is a new one.
+    if held.shown == Some(client) {
         note_pin_trace!(
-            "page band: unchanged {}x{}+{}+{}",
-            destination.2,
-            destination.3,
-            destination.0,
-            destination.1
+            "page band: unchanged {}x{} picture {:#x} page={:#x}",
+            client.0,
+            client.1,
+            picture.0 as isize,
+            page
         );
         return;
     }
 
-    // The hand-over's own line is `point_the_thumbnail`'s.
-    point_the_thumbnail(&mut held, destination, caption);
+    point_the_thumbnail(&mut held, client, page);
 }
 
-/// Keep `caption` rows off the top of the page's picture, or draw all of it again, for the pin whose
-/// chrome has just come or gone (see `pin_chrome_strips::sync_the_chrome_strips`).
-///
-/// A pin with no page registration — every pin that is not a browser's — is nothing at all here, and so
-/// is a caption number the registration was handed already: this is asked after every paint.
-pub(super) fn the_caption_rows_are(caption: i32) {
-    let Ok(mut held) = PAGE_THUMBNAIL.lock() else {
-        return;
-    };
-    // `shown` stands only with a registration: a page let go is nothing to crop.
-    let Some((band, was)) = held.shown else {
-        return;
-    };
-    if was == caption {
-        return;
-    }
-
-    if !point_the_thumbnail(&mut held, band, caption) {
-        note_pin_trace!("page band: caption {caption} refused, the registration is let go");
-    }
-}
-
-/// Hand the Shell the destination and the source for a band and a caption, and keep the pair. False
-/// where the Shell refused: nothing here asks a second time, so the registration is let go (see
+/// Hand the Shell the destination and the source for a picture child, and keep the client size handed.
+/// False where the Shell refused: nothing here asks a second time, so the registration is let go (see
 /// `the_page_was_placed`).
-fn point_the_thumbnail(held: &mut Held, band: Band, caption: i32) -> bool {
-    // The source's client, which is a constant for as long as it is the pin's picture: a page that has
-    // gone answers nothing, and the band's own size is then the factor it would have had anyway.
-    let source = unsafe { pin_film_thumbnail::client_size(HWND(held.page as *mut _)) };
-    let client = source.unwrap_or((band.2, band.3));
-    let (destination, cropped) = the_rectangles(band, caption, client);
-
+fn point_the_thumbnail(held: &mut Held, client: (i32, i32), page: isize) -> bool {
+    // The whole client of either window, and never a rectangle of it: the Shell's source crop is one the
+    // picture child makes unnecessary (see the module note).
     let properties = DWM_THUMBNAIL_PROPERTIES {
-        dwFlags: DWM_TNP_RECTDESTINATION
-            | DWM_TNP_SOURCECLIENTAREAONLY
-            | DWM_TNP_VISIBLE
-            | cropped.map_or(0, |_| DWM_TNP_RECTSOURCE),
-        rcDestination: destination,
-        rcSource: cropped.unwrap_or_default(),
+        dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_SOURCECLIENTAREAONLY | DWM_TNP_VISIBLE,
+        rcDestination: RECT {
+            left: 0,
+            top: 0,
+            right: client.0,
+            bottom: client.1,
+        },
         opacity: 255,
         fVisible: true.into(),
         // The page is its client area and nothing around it: the window is a popup a browser draws in,
         // and a frame sampled with it would be a page drawn off its own box by the frame's width.
         fSourceClientAreaOnly: true.into(),
+        ..Default::default()
     };
 
     if let Err(error) = unsafe { DwmUpdateThumbnailProperties(held.registration, &properties) } {
         let registration = held.registration;
         *held = Held::NOTHING;
         let _ = unsafe { DwmUnregisterThumbnail(registration) };
+        hide_the_picture();
         note_pin_trace!("page band: update refused {error:?}");
         return false;
     }
-    held.shown = Some((band, caption));
-    // The source the Shell is sampling, against the client it scales it from: a crop off the whole
-    // client is the pair that tells a band drawn one to one from one drawn into a smaller box.
-    let source = cropped.map_or_else(
-        || "whole client".to_string(),
-        |source| {
-            format!(
-                "{}x{}+{}+{}",
-                source.right - source.left,
-                source.bottom - source.top,
-                source.left,
-                source.top
-            )
-        },
-    );
+    held.shown = Some(client);
+
+    let source = unsafe { pin_film_thumbnail::client_size(HWND(page as *mut _)) }.unwrap_or((0, 0));
     note_pin_trace!(
-        "page band: shown {}x{}+{}+{} dest, src {source} ({}x{} client), band {}x{} caption {caption}",
-        destination.right - destination.left,
-        destination.bottom - destination.top,
-        destination.left,
-        destination.top,
+        "page band: shown picture {:#x} client {}x{} source {:#x} client {}x{}",
+        held.picture,
         client.0,
         client.1,
-        band.2,
-        band.3
+        page,
+        source.0,
+        source.1
     );
     true
 }
 
-/// The two rectangles a registration is handed: the band, less the rows its caption stands in over
-/// its top, and the same rows off the source's client — `None` where the source is the whole of it.
+/// The pin's picture child, placed at `band` in the pin's client coordinates and kept at the bottom of
+/// its child order — under the chrome strips, which stay above it by being ordered over it.
 ///
-/// Cropped and never scaled: the source loses `rows * source height / band height`, which is the row
-/// itself while the page is drawn one to one, and the same picture with its top cut off when it is not.
-/// Nothing is cropped where the band already starts below the caption (a kind whose chrome stands in
-/// bands around its media), nor where the crop would leave no rows at all.
-fn the_rectangles(band: Band, caption: i32, source: (i32, i32)) -> (RECT, Option<RECT>) {
-    let (x, y, width, height) = band;
-    let whole = RECT {
-        left: x,
-        top: y,
-        right: x + width,
-        bottom: y + height,
-    };
+/// Made once and kept, like a strip, and made again where the pin window it was made for has changed: a
+/// pin window that went takes its children with it, and a child of another pin is a picture drawn into
+/// somebody else's window.
+fn the_picture_at(pin: HWND, band: Band) -> Option<HWND> {
+    let mut picture = HWND(PICTURE.load(Ordering::SeqCst) as *mut _);
+    let made_for = PICTURE_PARENT.load(Ordering::SeqCst);
+    let standing = picture.0 as isize != 0
+        && made_for == pin.0 as isize
+        && unsafe { IsWindow(picture) }.as_bool();
 
-    let rows = (caption - y).clamp(0, height);
-    if rows == 0 || rows >= height {
-        return (whole, None);
+    if !standing {
+        if unsafe { IsWindow(picture) }.as_bool() {
+            // A destination that goes takes its registration with it: let it go before the window does.
+            let_registration_go("the picture child's pin changed");
+            let _ = unsafe { DestroyWindow(picture) };
+            note_pin_trace!("page picture: destroyed {:#x}", picture.0 as isize);
+        }
+        PICTURE.store(0, Ordering::SeqCst);
+        PICTURE_PARENT.store(0, Ordering::SeqCst);
+        picture = make_the_picture(pin)?;
+        PICTURE.store(picture.0 as isize, Ordering::SeqCst);
+        PICTURE_PARENT.store(pin.0 as isize, Ordering::SeqCst);
+        note_pin_trace!(
+            "page picture: made {:#x} for pin {:#x}",
+            picture.0 as isize,
+            pin.0 as isize
+        );
     }
 
-    let (source_width, source_height) = (source.0.max(1), source.1.max(1));
-    let cropped =
-        ((rows as i64 * source_height as i64 / height as i64) as i32).clamp(0, source_height - 1);
+    // Bottom of the child order and at the band in one call: the strips are made on top and placed with
+    // `SWP_NOZORDER`, so this is the order that sticks (see `pin_chrome_strips`).
+    let _ = unsafe {
+        SetWindowPos(
+            picture,
+            HWND_BOTTOM,
+            band.0,
+            band.1,
+            band.2,
+            band.3,
+            SWP_NOACTIVATE,
+        )
+    };
 
-    (
-        RECT {
-            left: x,
-            top: y + rows,
-            right: x + width,
-            bottom: y + height,
-        },
-        Some(RECT {
-            left: 0,
-            top: cropped,
-            right: source_width,
-            bottom: source_height,
-        }),
-    )
+    let up = unsafe { GetWindowLongPtrW(picture, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
+    if !up {
+        let _ = unsafe { ShowWindow(picture, SW_SHOWNOACTIVATE) };
+    }
+    Some(picture)
+}
+
+/// Make the picture child: a child of the pin, disabled so that a press on the band keeps landing on the
+/// pin, and with no layered style — the Shell refuses a layered destination.
+fn make_the_picture(pin: HWND) -> Option<HWND> {
+    PICTURE_CLASS_REGISTERED.call_once(|| unsafe {
+        let hinstance = GetModuleHandleW(None).expect("the module's own handle");
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(the_default_answer),
+            hInstance: hinstance.into(),
+            hbrBackground: HBRUSH(GetStockObject(NULL_BRUSH).0),
+            lpszClassName: PICTURE_CLASS,
+            ..Default::default()
+        };
+        RegisterClassExW(&class);
+    });
+
+    let hinstance = unsafe { GetModuleHandleW(None) }.ok()?;
+    unsafe {
+        CreateWindowExW(
+            Default::default(),
+            PICTURE_CLASS,
+            w!("page picture"),
+            WS_CHILD | WS_DISABLED,
+            0,
+            0,
+            1,
+            1,
+            pin,
+            None,
+            hinstance,
+            None,
+        )
+    }
+    .ok()
+}
+
+/// Take the picture child off the screen, keeping it: nothing is drawn into a child with no registration,
+/// and a hidden one carries the last page into the next pin that finds it standing.
+fn hide_the_picture() {
+    let picture = HWND(PICTURE.load(Ordering::SeqCst) as *mut _);
+    if picture.0 as isize == 0 || !unsafe { IsWindow(picture) }.as_bool() {
+        return;
+    }
+    let up = unsafe { GetWindowLongPtrW(picture, GWL_STYLE) } & WS_VISIBLE.0 as isize != 0;
+    if up {
+        let _ = unsafe { ShowWindow(picture, SW_HIDE) };
+        note_pin_trace!("page picture: hidden {:#x}", picture.0 as isize);
+    }
 }
 
 /// Let the registration go, keeping the pin and the page it was made for: what a pin going down, a pin
@@ -280,29 +336,26 @@ fn let_registration_go(reason: &str) {
     if registration != 0 {
         let _ = unsafe { DwmUnregisterThumbnail(registration) };
         note_pin_trace!("page thumbnail let go (reason={reason})");
+        hide_the_picture();
     }
 }
 
-/// The pin window the Shell draws into, the page window it draws, and the band's rectangle in the pin's
-/// own client coordinates — or nothing where either window or the band is not there.
-fn the_pair(content: ScreenRegion) -> Option<(isize, isize, Band)> {
+/// The pin window whose child draws the page, the page window it draws, and the band's rectangle in the
+/// pin's own client coordinates — or nothing where either window or the band is not there.
+fn the_pair(content: ScreenRegion) -> Option<(HWND, isize, Band)> {
     let page = webview_preview::showing_hwnd();
     if page == 0 {
         return None;
     }
     let pin = pin_real_window::real_pin_window()?;
 
-    // The pin's client origin and area, which are the coordinates the Shell is handed the rectangle in: a
+    // The pin's client origin and area, which are the coordinates the picture child is placed in: a
     // layered pin is drawn where its client is, so the band is the same rectangle in either coordinates —
     // and the *difference* is what makes a drag re-point nothing (see the module note).
     let origin = unsafe { pin_film_thumbnail::client_origin(pin) }?;
     let client = unsafe { pin_film_thumbnail::client_size(pin) }?;
 
-    Some((
-        pin.0 as isize,
-        page,
-        the_band_in_the_client(content, origin, client),
-    ))
+    Some((pin, page, the_band_in_the_client(content, origin, client)))
 }
 
 /// A band, in the client coordinates of the window that draws it: the pin's own rectangle of itself, cut
@@ -333,7 +386,7 @@ mod tests {
         assert_eq!(placed, (0, 0, 640, 300), "the band is the pin's own client");
 
         // The same pin carried a hundred pixels each way: the band and the client moved together, so
-        // the pair handed to the Shell did not move at all.
+        // the rectangle the picture child is placed at did not move at all.
         assert_eq!(
             the_band_in_the_client((600, 500, 1240, 800), (600, 500), (client.2, client.3)),
             placed,
@@ -361,101 +414,25 @@ mod tests {
     #[test]
     fn a_pair_is_re_pointed_only_where_it_changed() {
         let held = Held {
-            pin: 1,
+            picture: 1,
             page: 2,
             registration: 3,
-            shown: Some(((0, 28, 640, 272), 0)),
+            shown: Some((640, 272)),
         };
 
-        assert_eq!(held.shown, Some(((0, 28, 640, 272), 0)));
-        assert_eq!((held.pin, held.page), (1, 2));
+        assert_eq!(held.shown, Some((640, 272)));
+        assert_eq!((held.picture, held.page), (1, 2));
         assert!(
-            held.shown != Some(((0, 28, 640, 271), 0)),
-            "a band that changed is a pair to hand over again"
+            held.shown != Some((640, 271)),
+            "a band that changed size is a pair to hand over again"
         );
         assert!(
-            held.shown != Some(((0, 28, 640, 272), 28)),
-            "a caption that changed is a pair to hand over again"
+            held.picture != 4,
+            "a picture child that changed is a registration made again"
         );
-    }
-
-    /// **The caption's rows are given up, not scaled over**: a thumbnail composites over the pin's own
-    /// content and its children with it, so a strip under it is a caption nobody can see whose buttons
-    /// still take the press. The source loses the same rows at the factor it already had.
-    #[test]
-    fn the_caption_rows_are_cropped_off_both_rectangles() {
-        let band = (0, 0, 640, 300);
-        let source = (640, 300);
-
-        // No caption: the whole band and the whole of the source, as the road has always handed it.
-        assert_eq!(
-            the_rectangles(band, 0, source),
-            (
-                RECT {
-                    left: 0,
-                    top: 0,
-                    right: 640,
-                    bottom: 300
-                },
-                None
-            ),
-            "no caption is no crop"
-        );
-
-        // A caption over the band: the same crop of the page's client, one to one.
-        assert_eq!(
-            the_rectangles(band, 28, source),
-            (
-                RECT {
-                    left: 0,
-                    top: 28,
-                    right: 640,
-                    bottom: 300
-                },
-                Some(RECT {
-                    left: 0,
-                    top: 28,
-                    right: 640,
-                    bottom: 300
-                })
-            ),
-            "the caption's rows off the client as well"
-        );
-
-        // A source drawn at another size keeps the factor it had: the crop is the same fraction of it.
-        assert_eq!(
-            the_rectangles(band, 28, (1280, 600)),
-            (
-                RECT {
-                    left: 0,
-                    top: 28,
-                    right: 640,
-                    bottom: 300
-                },
-                Some(RECT {
-                    left: 0,
-                    top: 56,
-                    right: 1280,
-                    bottom: 600
-                })
-            ),
-            "the crop is scaled by the factor the source already had"
-        );
-
-        // A band that already starts below the caption — the chrome in bands around its media — is
-        // nothing to crop, the picture being under no strip of it.
-        assert_eq!(
-            the_rectangles((0, 28, 640, 272), 28, source),
-            the_rectangles((0, 28, 640, 272), 0, source),
-            "a caption the band starts under crops nothing"
-        );
-
-        // A caption taller than the band leaves no rows to draw in, and the band is handed over whole
-        // rather than scaled or cropped into nothing.
-        assert_eq!(
-            the_rectangles(band, 300, source),
-            the_rectangles(band, 0, source),
-            "a crop that leaves no rows is no crop"
+        assert!(
+            held.page != 5,
+            "a page that changed is a registration made again"
         );
     }
 }
