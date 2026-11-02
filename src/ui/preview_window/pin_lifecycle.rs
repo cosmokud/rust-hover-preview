@@ -2800,38 +2800,30 @@ pub(super) fn pinned_content() -> Option<ScreenRegion> {
     (!pin.collapsed).then_some(pin.content)
 }
 
-/// The rows a pinned window's own media band covers, in its client: the same answer `pinned_band_rows`
-/// gives the paint, and so the one rectangle the page in the band is fitted into (see
-/// `pin_page_thumbnail::the_pair`).
+/// The band a pinned window paints its media in, as **the paint itself** composes it: the window's own side,
+/// the row the band begins at, and the rows it covers — in the pin's client coordinates, which is the
+/// coordinates the Shell is handed a thumbnail's destination in (see `pin_page_thumbnail::the_pair`).
 ///
-/// **A window and a media box that disagree are said out loud here**, because that is the one fault the
-/// answer can hide: a window that was never resized for the document it is showing has the Shell fit a
-/// thumbnail of an old client into a band of another shape, and the band around it is the pin's own
-/// alpha-1 claim — the desktop seen through it. The band is the window's rows either way, so it is
-/// covered rather than cut short.
-pub(super) fn pinned_band_rows_of_the_client(client: (i32, i32)) -> Option<(i32, i32)> {
+/// It is the arithmetic of `paint::render_pinned_preview_at` and not of the window's client, and the
+/// difference is the one thing a destination must not be read from: a resize drag paints its surface a row
+/// taller than the window is (`paint::the_slack_a_resize_paints_with`), so a band cut to the client is a
+/// destination a row short of the picture on every step of a drag. Width, top row and rows are what the
+/// paint is given, so what this answers is the painted band by construction, whatever the window is doing.
+///
+/// **A media box that disagrees with it is said out loud by the caller**, which is the one fault this answer
+/// can hide: a window never resized for the document it shows has the Shell fit a thumbnail of one band into
+/// another, and the band around it is the pin's own alpha-1 claim — the desktop seen through it.
+pub(super) fn pinned_band_in_the_client() -> Option<(i32, i32, i32)> {
     let pinned = pin_state()?;
     let pin = pinned.pin()?;
-    let transport = pinned_transport_height(pin.dpi, pin.transport_bar);
-    let window = pin.window_box();
-    let (width, height) = (window.2 - window.0, window.3 - window.1);
-    if (width, height) != (client.0, client.1) {
-        note_pin_trace!(
-            "page band: pin window {}x{}+{}+{} is not its client {}x{}",
-            width,
-            height,
-            window.0,
-            window.1,
-            client.0,
-            client.1
-        );
-    }
-    Some(pinned_band_rows(
-        client.1,
+    let (width, height) = pin.window_size();
+    let (top, rows) = pinned_band_rows(
+        height,
         pin.caption,
-        transport,
+        pinned_transport_height(pin.dpi, pin.transport_bar),
         pin.overlay,
-    ))
+    );
+    Some((width, top, rows))
 }
 
 /// The card's own controls as they stand, read in one look and handed over rather than asked for

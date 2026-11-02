@@ -181,94 +181,82 @@ fn the_pair(content: ScreenRegion) -> Option<(isize, isize, Band)> {
     }
     let pin = pin_real_window::real_pin_window()?;
 
-    // The pin's client area, which is the surface the Shell samples and the coordinates it is handed the
-    // rectangle in, and the rows its own paint leaves for the media, which are the band those rows are.
-    let client = unsafe { pin_film_thumbnail::client_size(pin) }?;
-    let rows = pin_lifecycle::pinned_band_rows_of_the_client(client)?;
+    // The band the pin's paint composes its media into, which is the rectangle the Shell is handed the
+    // destination in: the pin's own side, the row the band begins at, and the rows it covers (see
+    // `pin_lifecycle::pinned_band_in_the_client`).
+    let band = pin_lifecycle::pinned_band_in_the_client()?;
 
-    Some((
-        pin.0 as isize,
-        page,
-        the_band_in_the_client(content, client, rows),
-    ))
+    Some((pin.0 as isize, page, the_band_in_the_client(content, band)))
 }
 
 /// A band, in the client coordinates of the window that draws it: the rows that window's own paint leaves
 /// for the media, edge to edge — what the pin is drawing, and so the one rectangle the page is fitted into.
 ///
-/// **It is never cut to a smaller rectangle**, because there is no third rectangle to cut to: the pin's
-/// window is fitted to its media, so a destination clamped to the client would be a band the pin paints and
-/// the page does not cover — and the rows it left out are the pin's own alpha-1 claim, which is the desktop
-/// seen through it. `content` is used only to say out loud the one fault this can hide, a pin whose window
-/// has not been resized for the media box it is showing: the band is the window's rows either way, so it is
-/// covered rather than cut short.
-fn the_band_in_the_client(content: ScreenRegion, client: (i32, i32), rows: (i32, i32)) -> Band {
-    let (top, height) = rows;
-    let height = height.max(1);
+/// **It is the painted band by construction and never cut to a smaller rectangle**, because there is no
+/// third rectangle to cut to: the pin's window is fitted to its media, so a destination clamped to the
+/// client would be a band the pin paints and the page does not cover — and the rows it left out are the
+/// pin's own alpha-1 claim, which is the desktop seen through it. `content` is used only to say out loud
+/// the one fault this can hide, a pin whose window has not been resized for the media box it is showing:
+/// the band is the pin's own rows either way, so it is covered rather than cut short.
+fn the_band_in_the_client(content: ScreenRegion, band: (i32, i32, i32)) -> Band {
+    let (width, top, rows) = band;
+    let (width, rows) = (width.max(1), rows.max(1));
 
-    if (content.2 - content.0, content.3 - content.1) != (client.0, height) {
+    if (content.2 - content.0, content.3 - content.1) != (width, rows) {
         note_pin_trace!(
-            "page band: pin window {}x{} is not its media {}x{}",
-            client.0,
-            client.1,
+            "page band: the pin paints {width}x{rows} and its media box is {}x{}",
             content.2 - content.0,
             content.3 - content.1
         );
     }
 
-    (0, top, client.0.max(1), height)
+    (0, top, width, rows)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// **The destination is the pin's own band, so it is the client's rows wherever the pin stands and
-    /// whatever the pin was before**: a drag changes no side and so re-points nothing, and a resize is a
-    /// rectangle the Shell is handed again — never a band cut to fit a window that had not caught up.
+    /// **The destination is the pin's own painted band, so it is the same rectangle wherever the pin
+    /// stands and whatever the pin was before**: a drag changes no side and so re-points nothing, and a
+    /// resize is a rectangle the Shell is handed again — never a band cut to fit a window that had not
+    /// caught up, and never one read from a client a resize drag has painted a row taller than the window.
     #[test]
     fn a_band_is_the_pins_own_rows_wherever_it_stands() {
         let content = (500, 400, 1140, 700);
-        let client = (640, 300);
         // A caption above the band and no transport below it: the band is the rows under the caption.
-        let placed =
-            the_band_in_the_client(content, client, pinned_band_rows(client.1, 28, 0, false));
+        let placed = the_band_in_the_client(content, (640, 28, 272));
         assert_eq!(placed, (0, 28, 640, 272), "the band is below the caption");
 
-        // The same client on a pin carried a hundred pixels each way: the band is the same rectangle,
-        // which is the whole of why a step of a drag asks the Shell nothing.
+        // The same pin carried a hundred pixels each way: the band is the same rectangle, which is the
+        // whole of why a step of a drag asks the Shell nothing.
         assert_eq!(
-            the_band_in_the_client(content, client, pinned_band_rows(client.1, 28, 0, false)),
+            the_band_in_the_client((600, 500, 1240, 800), (640, 28, 272)),
             placed,
             "a drag re-points nothing"
         );
 
-        // A window the hand pulled out: the band is the new client's own rows, edge to edge.
-        let resized = (900, 500);
+        // A window the hand pulled out: the band is the new window's own rows, edge to edge.
         assert_eq!(
-            the_band_in_the_client(content, resized, pinned_band_rows(resized.1, 28, 0, false)),
+            the_band_in_the_client((500, 400, 1400, 900), (900, 28, 472)),
             (0, 28, 900, 472),
-            "a resize is a band of the client it was made"
+            "a resize is a band of the window it was made"
         );
 
-        // A media box smaller than the window is a trace line and not a destination: what is handed to
-        // the Shell is still the whole band, since a band cut to the box would leave the window's own
-        // alpha-1 rows painting the desktop.
+        // A media box smaller than the band is a trace line and not a destination: what is handed to the
+        // Shell is still the whole band, since a band cut to the box would leave the pin's own alpha-1
+        // rows painting the desktop.
         assert_eq!(
-            the_band_in_the_client(
-                (500, 400, 760, 594),
-                client,
-                pinned_band_rows(client.1, 28, 0, false)
-            ),
+            the_band_in_the_client((500, 400, 760, 594), (640, 28, 272)),
             placed,
-            "a media box that disagrees with the window is not a band cut to it"
+            "a media box that disagrees with the band is not a band cut to it"
         );
 
-        // A kind whose chrome is drawn over the media: the band is the whole client.
+        // A kind whose chrome is drawn over the media: the band is the whole window.
         assert_eq!(
-            the_band_in_the_client(content, client, pinned_band_rows(client.1, 28, 0, true)),
+            the_band_in_the_client(content, (640, 0, 300)),
             (0, 0, 640, 300),
-            "a band drawn under the chrome is the whole client"
+            "a band drawn under the chrome is the whole window"
         );
     }
 
