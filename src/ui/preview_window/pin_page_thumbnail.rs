@@ -139,15 +139,8 @@ pub(super) fn the_page_was_placed(content: Option<ScreenRegion>) {
         return;
     }
 
-    if point_the_thumbnail(&mut held, destination, caption) {
-        note_pin_trace!(
-            "page band: shown {}x{}+{}+{}",
-            destination.2,
-            destination.3,
-            destination.0,
-            destination.1
-        );
-    }
+    // The hand-over's own line is `point_the_thumbnail`'s.
+    point_the_thumbnail(&mut held, destination, caption);
 }
 
 /// Keep `caption` rows off the top of the page's picture, or draw all of it again, for the pin whose
@@ -179,7 +172,8 @@ fn point_the_thumbnail(held: &mut Held, band: Band, caption: i32) -> bool {
     // The source's client, which is a constant for as long as it is the pin's picture: a page that has
     // gone answers nothing, and the band's own size is then the factor it would have had anyway.
     let source = unsafe { pin_film_thumbnail::client_size(HWND(held.page as *mut _)) };
-    let (destination, cropped) = the_rectangles(band, caption, source.unwrap_or((band.2, band.3)));
+    let client = source.unwrap_or((band.2, band.3));
+    let (destination, cropped) = the_rectangles(band, caption, client);
 
     let properties = DWM_THUMBNAIL_PROPERTIES {
         dwFlags: DWM_TNP_RECTDESTINATION
@@ -195,20 +189,6 @@ fn point_the_thumbnail(held: &mut Held, band: Band, caption: i32) -> bool {
         fSourceClientAreaOnly: true.into(),
     };
 
-    if let Some(source) = cropped {
-        note_pin_trace!(
-            "page band: caption {caption} rows cropped: dest {}x{}+{}+{} src {}x{}+{}+{}",
-            destination.right - destination.left,
-            destination.bottom - destination.top,
-            destination.left,
-            destination.top,
-            source.right - source.left,
-            source.bottom - source.top,
-            source.left,
-            source.top
-        );
-    }
-
     if let Err(error) = unsafe { DwmUpdateThumbnailProperties(held.registration, &properties) } {
         let registration = held.registration;
         *held = Held::NOTHING;
@@ -217,6 +197,31 @@ fn point_the_thumbnail(held: &mut Held, band: Band, caption: i32) -> bool {
         return false;
     }
     held.shown = Some((band, caption));
+    // The source the Shell is sampling, against the client it scales it from: a crop off the whole
+    // client is the pair that tells a band drawn one to one from one drawn into a smaller box.
+    let source = cropped.map_or_else(
+        || "whole client".to_string(),
+        |source| {
+            format!(
+                "{}x{}+{}+{}",
+                source.right - source.left,
+                source.bottom - source.top,
+                source.left,
+                source.top
+            )
+        },
+    );
+    note_pin_trace!(
+        "page band: shown {}x{}+{}+{} dest, src {source} ({}x{} client), band {}x{} caption {caption}",
+        destination.right - destination.left,
+        destination.bottom - destination.top,
+        destination.left,
+        destination.top,
+        client.0,
+        client.1,
+        band.2,
+        band.3
+    );
     true
 }
 
