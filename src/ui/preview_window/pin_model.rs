@@ -436,9 +436,10 @@ pub(super) struct PinnedPreview {
     /// restore puts back (see `PinnedPreview::window_box`).
     pub(super) content: ScreenRegion,
     /// The longest side a swap may give this pin's media, in either direction, or nothing while the
-    /// pin has no bound yet: the longest side of the box the pin went up with, or of the one a
-    /// manual resize last left it at, which are the two things that write it (see `apply_pin_drag`
-    /// and `pin_bound_after`).
+    /// pin has no bound yet: the longest side of the box the pin went up with, or of the one a hand
+    /// or a maximize last left it at. A maximize and its restore are boxes chosen for the whole of
+    /// a window, so each is the bound as a resize is — not a hole left in the rule (see
+    /// `apply_pin_drag`, `pin_bound_after` and `toggle_pin_maximized`).
     ///
     /// It exists because a swap fits one shape inside a box, and a box that was itself the last
     /// swap's answer can only ever lose a side of it: a pin that followed a listing past files of

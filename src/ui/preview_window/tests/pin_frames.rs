@@ -818,6 +818,68 @@ fn a_restore_puts_back_the_size_the_window_came_from() {
     assert_eq!(pin_restore_box(None, resized, (300, 700, 900, 1150)), None);
 }
 
+/// A maximize and its restore are boxes chosen for the whole of the window, so each is the bound a
+/// swap fits the next file into, as a pulled edge is — the maximized ceiling is not left behind for
+/// the restore to keep, and the size from before the maximize is not kept for the next file.
+#[test]
+fn a_maximize_and_its_restore_move_the_bound_with_the_box() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+
+    let before = (400, 300, 800, 600);
+    stand_pin(Some(overlay_pin(before, PinChrome::always())));
+
+    let mut request = None;
+    toggle_pin_maximized(&mut request);
+    assert!(
+        matches!(request.take(), Some(PreviewMessage::PinBox(_))),
+        "a maximize asks for the box it gave the window"
+    );
+
+    let (content, bound) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| (pin.content, pin.bound)))
+        .expect("a pin up");
+    assert_ne!(content, before, "the window was maximized");
+    let maximized = Some((content.2 - content.0).max(content.3 - content.1).max(1));
+    assert_eq!(
+        bound, maximized,
+        "the maximized box is the ceiling a file picked in afterwards is fitted into"
+    );
+
+    // And a file picked into the maximized pin fills that square: its longer side is the bound.
+    let (space, dpi) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| (pin_swap_space(pin), pin.dpi)))
+        .expect("a pin up");
+    let bounds = work_area_at(space.current.0, space.current.1);
+    let swapped = pin_update_box(
+        pin_swap_room(space, bounds, dpi),
+        (1280, 720),
+        PreviewScale::FitToScreen,
+    );
+    assert_eq!(
+        (swapped.2 - swapped.0).max(swapped.3 - swapped.1),
+        bound.expect("a maximized pin has a bound"),
+        "an engine-drawn file picked in after the maximize fills it"
+    );
+
+    toggle_pin_maximized(&mut request);
+    assert!(
+        matches!(request.take(), Some(PreviewMessage::PinBox(_))),
+        "and the restore asks for the box it put aside"
+    );
+    let (content, bound) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| (pin.content, pin.bound)))
+        .expect("a pin up");
+    assert_eq!(
+        bound,
+        Some((content.2 - content.0).max(content.3 - content.1).max(1)),
+        "the restored box is the ceiling again"
+    );
+    assert_ne!(bound, maximized, "not the maximized ceiling left behind");
+
+    stand_pin(previous_pin);
+}
+
 #[test]
 fn only_the_kinds_that_play_carry_a_transport_bar() {
     // A video of either engine is the kind with a playhead to show. A sound is not: its card
