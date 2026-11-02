@@ -720,6 +720,15 @@ pub(super) unsafe extern "system" fn window_proc(
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
+        // **The Shell's ask for the still of this window's taskbar button, while the window is down.** A
+        // pin that stands in a window of its own wears its own button, and a button whose window has been
+        // put away has no composition for the Shell to freeze — the picture the collapse took is what is
+        // handed over instead (see `pin_taskbar_mirror::answer_a_thumbnail_ask`). The same procedure is the
+        // hover's, and a hover answers nothing here: no picture is ever held for one, and an ask with
+        // nothing to hand it leaves the Shell its own fallback rather than anything this app draws.
+        windows::Win32::UI::WindowsAndMessaging::WM_DWMSENDICONICTHUMBNAIL => {
+            pin_taskbar_mirror::answer_a_thumbnail_ask(hwnd, lparam)
+        }
         windows::Win32::UI::WindowsAndMessaging::WM_DESTROY => LRESULT(0),
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
