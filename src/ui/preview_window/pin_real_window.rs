@@ -20,8 +20,10 @@
 //! What is *not* here is as much the point: no message of its own for presses, because Windows
 //! activates the window a press lands on and a press on this window is a press on the pin; no
 //! stand-in in the taskbar, because this window brings its own button; no mirror, because the Shell
-//! draws a thumbnail of the window itself. A pin that is a window needs none of that, and the first
-//! ticket of this module is the window alone so that the rest can be proven one kind at a time.
+//! draws a thumbnail of the window itself while it is up. A pin that is a window needs none of that,
+//! and the first ticket of this module is the window alone so that the rest can be proven one kind at
+//! a time. What it does owe is the still of that button once it is down, which is why it is made
+//! supplying its own (see `pin_taskbar::supply_the_stills_of_this_window`).
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::Once;

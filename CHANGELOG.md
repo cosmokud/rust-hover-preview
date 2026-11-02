@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **An image pin moved from the bubble into the taskbar keeps its picture in the button's hover.** A pin that stands in a window of its own wears its own taskbar button, and the row that moves one from the bubble into the taskbar minimized a window that had been hidden since the collapse — a window with no composition for the Shell to freeze, and no picture taken of it — so the hover fell back to the icon. The picture is now taken at the collapse, while that window is still on the screen, and the window is made supplying the still its button is drawn of and answers the Shell's ask for it; a pin restored, ended, or up again gives the still back and forgets the picture, so the direct minimize keeps the Shell's own freeze it has always had.
+
 ## [0.4.6] - 2026-11-03
 
 ### Added

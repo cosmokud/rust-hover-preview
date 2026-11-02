@@ -500,7 +500,7 @@ rather than answered out of the listing the chrome covered.
 
 > How a hover becomes a persistent topmost window. Pin key freezes hover machinery, stands a window of the pin's own with caption/transport chrome, and swaps media in place for picks or prev/next walks — same file, no re-resolve.
 
-The design decision that shapes all of this: the pin is a window of this app's own, and the hover's window is not it. A hover is made a non-activating tool window on purpose — it appears under a pointer that may be in the middle of renaming a file, and a window that took the focus would swallow the name being typed — while what Windows decides from a window's styles (whether a click may activate it, whether it is listed, whether it can be minimized and restored) is asked of that window once, when it is made. A pin is the opposite case, so it gets `pin_real_window`'s class: `WS_POPUP` with `WS_SYSMENU | WS_MINIMIZEBOX`, layered because its edges are alpha, no band in its styles at all (the setting asks for the band when the pin is shown), and no stand-in of its own for the taskbar, because this window brings its own button. Everything that would require re-resolving a file is still free — the pin already knows the folder, the window, the sort order, and the config.
+The design decision that shapes all of this: the pin is a window of this app's own, and the hover's window is not it. A hover is made a non-activating tool window on purpose — it appears under a pointer that may be in the middle of renaming a file, and a window that took the focus would swallow the name being typed — while what Windows decides from a window's styles (whether a click may activate it, whether it is listed, whether it can be minimized and restored) is asked of that window once, when it is made. A pin is the opposite case, so it gets `pin_real_window`'s class: `WS_POPUP` with `WS_SYSMENU | WS_MINIMIZEBOX`, layered because its edges are alpha, no band in its styles at all (the setting asks for the band when the pin is shown), and no stand-in of its own for the taskbar, because this window brings its own button — and, put away into the taskbar, supplies the still of it. Everything that would require re-resolving a file is still free — the pin already knows the folder, the window, the sort order, and the config.
 
 - Take-up: `pin_key` (Mouse3 or Space) on settled preview (`pin_screen_is_settled`), never spinner; engine kinds install `pinned_engine_media`. `key_input`/`wheel_input` LL hooks + per-tick counter; `refresh` on config/tray.
 - The key a setting names: `key_binding` reads a binding as alternatives separated by `,` and the keys of one alternative by `+` — `space,page_down`, `ctrl+alt+space`, `ctrl+mouse4` — where the last key of an alternative is the press counted and the rest only have to be held. Mouse buttons are `mouse3`–`mouse5`, carried as their Windows virtual keys so one down-state read answers for both kinds, and left and right are not names it takes; an unreadable or empty `pin_key` falls back to `DEFAULT_PIN_KEY` (`mouse3,space`). The same parse answers `trigger_key` and `toggle_key`, and every stored spelling keeps working.
@@ -1400,18 +1400,24 @@ Shell draws through it is hidden (`put_the_pins_window_in_the_taskbar`, `hide_pi
 own rows would be the black it erases to**: the film in it is a DWM thumbnail composed *over* the host's client, so what
 the button holds is a picture of the host's *client as the desktop shows it* — the film and the chrome strips drawn over
 it — taken before the pin leaves the screen (`keep_the_pins_picture_for_the_taskbar`,
-`pin_taskbar_mirror::take_the_picture_of`). **It is taken at every collapse and not only at a put-away into the
-taskbar**, because the collapse is the last moment the host is on the screen: a pin that goes away into the bubble and
-is then asked for the taskbar from the bubble's own row has had no window of its own on the screen since, so the frame
+`pin_taskbar_mirror::take_the_picture_of`). **A pin that stands in a window of its own has no host to be pictured of,
+and its own window is the button** (`pin_is_its_own_window`, `real_pin_window`), so the same picture is taken of that
+window at the same moment and held for the same button. **It is taken at every collapse and not only at a put-away into
+the taskbar**, because the collapse is the last moment the window on the button is on the screen: a pin that goes away
+into the bubble and is then asked for the taskbar from the bubble's own row has had no window of its own on the screen
+since, so the frame
 composed at that collapse — the last one the user saw — is what its button is handed (`take_the_pins_picture`,
 `collapse_pin_to`), and the row that puts a pin away forces the app's own still and invalidates it whether or not it
-could take a new picture. `SW_MINIMIZE` from a hidden window is a *visible* iconic one — measured,
-`IsWindowVisible && IsIconic` — so the row leaves a real taskbar button behind the bubble either way. The window is made
-supplying its own stills (`DWMWA_HAS_ICONIC_BITMAP`, `supply_the_stills_of_this_window`), the app's own bitmap is forced
+could take a new picture. **The direct minimize takes nothing over that picture**: its window is still on the screen when
+the row runs, and the Shell's own freeze of it is what that road's hover has always been. `SW_MINIMIZE` from a hidden
+window is a *visible* iconic one — measured, `IsWindowVisible && IsIconic` — so the row leaves a real taskbar button
+behind the bubble either way. Every window that can wear the button is made supplying its own stills
+(`DWMWA_HAS_ICONIC_BITMAP`, `supply_the_stills_of_this_window`), the app's own bitmap is forced
 for as long as the pin is away (`DWMWA_FORCE_ICONIC_REPRESENTATION`, `the_buttons_still_is_the_apps_own`), the Shell's
-`WM_DWMSENDICONICTHUMBNAIL` is answered with it in the host's own procedure (`answer_a_thumbnail_ask`), and the picture
-is forgotten when the pin ends or the host goes. Both classes a host can be made from answer the same things, because a
-hover's host a pin took up *is* the pin's host from then on (`answer_a_host`).
+`WM_DWMSENDICONICTHUMBNAIL` is answered with it in that window's own procedure (`answer_a_thumbnail_ask` — the pin's own
+window answers it in `window_proc`, where an ask with no picture held is the hover's and answers nothing), and the
+picture is forgotten when the pin ends, the host goes, or the pin is up again. Both classes a host can be made from
+answer the same things, because a hover's host a pin took up *is* the pin's host from then on (`answer_a_host`).
 
 **And the Shell's restore of that button is the pin's restore.** The window coming back is one message on both roads a
 pin is put away as a window — the pin's own window and the host that owns its chrome — so the size gate and the ask are
