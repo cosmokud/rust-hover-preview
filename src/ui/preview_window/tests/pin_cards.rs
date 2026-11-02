@@ -2473,3 +2473,36 @@ fn a_hand_on_the_artwork_does_not_ask_the_cards_command_bar_out() {
 
     stand_pin(previous_pin);
 }
+
+/// The Explorer hook's own reading of a sound card's button: the screen point the always-on-top
+/// button's press lands on is the pin's chrome, not a pick of the file the pin stands over — a
+/// press on it must not arrive with the file under the card (see `pin_button_covers`).
+///
+/// A sound has no caption, so the controls it carries in its card's place are the only buttons it
+/// has: without them asked here, the hook reads the press as a pick of the listing and the preview
+/// switches to whatever file is under the card.
+#[test]
+fn a_sounds_always_on_top_button_is_the_pins_own_and_not_a_file_under_it() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+
+    let pin = sound_pin();
+    let window = pin.window_box();
+    let (_, height) = pin.window_size();
+    stand_pin(Some(pin));
+
+    let (x, y) = a_sound_window_button_point(&sound_pin(), CardControl::AlwaysOnTop);
+    assert!(
+        pin_button_covers((window.0 + x, window.1 + y)),
+        "the always-on-top button is the pin's own chrome"
+    );
+
+    // And the card's artwork, which is not a button of the pin's, keeps the pass-through a click
+    // on a pinned window has.
+    assert!(
+        !pin_button_covers((window.0 + 1, window.1 + height / 2)),
+        "while the card's artwork is the listing's, not the chrome's"
+    );
+
+    stand_pin(previous_pin);
+}

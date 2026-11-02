@@ -256,14 +256,13 @@ impl PinUpdateWatch {
         let previous_was_chrome = previous_window.is_some_and(window_is_menu_popup_chrome);
         let clicked = focus_move.clicked;
 
-        // A press on one of the pin's caption buttons is the pin's own button, not a pick of the
-        // file the chrome is drawn over: the hook reads a press on this app's own window as a
-        // press on the listing underneath, and the Minimize or Close the user aimed at would
-        // otherwise arrive with whatever Explorer item is under it. Asked of the same geometry
-        // the button's own press is (see `pin_caption_button_covers`).
-        let on_a_caption_button =
-            clicked && pin_caption_button_covers((pointer.point.x, pointer.point.y));
-        let on_the_pins_chrome = press_is_the_pins_chrome(clicked, on_a_caption_button);
+        // A press on one of the pin's own buttons — the caption's, or a sound's card's — is the
+        // pin's own button, not a pick of the file the chrome is drawn over: the hook reads a press
+        // on this app's own window as a press on the listing underneath, and the Minimize or Close
+        // the user aimed at would otherwise arrive with whatever Explorer item is under it. Asked
+        // of the same geometry the button's own press is (see `pin_button_covers`).
+        let on_a_pin_button = clicked && pin_button_covers((pointer.point.x, pointer.point.y));
+        let on_the_pins_chrome = press_is_the_pins_chrome(clicked, on_a_pin_button);
 
         // A press on one of this app's own panels spends the rest of the hand, so that the rest is not
         // read as a hover of the file the panel was covering (see `a_rest_is_a_hover`). Asked on both

@@ -367,7 +367,7 @@ fn every_caption_button_asks_its_command_on_a_press_and_a_release() {
 /// is on the pin's chrome, so the press is the button's and not a pick of the file the pin stands
 /// over. The media below the strip is not chrome, and the release still asks for the minimize —
 /// the suppression belongs to the hook's classification, not to the button (see
-/// `pin_caption_button_covers` and `press_is_the_pins_chrome`).
+/// `pin_button_covers` and `press_is_the_pins_chrome`).
 #[test]
 fn the_caption_minimize_is_the_pins_chrome_and_not_a_file_under_it() {
     let _room = the_room_to_itself();
@@ -384,11 +384,11 @@ fn the_caption_minimize_is_the_pins_chrome_and_not_a_file_under_it() {
         .expect("a pin is up");
 
     assert!(
-        pin_caption_button_covers((left + x, top + y)),
+        pin_button_covers((left + x, top + y)),
         "the Minimize button is the pin's own chrome"
     );
     assert!(
-        !pin_caption_button_covers((left + x, top + caption + y.max(1))),
+        !pin_button_covers((left + x, top + caption + y.max(1))),
         "while the media below the caption is the listing's, not the chrome's"
     );
 
