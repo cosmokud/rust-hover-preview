@@ -321,6 +321,7 @@ pub(crate) use image_cache::trim_image_cache;
 pub(crate) use media_types::PreviewMessage;
 pub(crate) use mpv_resident::shut_down_the_resident;
 pub(crate) use pin_bubble::PIN_BUBBLE_HWND;
+pub(crate) use pin_drag::a_pinned_resize_is_dragging;
 pub(crate) use pin_drag::publish_pin_media_press;
 pub(crate) use pin_input::pin_volume_keep_alive_try;
 pub(crate) use pin_lifecycle::band_place;

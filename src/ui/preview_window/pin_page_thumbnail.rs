@@ -19,11 +19,18 @@
 //!
 //! **The road follows `pin_film_thumbnail`'s rules and has this one difference: the destination is the
 //! pin, not a host of its own.** The pin's window is the caption and the transport as well as the band,
-//! so the destination rectangle is the band's own rect inside the pin's client, and everything else the
-//! pin draws is untouched by it. The source's client is a constant for as long as it is the pin's
-//! picture (the one placement, see `webview_preview`'s `put_window`), so a frame can only change with
-//! the pin's band — which on a drag changes in *screen* coordinates only, and so is the same rectangle
-//! in the pin's client: **a drag re-points nothing at all**.
+//! so the destination rectangle is the rows the pin's own paint leaves for the media, and everything else
+//! the pin draws is untouched by it. The source's client follows those rows — the Shell fits the thumbnail
+//! of that client into the destination, so a client of another shape is a page drawn at a shape the band is
+//! not (see `webview_preview`'s `put_window`) — and a resize and a new document are both a size while a
+//! move is not: a drag changes the pin's band in *screen* coordinates only, so the destination is the same
+//! rectangle in the pin's client and **a drag re-points nothing at all**.
+//!
+//! **And nothing here is ever registered for a pin that does not frame an engine page.** The page's window
+//! is the engine's for the session rather than any pin's — hidden between documents, its handle still
+//! published — and the Shell answers a thumbnail of a hidden window with this app's icon, so a band that
+//! took one would draw an icon into a pin of a kind that has no page at all (see `the_pair`). Every road in
+//! here is reached through the pin's page (see `pin_lifecycle::engine_page_in_the_band`).
 
 use super::*;
 
@@ -37,6 +44,7 @@ use windows::Win32::Graphics::Dwm::{
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY,
     DWM_TNP_VISIBLE,
 };
+use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 
 /// The band a registration is pointed at: `left, top, width, height` in the client coordinates of the
 /// window the Shell draws into.
@@ -66,13 +74,19 @@ impl Held {
     };
 }
 
-/// Draw the pin's page into it, for `content` — the media band the pin is showing, in screen
-/// coordinates — or let the registration go where the pin has no page in its band.
+/// Draw the pin's page into it — the pin's own band being the destination — or let the registration go
+/// where the pin has no page in its band.
+///
+/// `content` is the media band the pin is showing, in screen coordinates, and the destination is not
+/// worked out from it (see `the_band_in_the_client`): it is what a pin whose window and media box
+/// disagree is said out loud against. **A pin with no page in its band is the registration let go and
+/// nothing else**, and that gate is the whole of why this is only ever asked on the page's own road —
+/// the engine's window outlives the pin's page (see the module note).
 ///
 /// It is asked wherever the band moves or changes (see `pin_lifecycle::place_pinned_siblings`) and it is
 /// cheap to ask: a page that is not the pin's picture is a registration let go of, and a pair that did not
 /// change hands the Shell nothing at all — **which is every step of a drag**, the destination being the
-/// band in the pin's own client coordinates rather than on the screen.
+/// pin's own band rather than anything on the screen.
 pub(super) fn the_page_was_placed(content: Option<ScreenRegion>) {
     let Some((pin, page, destination)) = content.and_then(the_pair) else {
         let_registration_go("the pin has no page in its band");
@@ -153,74 +167,128 @@ fn let_registration_go(reason: &str) {
 
 /// The pin window the Shell draws into, the page window it draws, and the band's rectangle in the pin's
 /// own client coordinates — or nothing where either window or the band is not there.
+///
+/// **A page window that is not on screen is no page at all.** The engine's window is the session's rather
+/// than the pin's, and a hide leaves its handle published — so a registration made against a hidden one is
+/// a thumbnail the Shell answers with this app's icon, which is a pin that peeks itself instead of its
+/// page. That is the one fault this refuses rather than reports, and refusing costs nothing: the next
+/// placement of the band asks again, exactly as it does after the `DwmRegisterThumbnail` below has failed.
 fn the_pair(content: ScreenRegion) -> Option<(isize, isize, Band)> {
     let page = webview_preview::showing_hwnd();
     if page == 0 {
         return None;
     }
+    if !unsafe { IsWindowVisible(HWND(page as *mut _)) }.as_bool() {
+        return None;
+    }
     let pin = pin_real_window::real_pin_window()?;
 
-    // The pin's client origin and area, which are the coordinates the Shell is handed the rectangle in: a
-    // layered pin is drawn where its client is, so the band is the same rectangle in either coordinates —
-    // and the *difference* is what makes a drag re-point nothing (see the module note).
-    let origin = unsafe { pin_film_thumbnail::client_origin(pin) }?;
+    // The pin's client area, which is the surface the Shell samples and the coordinates it is handed the
+    // rectangle in, and the rows its own paint leaves for the media, which are the band those rows are.
     let client = unsafe { pin_film_thumbnail::client_size(pin) }?;
+    let rows = pin_lifecycle::pinned_band_rows_of_the_client(client)?;
 
     Some((
         pin.0 as isize,
         page,
-        the_band_in_the_client(content, origin, client),
+        the_band_in_the_client(content, client, rows),
     ))
 }
 
-/// A band, in the client coordinates of the window that draws it: the pin's own rectangle of itself, cut
-/// to the client so that a band a display change has left stale is a rectangle inside the window rather
-/// than one reaching past the surface the Shell samples.
-fn the_band_in_the_client(content: ScreenRegion, origin: (i32, i32), client: (i32, i32)) -> Band {
-    let (client_width, client_height) = (client.0.max(1), client.1.max(1));
-    let left = (content.0 - origin.0).clamp(0, client_width);
-    let top = (content.1 - origin.1).clamp(0, client_height);
-    let right = (content.2 - origin.0).clamp(left, client_width);
-    let bottom = (content.3 - origin.1).clamp(top, client_height);
+/// A band, in the client coordinates of the window that draws it: the rows that window's own paint leaves
+/// for the media, edge to edge — what the pin is drawing, and so the one rectangle the page is fitted into.
+///
+/// **It is never cut to a smaller rectangle**, because there is no third rectangle to cut to: the pin's
+/// window is fitted to its media, so a destination clamped to the client would be a band the pin paints and
+/// the page does not cover — and the rows it left out are the pin's own alpha-1 claim, which is the desktop
+/// seen through it. `content` is used only to say out loud the one fault this can hide, a pin whose window
+/// has not been resized for the media box it is showing: the band is the window's rows either way, so it is
+/// covered rather than cut short.
+fn the_band_in_the_client(content: ScreenRegion, client: (i32, i32), rows: (i32, i32)) -> Band {
+    let (top, height) = rows;
+    let height = height.max(1);
 
-    (left, top, (right - left).max(1), (bottom - top).max(1))
+    if (content.2 - content.0, content.3 - content.1) != (client.0, height) {
+        note_pin_trace!(
+            "page band: pin window {}x{} is not its media {}x{}",
+            client.0,
+            client.1,
+            content.2 - content.0,
+            content.3 - content.1
+        );
+    }
+
+    (0, top, client.0.max(1), height)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// **The band is the same rectangle in the pin's client coordinates wherever the pin stands**, which
-    /// is the whole of why a drag costs the Shell nothing: the band and the client move together. And a
-    /// band is never a rectangle reaching past the client the Shell samples (see `the_band_in_the_client`).
+    /// **The destination is the pin's own band, so it is the client's rows wherever the pin stands and
+    /// whatever the pin was before**: a drag changes no side and so re-points nothing, and a resize is a
+    /// rectangle the Shell is handed again — never a band cut to fit a window that had not caught up.
     #[test]
-    fn a_band_is_the_same_rectangle_wherever_its_pin_stands() {
+    fn a_band_is_the_pins_own_rows_wherever_it_stands() {
         let content = (500, 400, 1140, 700);
-        let client = (500, 400, 640, 300);
-        let placed = the_band_in_the_client(content, (500, 400), (client.2, client.3));
-        assert_eq!(placed, (0, 0, 640, 300), "the band is the pin's own client");
+        let client = (640, 300);
+        // A caption above the band and no transport below it: the band is the rows under the caption.
+        let placed =
+            the_band_in_the_client(content, client, pinned_band_rows(client.1, 28, 0, false));
+        assert_eq!(placed, (0, 28, 640, 272), "the band is below the caption");
 
-        // The same pin carried a hundred pixels each way: the band and the client moved together, so
-        // the pair handed to the Shell did not move at all.
+        // The same client on a pin carried a hundred pixels each way: the band is the same rectangle,
+        // which is the whole of why a step of a drag asks the Shell nothing.
         assert_eq!(
-            the_band_in_the_client((600, 500, 1240, 800), (600, 500), (client.2, client.3)),
+            the_band_in_the_client(content, client, pinned_band_rows(client.1, 28, 0, false)),
             placed,
             "a drag re-points nothing"
         );
 
-        // A pin's caption above the band: the band is the rectangle below it, in the client's units.
+        // A window the hand pulled out: the band is the new client's own rows, edge to edge.
+        let resized = (900, 500);
         assert_eq!(
-            the_band_in_the_client((500, 428, 1140, 728), (500, 400), (640, 300)),
-            (0, 28, 640, 272),
-            "the chrome above the band is the pin's own pixels"
+            the_band_in_the_client(content, resized, pinned_band_rows(resized.1, 28, 0, false)),
+            (0, 28, 900, 472),
+            "a resize is a band of the client it was made"
         );
 
-        // A band the geometry has left outside the window is cut to the client rather than handed to the
-        // Shell as a rectangle sampled past the surface it is sampling.
+        // A media box smaller than the window is a trace line and not a destination: what is handed to
+        // the Shell is still the whole band, since a band cut to the box would leave the window's own
+        // alpha-1 rows painting the desktop.
         assert_eq!(
-            the_band_in_the_client((560, 400, 1180, 712), (500, 400), (640, 300)),
-            (60, 0, 580, 300),
-            "a band reaching past the client is cut to it"
+            the_band_in_the_client(
+                (500, 400, 760, 594),
+                client,
+                pinned_band_rows(client.1, 28, 0, false)
+            ),
+            placed,
+            "a media box that disagrees with the window is not a band cut to it"
+        );
+
+        // A kind whose chrome is drawn over the media: the band is the whole client.
+        assert_eq!(
+            the_band_in_the_client(content, client, pinned_band_rows(client.1, 28, 0, true)),
+            (0, 0, 640, 300),
+            "a band drawn under the chrome is the whole client"
+        );
+    }
+
+    /// **The fatal regression, as a test.** The engine's window outlives the pin's page with its handle
+    /// still published, so a pin that frames no page is a pin this road must say nothing about: a
+    /// registration made for one is a thumbnail of a hidden window, which the Shell answers with this
+    /// app's icon, in every kind of pin's band and on every step of its drag.
+    #[test]
+    fn nothing_is_registered_for_a_pin_with_no_page() {
+        the_page_was_placed(None);
+
+        let held = *PAGE_THUMBNAIL
+            .lock()
+            .expect("the held registration is a lock of this module's own");
+        assert_eq!(
+            (held.pin, held.page, held.registration, held.shown),
+            (0, 0, 0, None),
+            "a pin with no page in its band is a registration let go of"
         );
     }
 

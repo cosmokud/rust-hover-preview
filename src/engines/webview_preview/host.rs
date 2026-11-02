@@ -347,7 +347,7 @@ impl Host {
 
             self.set_bounds(area);
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
-            self.put_window(area);
+            self.put_window(area, true);
         }
 
         publish(Some((path.clone(), area)));
@@ -412,32 +412,48 @@ impl Host {
     ///
     /// **A page the pin draws is not a window of the desktop's at all, and it is the film road's own
     /// one placement** (see `pin_film_thumbnail::place_the_source`): invisible at one part in 255 and
-    /// click-through, at the bottom of the order, placed at the band once and only *moved* after that.
-    /// What the pin shows of it is the Shell's thumbnail of this window, so the surface it samples —
-    /// this window's client — is a constant for as long as the page is the picture, and a drag step is
-    /// one `SetWindowPos` that changes nothing of the picture the band draws (see `pin_page_thumbnail`).
-    pub(super) fn put_window(&mut self, area: Area) {
+    /// click-through, at the bottom of the order, lowered once at the band it is the picture in.
+    ///
+    /// **Its size is the band's, and its place alone is free.** What the pin shows of it is the Shell's
+    /// thumbnail of this window, and the Shell fits that thumbnail of this client into the band — so a
+    /// client of another shape is a page drawn at a shape the band is not, and the band around it is the
+    /// pin's own alpha-1 rows, which is the desktop seen through. A drag changes no side, so a step of one
+    /// is a `SetWindowPos` that costs the Shell nothing; a resize and a new document are sizes, and both
+    /// are this window's (see `pin_page_thumbnail`).
+    pub(super) fn put_window(&mut self, area: Area, resized: bool) {
         if self.the_page_is_a_source() {
             let placed = std::mem::replace(&mut self.a_source, true);
-            let (after, flags) = if placed {
-                (HWND::default(), SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
-            } else {
-                (HWND_BOTTOM, SWP_NOACTIVATE | SWP_SHOWWINDOW)
-            };
+            let (pay, flags) = a_source_placement(
+                placed,
+                resized,
+                crate::ui::preview_window::a_pinned_resize_is_dragging(),
+            );
+            if pay {
+                // The page is laid out at the band it is the picture of, which only a paid placement is: a
+                // size the drag has not settled on is a box the browser would be asked to follow and could
+                // not (see `PIN_RESIZE_DRAGGING`), so it is left standing and the placement after the drag
+                // pays it.
+                self.set_bounds(area);
+                self.last_area = Some((area.width, area.height));
+            }
+            let after = if placed { HWND::default() } else { HWND_BOTTOM };
             unsafe {
                 let _ = SetWindowPos(
                     self.hwnd,
                     after,
                     area.x,
                     area.y,
-                    area.width,
-                    area.height,
+                    if pay { area.width } else { 0 },
+                    if pay { area.height } else { 0 },
                     flags,
                 );
             }
             return;
         }
         self.a_source = false;
+        // What this window was given, so that a box which only moves from here is not re-laid-out: the
+        // record is the size the page was *laid out* at, and no placement below pays for one (see `place`).
+        self.last_area = Some((area.width, area.height));
 
         let raises = raises(
             crate::ui::preview_window::pinned(),
@@ -520,20 +536,22 @@ impl Host {
     pub(super) fn place(&mut self, placement: &Placement) {
         let size = (placement.area.width, placement.area.height);
         let resized = self.last_area != Some(size);
-        self.last_area = Some(size);
 
         // The pin may have been taken up over this very page, which is a style to put on and not a
         // navigation: a document already on screen is never shown again for it (see `put_the_page_style`).
         unsafe { self.put_the_page_style() };
 
-        // **A pin's picture is laid out once**: the client area of a page placed as a source is the
-        // surface the Shell samples, so a resize of the pin is the destination rectangle's and never
-        // this window's (see `put_window`).
+        // **A pin's picture is laid out at the band it is the picture of**, which is what its client is
+        // sampled as, so a size is owed to the browser as well as to the window (see `put_window`). The
+        // size the page was laid out at is what the next placement is compared against, so a step of a
+        // resize drag — whose re-layout is deferred — leaves that debt standing and the placement after
+        // the drag pays it. A page that is not a pin's source keeps its own road: the window's bounds are
+        // the layout's, and `put_window` records the size it was given.
         if resized && !self.a_source {
             self.set_bounds(placement.area);
         }
 
-        self.put_window(placement.area);
+        self.put_window(placement.area, resized);
         publish_rect(Some(placement.area));
     }
 
@@ -999,5 +1017,84 @@ pub(super) fn raises(pinned: bool, holds_front: bool) -> [Option<Raise>; 2] {
         ]
     } else {
         [Some(topmost), None]
+    }
+}
+
+/// Whether a placement of a page as a *source* pays for the side it stands at, and the flags that carry
+/// the window there.
+///
+/// A page the pin draws is sampled as this window's client area, so the client's side is the band's: a
+/// placement that changes it is one both the window and the browser are owed, and one that only moves is
+/// not (`SWP_NOSIZE`). The first placement is owed whatever it is, since nothing has been laid out yet and
+/// nothing is standing at the band. A step of a resize drag is not paid: the box the hand is still pulling
+/// is not one the page can follow — and a page laid out again per pointer move does not follow the hand,
+/// it lags it — so the Shell stretches the client it has into the band meanwhile, and the placement at the
+/// band the drag settles on pays the debt, `last_area` being the size the page was laid out at rather than
+/// the one it was last asked for (see `place`).
+fn a_source_placement(placed: bool, resized: bool, dragging: bool) -> (bool, SET_WINDOW_POS_FLAGS) {
+    let pay = (resized || !placed) && !dragging;
+
+    let mut flags = if placed {
+        SWP_NOZORDER | SWP_NOACTIVATE
+    } else {
+        // A source is lowered once rather than raised: where it is drawn is the pin's band, and being at
+        // the bottom of the order is what keeps it out of the way of it.
+        SWP_NOACTIVATE | SWP_SHOWWINDOW
+    };
+    if !pay {
+        flags |= SWP_NOSIZE;
+    }
+
+    (pay, flags)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A carried page is one `SetWindowPos` and no size, and a resize is a size the page is owed.** That
+    /// is the whole of what a drag of a pinned page costs the browser, its client being the surface the
+    /// Shell fits into the band. A step of a resize drag is the one that is deferred, since a box the hand
+    /// has not settled on is not a box the page can be laid out at.
+    #[test]
+    fn a_source_pays_for_its_size_and_never_for_its_place() {
+        let moved = a_source_placement(true, false, false);
+        assert!(!moved.0, "a move is not a size");
+        assert!(
+            moved.1.contains(SWP_NOSIZE),
+            "a move leaves the client it is sampled as alone"
+        );
+
+        let resized = a_source_placement(true, true, false);
+        assert!(
+            resized.0,
+            "a resize is the band's own side, which is the page's layout"
+        );
+        assert!(
+            !resized.1.contains(SWP_NOSIZE),
+            "a resize is a size the window is given"
+        );
+
+        let dragged = a_source_placement(true, true, true);
+        assert!(
+            !dragged.0,
+            "a band the hand has not settled on is not a size to lay out"
+        );
+        assert!(
+            dragged.1.contains(SWP_NOSIZE),
+            "the page keeps the client it has while the hand pulls the band"
+        );
+
+        let first = a_source_placement(false, true, false);
+        assert!(first.0, "the first placement is the page's own layout");
+        assert!(!first.1.contains(SWP_NOSIZE));
+        assert!(
+            first.1.contains(SWP_SHOWWINDOW) && first.1.contains(SWP_NOACTIVATE),
+            "a source is shown and lowered, never activated"
+        );
+        assert!(
+            !first.1.contains(SWP_NOZORDER),
+            "the first placement is the one that sits at the bottom of the order"
+        );
     }
 }
