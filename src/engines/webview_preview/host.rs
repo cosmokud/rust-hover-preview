@@ -428,14 +428,6 @@ impl Host {
                 resized,
                 crate::ui::preview_window::a_pinned_resize_is_dragging(),
             );
-            if pay {
-                // The page is laid out at the band it is the picture of, which only a paid placement is: a
-                // size the drag has not settled on is a box the browser would be asked to follow and could
-                // not (see `PIN_RESIZE_DRAGGING`), so it is left standing and the placement after the drag
-                // pays it.
-                self.set_bounds(area);
-                self.last_area = Some((area.width, area.height));
-            }
             let after = if placed { HWND::default() } else { HWND_BOTTOM };
             unsafe {
                 let _ = SetWindowPos(
@@ -448,12 +440,38 @@ impl Host {
                     flags,
                 );
             }
+            if pay {
+                // **The window's new size commits before the browser is told the box it stands in**, and the
+                // order is the whole of what makes a resized page a page rather than a stretched picture.
+                // `SetBounds` sizes the WebView's own child of this window, which this window's client clips:
+                // bounds set while the window is still the old size are bounds for a client that is about to
+                // stop existing, so after a small-to-huge resize the document is genuinely laid out at the
+                // small side and only the Shell's thumbnail stretches it into the band afterwards — which is a
+                // vector page arriving pixelated — and on a shrink the geometry it is drawn at is a box the
+                // window no longer has, which is the content read as zoomed in. The page is laid out at the
+                // band it is the picture of, and only a paid placement is (see `PIN_RESIZE_DRAGGING`): a size
+                // the drag has not settled on is a box the browser would be asked to follow and could not, so
+                // it is left standing and the placement after the drag pays it.
+                self.set_bounds(area);
+                self.last_area = Some((area.width, area.height));
+            }
             return;
         }
         self.a_source = false;
-        // What this window was given, so that a box which only moves from here is not re-laid-out: the
-        // record is the size the page was *laid out* at, and no placement below pays for one (see `place`).
-        self.last_area = Some((area.width, area.height));
+
+        // **A page's own surface is never smaller than the window it stands in**, which is the whole of why
+        // the two commits below are ordered by the direction of the step rather than made in one order for
+        // every step. The WebView's child is clipped by this window's client, so a step that *grows* the
+        // window while the bounds are still the old box leaves the rows the growth revealed with nothing
+        // drawn in them for as long as the browser takes to follow — the black flash of a page resizing
+        // faster than its window can — so a growth sets the bounds first and the window after. A *shrink* is
+        // the mirror of it: bounds given before the window comes down are a page's surface larger than the
+        // client clipping it, which is a frame composed for a box that no longer exists, so the window is
+        // resized first and the bounds follow it (see `the_step_grew`).
+        let grew = the_step_grew(self.last_area, (area.width, area.height));
+        if resized && grew {
+            self.set_bounds(area);
+        }
 
         let raises = raises(
             crate::ui::preview_window::pinned(),
@@ -472,6 +490,14 @@ impl Host {
                 );
             }
         }
+
+        if resized && !grew {
+            self.set_bounds(area);
+        }
+
+        // What this window was given, so that a box which only moves from here is not re-laid-out: the record
+        // is the size the page was laid out at, and a move pays for none (see `place`).
+        self.last_area = Some((area.width, area.height));
     }
 
     /// Tell the controller the box the page is rendered in, which is what the browser lays the
@@ -541,16 +567,12 @@ impl Host {
         // navigation: a document already on screen is never shown again for it (see `put_the_page_style`).
         unsafe { self.put_the_page_style() };
 
-        // **A pin's picture is laid out at the band it is the picture of**, which is what its client is
-        // sampled as, so a size is owed to the browser as well as to the window (see `put_window`). The
-        // size the page was laid out at is what the next placement is compared against, so a step of a
-        // resize drag — whose re-layout is deferred — leaves that debt standing and the placement after
-        // the drag pays it. A page that is not a pin's source keeps its own road: the window's bounds are
-        // the layout's, and `put_window` records the size it was given.
-        if resized && !self.a_source {
-            self.set_bounds(placement.area);
-        }
-
+        // **Both roads' two commits, and the order they are made in, are `put_window`'s**: a pin's picture is
+        // laid out at the band it is the picture of, and a page that runs at the window it stands in, and each
+        // of them orders the window and the bounds by what the step did (see `put_window`). The size the page
+        // was laid out at is what the next placement is compared against, and it is `put_window` that records
+        // it — so a step of a resize drag, whose re-layout is deferred, leaves that debt standing and the
+        // placement after the drag pays it.
         self.put_window(placement.area, resized);
         publish_rect(Some(placement.area));
     }
@@ -1048,9 +1070,53 @@ fn a_source_placement(placed: bool, resized: bool, dragging: bool) -> (bool, SET
     (pay, flags)
 }
 
+/// Whether the box a placement was given came out larger than the box the page was last laid out at, on
+/// either side: the one question the order of a running page's two commits turns on (see `put_window`).
+///
+/// It is the test `pin_geometry::a_resize_step_grows` makes of a band, asked here of a placement's own side
+/// rather than of the rectangle a pin paints — the engine thread has no pin to ask and must not reach for
+/// one. A box that grew on one side and shrank on the other is a growth: what the browser must never have is
+/// a surface *smaller* than the window it stands in. A host with nothing laid out yet is a growth too, since
+/// bounds are owed by a window that has nothing standing at it.
+fn the_step_grew(was: Option<(i32, i32)>, now: (i32, i32)) -> bool {
+    was.is_none_or(|(width, height)| (now.0 - width) > 0 || (now.1 - height) > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Which way a step went is what orders the window and the bounds**, and a step that is a growth on
+    /// either side is the one that takes the bounds first: a page's surface smaller than the window it is
+    /// clipped by is the black flash, and one larger is a frame composed for a box that is gone (see
+    /// `put_window`). A box that only moves is neither, and a host with nothing laid out yet is a growth.
+    #[test]
+    fn a_step_is_a_growth_where_either_of_its_sides_grew() {
+        assert!(
+            the_step_grew(Some((640, 300)), (900, 500)),
+            "both sides out is a growth"
+        );
+        assert!(
+            the_step_grew(Some((640, 300)), (641, 300)),
+            "one side out by a pixel is a growth"
+        );
+        assert!(
+            the_step_grew(Some((640, 300)), (400, 500)),
+            "a side that shrank beside one that grew is still a growth"
+        );
+        assert!(
+            the_step_grew(None, (640, 300)),
+            "a page with nothing laid out yet takes the bounds first"
+        );
+        assert!(
+            !the_step_grew(Some((640, 300)), (640, 300)),
+            "a move is no step of a size"
+        );
+        assert!(
+            !the_step_grew(Some((640, 300)), (400, 200)),
+            "both sides in is a shrink, and the window comes down first"
+        );
+    }
 
     /// **A carried page is one `SetWindowPos` and no size, and a resize is a size the page is owed.** That
     /// is the whole of what a drag of a pinned page costs the browser, its client being the surface the
