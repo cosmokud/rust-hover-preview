@@ -37,6 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
+use super::pin_trace::note_pin_trace;
 use super::window_proc;
 use super::ScreenRegion;
 
@@ -107,13 +108,28 @@ pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) 
             // app's own and only the Shell's button needs it, so the caret it costs is asked for
             // again from the same place every press asks (see `pin_take_focus`).
             let front_before = unsafe { GetForegroundWindow() };
+            let owes_the_foreground_back =
+                a_put_down_owes_the_foreground_back(front_before, hwnd, the_pins_own_window(hwnd));
+            note_pin_trace!(
+                "appwindow {} of {}: caret in {} owed back {}",
+                app_window as u8,
+                super::pin_trace::window_name(hwnd),
+                super::pin_trace::window_name(front_before),
+                owes_the_foreground_back as u8,
+            );
             let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
             let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
-            if a_put_down_owes_the_foreground_back(front_before, hwnd, the_pins_own_window(hwnd)) {
+            if owes_the_foreground_back {
                 unsafe {
                     super::pin_model::pin_take_focus(hwnd, &super::pin_lifecycle::Win32PinWindow);
                 }
             }
+            note_pin_trace!(
+                "appwindow {} of {}: caret now {}",
+                app_window as u8,
+                super::pin_trace::window_name(hwnd),
+                super::pin_trace::window_name(unsafe { GetForegroundWindow() }),
+            );
         }
     }
 }
