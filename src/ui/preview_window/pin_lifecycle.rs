@@ -2832,13 +2832,18 @@ pub(super) fn pinned_band_in_the_client() -> Option<(i32, i32, i32)> {
     // the window is the one difference that is not a fault (see
     // `paint::the_slack_a_resize_paints_with`), so both are allowed for and nothing else is.
     if let Some(hwnd) = pin_real_window::real_pin_window() {
-        if let Some(client) = unsafe { pin_film_thumbnail::client_size(hwnd) } {
-            if client != (width, height) && client != (width, height + 1) {
-                note_pin_trace!(
-                    "page band: the pin stands at {width}x{height} and its client is {}x{}",
-                    client.0,
-                    client.1
-                );
+        // A step of a resize drag is not asked: the pin's own box is written before the window it stands
+        // in is resized, so the client is a step behind for the whole of a gesture, and a fault read
+        // there is one read at the wrong moment (see `apply_pin_drag`).
+        if pin.dragging.is_none() {
+            if let Some(client) = unsafe { pin_film_thumbnail::client_size(hwnd) } {
+                if client != (width, height) && client != (width, height + 1) {
+                    note_pin_trace!(
+                        "page band: the pin stands at {width}x{height} and its client is {}x{}",
+                        client.0,
+                        client.1
+                    );
+                }
             }
         }
     }

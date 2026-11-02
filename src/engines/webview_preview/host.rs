@@ -454,6 +454,13 @@ impl Host {
                 // it is left standing and the placement after the drag pays it.
                 self.set_bounds(area);
                 self.last_area = Some((area.width, area.height));
+                // The number a page's own look after a drop turns on: the box the document was laid out at,
+                // and whether that was the band it arrived in rather than one it had to be resized into
+                // (see `PIN_RESIZE_DRAGGING`).
+                trace(&format!(
+                    "engine: page laid out at {}x{} (first placement {})",
+                    area.width, area.height, !placed
+                ));
             }
             return;
         }
