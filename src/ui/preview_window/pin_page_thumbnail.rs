@@ -19,7 +19,11 @@
 //!
 //! **The road follows `pin_film_thumbnail`'s rules and has this one difference: the destination is the
 //! pin, not a host of its own.** The pin's window is the caption and the transport as well as the band,
-//! so the destination rectangle is the band's own rect inside the pin's client, and everything else the
+//! so the destination rectangle is the band's own rect inside the pin's client, less the rows the
+//! caption stands in over it: a thumbnail composites over the destination window's own content, child
+//! windows included, so a caption whose rows were handed over would be a caption under the picture —
+//! invisible while its buttons still took the press (see `ARCHITECTURE.md`). The crop is a crop and not
+//! a scale: the source loses the same rows, scaled by the factor it already had. Everything else the
 //! pin draws is untouched by it. The source's client is a constant for as long as it is the pin's
 //! picture (the one placement, see `webview_preview`'s `put_window`), so a frame can only change with
 //! the pin's band — which on a drag changes in *screen* coordinates only, and so is the same rectangle
@@ -34,8 +38,8 @@ use crate::ui::preview_window::pin_trace::note_pin_trace;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
-    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY,
-    DWM_TNP_VISIBLE,
+    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE,
+    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 
 /// The band a registration is pointed at: `left, top, width, height` in the client coordinates of the
@@ -52,9 +56,10 @@ struct Held {
     pin: isize,
     page: isize,
     registration: isize,
-    /// The destination last handed, in the pin's client coordinates, or nothing where none stands: a
-    /// placement that asks for the same one is the Shell asked nothing (see `the_page_was_placed`).
-    shown: Option<Band>,
+    /// The destination last handed, in the pin's client coordinates, and the caption rows cropped off
+    /// its top, or nothing where none stands: a placement that asks for the same pair is the Shell
+    /// asked nothing (see `the_page_was_placed`).
+    shown: Option<(Band, i32)>,
 }
 
 impl Held {
@@ -119,7 +124,11 @@ pub(super) fn the_page_was_placed(content: Option<ScreenRegion>) {
         }
     }
 
-    if held.shown == Some(destination) {
+    // The caption rows the registration already keeps out of the picture: a band that moved is the
+    // same crop re-pointed, and the chrome road is what changes the crop itself
+    // (see `the_caption_rows_are`).
+    let caption = held.shown.map_or(0, |(_, caption)| caption);
+    if held.shown == Some((destination, caption)) {
         note_pin_trace!(
             "page band: unchanged {}x{}+{}+{}",
             destination.2,
@@ -130,31 +139,126 @@ pub(super) fn the_page_was_placed(content: Option<ScreenRegion>) {
         return;
     }
 
-    let (x, y, width, height) = destination;
+    if point_the_thumbnail(&mut held, destination, caption) {
+        note_pin_trace!(
+            "page band: shown {}x{}+{}+{}",
+            destination.2,
+            destination.3,
+            destination.0,
+            destination.1
+        );
+    }
+}
+
+/// Keep `caption` rows off the top of the page's picture, or draw all of it again, for the pin whose
+/// chrome has just come or gone (see `pin_chrome_strips::sync_the_chrome_strips`).
+///
+/// A pin with no page registration — every pin that is not a browser's — is nothing at all here, and so
+/// is a caption number the registration was handed already: this is asked after every paint.
+pub(super) fn the_caption_rows_are(caption: i32) {
+    let Ok(mut held) = PAGE_THUMBNAIL.lock() else {
+        return;
+    };
+    // `shown` stands only with a registration: a page let go is nothing to crop.
+    let Some((band, was)) = held.shown else {
+        return;
+    };
+    if was == caption {
+        return;
+    }
+
+    if !point_the_thumbnail(&mut held, band, caption) {
+        note_pin_trace!("page band: caption {caption} refused, the registration is let go");
+    }
+}
+
+/// Hand the Shell the destination and the source for a band and a caption, and keep the pair. False
+/// where the Shell refused: nothing here asks a second time, so the registration is let go (see
+/// `the_page_was_placed`).
+fn point_the_thumbnail(held: &mut Held, band: Band, caption: i32) -> bool {
+    // The source's client, which is a constant for as long as it is the pin's picture: a page that has
+    // gone answers nothing, and the band's own size is then the factor it would have had anyway.
+    let source = unsafe { pin_film_thumbnail::client_size(HWND(held.page as *mut _)) };
+    let (destination, cropped) = the_rectangles(band, caption, source.unwrap_or((band.2, band.3)));
+
     let properties = DWM_THUMBNAIL_PROPERTIES {
-        dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_SOURCECLIENTAREAONLY | DWM_TNP_VISIBLE,
-        rcDestination: RECT {
-            left: x,
-            top: y,
-            right: x + width,
-            bottom: y + height,
-        },
-        rcSource: RECT::default(),
+        dwFlags: DWM_TNP_RECTDESTINATION
+            | DWM_TNP_SOURCECLIENTAREAONLY
+            | DWM_TNP_VISIBLE
+            | cropped.map_or(0, |_| DWM_TNP_RECTSOURCE),
+        rcDestination: destination,
+        rcSource: cropped.unwrap_or_default(),
         opacity: 255,
         fVisible: true.into(),
         // The page is its client area and nothing around it: the window is a popup a browser draws in,
         // and a frame sampled with it would be a page drawn off its own box by the frame's width.
         fSourceClientAreaOnly: true.into(),
     };
+
+    if let Some(source) = cropped {
+        note_pin_trace!(
+            "page band: caption {caption} rows cropped: dest {}x{}+{}+{} src {}x{}+{}+{}",
+            destination.right - destination.left,
+            destination.bottom - destination.top,
+            destination.left,
+            destination.top,
+            source.right - source.left,
+            source.bottom - source.top,
+            source.left,
+            source.top
+        );
+    }
+
     if let Err(error) = unsafe { DwmUpdateThumbnailProperties(held.registration, &properties) } {
         let registration = held.registration;
         *held = Held::NOTHING;
         let _ = unsafe { DwmUnregisterThumbnail(registration) };
         note_pin_trace!("page band: update refused {error:?}");
-        return;
+        return false;
     }
-    held.shown = Some(destination);
-    note_pin_trace!("page band: shown {width}x{height}+{x}+{y}");
+    held.shown = Some((band, caption));
+    true
+}
+
+/// The two rectangles a registration is handed: the band, less the rows its caption stands in over
+/// its top, and the same rows off the source's client — `None` where the source is the whole of it.
+///
+/// Cropped and never scaled: the source loses `rows * source height / band height`, which is the row
+/// itself while the page is drawn one to one, and the same picture with its top cut off when it is not.
+/// Nothing is cropped where the band already starts below the caption (a kind whose chrome stands in
+/// bands around its media), nor where the crop would leave no rows at all.
+fn the_rectangles(band: Band, caption: i32, source: (i32, i32)) -> (RECT, Option<RECT>) {
+    let (x, y, width, height) = band;
+    let whole = RECT {
+        left: x,
+        top: y,
+        right: x + width,
+        bottom: y + height,
+    };
+
+    let rows = (caption - y).clamp(0, height);
+    if rows == 0 || rows >= height {
+        return (whole, None);
+    }
+
+    let (source_width, source_height) = (source.0.max(1), source.1.max(1));
+    let cropped =
+        ((rows as i64 * source_height as i64 / height as i64) as i32).clamp(0, source_height - 1);
+
+    (
+        RECT {
+            left: x,
+            top: y + rows,
+            right: x + width,
+            bottom: y + height,
+        },
+        Some(RECT {
+            left: 0,
+            top: cropped,
+            right: source_width,
+            bottom: source_height,
+        }),
+    )
 }
 
 /// Let the registration go, keeping the pin and the page it was made for: what a pin going down, a pin
@@ -255,14 +359,98 @@ mod tests {
             pin: 1,
             page: 2,
             registration: 3,
-            shown: Some((0, 28, 640, 272)),
+            shown: Some(((0, 28, 640, 272), 0)),
         };
 
-        assert_eq!(held.shown, Some((0, 28, 640, 272)));
+        assert_eq!(held.shown, Some(((0, 28, 640, 272), 0)));
         assert_eq!((held.pin, held.page), (1, 2));
         assert!(
-            held.shown != Some((0, 28, 640, 271)),
+            held.shown != Some(((0, 28, 640, 271), 0)),
             "a band that changed is a pair to hand over again"
+        );
+        assert!(
+            held.shown != Some(((0, 28, 640, 272), 28)),
+            "a caption that changed is a pair to hand over again"
+        );
+    }
+
+    /// **The caption's rows are given up, not scaled over**: a thumbnail composites over the pin's own
+    /// content and its children with it, so a strip under it is a caption nobody can see whose buttons
+    /// still take the press. The source loses the same rows at the factor it already had.
+    #[test]
+    fn the_caption_rows_are_cropped_off_both_rectangles() {
+        let band = (0, 0, 640, 300);
+        let source = (640, 300);
+
+        // No caption: the whole band and the whole of the source, as the road has always handed it.
+        assert_eq!(
+            the_rectangles(band, 0, source),
+            (
+                RECT {
+                    left: 0,
+                    top: 0,
+                    right: 640,
+                    bottom: 300
+                },
+                None
+            ),
+            "no caption is no crop"
+        );
+
+        // A caption over the band: the same crop of the page's client, one to one.
+        assert_eq!(
+            the_rectangles(band, 28, source),
+            (
+                RECT {
+                    left: 0,
+                    top: 28,
+                    right: 640,
+                    bottom: 300
+                },
+                Some(RECT {
+                    left: 0,
+                    top: 28,
+                    right: 640,
+                    bottom: 300
+                })
+            ),
+            "the caption's rows off the client as well"
+        );
+
+        // A source drawn at another size keeps the factor it had: the crop is the same fraction of it.
+        assert_eq!(
+            the_rectangles(band, 28, (1280, 600)),
+            (
+                RECT {
+                    left: 0,
+                    top: 28,
+                    right: 640,
+                    bottom: 300
+                },
+                Some(RECT {
+                    left: 0,
+                    top: 56,
+                    right: 1280,
+                    bottom: 600
+                })
+            ),
+            "the crop is scaled by the factor the source already had"
+        );
+
+        // A band that already starts below the caption — the chrome in bands around its media — is
+        // nothing to crop, the picture being under no strip of it.
+        assert_eq!(
+            the_rectangles((0, 28, 640, 272), 28, source),
+            the_rectangles((0, 28, 640, 272), 0, source),
+            "a caption the band starts under crops nothing"
+        );
+
+        // A caption taller than the band leaves no rows to draw in, and the band is handed over whole
+        // rather than scaled or cropped into nothing.
+        assert_eq!(
+            the_rectangles(band, 300, source),
+            the_rectangles(band, 0, source),
+            "a crop that leaves no rows is no crop"
         );
     }
 }
