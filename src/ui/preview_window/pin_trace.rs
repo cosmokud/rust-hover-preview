@@ -4,20 +4,26 @@
 //!
 //! **And what a window of the pin's is handed as a hand arrives on it**: the messages a click on the
 //! pair's taskbar button delivers, named by the window they arrive at rather than by a handle
-//! nothing can be read out of (see `window_name` and `note_a_message_of_a_window`).
+//! nothing can be read out of (see `window_name` and `note_a_message_of_a_window`) — and who held the
+//! foreground when it did, and what the z-order had directly over that window, read out of the
+//! handles rather than left as `other` (see `a_window_description`, `what_is_above`).
 //!
 //! The gate is one atomic read: a run without the variable writes nothing and builds no line.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, IsIconic, IsWindowVisible, SC_CLOSE, SC_MINIMIZE, SC_RESTORE,
-    SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, WA_ACTIVE, WA_CLICKACTIVE, WA_INACTIVE,
-    WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLOSE, WM_ENABLE, WM_KILLFOCUS, WM_MOUSEACTIVATE,
-    WM_NCACTIVATE, WM_QUERYOPEN, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_SYSCOMMAND,
+    GetClassNameW, GetForegroundWindow, GetWindow, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, GW_HWNDPREV, SC_CLOSE, SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED,
+    SIZE_MINIMIZED, SIZE_RESTORED, WA_ACTIVE, WA_CLICKACTIVE, WA_INACTIVE, WM_ACTIVATE,
+    WM_ACTIVATEAPP, WM_CLOSE, WM_ENABLE, WM_KILLFOCUS, WM_MOUSEACTIVATE, WM_NCACTIVATE,
+    WM_QUERYOPEN, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_SYSCOMMAND,
 };
 
 static READ: Once = Once::new();
@@ -104,6 +110,78 @@ pub(super) fn window_name(hwnd: HWND) -> &'static str {
     }
 
     "other"
+}
+
+/// A window described for a line, whoever it belongs to: `class:pid (image)` for any window Windows
+/// can still be asked about, the name of one of this app's own (see `window_name`), `none` for a
+/// handle that names no window, and `invalid` for one that names nothing any more.
+///
+/// **A line that can only say `other` about the window holding the foreground answers the one
+/// question a run has**: a pin was put down by *somebody*, and which program that was is the whole
+/// of the answer. The class is written rather than the title, because a title is the file's and the
+/// class is the program's.
+///
+/// Only ever asked behind `wanted`: it costs two calls and a process handle, which is not a price a
+/// window procedure pays per message of a hand on a button.
+pub(super) fn a_window_description(hwnd: HWND) -> String {
+    if hwnd.0.is_null() {
+        return "none".to_string();
+    }
+
+    // This app's own windows are named by what it knows of them, with nothing asked of Windows.
+    let ours = window_name(hwnd);
+    if ours != "other" {
+        return ours.to_string();
+    }
+
+    let mut name = [0u16; 128];
+    // Safety: a question about a window Windows may be taking apart answers nothing, and is
+    // `invalid` rather than a fault.
+    let length = unsafe { GetClassNameW(hwnd, &mut name) };
+    if length <= 0 {
+        return "invalid".to_string();
+    }
+
+    let class = String::from_utf16_lossy(&name[..length as usize]);
+    let mut pid = 0u32;
+    // Safety: the process the desktop keeps for the window is read, nothing of the window's is.
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    match process_image_name(pid) {
+        Some(image) => format!("{class}:{pid} ({image})"),
+        None => format!("{class}:{pid}"),
+    }
+}
+
+/// The name of the file a process runs, for a line that has to say which program a window is.
+fn process_image_name(pid: u32) -> Option<String> {
+    let mut name = [0u16; 260];
+    let mut length = name.len() as u32;
+    // Safety: a process this app may not ask about — elevated, or already gone — is a handle that
+    // cannot be opened, and the line is still worth reading without the image.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let asked = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            windows::core::PWSTR(name.as_mut_ptr()),
+            &mut length,
+        );
+        let _ = CloseHandle(process);
+        asked.ok()?;
+    }
+
+    let path = String::from_utf16_lossy(&name[..length as usize]);
+    Some(path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string())
+}
+
+/// The window directly above one in the z-order, described: what a raise left the window under, so
+/// that a strip that went down in a box change is read against what came over it (`none` for a
+/// window that is the front-most one there is).
+pub(super) fn what_is_above(hwnd: HWND) -> String {
+    // Safety: a question about the desktop's own z-order, which a window on its way out answers with
+    // nothing (see `a_window_description`).
+    let above = unsafe { GetWindow(hwnd, GW_HWNDPREV) }.unwrap_or_default();
+    a_window_description(above)
 }
 
 /// Whether a message a pin's window is handed is one a hand on the pair's taskbar button could
@@ -210,14 +288,15 @@ pub(super) fn note_a_message_of_a_window(
         return;
     }
 
-    // Safety: both are questions about the desktop's own bookkeeping. Neither can fault, and a
-    // window that is not this app's is `other` (see `window_name`).
-    let foreground = unsafe { window_name(GetForegroundWindow()) };
-    let focus = unsafe { window_name(GetFocus()) };
+    // Safety: all three are questions about the desktop's own bookkeeping. None can fault, and a
+    // window that is not this app's is described rather than named (see `a_window_description`).
+    let foreground = unsafe { GetForegroundWindow() };
+    let focus = unsafe { GetFocus() };
+    let above = what_is_above(hwnd);
     note_pin_trace!(
         "{subject} msg {} arg={} wparam={} lparam={} own-host={} window={} pinned={} collapsed={} \
-         pin-window={} always-on-top={} visible={} iconic={} enabled={} foreground={foreground} \
-         focus={focus}",
+         pin-window={} always-on-top={} visible={} iconic={} enabled={} foreground={} focus={} \
+         above={above}",
         the_messages_name(msg),
         the_messages_word(msg, wparam),
         wparam.0,
@@ -232,6 +311,8 @@ pub(super) fn note_a_message_of_a_window(
         unsafe { IsWindowVisible(hwnd) }.as_bool() as u8,
         unsafe { IsIconic(hwnd) }.as_bool() as u8,
         unsafe { IsWindowEnabled(hwnd) }.as_bool() as u8,
+        a_window_description(foreground),
+        a_window_description(focus),
     );
 }
 
@@ -322,5 +403,19 @@ mod tests {
             "other",
             "and a window of nobody's that this app knows nothing of is other"
         );
+    }
+
+    /// **A window nobody can be asked about is described rather than named**, and the two handles a
+    /// line is written about with no window behind them are the two words a run has to tell apart: no
+    /// window at all versus a number that names none any more.
+    #[test]
+    fn a_window_no_question_can_be_asked_about_is_still_described() {
+        assert_eq!(a_window_description(HWND(std::ptr::null_mut())), "none");
+        assert_eq!(
+            a_window_description(HWND(0x5EED_1EAF as *mut _)),
+            "invalid",
+            "a handle no class can be read of names nothing any more"
+        );
+        assert_eq!(what_is_above(HWND(0x5EED_1EAF as *mut _)), "none");
     }
 }

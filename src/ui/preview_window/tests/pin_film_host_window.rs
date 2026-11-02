@@ -8926,6 +8926,15 @@ fn the_line(lines: &[String], line: String) -> usize {
         .unwrap_or_else(|| panic!("`{line}` is not one of the lines this run wrote: {lines:?}"))
 }
 
+/// The index of the one line that begins with `named`, for a line whose tail is what the desktop
+/// answered about that moment rather than what the road asked it to do.
+fn the_line_that_names(lines: &[String], named: &str) -> usize {
+    lines
+        .iter()
+        .position(|noted| noted.starts_with(named))
+        .unwrap_or_else(|| panic!("no line this run wrote begins `{named}`: {lines:?}"))
+}
+
 /// **The pair is put in its band after the host that carries the film is on the screen, and only on
 /// the appearance.**
 ///
@@ -8985,7 +8994,9 @@ fn the_band_is_asked_of_the_pair_after_its_host_appears() {
         );
 
         let lines = pin_trace::noted_lines();
-        let shown = the_line(&lines, format!("host visible 1 {host:?}"));
+        // The show's own line carries what the desktop answered about that moment, so it is held by
+        // the show it names rather than by the whole line (see `trace_the_host_show`).
+        let shown = the_line_that_names(&lines, &format!("host visible 1 {host:?} "));
         let asked_of_the_host = the_line(&lines, a_band_write(host, HWND_NOTOPMOST));
         let asked_of_the_pin = the_line(&lines, a_band_write(pin, HWND_NOTOPMOST));
         assert!(
