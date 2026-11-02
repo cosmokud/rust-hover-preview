@@ -838,23 +838,54 @@ impl PinWindow for Win32PinWindow {
     }
 
     fn set_focusable(&self, hwnd: isize, focusable: bool) {
+        // Asked before the call: a style a run has to know the window wore while it was still
+        // focusable is one the window no longer answers with afterwards.
+        if pin_trace::wanted() {
+            note_pin_trace!(
+                "set_focusable {} {}",
+                pin_trace::a_window_description(HWND(hwnd as *mut _)),
+                focusable as u8
+            );
+        }
         // Safety: the handle is this app's own preview window, and only its extended style is
         // touched. A window that has since gone is refused by the calls rather than acted on.
         unsafe { pin_set_focusable(HWND(hwnd as *mut _), focusable) }
     }
 
     fn set_focus(&self, hwnd: isize) {
+        let asked =
+            pin_trace::wanted().then(|| pin_trace::a_window_description(HWND(hwnd as *mut _)));
         // Safety: asks the keyboard for a window, and names this thread's own. Neither is a
         // dereference and neither can fail.
         let _ = unsafe { SetFocus(HWND(hwnd as *mut _)) };
+        if let Some(asked) = asked {
+            // What the call answered rather than what it was asked for: the claim is written on the
+            // same answer (see `pin_window::take_keyboard`).
+            note_pin_trace!(
+                "set_focus {asked} -> focus={}",
+                pin_trace::a_window_description(unsafe { GetFocus() })
+            );
+        }
     }
 
     fn set_foreground(&self, hwnd: isize) {
+        let asked =
+            pin_trace::wanted().then(|| pin_trace::a_window_description(HWND(hwnd as *mut _)));
         // Safety: names a window to bring to the front. The handle is either this app's own
         // preview window or the one that was in front a moment ago, which by then is a live
         // window or a handle to one that has since gone — in which case the call is refused
         // and nothing else is disturbed.
         let _ = unsafe { SetForegroundWindow(HWND(hwnd as *mut _)) };
+        if let Some(asked) = asked {
+            // **A grant raises the window it names**, so the pin's own place in the z-order is read
+            // after the ask: a hand-back to a window behind the pin leaves the pin under it.
+            let pin = self.hwnd();
+            note_pin_trace!(
+                "set_foreground {asked} asked -> foreground={} pin above={}",
+                pin_trace::a_window_description(unsafe { GetForegroundWindow() }),
+                pin_trace::what_is_above(HWND(pin as *mut _))
+            );
+        }
     }
 
     fn hide_pin_windows(&self) {
