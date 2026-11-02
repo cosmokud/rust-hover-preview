@@ -1,0 +1,220 @@
+# System Tray Menu
+
+
+A setting marked `(Default)` is what an untouched setting would be. The check or radio mark shows what is set now.
+
+- **Enable Preview** — Turn previews on or off. The row names the shortcut that throws the same switch while File Explorer is in front — `Enable Preview (F7)` unless `toggle_key` names another key.
+- **Pin Mode** — Everything about pinning, in one place.
+  - **Enable (Mouse3, Space)** — Turn pinning on or off.
+    - Pressing the key while a preview is up turns it into a window of its own: captioned, movable, resizable, always on top unless **Always On Top** is off, and still there when the pointer leaves.
+    - The caption carries **Previous**, **Next**, **Open With**, and **Open With...**.
+      - **Previous** / **Next** — Step the pin through the sibling files in the folder it was taken up in, in the order the listing is showing them; step over any one that will not open rather than stopping there.
+      - **Open With** — Opens the file in whatever program Windows has registered for it.
+      - **Open With...** — Asks you to pick one from the list Windows keeps of the programs that could.
+      - The two hand-off buttons name themselves while the pointer rests on them; **Open With** names the program it would use.
+    - A **right-click** on a pinned window opens the pin's own menu — the panel a collapsed pin's bubble opens: the hold, **Next File**, **Previous File**, **Pause on Minimize** where the kind plays something, the two picks of where a minimize sends the pin, **To Bubble** / **To Taskbar** to put it away at once, then **Close**. A pinned page carries **Select All**, **Copy**, **Find** and **Find Next** above them, and a sound's card keeps its own menu. A film's title bar is the way to it, since the player's own band takes the clicks in the picture.
+    - A caption the hand has narrowed past the point of saying the file's name leaves the name out, and one narrowed past ten pixels leaves the strip out altogether — a row of window buttons over the top of somebody's picture is not what the strip is for. Both come back as the window is widened.
+    - Its edges resize it; what that does depends on what is inside.
+      - A picture, video, or rendered page keeps its own shape; a document or specimen the browser draws is laid out at its own page box too, so a file picked after it is fitted into that same size.
+      - A document or listing is laid out to whatever box it is given.
+      - A sound's card keeps the size **Audio** names, and a video `ffplay` has is not resized at all.
+    - A picture's caption and bar are drawn over the media rather than in bands around it, and fade in as the pointer arrives; only the strip under the pointer is shown. A document or specimen the browser draws counts as one of these; a page of HTML with **Render HTML** on runs in front of the pin, so its caption keeps its bands.
+    - A wheel over a pinned picture zooms it: the window grows about the picture's middle to the size its scale's fit names, then the picture grows inside the window that has stopped, about the cursor. A wheel back out takes it down the way it came, and a picture the hand has carried off its window comes home over the last of the zoom with a small swing past its place. A film is not zoomed — its picture belongs to its player.
+    - A pinned video carries a transport bar of its own: play/pause, a draggable seek bar, the two clocks, and a volume button.
+      - The wheel over that volume button or the panel it opens turns the level `5%` a notch, and the level glides there rather than jumping.
+      - FFmpeg's player gets the same bar: a seek is a relaunch, and a level is written to that player's Windows mixer session, so the film plays on while the knob turns.
+    - A pinned sound's card carries four buttons of its own: **Previous**, **Play/Pause**, **Next**, and **Volume**.
+      - `Space` holds a sound where it stood and sets it going again from there.
+      - The mark beside the name is a dot the ripples of a beat travel out from: the bass under the sound sends them, and a pause brings them home. Which band they follow is `beat_hz` in `config.ini` — `off`, or a top of band between `20 Hz` and `16 kHz` (`250 Hz` by default). The dot is centred on the name line's own ink, and `audio_mark_offset_y` shifts it up or down from there in pixels (`0` by default, `-100` to `100`).
+      - A click on a sound's bar takes the file to that second.
+      - A right-click on the card opens the card's own menu in a panel of its own over the screen: the whole of what a pin does — the two ways out, the file's own playback, then **Shuffle**, **End of File** and **Seek**.
+        - Below a rule after **Seek**, the card offers **Open in Default App** and **Open With...**, which hand the file over and end the pin the way the card's own two buttons do.
+    - A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied.
+      - `Up`, `Down`, `Page Up` and `Page Down` move a screenful at a time, and `Home` and `End` take the page to its top and its last screenful.
+      - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected; `F3` takes the page to the next place what is selected appears.
+      - `Ctrl` and a wheel steps the page's own text size through the sizes **Text → Font Size** offers; the size rides across a resize and the next file of a walk, and closing the pin gives it up.
+      - A press begins a selection, `Shift` grows it, and a second press takes the word under the pointer; a drag carried past the page's edge scrolls it three lines a tick, a wrapped line copies whole, and **Select All** means the page rather than the screenful.
+      - A page of code keeps a column of line numbers down its left.
+    - A pinned video's transport bar carries a volume of its own, set on the pin; it does not change **Volume → Video** unless that half's **Remember Level** is on.
+    - **Maximize** fits the window to the screen.
+    - A **double-click** puts the window back to the size its kind's scaling setting names and in the middle of the screen it stands on (both halves are switches in `config.ini`: `pin_double_click_reset_size` and `pin_double_click_center`, both on).
+    - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a film's bubble keeps showing the film, and holds the frame it stopped on when it is paused; a right-click on the bubble opens its own menu: the same playback rows, then **Pause on Minimize** where the kind behind it plays something, then the ways out; **Play** there gives back a park the collapse made, without waiting for the window), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
+    - Clicking the window gives it the keyboard; then the arrow keys step it and `Escape` closes it.
+    - The pin key itself only ever puts a pin up and brings back a bubble; it never hides one.
+    - The key is named in the item and can be changed in `config.ini` (`pin_key`).
+  - **Always On Top** — On by default: a pin stays above every other window. Off, the pin is an ordinary window that other programs can cover — it keeps the place your own clicks gave it, and it wears this app's own taskbar button while it is up. The mark left of the window buttons is the same switch, and the wheel over such a pin is the pin's only while the pin is the window you are in.
+  - **Update Preview** — Whether a pin that is up is shown the file you pick next.
+    - **Follow Selection** — On by default.
+      - A file you click, or one the keyboard selects, is shown where the window already stands, rather than as a second preview beside it.
+      - A file named this way that cannot be shown leaves the window on the file it already had.
+      - Stepping over a file that will not open belongs to the caption's own **Previous** and **Next**, which you pressed.
+      - A sound's card is drawn at the size its **Audio** setting names, in the middle of that box; it follows **System → Theme**, and no longer **Font Size**.
+      - The keyboard half follows Explorer, so it pauses while a pinned window holds the keyboard; click back into the listing and it carries on.
+    - **Move To Top** — On by default (`pin_update_move_to_top`).
+      - A file an update shows also puts the pin at the top of its own band without taking the keyboard from the listing; greyed while **Follow Selection** is off.
+    - **On Hover** — Off by default.
+      - On, the pointer's own hover is one of the ways a pin is told about a file, the way a Quick Look window follows a listing.
+      - Greyed while **Follow Selection** is off.
+  - **Minimize** — Where a window put away by its **Minimize** button goes, and what it does with what it was playing while it is away.
+    - **To Bubble** (Default) — The window collapses into the round bubble on the desktop, and this app never appears in the taskbar.
+    - **To Taskbar** — The window leaves the screen and the app appears in the taskbar as its own button, named for the pinned file and wearing this app's icon; its hover holds the pin — the live picture while the window is up, the frame it went down on once it is away, and **Previous**, **Play/Pause** and **Next** for a film or a sound. Clicking the button brings the pinned window back where it stood, and a right-click closes the window. A pin that is not **Always On Top** wears this button while it is up as well.
+    - A window is away either way, so previews stay held back until it is brought back, whichever place the setting names.
+    - What a window put away holds where it is is **Pause on Minimize** at the top of each kind's own **Pin Mode** — one under **Preview Settings → Video**, one under **Preview Settings → Audio** — because what should go quiet while a pin is away is a question about one kind of file.
+  - **Navigation** — What **Previous** and **Next** on the caption step through: three anchors — **Video**, **Audio**, **Others** — each with **All Files** / **Same Category**. The walk is anchored on the first file pinned, so a video walks videos while a document walks end to end.
+    - The walk is the pin's own: one playlist spawned when the pin is taken up and stepped along, so a **Previous** is the file the walk came from and the **Next** after it is the file it was interrupted on. A file picked in the listing inside that folder carries the playlist on; one anywhere else starts fresh.
+    - Video and Audio start at **Same Category**, Others at **All Files**.
+    - Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them.
+    - The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front.
+    - `Space` in a pinned sound pauses and resumes it, on the same terms.
+    - `Escape` in a pinned window closes it.
+    - **All Files** — Every file this build can preview, in the folder the pin was taken up in and not any subfolder of it, in the order the Explorer listing is showing them. A video sits beside a sound.
+    - **Same Category** — Only the files of the walk's anchor category: video, audio, or the anchor's own kind for Others.
+      - A camera raw is a picture and a book is a document, because that is what you call them.
+      - A kind switched off under **Preview Types**, or one with no engine installed on the machine, is not a step either way.
+      - A file this build *could* preview but that will not open is a step the window steps over rather than one it stops on.
+- **Preview Types** — Choose which file kinds can preview: Image, Video, Audio, Text, Ebook, Archive, Document, Vector, Font, Design.
+  - A switch is a switch over behaviour, not over files: the lists deciding which files are previewed are untouched, so switching a kind off and back on restores what was configured.
+  - One switch covers both the original file and the engine-drawn preview.
+    - Camera raw uses **Images**.
+    - A LibreOffice document uses **Document**.
+    - A PeaZip archive uses **Archives**.
+    - A Calibre book uses **Ebook**, as do the app-drawn PDF and comic pages.
+- **Preview Settings** — What each kind's previews are like, below **Preview Types**: one half per kind that has settings beyond whether it previews at all, named for the kind and nothing else. What a film and a sound are heard *at* is the **Volume** submenu below **Background**, since the level is the one question both kinds answer the same way.
+  - **Video** — What a film's previews are like: whether a hovered one goes round, and what a *pinned* one does.
+    - **Subtitles** — Whether a film's own subtitle tracks are probed for and copied out at all, which is what **General (Disk)** holds between hovers; `0` there draws a film without them.
+      - Where the engine that will play is mpv the row reads **Subtitles (MPV)** and is not about a copy at all: mpv finds a film's own tracks and the `.srt` beside it and draws them itself, so nothing is extracted and the pinned `T` key does nothing on that route.
+    - **Loop** — On by default: a hovered film goes round at the end of its file. Off, it stops there.
+    - **Pin Mode** — What a *pinned* film does.
+      - **Pause on Minimize** — On by default: a film put away by the **Minimize** button is held where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
+      - **Shuffle** — Off by default: whether a forward step of the walk takes a random film of the anchor's kind rather than the one beside it. A step back is the file the walk came from.
+      - **End of File** — What a pinned film does at the end of its file: **Loop** (default), **Pause** (the file left where it ended, the bar and the play button standing there), or **Jump** — the walk's next file, which the **Shuffle** row decides between the file beside it and a random one of the same kind.
+  - **Audio** — The same questions for a sound, and the two places a sound starts: where a hovered one does and where a *pinned* one does.
+  - **Loop** — On by default: a hovered sound goes round at the end of its file. Off, it stops there.
+  - **Seek** — Where in a file a hovered sound starts playing.
+    - **Remember** (`default`) — Picks it up where the last hover left it.
+    - **From the Start** — Always begins at the beginning.
+    - **From the Middle** — Drops it half way in.
+    - **Random** — Anywhere at all.
+    - The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen.
+    - A video is always played from its beginning.
+  - **Pin Mode** — What a *pinned* sound does.
+    - **Pause on Minimize** — On by default: the sound a pin put away was playing is held where it stood and started again at the second it stopped at when the window comes back.
+    - **Shuffle** and **End of File** — the same two rows as a film's, asked of a sound: a forward step takes a random sound rather than the one beside it, and a file that ends goes round, holds where it stopped, or steps on to the next.
+    - **Seek** — Where in a file a *pinned* sound starts playing: **From the Start** (default), **Remember**, **From the Middle**, or **Random**.
+  - **Text** — What a text preview is painted with: the font size, how Markdown is shown, and whether a page of HTML runs.
+    - **Font Size** — `400%` at the top down to `70%` at the bottom.
+    - **Markdown** — Rendered or Source.
+    - **Render HTML** — Off by default.
+      - On, a `.htm` or `.html` file is previewed as the page it holds rather than as its markup, run by the browser engine.
+      - A page is the one thing previewed as a page rather than as a picture, so it is the one thing that runs, and a page that draws itself with script has nothing to show without a run.
+      - What it may still do is bounded: the frame it is shown in cannot open forms or popups or navigate, and nothing a page links to is fetched.
+      - SVG documents and font specimens, which a browser is handed as an image, are still drawn rather than run.
+      - A running page can be pointed at, clicked into and typed into; a document, a specimen and every other preview still cannot.
+    - Without the engine on the machine it stays a text preview.
+  - **Image** — **Pin Mode**, and the whole of it: **Shuffle**, whether a *pinned* picture's walk takes the next file at random, and **Zoom Background**, the backdrop the band a zoom leaves behind the picture is filled with.
+    - A picture has no level, no end of file and nowhere in it to start, and a hover has no next file, so the shuffle is the one thing a picture answers.
+    - **Pin Mode → Zoom Background** — **Black** (default), **White** or **Checkerboard**: the backdrops that fill the band a hand carries a zoomed picture off its window leaves behind it. The see-through one is not offered, since the band is the window's rather than the file's. Written as `zoom_background`. A picture with a transparent pixel in it keeps what **Background → Image** asks for instead — see-through included — so one meant to show the desktop through it keeps doing so at any size, zoom or not.
+- **Timing**
+  - **Prioritize Keyboard** — On by default.
+    - The file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview.
+    - The pointer takes the screen back when it is moved, when the wheel is turned, or when a folder change hands it over.
+    - Off, the pointer's own hover always wins.
+  - **Trigger Key (Alt)** — The key is named in the item.
+    - **Enable Trigger Key** — Whether the key is watched.
+    - **Affect Pin Mode** — Off by default, and off at the start.
+      - A pinned window is one you put there, so the key that holds back hovers is not read while one is up.
+      - On, holding it brings the pin down along with the previews it stops.
+      - It speaks for **Hold to Disable Preview**.
+    - **Hold to Disable Preview** / **Hold to Enable Preview** — What holding the key does.
+  - **Hover Delay** — How long the pointer rests before a preview opens: `0 ms` at the top down to `1000 ms` at the bottom. Default `0 ms`.
+  - **Rehover Delay** — Wait before the same file can preview again. Default `200 ms`.
+  - **Settling Delay** — How still the pointer must be before previewing what it is on.
+    - Default `0 ms` means a new file can preview while the hand is still moving.
+    - Keyboard previews ignore this.
+- **Placement**
+  - **Position** — Follow Cursor or Best Position. Default **Best Position**.
+  - **Avoid** — Nothing, Filename (`default`), Filename Column, or Details.
+    - Keeps a preview off the item it is about.
+    - Keyboard previews have no cursor, so **Nothing** acts like **Filename**.
+- **Scaling**
+  - **Image** — **Fit to Screen**, a share of the display's fitted size (`75%`, `50%`, `25%`, `10%`), or a share of the image's own size (`400%`–`25%`). The two groups are listed under **By Screen** and **By Own Size**. Default `100%`.
+  - **Video** — Same shares for a video, except that **Fit to Screen** is the display's room: a film smaller than the screen fills it, as a pinned window and a maximize already do. Default `100%`.
+  - **Animated** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery.
+    - A still GIF or PNG uses **Image**.
+    - Default `100%`.
+  - **Audio** — `25%`, `20%`, `15%`, `10%` (`default`), `7%`, or `5%` of the display, for a sound's card — the whole card scales with the share: font, height and width, the way Windows scaling sizes a window.
+    - The card at any share is the `10%` card uniformly smaller or larger (~188×50 at `5%` to ~936×250 at `25%` on a 3440×1440 display), its seek bar stretching with the width, its height what its content measures at the share's font.
+    - Built at the share's own font (the default text size, `125%`, at the `10%` anchor), so **Font Size** does not resize it; a pinned sound's card is the same size as the hover's.
+  - **Vector** — Fit to Screen (`default`), or `75%`, `50%`, `25%`, `10%` of the display.
+  - **Text** — Same display shares for a text preview — a plain text file, code, or Markdown.
+    - It caps how much of the screen the preview box may take when it opens; a short file still gets the small box its own text needs.
+    - Default **Fit to Screen**.
+  - **Ebook** — Fit to Screen (`default`), or the same display shares for a PDF page, a comic's first page, and a Calibre-converted book.
+  - **Document** — Same display shares for a document drawn as a page, whether by its own Office app or by LibreOffice.
+    - A workbook's fallback bitmap is never enlarged.
+  - **Font** — Same shares for a font specimen. Default `50%`.
+  - **Design** — Same display shares for design documents: Photoshop, Illustrator, Krita, OpenRaster, Procreate. Default **Fit to Screen**.
+- **Background**
+  - **Image** — Transparent, Black, White, or Checkerboard. Default **Checkerboard**.
+  - **Vector** — Same backdrops for an SVG document or metafile. Default **Checkerboard**.
+  - **HTML** — White, Black, or Checkerboard for a page of HTML. Default **White**.
+    - The see-through backdrop is not offered: a page is drawn on a page, whether it runs or not, and the backdrop is behind the page rather than behind what it paints.
+  - **Font** — Same backdrops for a font specimen. Default **White**.
+  - **DDS** — Black or White for `.dds` textures. Default **White**.
+    - The two see-through backdrops are not offered.
+  - **Design** — Same as picture backdrops for a design document. Default **Checkerboard**.
+- **Volume** — What a film and a sound are heard at: one menu with a **Video** half and an **Audio** half, below **Background** and above **Performance**. Each half carries **Normalize (Expensive)** (loudness measured and brought to `-14 LUFS`; greyed without FFmpeg) and **Remember Level** above its levels.
+  - **Video** — `100%` down to `0%`, loudest first. A film's soundtrack starts at `0%`, so a hover never makes a sound the pointer did not ask for.
+  - **Audio** — The same levels; a sound file starts at `10%`, and a sound at `0%` still shows its card, silently.
+- **Performance**
+  - **Cache** — What a preview may cost between hovers: `Image (RAM)` offers `16 GB` down to `0 MB`, the three disk caches `128 GB` down to `0 MB`, and a size that is a whole gigabyte is named in it (`4 GB`, `128 GB`).
+    - **`Image (RAM)`** = decoded frames kept in memory.
+    - **`Document (Disk)`** = engine-drawn pages kept as temp files.
+    - **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
+    - **`General (Disk)`** = the subtitle tracks a film's embedded ones are copied into, kept as temp files; `0` draws a film without its subtitles.
+  - **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
+  - **Explorer Poll** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`.
+    - Lower answers a move sooner; higher is lighter on CPU and Explorer.
+  - **Hardware Acceleration (MPV Only)** — checked by default: a film mpv plays is decoded on the graphics card through mpv's own `--hwdec=auto`, whose safe list and software fallback are that player's business.
+    - It is mpv's switch and nobody else's: FFmpeg's player is given no decode device, and the bubble's own frame reader decodes on a core.
+    - A machine with no `mpv.exe` has no player for the switch to act on, so the row is greyed and unchecked there and a `config.ini` that says on is read as off.
+- **Engine**
+  - **Away Timer** — How long Explorer may be unreachable before an engine set to **Until away** is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`.
+    - Counts time when no Explorer window is reachable on any monitor.
+    - A second Explorer window keeps engines warm.
+  - **Video Engine** — Which engine plays a video.
+    - **Best** (`default`) — The machine's own answer: mpv for every video where it is installed, and otherwise the media engine for a film at or under 3.2 megapixels and FFmpeg's player for a larger one or one it could not measure.
+    - **MPV** — mpv alone.
+    - **FFmpeg** — `ffplay` alone.
+    - **Native** — The media engine alone.
+    - **Native (FFmpeg above 3.2MP)** — That size rule stated plainly.
+    - A **Fallback** switch at the top (`default` on) lets a chosen engine that cannot play a given file fall through to the engines it may: **MPV** reaches both of the others, while **Native** and **FFmpeg** still only reach each other. Off, the engine you chose stands alone.
+    - **MPV** is greyed out where `mpv` is not installed; **FFmpeg** and **Native (FFmpeg above 3.2MP)** where `ffplay` is not.
+    - A choice is read where a preview begins, so a film already playing or a document already drawn keeps the engine it was built under; a change reaches the next hover, or a pin's next file.
+  - **Office Engine** — Which engine draws Office documents.
+    - **Microsoft Office** (`default`) — Uses the format's own app and falls back to LibreOffice.
+    - **LibreOffice** — Draws every Office document.
+    - LibreOffice is greyed out if not installed.
+  - **MPV TTL** — How long the player is kept between films: **Until away** (`default`), `30 seconds`, `1 minute`, `5 minutes`, `10 minutes`, `30 minutes`, `1 hour`, `Indefinitely`, `Never (0 seconds)`.
+    - One mpv is kept warm between hovers and every film is loaded into it; this is what ends it — **Until away** while you are at the keyboard, a time that long after its last film, **Indefinitely** until the app exits, and **Never (0 seconds)** the moment a film ends. A pin that takes that player over keeps it for as long as the pin is up (`video_engine_idle`).
+    - Greyed out where `mpv` is not installed.
+  - **Microsoft Office TTL** — How long a family's Office app stays warm: **Until away** (`default`), `30 seconds`, `1 minute`, `5 minutes`, `10 minutes`, `30 minutes`, `1 hour`, `Indefinitely`, `Never (0 seconds)`.
+    - **Until away** is kept while Explorer is reachable, then let go by **Away Timer**; a time is that long after the family's last page.
+  - **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats.
+    - A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB.
+    - `Never (0 seconds)` means one engine per document.
+    - Greyed out if LibreOffice is not installed.
+  - **WebView2 TTL** — How long the SVG browser stays warm: the same nine answers, **Until away** at the top.
+    - Greyed out if WebView2 is missing.
+  - No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
+- **Codecs** — What this machine has: Videos, Audio, Images, Engines.
+  - A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
+  - **Videos → MPV** opens a submenu of every mpv this machine has where there is more than one — the standalone install and SVP's own, say — each named by its path, with the one in use marked. Picking one is remembered as `mpv_path`.
+- **System (vX.Y.Z)**
+  - **Check for Updates** — Whether the app asks GitHub for a newer release on its own, at startup and when the menu is opened. On by default; at most once every six hours. Where one is found, the **Update Available** row appears above this submenu on the menu's next opening; where none is, nothing happens. Turning it on asks at once.
+  - **Run at Startup** — Add or remove the Windows startup entry.
+    - On every start, an entry that names another copy of the app — a portable copy, an older version, a path that has moved — is pointed back at the one you are running.
+  - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in `%APPDATA%\rust-hover-preview\theme`. The look is the app's own rather than a text preview's, so it sits beside the rows about the app.
+  - **Edit Config.ini** — Open the configuration file in its default editor.
+- **Exit** — Close the app.
+
