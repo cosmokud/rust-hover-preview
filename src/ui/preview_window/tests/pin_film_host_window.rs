@@ -14,8 +14,8 @@ use super::*;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetWindow,
-    GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetForegroundWindow, GetParent,
+    GetWindow, GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
     GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
     SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
     SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ERASEBKGND,
@@ -8905,6 +8905,75 @@ fn always_on_top_is_the_pins_own_band_and_not_only_the_hosts() {
             && !unsafe { window_holds_the_topmost_band(pin) },
         "and a setting turned off takes both out of the topmost band"
     );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = standing;
+    }
+    drop(hover);
+}
+
+/// **The row that turns `Always On Top` off takes the front rather than asking for the ordinary band a
+/// second time.** One `HWND_NOTOPMOST` demotes the pin to just under the window in front — the listing
+/// the user is working in — so the setting off put the pin behind Explorer. The road over that wall is
+/// the pair the press and the pick use: the topmost band taken and given straight back, which leaves the
+/// pin over every ordinary window without holding anything of the band.
+#[test]
+fn the_row_that_turns_always_on_top_off_takes_the_front_instead_of_dropping_behind() {
+    let _room = the_room_to_itself();
+
+    let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 3.0) };
+    let pin = pin_real_window::real_pin_window().expect("the pin's own window");
+    let standing = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    pin_stands_in_its_own_window(true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    assert_eq!(pin_film_host::film_host(), Some(hover.host));
+    assert_ne!(
+        unsafe { GetForegroundWindow() },
+        pin,
+        "the pin never takes the keyboard, so the window in front is somebody else's"
+    );
+
+    // The setting on: the topmost band is the front of itself, and one ask of each window is enough.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+    pin_trace::clear_noted();
+    unsafe { place_the_pin_where_the_setting_names() };
+    let lines = pin_trace::noted_lines();
+    for window in [hover.host, pin] {
+        the_line(&lines, a_band_write(window, HWND_TOPMOST));
+        assert!(
+            !lines.contains(&a_band_write(window, HWND_NOTOPMOST)),
+            "a setting turned on asks for the topmost band alone: {lines:?}"
+        );
+    }
+
+    // The setting off: the ordinary band is taken and given back, not asked for once — the pin must
+    // end at the front of it rather than under the window in front.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+    pin_trace::clear_noted();
+    unsafe { place_the_pin_where_the_setting_names() };
+    let lines = pin_trace::noted_lines();
+    for window in [hover.host, pin] {
+        let took = the_line(&lines, a_band_write(window, HWND_TOPMOST));
+        let gave = the_line(&lines, a_band_write(window, HWND_NOTOPMOST));
+        assert!(
+            took < gave,
+            "the front of the ordinary band is reached through the topmost one, not by a single \
+             demotion: {lines:?}"
+        );
+        assert!(
+            !unsafe { window_holds_the_topmost_band(window) },
+            "and nothing of the band is left held afterwards: {lines:?}"
+        );
+    }
 
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = standing;

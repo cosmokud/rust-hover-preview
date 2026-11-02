@@ -406,10 +406,22 @@ pub(crate) fn band_place() -> HWND {
 /// band — so the answer is the one every other placement asks (see `band_place` and
 /// `pin_film_host::place_the_pin_in_the_band`).
 ///
+/// **The ordinary band is taken and given back rather than asked for once, where the pin does not hold
+/// the foreground.** A window demoted from the topmost band is put just under the foreground window, so
+/// one `HWND_NOTOPMOST` leaves the pin behind the listing the user is working in — the same wall a press
+/// and a pick meet, and the same road over it (see `take_the_band_and_give_it_back`). The topmost band is
+/// one call, which is already the front of it.
+///
 /// It is a function rather than three lines in the loop for the reason the rows of a menu are: the
 /// loop cannot be asked what it did, and this is a rule about a band that a test can.
 pub(super) unsafe fn place_the_pin_where_the_setting_names() {
-    unsafe { pin_film_host::place_the_pin_in_the_band(pinned_window(), band_place()) };
+    let hwnd = pinned_window();
+    let band = band_place();
+    if band == HWND_NOTOPMOST && !hwnd.is_invalid() && unsafe { GetForegroundWindow() } != hwnd {
+        unsafe { take_the_band_and_give_it_back(hwnd) };
+    } else {
+        unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, band) };
+    }
 }
 
 /// Whether a pin being put up takes the topmost band for the moment it appears, and gives it back.
