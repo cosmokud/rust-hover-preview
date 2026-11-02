@@ -1035,11 +1035,12 @@ fn what_is_on_screen_is_settled_by_the_engine_as_well_as_by_the_media() {
 }
 
 /// The tray's `Text → Render HTML` switch, stood where a test asks and put back when the guard is
-/// dropped (the house pattern: `PagePutBack`).
-struct RenderHtml(bool);
+/// dropped (the house pattern: `PagePutBack`). Shared with the tests that lay a page out, which
+/// ask the same switch the other way round (`layout`).
+pub(super) struct RenderHtml(bool);
 
 impl RenderHtml {
-    fn stood_at(asked: bool) -> Self {
+    pub(super) fn stood_at(asked: bool) -> Self {
         let mut config = crate::CONFIG.lock().expect("the configuration");
         let was = config.render_html;
         config.render_html = asked;
@@ -1065,6 +1066,9 @@ impl Drop for RenderHtml {
 /// read of the file has to ask it as well.
 #[test]
 fn a_page_of_html_the_switch_leaves_as_markup_stays_a_page_of_text_in_a_pin() {
+    // The room as well as the switch: `Render HTML` is one setting for the whole process, and the
+    // tests that stand it are the ones that must not see each other's (see `RenderHtml`).
+    let _room = the_room_to_itself();
     let _switch = RenderHtml::stood_at(false);
 
     let folder = std::env::temp_dir().join("rust-hover-preview-pin-keys");

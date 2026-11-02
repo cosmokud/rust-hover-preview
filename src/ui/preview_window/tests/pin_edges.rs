@@ -985,3 +985,318 @@ fn a_border_stroke(edge_: PinResize, dx: i32) -> (ScreenRegion, i32) {
     with_pin(|pin| pin.dragging = None);
     (after, by)
 }
+
+// The `Text → Render HTML` switch, stood by the page tests below (see `pin_keys`).
+use super::pin_keys::RenderHtml;
+
+/// The specimen's share of the display, stood where a test asks and put back when the guard is
+/// dropped (the house pattern: `RenderHtml`).
+struct FontScale(PreviewScale);
+
+impl FontScale {
+    fn stood_at(asked: PreviewScale) -> Self {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = config.font_scale;
+        config.font_scale = asked;
+
+        FontScale(was)
+    }
+}
+
+impl Drop for FontScale {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.font_scale = self.0;
+        }
+    }
+}
+
+/// A file the browser engine draws is laid out at the box its own preview takes rather than at the
+/// pin's whole room: the shape the file measures at, fitted to the work area at the share a take-up
+/// names for its kind, in the middle of the box the pin occupies now. It is the box a fresh pin of
+/// the same file stands in, which is the whole of what a swap is asked to give it (see
+/// `pinned_media_box` and `hover_preview_scale`).
+///
+/// The old answer was the pin's room for all three of these, because all three are kinds
+/// `media_dimensions` answers for itself: a drawing laid out in a box nothing asked it for, and a
+/// page the engine then drew into a window far larger than the page box it was measured at.
+#[test]
+fn an_engine_drawn_file_is_given_the_box_its_own_preview_takes() {
+    let _room = the_room_to_itself();
+
+    // A machine with no runtime draws none of these, and the box a drawn file is given is the
+    // whole subject here (see `webview_preview::can_draw`).
+    if !webview_preview::can_draw() {
+        return;
+    }
+
+    let previous_pin = take_pin_for_a_test();
+    stand_pin(Some(overlay_pin(
+        (760, 440, 1160, 640),
+        PinChrome::always(),
+    )));
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-engine-box");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    let drawing = folder.join("a drawing.svg");
+    std::fs::write(
+        &drawing,
+        br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="24"/>"#,
+    )
+    .expect("a written drawing");
+    hold_box(
+        &drawing,
+        &file_version(&drawing),
+        &MeasureScope::File,
+        Some((40, 24)),
+    );
+
+    let specimen = folder.join("a specimen.ttf");
+    std::fs::write(&specimen, b"a specimen's own bytes").expect("a written specimen");
+    hold_box(
+        &specimen,
+        &file_version(&specimen),
+        &MeasureScope::File,
+        Some((1500, 1000)),
+    );
+
+    // The switch is off by default, and a page the engine draws is the third of the three it has
+    // to be on for.
+    let _on = RenderHtml::stood_at(true);
+    let page = folder.join("a page.html");
+    std::fs::write(&page, b"<!DOCTYPE html><p>a page of its own</p>").expect("a written page");
+
+    let bounds = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+    let space = |bound| PinSwapSpace {
+        current: (760, 440, 1160, 640),
+        bound,
+        transport_bar: false,
+        overlay: false,
+        caption: pinned_caption_height(96, None),
+        maximized: false,
+        room: bounds,
+    };
+
+    for path in [&drawing, &specimen, &page] {
+        assert!(
+            webview_preview::draws(path),
+            "{} is a file the engine draws",
+            path.display()
+        );
+
+        let shape = media_dimensions(path, bounds, 96).expect("the file's own shape");
+        let own = pinned_media_box(
+            shape,
+            bounds,
+            hover_preview_scale(path, current_hover_scales()),
+        );
+
+        let Some(PinBox::Measured(laid_out)) = pin_update_content(space(None), path, bounds, 96)
+        else {
+            panic!("{} was not laid out", path.display());
+        };
+
+        let box_of = |region: ScreenRegion| (region.2 - region.0, region.3 - region.1);
+        assert_eq!(
+            box_of(laid_out),
+            own,
+            "{} was not given the box its own preview takes",
+            path.display()
+        );
+        // The place is the pin's own, so a window the hand has moved keeps it: the caption above
+        // the box may push a box as tall as the room down, so what this asks is which way the box
+        // moved rather than where it stands (see `pin_swap_content`).
+        assert!(
+            (laid_out.0 + laid_out.2) / 2 == pin_swap_centre(space(None)).0,
+            "{} was not placed about the middle of the box the pin occupies",
+            path.display()
+        );
+        assert_ne!(
+            box_of(laid_out),
+            box_of(pin_swap_room(space(None), bounds, 96)),
+            "{} was laid out in the pin's whole room rather than in its own box",
+            path.display()
+        );
+    }
+
+    stand_pin(previous_pin);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// A bound the pin carries is a ceiling for the bound files after it, not a share applied again: a
+/// specimen at `By Screen 50%` whose bound is its own box is left at that box rather than folded in
+/// half once more (see `pin_update_box`).
+///
+/// That halving is what was reported: a `ttf` whose hover box was 1080 by 720 came out of a swap
+/// into a pin of the same size as 540 by 360, because the share its kind names was applied on top
+/// of a box that was already the share's own.
+#[test]
+fn a_bound_does_not_halve_an_engine_drawn_file_below_the_box_its_own_preview_takes() {
+    let _room = the_room_to_itself();
+
+    if !webview_preview::can_draw() {
+        return;
+    }
+
+    let previous_pin = take_pin_for_a_test();
+    stand_pin(Some(overlay_pin(
+        (760, 440, 1160, 640),
+        PinChrome::always(),
+    )));
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-engine-bound");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    let specimen = folder.join("a specimen.ttf");
+    std::fs::write(&specimen, b"a specimen's own bytes").expect("a written specimen");
+    hold_box(
+        &specimen,
+        &file_version(&specimen),
+        &MeasureScope::File,
+        Some((1500, 1000)),
+    );
+
+    let bounds = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+    let space = |bound| PinSwapSpace {
+        current: (760, 440, 1160, 640),
+        bound,
+        transport_bar: false,
+        overlay: false,
+        caption: pinned_caption_height(96, None),
+        maximized: false,
+        room: bounds,
+    };
+
+    // `By Screen 50%`, which is the share the reported file was under.
+    let _share = FontScale::stood_at(PreviewScale::Percent(50));
+    let shape = media_dimensions(&specimen, bounds, 96).expect("the specimen's shape");
+    let own = pinned_media_box(
+        shape,
+        bounds,
+        hover_preview_scale(&specimen, current_hover_scales()),
+    );
+    let whole = pinned_media_box(shape, bounds, PreviewScale::FitToScreen);
+    assert_ne!(
+        own, whole,
+        "the share is not in play, so there is nothing here to halve"
+    );
+
+    // The pin was given this file's own box as its bound, which is every pin taken up on a file
+    // that was laid out at its own size.
+    let bound = own.0.max(own.1);
+    let Some(PinBox::Measured(laid_out)) =
+        pin_update_content(space(Some(bound)), &specimen, bounds, 96)
+    else {
+        panic!("the specimen was not laid out");
+    };
+
+    let size = (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1);
+    assert_eq!(
+        size, own,
+        "the bound was a share of the file's own size rather than a ceiling for it"
+    );
+    assert_ne!(
+        size,
+        (own.0 / 2, own.1 / 2),
+        "the file was halved again by the bound"
+    );
+
+    // And the box is the middle of the box the pin occupies rather than the middle of the display:
+    // a swap keeps the place a hand put the window (see `pin_swap_centre`).
+    assert_eq!(
+        ((laid_out.0 + laid_out.2) / 2, (laid_out.1 + laid_out.3) / 2),
+        pin_swap_centre(space(Some(bound))),
+        "the window moved off the place it stood rather than changing size about its middle"
+    );
+
+    stand_pin(previous_pin);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// A page the engine draws that is larger than the bound the pin carries is clamped to that bound
+/// with its aspect kept: the bound is the window's ceiling, and a page fitted into it is a page
+/// drawn smaller rather than one drawn past the edge of its window (see `pin_update_box`).
+#[test]
+fn an_engine_page_larger_than_the_bound_is_clamped_to_it() {
+    let _room = the_room_to_itself();
+
+    if !webview_preview::can_draw() {
+        return;
+    }
+
+    let previous_pin = take_pin_for_a_test();
+    stand_pin(Some(overlay_pin(
+        (760, 440, 1160, 640),
+        PinChrome::always(),
+    )));
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-engine-clamp");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    let _on = RenderHtml::stood_at(true);
+    let page = folder.join("a page.html");
+    std::fs::write(&page, b"<!DOCTYPE html><p>a page of its own</p>").expect("a written page");
+
+    let bounds = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+    let space = |bound| PinSwapSpace {
+        current: (760, 440, 1160, 640),
+        bound,
+        transport_bar: false,
+        overlay: false,
+        caption: pinned_caption_height(96, None),
+        maximized: false,
+        room: bounds,
+    };
+
+    let shape = media_dimensions(&page, bounds, 96).expect("the page's shape");
+    let own = pinned_media_box(
+        shape,
+        bounds,
+        hover_preview_scale(&page, current_hover_scales()),
+    );
+    let bound = own.0 / 3;
+    assert!(
+        bound < own.0 && bound < own.1,
+        "the bound has to be smaller than the page for this to be a clamp"
+    );
+
+    let Some(PinBox::Measured(laid_out)) =
+        pin_update_content(space(Some(bound)), &page, bounds, 96)
+    else {
+        panic!("the page was not laid out");
+    };
+
+    let (width, height) = (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1);
+    assert!(
+        width <= bound && height <= bound,
+        "the page was drawn past the bound the pin carries"
+    );
+    assert_eq!(
+        width, bound,
+        "the page does not fill the bound it was fitted into"
+    );
+    assert_eq!(
+        height,
+        own.1 * bound / own.0,
+        "the page's aspect was not kept as it was fitted into the bound"
+    );
+
+    stand_pin(previous_pin);
+    let _ = std::fs::remove_dir_all(&folder);
+}

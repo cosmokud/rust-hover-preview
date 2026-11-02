@@ -383,11 +383,53 @@ fn pin_update_content_measured(
         return Some(PinBox::Waiting);
     }
 
-    // A kind that holds no shape of its own — a page of text, a listing, a page an engine draws, a
-    // sound's card — is laid out in the room rather than fitted into the bound, at the share its
-    // kind names: which is the answer a hover of the same file is given, and so the one `Scaling`
-    // names. A bound is a size some *other* file came out at, and none of these four is drawn to
-    // that or fitted into it.
+    // A file the browser engine draws is not a page painted into a box: the engine draws it at
+    // whatever box it is handed, so a swap gives it the box a fresh take-up of the same file
+    // gives it — the work area's own room at the share its kind names — and keeps that inside the
+    // bound the pin was given, the way every file with a shape of its own is (see `pinned_media_box`,
+    // `hover_preview_scale` and `reset_pinned_size`). The share is the take-up's rather than the
+    // hover's, because the box this answers is the one the take-up installs the file in.
+    //
+    // Asked only of a pin that is up: a box handed to a file where no pin stands is the hover's
+    // own to decide (see `hover_preview_scale_of`).
+    if pinned() && webview_preview::draws(path) {
+        let share = hover_preview_scale(path, current_hover_scales());
+        let own = pinned_media_box(shape, bounds, share);
+        let content = match space.bound {
+            // No bound asked of this window yet, so the file is its own size in the middle of the
+            // box the pin occupies: the size a take-up would have given it, and no ceiling to fit
+            // into (see `pin_swap_room`).
+            None => centred_at(own, pin_swap_centre(space)),
+            // A bound is a ceiling some other file's box gave this window, so the file's own box
+            // is fitted into the square of that bound rather than being the size on screen: the
+            // rule every later file is given, and never a share of its own size (see
+            // `pin_update_box`).
+            Some(_) => pin_update_box(
+                pin_swap_room(space, bounds, dpi),
+                (own.0 as u32, own.1 as u32),
+                PreviewScale::Percent(100),
+            ),
+        };
+
+        note_a_swap_box(
+            "engine-drawn",
+            path,
+            &space,
+            Some(shape),
+            Some(share),
+            space.room.region(),
+            Some(content),
+        );
+
+        return Some(PinBox::Measured(content));
+    }
+
+    // A kind that holds no shape of its own — a page of text, a listing, a sound's card — is laid
+    // out in the room rather than fitted into the bound, at the share its kind names: which is the
+    // answer a hover of the same file is given, and so the one `Scaling` names. A bound is a size
+    // some *other* file came out at, and none of these three is drawn to that or fitted into it.
+    // A page the browser engine draws is not one of them: it was laid out above, because the engine
+    // draws it at whatever box it is handed.
     //
     // The box it comes out with is centred on the box the pin occupies rather than fitted into the
     // room it was laid out in, so the window keeps its place on the display the hand put it and
@@ -400,7 +442,7 @@ fn pin_update_content_measured(
     // it to add (see `pin_keeps_its_box`).
     //
     // The room is the pin's own, which is the one the file before this one left its chrome in. All
-    // four carry no transport bar and draw no chrome over their media, so what the file before it
+    // three carry no transport bar and draw no chrome over their media, so what the file before it
     // was decides only whether the room a picture left is a caption shorter than this one's — and
     // which way that goes, every other swap in this file already measures the same way (see
     // `pin_swap_room`).
@@ -658,10 +700,10 @@ fn pin_swap_content(content: ScreenRegion, space: PinSwapSpace, dpi: u32) -> Scr
 }
 
 /// Whether a preview of this file is drawn to the box it is given rather than scaled into it by a
-/// shape of its own: a page of text, a listing this app or an engine reads out of an archive, a page
-/// an engine draws, and a sound's card are all measured against the room they are drawn in — there
-/// is no size in the file to take a shape from — and they are the kinds `media_dimensions` answers
-/// for itself rather than through the file's own dimensions (see `media_dimensions`).
+/// shape of its own: a page of text this app paints, a listing this app or an engine reads out of an
+/// archive, and a sound's card are all measured against the room they are drawn in — there is no
+/// size in the file to take a shape from — and they are the kinds `media_dimensions` answers for
+/// itself rather than through the file's own dimensions (see `media_dimensions`).
 ///
 /// It decides two things about a swap, and they are the same thing said twice: the box the new
 /// file is laid out in is the display's whole room rather than the pin's bound, because a bound is
@@ -671,7 +713,15 @@ fn pin_swap_content(content: ScreenRegion, space: PinSwapSpace, dpi: u32) -> Scr
 ///
 /// A sound's card is here for the second of those only, as it was: the box a swap gives a card is
 /// the one its own measure came out at rather than the box the pin has (see `pin_update_content`).
+///
+/// A page the browser engine draws is not one of them even though its kind is text: the engine
+/// draws it at whatever box it is handed, so it is the file's own box that is laid out and a bound
+/// of its own that the files after it are given (see `pin_update_content`).
 pub(super) fn pin_keeps_its_box(path: &Path) -> bool {
+    if html_is_engine_drawn(path) {
+        return false;
+    }
+
     // Asked of the content, with the entry read before the lock rather than the whole
     // configuration copied out of it: the take-up that asks this one is a take-up that must
     // not be holding a lock a window message may be waiting on, and a copy of the
