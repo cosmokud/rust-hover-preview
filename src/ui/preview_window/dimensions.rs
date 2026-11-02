@@ -1010,6 +1010,10 @@ pub(super) fn peazip_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<
 /// otherwise come back taller than the share allows — and at `Fit to Screen` the room is
 /// the whole work area, which is wider and taller than the layout is, so nothing is
 /// clamped at the setting's own start.
+///
+/// A page the browser engine draws is the one text kind not measured here: it is laid out
+/// at the box `media_dimensions` gave it and the engine wraps it inside that, so there is
+/// no page of this app's to measure (see `html_page_box`).
 pub(super) fn text_preview_layout(
     hover: &HoverFacts,
     path: &Path,
@@ -1019,6 +1023,13 @@ pub(super) fn text_preview_layout(
     place: impl FnOnce((u32, u32)) -> Option<PreviewLayout>,
 ) -> (PreviewLayout, Option<(u32, u32)>) {
     if !hover.is_text() {
+        return (layout, None);
+    }
+
+    // A page the engine draws keeps the box it was measured at rather than being wrapped as
+    // text: the engine is handed that box and lays the page out in it, so a measure here would
+    // be a second page in a box the engine never saw (see `html_page_box`).
+    if hover.html_drawn_by_the_engine() {
         return (layout, None);
     }
 

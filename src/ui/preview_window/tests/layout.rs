@@ -1,5 +1,8 @@
 use super::*;
 
+// The `Text → Render HTML` switch, stood by the page tests below (see `pin_keys`).
+use super::pin_keys::RenderHtml;
+
 /// A keyboard placement of one item, at the size and mode the figures are easy to
 /// read in: the media's own size at 100%, and `Best Position`, so the place comes
 /// out of the room beside the item alone. `columns` is whether the item is read as
@@ -705,4 +708,115 @@ fn a_hover_that_comes_to_nothing_ends_as_a_mark_that_goes_after_three_seconds() 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = previous_media;
     }
+}
+
+/// A page the browser engine draws is not a page of text this app lays out: the box
+/// `media_dimensions` gives it is the box the engine is handed, and the engine wraps the page
+/// inside that. So `text_preview_layout` leaves the box alone rather than measuring the file as
+/// text a second time — that measure is a different box, and a page re-placed into it is a page the
+/// engine was never given (see `html_page_box`).
+///
+/// The switch is what makes the page the engine's: with `Render HTML` off the same file is a page
+/// of text this app paints, and it is re-measured at the width its layout came out with like every
+/// other text file.
+#[test]
+fn a_page_the_engine_draws_keeps_the_box_it_was_measured_at() {
+    // The room as well as the switch: `Render HTML` is one setting for the whole process, and the
+    // tests that stand it are the ones that must not see each other's (see `RenderHtml`).
+    let _room = the_room_to_itself();
+
+    // A machine with no runtime draws no page at all, and this is a question about the engine's
+    // own page (see `webview_preview::can_draw`).
+    if !webview_preview::can_draw() {
+        return;
+    }
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-engine-page");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a page.html");
+    std::fs::write(&path, b"<!DOCTYPE html><p>a page of its own</p>").expect("a written page");
+
+    // The switch starts off, so the engine's own page has to be asked for.
+    let _on = RenderHtml::stood_at(true);
+
+    let bounds = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+    let dpi = 96;
+
+    let hover = HoverFacts::read(&path);
+    assert!(
+        hover.html_drawn_by_the_engine(),
+        "the fixture is a page the switch hands to the engine"
+    );
+
+    let page = media_dimensions_of(&hover, &path, bounds, dpi).expect("the page's box");
+    assert_eq!(
+        page,
+        html_page_box(),
+        "a page the engine draws is measured at the page box rather than as text"
+    );
+
+    let placement = HoverPlacement {
+        orig_dims: page,
+        avoid: None,
+        follow_cursor: false,
+        preview_scale: hover_preview_scale_of(&hover, hover.scales),
+        at_the_pointer_corner: false,
+    };
+    let layout = compute_mouse_layout(900, 500, placement, bounds, dpi).expect("a layout");
+    let placed = (
+        layout.pos_x,
+        layout.pos_y,
+        layout.preview_w,
+        layout.preview_h,
+    );
+    let place = |size: (u32, u32)| {
+        compute_mouse_layout(
+            900,
+            500,
+            HoverPlacement {
+                orig_dims: size,
+                ..placement
+            },
+            bounds,
+            dpi,
+        )
+    };
+
+    let (kept, size) = text_preview_layout(&hover, &path, layout, bounds, dpi, place);
+    assert_eq!(
+        (kept.pos_x, kept.pos_y, kept.preview_w, kept.preview_h),
+        placed,
+        "the engine's page was laid out again as a page of text"
+    );
+    assert_eq!(
+        size, None,
+        "a page that was not measured hands no size back for the wait to re-place from"
+    );
+
+    let _off = RenderHtml::stood_at(false);
+    let hover = HoverFacts::read(&path);
+    assert!(
+        !hover.html_drawn_by_the_engine(),
+        "the switch is what makes the page the engine's, so its absence leaves a page of text"
+    );
+
+    // The same placement, laid out again: the arm above took the first layout with it.
+    let layout = compute_mouse_layout(900, 500, placement, bounds, dpi).expect("a layout");
+
+    let (kept, size) = text_preview_layout(&hover, &path, layout, bounds, dpi, place);
+    let size = size.expect("a page of text is measured");
+    assert_ne!(
+        size, page,
+        "a page of text measured at the width the layout gave it is not the engine's page box"
+    );
+    assert_ne!(
+        (kept.preview_w, kept.preview_h),
+        (placed.2, placed.3),
+        "and the frame that came back is placed again, the way every text preview is"
+    );
 }
