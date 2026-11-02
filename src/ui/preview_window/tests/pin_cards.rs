@@ -1306,6 +1306,81 @@ fn the_chrome_is_drawn_over_the_media_of_the_kinds_this_app_draws_itself() {
     assert!(!pin_overlay_chrome(None, true));
 }
 
+/// The caption's popup is the two kinds the Shell composes into the pin and no other, it joins the
+/// pin's own band because an owned window inherits none, and a pin that is minimized or off the screen
+/// cannot show it (see `the_caption_popup_at`, `the_popup_band` and `the_pin_can_show_it`).
+#[test]
+fn the_caption_popup_rides_with_the_pin_and_only_for_a_page_the_shell_composes() {
+    // Band mirrored both ways, and never `HWND_TOP`.
+    assert_eq!(pin_chrome_strips::the_popup_band(true), HWND_TOPMOST);
+    assert_eq!(pin_chrome_strips::the_popup_band(false), HWND_NOTOPMOST);
+
+    assert!(pin_chrome_strips::the_pin_can_show_it(false, true));
+    assert!(
+        !pin_chrome_strips::the_pin_can_show_it(true, true),
+        "minimized"
+    );
+    assert!(
+        !pin_chrome_strips::the_pin_can_show_it(false, false),
+        "hidden"
+    );
+
+    // Every kind but the two the Shell composes keeps the child strip it always had, whatever the two
+    // flags say.
+    for kind in [
+        MediaType::StaticImage,
+        MediaType::Dds,
+        MediaType::AnimatedGif,
+        MediaType::AnimatedApng,
+        MediaType::AnimatedWebP,
+        MediaType::AnimatedHeif,
+        MediaType::AnimatedJxl,
+        MediaType::Video,
+        MediaType::NativeVideo,
+        MediaType::Audio,
+        MediaType::Pdf,
+        MediaType::Text,
+        MediaType::Archive,
+        MediaType::Peazip,
+        MediaType::Office,
+        MediaType::Design,
+        MediaType::Vector,
+        MediaType::Libre,
+        MediaType::Magick,
+        MediaType::Calibre,
+        MediaType::Comic,
+        MediaType::Unplayable,
+        MediaType::Loading,
+    ] {
+        assert!(
+            !pin_chrome_strips::the_caption_rides_in_a_popup(true, true, Some(kind)),
+            "{kind:?}"
+        );
+    }
+    assert!(!pin_chrome_strips::the_caption_rides_in_a_popup(
+        true, true, None
+    ));
+
+    // And the two it is for need both flags: a page that runs, and a pin that draws its own picture.
+    for kind in [MediaType::EngineSvg, MediaType::EngineFont] {
+        assert!(pin_chrome_strips::the_caption_rides_in_a_popup(
+            true,
+            true,
+            Some(kind)
+        ));
+        assert!(!pin_chrome_strips::the_caption_rides_in_a_popup(
+            false,
+            true,
+            Some(kind)
+        ));
+        assert!(!pin_chrome_strips::the_caption_rides_in_a_popup(
+            true,
+            false,
+            Some(kind)
+        ));
+    }
+}
+
 /// **A page the browser draws is the pin's picture until it runs**, and the whole of the difference
 /// is visible in the window a pin is taken up with: a drawing's caption floats over its picture, in
 /// a window that is the media's own box, and a page of HTML's caption is a band above one.

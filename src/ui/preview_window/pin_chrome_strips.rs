@@ -40,11 +40,11 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{GetStockObject, HBRUSH, NULL_BRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, RegisterClassExW,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_STYLE, HWND_TOP,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW,
-    WS_CHILD, WS_DISABLED, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
-    WS_POPUP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, IsIconic, IsWindowVisible,
+    RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_STYLE,
+    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSEXW, WS_CHILD, WS_DISABLED, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
 
 use super::*;
@@ -167,8 +167,9 @@ fn the_strips_state() -> Option<TheStripsState> {
 /// `WS_DISABLED` and `WS_EX_NOACTIVATE` stay: the popup takes no keyboard and no focus either.
 ///
 /// The pin owns it through `GWLP_HWNDPARENT`, which is what keeps it over its owner without being
-/// raised, and nothing here ever asks for `HWND_TOP` or `HWND_TOPMOST`: a caption that takes the top of
-/// the desktop would stand over every window the user has.
+/// raised. An owned window does not inherit its owner's band, so the pin's is mirrored onto it where it
+/// is placed (`the_popup_band`, see `place_the_caption_popup`); `HWND_TOP` never, a caption that took
+/// the top of the desktop would stand over every window the user has.
 unsafe fn the_caption_popup_at(pin: HWND) -> Option<HWND> {
     let mut popup = HWND(CAPTION_POPUP.load(Ordering::SeqCst) as *mut _);
     let standing = popup.0 as isize != 0
@@ -237,7 +238,7 @@ fn hide_the_caption_popup() {
 /// The two flags are the pin's own reading of its kind (see `pin_overlay_chrome`), and the kind is
 /// asked as well so that a page the pin does not draw — one that runs, standing in front of the pin as
 /// a window of the user's — keeps the child strip it always had.
-fn the_caption_rides_in_a_popup(
+pub(super) fn the_caption_rides_in_a_popup(
     overlay: bool,
     hides_chrome: bool,
     kind: Option<MediaType>,
@@ -266,6 +267,23 @@ fn the_popup_at(
     )
 }
 
+/// The band the caption's popup joins: the pin's own, mirrored, because an owned window does not
+/// inherit topmost. Never `HWND_TOP` — a caption that took the top of the desktop would stand over
+/// every window the user has (see `place_the_caption_popup`).
+pub(super) fn the_popup_band(always_on_top: bool) -> HWND {
+    if always_on_top {
+        HWND_TOPMOST
+    } else {
+        HWND_NOTOPMOST
+    }
+}
+
+/// Whether the pin can show its popup at all: a minimized pin, and one not on the screen, leaves a
+/// popup of its own standing on the desktop (see `follow_the_pin`).
+pub(super) fn the_pin_can_show_it(minimized: bool, visible: bool) -> bool {
+    !minimized && visible
+}
+
 /// Put the caption's popup at the pin's caption rows, in **screen** coordinates: it is a top-level window
 /// owned by the pin, so it travels with the pin on every placement the way the child strip does.
 ///
@@ -284,26 +302,58 @@ unsafe fn place_the_caption_popup(
     }
     let (x, y, width, caption_height) =
         the_popup_at((corner.x, corner.y), row, width, caption_height);
-    let _ = unsafe {
-        SetWindowPos(
-            popup,
-            HWND::default(),
-            x,
-            y,
-            width,
-            caption_height,
-            SWP_NOZORDER | SWP_NOACTIVATE,
-        )
-    };
+    // Place and band in one call: a lowering band re-asked of a window already in it is no reorder.
+    let band = the_popup_band(pin_always_on_top());
+    let _ = unsafe { SetWindowPos(popup, band, x, y, width, caption_height, SWP_NOACTIVATE) };
     note_pin_trace!(
-        "caption popup: placed {:#x} at {},{}+{}x{}",
+        "caption popup: placed {:#x} at {},{}+{}x{} topmost {}",
         popup.0 as isize,
         x,
         y,
         width,
-        caption_height
+        caption_height,
+        band == HWND_TOPMOST
     );
     Some(popup)
+}
+
+/// Carry the caption's popup with the pin on the pin's **own motion** — `WM_MOVE` and
+/// `WM_WINDOWPOSCHANGED` in the pin window's procedure — because a move repaints nothing and no paint
+/// road would re-place it; a pin that maximizes, restores, is minimized or goes off the screen answers
+/// here too (see `place_the_chrome_strips` for the paint road that stays).
+///
+/// Gated: a pin that is not on the popup road, or whose popup is not standing, asks no window anything.
+pub(super) unsafe fn follow_the_pin(pin: HWND) {
+    let Some(state) = the_strips_state() else {
+        return;
+    };
+    if state.pin != pin || !state.over_a_page || caption_popup().is_none() {
+        return;
+    }
+
+    if !the_pin_can_show_it(
+        unsafe { IsIconic(pin) }.as_bool(),
+        unsafe { IsWindowVisible(pin) }.as_bool(),
+    ) {
+        if let Some(popup) = caption_popup() {
+            note_pin_trace!(
+                "caption popup: hidden {:#x} for a minimized or invisible pin",
+                popup.0 as isize
+            );
+        }
+        hide_the_caption_popup();
+        return;
+    }
+
+    if state.caption_height == 0 {
+        return;
+    }
+    place_the_caption_popup(
+        pin,
+        paint::the_row_a_resize_paints_the_picture_down(),
+        state.width,
+        state.caption_height,
+    );
 }
 
 /// Make the strips with the pin's own window: children of it, layered from the moment they

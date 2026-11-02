@@ -452,6 +452,15 @@ pub(super) unsafe extern "system" fn window_proc(
 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
+        WM_MOVE | WM_WINDOWPOSCHANGED => {
+            // **The pin's own motion is the only road the caption's popup can follow it on**: a window
+            // that moves repaints nothing, so nothing of the paint road runs and the popup would be
+            // left standing where the pin was. A maximize, a restore and a minimize answer here too —
+            // and a pin that cannot show its popup hides it rather than leaving it on the desktop (see
+            // `follow_the_pin`).
+            pin_chrome_strips::follow_the_pin(hwnd);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_CHAR => {
             // **A character is the find bar's while it is up.** It arrives here as one UTF-16 code
             // unit because the loop translates the key before dispatching it, and the bar is the
