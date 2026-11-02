@@ -237,6 +237,11 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
     .ok()?;
 
     REAL_PIN_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+    // **The window that wears the button is the one that says it supplies the still of it.** What the
+    // Shell draws the hover of a window that is down from is the bitmap the app hands it, and a window
+    // that never said it would supply one is asked for nothing — the hover falls back to the icon (see
+    // `pin_taskbar::supply_the_stills_of_this_window`, `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
+    unsafe { super::pin_taskbar::supply_the_stills_of_this_window(hwnd) };
     // The chrome the pin is carried in is made with the window that carries it, on every road —
     // a hosted film, a park, a cover, FFmpeg's player, or this app's own picture — and kept for
     // the window's life (see `pin_chrome_strips`).

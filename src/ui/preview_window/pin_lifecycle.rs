@@ -857,6 +857,15 @@ impl PinWindow for Win32PinWindow {
             hide_pin_taskbar();
         }
         hide_minimized_pin();
+
+        // **A pin that is gone holds no button's still, and the window it stood in is kept between
+        // pins.** The picture is the last pin's, and a forced still left on a window the next pin
+        // stands in is a hover drawn once and frozen after that (see
+        // `pin_taskbar_mirror::forget_the_pin_picture`, `pin_taskbar::the_buttons_still_is_the_apps_own`).
+        if let Some(pin) = pin_real_window::real_pin_window() {
+            unsafe { pin_taskbar::the_buttons_still_is_the_apps_own(pin, false) };
+        }
+        pin_taskbar_mirror::forget_the_pin_picture();
     }
 
     fn hide_pin_bubble(&self) {
