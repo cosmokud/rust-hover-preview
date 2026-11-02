@@ -243,6 +243,22 @@ pub(super) fn path_name(path: &std::path::Path) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+/// A box on screen as a line says it — `<W>x<H>+<X>+<Y>`, the one spelling every box in the trace
+/// is written in, so that the box a swap measured and the box a take-up was handed read against
+/// each other rather than against two spellings of one number (see `note_a_swap_box`).
+pub(super) fn a_box(region: super::ScreenRegion) -> String {
+    let (left, top, right, bottom) = region;
+    format!("{}x{}+{}+{}", right - left, bottom - top, left, top)
+}
+
+/// A pin's bound as a line says it: the side it names, or `none` for a window that has none yet (see
+/// `PinnedPreview::bound`).
+pub(super) fn a_bound(bound: Option<i32>) -> String {
+    bound
+        .map(|bound| bound.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
 /// The lines a test run wrote, so a test can hold the road to what it said rather than to what the
 /// log happened to be configured to keep: the same seam `mpv_ipc` keeps its command lines with, and
 /// for the same reason (see `note_pin_trace`).

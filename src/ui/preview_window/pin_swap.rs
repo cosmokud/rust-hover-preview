@@ -116,6 +116,16 @@ pub(super) fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
         (pin_swap_space(pin), pin.path.clone())
     };
 
+    note_pin_trace!(
+        "swap plan: {} pin content {} bound {} room {} caption {} keeps_its_box {}",
+        pin_trace::path_name(path),
+        pin_trace::a_box(space.current),
+        pin_trace::a_bound(space.bound),
+        pin_trace::a_box(space.room.region()),
+        space.caption,
+        pin_keeps_its_box(path)
+    );
+
     if showing == *path {
         return None;
     }
@@ -269,16 +279,32 @@ fn pin_update_content_measured(
     // probe, which is the whole of why it is asked before the box is settled: what the card says,
     // and whether there is a card at all, is the answer this is for.
     if drawn_as_audio(path) {
-        return match media_dimensions(path, bounds, dpi) {
+        let measured = media_dimensions(path, bounds, dpi);
+
+        return match measured {
             // Nothing here plays the file, so there is no card to swap in: the pin keeps what it
             // is showing. The verdict is remembered, so this is not a wait that comes back.
-            None => None,
+            None => {
+                note_a_swap_box("audio", path, &space, None, None, space.room.region(), None);
+                None
+            }
             // The probe is in flight, which is the wait `pin_swap_awaits` names — but
             // asked here as the read running behind the box rather than as the box
             // itself: a sound's card waits in the room the card will take (see
             // `audio_box`), and the card that answers is drawn at that same room, so
             // the box alone cannot tell the wait from the answer.
-            Some(_) if measure_waiting(path) => Some(PinBox::Waiting),
+            Some(_) if measure_waiting(path) => {
+                note_a_swap_box(
+                    "audio",
+                    path,
+                    &space,
+                    measured,
+                    None,
+                    space.room.region(),
+                    None,
+                );
+                Some(PinBox::Waiting)
+            }
             // The card is there to be laid out, and a card is its own size: the box it is given
             // is the one its own measure came out at, in the middle of the box the pin has now —
             // never the box another file left, which no card is drawn to or fitted into.
@@ -287,11 +313,19 @@ fn pin_update_content_measured(
                     (space.current.0 + space.current.2) / 2,
                     (space.current.1 + space.current.3) / 2,
                 );
+                let content = centred_at((shape.0 as i32, shape.1 as i32), centre);
 
-                Some(PinBox::Measured(centred_at(
-                    (shape.0 as i32, shape.1 as i32),
-                    centre,
-                )))
+                note_a_swap_box(
+                    "audio",
+                    path,
+                    &space,
+                    Some(shape),
+                    None,
+                    space.room.region(),
+                    Some(content),
+                );
+
+                Some(PinBox::Measured(content))
             }
         };
     }
@@ -303,17 +337,49 @@ fn pin_update_content_measured(
     // the engine was, and it answers no for a file already refused — so it comes through here
     // and is measured, or is nothing, as it always was (see `page_is_on_the_way`).
     if page_is_on_the_way(path) {
+        note_a_swap_box(
+            "waiting",
+            path,
+            &space,
+            None,
+            None,
+            space.room.region(),
+            None,
+        );
+
         return Some(PinBox::Waiting);
     }
 
     let scale = effective_preview_scale(path, current_hover_scales());
-    let shape = media_dimensions(path, bounds, dpi)?;
+    let Some(shape) = media_dimensions(path, bounds, dpi) else {
+        note_a_swap_box(
+            "none",
+            path,
+            &space,
+            None,
+            Some(scale),
+            space.room.region(),
+            None,
+        );
+
+        return None;
+    };
 
     // A box still being read is the wait for a box rather than one, whichever file it was asked
     // for: the measure this call has just taken is what starts the read that settles it, so what
     // the pin has of the new file is a wait to keep rather than a shape to lay out (see
     // `pin_swap_awaits`).
     if pin_swap_awaits(path, shape) {
+        note_a_swap_box(
+            "waiting",
+            path,
+            &space,
+            Some(shape),
+            Some(scale),
+            space.room.region(),
+            None,
+        );
+
         return Some(PinBox::Waiting);
     }
 
@@ -340,11 +406,22 @@ fn pin_update_content_measured(
     // `pin_swap_room`).
     if pin_keeps_its_box(path) {
         let laid_out = pin_update_box(space.room.region(), shape, scale);
-
-        return Some(PinBox::Measured(centred_at(
+        let content = centred_at(
             (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1),
             pin_swap_centre(space),
-        )));
+        );
+
+        note_a_swap_box(
+            "keeps-its-box",
+            path,
+            &space,
+            Some(shape),
+            Some(scale),
+            space.room.region(),
+            Some(content),
+        );
+
+        return Some(PinBox::Measured(content));
     }
 
     if space.maximized {
@@ -363,18 +440,75 @@ fn pin_update_content_measured(
         // the maximize was. A percentage kept here would draw a file smaller than the room
         // at its own size while the caption went on drawing the restore glyph — the button
         // saying maximized and the preview not being it.
-        return Some(PinBox::Measured(pin_update_box(
+        let content = pin_update_box(space.room.region(), shape, PreviewScale::FitToScreen);
+
+        note_a_swap_box(
+            "maximized",
+            path,
+            &space,
+            Some(shape),
+            Some(PreviewScale::FitToScreen),
             space.room.region(),
-            shape,
-            PreviewScale::FitToScreen,
-        )));
+            Some(content),
+        );
+
+        return Some(PinBox::Measured(content));
     }
 
-    Some(PinBox::Measured(pin_update_box(
-        pin_swap_room(space, bounds, dpi),
-        shape,
-        scale,
-    )))
+    let room = pin_swap_room(space, bounds, dpi);
+    let content = pin_update_box(room, shape, scale);
+
+    note_a_swap_box(
+        "bound",
+        path,
+        &space,
+        Some(shape),
+        Some(scale),
+        room,
+        Some(content),
+    );
+
+    Some(PinBox::Measured(content))
+}
+
+/// One line about the box a swap measured its incoming file out in, written under the name of the
+/// arm that measured it: which arm laid the file out is the whole of why the box the take-up is then
+/// handed has the size it has, and the take-up writes its own box beside it (see
+/// `take_up_pinned_window`).
+///
+/// `shape`, `scale` and `content` are nothing where the arm never got to one: a file whose box is a
+/// wait has no shape yet, a card is given no scale of its own, and an arm that lays nothing out has
+/// no box.
+fn note_a_swap_box(
+    tag: &str,
+    path: &Path,
+    space: &PinSwapSpace,
+    shape: Option<(u32, u32)>,
+    scale: Option<PreviewScale>,
+    room: ScreenRegion,
+    content: Option<ScreenRegion>,
+) {
+    // Nothing is built for a line nothing is going to write (see `pin_trace::wanted`).
+    if !pin_trace::wanted() {
+        return;
+    }
+
+    let shape = shape
+        .map(|(width, height)| format!("{width}x{height}"))
+        .unwrap_or_else(|| "-".to_string());
+    let scale = scale
+        .map(|scale| format!("{scale:?}"))
+        .unwrap_or_else(|| "-".to_string());
+    let content = content
+        .map(pin_trace::a_box)
+        .unwrap_or_else(|| "waiting".to_string());
+
+    note_pin_trace!(
+        "swap box: {tag} {} shape {shape} scale {scale} bound {} room {} -> content {content}",
+        pin_trace::path_name(path),
+        pin_trace::a_bound(space.bound),
+        pin_trace::a_box(room)
+    );
 }
 
 /// Whether a swap for this file has to wait for a box: what the file was measured by is the
