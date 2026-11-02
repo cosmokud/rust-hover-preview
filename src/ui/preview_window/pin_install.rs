@@ -1196,6 +1196,22 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
     // answer lands rather than the take-up waiting for it.
     ask_pin_open_with(path.to_path_buf());
 
+    // The bound the files after this one are fitted into, read once: a line writes it beside the one
+    // the window had before this take-up (see `pin_bound_after`).
+    let bound_before = carried.and_then(|(.., bound)| bound);
+    let bound = pin_bound_after(bound_before, keeps_its_box, content);
+
+    note_pin_trace!(
+        "take-up: {} kind {:?} rect {} window {} content {} bound-in {} bound-out {}",
+        pin_trace::path_name(path),
+        kind,
+        pin_trace::a_box(rect),
+        pin_trace::a_box(window),
+        pin_trace::a_box(content),
+        pin_trace::a_bound(bound_before),
+        pin_trace::a_bound(bound)
+    );
+
     PinnedPreview {
         path: path.to_path_buf(),
         content,
@@ -1206,11 +1222,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         // own box, and takes the longest side of the box the first file
         // with a shape of its own came out at — which is where a pin taken
         // up on a picture gets its bound too (see `pin_bound_after`).
-        bound: pin_bound_after(
-            carried.and_then(|(.., bound)| bound),
-            keeps_its_box,
-            content,
-        ),
+        bound,
         // A picture the wheel zooms arrives filling its window: every take-up is a whole window
         // built around the file it landed on, so there is no view of another picture to carry — a
         // walk from a zoomed-in photograph to the one beside it is the new file at the size the window

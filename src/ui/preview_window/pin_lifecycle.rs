@@ -701,6 +701,11 @@ pub(super) fn pin_what_is_on_screen(
     }
 
     let rect = preview_screen_rect()?;
+    note_pin_trace!(
+        "pin key: {} hover rect {}",
+        pin_trace::path_name(&path),
+        pin_trace::a_box(rect)
+    );
     Some(PreviewMessage::Pin {
         path,
         rect,
@@ -1627,6 +1632,19 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         unsafe { IsWindowVisible(hwnd).as_bool() } as u8,
         window,
     );
+
+    // **Where the window really landed**, read back rather than taken from the box that was asked
+    // for: the placement above is a request, and what the pin stands at is what Windows reports —
+    // which is the whole of what a take-up's own box is read against (see `take_up_pinned_window`).
+    if pin_trace::asked() {
+        let mut placed = RECT::default();
+        // Safety: the window is this app's own, and the rect only reads what Windows keeps of it.
+        let _ = unsafe { GetWindowRect(hwnd, &mut placed) };
+        note_pin_trace!(
+            "pin window: {}",
+            pin_trace::a_box((placed.left, placed.top, placed.right, placed.bottom))
+        );
+    }
 
     // **Nothing in this road asks for the foreground, on any road a pin arrives by.** That is a
     // guarantee rather than a debt with a clock on it: what puts a pin in front is the band, and which
