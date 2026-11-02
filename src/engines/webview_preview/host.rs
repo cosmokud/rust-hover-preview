@@ -11,7 +11,7 @@ use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW, KillTimer,
+    DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW, GetWindowLongPtrW, KillTimer,
     SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TranslateMessage, GWL_EXSTYLE, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, LWA_ALPHA, MSG,
     SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
@@ -338,6 +338,7 @@ impl Host {
 
         // The bounds this window was given are recorded, so that a box which only moves from
         // here is not also re-laid-out (see `place`).
+        let before = self.last_area;
         self.last_area = Some((area.width, area.height));
 
         unsafe {
@@ -349,6 +350,21 @@ impl Host {
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
             self.put_window(area);
         }
+
+        // The box asked for beside the client the window really has, and what it held before: a page
+        // the pin draws is sampled at its client, so the two disagreeing is a band drawn off its source.
+        let mut client = RECT::default();
+        let _ = unsafe { GetClientRect(self.hwnd, &mut client) };
+        trace(&format!(
+            "show client {}x{} area {}x{}+{}+{} before {before:?} source={} runs={runs}",
+            client.right - client.left,
+            client.bottom - client.top,
+            area.width,
+            area.height,
+            area.x,
+            area.y,
+            self.a_source
+        ));
 
         publish(Some((path.clone(), area)));
     }
@@ -434,6 +450,18 @@ impl Host {
                     area.height,
                     flags,
                 );
+
+                let mut client = RECT::default();
+                let _ = GetClientRect(self.hwnd, &mut client);
+                trace(&format!(
+                    "put_window source placed={placed} area {}x{}+{}+{} client {}x{}",
+                    area.width,
+                    area.height,
+                    area.x,
+                    area.y,
+                    client.right - client.left,
+                    client.bottom - client.top
+                ));
             }
             return;
         }

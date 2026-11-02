@@ -79,6 +79,19 @@ pub(super) fn the_page_was_placed(content: Option<ScreenRegion>) {
         return;
     };
 
+    // The band handed, the pin's client it is a rectangle in and the two windows it was made for: a
+    // band drawn off its source is one of these three disagreeing with the others (see the module note).
+    let client = unsafe { pin_film_thumbnail::client_size(HWND(pin as *mut _)) };
+    note_pin_trace!(
+        "page band: destination {}x{}+{}+{} pin client {client:?} pin={:#x} page={:#x}",
+        destination.2,
+        destination.3,
+        destination.0,
+        destination.1,
+        pin,
+        page
+    );
+
     let Ok(mut held) = PAGE_THUMBNAIL.lock() else {
         return;
     };
@@ -94,18 +107,26 @@ pub(super) fn the_page_was_placed(content: Option<ScreenRegion>) {
     held.pin = pin;
     held.page = page;
     if held.registration == 0 {
-        let Ok(registration) =
-            (unsafe { DwmRegisterThumbnail(HWND(pin as *mut _), HWND(page as *mut _)) })
-        else {
-            // The Shell refuses a source that has made its window and not yet presented one, and nothing
-            // here asks a second time: the next placement of the band does (see `the_page_was_placed`).
-            *held = Held::NOTHING;
-            return;
-        };
-        held.registration = registration;
+        match unsafe { DwmRegisterThumbnail(HWND(pin as *mut _), HWND(page as *mut _)) } {
+            Ok(registration) => held.registration = registration,
+            Err(error) => {
+                // The Shell refuses a source that has made its window and not yet presented one, and nothing
+                // here asks a second time: the next placement of the band does (see `the_page_was_placed`).
+                *held = Held::NOTHING;
+                note_pin_trace!("page band: register refused {error:?}");
+                return;
+            }
+        }
     }
 
     if held.shown == Some(destination) {
+        note_pin_trace!(
+            "page band: unchanged {}x{}+{}+{}",
+            destination.2,
+            destination.3,
+            destination.0,
+            destination.1
+        );
         return;
     }
 
@@ -125,13 +146,15 @@ pub(super) fn the_page_was_placed(content: Option<ScreenRegion>) {
         // and a frame sampled with it would be a page drawn off its own box by the frame's width.
         fSourceClientAreaOnly: true.into(),
     };
-    if unsafe { DwmUpdateThumbnailProperties(held.registration, &properties) }.is_err() {
+    if let Err(error) = unsafe { DwmUpdateThumbnailProperties(held.registration, &properties) } {
         let registration = held.registration;
         *held = Held::NOTHING;
         let _ = unsafe { DwmUnregisterThumbnail(registration) };
+        note_pin_trace!("page band: update refused {error:?}");
         return;
     }
     held.shown = Some(destination);
+    note_pin_trace!("page band: shown {width}x{height}+{x}+{y}");
 }
 
 /// Let the registration go, keeping the pin and the page it was made for: what a pin going down, a pin
