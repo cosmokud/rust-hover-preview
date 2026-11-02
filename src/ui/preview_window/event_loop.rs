@@ -382,6 +382,10 @@ pub fn run_preview_window() {
             // `preview_stall_ms`).
             note_preview_alive();
 
+            // And the ladder a box change hung comes round here, on the loop's own tick rather than on
+            // a thread of its own (see `sample_the_ladder_where_due`).
+            pin_trace::sample_the_ladder_where_due();
+
             // And the same note for the pin, which is a narrower question with a much
             // shorter bound: a loop that is not turning while a window the user is
             // looking at is up is a window whose buttons do nothing, and the thread that
