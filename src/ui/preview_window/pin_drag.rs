@@ -20,23 +20,6 @@ pub(super) static PIN_MEDIA_LEFT_DOWN: AtomicBool = AtomicBool::new(false);
 /// way: what this side asks is whether the count has moved, which is the question a press is.
 pub(super) static PIN_MEDIA_LEFT_PRESSES: AtomicU64 = AtomicU64::new(0);
 
-/// Whether a hand is dragging a pin's edge right now, which is a box it has not settled on yet.
-///
-/// The one reader is the page a pin frames as its *source*: that page's client is what the Shell fits
-/// into the band, so a step of a resize drag would otherwise lay the browser out again per pointer move —
-/// and a page laid out at a box the hand is still pulling does not follow the hand, it lags it (see
-/// `webview_preview::put_window`). A resize drag therefore defers the page's size to the band the drag
-/// settles on, and the Shell stretches what the page already is into the band meanwhile.
-///
-/// It is set by a gesture that installed a resize, and cleared by both of the endings a gesture has
-/// (see `begin_pin_drag`, `finish_pin_drag`, `pin_capture_lost`).
-static PIN_RESIZE_DRAGGING: AtomicBool = AtomicBool::new(false);
-
-/// Whether a resize of a pin's edge is being dragged right now (see `PIN_RESIZE_DRAGGING`).
-pub(crate) fn a_pinned_resize_is_dragging() -> bool {
-    PIN_RESIZE_DRAGGING.load(Ordering::Acquire)
-}
-
 /// Whether a pinned window's pointer is carrying it or pulling it to a new size right now.
 ///
 /// What a press, a drag and their ends do to the film is **nothing**: the film is a thumbnail of a
@@ -423,8 +406,6 @@ pub(super) fn begin_pin_drag(
         return;
     };
 
-    let resize = matches!(action, PinDragAction::Resize(_));
-
     let installed = pin_state()
         .and_then(|mut pinned| {
             let pin = pinned.pin_mut()?;
@@ -443,12 +424,6 @@ pub(super) fn begin_pin_drag(
 
     if installed {
         window.capture(hwnd);
-
-        // **A drag of an edge is a box the hand is pulling rather than one it has chosen**, and the page a
-        // pin frames is sized by the band — so the shared page is told not to re-lay-out for the box a step
-        // of this drag passes through, and does so at the band the drag settles on (see
-        // `PIN_RESIZE_DRAGGING`).
-        PIN_RESIZE_DRAGGING.store(resize, Ordering::Release);
         // **Nothing of the film is asked for here, and there is nothing of it to ask.** The film
         // is a thumbnail of a source window no gesture moves, so a press, a move, a resize and
         // their ends are this app's own window work and one rectangle: no key, no kill, no
@@ -743,11 +718,6 @@ impl Carry {
 /// than off `GetCapture` — the two ends of a capture are one list, and a list that had to be
 /// read out of the machine in two places is a list whose two halves can disagree.
 pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
-    // One of the two endings a resize drag has, whichever drag there is to end: the page a pin frames is
-    // owed the band this gesture settles on rather than the one it was passing through (see
-    // `PIN_RESIZE_DRAGGING`).
-    PIN_RESIZE_DRAGGING.store(false, Ordering::Release);
-
     let drag =
         pin_state().and_then(|mut pinned| pinned.pin_mut().and_then(|pin| pin.dragging.take()));
     let Some(drag) = drag else {
@@ -812,11 +782,6 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
 /// or another window took it, and it says in no way the two can be told apart afterwards. Both
 /// leave the same thing behind, which is a drag that has ended.
 pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
-    // The other ending of a gesture, and the one a watchdog taking a pin down arrives on: a resize drag
-    // whose capture went elsewhere is over, so the page it was deferring is owed the band it is standing
-    // at (see `PIN_RESIZE_DRAGGING`).
-    PIN_RESIZE_DRAGGING.store(false, Ordering::Release);
-
     // A capture taken from under a drag is the drag's other settle, and the held frames it counted are
     // summed here as they are at a release (see `pin_film_thumbnail::settle_the_held_frames`).
     pin_film_thumbnail::settle_the_held_frames();

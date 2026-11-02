@@ -2800,57 +2800,6 @@ pub(super) fn pinned_content() -> Option<ScreenRegion> {
     (!pin.collapsed).then_some(pin.content)
 }
 
-/// The band a pinned window paints its media in, as **the paint itself** composes it: the window's own side,
-/// the row the band begins at, and the rows it covers — in the pin's client coordinates, which is the
-/// coordinates the Shell is handed a thumbnail's destination in (see `pin_page_thumbnail::the_pair`).
-///
-/// It is the arithmetic of `paint::render_pinned_preview_at` and not of the window's client, and the
-/// difference is the one thing a destination must not be read from: a resize drag paints its surface a row
-/// taller than the window is (`paint::the_slack_a_resize_paints_with`), so a band cut to the client is a
-/// destination a row short of the picture on every step of a drag. Width, top row and rows are what the
-/// paint is given, so what this answers is the painted band by construction, whatever the window is doing.
-///
-/// **A media box that disagrees with it is said out loud by the caller**, which is the one fault this answer
-/// can hide: a window never resized for the document it shows has the Shell fit a thumbnail of one band into
-/// another, and the band around it is the pin's own alpha-1 claim — the desktop seen through it.
-pub(super) fn pinned_band_in_the_client() -> Option<(i32, i32, i32)> {
-    let pinned = pin_state()?;
-    let pin = pinned.pin()?;
-    let (width, height) = pin.window_size();
-    let (top, rows) = pinned_band_rows(
-        height,
-        pin.caption,
-        pinned_transport_height(pin.dpi, pin.transport_bar),
-        pin.overlay,
-    );
-
-    // **A window and the box the pin says it stands at are one fact, and this is the one place that
-    // fault is said out loud.** What is handed to the Shell is the painted band, so a window larger
-    // than the box the paint was composed for is a strip of the pin's own alpha-1 rows standing
-    // around a page that is the right size — the desktop seen through the pin, under chrome that
-    // stops where the baked surface does. The row a resize drag paints its surface a row taller than
-    // the window is the one difference that is not a fault (see
-    // `paint::the_slack_a_resize_paints_with`), so both are allowed for and nothing else is.
-    if let Some(hwnd) = pin_real_window::real_pin_window() {
-        // A step of a resize drag is not asked: the pin's own box is written before the window it stands
-        // in is resized, so the client is a step behind for the whole of a gesture, and a fault read
-        // there is one read at the wrong moment (see `apply_pin_drag`).
-        if pin.dragging.is_none() {
-            if let Some(client) = unsafe { pin_film_thumbnail::client_size(hwnd) } {
-                if client != (width, height) && client != (width, height + 1) {
-                    note_pin_trace!(
-                        "page band: the pin stands at {width}x{height} and its client is {}x{}",
-                        client.0,
-                        client.1
-                    );
-                }
-            }
-        }
-    }
-
-    Some((width, top, rows))
-}
-
 /// The card's own controls as they stand, read in one look and handed over rather than asked for
 /// under the media's own lock — see `MediaData::refresh_audio_card`.
 ///
