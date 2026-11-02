@@ -44,7 +44,7 @@ use windows::Win32::Graphics::Dwm::{
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY,
     DWM_TNP_VISIBLE,
 };
-use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 
 /// The band a registration is pointed at: `left, top, width, height` in the client coordinates of the
 /// window the Shell draws into.
@@ -168,17 +168,15 @@ fn let_registration_go(reason: &str) {
 /// The pin window the Shell draws into, the page window it draws, and the band's rectangle in the pin's
 /// own client coordinates — or nothing where either window or the band is not there.
 ///
-/// **A page window that is not on screen is no page at all.** The engine's window is the session's rather
-/// than the pin's, and a hide leaves its handle published — so a registration made against a hidden one is
-/// a thumbnail the Shell answers with this app's icon, which is a pin that peeks itself instead of its
-/// page. That is the one fault this refuses rather than reports, and refusing costs nothing: the next
-/// placement of the band asks again, exactly as it does after the `DwmRegisterThumbnail` below has failed.
+/// **A window that is gone is no page at all.** A handle the engine has taken down is not one the Shell
+/// can be asked about, and a registration made against one is a fault asked for in the wrong place; a page
+/// that is merely off screen is still the pin's picture, and is deliberately *not* refused — what the Shell
+/// composed of it last is what the band draws while it is away, which is the same road a player's window
+/// takes (see `pin_film_thumbnail`). The refusal costs nothing: the next placement of the band asks again,
+/// exactly as it does after the `DwmRegisterThumbnail` below has failed.
 fn the_pair(content: ScreenRegion) -> Option<(isize, isize, Band)> {
     let page = webview_preview::showing_hwnd();
-    if page == 0 {
-        return None;
-    }
-    if !unsafe { IsWindowVisible(HWND(page as *mut _)) }.as_bool() {
+    if page == 0 || !unsafe { IsWindow(HWND(page as *mut _)) }.as_bool() {
         return None;
     }
     let pin = pin_real_window::real_pin_window()?;
