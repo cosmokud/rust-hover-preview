@@ -211,10 +211,11 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
 /// relaunch for a film, a re-decode for a picture, and nothing at all for a kind whose window is
 /// not its media (see `PreviewMessage::PinBox`).
 ///
-/// The size a hand pulled the window to goes with it, since a reset is the window handed back to
-/// the settings: the bound the files that follow are fitted into names that size, so it is given up
-/// with it (see `PinnedPreview::bound`). A maximize goes the way a drag sends it, the box it
-/// arranged having just been arranged by something else (see `pin_restore_box`).
+/// The box it lands in is the bound the files that follow are fitted into, as a box a hand dragged
+/// is: a reset is a size chosen for the whole of a window, not a size the file on screen came out
+/// at, so the size a hand pulled the window to is replaced by this one rather than left standing
+/// (see `PinnedPreview::bound`). A maximize goes the way a drag sends it, the box it arranged
+/// having just been arranged by something else (see `pin_restore_box`).
 ///
 /// A sound's card is the one kind with no size of its own to be given back: it is framed by nothing
 /// — no hand can pull a card to another size — so the size it has is the size its setting asked for
@@ -285,7 +286,9 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
             }
 
             pin.restore = None;
-            pin.bound = None;
+            // A reset is a box chosen for the whole of the window, so it is the ceiling the files
+            // that follow are fitted into, as a pulled edge is (see `PinnedPreview::bound`).
+            pin.bound = Some((content.2 - content.0).max(content.3 - content.1).max(1));
             pin.content = content;
             reset_pin_zoom(pin);
             Some(())
