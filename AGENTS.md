@@ -11,12 +11,12 @@ Windows 11 tray app. Hovering a file in Explorer previews it in-process or throu
 | Build | `cargo build` | links the debug binary the tray runs from |
 | Build to ship | `cargo build --release` | `build.rs::stop_running_app` runs `taskkill /F /IM rust-hover-preview.exe` before the link, release profile only |
 | Check every target | `cargo check --all-targets` | ~5 s warm; `--all-targets` is what reaches the `src/**/tests` modules |
-| Test everything | `cargo test` | 1644 passed, 38 ignored, ~12 s after compile |
-| Test a slice | `cargo test <filter>` | `cargo test pin_zoom` = 49 tests in 0.4 s; `cargo test config` = 106 in 0.36 s |
+| Test everything | `cargo test` | 1667 passed, 38 ignored, ~10 s after compile |
+| Test a slice | `cargo test <filter>` | `cargo test pin_zoom` = 50 tests in 0.1 s; `cargo test config` = 109 in 0.29 s |
 | Path gate | `cargo test --test no_path_leaks` | every tracked file, and every commit message |
 | Lint | `cargo clippy --all-targets -- -D warnings` | ~0.3 s warm; the gate is `Cargo.toml`'s `[lints.clippy] all = "deny"`, so a bare `cargo clippy` denies the same lints and the flag adds rustc's warnings |
 | Format | `cargo fmt --all -- --check` | `--check` is the half that reports; without it rustfmt rewrites every file it reaches |
-| The whole gate | `pwsh -File scripts/verify.ps1` | the real file, not a recipe; `.github/workflows/ci.yml` runs the path gate, the formatter and the linter and no suite, so the suite is `manual-ci.yml`'s and this script's; `-Fast` = check + the three `tests/` targets (~1 s), `-Pure` = the suite without `ui::`/`shell::` (475 tests), `-Filter <name>` for one test, `-NoTest`; the default run names the desktop-dependent tests out with `--skip` |
+| The whole gate | `pwsh -File scripts/verify.ps1` | the real file, not a recipe; `.github/workflows/ci.yml` is gone, so the path gate, the formatter and the linter run from this script and `manual-ci.yml` alone; `-Fast` = check + the three `tests/` targets (~1 s), `-Pure` = the suite without `ui::`/`shell::`, `-Filter <name>` for one test, `-NoTest`; the default run names the desktop-dependent tests out with `--skip` |
 
 ## Run it
 
@@ -53,6 +53,22 @@ A release build ends the copy you were testing. `build.rs` runs `taskkill /F /IM
 - **Any edit under `src/`.** `build.rs` prints `rerun-if-changed=src`, so one changed line recompiles
   the whole crate and reruns the script; the fingerprint is also keyed on `RHP_WORKTREE`, so a second
   checkout sharing one target dir rebuilds this package on its first build.
+- **A box the user chose that is not written to `PinnedPreview::bound`.** A hand's drag, a maximize, its
+  restore and a double-click's reset each write it (`apply_pin_drag`, `toggle_pin_maximized`,
+  `reset_pinned_size`); one that does not leaves the next file fitted into a stale size, and nothing fails.
+- **A window that moves repaints nothing.** Chrome carried in a window of its own is placed on the pin's
+  own `WM_MOVE`/`WM_WINDOWPOSCHANGED` (`pin_chrome_strips::follow_the_pin`), not awaited from the paint.
+- **A DWM thumbnail composes over its destination's content, children included.** Nothing drawn into a
+  child of the pin can stand over the picture, which is why the caption over a page is a `WS_POPUP` —
+  and why that popup needs `WS_EX_TRANSPARENT`: a disabled top-level window still takes the press (measured).
+- **`HWND_NOTOPMOST` on a window that is already non-topmost is a no-op.** A page under a raised pin is
+  put at the top of the ordinary band by claiming topmost and giving it up (`webview_preview::host::raises`).
+- **A window sampled by a thumbnail is its client, not the box last asked for.** Compare `GetClientRect`
+  (`webview_preview::host::the_window_takes_the_area`), or a band that moved without resizing the window
+  leaves the band sampling the older, smaller client.
+- **A maximize asked by a caption double-click arrives as `WM_SYSCOMMAND`/`SC_MAXIMIZE`.**
+  `DefWindowProcW` gives a native box neither `pin.restore` nor `pin.bound` hears about; answer it with the
+  pin's own toggle (`src/ui/preview_window/window_proc.rs`, `toggle_pin_maximized`).
 
 ## Where things live
 
@@ -66,7 +82,7 @@ A release build ends the copy you were testing. `build.rs` runs `taskkill /F /IM
 | `src/ui/` | `preview_window.rs` and `preview_window/`: pin, layout, load, paint, media, displays | Preview window |
 | `src/formats/` | `routing`, `native_formats::job_for`, `content_type`, `head`, `codecs`, the sixteen `lists` rows | Media pipeline |
 | `src/readers/` | in-process decodes: a bitmap or a block of text, cancellable, no process to reap | Kind notes |
-| `src/engines/` | out-of-process draws: office, libre, magick, peazip, calibre, webview, the players | Kind notes |
+| `src/engines/` | out-of-process draws: office, libre, magick, peazip, calibre, webview, the players | Kind notes; Pin mode (the page road) |
 | `src/text/` | painted pages, `text_paint`, `text_theme`, `pin_chrome/` | Pin mode; Kind notes |
 
 ## Recipes
@@ -89,6 +105,51 @@ A release build ends the copy you were testing. `build.rs` runs `taskkill /F /IM
 3. `src/formats/lists/list_store.rs` — that constant in the row's `before:`.
 4. `src/formats/native_formats.rs` — which job draws it.
 5. `src/readers/` — a reader of its own, only where the built-in crate cannot take it.
+
+(c) **Add a kind of hover preview.**
+
+1. `src/formats/routing.rs` — `DrawnBy`: does this app read the file, or an engine draw it.
+2. `src/formats/native_formats.rs::job_for` — the job that draws it.
+3. `src/readers/` or `src/engines/` — the draw itself, behind the thread its kind's work already runs on.
+4. `src/ui/preview_window/media_types.rs` — `MediaType`, `media_type`, and `draws_in_a_window_of_its_own`
+   (whether the picture in the band is another window's rather than this app's own surface).
+5. `src/ui/preview_window/dimensions.rs::media_dimensions` — the box it is measured at; a kind with no
+   shape of its own is measured against the room instead, and `pin_swap::pin_keeps_its_box` says whether a
+   pin of it is laid out for itself or fitted into the pin's `bound`.
+6. `src/ui/preview_window/pin_geometry.rs::pin_frame` — how a pin of it resizes (stretch, reflow, unframed).
+7. `src/ui/preview_window/pin_lifecycle.rs::pin_should_stand_in_its_own_window` — whose window a pin of it
+   stands in, and `pin_chrome_layout::pin_overlay_chrome` — whether its chrome floats over the picture.
+8. `src/config/` and the tray — its `PreviewType` switch, its scaling setting, and whether a cache keeps it.
+
+(d) **Add something to pin mode (a command, a caption button, a menu row).**
+
+1. `src/ui/preview_window/pin_lifecycle.rs` — the `PinCommand` variant.
+2. `pin_lifecycle.rs` / `pin_geometry.rs` / `pin_swap.rs` — the road it runs, in the order a pin takes one:
+   a box, a media, a window, a state.
+3. `src/text/pin_chrome/caption.rs::button_boxes` and `button_at` — the mark and its box; a rendered model
+   goes in `page_marks.rs`, and every pixel it places goes through `logical_px` (trap 3).
+4. `src/ui/preview_window/pin_input.rs` — the press that lands on it, read in the pin's coordinates.
+5. `src/text/pin_chrome/menu.rs` + `src/ui/preview_window/pin_menu.rs` — the row, where the bubble's menu
+   and a standing window's share the panel.
+6. `src/ui/preview_window/event_loop.rs` — the dispatch; `window_proc.rs` only where a message asks it.
+7. `src/ui/preview_window/pin_bubble.rs` — what a collapsed pin owes the same command.
+
+(e) **Windowing: show, place or move a window the pin draws through.**
+
+1. `src/ui/preview_window/pin_real_window.rs` — the pin's own window (the one Windows activates, lists and
+   gives a button); `pin_film_host.rs` — the band's host; a page's source is `webview_preview`'s host.
+2. `src/ui/preview_window/pin_lifecycle.rs::show_pinned_window` — the show, and
+   `place_pinned_siblings` — what stands in the band. **Every road that raises, activates, shows or demotes
+   the pin places the siblings again, last**, since they are windows of their own.
+3. `src/ui/preview_window/window_proc.rs` — the messages that move it or ask it something:
+   `WM_MOVE`/`WM_WINDOWPOSCHANGED`, `WM_ACTIVATE`, `WM_SYSCOMMAND`, `WM_NCHITTEST`.
+4. `src/ui/preview_window/paint.rs` — what the band's pixels say: a picture drawn through a thumbnail is an
+   alpha-1 claim (`fill_band_hit_testable`) so the press falls to the pin; a page that runs claims nothing.
+5. `pin_page_thumbnail.rs` / `pin_film_thumbnail.rs` — the source and its `DwmRegisterThumbnail`, placed once
+   and moved after that.
+6. `src/ui/preview_window/pin_chrome_strips.rs` — the chrome over the band, a child strip or a popup owned by
+   the pin (see ARCHITECTURE.md, "The page road", and the traps above).
+7. Tests: a window through `a_window_of_the_suite`; `tests/no_window_reaches_the_desktop.rs` is the rule.
 
 ## Ground truth
 

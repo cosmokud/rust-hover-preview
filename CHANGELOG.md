@@ -14,6 +14,8 @@
 - **A taken-up sound's `End of File` is answered without rebuilding its player.** A pin that comes up over a sound keeps the player the hover began, so a pass end the pin owes is read where the file comes round rather than by killing and beginning that player again.
 - **A pinned sound card's menu offers another program** — **Open in Default App** and **Open With...** below its **Seek** row, handing the file over and ending the pin the way the card's own two buttons do.
 - **`Pin Mode → Update Preview → Move To Top`** — on by default (`pin_update_move_to_top`): a file an update shows also puts the pin at the top of its own band, without taking the keyboard from the listing. Greyed while **Follow Selection** is off. And `toggle_key` (`f7` by default) throws `preview_enabled` while Explorer is in front, never swallowing the key; the tray's **Enable Preview** row names it.
+- **A pinned SVG, font specimen or rendered HTML page is a pin like any other** — the three kinds the browser engine draws now stand in the pin's own window: it is the window Windows activates, lists and gives a button, its caption floats over the page, and the page follows a drag, a resize, a maximize, a restore and a walk between files. A page that runs — a page of HTML with **Render HTML** on — keeps its own window in front of the pin and its caption in bands above it, a caption drawn over it being one underneath it.
+- **A pinned page's picture is drawn into the pin rather than nested in it** — the page's window is lowered, invisible at one part in 255 and click-through, and the band is the Shell's own thumbnail of its client: the picture rides the pin's client through a drag, the pin's taskbar hover holds the page rather than a hole, and a press on the band is the pin's own.
 - **The installer, its uninstaller and the installed-apps entry carry the app icon** — the uninstaller kept NSIS's stock glyph, and the entry's icon named the exe an update replaces; the icon now ships beside it as `app.ico`.
 
 ### Changed
@@ -29,6 +31,7 @@
 - **The wheel over a pinned film's volume control turns it.** A notch steps the level `5%`, each notch re-bases on the level in hand, and a level this app wrote is not read back off the knob under the pointer.
 - **A `config.ini` volume edit reaches a pin that is already playing** — the file's watcher and the tray's own reload each publish the half the file moved, and the half this app last wrote is left alone.
 - **Every engine TTL defaults to `away`** — `libreoffice_idle`, `office_engine_idle`, `webview_idle` and `video_engine_idle` keep their engine while Explorer is reachable and let it go after **Away Timer**, where a number of seconds is that long after the last file. The old `office_engine_persistent`/`libreoffice_persistent`/`webview_persistent` switches are read once and dropped.
+- **The box a pin is given is the box the user last chose** — a maximize, its restore and a double-click's reset each write the pin's bound the way a pulled edge does, so the files picked after one are fitted into that box up as well as down rather than into the size before it; a maximize a caption double-click asks for is the pin's own toggle rather than a native box neither its restore nor its bound ever hears about. A page the browser draws is laid out at its own page box and fitted into the bound, so a pin walking between a page and a picture keeps the size the hand gave it.
 - **A film's hovered mpv is kept warm between hovers as one resident**, parked off-screen at 1×1 and ended by **MPV TTL** (`video_engine_idle`), so a hover no longer pays a cold launch. A resident a pin took over leaves a fresh one owed.
 
 ### Fixed
@@ -46,6 +49,10 @@
 - **`To Bubble` from a pin's right-click menu puts the bubble on the point the row was pressed**, not on the minimize button.
 - **A hand-off is not a close** — a pin whose file went to another program is noted as handed off, and hovers are held back until the pointer moves, so no card opens over the program that was just launched.
 - **A pinned sound's command bar is asked out only by a hand near its own row**, so a hand on the artwork lights nothing.
+- **A hand one pixel above a pin's caption asks for the caption** — the near margin is no place a window can stand over the pin, so only a point inside the pin's box is asked what stands under it, and a move that lands on the caption shows the strip on the spot rather than leaving it as state the loop's next tick finds already true.
+- **A pin's caption over a page follows the window** — it rides in a popup of its own, mirroring the pin's band, placed on the pin's own motion, hidden with a minimized or invisible pin, and passing the press through to the pin rather than eating it.
+- **A pinned page is no longer left behind by a raise** — with **Always On Top** off, a page is put back above the raised pin by claiming topmost and giving it up, and every activation, restore and display change places it again.
+- **A hidden hover no longer empties a pinned page's band**, and **a rendered page keeps the box the engine was handed** rather than being measured as text a second time and placed in a frame the engine never saw.
 - **Version bumped** — `0.4.6` in `Cargo.toml` and `Cargo.lock`.
 
 ## [0.4.5] - 2026-10-18
