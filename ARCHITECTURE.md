@@ -273,7 +273,11 @@ An SVG or font page is drawn by the browser engine but is _not_ a document — i
 to select the file behind it, so pointer events and drag are disabled on it. An engine-drawn page (an SVG, a specimen)
 inside a pin needs the opposite: the drag has to be forwarded to the window that owns it, because the pin's own window
 only sees a child HWND in the middle. That forwarding polls the preview channel rather than running a nested message
-loop, which would re-enter paint and deadlock.
+loop, which would re-enter paint and deadlock. **Inside a pin the page is one of two things, and
+`a_running_page_holds_the_band` is which** (it is `webview_preview::the_shown_page_runs`, so `render_html` plus an
+`htm`/`html` name): a page that runs keeps the pointer and stands in front of the pin as a window of the desktop's,
+while a document or a specimen is the pin's *picture* — its window lowered, invisible at one part in 255 and
+click-through, drawn into the band as a DWM thumbnail of its client (see "The page road").
 
 ## Caches
 
@@ -729,7 +733,15 @@ them, and the chrome has windows of its own — layered, **disabled** children o
 strip, the transport's and the volume popup's footprint (`pin_chrome_strips`), so they stand over whatever is in the
 band and stay in step with the pin's own paint. A disabled child is skipped by `WindowFromPoint`, and the host answers
 `WM_NCHITTEST` with `HTTRANSPARENT`, so a press on the chrome or on the band still lands on the pin and is answered by
-its coordinates. `Open With` deliberately ends the
+its coordinates. **A page the pin carries is the one band a child strip cannot serve**: the Shell composes a thumbnail
+over its destination's own content, children included (`pin_page_thumbnail`), so a caption in a child of that pin would
+stand *under* the picture while its buttons still took the press. Over such a page the caption rides in a `WS_POPUP`
+window owned by the pin and mirroring its band (`the_caption_popup_at`), `WS_EX_LAYERED | WS_EX_TRANSPARENT` — a
+disabled top-level popup is not skipped by `WindowFromPoint`, `WS_EX_TRANSPARENT` is (measured) — placed again on the
+pin's own `WM_MOVE`/`WM_WINDOWPOSCHANGED` because a window that moves repaints nothing (`follow_the_pin`), and hidden
+for a pin that is minimized, invisible or no longer drawing a page. Which caption a pin gets is
+`pin_overlay_chrome(kind, page_runs)`: a page that runs keeps its bands, and a page the pin draws has the caption and
+bar floating over it. `Open With` deliberately ends the
 pin: it hands the file to another application, and keeping a preview up over a file the user has just opened in Word is
 not useful. It ends by asking for a close rather than closing directly, so there is exactly one path that tears a pin
 down. A hand-off is not a close: the end is noted as one (`note_pin_handed_off`, `PIN_HANDED_OFF`) and the hook holds
@@ -792,13 +804,20 @@ window is not raised with it; the restore then brings the window up on the file 
   alpha over backdrop; every edge and corner resizes, smaller as well as larger, and the pointer's shape matches the
   edge under it; media scales with the window as an edge is dragged; a drag that moves the box ends the maximize;
   shapeless kinds (text/archive/HTML/card) laid out for themselves at their kind's scale, centered in the window's box —
-  `bound` neither ceiling nor floor for them; maximize carried across a sound card, walk fits to the display afresh,
-  restore measures the file on screen; pinned picture wears caption and bar on top (`overlay`, only the strip under the
+  `bound` neither ceiling nor floor for them, and a page the browser draws excluded because it is laid out at its own
+  box and fitted into the bound (see below); maximize carried across a sound card, walk fits to the display afresh,
+  restore measures the file on screen; a maximize, its restore and a double-click's reset each write the `bound` as a
+  pulled edge does, since all three are boxes chosen for the whole of a window (`toggle_pin_maximized`,
+  `reset_pinned_size`), and `WM_SYSCOMMAND`'s `SC_MAXIMIZE`/`SC_RESTORE` is answered by the pin's own toggle rather
+  than by `DefWindowProcW`, whose native box no `restore` and no `bound` ever hears about; pinned picture wears caption and bar on top (`overlay`, only the strip under the
   pointer shows). Minimize → bubble or taskbar stand-in (`pin_minimize_to`: bubble = `carry_bubble_drag`, at
   minimize-btn box, drag by grab-offset, restore at placement mode; taskbar = `show_pin_taskbar`, a minimized off-screen
   `WS_EX_APPWINDOW` window whose button restores the pin where it stood — or, for a film a player draws, the film host
   itself minimized, since it is the window that wears the button (see "The film road")). Overlay chrome auto-hide
-  (`PIN_CHROME_ARRIVAL_SECONDS`, cursor-proximity, no fade). A box the frame on screen already covers is not decoded
+  (`PIN_CHROME_ARRIVAL_SECONDS`, cursor-proximity, no fade); a point in the near margin is asked for the strip it
+  reaches for and not whose window stands under it, since the desktop there is not a cover of this pin
+  (`pin_chrome_occluded`), and a move answers the strips on the spot rather than through the loop's next tick
+  (`pinned_mouse_move` → `sync_the_chrome_strips`). A box the frame on screen already covers is not decoded
   again (`box_is_covered`): a picture, and every page that rasterizes at its box — a PDF page, a page Office, the render
   engine or Calibre drew, a comic plate — is stretched into the smaller box and keeps its larger pixels for the
   enlargement back, while a page of text, a listing and a sound's card are still laid out afresh at whatever box they
@@ -825,11 +844,15 @@ edge under it, returning to the arrow when it is over none. Media scales with th
 of standing at its old size inside the new box. Any drag that actually moves the box now ends the maximize, the same
 answer whether it was carried to another place or pulled to a size, so the caption's restore glyph reverts to a maximize
 and the button maximizes the window again; a press that moves the window by nothing is not a drag and leaves the
-maximize standing. The four kinds that hold no shape of their own — a text file, an archive listing, a page of HTML, a
-sound's card — are laid out for themselves, at the scale their kind names (`text_scale`, `document_scale`,
-`audio_scale`), centered in the box the window already stands in, so the window keeps its place on the display and only
-its size changes: the pin's `bound` is not a ceiling for any of them, since none is drawn to it or fitted into it, and a
-picture shown after a page still takes that picture's own bound rather than the page's. A maximize is a state about the
+maximize standing. The three kinds that hold no shape of their own — a text file, an archive listing, a sound's card —
+are laid out for themselves, at the scale their kind names (`text_scale`, `document_scale`, `audio_scale`), centered in
+the box the window already stands in, so the window keeps its place on the display and only its size changes: the pin's
+`bound` is not a ceiling for any of them, since none is drawn to it or fitted into it, and a picture shown after a page
+still takes that picture's own bound rather than the page's. **A page the browser draws is the fourth and is not one of
+them**: the engine draws it at whatever box it is handed, so `text_preview_layout` leaves the box `media_dimensions`
+measured it at alone (`html_page_box`, `hover.html_drawn_by_the_engine`), a swap gives it the box a fresh take-up would
+(`pinned_media_box` at `hover_preview_scale`) and fits that into the square of the bound up as well as down
+(`pin_keeps_its_box` answers no for it), and a pin of one therefore walks between files the way a pin of pictures does. A maximize is a state about the
 window rather than about the file it happens to be showing, so it is carried across a sound card — the card itself is
 never a maximized window, there is no box for it to fill and its caption draws no maximize to press — and every file a
 maximized window walks to is fitted to the display afresh, _up_ as well as down, so a small picture is enlarged to the
@@ -1079,6 +1102,65 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
   rather than a row of the frame; another file keeps neither (`keep_text_place`).
 
 A pinned text file is a full text preview, not a picture of one: it scrolls, selects, copies, and wraps to the pin's current width, and the frames it re-renders are cached. `Refresh` after a config change works by replaying the _recorded_ hover rather than asking Explorer again, because the pin is the only thing that knows what it is showing.
+
+### The page road (`pin_page_thumbnail.rs`, `webview_preview`'s `Host`)
+
+> What a pinned document, specimen or page of HTML is drawn through: the film road's own pair — one source, one
+> registration — with one decision in front of it, whether the page is the pin's *picture* or a window the user works in.
+
+**Every kind stands in the pin's own window** (`pin_should_stand_in_its_own_window`), the browser's three included: the
+page is a window of this app's placed at the pin's content box, and the pin's window is the frame around it — the window
+Windows activates, lists and gives a button. `MediaType::draws_in_a_window_of_its_own` survives as the answer to what
+fills the band during a drag, which is the question a pin's taskbar mirror asks, rather than as an answer about the pin.
+`take_the_hover_down` does not hide a page a pin is drawing: a hover's late hide after a take-up would leave the pin
+standing on an empty band.
+
+**Which of the two roads a page is on is the page, not the kind.** `a_running_page_holds_the_band` is
+`webview_preview::the_shown_page_runs` — `SHOWING && RUNNING_DOCUMENT`, published as two atomics because the paint that
+asks it must not take the engine's lock. A page that runs keeps a top-level window in front of the pin and is clicked
+into, so its band is a hole and a press on it is Windows' to answer: with **Always On Top** off the pin comes forward
+only by the band a process without the foreground can take (`take_the_band_and_give_it_back`), and the page is placed
+last so it ends above the raised pin. Every other page is the pin's picture.
+
+**A source is placed once and moved after that.** `Host::put_window` puts a non-running page at the band with
+`HWND_BOTTOM` and `SWP_SHOWWINDOW | SWP_NOACTIVATE` the first time and only moves it after (`SWP_NOSIZE |
+SWP_NOZORDER`), because the picture is sampled from its client area; `put_the_page_style` gives it
+`ex_style_for(style, runs, source)` — `WS_EX_LAYERED | WS_EX_TRANSPARENT` at `SOURCE_ALPHA` (1/255) — and it is asked on
+every placement as well as on every show, since a pin taken up over a page already on screen never navigates again. The
+client is the surface the band samples, so `show` takes the *window's* box where `the_window_takes_the_area` finds the
+real `GetClientRect` differing from the band: a maximize moves the band without resizing a source, and the box last
+asked for would otherwise be ahead of the client. A drag is one `SetWindowPos` of the source and re-points nothing.
+
+**The registration is the other half** (`pin_page_thumbnail`): `DwmRegisterThumbnail` from the pin to the page, its
+destination the band in the pin's *client* coordinates (`the_band_in_the_client`, cut to the client so a stale band is
+never a rectangle past the surface), `DWM_TNP_SOURCECLIENTAREAONLY`, and no crop and no scale — the Shell ignores
+`DWM_TNP_RECTSOURCE` here and flattens the page by the rows it was asked to cut (measured). One `Held` in a static
+holds it: a pair that changed (another pin, another page) is unregistered and made again, a band already handed is the
+Shell asked nothing — which is every step of a drag, the destination riding the pin's client — and
+`let_registration_go` runs when the pin's media goes down, when its siblings go down, and when the media is taken for a
+swap, because a hidden source is a thumbnail the Shell stops drawing rather than freezes, and one left standing would be
+a black rectangle over the incoming file. The registration is also what makes the pin's taskbar hover a page rather than
+a hole: the Shell pictures a window from what the compositor composed for it.
+
+**A press on the band is the pin's.** The band is painted alpha 1 (`fill_band_hit_testable`) for a page the pin carries,
+since a layered window is hit-tested by the shape of its pixels; a page that runs claims no pixels and is clicked into.
+
+**Every road that raises the pin places the page again, last** (`place_pinned_siblings`, from `show_pinned_window`,
+`raise_pinned_preview`, `put_pin_at_the_front`, `WM_ACTIVATE`'s `WA_ACTIVE`/`WA_CLICKACTIVE` and the `Always On Top`
+demotion): the page is a window of its own, and a raise of the pin alone leaves it behind. `raises()` claims topmost and
+then gives it up for a pin that does not hold the front, because `HWND_NOTOPMOST` on a window that is already
+non-topmost is a no-op (measured: the page stayed under Explorer while the pin was over it). `show_pinned_window` reads
+back the box Windows really gave the window (`GetWindowRect`) for the trace, rather than trusting the box it asked for.
+
+**Diagnosing a run.** `RHP_PIN_TRACE` gains `page band: shown pin … client … page … client … dest …` (once per
+registration or band), `page band: unchanged`, `page band: register refused` / `page band: update refused`,
+`page thumbnail let go (reason=…)`, `caption popup: made/shown/hidden/destroyed`,
+`take-up: … kind … rect … window … content … bound-in … bound-out …`, `swap box: <arm> … shape … scale … bound … room
+… -> content …` (the arm named — `engine-drawn`, `bound`, `maximized`, `keeps-its-box`, `audio`, `waiting`, `none` — is
+the whole of why a box has the size it has), `pin key: … hover rect …`, `pin window: …`, `show client … area …
+source=… runs=…`, `put_window source placed=…`, and `pin decision the window was asked to maximize/restore`. A box in
+any of them is `<W>x<H>+<X>+<Y>` (`pin_trace::a_box`), so the box a swap measured reads against the box a take-up was
+handed rather than against another spelling of itself.
 
 ### The film road (`pin_film_thumbnail.rs`, `pin_film_host.rs`, `hover_film_host.rs`)
 
@@ -1652,7 +1734,9 @@ implements a PostScript interpreter, it reads the preview bitmap Adobe embedded.
 - WebView2 (`webview_preview/{engine,host,environment,pages}`): newest-`want` only (wake, drop supplanted nav); `place`
   moves; `cursor_preview_hover` close rule; `file://` via `plain_path`; per-run profile; `webview_idle` (`Until away` =
   AFK); `NAVIGATION/HOST_CREATION_TIMEOUT`, 4× controller retries, `note_unanswered`;
-  `RHP_WEBVIEW_TRACE/RHP_WEBVIEW_PROFILE`. Draws SVG, font specimens, HTML pages.
+  `RHP_WEBVIEW_TRACE/RHP_WEBVIEW_PROFILE`. Draws SVG, font specimens, HTML pages. A pin adds the source half:
+  `ex_style_for(style, runs, source)` + `put_the_page_style` on every placement, `put_window`'s one placement and moves
+  after it, and `the_window_takes_the_area` for the client the band samples.
 
 WebView2 is a whole Chromium instance embedded for the three things GDI and WIC cannot do: SVG layout, font glyph
 rendering, and HTML. It is the most expensive thing in the app, which is why it is newest-wins — a second navigation
@@ -1672,7 +1756,8 @@ page was drawn in — and a click into the page gives it the keyboard (`engine_o
 specimen and every other preview still refuse it, since showing a page is not a click and the page takes the keyboard
 only where the user clicked. What a page still cannot have: sound of its own, the files beside it, fullscreen, a
 right-click menu, the tools or a find bar. A picture or a video is dismissed by the pointer exactly as before, and this
-applies only to a page that runs.
+applies only to a page that runs. **Inside a pin only a page that runs is reached at all**: every other page is lowered,
+invisible and click-through, and the press that lands on its band is the pin's (see "The page road").
 
 - Font (`font_preview/{font_tables,specimen}`): WebView2 `@font-face` page, `cmap`-gated lines (all-or-nothing + own-chars fallback), `name` (en pref), viewport units, per-bg ink, `direction` per line; `font_scale` (½ room), `font_background`, `[font]` list, own kind slot.
 
