@@ -2237,6 +2237,91 @@ fn a_pointer_over_a_window_covering_the_pin_shows_no_chrome() {
     assert!(!bar, "and the bar stays hidden under the covering window");
 }
 
+/// **The margin above the pin is no place a window can stand over it**: `pin_chrome_near`
+/// reaches `PIN_CHROME_NEAR_PIXELS` past the pin's own edge, and what the desktop answers there
+/// is whatever the hand left — Explorer, the desktop — not a cover of this pin. So a hand one pixel
+/// above the caption is a hand asking for the caption, and the window standing under it is not
+/// asked about at all (see `pin_chrome_occluded`).
+#[test]
+fn a_pointer_in_the_margin_above_the_pin_asks_its_chrome_back() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    with_pin(|pin| {
+        pin.chrome = PinChrome::hidden();
+        pin.transport_bar = true;
+    });
+    // Somebody else's window under the point: the desktop a hand that left the pin is over.
+    stand_window_at_point_in(Some(0x2000));
+
+    let window = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .expect("a pin up");
+    let changed = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(
+            pin,
+            Instant::now(),
+            Some((window.0 + 5, window.1 - 1)),
+        ))
+    });
+    let chrome =
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar)));
+
+    stand_window_at_point_in(None);
+    drop(film);
+    assert_eq!(
+        changed,
+        Some(true),
+        "a hand one pixel above the caption asks for it, whatever window stands under it"
+    );
+    assert_eq!(
+        chrome,
+        Some((true, false)),
+        "and the caption is what it asked for, with the bar left to its own end"
+    );
+}
+
+/// **A hand coming back down onto the band finds the strip it asked for**: the chrome went down
+/// with the pointer that left it, and the move that lands on the caption is a move this window was
+/// sent — so the strip is asked for *and shown* in the one pass, rather than left as state the
+/// loop's tick then finds already true and owes no repaint for (see `pinned_mouse_move` and
+/// `sync_the_chrome_strips`).
+#[test]
+fn a_hand_coming_back_down_onto_the_caption_shows_the_strip_it_asks_for() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    with_pin(|pin| {
+        pin.chrome = PinChrome::hidden();
+        pin.transport_bar = true;
+    });
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let caption = pin_chrome_strips::caption_strip().expect("the caption's strip");
+    assert!(
+        !unsafe { IsWindowVisible(caption) }.as_bool(),
+        "a pin comes up with its strips down"
+    );
+
+    // The move that reaches the window is one the pin itself was sent, so the pin is what
+    // stands under the hand — the answer any real hand on the band gets.
+    stand_window_at_point_in(Some(film.pin_hwnd.0 as isize));
+    unsafe { pinned_mouse_move(film.pin_hwnd, 5, 1) };
+    let chrome =
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.chrome.caption, pin.chrome.bar)));
+    let showing = unsafe { IsWindowVisible(caption) }.as_bool();
+
+    stand_window_at_point_in(None);
+    drop(film);
+    assert_eq!(
+        chrome,
+        Some((true, false)),
+        "the move onto the caption asks the caption back"
+    );
+    assert!(
+        showing,
+        "and the strip carrying it is on the screen with the state that asked for it"
+    );
+}
+
 /// The whole of the chrome rule on a pin's own window: it starts hidden on every spawn, the
 /// pointer over the pin asks the strip near it back, and the pointer leaving puts it away again —
 /// the strips follow the pin's chrome in the same pass (see `refresh_pin_chrome` and

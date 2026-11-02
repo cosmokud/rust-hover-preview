@@ -520,7 +520,7 @@ pub(super) fn refresh_pin_chrome(
                     // Near is only geometric: a pointer over a window standing over the pin is near
                     // it without hovering it, so the strips stay hidden there (see
                     // `pin_chrome_occluded`).
-                    let (caption, bar) = if (caption || bar) && pin_chrome_occluded(cursor) {
+                    let (caption, bar) = if (caption || bar) && pin_chrome_occluded(pin, cursor) {
                         (false, false)
                     } else {
                         (caption, bar)
@@ -765,8 +765,21 @@ pub(super) fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -
 /// read as the pin's own as well, because the band is the pin's picture (see
 /// `a_window_of_the_pins_own`). A pin with no window of its own has nothing standing over it to ask
 /// about, so there the geometric question stands as it did.
-fn pin_chrome_occluded(cursor: Option<(i32, i32)>) -> bool {
-    let (Some((x, y)), Some(hwnd)) = (cursor, pin_real_window::real_pin_window()) else {
+///
+/// **The margin is no place a window can stand over the pin**: `pin_chrome_near` reaches
+/// `PIN_CHROME_NEAR_PIXELS` past the pin's own edge, and the desktop there answers whatever
+/// the hand left — Explorer, the desktop — which is not a cover of this pin but the world
+/// outside it. So only a point inside `pin.window_box()` is asked what stands under it, and
+/// the hand one pixel above the caption gets the caption it is reaching for.
+fn pin_chrome_occluded(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -> bool {
+    let Some((x, y)) = cursor else {
+        return false;
+    };
+    let window = pin.window_box();
+    if x < window.0 || x >= window.2 || y < window.1 || y >= window.3 {
+        return false;
+    }
+    let Some(hwnd) = pin_real_window::real_pin_window() else {
         return false;
     };
     let under = window_at_point(x, y);

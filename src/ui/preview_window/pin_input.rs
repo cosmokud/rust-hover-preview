@@ -105,7 +105,7 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
             )
         })
         .flatten();
-    let changed = {
+    let (hovered_changed, chrome_changed) = {
         let Some(mut pinned) = pin_state() else {
             return;
         };
@@ -118,21 +118,20 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         // move that brought the pointer there: the loop would answer the question a tick too late
         // for a click that is already on its way (see `pin_chrome_near`). One strip at a time, the
         // way the tick asks it: it is the strip the pointer is in, not the window it is over.
-        let (_, height) = pin.window_size();
-        let bar_top = height - pinned_transport_height(pin.dpi, pin.transport_bar);
         // A handover holds the strips down: a move must not bring one back over the film it is
         // taking the picture from (see `pin_chrome_is_held_down`).
-        let held_down = pin_chrome_is_held_down();
-        if !held_down && y < caption.height {
-            pin.chrome.caption = true;
-        }
-        if !held_down && pin.transport_bar && y >= bar_top {
-            pin.chrome.bar = true;
-        }
 
-        let changed = pin.hovered != hovered;
+        let hovered_changed = pin.hovered != hovered;
         pin.hovered = hovered;
-        changed
+        // The same question the loop's tick asks, asked of the point this move carries rather
+        // than written into the state as a second, silent answer: a flag written here alone was
+        // state the tick then found already true, so neither repaint ran and the strip the state
+        // asked for stayed off the screen. The point is this move's own, carried into the box
+        // the pin stands in (see `refresh_pin_chrome`).
+        let window = pin.window_box();
+        let chrome_changed =
+            refresh_pin_chrome(pin, Instant::now(), Some((window.0 + x, window.1 + y)));
+        (hovered_changed, chrome_changed)
     };
 
     // The same question of the transport bar, which is the other strip a pointer lights up.
@@ -189,8 +188,15 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     // moved, because a repaint here is a band that copies the whole page frame (see `text_find::hover`).
     let find_changed = text_find::hover(x, y);
 
-    if changed || transport_changed || audio_changed || find_changed {
+    if hovered_changed || chrome_changed || transport_changed || audio_changed || find_changed {
         render_layered_preview(hwnd);
+    }
+
+    // The strips are chrome now, so the change answers them here rather than waiting for the
+    // loop's tick, which asks the same question and finds the answer already true (see
+    // `sync_the_chrome_strips`).
+    if chrome_changed {
+        pin_chrome_strips::sync_the_chrome_strips();
     }
 }
 
