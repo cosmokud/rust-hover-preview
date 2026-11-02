@@ -2448,6 +2448,9 @@ pub(super) unsafe fn the_pin_takes_the_front_after_a_box_change() {
             "front after a box change: {road} above={}",
             pin_trace::what_is_above(hwnd)
         );
+        // The same front is sampled over the next two seconds: what the raise answered is one window,
+        // and what a run needs is what stands over the pin after it (see `write_the_ladder`).
+        pin_trace::watch_the_ladder_after_a_box_change();
     }
 }
 
