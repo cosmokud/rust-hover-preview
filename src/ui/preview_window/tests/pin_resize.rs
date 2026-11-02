@@ -478,7 +478,8 @@ fn a_maximized_pin_fits_a_file_smaller_than_the_room_to_the_room() {
 /// A double-click that asks for the window's size back is the whole of what a fresh take-up of the
 /// file would have been given: the file measured as its kind is measured, fitted into the room the
 /// pin's own chrome leaves at the share the scaling setting names for that kind, and put in the
-/// middle of that room — with the size a hand pulled the window to given up and a maximize with it.
+/// middle of that room — the size a hand pulled the window to replaced by this box as the bound the
+/// files after it are fitted into, and a maximize given up with it.
 ///
 /// The size comes from the *setting* rather than from the box the window is standing in, and both
 /// ways it can be wrong are asked of: a window pulled down to 200 by 150 comes back 400 by 300 at
@@ -594,9 +595,13 @@ fn a_window_the_hand_sized_is_put_back_to_the_size_the_setting_asks_for() {
             "the box asked for is not the box the pin was written with"
         );
         assert_eq!(
-            bound, None,
-            "the size a hand pulled the window to was left behind as the bound the files after it \
-             are fitted into"
+            bound,
+            Some(
+                (reset_box.2 - reset_box.0)
+                    .max(reset_box.3 - reset_box.1)
+                    .max(1)
+            ),
+            "the box the reset landed in is not the bound the files after it are fitted into"
         );
         assert_eq!(
             restore, None,
@@ -605,6 +610,89 @@ fn a_window_the_hand_sized_is_put_back_to_the_size_the_setting_asks_for() {
     }
 
     let _ = std::fs::remove_dir_all(&folder);
+    stand_pin(previous_pin);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}
+
+/// A reset's box is a box chosen for the whole of the window, so it is the bound the files picked
+/// in afterwards are fitted into, as a pulled edge's box and a maximize's are: the size a hand pulled
+/// the window to is replaced by the reset box rather than left standing (see `reset_pinned_size`).
+#[test]
+fn a_reset_box_is_the_bound_the_files_after_it_are_fitted_into() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    // The media behind the window, so that the tick this asks is a tick with a pin still standing: a
+    // pin whose media reads as gone is taken down rather than given a box (see `pin_media_is_alive`).
+    let mut media = create_loading_media(200, 150);
+    media.media_type = MediaType::Audio;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    // A pin a hand pulled to a size of its own, with a bound of another size standing and a maximize
+    // that the reset gives up along with it: the box the reset lands in is asked to replace both. The
+    // kind is one with no size to be measured, so the box the reset keeps is this test's own
+    // arithmetic rather than a decode's (see `reset_pinned_size`).
+    let room = work_area_at(0, 0);
+    let pulled = (room.left, room.top, room.left + 200, room.top + 150);
+    let mut pin = overlay_pin(pulled, PinChrome::always());
+    pin.frame = PinFrame::None;
+    pin.bound = Some(800);
+    pin.restore = Some((0, 0, 800, 600));
+    stand_pin(Some(pin));
+
+    let mut request = None;
+    let mut wait = None;
+    let mut started = None;
+    let mut offset = 0.0;
+    let mut paused = None;
+    ask_pin(PinCommand::ResetSize);
+    unsafe {
+        pin_command_request(
+            HWND(0x1000 as *mut _),
+            &mut request,
+            &mut wait,
+            &mut started,
+            &mut offset,
+            &mut paused,
+            false,
+            None,
+        );
+    }
+    assert!(
+        matches!(request, Some(PreviewMessage::PinBox(_))),
+        "a reset asks for the box it gave the window"
+    );
+
+    let (space, dpi) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| (pin_swap_space(pin), pin.dpi)))
+        .expect("a pin up");
+    let bound = space.bound.expect("a reset pin has a bound");
+    assert_eq!(
+        bound,
+        (space.current.2 - space.current.0)
+            .max(space.current.3 - space.current.1)
+            .max(1),
+        "the reset box is the ceiling the files after it are fitted into"
+    );
+
+    // And a file picked into the pin fills that square: its longer side is the bound.
+    let bounds = work_area_at(space.current.0, space.current.1);
+    let swapped = pin_update_box(
+        pin_swap_room(space, bounds, dpi),
+        (1280, 720),
+        PreviewScale::FitToScreen,
+    );
+    assert_eq!(
+        (swapped.2 - swapped.0).max(swapped.3 - swapped.1),
+        bound,
+        "an engine-drawn file picked in after the reset fills it"
+    );
+
     stand_pin(previous_pin);
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = previous_media;
