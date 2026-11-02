@@ -1235,23 +1235,23 @@ fn a_sound_has_no_transport_strip_and_no_caption() {
     // of its window, and the pin's own window is the one on top for as long as any strip of
     // its chrome is showing (see `pin_overlay_chrome`).
     assert!(pin_transport_kind(Some(MediaType::NativeVideo)));
-    assert!(pin_hides_chrome(Some(MediaType::NativeVideo)));
+    assert!(pin_hides_chrome(Some(MediaType::NativeVideo), false));
     assert!(pin_transport_kind(Some(MediaType::Video)));
-    assert!(pin_hides_chrome(Some(MediaType::Video)));
-    assert!(!pin_hides_chrome(None));
+    assert!(pin_hides_chrome(Some(MediaType::Video), false));
+    assert!(!pin_hides_chrome(None, false));
 
     assert!(
         !pin_transport_kind(Some(MediaType::Audio)),
         "a sound's controls are the card's, drawn on the card's own row"
     );
     assert!(
-        !pin_hides_chrome(Some(MediaType::Audio)),
+        !pin_hides_chrome(Some(MediaType::Audio), false),
         "and it is given no caption to hide, so its chrome never comes or goes"
     );
 
     // The card is its own size and is not framed into one either way (see `pin_frame`).
     assert_eq!(pin_frame(Some(MediaType::Audio)), PinFrame::None);
-    assert!(!pin_overlay_chrome(Some(MediaType::Audio)));
+    assert!(!pin_overlay_chrome(Some(MediaType::Audio), false));
 
     // And those three facts together are what says "this pin is showing a sound's card",
     // which is the gate every question about the card's controls is behind (see
@@ -1280,23 +1280,144 @@ fn the_chrome_is_drawn_over_the_media_of_the_kinds_this_app_draws_itself() {
         MediaType::NativeVideo,
         MediaType::Video,
     ] {
-        assert!(pin_overlay_chrome(Some(kind)), "{kind:?}");
+        assert!(pin_overlay_chrome(Some(kind), false), "{kind:?}");
+        assert!(pin_overlay_chrome(Some(kind), true), "{kind:?}");
     }
 
-    // The kinds that keep their chrome in bands around the media: the page the browser
-    // engine draws an SVG or a font on, a page that is laid out to whatever box it is
-    // given, and a sound's card.
-    for kind in [
-        MediaType::Text,
-        MediaType::Archive,
-        MediaType::Audio,
-        MediaType::EngineSvg,
-        MediaType::EngineFont,
-    ] {
-        assert!(!pin_overlay_chrome(Some(kind)), "{kind:?}");
+    // The kinds that keep their chrome in bands around the media: a page that is laid out to
+    // whatever box it is given, a sound's card, and a page of HTML the browser runs — the last
+    // of which is a window standing in front of the pin rather than a picture under its chrome.
+    for kind in [MediaType::Text, MediaType::Archive, MediaType::Audio] {
+        assert!(!pin_overlay_chrome(Some(kind), false), "{kind:?}");
+        assert!(!pin_overlay_chrome(Some(kind), true), "{kind:?}");
+    }
+    for kind in [MediaType::EngineSvg, MediaType::EngineFont] {
+        assert!(
+            pin_overlay_chrome(Some(kind), false),
+            "{kind:?} is a picture the pin draws through the Shell's thumbnail"
+        );
+        assert!(
+            !pin_overlay_chrome(Some(kind), true),
+            "{kind:?} is also a page of HTML, which runs and holds the band itself"
+        );
     }
 
-    assert!(!pin_overlay_chrome(None));
+    assert!(!pin_overlay_chrome(None, false));
+    assert!(!pin_overlay_chrome(None, true));
+}
+
+/// **A page the browser draws is the pin's picture until it runs**, and the whole of the difference
+/// is visible in the window a pin is taken up with: a drawing's caption floats over its picture, in
+/// a window that is the media's own box, and a page of HTML's caption is a band above one.
+///
+/// Both are `EngineSvg`, so nothing but the page itself can say which (see `pin_overlay_chrome`).
+#[test]
+fn a_pinned_page_floats_its_chrome_over_the_picture_unless_the_page_runs() {
+    let _room = the_room_to_itself();
+
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let was_rendering = crate::CONFIG.lock().ok().map(|config| config.render_html);
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-page-overlay");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let drawing = folder.join("drawing.svg");
+    std::fs::write(&drawing, br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#)
+        .expect("a written drawing");
+    let specimen = folder.join("specimen.ttf");
+    std::fs::write(&specimen, b"not really a font").expect("a written specimen");
+    let page = folder.join("page.html");
+    std::fs::write(&page, b"<!doctype html><title>a page</title>").expect("a written page");
+
+    // An engine page in the media slot, which is the kind a drawing and a page of HTML both are.
+    let stand_an_engine_page = || {
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            let mut media = create_loading_media(40, 24);
+            media.media_type = MediaType::EngineSvg;
+            *current = Some(media);
+        }
+    };
+    let content = (100, 80, 500, 320);
+
+    stand_pin(None);
+    stand_an_engine_page();
+    let svg = take_up_pinned_window(&drawing, content);
+    assert!(
+        svg.overlay,
+        "a page that does not run is a picture under this app's chrome"
+    );
+    assert!(
+        svg.hides_chrome,
+        "so its chrome comes and goes with the pointer"
+    );
+    assert_eq!(svg.content, content, "the media is the box it was given");
+    assert_eq!(
+        svg.window_box(),
+        content,
+        "the caption is over the picture rather than above it"
+    );
+    let (_, height) = svg.window_size();
+    assert_eq!(
+        pinned_band_rows(height, svg.caption, 0, svg.overlay),
+        (0, height),
+        "and the page it frames is drawn the whole window down"
+    );
+
+    // A specimen is the same kind of thing, drawn by the same engine on the same road.
+    stand_pin(None);
+    stand_an_engine_page();
+    let font = take_up_pinned_window(&specimen, content);
+    assert!(font.overlay && font.hides_chrome, "a specimen is a picture");
+
+    // And a page of HTML, with the switch that draws one on, is the other answer: a window in
+    // front of the pin, whose band this app cannot paint a caption over.
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.render_html = true;
+    }
+    stand_pin(None);
+    stand_an_engine_page();
+    let running = take_up_pinned_window(&page, content);
+    assert!(
+        !running.overlay,
+        "a page that runs holds the band in front of the pin"
+    );
+    assert!(!running.hides_chrome, "and its band is never asked away");
+    assert_eq!(running.content, content, "the page is the box it was given");
+    assert_eq!(
+        running.window_box(),
+        (content.0, content.1 - svg.caption, content.2, content.3),
+        "with the caption in a band of its own above it"
+    );
+
+    // A step between the two is a step between the two answers, and the chrome arrives with the
+    // answer rather than carried from the file just left (see `take_up_pinned_window`).
+    stand_pin(Some(running));
+    stand_an_engine_page();
+    let back = take_up_pinned_window(&drawing, content);
+    assert!(back.overlay && back.hides_chrome, "the drawing again");
+    assert!(
+        !back.chrome.caption && !back.chrome.bar,
+        "and a chrome that is asked for is not one carried over from a band"
+    );
+    stand_pin(Some(svg));
+    stand_an_engine_page();
+    let across = take_up_pinned_window(&page, content);
+    assert!(!across.overlay && !across.hides_chrome, "the page again");
+    assert!(
+        across.chrome.caption && across.chrome.bar,
+        "and a band is always there, whatever the pin it replaced was hiding"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+    if let Some(was_rendering) = was_rendering {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.render_html = was_rendering;
+        }
+    }
+    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[test]
