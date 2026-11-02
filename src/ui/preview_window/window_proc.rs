@@ -400,6 +400,35 @@ pub(super) unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
+            // **A maximize or a restore asked of this window is the pin's own box, not the
+            // window's.** A double-click on the caption arrives here as `SC_MAXIMIZE`, and the box
+            // `DefWindowProcW` would give the window natively is one the pin's state never hears
+            // about: no `pin.restore` to come back from and no `pin.bound` for the files that follow
+            // (see `toggle_pin_maximized`). So each is answered by the pin's own toggle — one
+            // command, because the state it pivots on is the same one either way — and the command
+            // is not passed on, a native box being a box nothing else records. Every other system
+            // command is still the desktop's business and reaches the default procedure below.
+            let maximized = pin_state()
+                .and_then(|pinned| pinned.pin().map(|pin| pin.restore.is_some()))
+                .unwrap_or(false);
+            match (wparam.0 & 0xFFF0) as u32 {
+                SC_MAXIMIZE if !maximized => {
+                    note_pin_trace!(
+                        "pin decision the window was asked to maximize: the pin's own maximize is queued"
+                    );
+                    ask_pin(PinCommand::Maximize);
+                    return LRESULT(0);
+                }
+                SC_RESTORE if maximized => {
+                    note_pin_trace!(
+                        "pin decision the window was asked to restore: the pin's own restore is queued"
+                    );
+                    ask_pin(PinCommand::Maximize);
+                    return LRESULT(0);
+                }
+                _ => {}
+            }
+
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_SIZE => {
