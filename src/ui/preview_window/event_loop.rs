@@ -4204,6 +4204,13 @@ pub fn run_preview_window() {
                         // land over the line this has just drawn (see `relayout_pinned_media`).
                         relayout_text_for_the_box(content);
                         show_pinned_window(hwnd);
+                        // **And the box a gesture gave the pin is the box it is put in front at.**
+                        // A maximize, its restore, a reset and the end of a resize are all made in
+                        // the pin, and what the show above raises the window for is a question about
+                        // the window in front — which a gesture on the pin leaves as one of this
+                        // app's own as often as not, so the raise is one the gesture is owed whatever
+                        // the foreground says (see `the_pin_takes_the_front_after_a_box_change`).
+                        the_pin_takes_the_front_after_a_box_change();
                         place_pinned_siblings();
                         publish_pointer_hold(hwnd);
                     }

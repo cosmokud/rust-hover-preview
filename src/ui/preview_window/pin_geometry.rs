@@ -957,10 +957,12 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     } else {
         // Kept in its band without touching the z-order: the order (engine above preview) is
         // established where the pin comes up, and re-asserting TOPMOST per move fights the
-        // engine's own placement for the top, one DWM reorder each (see `Host::place`).
+        // engine's own placement for the top, one DWM reorder each (see `Host::place`). The
+        // insert-after argument is left empty rather than named: `SWP_NOZORDER` drops it, and a
+        // band named beside it is a call that reads as a raise and is not one.
         let _ = SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            HWND::default(),
             window.0,
             window.1,
             width,
@@ -1039,15 +1041,19 @@ pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
     }
 
     let placed = pinned_window_box_of(content, dpi, transport, overlay, caption);
+    // The place is the move and the raise is the gesture's: `HWND_TOPMOST` beside `SWP_NOZORDER`
+    // named a band this call drops, so the window moved and nothing put it in front of what it had
+    // been carried over (see `the_pin_takes_the_front_after_a_box_change`).
     let _ = SetWindowPos(
         hwnd,
-        HWND_TOPMOST,
+        HWND::default(),
         placed.0,
         placed.1,
         size.0,
         size.1,
         SWP_NOACTIVATE | SWP_NOZORDER,
     );
+    unsafe { the_pin_takes_the_front_after_a_box_change() };
     place_pinned_siblings();
 }
 

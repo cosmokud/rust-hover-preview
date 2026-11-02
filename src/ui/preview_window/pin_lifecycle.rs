@@ -2395,6 +2395,34 @@ pub(super) unsafe fn pin_stands_over(hwnd: HWND, window: HWND) -> bool {
     false
 }
 
+/// A gesture made in a pin gave it another box: put the pin in front of the window it was fitted
+/// over, where it is not already there.
+///
+/// **The show's own raise cannot answer this one.** That raise is a question about the window in
+/// front — the pin, a listing, a film's host, the engine's page, the menu a row was pressed in — and
+/// a box change made from inside the pin lands with any of them in front: the host a click on the
+/// band activates, the page under the pointer, the pair's own menu. The answer is then no raise at
+/// all, and a pin given a maximized box stands behind the listing it was fitted over until the user
+/// clicks it again. One question is asked here instead — is the pin in front of the front-most
+/// ordinary window — and the front is then taken the one way Windows cannot refuse (see
+/// `take_the_band_and_give_it_back`).
+///
+/// Nothing is asked of a pin already in the topmost band, whatever holds it there: there is no
+/// ordinary window over such a pin, and the flip would give a held band back early (see `band_place`).
+pub(super) unsafe fn the_pin_takes_the_front_after_a_box_change() {
+    if pin_is_collapsed() || !pin_update_move_to_top() || band_place() == HWND_TOPMOST {
+        return;
+    }
+
+    let hwnd = pinned_window();
+    let front = unsafe { front_ordinary_window(hwnd) };
+    if front.is_invalid() || unsafe { pin_stands_over(hwnd, front) } {
+        return;
+    }
+
+    unsafe { take_the_band_and_give_it_back(hwnd) };
+}
+
 /// The front-most window a pin belongs behind: the first visible window in the z-order that is
 /// neither this app's own, nor topmost, nor the desktop.
 ///
