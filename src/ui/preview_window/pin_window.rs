@@ -688,6 +688,12 @@ pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
                 // And the foreground, where one of ours still has it: a claim is not the question
                 // of who is in front, and a step is what separates the two (see
                 // `give_back_a_foreground_that_is_ours`).
+                if super::pin_trace::wanted() {
+                    note_pin_trace!(
+                        "pin end held no keyboard, giving back a foreground of ours above={}",
+                        super::pin_trace::what_is_above(HWND(hwnd as *mut _))
+                    );
+                }
                 give_back_a_foreground_that_is_ours(hwnd, window);
             }
         }
@@ -750,6 +756,16 @@ pub(super) fn give_the_keyboard_back(window: &dyn PinWindow) {
     });
 
     if let Some(keyboard) = keyboard {
+        // A collapse and an end run the same handover: what tells them apart in a run is this line.
+        if super::pin_trace::wanted() {
+            let hwnd = window.hwnd();
+            note_pin_trace!(
+                "pin collapse hands the keyboard back from={:?} behind={:?} pin above={}",
+                keyboard.behind,
+                pin_lifecycle::the_window_behind(keyboard.behind, hwnd),
+                super::pin_trace::what_is_above(HWND(hwnd as *mut _))
+            );
+        }
         hand_keyboard_back(&keyboard, window.hwnd(), window);
     }
 }
@@ -777,11 +793,24 @@ fn hand_keyboard_back(keyboard: &PinKeyboard, hwnd: isize, window: &dyn PinWindo
     window.set_focus(0);
     window.set_focusable(hwnd, false);
 
-    if keyboard.behind != 0 {
-        let behind = pin_lifecycle::the_window_behind(keyboard.behind, hwnd);
-        if behind != 0 {
-            window.set_foreground(behind);
-        }
+    // Resolved once, and after the style goes back: the line a run reads and the window the
+    // hand-back asks for have to be the same answer, and `the_window_behind` walks the z-order.
+    let behind = if keyboard.behind != 0 {
+        pin_lifecycle::the_window_behind(keyboard.behind, hwnd)
+    } else {
+        0
+    };
+    if super::pin_trace::wanted() {
+        note_pin_trace!(
+            "pin hand_back from={:?} behind={:?} pin above={}",
+            keyboard.behind,
+            behind,
+            super::pin_trace::what_is_above(HWND(hwnd as *mut _))
+        );
+    }
+
+    if behind != 0 {
+        window.set_foreground(behind);
     }
 }
 
@@ -849,6 +878,15 @@ fn give_back_a_foreground_that_is_ours(hwnd: isize, window: &dyn PinWindow) {
 
     if behind != 0 && behind != front {
         window.set_foreground(behind);
+    } else if super::pin_trace::wanted() {
+        // The silent branches: a `-> 0x0` above was read as the fault still there, and it is as
+        // often a desktop with nothing ordinary behind the pin.
+        note_pin_trace!(
+            "pin end keeps the foreground where it is front={:?} behind={:?} pin above={}",
+            front,
+            behind,
+            super::pin_trace::what_is_above(HWND(hwnd as *mut _))
+        );
     }
 }
 
