@@ -1048,6 +1048,9 @@ fn a_walk_is_anchored_on_the_first_file_pinned() {
     let mut config = CONFIG.lock().expect("the configuration").clone();
     config.pin_nav_video = PinNavFileTypes::Category;
     config.pin_nav_audio = PinNavFileTypes::Category;
+    // A picture is an anchor of its own (see `nav_mode_for`), so the end-to-end walk asked
+    // for below is the picture's own switch set wide.
+    config.pin_nav_image = PinNavFileTypes::All;
     config.pin_nav_others = PinNavFileTypes::All;
     // And the shuffle switches are this test's: a shuffle narrows the walk to the anchor's
     // own kind, which is the opposite of the end-to-end walk asked about below.
@@ -1093,13 +1096,13 @@ fn a_walk_is_anchored_on_the_first_file_pinned() {
                 .order
                 .iter()
                 .any(|path| path.extension().is_some_and(|ext| ext == "png")),
-        "anchored elsewhere, the walk is end to end: {:?}",
+        "anchored on a picture whose switch is wide, the walk is end to end: {:?}",
         other_walk.order
     );
 }
 
 /// A walk stays anchored on the first file pinned across presses: a pin taken up on a
-/// picture (`Others → All Files`) steps onto a sound, and the next press must still walk
+/// picture (`Image → All Files`) steps onto a sound, and the next press must still walk
 /// end to end — not collapse to `MP3 → MP3 → MP3`. (Repro: the second press re-anchored
 /// on the sound it was standing on instead of reusing the first file's anchor.)
 #[test]
@@ -1108,6 +1111,7 @@ fn a_press_after_a_sound_keeps_the_first_files_anchor() {
     let mut config = CONFIG.lock().expect("the configuration").clone();
     config.pin_nav_video = PinNavFileTypes::Category;
     config.pin_nav_audio = PinNavFileTypes::Category;
+    config.pin_nav_image = PinNavFileTypes::All;
     config.pin_nav_others = PinNavFileTypes::All;
     // The shuffle switches are the machine's rather than this test's, and a walk that
     // shuffles is not one that steps onto the file beside its own — so a test asking where
@@ -1116,7 +1120,7 @@ fn a_press_after_a_sound_keeps_the_first_files_anchor() {
     config.pin_mode_image_shuffle = false;
     config.pin_mode_video_shuffle = false;
 
-    // The first press, pinned on a picture: `Others → All`, so the walk is end to end
+    // The first press, pinned on a picture: `Image → All`, so the walk is end to end
     // and the step lands on the sound beside it (`a.png → b.mp3` in name order). The
     // press carries no anchor — a first press anchors on the file it stands on — and
     // the answer keeps it for the next press, the way the loop holds the walk that
@@ -1524,7 +1528,7 @@ fn a_playlist_an_answer_made_goes_onto_the_pin_without_moving_it() {
 /// in `ask_pin`, which the loop drains through `pin_command_request` with the held
 /// walk's anchor. This drives that whole chain twice: the second job must carry the
 /// first answer's anchor, and the walk it is answered with must still be the first
-/// file's (`Others → All`), not the sound's (`Audio → Same Category`).
+/// file's (`Image → All`), not the sound's (`Audio → Same Category`).
 #[test]
 fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
     let _room = the_room_to_itself();
@@ -1545,10 +1549,12 @@ fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
         let was = (
             config.pin_nav_video,
             config.pin_nav_audio,
+            config.pin_nav_image,
             config.pin_nav_others,
         );
         config.pin_nav_video = PinNavFileTypes::Category;
         config.pin_nav_audio = PinNavFileTypes::Category;
+        config.pin_nav_image = PinNavFileTypes::All;
         config.pin_nav_others = PinNavFileTypes::All;
         // And the same three shuffle switches, for the same reason
         // `a_press_after_a_sound_keeps_the_first_files_anchor` says: a walk that shuffles is
@@ -1679,7 +1685,8 @@ fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_nav_video = was.0 .0;
         config.pin_nav_audio = was.0 .1;
-        config.pin_nav_others = was.0 .2;
+        config.pin_nav_image = was.0 .2;
+        config.pin_nav_others = was.0 .3;
         config.pin_mode_audio_shuffle = was.1 .0;
         config.pin_mode_image_shuffle = was.1 .1;
         config.pin_mode_video_shuffle = was.1 .2;
