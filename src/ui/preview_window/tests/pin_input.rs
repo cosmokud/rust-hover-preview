@@ -538,16 +538,21 @@ fn the_first_press_takes_the_pointer_before_it_asks_for_the_keyboard() {
         *current = Some(media);
     }
 
+    // A point on the caption's empty strip rather than on one of its buttons: the buttons stand against
+    // the right edge, and a press on one of them is a button's press and takes no drag (see
+    // `pin_chrome::button_boxes`).
+    let on_the_strip = 20;
+
     let hwnd = HWND(0x1000 as *mut _);
     let window = RecordedPinWindow::with(
         hwnd.0 as isize,
-        Some((content.0 + 100, content.1 + caption + 100)),
+        Some((content.0 + on_the_strip, content.1 + caption + 100)),
         Some(content),
     );
 
     // The press, and the keyboard it asks for because the pin is not the window in front.
     assert!(
-        unsafe { press_the_pin(hwnd, 100, caption / 2, &window, true) },
+        unsafe { press_the_pin(hwnd, on_the_strip, caption / 2, &window, true) },
         "a press on the caption is the pin's to act on"
     );
 
@@ -617,11 +622,11 @@ fn the_first_press_takes_the_pointer_before_it_asks_for_the_keyboard() {
     // keyboard the pin already holds.
     let settled_window = RecordedPinWindow::with(
         hwnd.0 as isize,
-        Some((content.0 + 100, content.1 + caption + 100)),
+        Some((content.0 + on_the_strip, content.1 + caption + 100)),
         Some(content),
     );
     assert!(
-        unsafe { press_the_pin(hwnd, 100, caption / 2, &settled_window, false) },
+        unsafe { press_the_pin(hwnd, on_the_strip, caption / 2, &settled_window, false) },
         "the press is the pin's either way"
     );
     assert!(

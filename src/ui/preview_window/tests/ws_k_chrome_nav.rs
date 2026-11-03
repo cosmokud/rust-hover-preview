@@ -251,9 +251,9 @@ fn a_release_no_arm_owns_gives_the_pointer_back() {
 
 /// A banded video pin wide enough for its caption to carry the whole of its row.
 ///
-/// The walk of four is dropped whole from a caption too narrow for it rather than half of
-/// it, so a pin 320 across has no `Next` on it at all, and every question about a caption
-/// button would be about the three that are a window's own.
+/// The walk's four buttons go first from a caption too narrow for the whole row, so a pin
+/// narrower than the eight would answer no `Next` at all, and every question about a
+/// caption button would be about the ones a window keeps for itself.
 fn wide_banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
     banded_video_pin((content.0, content.1, content.0 + 700, content.3), from)
 }
