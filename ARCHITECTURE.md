@@ -964,34 +964,38 @@ paint a frame as well. What is left is the pump: a step per position reported is
 which starves the tick the animation is advanced on for as long as the hand keeps moving, so the pump dispatches one move
 a tick while a resize is in flight and leaves the rest for the tick after it — the system coalesces them to where the hand
 has got to, and the tick reads the pointer live anyway (`pin_is_resizing`). The box the hand leaves behind is the one
-decode a resize still owes, and for a picture that *plays* it is asked for from the place the animation is at rather
-than from the file's first frame: a decode begins a file at its opening frame, so a box the frames in hand do not cover
-would otherwise be the animation started again. The place is read once, at the box the change is fixing, and the decode
-begins there — the frames before it composited for the canvas they are part of and not scaled for a box they are never
-drawn in (`pin_media_load`, `resume_at`). A file answered from a place is the file from that place to its end and then
-from its first frame to that place: the pass that began in the middle of the file leaves its head undecoded, so it is
-always followed by the pass that begins at the first frame (`load_animated_gif`, and the APNG and WebP loaders beside
-it), and the frames a resumed decode ends up holding are the file in play order — its tail, then its head. Each frame
-carries the index it has from the file's first frame (`ImageFrame::file_index`), so the install lands the answer on the
-frame carrying the place and carries the wait that frame had already served with it (`keep_animation_place`): one
-number, whatever the decode began at, whatever the player has given back behind it, and wherever a file that has looped
-stands — which is why a window whose frames were released and a file decoded again from its first frame can no longer
-lose it, and why the landing is no clamp to the frames in hand. **And an answer is not installed before it is the frame
-the picture is on.** The decode is asked for at the place the box changed and lands a tick or more later, so the place it
-begins with is behind the place the pin has played to: the loop keeps the answer and installs it on the tick its own
-stream reaches that place, and the frames drawn for the new box go on being stretched until then — the one thing a box
-change must not cost is the picture put back by the decode's own duration, which is what a stutter on every step of a
-pulled edge was (`take_pin_relayout`). A pass that began at a place also stops where it began rather than decoding the
-file on under it, so a file decoded from the middle is the file once, in play order, and not its tail twice. That order is also the order the player loops in: a
-media that has played to the end of what it holds wraps onto the frame carrying the file's first frame rather than onto
-the first of the list (`frame_of_file_start`), which is what a file decoded at a place could not do while index zero was
-the list's own first frame. A kind that does not play has no run of frames to be part of: every one of its frames is the
-whole of what it shows, and it begins where it always did. This is the answer a wheel's notch already gives by decoding
-nothing at all (see "Wheel zoom"). And a box the frames in hand already cover
-is no decode either: a playing frame used to be re-read at every box the hand left it at, which replaced the pixels every
-later enlargement is stretched from with a thumbnail of them — so a pin dragged small and pulled back out played on from
-the small size it had been decoded at (`box_is_covered`, which now counts the kinds that play among the kinds a box gives
-another size to).
+decode a resize still owes, and a box the frames in hand already cover owes none: those frames are every pixel the
+smaller box would have been drawn to, and the pixels every later enlargement is stretched from — so a pin shrunk and
+pulled back out is as sharp as it was and keeps playing where it was (`box_is_covered`, which counts the kinds that play
+among the kinds a box gives another size to). A playing frame used to be re-read at every box the hand left it at, which
+replaced those pixels with a thumbnail of them; that is the half of this answer a box keeps.
+
+A box the frames do not cover is decoded for, and for a picture that *plays* the decode is asked for from the place the
+animation is at rather than from the file's first frame — a decode begins a file at its opening frame, so it would
+otherwise be the animation started again. The place is read once, at the box the change is fixing, and the frames before
+it are composited for the canvas they are part of and not scaled for a box they are never drawn in (`pin_media_load`,
+`resume_at`). A file answered from a place is that place to its end and then its first frame to that place: the pass that
+began in the middle leaves its head undecoded, so it is always followed by the pass that begins at the first frame, and
+that one stops where the resumed one began rather than decoding the file on under it (`load_animated_gif`, and the APNG
+and WebP loaders beside it). What a resumed decode holds is therefore the file in play order — its tail, then its head.
+Each frame carries the index it has from the file's first frame (`ImageFrame::file_index`), so the install lands the
+answer on the frame carrying the place and carries the wait that frame had already served with it
+(`keep_animation_place`): one number, whatever the decode began at, whatever the player has given back behind it, and
+wherever a file that has looped stands — which is why a released window and a file decoded again from its first frame can
+no longer lose it, and why the landing is no clamp to the frames in hand.
+
+The answer is not installed a moment before it is the frame the picture is on. The decode is asked for at the place the
+box changed and lands a tick or more later, so what it begins with is behind the place the pin has played to, and
+installing it on arrival was the picture put back by the decode's own duration — a stutter on every step of a pulled edge
+(`take_pin_relayout`). The loop keeps the answer until its own stream reaches that place, and the frames drawn for the new
+box go on being stretched until it does. That order is also the order the player loops in: a media that has played to the
+end of what it holds wraps onto the frame carrying the file's first frame rather than onto the first of the list
+(`frame_of_file_start`), which is what a file decoded at a place could not do while index zero was the list's own first
+frame.
+
+A kind that does not play has no run of frames to be part of: every one of its frames is the whole of what it shows, and it
+begins where it always did. This is the answer a wheel's notch already gives by decoding nothing at all (see "Wheel
+zoom").
 
 - Wheel zoom (`pin_zoom.rs`): a notch over a pinned picture is counted by the same low-level wheel hook that swallows
   one over a text preview — a third owner beside the two the hook already had (`wheel_input::take_pin_zoom_delta`,

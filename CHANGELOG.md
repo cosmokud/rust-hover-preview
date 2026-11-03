@@ -8,34 +8,21 @@
 
 ### Fixed
 
-- **A box change no longer puts a pinned animation back by however long its decode took** — the decode a resize past
-  the frames in hand asks for is begun at the place the box changed, and it lands a tick or more later, by which time
-  the animation has played on: installed the moment it answered, it was the picture put back by those frames, which is
-  the stutter every step of a pulled edge showed and the half-second loop a maximize showed. What the loop waits for now
-  is the answer's own stream reaching the place the pin has played to, so the frame installed is the frame the picture
-  was on, and the frames drawn for the box go on being stretched until then (`take_pin_relayout`). The decode a place
-  asked for also stops at that place rather than decoding the file on under it: a resumed pass is followed by the
-  file's head and nothing else, so a file decoded from the middle is the file once, in play order.
-
-- **A pinned animation is no longer put back at its first frame by a maximize, or by a drag out past the size it was
-decoded at** — a box the frames in hand do not cover is the one decode a resize still owes, and a decode begins a GIF,
-an animated WebP, an APNG, a HEIF sequence or an animated JPEG XL at its opening frame, so the resize that was meant to
-sharpen the picture restarted it at its opening seconds: once in a session for a GIF, whose frames then cover every
-later box, and on every maximize for one whose frames never cover the display. The decode is now asked for from the
-place the animation is at, and each frame carries where it is in its file, so the frame that lands is the one carrying
-that place, with the wait it had already served — whether the pin has played on since the box changed, whether its
-player has released the frames behind it, and whether the file has looped.
-
-- **A pin whose animation was decoded from the place it was at loops back to the file's first frame, and the decode it
-began with finishes the file it began in the middle of** — a decode begun at a place answers the file's *tail*, so the
-frames such a pin holds begin at the place the animation had got to rather than at the opening frame, and the streamed
-decode stopped there once the rest of the file had been delivered. Both were seen once a session, on the one decode a
-maximize or a drag out past the decoded size asks for: the animation looped back to the place the decode had resumed at
-rather than to the file's first frame, and a pin whose frames in hand were that tail alone played the part of the file
-the resize happened to catch, for good. A pass that began part-way through the file is now always followed by the pass
-that begins at its first frame, so the frames a resumed decode ends up holding are the file in play order — the tail,
-then the head — and the wrap lands on the frame carrying the file's first frame rather than on the first of the list. A
-file whose head has been decoded and whose frames were given back is the only one decoded again.
+- **A pinned animation keeps playing through a maximize, and through a drag past the size it was decoded at** — a box the
+  frames in hand do not cover is the one decode a resize still owes, and a decode begins a GIF, an animated WebP, an APNG,
+  a HEIF sequence or an animated JPEG XL at its opening frame: the resize meant to sharpen the picture restarted it instead,
+  once in a session for a GIF, whose frames then cover every later box, and on every maximize for one whose frames never
+  cover the display. That decode is now asked for from the place the animation is at, and each frame carries where it is in
+  its file, so the frame that lands is the one carrying that place, with the wait it had already served — whether the pin
+  has played on since the box changed, whether its player has released the frames behind it, and whether the file has
+  looped. A file decoded from a place is answered its tail and then its head, the file in play order, and the pass stops
+  where it began rather than decoding the file on under it, so a pin can no longer loop inside the part of the file a
+  resize happened to catch: a media that has played to the end of what it holds wraps onto the frame carrying the file's
+  first frame. And the answer is not installed before it is the frame the picture is on: a decode lands a tick or more
+  after the box changed, so what it begins with is behind the place the pin has played to, and installing it then was the
+  picture put back by the decode's own duration — the half-second loop a maximize showed and the stutter on every step of
+  a pulled edge. The answer now waits until its own stream reaches that place, the frames drawn for the new box being
+  stretched until it does.
 
 - **A resize no longer puts a pinned animation back at its first frame, and no longer softens one it shrank** — a pinned picture that plays is decoded at the box it is drawn in, and every box the hand left it at was laid out again. A decode begins a GIF, an animated WebP, APNG, a HEIF sequence or an animated JPEG XL at its opening frame, so a drag of an edge, a maximize or a double-press reset put the animation back at the beginning; and the box between was decoded for as well, so a window dragged small and opened again played back out of the thumbnail it had just been decoded into. Two answers now, the pair the other two gestures already give. A box the frames in hand already cover is no decode at all, which is the answer a still picture has always been given: those frames are every pixel the smaller box would have been drawn to, and every later enlargement is stretched from them, so a pin shrunk and pulled back out is as sharp as it was and keeps playing where it was. And a box they do not cover is decoded for — the pin laid out at the size the hand asked for — with the place the animation had got to carried across: the frame the pin was on and the wait that frame had already served, the new media being the same file's frames in the same order (`keep_animation_place`), so the new size sharpens the picture instead of restarting it, and the frame the pin was showing is not held for one more of its own delays.
 
