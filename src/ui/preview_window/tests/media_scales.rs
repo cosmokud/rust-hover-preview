@@ -265,6 +265,48 @@ fn a_decode_begun_at_a_place_answers_from_it_and_the_stream_goes_on_from_there()
     let _ = std::fs::remove_dir_all(&folder);
 }
 
+/// **A decode asked to begin at the file's first frame is the file once, not twice.** The stream begins
+/// after the frames the startup answer already holds, which is two of them for every file — that is not a
+/// pass begun part-way through the file, and reading it as one leaves every animation in every hover
+/// decoded twice, its tail held under its head and the memory window filled twice as fast for nothing.
+#[test]
+fn a_decode_begun_at_the_files_first_frame_is_the_whole_file_once() {
+    let folder = std::env::temp_dir().join("rhp-animated-startup-fixtures");
+    std::fs::create_dir_all(&folder).expect("a fixture folder");
+    let gif = folder.join("whole.gif");
+    write_test_gif(&gif, 8);
+
+    let mut loaded = load_animated_gif(
+        &gif,
+        64,
+        64,
+        PreviewScale::Percent(100),
+        Arc::new(AtomicBool::new(false)),
+        0,
+    )
+    .expect("a file read from its first frame is the animation it is");
+    assert_eq!(
+        loaded.current_frame_of_file(),
+        Some(0),
+        "the preview opens on the file's first frame"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !loaded.is_fully_loaded() && Instant::now() < deadline {
+        loaded.sync_shared_frames();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    loaded.sync_shared_frames();
+    assert!(loaded.is_fully_loaded(), "the decoder finished the file");
+    assert_eq!(
+        ids(&loaded),
+        (0..8).collect::<Vec<_>>(),
+        "every frame of the file once and in order, rather than the file decoded again over itself"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 /// The ids the frames in hand carry, which is where each of them is in the file.
 fn ids(media: &MediaData) -> Vec<usize> {
     media.frames.iter().map(|frame| frame.file_index).collect()
