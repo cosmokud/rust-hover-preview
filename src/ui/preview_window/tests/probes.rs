@@ -585,6 +585,51 @@ fn keys_a_probed_geometry_by_the_files_version() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// A whole 1920x1080 picture is not a letterbox, however the detector floors it: eight
+/// rows off one axis is codec padding, and a pin sized to 1920x1072 draws a 4-px band of
+/// desktop above and below it on a 1080-row screen. A real 1.85:1 letterbox inside the
+/// 10% cap is still cropped to.
+///
+/// A 2.40:1 picture (280 rows off) is refused by `VIDEO_CROP_MAX_AXIS_TRIM_RATIO`, not
+/// here: the cap is 10% of the axis, and that guard is unchanged.
+#[test]
+fn refuses_a_crop_that_is_only_codec_padding() {
+    assert!(
+        !validate_detected_crop(
+            VideoCrop {
+                width: 1920,
+                height: 1072,
+                x: 0,
+                y: 4,
+            },
+            1920,
+            1080
+        ),
+        "eight rows of a 1080-row frame is padding, not a letterbox"
+    );
+
+    assert!(
+        validate_detected_crop(
+            VideoCrop {
+                width: 1920,
+                height: 1037,
+                x: 0,
+                y: 22,
+            },
+            1920,
+            1080
+        ),
+        "a 1.85:1 picture in a 16:9 frame is a letterbox and is cropped to"
+    );
+}
+
+/// The detector floors to 8, not 16: every common frame height is a multiple of 8, so a
+/// whole frame reports zero trim and is refused, where round 16 floored 1080 to 1072.
+#[test]
+fn asks_the_detector_to_floor_to_eight() {
+    assert_eq!(video_cropdetect_filter(), "cropdetect=24:8:0");
+}
+
 /// The report an `ffprobe` pass writes is read for the sound in it and nothing of the
 /// picture before it: a film with a soundtrack is not a sound, and the fields a card is
 /// drawn with are the ones the sound's own stream carries. A stream's codec name is

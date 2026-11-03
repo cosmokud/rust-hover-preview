@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **A pinned film is not trimmed of eight rows it does not have** — the crop detector was asked to floor what it measures to a 16-px grid, and 1080 is not a multiple of it, so a whole 1920x1080 picture came back as `1920x1072` with four rows off the top and four off the bottom, inside the slack both guards allow. A pin maximized on a 1080-row screen was drawn 1920x1072 and left a 4-px band of desktop above and below it. The grid is 8, which every common frame height is a multiple of, so a whole frame measures as itself and is refused as the full-frame crop it already was; and a crop that trims under 16 px off *both* axes is refused too, that being codec padding (H.264 pads 1080 to 1088) or rounding rather than a letterbox. A 1.85:1 picture, 43 rows off, is still cropped to; a 2.40:1 one stays outside the 10% cap and is not cropped, as before.
+
 ## [0.4.8] - 2026-11-03
 
 ### Added
