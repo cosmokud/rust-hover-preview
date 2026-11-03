@@ -255,11 +255,12 @@ fn a_decode_begun_at_a_place_answers_from_it_and_the_stream_goes_on_from_there()
     }
     loaded.sync_shared_frames();
     assert!(loaded.is_fully_loaded(), "the decoder finished the file");
-    assert!(
-        ids(&loaded).starts_with(&[4, 5, 6, 7, 0, 1, 2, 3]),
+    assert_eq!(
+        ids(&loaded),
+        vec![4, 5, 6, 7, 0, 1, 2, 3],
         "the head follows the tail, so a file decoded whole is the file in play order rather than the \
-         part a decode begun at the fifth frame happened to have ({:?})",
-        ids(&loaded)
+         part a decode begun at the fifth frame happened to have — and the tail is not decoded a \
+         second time under it"
     );
 
     let _ = std::fs::remove_dir_all(&folder);

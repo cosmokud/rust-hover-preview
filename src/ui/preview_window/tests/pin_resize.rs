@@ -1691,6 +1691,7 @@ fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
         let mut relayout = Some(PinRelayout {
             path: path.clone(),
             answer: answers,
+            decoded: None,
         });
         assert!(
             take_pin_relayout(&mut relayout),
@@ -1743,21 +1744,131 @@ fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
         "the frame carrying the place the pin reached while the decode was out"
     );
 
-    // And a pin whose stream has run on past every frame the answer holds is that answer's own first
-    // frame: the place is not a count of frames in hand, so clamping it to their end would be a frame
-    // the decode never reached, while the place the decode begins at is one it did.
+    // And a pin whose stream has run on past every frame the answer holds is one the answer waits
+    // for: the place the picture has played to is a frame the decode has not reached, and installing
+    // the answer's first frame instead would be the picture put back by however long the decode
+    // took — which is what the tick after this one is for (see `take_pin_relayout`).
     play_to(
         (0..12).map(|index| frame(400, 300, index)).collect(),
         11,
         10,
     );
-    let Some((landed, place, _, _)) = install(answered(800, 600, 3)) else {
-        panic!("a frame was installed over the pin's own media");
-    };
+    let (answer, answers) = channel();
+    let mut behind = static_image_media(frame(800, 600, 3), MediaType::AnimatedGif);
+    behind.frames = answered(800, 600, 3);
+    answer.send(Some(behind)).ok();
+    let mut relayout = Some(PinRelayout {
+        path: path.clone(),
+        answer: answers,
+        decoded: None,
+    });
+    assert!(
+        !take_pin_relayout(&mut relayout),
+        "an answer behind the place the pin has played to is held rather than installed"
+    );
+    assert!(
+        relayout.is_some(),
+        "and it is kept, still standing on the pin's own file, for the tick its own stream catches \
+         up on"
+    );
     assert_eq!(
-        (landed, place),
-        (0, Some(3)),
-        "a place the answer holds no frame for is the frame the decode began at"
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.current_frame_of_file())
+        }),
+        Some(11),
+        "while the pin goes on showing the frame it had"
+    );
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous;
+    }
+    stand_pin(previous_pin);
+}
+
+/// **A box change's answer is installed when it holds the place the pin has played to**, not when it
+/// answers: the decode is asked for at the place the box changed and lands a tick or more later, so
+/// the frame it begins with is the frame the pin *was* on, and installing that the moment it arrived
+/// put the picture back by however long the decode took — the loop of a few frames seen on every box
+/// the frames in hand did not cover (see `take_pin_relayout`). What the pin shows meanwhile is the
+/// frame drawn for the box, stretched.
+#[test]
+fn a_box_change_waits_for_its_answer_to_reach_the_place_the_pin_has_played_to() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let frame = |file_index: usize| {
+        let mut frame = ImageFrame::new(vec![0u8; (40 * 30 * 4) as usize], 40, 30, 0);
+        frame.file_index = file_index;
+        Arc::new(frame)
+    };
+    let place = || {
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media
+                .as_ref()
+                .map(|media| (media.current_frame, media.current_frame_of_file()))
+        })
+    };
+
+    let path = PathBuf::from("a-playing-frame-caught-up.gif");
+    let mut pin = overlay_pin((100, 100, 500, 400), PinChrome::always());
+    pin.path = path.clone();
+    stand_pin(Some(pin));
+
+    // The pin has played on to the file's eighth frame while the decode begun at its sixth was out.
+    let mut playing = static_image_media(frame(5), MediaType::AnimatedGif);
+    playing.frames = (5..9).map(frame).collect();
+    playing.current_frame = 2;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(playing);
+    }
+
+    let answer_from = |from: usize, to: usize| {
+        let (answer, answers) = channel();
+        let mut decoded = static_image_media(frame(from), MediaType::AnimatedGif);
+        decoded.frames = (from..to).map(frame).collect();
+        answer.send(Some(decoded)).ok();
+        answers
+    };
+
+    // Short of the place, the answer is held: a frame that plays is not installed behind the picture
+    // it is drawn over, whatever box it was decoded for.
+    let mut relayout = Some(PinRelayout {
+        path: path.clone(),
+        answer: answer_from(5, 7),
+        decoded: None,
+    });
+    assert!(
+        !take_pin_relayout(&mut relayout),
+        "an answer that has not reached the place the pin has played to is not installed"
+    );
+    assert!(
+        relayout.is_some(),
+        "it is kept, still standing on the pin's own file, for the tick its stream catches up on"
+    );
+    assert_eq!(
+        place(),
+        Some((2, Some(7))),
+        "and the pin goes on showing the frame it had, which is the place the answer is short of"
+    );
+
+    // Its own stream decodes its way up to that place, and then it is the frame installed.
+    let mut relayout = Some(PinRelayout {
+        path: path.clone(),
+        answer: answer_from(5, 9),
+        decoded: None,
+    });
+    assert!(
+        take_pin_relayout(&mut relayout),
+        "an answer that holds the place is the one installed"
+    );
+    assert_eq!(
+        place(),
+        Some((2, Some(7))),
+        "on the frame carrying the place the pin had played to, so nothing of the picture is put \
+         back by the decode it was asked for"
     );
 
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -1819,6 +1930,7 @@ fn a_released_playhead_is_carried_as_exactly_as_a_held_one() {
     let mut relayout = Some(PinRelayout {
         path: path.clone(),
         answer: answers,
+        decoded: None,
     });
     assert!(
         take_pin_relayout(&mut relayout),

@@ -976,7 +976,13 @@ carries the index it has from the file's first frame (`ImageFrame::file_index`),
 frame carrying the place and carries the wait that frame had already served with it (`keep_animation_place`): one
 number, whatever the decode began at, whatever the player has given back behind it, and wherever a file that has looped
 stands — which is why a window whose frames were released and a file decoded again from its first frame can no longer
-lose it, and why the landing is no clamp to the frames in hand. That order is also the order the player loops in: a
+lose it, and why the landing is no clamp to the frames in hand. **And an answer is not installed before it is the frame
+the picture is on.** The decode is asked for at the place the box changed and lands a tick or more later, so the place it
+begins with is behind the place the pin has played to: the loop keeps the answer and installs it on the tick its own
+stream reaches that place, and the frames drawn for the new box go on being stretched until then — the one thing a box
+change must not cost is the picture put back by the decode's own duration, which is what a stutter on every step of a
+pulled edge was (`take_pin_relayout`). A pass that began at a place also stops where it began rather than decoding the
+file on under it, so a file decoded from the middle is the file once, in play order, and not its tail twice. That order is also the order the player loops in: a
 media that has played to the end of what it holds wraps onto the frame carrying the file's first frame rather than onto
 the first of the list (`frame_of_file_start`), which is what a file decoded at a place could not do while index zero was
 the list's own first frame. A kind that does not play has no run of frames to be part of: every one of its frames is the

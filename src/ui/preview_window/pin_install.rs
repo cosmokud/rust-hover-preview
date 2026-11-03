@@ -1554,6 +1554,7 @@ pub(super) fn relayout_pinned_media(
         Some(_) => Some(PinRelayout {
             path: path.to_path_buf(),
             answer: pin_media_load(path, width, height, dpi, scale, place),
+            decoded: None,
         }),
         None => None,
     }
@@ -1670,7 +1671,24 @@ pub(super) struct PinRelayout {
     /// flight across a swap would otherwise install a frame of the file the pin has left behind,
     /// at a box belonging to the one it is now showing.
     pub(super) path: PathBuf,
+    /// Where the answer arrives, asked for at the place the pin was at when the box changed.
     pub(super) answer: Receiver<Option<MediaData>>,
+    /// The answer, once it has arrived, kept here while it is behind the pin: the decode began at
+    /// the place the box change found the pin at, so it is a frame or three short of the place the
+    /// pin has played to by the time it lands, and what it is short of is waited for rather than
+    /// installed (see `take_pin_relayout`).
+    pub(super) decoded: Option<MediaData>,
+}
+
+impl Drop for PinRelayout {
+    /// A relayout put down unanswered is a decode nothing is waiting for any more — a newer box has
+    /// asked for one of its own, or the pin is gone. Its frames are a thread of this app's, so it is
+    /// told to stop here rather than left decoding for a window that no longer wants them.
+    fn drop(&mut self) {
+        if let Some(media) = self.decoded.as_mut() {
+            media.cancel_background_work();
+        }
+    }
 }
 
 /// Take a relayout that has answered, install it, and answer whether a frame was installed.
@@ -1690,22 +1708,71 @@ pub(super) struct PinRelayout {
 /// of the media being replaced *before* that lock is taken, for the reason it takes the lock
 /// itself: a lock this thread already holds is not a lock it can wait for.
 pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
-    let Some(media) = answered(relayout.as_ref().map(|pending| &pending.answer)) else {
+    // The answer is taken out of the channel once and kept here while it is behind the pin, which is
+    // the other half of what a box change costs a picture that plays. The decode is asked for at the
+    // place the pin is at when the box changes and it lands a tick or more later, so the frame it
+    // holds is the frame the pin *was* on: installed the moment it arrived, it put the picture back
+    // by however long the decode took — a loop of those frames on every box the frames in hand did
+    // not cover, seen as a stutter while an edge was pulled out. So what is waited for is the place
+    // the pin has played to, which the answer's own stream decodes its way up to (see
+    // `keep_animation_place`).
+    let Some(pending) = relayout.as_mut() else {
         return false;
     };
-    let Some(pending) = relayout.take() else {
+    if pending.decoded.is_none() {
+        match answered(Some(&pending.answer)) {
+            // Still a thread's work, and the frame on screen is the one drawn for the box until it
+            // answers (see `PinRelayout`).
+            None => return false,
+            Some(None) => {
+                relayout.take();
+                return false;
+            }
+            Some(Some(media)) => pending.decoded = Some(media),
+        }
+    }
+
+    // The place the pin has played to while this was out. A frame that has not been answered for a
+    // place at all — a picture that does not play, a pin with no media — has nothing to catch up to.
+    let wanted = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.current_frame_of_file())
+    });
+
+    // The answer is the one to install once it holds the place the picture has played to, or one
+    // past it — which is a frame skipped rather than a picture put back. Short of it, the frames on
+    // screen are still the ones drawn for the box, and the answer waits for its own stream.
+    let caught_up = pending.decoded.as_ref().is_none_or(|decoded| {
+        !decoded.media_type.is_animation()
+            || wanted.is_none_or(|wanted| {
+                decoded
+                    .frames
+                    .iter()
+                    .any(|frame| frame.file_index >= wanted)
+            })
+    });
+    if !caught_up {
+        return false;
+    }
+
+    let Some(mut pending) = relayout.take() else {
+        return false;
+    };
+    let Some(media) = pending.decoded.take() else {
         return false;
     };
 
     // A relayout is only an answer while the pin is still standing on the file it was asked for.
     // A swap that landed first, or a pin that has been closed, leaves it asking a question about
     // a window that is no longer there, and its frame must not be installed over whatever is
-    // there now.
+    // there now — and its frames are told to stop, nobody wanting them.
     if pinned_path().as_deref() != Some(pending.path.as_path()) {
+        let mut media = media;
+        media.cancel_background_work();
         return false;
     }
 
-    let Some(media) = media else { return false };
     let media = keep_text_place(media);
     let media = keep_animation_place(media);
     let Ok(mut current) = CURRENT_MEDIA.lock() else {
@@ -1804,16 +1871,18 @@ pub(super) fn keep_animation_place(media: MediaData) -> MediaData {
     let served = old.last_frame_time.elapsed();
 
     let mut media = media;
-    // A place the answer holds no frame for is the answer's own first frame: the decode began after
-    // it, and there was nothing left to decode back to.
-    media.current_frame = wanted
-        .and_then(|wanted| {
-            media
-                .frames
-                .iter()
-                .position(|frame| frame.file_index == wanted)
-        })
-        .unwrap_or(0);
+    // The landing is the frame the place names, or the first one past it where the answer's own
+    // stream has already overtaken the pin — a frame skipped, which a picture that plays does not
+    // show, rather than the answer's first frame, which would be the picture put back. A place no
+    // frame of the answer is at or past is the newest frame it holds, which is the least of the
+    // ways to be behind (see `take_pin_relayout`, which waits for one that is not).
+    media.current_frame = wanted.map_or(0, |wanted| {
+        media
+            .frames
+            .iter()
+            .position(|frame| frame.file_index >= wanted)
+            .unwrap_or_else(|| media.frames.len().saturating_sub(1))
+    });
     media.last_frame_time = Instant::now()
         .checked_sub(served)
         .unwrap_or_else(Instant::now);

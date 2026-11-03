@@ -8,6 +8,15 @@
 
 ### Fixed
 
+- **A box change no longer puts a pinned animation back by however long its decode took** — the decode a resize past
+  the frames in hand asks for is begun at the place the box changed, and it lands a tick or more later, by which time
+  the animation has played on: installed the moment it answered, it was the picture put back by those frames, which is
+  the stutter every step of a pulled edge showed and the half-second loop a maximize showed. What the loop waits for now
+  is the answer's own stream reaching the place the pin has played to, so the frame installed is the frame the picture
+  was on, and the frames drawn for the box go on being stretched until then (`take_pin_relayout`). The decode a place
+  asked for also stops at that place rather than decoding the file on under it: a resumed pass is followed by the
+  file's head and nothing else, so a file decoded from the middle is the file once, in play order.
+
 - **A pinned animation is no longer put back at its first frame by a maximize, or by a drag out past the size it was
 decoded at** — a box the frames in hand do not cover is the one decode a resize still owes, and a decode begins a GIF,
 an animated WebP, an APNG, a HEIF sequence or an animated JPEG XL at its opening frame, so the resize that was meant to
