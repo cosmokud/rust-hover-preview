@@ -272,6 +272,14 @@ impl PinUpdateWatch {
         // `pin_press_was_not_a_pick` and `lower_pinned_preview`).
         let on_the_pin = press_is_on_the_pin(clicked, pointer.point, self.pin_box);
 
+        // **A press read on the very tick this app's own window moved is not the listing's press at
+        // all**: the hand did not move, and what is under the point now is whatever the move
+        // uncovered (see `press_is_the_pins_own_gesture`). Such a press answers neither a pick nor a
+        // no-pick below, so a pin resized or maximized by the hand over its own content can no
+        // longer lower itself behind the listing it has just moved over.
+        let the_pins_own_press =
+            on_the_pins_chrome || on_the_pin || press_is_the_pins_own_gesture(clicked, pin_moved);
+
         // A press on one of this app's own panels spends the rest of the hand, so that the rest is not
         // read as a hover of the file the panel was covering (see `a_rest_is_a_hover`). Asked on both
         // ticks the press could be read on: while the panel is still up, and on the poll after the
@@ -350,12 +358,13 @@ impl PinUpdateWatch {
                 current_is_chrome,
                 previous_was_chrome,
             )
-            // And a press read on the very tick this app's own window moved is not a pick either:
-            // the hand did not move, and what is under the point now is whatever the move uncovered
-            // (see `note_pin_box`). The point is booked above all the same, so the second press of
-            // the pair that moved the window is refused as the gesture it is rather than answered
-            // as a pick of its own.
-            && !pin_moved;
+            // And a press read on the very tick this app's own window moved is not a pick either,
+            // which is the same gate the no-pick below is refused by: the hand did not move, and
+            // what is under the point now is whatever the move uncovered (see `note_pin_box` and
+            // `press_is_the_pins_own_gesture`). The point is booked above all the same, so the
+            // second press of the pair that moved the window is refused as the gesture it is
+            // rather than answered as a pick of its own.
+            && !the_pins_own_press;
 
         // Whether the press was read at all, before anything is decided about it, and where
         // the pointer was when it was. This is the one reading that says a click was lost
@@ -399,12 +408,13 @@ impl PinUpdateWatch {
         // neither of them picked, and the pin is neither raised nor taken behind for them. A row the
         // shell has not named yet is left for the retry below rather than guessed at either way.
         //
-        // A press on this app's own window is left out: it is the pin being used rather than the
+        // A press the pin itself answers is left out: it is the pin being used rather than the
         // listing under it being picked, and what the pin stands over is not changed by it. So is a
         // press whose point is inside the pin's box, which is the same press read off the box where
-        // the hit test under it names the listing the pin stands on (see `press_is_on_the_pin`).
-        if !on_the_pins_chrome
-            && !on_the_pin
+        // the hit test under it names the listing the pin stands on, and so is a press read on the
+        // tick this app's own window moved under a hand nobody moved (see `press_is_on_the_pin` and
+        // `press_is_the_pins_own_gesture`).
+        if !the_pins_own_press
             && press_is_answered(
                 clicked,
                 over_explorer,
