@@ -346,17 +346,19 @@ pub(crate) use pointer::text_size_keep_alive_try;
 pub(crate) use pointer::AvoidRegion;
 pub(crate) use requests::hide_preview;
 
-/// Whether a screen point is on one of a standing pin's caption buttons.
+/// Whether a screen point is on one of a standing pin's own buttons — the caption's, or a sound's
+/// card's, which carries its buttons in place of a caption's.
 ///
 /// The hook reads a press on this app's own window as a press on the listing the window stands
 /// over — the pin passes a click through to the file behind it — but a press on the caption's
-/// Minimize or Close is the pin's own button, and the file drawn under the chrome is not one the
-/// user picked (see `PinUpdateWatch::follow`). Asked of the same geometry the window procedure's
-/// own press is, so the hook and the button cannot disagree (see `pinned_press_on`).
+/// Minimize or Close, or on one of the card's own controls, is the pin's own button, and the file
+/// drawn under it is not one the user picked (see `PinUpdateWatch::follow`). Asked of the same
+/// geometry the window procedure's own press is, so the hook and the button cannot disagree (see
+/// `pinned_press_on` and `pin_audio_control_at`).
 ///
 /// A collapsed pin's window is hidden rather than moved, so the answer holds on the tick after a
 /// minimize has already taken the window off screen (see `collapse_pin_to`).
-pub(crate) fn pin_caption_button_covers(point: (i32, i32)) -> bool {
+pub(crate) fn pin_button_covers(point: (i32, i32)) -> bool {
     let Some(pinned) = pin_state() else {
         return false;
     };
@@ -367,19 +369,13 @@ pub(crate) fn pin_caption_button_covers(point: (i32, i32)) -> bool {
     let (width, _) = pin.window_size();
     let (left, top, _, _) = pin.window_box();
     let framed = pin.frame != PinFrame::None;
+    let (x, y) = (point.0 - left, point.1 - top);
 
-    pin.caption > 0
-        && pin.chrome.caption
-        && pin_chrome::caption_fits(width, pin.dpi, framed)
-        && pin_chrome::button_at(
-            point.0 - left,
-            point.1 - top,
-            width,
-            pin.caption,
-            pin.dpi,
-            framed,
-        )
-        .is_some()
+    pin_audio_control_at(pin, x, y).is_some()
+        || (pin.caption > 0
+            && pin.chrome.caption
+            && pin_chrome::caption_fits(width, pin.dpi, framed)
+            && pin_chrome::button_at(x, y, width, pin.caption, pin.dpi, framed).is_some())
 }
 
 /// Whether `RHP_PIN_TRACE` asks for the preview's road to be written out — asked by the one module
