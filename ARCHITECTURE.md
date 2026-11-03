@@ -470,13 +470,15 @@ transiently", which is what stops a deleting file from being retried forever.
 
 - Picks: gesture = two presses inside `GetDoubleClickTime`; an unanswered place carries its baseline;
   `press_is_a_listing` (window is Explorer's or this app's own, still there, not menu-popup chrome — current _or_
-  previous tick); click read through own windows (`is_our_own_window` = preview or engine HWND/children) else the
-  focused item in the click's own place; item and view caches dropped on the foreground handoff; a click that answers
-  nothing is held and re-asked while the pointer stays put, and given up the moment this app's own window moves
-  (`preview_window_rect`, noted on every pinned tick), so a double-click that centers a pin is not answered against the
-  point the move uncovered.
+  previous tick); a press the pin itself takes is neither a pick nor a no-pick — its point inside the pin's own box
+  whatever the hit test names under it (`press_is_on_the_pin`), or read on the tick that box changed under a hand
+  nobody moved (`press_is_the_pins_own_gesture`); click read through own windows (`is_our_own_window` = preview or
+  engine HWND/children) else the focused item in the click's own place; item and view caches dropped on the foreground
+  handoff; a click that answers nothing is held and re-asked while the pointer stays put, and given up the moment this
+  app's own window moves (`preview_window_rect`, noted on every pinned tick), so a double-click that centers a pin is
+  not answered against the point the move uncovered.
 
-Three judgments decide what a press or a click means, and they are the whole of the pin's follow behavior. A gesture is
+Four judgments decide what a press or a click means, and they are the whole of the pin's follow behavior. A gesture is
 two presses _inside the machine's own double-click time_ — the same window Explorer itself reads the double-click that
 opens a folder in — so the click on a file in a listing a double-click just opened is that file's pick, not a third
 press of the gesture; nothing else moves (a folder opened from the keyboard still does not change the window, and a
@@ -495,6 +497,18 @@ matters most, because the item a fresh listing puts under a parked pointer is dr
 press on one of a pin's caption buttons is asked of the geometry that button's own press reads
 (`pin_caption_button_covers`); it is no pick, it spends the rest of the hand, and a click held from before it is dropped
 rather than answered out of the listing the chrome covered.
+
+**A press inside the pin's own box is the pin's own, and so is one read on the tick the pin moved.** A pin shows its
+picture in a host, and a host answers `HTTRANSPARENT` so the press reaches the pin's chrome: `WindowFromPoint` over the
+pin's picture therefore names the *listing* the pin was fitted over. Read as that listing's, a press on the pin held the
+gap between the rows and picked no file, and the answer a press that named nothing owes is the lowering — so a maximized
+pin, a restored one, one given a reset size, or one whose picture was double-pressed put itself behind the listing until
+a click brought it back (`pin_press_was_not_a_pick`, `lower_pinned_preview`). Two readings refuse that answer. The box
+the watch already holds makes a press whose point is inside it the pin's, whatever the hit test under that point named
+(`press_is_on_the_pin`). And the same box, noted against the last tick, makes a press read on the very tick it changed
+neither a pick nor a no-pick (`press_is_the_pins_own_gesture`): a gesture that moves the window off the point the hand
+was on leaves that point *outside* the new box, so the box alone cannot refuse it. The point is still booked, so the
+second press of a double press that moved the window is refused as the gesture it is.
 
 ## Pin mode (`ui/preview_window/pin_*.rs`, `pin_window.rs`, `pin_chrome/`, `text/`)
 
@@ -706,9 +720,10 @@ resets. A kind switched off under **Preview Types**, or one with no engine insta
 either way. The walk is the folder the pin was taken up in and no subfolder of it, read on the first press rather than
 when the pin is taken up; each other file is offered at most once, so a folder of nothing this build can read ends the
 walk instead of going round for ever, and a file *you* picked in the Explorer listing is still not stepped over. What a
-press means is settled by the hook's three judgments (Explorer hook → Picks): a gesture is two presses inside the
-machine's own double-click time, an unanswered place carries its baseline, and a press is a pick only on a listing
-window that is still there — which is why the first click and the first arrow-key press after a double-click-opened
+press means is settled by the hook's four judgments (Explorer hook → Picks): a gesture is two presses inside the
+machine's own double-click time, an unanswered place carries its baseline, a press is a pick only on a listing window
+that is still there, and a press inside the pin's own box — or one read on the tick that box changed — is the pin's
+rather than any listing's — which is why the first click and the first arrow-key press after a double-click-opened
 folder, a folder change, or the window taking the keyboard all work, and a press Explorer's own popup took is dropped
 rather than retried.
 
@@ -1470,6 +1485,18 @@ is worth reading. The rectangles in the `thumbnail update` line are the whole di
 
 `thumbnail source moved` is not a fault — it is the slide at an edge — and `thumbnail source cannot hold the crop on screen` names the one case no position can fix (a crop longer than the work area). `thumbnail source native unknown`, `late` and `unobtainable` say which of the placement roads a film got.
 
+**Where a window ended up, and who was in front.** Every line that reads the front carries `above=`, the window directly
+over it in the z-order, and most carry `foreground=`, the window holding the front: `band placed`, `band taken and given
+back: <why>` — with the road that asked for the flip, `a press`, `a preview update`, `a press on a running page` or `the
+pin appeared` — the host's show, `pin above:` after a show, the keyboard hand-back at a collapse and at an end,
+`set_foreground … -> foreground=… pin above=…`, and the player's topmost show. Every message a pin's window is handed
+carries an `above=` beside its `foreground=` and `focus=`. Both readings are described rather than left as `other`:
+`class:pid (image)` for any window Windows can still be asked about, this app's own by the word `window_name` gives them
+(`pin`, `host`, `preview`, `bubble`, `stand-in`), `none` for a handle that names no window at all, and `invalid` for one
+that names none any more (`a_window_description`, `what_is_above`). A pin with `none` above it is a pin at the front of
+its band; a listing's class above one, after a box change, is the whole of what "it put itself behind the listing" is
+read from.
+
 **Watching a film's sound.** `RHP_PLAYBACK_TRACE` (presence is enough) writes `%TEMP%\rhp-playback-trace.log`: one
 `launch` line per engine start (engine, kind, the level the launch resolved to, and the form that level was given the
 player in — `aid=no`/`-an` or `volume=N gain=…`), one `engine truth` line per mpv start (the `aid`, `audio-device`,
@@ -1661,7 +1688,7 @@ property. An engine that could do neither would need a third: a size known at la
 | `src/ui/preview_window/video_launch.rs` | mpv's launch: no `--wid`, `--no-border`, `--geometry` at the source's place, the swapchain, and the level a traced run is read at |
 | `src/ui/preview_window/ffplay_window.rs` | the pass that finds a player's window, adopts it as a source, keeps it invisible and styles it |
 | `src/ui/preview_window/video_playback.rs` | both launches: where a film is born (the desktop, at its own size, borderless) and which host keeps it |
-| `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; `RHP_RESIZE_TRACE` and a step's own numbers |
+| `src/ui/preview_window/pin_trace.rs` (and `pin_resize_probe.rs` beside it) | `RHP_PIN_TRACE` and the log's file; the window holding the front and the one standing directly over another (`a_window_description`, `what_is_above`); `RHP_RESIZE_TRACE` and a step's own numbers |
 | `src/ui/preview_window/playback_trace.rs` | `RHP_PLAYBACK_TRACE` and its log: a launch's sound form, the player's own answer to it — the level asked for beside the level it is at — both players' own lines, and a kill's confirmation |
 | `src/ui/preview_window/audio_session.rs` | what Windows' own mixer says about a player: the session its pid has, the state it is in (`expired` being the datum the probe was built for), who it is — both identifiers whole, the image the pid runs, and the sessions the endpoints listed beside it, each with `dead` on one whose process has ended — the mixer's slider and mute and the stream's per-channel volumes beside the player's own level, the endpoint it is on against the default one, and `session none` with the children counted when there is none — the two writes this app makes to the OS: a muted session's `SetMute(false)` under a guarded player at a slider that is up, and the master volume `SetMasterVolume` a film's or a sound's level asks for |
 | `src/ui/preview_window/audio_guard.rs` | the ladder a film's sound is healed by: the read-back's verdict with the machine's own answer folded into it (`session-muted` being the fourth road), the in-place rungs and the one relaunch, the asks of a player that has said nothing being bounded by its own readiness, the level it stands for being the one this app last asked for, the hover's in-place-only road, and the `audio gave up` post-mortem; the strict signature list FFmpeg's player is read against |
