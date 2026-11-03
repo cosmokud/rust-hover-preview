@@ -238,7 +238,13 @@ pub(super) fn load_media_of_kind(
             preview_scale,
             &cancel,
             resume_at,
-        ),
+        )
+        // And the picture the installed image converter developed, where the readers of this app
+        // came back with nothing: a camera raw on a machine without the codec for it, a `.heic`
+        // with no HEIF extension. The picture is in hand or it is the wait for it — either way the
+        // engine is behind the readers here rather than beside them (see `routing::chain` and
+        // `magick_box`).
+        .or_else(|| load_magick_picture(path, max_width, max_height, preview_scale, &cancel)),
 
         // A file whose content named no kind and whose name no list claims is the picture
         // path's, and the caller above has already answered that one — a name no list has ever
@@ -473,7 +479,11 @@ pub(super) fn spawn_load_worker(
             let awaiting_render = media.is_none()
                 && (office_render_is_due(&request.path, request.max_width)
                     || libre_render_is_due(&request.path)
-                    || magick_render_is_due(&request.path)
+                    // The picture the readers of this app have no answer for, which is what the
+                    // load that just came back empty says: the engine is behind them for it, and
+                    // the box the layout holds has nothing to add where the read itself has
+                    // answered (see `magick_fallback_is_due`).
+                    || magick_fallback_is_due(&request.path)
                     || peazip_render_is_due(&request.path)
                     || calibre_render_is_due(&request.path));
 

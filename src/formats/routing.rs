@@ -937,7 +937,13 @@ pub fn chain(kind: PreviewType) -> &'static [Reader] {
 
         PreviewType::Text => &[Reader::Native],
         PreviewType::Fonts => &[Reader::WebView2],
-        PreviewType::Images => &[Reader::Native],
+
+        // A picture is the readers of this app's first — the ones built in and the codec Windows
+        // has — and the installed image converter behind them, for the pictures those answer
+        // nothing for: a name whose codec package the machine has not been given, which is what a
+        // `.heic`, a `.jxl` or a camera raw is on a machine without the extension for it (see
+        // `wic_image` and `magick_formats`).
+        PreviewType::Images => &[Reader::Native, Reader::ImageMagick],
     }
 }
 

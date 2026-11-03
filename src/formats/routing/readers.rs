@@ -79,7 +79,9 @@ pub enum Reader {
     Office,
     /// The installed render engine, which draws a page of what its import filters read.
     LibreOffice,
-    /// The installed image converter, which develops a picture nothing else opens.
+    /// The installed image converter, which develops a picture nothing else opens — and which is
+    /// the second reader of the picture kind, behind the readers of this app, for a name whose
+    /// codec package the machine has not been given (see `magick_formats` and `chain`).
     ImageMagick,
     /// The installed archiver, which lists a container no reader here opens.
     PeaZip,

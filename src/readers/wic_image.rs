@@ -1,6 +1,13 @@
 //! The picture formats this app's own decoder does not read and Windows does: HEIF
-//! (`.heic`, `.heif`), AVIF (`.avif`), JPEG XL (`.jxl`), a still WebP (`.webp`) and a
-//! DirectDraw Surface (`.dds`).
+//! (`.heic`, `.heif`, `.heics`, `.heifs`, `.hif`), AVIF (`.avif`, `.avifs`, `.avcs`), the AVC
+//! still (`.avci`), JPEG XL (`.jxl`), JPEG XR (`.jxr`, `.wdp`), a still WebP (`.webp`), a
+//! DirectDraw Surface (`.dds`), the camera raws the Raw Image Extension decodes
+//! (`.dng`, `.nef`, `.cr3` and the rest), and the bitmap, icon and cursor resources
+//! (`.bmp`, `.dib`, `.rle`, `.ico`, `.icon`, `.exif`, `.cur`).
+//!
+//! They are pictures the image list carries — the master bucket for everything Windows
+//! decodes that *is* a picture — and this is the reader that asks the codec for them (see
+//! `lists::DEFAULT_IMAGE_EXTENSIONS`).
 //!
 //! Nothing is bundled for them and nothing is installed beside the app. What decodes
 //! them is the Windows Imaging Component — the codec surface Windows itself draws
@@ -66,14 +73,28 @@ use windows::Win32::Graphics::Imaging::{
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
+use windows::Win32::UI::Shell::SHCreateMemStream;
 
 /// The names a codec is asked for.
 ///
 /// They are entries of the image list as well — that list is what decides a hover is
 /// a picture at all, and these are pictures — so this is only which pictures the
 /// codec has to be asked about rather than the decoder every other picture goes
-/// through.
-const CODEC_EXTENSIONS: &[&str] = &["avci", "avif", "dds", "heic", "heif", "jxl", "webp"];
+/// through. A name is here because no decoder in the binary carries the format: the
+/// ones `image` reads (a PNG, a JPEG, a BMP, a TIFF, a TGA, a QOI, an EXR) are asked of
+/// it and never of a codec, which is what keeps a picture whose decode is in hand from
+/// costing a codec call as well.
+///
+/// The bitmap, icon and cursor shapes are here beside the codec packages they look
+/// unlike, because `image` reads some of them under other names and not at all under
+/// these: a `.dib` has no file header to sniff, and a `.cur` is a cursor rather than the
+/// icon `image` can open.
+const CODEC_EXTENSIONS: &[&str] = &[
+    "3fr", "arw", "avcs", "avif", "avifs", "avci", "cr2", "cr3", "crw", "cur", "dcr", "dds", "dib",
+    "dng", "erf", "exif", "fff", "heic", "heics", "heif", "heifs", "hif", "ico", "icon", "iiq",
+    "jxl", "jxr", "k25", "kdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "pef", "raf", "raw",
+    "rle", "rw2", "rwl", "sr2", "srf", "srw", "wdp", "webp", "x3f",
+];
 
 thread_local! {
     /// The imaging factory this thread asks its codecs through.
@@ -180,8 +201,26 @@ pub(crate) fn factory() -> Option<IWICImagingFactory> {
 /// a file with the file API rather than through a broker: every path form the rest of
 /// the app produces is one it accepts, the long one and the share included — which is
 /// what the module's test asks, in the form the Shell hands a hovered path over.
+///
+/// A `.dib` is the one name here the codec will not open by itself: it is a bitmap with its
+/// fourteen-byte file header taken off, and this decoder reads that header rather than the
+/// shape. So the header is put back in memory and the codec is handed the file as a stream
+/// instead (see `bitmap_resource_bytes`).
 fn open_frame(path: &Path) -> Option<IWICBitmapFrameDecode> {
     let factory = factory()?;
+
+    if is_bitmap_resource(path) {
+        let stream = unsafe { SHCreateMemStream(Some(&bitmap_resource_bytes(path)?)) }?;
+
+        return unsafe {
+            factory
+                .CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)
+                .ok()?
+                .GetFrame(0)
+                .ok()
+        };
+    }
+
     let wide: Vec<u16> = path
         .as_os_str()
         .encode_wide()
@@ -200,6 +239,62 @@ fn open_frame(path: &Path) -> Option<IWICBitmapFrameDecode> {
 
         decoder.GetFrame(0).ok()
     }
+}
+
+/// Whether the file is the bitmap the codec will not open by itself — see `open_frame`.
+fn is_bitmap_resource(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dib"))
+}
+
+/// A device-independent bitmap as the file the codec does open: its own bytes with the
+/// fourteen-byte bitmap-file header put back in front of them.
+///
+/// The header is written for the one field the codec reads out of it rather than for what it
+/// is: where the picture begins, which is the DIB header's own length, the masks a bitfield
+/// header carries behind it, and the palette entries the header names — or one for every
+/// colour a `bits`-deep palette can hold, where it names none.
+///
+/// shortcut: the whole bitmap is read into memory, which is what a `.dib` on a hover is; a
+/// stream the codec could read in place is what to reach for if one ever turns up large.
+fn bitmap_resource_bytes(path: &Path) -> Option<Vec<u8>> {
+    let dib = std::fs::read(path).ok()?;
+
+    let header = u32::from_le_bytes(dib.get(0..4)?.try_into().ok()?) as usize;
+    let bits = u16::from_le_bytes(dib.get(14..16)?.try_into().ok()?);
+    let compression = u32::from_le_bytes(dib.get(16..20)?.try_into().ok()?);
+    let colours = u32::from_le_bytes(dib.get(32..36)?.try_into().ok()?);
+
+    // A bitfield header carries its masks behind a 40-byte one, and names them inside a
+    // longer one.
+    let masks = match compression {
+        3 | 6 if header == 40 => {
+            if compression == 3 {
+                12
+            } else {
+                16
+            }
+        }
+        _ => 0,
+    };
+    let palette = if bits <= 8 && bits > 0 {
+        match colours {
+            0 => 1usize << bits,
+            entries => entries as usize,
+        }
+    } else {
+        0
+    };
+
+    let mut file = Vec::with_capacity(14 + dib.len());
+    file.extend_from_slice(b"BM");
+    file.extend_from_slice(&((14 + dib.len()) as u32).to_le_bytes());
+    file.extend_from_slice(&[0u8; 4]);
+    file.extend_from_slice(&((14 + header + masks + palette * 4) as u32).to_le_bytes());
+    file.extend_from_slice(&dib);
+
+    Some(file)
 }
 
 /// A frame's own size in pixels.
@@ -404,11 +499,28 @@ mod tests {
             "picture.jxl",
             "picture.webp",
             "picture.WEBP",
+            "picture.dib",
+            "picture.cur",
+            "picture.icon",
+            "picture.jxr",
+            "picture.wdp",
+            "picture.heics",
+            "picture.NEF",
+            "picture.cr2",
+            "picture.dng",
+            "picture.raw",
         ] {
             assert!(is_codec_file(Path::new(name)), "{name}");
         }
 
-        for name in ["picture.png", "picture.jpg", "picture.heic.txt", "heic"] {
+        for name in [
+            "picture.png",
+            "picture.jpg",
+            "picture.heic.txt",
+            "heic",
+            "picture.xcf",
+            "picture.miff",
+        ] {
             assert!(!is_codec_file(Path::new(name)), "{name}");
         }
     }
@@ -536,6 +648,149 @@ mod tests {
         std::fs::write(&path, bytes).ok()?;
 
         Some(path)
+    }
+
+    /// A `.dib` and a `.cur` — the two shapes of a picture in the master list that a codec is
+    /// asked about and that has no package of its own to be missing: a bitmap resource and a
+    /// cursor. Both are written here by hand rather than carried in the repository, because
+    /// what is being tested is that the codec reads what the format says, and a fixture off a
+    /// disc would be a second thing to keep in step with it.
+    ///
+    /// The bitmap is the one every Windows has a codec for, and the one whose file header this
+    /// app writes itself, so it is asserted rather than skipped. A cursor is asked of a codec
+    /// that a machine could be without — the answer then is a picture with no preview, which is
+    /// what this reader gives for a missing package as well — so a machine whose codec answers
+    /// nothing to it returns rather than failing (see
+    /// `decodes_a_heic_written_by_the_windows_codec`).
+    #[test]
+    fn decodes_a_bitmap_resource_and_a_cursor_where_the_codec_is_there() {
+        initialize_apartment();
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-wic-tests");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let (width, height) = (2u32, 2u32);
+        let probes = [
+            ("probe.dib", device_independent_bitmap(width, height), true),
+            ("probe.cur", cursor(width, height), false),
+        ];
+
+        for (name, bytes, everywhere) in probes {
+            let path = folder.join(name);
+            std::fs::write(&path, bytes).expect("a written picture");
+
+            assert!(
+                is_codec_file(&path),
+                "`{name}` is a name the codec is asked about"
+            );
+
+            let Some(measured) = dimensions(&path) else {
+                assert!(
+                    !everywhere,
+                    "`{name}` is read by the codec every Windows has"
+                );
+                continue;
+            };
+
+            assert_eq!(
+                measured,
+                (width, height),
+                "`{name}` is measured from its own frame"
+            );
+
+            let pixels = decode(&path, width, height)
+                .unwrap_or_else(|| panic!("`{name}` decodes at the box it was asked for"));
+            assert_eq!(
+                pixels.len(),
+                (width * height * 4) as usize,
+                "four bytes to the pixel for `{name}`"
+            );
+            assert_eq!(
+                &pixels[..4],
+                &[PROBE_BLUE, PROBE_GREEN, PROBE_RED, 255],
+                "`{name}` comes back in the order the frame is composed in"
+            );
+        }
+    }
+
+    /// A device-independent bitmap of one colour: the `BITMAPINFOHEADER` and the rows under it,
+    /// which is what a `.bmp` is once its own file header is taken off, and what a `.dib` is.
+    fn device_independent_bitmap(width: u32, height: u32) -> Vec<u8> {
+        // A row of a 24-bit bitmap is padded to four bytes, and stored bottom-up — the colour
+        // here is the same in every pixel, so which end the rows are written from does not
+        // matter to what is read back.
+        let row = (width as usize * 3).div_ceil(4) * 4;
+        let mut bytes = bitmap_info_header(width, height, 24);
+
+        for _ in 0..height {
+            let mut pixels = vec![0u8; row];
+            for column in 0..width as usize {
+                pixels[column * 3..column * 3 + 3].copy_from_slice(&[
+                    PROBE_BLUE,
+                    PROBE_GREEN,
+                    PROBE_RED,
+                ]);
+            }
+            bytes.extend_from_slice(&pixels);
+        }
+
+        bytes
+    }
+
+    /// A cursor of one colour: the icon directory, the one entry that says where its image is,
+    /// and the image itself. A cursor and an icon are the same file with one field of that
+    /// directory saying which it is, and the image is a bitmap under a mask — which is why the
+    /// header's height is twice the picture's.
+    fn cursor(width: u32, height: u32) -> Vec<u8> {
+        let image = {
+            let mut bytes = bitmap_info_header(width, height * 2, 32);
+
+            for _ in 0..height {
+                for _ in 0..width {
+                    bytes.extend_from_slice(&[PROBE_BLUE, PROBE_GREEN, PROBE_RED, 255]);
+                }
+            }
+
+            // The mask, all clear: every pixel is drawn through rather than left out.
+            let mask_row = (width as usize).div_ceil(32) * 4;
+            bytes.extend(std::iter::repeat_n(0u8, mask_row * height as usize));
+
+            bytes
+        };
+
+        // `ICONDIR` — reserved, 2 for a cursor, one image — then the entry: its shape, its
+        // palette, the hotspot (zero, the corner) and where its image starts behind the two.
+        let mut bytes = Vec::with_capacity(22 + image.len());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&[width as u8, height as u8, 0, 0]);
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&(image.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&22u32.to_le_bytes());
+        bytes.extend_from_slice(&image);
+
+        bytes
+    }
+
+    /// A `BITMAPINFOHEADER` of a picture that is not compressed, which is the whole of the header
+    /// every bitmap resource and every image in an icon opens with.
+    fn bitmap_info_header(width: u32, height: u32, bits: u16) -> Vec<u8> {
+        let stride = (width as usize * bits as usize).div_ceil(8).div_ceil(4) * 4;
+        let image_size = stride * height as usize;
+
+        let mut bytes = Vec::with_capacity(40);
+        bytes.extend_from_slice(&40u32.to_le_bytes());
+        bytes.extend_from_slice(&(width as i32).to_le_bytes());
+        bytes.extend_from_slice(&(height as i32).to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&bits.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&(image_size as u32).to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 16]);
+
+        bytes
     }
 
     /// The bytes a WinRT stream holds, read the way the PDF module reads its own.

@@ -79,6 +79,16 @@ pub(super) fn held_box(
         .map(|held| held.size)
 }
 
+/// Whether the measure the layout ran for this file came back with nothing — a picture the readers
+/// of this app have no answer for, and so one the engine behind them is owed (see `picture_box`
+/// and `magick_render_is_due`).
+///
+/// A file nothing has measured yet answers `false`: nothing is known to be unreadable, and a wait
+/// placed on a guess would be a spinner in front of a picture that is already there.
+pub(super) fn measured_as_nothing(path: &Path) -> bool {
+    held_box(path, &file_version(path), &MeasureScope::File) == Some(None)
+}
+
 /// Hold the box a measure answered with.
 pub(super) fn hold_box(
     path: &Path,
