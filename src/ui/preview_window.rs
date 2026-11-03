@@ -433,6 +433,7 @@ pub(crate) use requests::request_pin_end;
 pub(crate) use requests::request_pin_menu_dismiss;
 pub(crate) use requests::show_preview;
 pub(crate) use requests::show_preview_keyboard;
+pub(crate) use requests::take_pin_menu_pressed;
 pub(crate) use requests::take_pin_resumed;
 pub(crate) use requests::update_pinned_preview;
 pub(crate) use subtitle_files::keep_extraction_for;

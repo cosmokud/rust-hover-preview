@@ -563,6 +563,10 @@ pub(super) unsafe fn bubble_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
             .copied()
     });
 
+    if row.is_some() {
+        pin_menu::note_pin_menu_pressed();
+    }
+
     // The chrome rows above are built from the same list in the same order, so an index into the
     // panel is an index into the rows the menu holds.
     //

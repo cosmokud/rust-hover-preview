@@ -440,6 +440,23 @@ impl Drop for BubbleHwndPutBack {
     }
 }
 
+/// The pin menu's handle put where a test asks, and put back when the guard is dropped.
+struct PinMenuHwndPutBack;
+
+impl PinMenuHwndPutBack {
+    fn put(hwnd: HWND) -> Self {
+        crate::ui::preview_window::PIN_MENU_HWND
+            .store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for PinMenuHwndPutBack {
+    fn drop(&mut self) {
+        crate::ui::preview_window::PIN_MENU_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// A press on the bubble is not published either: a collapsed pin leaves no window on
 /// screen but the bubble, the bubble carries the same menu a card does, and a press on it
 /// is answered there rather than out here (see `bubble_menu_press`). The bubble's handle
@@ -498,6 +515,42 @@ fn a_press_on_the_bubble_is_the_pins_own_and_is_not_published() {
             window_is_menu_popup_chrome(HWND(0x2000 as *mut _))
         ),
         "and the tick after the bubble's menu closed is that menu's press, not a click on the file"
+    );
+}
+
+#[test]
+fn a_press_on_the_pin_menu_is_the_pins_own_and_is_not_published() {
+    let _put_back = PinMenuHwndPutBack::put(HWND(0x4000 as *mut _));
+    let on_menu = PointerTick {
+        point: POINT { x: 50, y: 150 },
+        dpi: 96,
+        window: HWND(0x4000 as *mut _),
+    };
+    let elsewhere = PointerTick {
+        point: POINT { x: 50, y: 150 },
+        dpi: 96,
+        window: HWND(0x5000 as *mut _),
+    };
+
+    assert!(
+        !pin_menu_dismiss_ask(true, Some(&on_menu)),
+        "a press on the pin menu is a press on the pin's own window"
+    );
+    assert!(
+        pin_menu_dismiss_ask(true, Some(&elsewhere)),
+        "and one outside is published as dismissal"
+    );
+    assert!(
+        is_our_own_window(HWND(0x4000 as *mut _)),
+        "the pin menu window is our own window"
+    );
+    assert!(
+        press_is_on_the_pins_menu(false, true, HWND(0x4000 as *mut _), None),
+        "a press on the menu window is the pin's own menu press"
+    );
+    assert!(
+        press_is_on_the_pins_menu(true, true, HWND(0x5000 as *mut _), None),
+        "a press recorded by take_pin_menu_pressed is the pin's own menu press even if the window is gone"
     );
 }
 
