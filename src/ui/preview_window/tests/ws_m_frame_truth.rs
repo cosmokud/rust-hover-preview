@@ -419,7 +419,7 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
     );
     assert_eq!(
         take_pin_command(),
-        Some(PinCommand::Next),
+        Some(PinCommand::NextFile),
         "which walks the listing along"
     );
 
@@ -495,7 +495,7 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
     );
     assert_eq!(
         take_pin_command(),
-        Some(PinCommand::Next),
+        Some(PinCommand::NextFile),
         "which asks for its own command rather than another arm's"
     );
 

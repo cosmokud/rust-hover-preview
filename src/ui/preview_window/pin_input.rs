@@ -1245,8 +1245,8 @@ pub(super) unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> b
 /// does nothing at all, because a seek was already taken where it was pressed.
 ///
 /// The two ends of the walk are the caption's own walk rather than this card's: `PinCommand::
-/// Previous` and `PinCommand::Next` are what the caption's arrows ask for, so a step from a button
-/// on the card and a step from a button on the caption are one walk and not two.
+/// PreviousFile` and `PinCommand::NextFile` are what the caption's arrows ask for, so a step from
+/// a button on the card and a step from a button on the caption are one walk and not two.
 pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) -> bool {
     // No button of the card was held, so this arm has nothing to answer and nothing of the
     // pointer's to give back: the capture a press took belongs to the arm that armed it, and a
@@ -1270,8 +1270,8 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
             // The player's own state — whether it is going — is the loop's, so this is a door
             // rather than a call (see `settle_pinned_audio_toggle`).
             CardControl::Play => ask_pin_audio_toggle(),
-            CardControl::Previous => ask_pin(PinCommand::Previous),
-            CardControl::Next => ask_pin(PinCommand::Next),
+            CardControl::Previous => ask_pin(PinCommand::PreviousFile),
+            CardControl::Next => ask_pin(PinCommand::NextFile),
             // The panel is over this app's own card rather than over a player's window, so raising
             // the pin's window for it is harmless rather than necessary (see `toggle_pin_volume`).
             CardControl::Volume => toggle_pin_volume(hwnd),
@@ -1371,8 +1371,8 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
                 pin_chrome::CaptionButton::Minimize => ask_pin(PinCommand::Minimize),
                 pin_chrome::CaptionButton::Maximize => ask_pin(PinCommand::Maximize),
                 pin_chrome::CaptionButton::Close => ask_pin(PinCommand::Close),
-                pin_chrome::CaptionButton::Previous => ask_pin(PinCommand::Previous),
-                pin_chrome::CaptionButton::Next => ask_pin(PinCommand::Next),
+                pin_chrome::CaptionButton::Previous => ask_pin(PinCommand::PreviousFile),
+                pin_chrome::CaptionButton::Next => ask_pin(PinCommand::NextFile),
                 // The file is in hand here and the Shell takes it as it stands, so this one
                 // is asked for where it was pressed rather than written down for the loop
                 // to pick up: nothing about opening a file is the loop's business.
