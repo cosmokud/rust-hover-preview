@@ -442,6 +442,26 @@ pub(super) fn press_is_the_pins_chrome(pressed: bool, on_a_caption_button: bool)
     pressed && on_a_caption_button
 }
 
+/// Whether a press is one the pin itself took: its point is inside the pin's own box, whatever the
+/// window under that point turned out to be.
+///
+/// **The hit test cannot answer this one**, which is what the box is asked instead for: a pin's film
+/// stands in a host that answers `HTTRANSPARENT` so the press reaches the pin's chrome, and a hit
+/// test that skips the host names the *listing* the pin was fitted over (see `pin_film_host`). Read
+/// as that listing's, a press on the pin's own picture is a press that picked no file — the point
+/// holds the gap between the rows — and the pin is put back behind the listing for it (see
+/// `pin_press_was_not_a_pick` and `lower_pinned_preview`).
+///
+/// The box is handed in rather than read here, because the watch already holds the pin's box and it
+/// is the same reading its own move is measured against (see `PinUpdateWatch::note_pin_box`).
+pub(super) fn press_is_on_the_pin(
+    pressed: bool,
+    point: POINT,
+    pin_box: Option<(i32, i32, i32, i32)>,
+) -> bool {
+    pressed && pin_box.is_some_and(|pin_box| point_in_box(point, pin_box))
+}
+
 /// Whether a press is one the pin answers at all, whatever it turned out to name.
 ///
 /// The pin owes the listing an answer for a press in that listing's own window — the frame, its view,

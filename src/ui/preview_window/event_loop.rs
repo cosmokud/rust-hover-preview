@@ -4208,13 +4208,11 @@ pub fn run_preview_window() {
                         // land over the line this has just drawn (see `relayout_pinned_media`).
                         relayout_text_for_the_box(content);
                         show_pinned_window(hwnd);
-                        // **And the box a gesture gave the pin is the box it is put in front at.**
-                        // A maximize, its restore, a reset and the end of a resize are all made in
-                        // the pin, and what the show above raises the window for is a question about
-                        // the window in front — which a gesture on the pin leaves as one of this
-                        // app's own as often as not, so the raise is one the gesture is owed whatever
-                        // the foreground says (see `the_pin_takes_the_front_after_a_box_change`).
-                        the_pin_takes_the_front_after_a_box_change();
+                        // **The box a gesture gave the pin is traced here**, because what a raise after
+                        // it answered is exactly what a run cannot see from the desktop afterwards: the
+                        // ladder is sampled over the next two seconds (see
+                        // `pin_trace::watch_the_ladder_after_a_box_change`).
+                        pin_trace::watch_the_ladder_after_a_box_change();
                         place_pinned_siblings();
                         publish_pointer_hold(hwnd);
                     }

@@ -2439,52 +2439,6 @@ pub(super) unsafe fn pin_stands_over(hwnd: HWND, window: HWND) -> bool {
     false
 }
 
-/// A gesture made in a pin gave it another box: put the pin in front of the window it was fitted
-/// over, where it is not already there.
-///
-/// **The show's own raise cannot answer this one.** That raise is a question about the window in
-/// front — the pin, a listing, a film's host, the engine's page, the menu a row was pressed in — and
-/// a box change made from inside the pin lands with any of them in front: the host a click on the
-/// band activates, the page under the pointer, the pair's own menu. The answer is then no raise at
-/// all, and a pin given a maximized box stands behind the listing it was fitted over until the user
-/// clicks it again. One question is asked here instead — is the pin in front of the front-most
-/// ordinary window — and the front is then taken the one way Windows cannot refuse (see
-/// `take_the_band_and_give_it_back`).
-///
-/// Nothing is asked of a pin already in the topmost band, whatever holds it there: there is no
-/// ordinary window over such a pin, and the flip would give a held band back early (see `band_place`).
-pub(super) unsafe fn the_pin_takes_the_front_after_a_box_change() {
-    let hwnd = pinned_window();
-    // **Which road out of this one was taken**, written as it is taken: the whole of what a box change
-    // owes the front is the difference between a pin that flipped the band and one that did not, and a
-    // run cannot tell them apart from the desktop's own answer afterwards (see `band_place`).
-    let road = if pin_is_collapsed() {
-        "collapsed"
-    } else if !pin_update_move_to_top() {
-        "move-to-top off"
-    } else if band_place() == HWND_TOPMOST {
-        "band already topmost"
-    } else {
-        let front = unsafe { front_ordinary_window(hwnd) };
-        if front.is_invalid() || unsafe { pin_stands_over(hwnd, front) } {
-            "already in front"
-        } else {
-            unsafe { take_the_band_and_give_it_back(hwnd, "a box change") };
-            "flipped"
-        }
-    };
-
-    if pin_trace::wanted() {
-        note_pin_trace!(
-            "front after a box change: {road} above={}",
-            pin_trace::what_is_above(hwnd)
-        );
-        // The same front is sampled over the next two seconds: what the raise answered is one window,
-        // and what a run needs is what stands over the pin after it (see `write_the_ladder`).
-        pin_trace::watch_the_ladder_after_a_box_change();
-    }
-}
-
 /// The front-most window a pin belongs behind: the first visible window in the z-order that is
 /// neither this app's own, nor topmost, nor the desktop.
 ///

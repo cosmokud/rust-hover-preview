@@ -1041,9 +1041,8 @@ pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
     }
 
     let placed = pinned_window_box_of(content, dpi, transport, overlay, caption);
-    // The place is the move and the raise is the gesture's: `HWND_TOPMOST` beside `SWP_NOZORDER`
-    // named a band this call drops, so the window moved and nothing put it in front of what it had
-    // been carried over (see `the_pin_takes_the_front_after_a_box_change`).
+    // The insert-after argument is left empty rather than named: `SWP_NOZORDER` drops it, and a band
+    // named beside it is a call that reads as a raise and is not one.
     let _ = SetWindowPos(
         hwnd,
         HWND::default(),
@@ -1053,7 +1052,9 @@ pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
         size.1,
         SWP_NOACTIVATE | SWP_NOZORDER,
     );
-    unsafe { the_pin_takes_the_front_after_a_box_change() };
+    // Traced rather than answered: what a run needs is what stands over the pin after a box change
+    // (see `pin_trace::watch_the_ladder_after_a_box_change`).
+    pin_trace::watch_the_ladder_after_a_box_change();
     place_pinned_siblings();
 }
 
