@@ -552,6 +552,18 @@ fn a_press_on_the_pin_menu_is_the_pins_own_and_is_not_published() {
         !pin_menu_window_is_at(HWND(0x3000 as *mut _)),
         "while a window the slot does not hold is not the pin menu"
     );
+    assert!(
+        is_our_own_window(HWND(0x4000 as *mut _)),
+        "the pin menu window is our own window"
+    );
+    assert!(
+        press_is_on_the_pins_menu(false, true, HWND(0x4000 as *mut _), None),
+        "a press on the menu window is the pin's own menu press"
+    );
+    assert!(
+        press_is_on_the_pins_menu(true, true, HWND(0x3000 as *mut _), None),
+        "a press recorded by take_pin_menu_pressed is the pin's own menu press even if the window is gone"
+    );
 }
 
 /// A pointer that has left the item the preview on screen is about has moved,

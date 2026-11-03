@@ -13,6 +13,25 @@
 //! this window draws its own panels (see `pin_chrome::menu`).
 
 use super::*;
+use std::sync::atomic::AtomicBool;
+
+/// Whether a press landed inside the pin's own menu (the popup or its flyout).
+///
+/// Cleared on read by the Explorer hook's `pin_watch`, so a press that dismissed the menu
+/// or picked a row on it does not lower the preview behind Explorer when over an Explorer window.
+static PIN_MENU_PRESSED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn note_pin_menu_pressed() {
+    PIN_MENU_PRESSED.store(true, Ordering::SeqCst);
+}
+
+pub(crate) fn take_pin_menu_pressed() -> bool {
+    PIN_MENU_PRESSED.swap(false, Ordering::SeqCst)
+}
+
+fn point_in_panel(panel: &RECT, x: i32, y: i32) -> bool {
+    x >= panel.left && x < panel.right && y >= panel.top && y < panel.bottom
+}
 
 /// The state of the card's menu: whether its panel is up, and which row's flyout is
 /// up beside it.
@@ -840,10 +859,19 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     let card = pin_state()
         .and_then(|pinned| pinned.pin().map(pin_shows_an_audio_card))
         .unwrap_or(false);
+    let on_menu_panel = point_in_panel(&paint.popup.panel, x, y)
+        || paint
+            .flyout
+            .as_ref()
+            .is_some_and(|f| point_in_panel(&f.popup.panel, x, y));
     let stays_up = match card {
         true => card_menu_press(&paint, x, y),
         false => shared_menu_press(hwnd, &paint, x, y),
     };
+
+    if on_menu_panel {
+        note_pin_menu_pressed();
+    }
 
     if !stays_up {
         // The pointer is kept while a hand-off is armed: the release that makes it has to arrive
