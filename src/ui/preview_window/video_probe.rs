@@ -8,10 +8,15 @@
 use super::*;
 
 pub(super) const VIDEO_CROPDETECT_LIMIT: &str = "24";
-pub(super) const VIDEO_CROPDETECT_ROUND: &str = "16";
+// 8, not 16: 480/720/1080/1440/2160 are all multiples of 8, so a whole frame floors to itself
+// and the full-frame refusal below catches it. Round 16 floored 1080 to 1072 and was accepted.
+pub(super) const VIDEO_CROPDETECT_ROUND: &str = "8";
 pub(super) const VIDEO_CROPDETECT_FRAMES: &str = "48";
 pub(super) const VIDEO_CROP_MAX_AXIS_TRIM_RATIO: f32 = 0.10;
 pub(super) const VIDEO_CROP_MAX_ASYMMETRY_PX: i32 = 12;
+// Under one detector grid step off both axes is codec padding (H.264 pads 1080 to 1088) or
+// rounding, not a letterbox.
+pub(super) const VIDEO_CROP_MIN_AXIS_TRIM_PX: u32 = 16;
 
 /// How long either of a video's two probes is given before it is killed and the file is
 /// answered as one that could not be measured.
@@ -370,18 +375,27 @@ pub(super) fn validate_detected_crop(crop: VideoCrop, src_w: u32, src_h: u32) ->
         return false;
     }
 
+    if trim_x < VIDEO_CROP_MIN_AXIS_TRIM_PX && trim_y < VIDEO_CROP_MIN_AXIS_TRIM_PX {
+        return false;
+    }
+
     (trim_left - trim_right).abs() <= VIDEO_CROP_MAX_ASYMMETRY_PX
         && (trim_top - trim_bottom).abs() <= VIDEO_CROP_MAX_ASYMMETRY_PX
+}
+
+/// The detector's filter string, which is what the round it floors to is asked of.
+pub(super) fn video_cropdetect_filter() -> String {
+    format!(
+        "cropdetect={}:{}:0",
+        VIDEO_CROPDETECT_LIMIT, VIDEO_CROPDETECT_ROUND
+    )
 }
 
 /// Every crop rectangle ffmpeg's detector reported for the file, with the number
 /// of frames that reported it. The source dimensions are not needed to collect
 /// them, which is what lets this run alongside the probe that reads them.
 pub(super) fn collect_video_crop_candidates(path: &PathBuf) -> HashMap<(u32, u32, u32, u32), u32> {
-    let filter = format!(
-        "cropdetect={}:{}:0",
-        VIDEO_CROPDETECT_LIMIT, VIDEO_CROPDETECT_ROUND
-    );
+    let filter = video_cropdetect_filter();
 
     // Spawned rather than run through `Command::output` for the same reason the
     // ffprobe next to it is: a probe that is in the job is one a crash cannot leave
