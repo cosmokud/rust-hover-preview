@@ -7,11 +7,14 @@
 #
 # Every checkout builds into that one dir, so a dependency is compiled once and
 # stored once instead of once per worktree. Cargo's artifact and fingerprint names
-# carry no part of a checkout's path, so a build here could otherwise be called
-# fresh against another tree's recorded inputs and do nothing at all, leaving that
-# tree's binary behind. RHP_WORKTREE is this checkout's path and `build.rs` watches
-# it, so a build in a different checkout always recompiles this package — and only
-# this package, which is the part that cannot be shared between checkouts anyway.
+# carry no part of a checkout's path, so this package — the one thing that dir
+# cannot share — keeps one fingerprint that any checkout's build calls fresh, and
+# the artifact path is shared as well: the binary left there is whoever linked last.
+# Cargo never looks at that artifact's mtime, so nothing about a switch invalidates
+# it. Touching src/main.rs below dirties this package through the
+# `cargo:rerun-if-changed=src` that build.rs already prints, so the next build in
+# this checkout recompiles and relinks its own binary instead of leaving another
+# checkout's behind at the path the app is launched from.
 
 set -eu
 
@@ -38,4 +41,9 @@ root=$(git rev-parse --show-toplevel) || exit 0
 root=$(printf '%s' "$root" | tr '\\' '/')
 
 mkdir -p "$root/.cargo"
-printf '# Written by .githooks/post-checkout. Machine-local, never committed.\n[build]\ntarget-dir = "%s"\n\n# Differs per checkout: a build in another one recompiles this package (see build.rs).\n[env]\nRHP_WORKTREE = { value = "%s", relative = false, force = true }\n' "$target" "$root" > "$root/.cargo/target-dir.local.toml"
+printf '# Written by .githooks/post-checkout. Machine-local, never committed.\n[build]\ntarget-dir = "%s"\n' "$target" > "$root/.cargo/target-dir.local.toml"
+
+# See the header: a shared fingerprint needs dirtying, and the artifact's mtime does not count.
+if [ -f "$root/src/main.rs" ]; then
+  touch "$root/src/main.rs"
+fi
