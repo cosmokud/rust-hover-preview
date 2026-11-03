@@ -4469,6 +4469,8 @@ pub fn run_preview_window() {
                             // drawn at is what the configuration says (see `load_media`).
                             None,
                             no_cancel,
+                            // And it begins the file at its first frame.
+                            0,
                         ) {
                             // Nothing of this app's is on screen for a video — the
                             // player draws it in a window of its own — so what is put

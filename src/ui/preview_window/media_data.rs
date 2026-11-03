@@ -262,6 +262,13 @@ impl MediaData {
         self.frames.get(self.current_frame).map(AsRef::as_ref)
     }
 
+    /// The place the frame on screen is at in its own file, which is the place a picture that plays
+    /// carries across a decode — never the frame's index among the frames in hand, which a release
+    /// and a decode begun part-way through the file both move (see `ImageFrame::file_index`).
+    pub(super) fn current_frame_of_file(&self) -> Option<usize> {
+        self.current_frame().map(|frame| frame.file_index)
+    }
+
     pub(super) fn current_pixels(&self) -> &[u8] {
         self.current_frame()
             .map(|frame| frame.pixels.as_slice())

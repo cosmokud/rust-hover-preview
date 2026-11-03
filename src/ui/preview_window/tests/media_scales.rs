@@ -195,6 +195,67 @@ fn write_test_gif(path: &Path, frames: usize) {
     std::fs::write(path, bytes).expect("a written GIF");
 }
 
+/// **A decode asked to begin at a place begins there, and the stream goes on from it.** A box change of
+/// a pin that plays decodes the file from the place its playhead is at rather than from the file's first
+/// frame (see `keep_animation_place`), so what the loader answers with is the frames from that place
+/// onward — each carrying where it is in the file — and every frame the stream decodes after them goes
+/// on down the file rather than starting it again.
+#[test]
+fn a_decode_begun_at_a_place_answers_from_it_and_the_stream_goes_on_from_there() {
+    let folder = std::env::temp_dir().join("rhp-animated-resume-fixtures");
+    std::fs::create_dir_all(&folder).expect("a fixture folder");
+    let gif = folder.join("resumed.gif");
+    write_test_gif(&gif, 8);
+
+    let mut loaded = load_animated_gif(
+        &gif,
+        64,
+        64,
+        PreviewScale::Percent(100),
+        Arc::new(AtomicBool::new(false)),
+        4,
+    )
+    .expect("a file decoded from its fifth frame is still the animation it is");
+
+    assert_eq!(
+        loaded.frames.len(),
+        ANIMATION_STARTUP_FRAMES,
+        "the startup answer is the frames from the place onward, not a file begun again"
+    );
+    assert_eq!(
+        loaded.current_frame_of_file(),
+        Some(4),
+        "and the frame the preview opens on is the place the decode was asked to begin at"
+    );
+    assert_eq!(
+        loaded
+            .frames
+            .iter()
+            .map(|frame| frame.file_index)
+            .collect::<Vec<_>>(),
+        vec![4, 5],
+        "the ids are the frames' own, from the file's first frame"
+    );
+
+    // The decoder runs on down the file from where the startup answer ended.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while loaded.frames.len() < 4 && Instant::now() < deadline {
+        loaded.sync_shared_frames();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        loaded
+            .frames
+            .iter()
+            .map(|frame| frame.file_index)
+            .collect::<Vec<_>>(),
+        vec![4, 5, 6, 7],
+        "the streamed frames continue the file's run rather than restarting it at zero"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 /// A video's size is a setting of its own: a video the probe has answered for keeps
 /// the share `video_scale` names whatever the pictures beside it are drawn at. A
 /// video the probe has not answered for is not laid out at any share yet — what is
@@ -616,6 +677,7 @@ fn only_a_gif_with_a_second_frame_counts_as_one() {
         64,
         PreviewScale::Percent(100),
         Arc::new(AtomicBool::new(false)),
+        0,
     )
     .expect("the two-frame file loads as an animation");
     assert_eq!(
@@ -631,6 +693,7 @@ fn only_a_gif_with_a_second_frame_counts_as_one() {
             64,
             PreviewScale::Percent(100),
             Arc::new(AtomicBool::new(false)),
+            0,
         )
         .is_none(),
         "a single frame is not an animation, so the loader turns it down"
