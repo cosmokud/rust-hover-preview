@@ -30,13 +30,14 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetWindowLongPtrW, IsWindowVisible, MoveWindow, RegisterClassExW,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX,
-    WS_POPUP, WS_SYSMENU,
+    CreateWindowExW, GetForegroundWindow, GetWindowLongPtrW, IsWindowVisible, MoveWindow,
+    RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
+use super::pin_trace::note_pin_trace;
 use super::window_proc;
 use super::ScreenRegion;
 
@@ -92,6 +93,28 @@ fn real_pin_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
 pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) {
     if unsafe { set_an_ex_style(hwnd, WS_EX_APPWINDOW, app_window) } {
         unsafe { ask_the_window_to_re_read_its_style(hwnd) };
+
+        // **A window the user is in keeps the show it was given, because the show that re-reads the
+        // bit is one the user watches.** The Shell reads whether a window is listed from the show
+        // that put it on the screen, so the only way to have it read a bit written now is to put the
+        // window down and up again — and a window put down is a window the desktop behind it shows
+        // through. Under the hand that pressed `Always On Top`, that is the sound card blinking out
+        // on every press: the pin is the window the user is in (a press on it took the caret, see
+        // `pin_take_focus`), so the bit is written here and read at the pin's next show rather than
+        // paid for now. A button that is one show late is the smaller price than a hole where the
+        // card was.
+        if unsafe { GetForegroundWindow() } == hwnd && the_pins_own_window(hwnd) {
+            note_pin_trace!(
+                "appwindow {} of {}: the user is in it, read at its next show",
+                app_window as u8,
+                super::pin_trace::window_name(hwnd),
+            );
+            return;
+        }
+
+        // A window that is down is left alone as well: the show it is owed is the one that brings it,
+        // and that show reads the bit (see `pin_film_host::create` and `promote_the_hover_film_host`,
+        // which write the bit before any show rather than paying for one here).
         if unsafe { IsWindowVisible(hwnd) }.as_bool() {
             #[cfg(test)]
             if let Ok(mut shown) = APPWINDOW_SHOWS.lock() {
@@ -101,6 +124,12 @@ pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) 
             let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
         }
     }
+}
+
+/// Whether `hwnd` is the window a pin of this app's stands in right now (see
+/// `set_the_pin_window_appwindow`).
+fn the_pins_own_window(hwnd: HWND) -> bool {
+    super::pinned() && super::pinned_window() == hwnd
 }
 
 /// The windows this run has put down and up again so that the Shell reads a taskbar bit: the one
@@ -257,9 +286,10 @@ pub(super) unsafe fn hide_real_pin_window() {
 mod tests {
     use super::super::tests::the_room_to_itself;
     use super::*;
+    use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        DestroyWindow, GetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TOPMOST,
+        DestroyWindow, GetWindowLongPtrW, GetWindowRect, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     /// What makes a window a window as far as the Shell is concerned, and what makes it not one: the
@@ -345,6 +375,47 @@ mod tests {
             keeps_out_of_the_keyboard(hwnd),
             WINDOW_EX_STYLE::default(),
             "a window that is no pin's own is the hover's to keep out of the keyboard"
+        );
+
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        REAL_PIN_HWND.store(0, Ordering::SeqCst);
+    }
+
+    /// **The show a taskbar bit costs leaves the window where it stands.** A window put down and up
+    /// again so the Shell reads its button is a window that keeps the box it was placed in — what
+    /// moves is whether the Shell lists it, not where it is (see `set_the_pin_window_appwindow`).
+    #[test]
+    fn the_put_down_that_re_reads_a_button_leaves_the_window_where_it_stands() {
+        let _room = the_room_to_itself();
+
+        let box_ = (-20000, -20000, -19680, -19760);
+        let hwnd = unsafe { real_pin_window_at(box_) }.expect("the pin's own window");
+        let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+
+        let mut before = RECT::default();
+        assert!(
+            unsafe { GetWindowRect(hwnd, &mut before) }.is_ok(),
+            "the stand's window is a window, so its box is readable"
+        );
+
+        // The bit the window was made with is taken off it: the change is a put-down and a show.
+        unsafe { set_the_pin_window_appwindow(hwnd, false) };
+
+        assert!(
+            unsafe { IsWindowVisible(hwnd) }.as_bool(),
+            "the window the Shell was shown is a window on the screen"
+        );
+        let mut after = RECT::default();
+        assert!(
+            unsafe { GetWindowRect(hwnd, &mut after) }.is_ok(),
+            "and the box is readable after the show as before it"
+        );
+        assert_eq!(
+            (after.left, after.top, after.right, after.bottom),
+            (before.left, before.top, before.right, before.bottom),
+            "the box the hand left is where the show is played out: nothing of the pin is moved"
         );
 
         unsafe {

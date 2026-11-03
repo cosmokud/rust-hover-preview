@@ -2532,6 +2532,13 @@ pub fn run_preview_window() {
                                 settle_pinned_mpv_ontop();
                                 AUDIO_CARD_DIRTY.store(true, Ordering::Release);
                                 render_layered_preview(hwnd);
+                                // **And the pin's place is settled last, because the button road above
+                                // is one that moves the caret.** Reading the Shell's bit back costs a
+                                // visible window a hide and a re-show, and a hidden window hands the
+                                // caret to the window next in the z-order — the listing raised over a
+                                // pin that has just left the topmost band (see
+                                // `settle_the_pin_after_the_setting_moved`).
+                                settle_the_pin_after_the_setting_moved();
                             }
                         }
                     }

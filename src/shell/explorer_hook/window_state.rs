@@ -434,12 +434,12 @@ pub(super) fn press_is_a_listing(
         && !previous_was_chrome
 }
 
-/// Whether a press the hook read is one the pin's own caption buttons answered rather than the
-/// listing the pin stands over: the buttons are the pin's, and the file the chrome is drawn over is
+/// Whether a press the hook read is one the pin's own buttons answered rather than the
+/// listing the pin stands over: the buttons are the pin's, and the file drawn under one is
 /// not one the user picked — the minimize that press asks for must not arrive with that file (see
-/// `PinUpdateWatch::follow` and `pin_caption_button_covers`).
-pub(super) fn press_is_the_pins_chrome(pressed: bool, on_a_caption_button: bool) -> bool {
-    pressed && on_a_caption_button
+/// `PinUpdateWatch::follow` and `pin_button_covers`).
+pub(super) fn press_is_the_pins_chrome(pressed: bool, on_a_pin_button: bool) -> bool {
+    pressed && on_a_pin_button
 }
 
 /// Whether a press was read on the very tick this app's own window moved: the pin's box changed

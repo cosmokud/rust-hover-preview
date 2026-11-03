@@ -1,7 +1,7 @@
 //! A pin's own lifetime: the state it is installed and ended from, what ends it, and the
 //! window it stands in beside the player's.
 
-use super::pin_trace::note_pin_trace;
+use super::pin_trace::{self, note_pin_trace};
 use super::*;
 
 /// A pin was asked to come down, by the Explorer hook (previews were turned off, or the</path>
@@ -406,10 +406,77 @@ pub(crate) fn band_place() -> HWND {
 /// band — so the answer is the one every other placement asks (see `band_place` and
 /// `pin_film_host::place_the_pin_in_the_band`).
 ///
+/// **The ordinary band is taken and given back rather than asked for once, where the pin does not hold
+/// the foreground.** A window demoted from the topmost band is put just under the foreground window, so
+/// one `HWND_NOTOPMOST` leaves the pin behind the listing the user is working in — the same wall a press
+/// and a pick meet, and the same road over it (see `take_the_band_and_give_it_back`). The topmost band is
+/// one call, which is already the front of it.
+///
 /// It is a function rather than three lines in the loop for the reason the rows of a menu are: the
 /// loop cannot be asked what it did, and this is a rule about a band that a test can.
 pub(super) unsafe fn place_the_pin_where_the_setting_names() {
-    unsafe { pin_film_host::place_the_pin_in_the_band(pinned_window(), band_place()) };
+    let hwnd = pinned_window();
+    let band = band_place();
+    note_pin_trace!(
+        "setting names {:?}: pin {} caret in {} holds-band {}",
+        band,
+        pin_trace::window_name(hwnd),
+        pin_trace::window_name(unsafe { GetForegroundWindow() }),
+        unsafe { window_holds_the_topmost_band(hwnd) } as u8,
+    );
+    if band == HWND_NOTOPMOST && !hwnd.is_invalid() && unsafe { GetForegroundWindow() } != hwnd {
+        unsafe { take_the_band_and_give_it_back(hwnd, "the setting named the ordinary band") };
+    } else {
+        unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, band) };
+    }
+}
+
+/// Leave a pin whose setting has just been turned off where the user's own click put it: the front of
+/// the ordinary band.
+///
+/// **The click that turns `Always On Top` off is a click on the pin, and every part of answering it
+/// moves the caret.** The setting's own band change is one placement, and the Shell's button bit is
+/// another: a visible window's bit is re-read only by a hide and a re-show, and a hidden window hands
+/// the caret to the window next in the z-order — which the pin's own `WM_ACTIVATE` answer gives the
+/// listing for good (see `pin_real_window::set_the_pin_window_appwindow` and `pin_release_focus`).
+/// The listing raised over a pin that has just left the topmost band is the sound card vanishing
+/// behind Explorer on the very button the user pressed.
+///
+/// So the place is settled **after** that road rather than before it, and only where the window the
+/// pin is behind is one it belongs over: the listing it was picked in, the pin itself, or the desktop.
+/// Anywhere else the user has taken the caret with their own click, and a raise there is the pin over
+/// a program they chose (see `pin_holds_the_front` and `where_the_band_goes_back`). The raise is the
+/// one every press already takes, so a pin that is already in front is left exactly where it is.
+pub(super) unsafe fn settle_the_pin_after_the_setting_moved() {
+    if !pinned() || pin_always_on_top() || pin_is_collapsed() {
+        return;
+    }
+    let hwnd = pinned_window();
+    if hwnd.is_invalid() {
+        return;
+    }
+
+    let front = unsafe { GetForegroundWindow() };
+    let the_front_is_where_the_pin_stands = front == hwnd
+        || crate::shell::explorer_hook::explorer_browser_class_matches(front)
+        || unsafe { foreground_is_the_desktop(front) };
+    let stands_over_the_front = unsafe { pin_stands_over(hwnd, front) };
+    note_pin_trace!(
+        "settle after the setting moved: caret in {} stands-over {} raisable {}",
+        pin_trace::window_name(front),
+        stands_over_the_front as u8,
+        the_front_is_where_the_pin_stands as u8,
+    );
+
+    if !the_front_is_where_the_pin_stands || stands_over_the_front {
+        return;
+    }
+    unsafe { take_the_band_and_give_it_back(hwnd, "the setting was turned off") };
+    note_pin_trace!(
+        "settled: caret in {} stands-over {}",
+        pin_trace::window_name(unsafe { GetForegroundWindow() }),
+        unsafe { pin_stands_over(hwnd, GetForegroundWindow()) } as u8,
+    );
 }
 
 /// Whether a pin being put up takes the topmost band for the moment it appears, and gives it back.

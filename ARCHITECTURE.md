@@ -494,8 +494,9 @@ otherwise be answered as the file the user had picked. A click is read through t
 Explorer's, and wherever its own look at the point answers nothing it is read the second way a pick is: out of the item
 the view has the _focus_ on, which is the one reading a window standing on top cannot take away — and the third fact
 matters most, because the item a fresh listing puts under a parked pointer is drawn exactly where the click landed. A
-press on one of a pin's caption buttons is asked of the geometry that button's own press reads
-(`pin_caption_button_covers`); it is no pick, it spends the rest of the hand, and a click held from before it is dropped
+press on one of a pin's own buttons — the caption's, or a sound card's own controls — is asked of the geometry that
+button's own press reads
+(`pin_button_covers`); it is no pick, it spends the rest of the hand, and a click held from before it is dropped
 rather than answered out of the listing the chrome covered.
 
 **A press inside the pin's own box is the pin's own, and so is one read on the tick the pin moved.** A pin shows its

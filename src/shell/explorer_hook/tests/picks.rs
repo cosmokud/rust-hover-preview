@@ -214,10 +214,10 @@ fn a_press_on_the_tick_the_pin_moved_is_neither_a_pick_nor_a_no_pick() {
 #[test]
 fn a_press_on_the_pins_caption_button_is_not_a_pick_of_the_file_under_it() {
     // The hook's reading of the press: the window under it is the pin's, standing over a listing,
-    // and the point is on a caption button (`pin_caption_button_covers` answered that).
+    // and the point is on a pin button (`pin_button_covers` answered that).
     let over_our_own = true;
-    let on_a_caption_button = true;
-    let on_the_pins_chrome = press_is_the_pins_chrome(true, on_a_caption_button);
+    let on_a_pin_button = true;
+    let on_the_pins_chrome = press_is_the_pins_chrome(true, on_a_pin_button);
 
     assert!(on_the_pins_chrome, "a caption button is the pin's own");
     assert!(
@@ -246,7 +246,7 @@ fn a_press_on_the_pins_caption_button_is_not_a_pick_of_the_file_under_it() {
 
     // A tick that read no press names no chrome, however the point sits.
     assert!(
-        !press_is_the_pins_chrome(false, on_a_caption_button),
+        !press_is_the_pins_chrome(false, on_a_pin_button),
         "a tick with no press spends nothing"
     );
 }
