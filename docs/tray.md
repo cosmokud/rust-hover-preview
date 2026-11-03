@@ -30,8 +30,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - A right-click on the card opens the card's own menu in a panel of its own over the screen: the whole of what a pin does — the two ways out, the file's own playback, then **Shuffle**, **End of File** and **Seek**.
         - Below a rule after **Seek**, the card offers **Open in Default App** and **Open With...**, which hand the file over and end the pin the way the card's own two buttons do.
     - A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied.
-      - `Up`, `Down`, `Page Up` and `Page Down` move a screenful at a time, and `Home` and `End` take the page to its top and its last screenful.
-      - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected; `F3` takes the page to the next place what is selected appears.
+      - The caret's keys are the page's only once a press inside it has given it the focus: `Up`/`Down` move it a line, `Left`/`Right` a character, `Page Up`/`Page Down` a screenful, `Home`/`End` the line's two ends, `Ctrl`+`Home`/`Ctrl`+`End` the document's, and `Ctrl` with an arrow moves a word. `Shift` grows the selection and a bare move collapses it.
+      - Until then the page is drawn without a caret and those same keys step the folder, as they do over a picture. A press on the caption gives the focus up again — its walk, its buttons and the empty drag area, and nothing else — without losing the caret, its column or the selection, so a page pressed into again comes back where it was left.
+      - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected; `F3` takes the page to the next place what is selected appears. Those read the page rather than move a caret in it, and are the page's either way.
       - `Ctrl` and a wheel steps the page's own text size through the sizes **Text → Font Size** offers; the size rides across a resize and the next file of a walk, and closing the pin gives it up.
       - A press begins a selection, `Shift` grows it, and a second press takes the word under the pointer; a drag carried past the page's edge scrolls it three lines a tick, a wrapped line copies whole, and **Select All** means the page rather than the screenful.
       - A page of code keeps a column of line numbers down its left.
@@ -64,7 +65,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - The walk is the pin's own: one playlist spawned when the pin is taken up and stepped along, so a **Previous** is the file the walk came from and the **Next** after it is the file it was interrupted on. A file picked in the listing inside that folder carries the playlist on; one anywhere else starts fresh.
     - Image, Video and Audio start at **Same Category**, Others at **All Files**.
     - Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them.
-    - The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front.
+    - The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front. A pinned page keeps them until a press inside it gives it its caret; from then on they are the caret's, and a press on its caption gives them back to the folder.
     - `Space` in a pinned sound pauses and resumes it, on the same terms.
     - `Escape` in a pinned window closes it.
     - **All Files** — Every file this build can preview, in the folder the pin was taken up in and not any subfolder of it, in the order the Explorer listing is showing them. A video sits beside a sound.
@@ -101,7 +102,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **Pause on Minimize** — On by default: the sound a pin put away was playing is held where it stood and started again at the second it stopped at when the window comes back.
     - **Shuffle** and **End of File** — the same two rows as a film's, asked of a sound: a forward step takes a random sound rather than the one beside it, and a file that ends goes round, holds where it stopped, or steps on to the next.
     - **Seek** — Where in a file a *pinned* sound starts playing: **From the Start** (default), **Remember**, **From the Middle**, or **Random**.
-  - **Text** — What a text preview is painted with: the font size, how Markdown is shown, and whether a page of HTML runs.
+  - **Text** — What a text preview is painted with: the font size, how Markdown is shown, whether a page of HTML runs, and which files count as text at all.
     - **Font Size** — `400%` at the top down to `70%` at the bottom.
     - **Markdown** — Rendered or Source.
     - **Render HTML** — Off by default.
@@ -111,6 +112,11 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - SVG documents and font specimens, which a browser is handed as an image, are still drawn rather than run.
       - A running page can be pointed at, clicked into and typed into; a document, a specimen and every other preview still cannot.
     - Without the engine on the machine it stays a text preview.
+    - **Preview All Extensionless** — Off by default: on, a file with no extension at all (`README`, `notes`, a script a repository left bare) is previewed as text. A bare name says nothing about what is in it — a note, a binary or a key — which is why it is off.
+      - The names list — `LICENSE`, `Makefile`, `.gitignore` and the rest — is read either way.
+      - A folder is never previewed as text, whatever its name looks like.
+    - **Don't Preview Secret Files** — On by default: a secret or credential file is not previewed at all rather than shown as the text it is. `.env` and its variants, `id_rsa`/`id_ed25519`/`credentials` and their suffixed copies, key, certificate, keystore, VPN and password-database extensions, and anything under `~/.ssh`, `~/.aws`, `~/.gcp`, `~/.kube`, `~/.docker` or a coding agent's credential folder.
+      - Public keys (`*.pub`) and the `.env.example`/`.sample`/`.template`/`.tpl`/`.defaults` templates are still previewed, since those are the ones a repository means to be read.
   - **Image** — **Pin Mode**, and the whole of it: **Shuffle**, whether a *pinned* picture's walk takes the next file at random, and **Zoom Background**, the backdrop the band a zoom leaves behind the picture is filled with.
     - A picture has no level, no end of file and nowhere in it to start, and a hover has no next file, so the shuffle is the one thing a picture answers.
     - **Pin Mode → Zoom Background** — **Black** (default), **White** or **Checkerboard**: the backdrops that fill the band a hand carries a zoomed picture off its window leaves behind it. The see-through one is not offered, since the band is the window's rather than the file's. Written as `zoom_background`. A picture with a transparent pixel in it keeps what **Background → Image** asks for instead — see-through included — so one meant to show the desktop through it keeps doing so at any size, zoom or not.

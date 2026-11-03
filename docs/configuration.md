@@ -52,7 +52,9 @@ video_preview_enabled=true
 ; Text Preview
 markdown_mode=rendered
 render_html=false
+text_dont_preview_secrets=true
 text_font_scale=125
+text_show_extensionless=false
 
 ; Timing
 hover_delay_ms=0
@@ -141,6 +143,8 @@ spinner_delay_ms=250
   - On, `.htm` and `.html` files are run as the pages they hold by the browser engine, at the share of the screen **Document Scaling** names.
   - That is the one kind of preview a pointer and a keyboard reach: the page's own box holds the pointer, and a click into it gives the keys.
   - Without that engine, they are text like before.
+- `text_show_extensionless`: whether a file with no extension at all (`README`, `notes`, a bare script) is previewed as text. Default `false`. The `[text] names` list — `LICENSE`, `Makefile`, `.gitignore` and the rest — is read either way, and a folder is never previewed as text whatever its name looks like.
+- `text_dont_preview_secrets`: whether secret and credential files are refused rather than shown as the text they are. Default `true`. Refused: `.env` and its variants, `id_rsa`/`id_ed25519`/`credentials` and their suffixed copies, key, certificate and keystore extensions (`.pem`, `.key`, `.p12`, `.pfx`, `.kdbx`, `.ovpn`, `.rdp`, `.pcap` and the rest), and anything under `~/.ssh`, `~/.aws`, `~/.gcp`, `~/.kube`, `~/.docker` or a coding agent's credential path. Still previewed: public keys (`*.pub`) and the `.env.example`/`.sample`/`.template`/`.tpl`/`.defaults` templates.
 
 ### What can preview
 
@@ -150,6 +154,7 @@ spinner_delay_ms=250
   - No dots.
   - An entry with a dot, like `tar.gz`, matches the end of the file name.
   - A name two sections hold belongs to the earlier kind, so the kind decides which switch applies to it.
+  - A name the text lists hold is still refused while `text_dont_preview_secrets` is on, the lists being a question about names and that setting a question about what the name holds.
 - Which engine plays a sound is the machine's answer rather than a setting: the media engine Windows has is asked first and an installed FFmpeg second.
 
 ### Video and audio
