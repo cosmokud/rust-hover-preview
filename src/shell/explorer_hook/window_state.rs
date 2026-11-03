@@ -442,6 +442,23 @@ pub(super) fn press_is_the_pins_chrome(pressed: bool, on_a_caption_button: bool)
     pressed && on_a_caption_button
 }
 
+/// Whether a press was read on the very tick this app's own window moved: the pin's box changed
+/// under a hand that did not move, so the point is over whatever the move uncovered (see
+/// `PinUpdateWatch::note_pin_box`).
+///
+/// Such a press is the pin's own gesture rather than the listing's, and it is neither a pick nor a
+/// no-pick: a resize, a maximize or a double-clicked picture moves the window off the point the hand
+/// was on, the hit test there names the listing the pin has just moved across, and read as that
+/// listing's the press picks no file — which lowers the pin behind the listing it moved over (see
+/// `press_is_answered` and `pin_press_was_not_a_pick`). The point need not be inside the pin's new
+/// box for this: the move is what refuses it, not the box (see `press_is_on_the_pin`).
+///
+/// The move is handed in rather than read here, because it is the same reading the watch's own
+/// gesture state is dropped on (see `PinUpdateWatch::note_pin_box` and `the_pin_window_moved`).
+pub(super) fn press_is_the_pins_own_gesture(pressed: bool, pin_moved: bool) -> bool {
+    pressed && pin_moved
+}
+
 /// Whether a press is one the pin itself took: its point is inside the pin's own box, whatever the
 /// window under that point turned out to be.
 ///

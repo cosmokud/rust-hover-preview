@@ -135,6 +135,75 @@ fn a_press_inside_the_pins_own_box_is_the_pins_own() {
     );
 }
 
+/// A press read on the tick this app's own window moved under a hand that did not move is neither a
+/// pick nor a no-pick: nothing is lowered.
+///
+/// The reported fault: the pin's own gesture — a resize, a maximize, a double-clicked picture — moved
+/// the window out from under the hand, and the press of the same gesture was read against whatever
+/// the move had uncovered. Explorer's frame is what the hit test names there, the point holds no file,
+/// and the press was answered as a no-pick: the pin lowered itself behind the listing it had just
+/// moved over. The point is outside the pin's new box, which is why the box alone cannot refuse it
+/// (see `press_is_on_the_pin`).
+#[test]
+fn a_press_on_the_tick_the_pin_moved_is_neither_a_pick_nor_a_no_pick() {
+    let stood = (100, 100, 400, 300);
+    let moved = (1295, 120, 2145, 1319);
+    let mut watch = PinUpdateWatch::default();
+
+    assert!(
+        !watch.note_pin_box(Some(stood)),
+        "the first sighting of the pin's window is not a move"
+    );
+    let pin_moved = watch.note_pin_box(Some(moved));
+    assert!(
+        pin_moved,
+        "the pin's own gesture moved its window while the hand stayed where it was"
+    );
+
+    // The hand has not moved, so the point is still the one it was on — and the pin is no longer
+    // there. Explorer's frame is what reads under it.
+    let point = POINT { x: 2375, y: 832 };
+    let over_explorer = true;
+    let over_our_own = false;
+    assert!(
+        !press_is_on_the_pin(true, point, watch.pin_box),
+        "the point is outside the pin's box now, so the box is no help against the answer below"
+    );
+    assert!(
+        press_is_a_listing(over_explorer, over_our_own, false, false, false),
+        "the window read under the point is the listing's, which is what the press is read by"
+    );
+    assert!(
+        press_is_answered(true, over_explorer, over_our_own, false),
+        "and the same reading answers it, which is the lowering road"
+    );
+
+    let the_pins_own_press = press_is_the_pins_own_gesture(true, pin_moved);
+    assert!(
+        the_pins_own_press,
+        "but the tick recorded the pin moving under the hand, which is the pin's own gesture"
+    );
+    assert!(
+        !(press_is_a_listing(over_explorer, over_our_own, false, false, false)
+            && !the_pins_own_press),
+        "so no file under the point is offered to the pin"
+    );
+    assert!(
+        !(press_is_answered(true, over_explorer, over_our_own, false) && !the_pins_own_press),
+        "and nothing answers it: the pin is not put behind the listing the move uncovered"
+    );
+
+    // A pin that stood still, and a tick that read no press, are not this gesture.
+    assert!(
+        !press_is_the_pins_own_gesture(true, false),
+        "a press read on a tick the pin did not move is the listing's own"
+    );
+    assert!(
+        !press_is_the_pins_own_gesture(false, true),
+        "and a tick that read no press names no gesture of the pin's"
+    );
+}
+
 /// A press on the pin's own caption buttons is the pin's, not the listing the pin stands over.
 ///
 /// The reported fault: the hand is on a file in Explorer, the pin stands over it, and the user
