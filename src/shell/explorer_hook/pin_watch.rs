@@ -276,8 +276,16 @@ impl PinUpdateWatch {
         // uncovered (see `press_is_the_pins_own_gesture`). Such a press answers neither a pick nor a
         // no-pick below, so a pin resized or maximized by the hand over its own content can no
         // longer lower itself behind the listing it has just moved over.
-        let the_pins_own_press =
-            on_the_pins_chrome || on_the_pin || press_is_the_pins_own_gesture(clicked, pin_moved);
+        let on_the_pins_menu = press_is_on_the_pins_menu(
+            take_pin_menu_pressed(),
+            clicked,
+            pointer.window,
+            previous_window,
+        );
+        let the_pins_own_press = on_the_pins_chrome
+            || on_the_pin
+            || on_the_pins_menu
+            || press_is_the_pins_own_gesture(clicked, pin_moved);
 
         // A press on one of this app's own panels spends the rest of the hand, so that the rest is not
         // read as a hover of the file the panel was covering (see `a_rest_is_a_hover`). Asked on both
@@ -292,18 +300,14 @@ impl PinUpdateWatch {
         //
         // Spent here rather than beside the press's own answer below, because the tick that reads the
         // press is the tick that would offer the file: the rest is measured from this, once, below.
-        if on_the_pins_chrome
-            || (clicked
-                && (press_is_on_the_pins_own_menu(pointer.window)
-                    || previous_window.is_some_and(press_is_on_the_pins_own_menu)))
-        {
+        if on_the_pins_chrome || on_the_pins_menu {
             self.probed = true;
         }
 
-        // A button press is not a pick, so nothing it did may be retried later: a click held from
+        // A button or menu press is not a pick, so nothing it did may be retried later: a click held from
         // before it would else be answered out of the listing the chrome covers once the minimize
         // has taken the pin off that listing (see the retry below).
-        if on_the_pins_chrome {
+        if on_the_pins_chrome || on_the_pins_menu {
             self.pending = None;
         }
 
