@@ -1233,6 +1233,88 @@ fn a_box_the_frames_pixels_already_cover_owes_the_pin_no_decode() {
     }
 }
 
+/// **A wheel notch never puts a playing animation back at its first frame**, whatever box the picture
+/// has been taken out to: a decode begins the file at its opening frame, so the frame a relayout
+/// installs over a GIF is the GIF started again — and where it had got to is the whole of what it was
+/// showing. A wheel turned a notch at a time would put it back at the start on every notch it settled
+/// at, rather than growing a picture that plays on.
+///
+/// The band stretches the frame the pin already holds into the box the picture is drawn at, which is
+/// the answer a picture that fills its window is given (see `compose_media_into_band`), so the zoom
+/// still arrives; what it does not do is re-read the file for it. A box change is the other side of
+/// it and is left as it was: a pin put into a box of another size is one the hand asked to be shown
+/// at that size, and a take-up has no frame of this file to keep at all.
+#[test]
+fn a_zoom_does_not_begin_a_playing_animation_again() {
+    let _room = the_room_to_itself();
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let held = |kind: MediaType, width: u32, height: u32| {
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            let mut frame = static_image_media(
+                Arc::new(ImageFrame::new(
+                    vec![0u8; (width * height * 4) as usize],
+                    width,
+                    height,
+                    0,
+                )),
+                kind,
+            );
+            // A playhead part-way through the file, which is what a relayout must not spend.
+            frame.current_frame = 2;
+            *media = Some(frame);
+        }
+    };
+    let path = PathBuf::from("a-playing-frame.gif");
+    let owed =
+        |box_: ScreenRegion, road| relayout_pinned_media(&path, box_, 96, None, road).is_some();
+    for kind in [
+        MediaType::AnimatedGif,
+        MediaType::AnimatedApng,
+        MediaType::AnimatedWebP,
+        MediaType::AnimatedHeif,
+        MediaType::AnimatedJxl,
+    ] {
+        // A picture wheel has taken past its window is drawn larger than the frame it holds, and
+        // one taken back to the fit is drawn smaller: neither is a read of the file.
+        held(kind, 400, 300);
+        assert!(
+            !owed((100, 100, 900, 775), PinRelayoutRoad::Zoom),
+            "{kind:?} zoomed in: the frame it holds is stretched into the box the picture is \
+             drawn at, because a decode here would be the file read again from its first frame"
+        );
+        held(kind, 1600, 1200);
+        assert!(
+            !owed((100, 100, 500, 400), PinRelayoutRoad::Zoom),
+            "and {kind:?} zoomed back in with a bigger frame in hand is the same question"
+        );
+        // And the pin still holds the frame it was playing: nothing was installed over it.
+        let playing = CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media
+                .as_ref()
+                .map(|media| (media.media_type, media.current_frame))
+        });
+        assert_eq!(
+            playing,
+            Some((kind, 2)),
+            "{kind:?} keeps playing from where it was, rather than being begun again"
+        );
+        // A box change and a take-up are not this: both still owe the read. A box change lays the
+        // pin out at the size the hand asked for, and a take-up is the pin built whole for a file
+        // it has not stood on.
+        assert!(
+            owed((100, 100, 1900, 1525), PinRelayoutRoad::BoxChange),
+            "{kind:?} in a box bigger than its frame is decoded for that box"
+        );
+        assert!(
+            owed((100, 100, 500, 400), PinRelayoutRoad::TakeUp),
+            "and {kind:?} taken up is read for the box it is taken up in"
+        );
+    }
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous;
+    }
+}
+
 /// **A page of text answers its own box, and the read a box change starts for every other kind is one
 /// it is not owed.** The seat of the box change draws the page again at the reader's line, keeping
 /// what is selected and the size they put it to (see `relayout_text_for_the_box`), so a read behind it

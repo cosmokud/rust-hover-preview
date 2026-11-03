@@ -414,6 +414,23 @@ impl MediaType {
         }
     }
 
+    /// Whether this kind is a file that *plays*: GIF, APNG, animated WebP, a HEIF or AVIF
+    /// sequence and an animated JPEG XL, each decoded frame after frame into the one queue.
+    ///
+    /// What it answers is asked by a relayout above all: a decode of one of these begins the file
+    /// at its first frame, so a frame installed over a playing animation is the animation started
+    /// again rather than the same picture laid out another size (see `relayout_pinned_media`).
+    pub(super) fn is_animation(&self) -> bool {
+        matches!(
+            self,
+            Self::AnimatedGif
+                | Self::AnimatedApng
+                | Self::AnimatedWebP
+                | Self::AnimatedHeif
+                | Self::AnimatedJxl
+        )
+    }
+
     /// Whether this is a sound, whose card is the one painted preview that changes while it is
     /// on screen: the clock and the bar under it are drawn from a player that is running.
     pub(super) fn is_audio(&self) -> bool {
