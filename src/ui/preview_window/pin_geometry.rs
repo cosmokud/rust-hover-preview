@@ -1035,6 +1035,28 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         }
         pin_resize_probe::end_step();
 
+        // **And the hand's next step is a frame away rather than a position away.** A resize is the
+        // second gesture whose paint is a composed band — the box is being dragged and the frame is
+        // sampled into it (see `resample_into_band`) — and a pointer reports up to a thousand
+        // positions a second, several of them per frame the display can show: a step would be replaced
+        // before it was ever put up, and the preview loop, whose tick advances a playing picture on
+        // this same thread, would have no tick left to do it in. That is the stutter a pan of the
+        // picture had, one gesture over.
+        //
+        // `DwmFlush` is what the wheel's travel and a pan are paced by (see `wait_for_the_compositor`),
+        // and the block it puts here is what coalesces the hand's positions into the one it has
+        // reached: the pointer is read live by the pass after this, so the positions in between cost a
+        // move each and no paint (see the early return above). A machine whose compositor answers no
+        // flush has no frame to be paced by, and is left the pointer's own pace rather than a made-up
+        // one.
+        //
+        // The step's own paint is also the frame the tick after it would otherwise draw again, which is
+        // why the tick asks `the_pin_owes_a_paint` rather than `needs_repaint` alone.
+        //
+        // SAFETY: `DwmFlush` takes no arguments and touches no state of this app's; it asks the
+        // compositor to flush a frame and answers whether it could.
+        let _ = DwmFlush();
+
         // The band is not re-asked here. It is a question about the setting rather than about the
         // box (`band_place`), so a step that re-asked it was a DWM reorder per pointer move for a
         // window already in the band it named — and the drag's own two ends ask it once each (see
