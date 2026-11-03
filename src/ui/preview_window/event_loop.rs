@@ -398,11 +398,36 @@ pub fn run_preview_window() {
             // tick by the ordinary swap rather than here, so that a bubble is shown a file the
             // same way a window is (see `pin_bubble_pick`).
             let mut pin_swap_requested: Option<PathBuf> = None;
+            // How many times the pin's window has been painted before this tick's messages were
+            // pumped, taken here so that a paint the pump itself asks for is counted as one (see
+            // `the_pin_owes_a_paint`).
+            let paints_before_the_pump = PIN_PAINTS.load(Ordering::Relaxed);
 
             // Check for Windows messages
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+                // **A hand pulling an edge gets one position a tick, and the rest are left for the tick
+                // after it.**
+                //
+                // A step of a resize is the whole band composed through the sampler — the frame the box
+                // is being dragged to, sampled into it, plus the window's own size in the same call (see
+                // `apply_pin_drag`) — and a pointer reports up to a thousand positions a second. Dispatching
+                // every one of them is a pump that never empties: each dispatch is a band, the next move is
+                // already queued behind it, and the tick below this loop — the one that advances a playing
+                // picture, and the only thing that was going to draw its next frame — is not reached until
+                // the hand stops. That is seen as an animation frozen for the whole of a resize and playing
+                // again the moment the button is let go; measured on a 1920x1080 pin, one band is 2.3 ms of
+                // composing before the surface is cleared and `UpdateLayeredWindow` is handed it.
+                //
+                // One move dispatched per tick is what the moves left behind cost nothing: the system
+                // coalesces them into the position the hand has reached, and the tick that reads it reads
+                // the pointer live rather than the position the message carried (`apply_pin_drag`). The
+                // pump is left not emptied, so the wait below returns at once and this loop goes straight
+                // round to dispatch the next one (see `wait_preview_channel`).
+                if msg.message == WM_MOUSEMOVE && pin_is_resizing() {
+                    break;
+                }
             }
 
             // Detect resume from sleep (WM_POWERBROADCAST handler sets this flag).
@@ -1615,6 +1640,14 @@ pub fn run_preview_window() {
             if pin_chrome_owes_a_repaint() {
                 needs_repaint = true;
             }
+            // And a hand carrying the picture inside its window owes the loop the repaint that shows
+            // where it has got to: a pan is movement, and movement is drawn once per frame the
+            // display shows rather than once per position the pointer reports (see
+            // `a_pan_owes_a_repaint`, and the wait below, which the compositor paces while a pan is
+            // in flight).
+            if the_pan_owes_a_repaint() {
+                needs_repaint = true;
+            }
             if need_media_check {
                 last_full_media_check = Instant::now();
                 last_checked_generation = current_generation;
@@ -1644,7 +1677,11 @@ pub fn run_preview_window() {
                 )
             });
 
-            if needs_repaint && first_frame_landed.is_none() {
+            if the_pin_owes_a_paint(
+                needs_repaint,
+                first_frame_landed.is_some(),
+                paints_before_the_pump,
+            ) {
                 render_layered_preview(hwnd);
             }
 
@@ -4802,20 +4839,34 @@ pub fn run_preview_window() {
                 // frame cadence for as long as it lasts and the loop drops back to its own wait the
                 // tick after it has arrived (see `pin_zoom_in_flight`).
                 let travelling = pin_zoom_in_flight();
+                // And a pan is the same kind of thing one layer in: a picture a hand is carrying
+                // inside its window is movement of the picture rather than of the box, so what it is
+                // worth is a frame of the display's and not a position of the pointer's — a mouse
+                // that reports at a thousand hertz reports four to a frame, and every one of them
+                // would be a band composed through the sampler if the move handler painted it (see
+                // `a_pan_owes_a_repaint`).
+                let panning = pin_is_panning();
                 // A level the wheel has just asked for is something to animate as well: its glide and
                 // its flush are only as smooth as the ticks they land on, and the pin's own wait is
                 // four times the frame's (see `pin_volume_is_moving`).
                 let wait_ms = wait_before_the_next_tick(
                     false,
-                    media_dynamic_hint || tick_has_wait || travelling || pin_volume_is_moving(),
+                    media_dynamic_hint
+                        || tick_has_wait
+                        || travelling
+                        || panning
+                        || pin_volume_is_moving(),
                     pinned(),
                 );
                 // And a travel is paced by the compositor rather than by that wait, because what its
                 // frames are worth is the display's own period and not a timer's: a sleep of
                 // `FRAME_WAIT_MS` comes back in 27.8 ms — 36 frames a second — where a flush of the
                 // compositor comes back in the 6.94 ms of a 144 Hz display's frame (see
-                // `wait_for_the_compositor`).
-                carried_preview_msg = if travelling {
+                // `wait_for_the_compositor`). A pan is paced by it for that reason and one more: the
+                // block it puts in front of the pointer's next position is what coalesces them, so a
+                // hand that has moved on is drawn where it is rather than once for every place it
+                // passed through.
+                carried_preview_msg = if travelling || panning {
                     wait_for_the_compositor(&rx, wait_ms)
                 } else {
                     wait_preview_channel(&rx, wait_ms)

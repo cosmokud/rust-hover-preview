@@ -547,14 +547,7 @@ impl MediaData {
 
     /// Returns true if this media is an animation still being decoded
     pub(super) fn is_streaming(&self) -> bool {
-        matches!(
-            self.media_type,
-            MediaType::AnimatedGif
-                | MediaType::AnimatedApng
-                | MediaType::AnimatedWebP
-                | MediaType::AnimatedHeif
-                | MediaType::AnimatedJxl
-        ) && !self.is_fully_loaded()
+        self.media_type.is_animation() && !self.is_fully_loaded()
     }
 
     pub(super) fn should_draw_streaming_overlay(&self) -> bool {
