@@ -394,14 +394,18 @@ pub(super) fn press_is_outside_the_pin_window(pressed: bool, on_pin_window: bool
 /// different windows. The rule itself, with the window's identity handed in,
 /// is `press_is_outside_the_pin_window`.
 ///
-/// The bubble's own window counts as the pin's own here, and a press on it
-/// is not published: a collapsed pin leaves no window on screen but the
-/// bubble, the bubble carries the same menu a card does, and a press on it
-/// is answered there (see `bubble_window_is_at` and `bubble_menu_press`).
+/// The bubble's own window and the pin menu's own window count as the pin's own here, and a
+/// press on them is not published: a collapsed pin leaves no window on screen but the
+/// bubble, the bubble carries the same menu a card does, and a press on either or on the
+/// menu itself (e.g. clamped under the cursor near screen edges) is answered there rather
+/// than putting the menu away (see `bubble_window_is_at`, `pin_menu_window_is_at`, and
+/// `bubble_menu_press`).
 pub(super) fn pin_menu_dismiss_ask(clicked: bool, tick_pointer: Option<&PointerTick>) -> bool {
     let on_the_pins_own_window = clicked
         && tick_pointer.is_some_and(|pointer| {
-            preview_window_is_at(pointer.window) || bubble_window_is_at(pointer.window)
+            preview_window_is_at(pointer.window)
+                || bubble_window_is_at(pointer.window)
+                || pin_menu_window_is_at(pointer.window)
         });
 
     press_is_outside_the_pin_window(clicked, on_the_pins_own_window)

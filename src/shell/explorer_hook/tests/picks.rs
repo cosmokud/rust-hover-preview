@@ -501,6 +501,59 @@ fn a_press_on_the_bubble_is_the_pins_own_and_is_not_published() {
     );
 }
 
+/// The pin menu's handle put where a test asks, and put back when the guard is dropped.
+struct PinMenuHwndPutBack;
+
+impl PinMenuHwndPutBack {
+    fn put(hwnd: HWND) -> Self {
+        crate::ui::preview_window::PIN_MENU_HWND
+            .store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for PinMenuHwndPutBack {
+    fn drop(&mut self) {
+        crate::ui::preview_window::PIN_MENU_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A press on the pin menu itself is not published: when opened near the bottom or right
+/// screen edge, the popup clamps upward and can sit directly under the cursor. The press
+/// on it is answered by the menu's own window procedure rather than dismissed by the
+/// Explorer hook (see `pin_menu_window_is_at` and `pin_menu_dismiss_ask`).
+#[test]
+fn a_press_on_the_pin_menu_is_the_pins_own_and_is_not_published() {
+    let _put_back = PinMenuHwndPutBack::put(HWND(0x4000 as *mut _));
+    let on_pin_menu = PointerTick {
+        point: POINT { x: 12, y: 34 },
+        dpi: 96,
+        window: HWND(0x4000 as *mut _),
+    };
+    let elsewhere = PointerTick {
+        point: POINT { x: 12, y: 34 },
+        dpi: 96,
+        window: HWND(0x3000 as *mut _),
+    };
+
+    assert!(
+        !pin_menu_dismiss_ask(true, Some(&on_pin_menu)),
+        "a press on the pin menu itself is a press on the pin's own window"
+    );
+    assert!(
+        pin_menu_dismiss_ask(true, Some(&elsewhere)),
+        "and one on anything else is still the press that puts the menu away"
+    );
+    assert!(
+        pin_menu_window_is_at(HWND(0x4000 as *mut _)),
+        "the slot recognizes the pin menu window"
+    );
+    assert!(
+        !pin_menu_window_is_at(HWND(0x3000 as *mut _)),
+        "while a window the slot does not hold is not the pin menu"
+    );
+}
+
 /// A pointer that has left the item the preview on screen is about has moved,
 /// whether or not it went far enough to clear the threshold: the threshold is a
 /// hand's own jitter, and a row of the list crossed under it would otherwise
