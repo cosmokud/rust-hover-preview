@@ -499,8 +499,13 @@ pub fn named_as(path: &Path, config: &AppConfig, kind: PreviewType) -> bool {
         PreviewType::Videos => video_formats::matches_any_video_list(path, config),
         // The text kind's two rows: an extension, or a whole name for a repository file that has
         // none — which is what `matches_text_lists` used to be, before the two rows became the
-        // only place either list is read from.
-        PreviewType::Text => lists::TEXT.claims(path, config) || lists::NAMES.claims(path, config),
+        // only place either list is read from. Also extensionless files when configured.
+        PreviewType::Text => {
+            lists::TEXT.claims(path, config)
+                || lists::NAMES.claims(path, config)
+                || (config.text_show_extensionless
+                    && crate::formats::text_formats::is_extensionless(path))
+        }
         PreviewType::Audio => lists::AUDIO.claims(path, config),
         PreviewType::Ebook => lists::EBOOK.claims(path, config),
         PreviewType::Archives => archive_formats::claims_in(path, lists::ARCHIVE.entries(config)),
@@ -794,15 +799,18 @@ fn claim_vector(
 }
 
 /// Text: the extension lists and the names list, which is what makes a `makefile` a text file
-/// and what the dot-file rule is for (see `text_formats::lookup_extension`).
+/// and what the dot-file rule is for (see `text_formats::lookup_extension`). Also extensionless
+/// files when `text_show_extensionless` is enabled.
 fn claim_text(
     path: &Path,
     config: &AppConfig,
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    (lists::TEXT.claims(path, config) || lists::NAMES.claims(path, config))
-        .then_some(PreviewType::Text)
+    (lists::TEXT.claims(path, config)
+        || lists::NAMES.claims(path, config)
+        || (config.text_show_extensionless && crate::formats::text_formats::is_extensionless(path)))
+    .then_some(PreviewType::Text)
 }
 
 /// A font, asked ahead of the image list that would have turned a `.ttf` down: what draws one

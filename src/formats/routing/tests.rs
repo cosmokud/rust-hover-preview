@@ -703,3 +703,25 @@ fn a_route_says_what_the_four_questions_it_is_made_of_say() {
         }
     }
 }
+
+#[test]
+fn extensionless_files_route_to_text_when_enabled() {
+    let mut config = AppConfig::default();
+    let extensionless_path = Path::new("extensionless_sample");
+    let txt_path = Path::new("notes.txt");
+
+    config.text_show_extensionless = true;
+    assert!(named_as(extensionless_path, &config, PreviewType::Text));
+    assert_eq!(
+        kind_of(extensionless_path, &config),
+        Some(PreviewType::Text)
+    );
+    assert!(named_as(txt_path, &config, PreviewType::Text));
+    assert_eq!(kind_of(txt_path, &config), Some(PreviewType::Text));
+
+    config.text_show_extensionless = false;
+    assert!(!named_as(extensionless_path, &config, PreviewType::Text));
+    assert_eq!(kind_of(extensionless_path, &config), None);
+    assert!(named_as(txt_path, &config, PreviewType::Text));
+    assert_eq!(kind_of(txt_path, &config), Some(PreviewType::Text));
+}
