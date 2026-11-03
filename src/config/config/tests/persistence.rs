@@ -732,6 +732,7 @@ const ANOTHER_VALUE: &[(&str, &str)] = &[
     ("pin_mode_audio_seek", "middle"),
     ("pin_mode_video_end_of_file", "pause"),
     ("pin_nav_audio", "all"),
+    ("pin_nav_image", "all"),
     ("pin_nav_others", "category"),
     ("pin_nav_video", "all"),
     ("text_scale", "50"),

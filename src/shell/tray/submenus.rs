@@ -19,10 +19,10 @@ use super::ids::{
     ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE,
     ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_MPV_BASE,
     ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_AUDIO_CATEGORY,
-    ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL,
-    ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK,
-    PIN_END_OF_FILE_CHOICES, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
-    ZOOM_BACKGROUND_CHOICES,
+    ID_TRAY_PIN_NAV_IMAGE_ALL, ID_TRAY_PIN_NAV_IMAGE_CATEGORY, ID_TRAY_PIN_NAV_OTHERS_ALL,
+    ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_NAV_VIDEO_CATEGORY,
+    ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, PIN_END_OF_FILE_CHOICES,
+    TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES, ZOOM_BACKGROUND_CHOICES,
 };
 
 use crate::app::dialogs;
@@ -30,8 +30,9 @@ use crate::config::config::{
     AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinEndOfFile, PinMinimizeTo, PinNavFileTypes,
     PreviewScale, TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
     DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MINIMIZE_TO,
-    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS,
-    DEFAULT_PIN_NAV_VIDEO, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
+    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_IMAGE,
+    DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE,
+    DEFAULT_VIDEO_ENGINE_FALLBACK,
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
@@ -281,16 +282,25 @@ fn append_pin_nav_anchor(
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
 }
 
-/// The `Navigation` submenu: three anchors — Video, Audio, Others — each with its
-/// own All/Same Category pair. The walk is anchored on the first file pinned, so a
+/// The `Navigation` submenu: four anchors — Image, Video, Audio, Others, in menu order — each
+/// with its own All/Same Category pair. The walk is anchored on the first file pinned, so a
 /// video walks videos while a document walks end to end (see `nav_mode_for`).
 pub(super) fn append_pin_nav_menu(
     parent: HMENU,
+    image: PinNavFileTypes,
     video: PinNavFileTypes,
     audio: PinNavFileTypes,
     others: PinNavFileTypes,
 ) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
+    append_pin_nav_anchor(
+        menu,
+        w!("Image"),
+        ID_TRAY_PIN_NAV_IMAGE_ALL,
+        ID_TRAY_PIN_NAV_IMAGE_CATEGORY,
+        image,
+        DEFAULT_PIN_NAV_IMAGE,
+    );
     append_pin_nav_anchor(
         menu,
         w!("Video"),

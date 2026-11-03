@@ -128,6 +128,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "pin_nav_image",
+            Some(self.pin_nav_image.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "pin_nav_video",
             Some(self.pin_nav_video.as_str().to_string()),
         );
@@ -672,12 +677,19 @@ impl AppConfig {
             self.pin_update_move_to_top = value;
         }
         // The per-anchor answers, read the same way. A file holding only the retired single
-        // key seeds all three with it, so a user who picked one walk keeps it; a value
+        // key seeds all four with it, so a user who picked one walk keeps it; a value
         // that names neither way leaves that anchor at its fresh default. The old key is
         // not written back (see `to_ini`), so the seeding happens once.
         let legacy = ini
             .get(CONFIG_SECTION, "pin_nav_file_types")
             .and_then(|value| PinNavFileTypes::from_str(&value));
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_nav_image") {
+            if let Some(mode) = PinNavFileTypes::from_str(&value) {
+                self.pin_nav_image = mode;
+            }
+        } else if let Some(mode) = legacy {
+            self.pin_nav_image = mode;
+        }
         if let Some(value) = ini.get(CONFIG_SECTION, "pin_nav_video") {
             if let Some(mode) = PinNavFileTypes::from_str(&value) {
                 self.pin_nav_video = mode;

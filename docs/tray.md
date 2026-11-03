@@ -60,15 +60,15 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **To Taskbar** — The window leaves the screen and the app appears in the taskbar as its own button, named for the pinned file and wearing this app's icon; its hover holds the pin — the live picture while the window is up, the frame it went down on once it is away, and **Previous**, **Play/Pause** and **Next** for a film or a sound. Clicking the button brings the pinned window back where it stood, and a right-click closes the window. A pin that is not **Always On Top** wears this button while it is up as well.
     - A window is away either way, so previews stay held back until it is brought back, whichever place the setting names.
     - What a window put away holds where it is is **Pause on Minimize** at the top of each kind's own **Pin Mode** — one under **Preview Settings → Video**, one under **Preview Settings → Audio** — because what should go quiet while a pin is away is a question about one kind of file.
-  - **Navigation** — What **Previous** and **Next** on the caption step through: three anchors — **Video**, **Audio**, **Others** — each with **All Files** / **Same Category**. The walk is anchored on the first file pinned, so a video walks videos while a document walks end to end.
+  - **Navigation** — What **Previous** and **Next** on the caption step through: four anchors — **Image**, **Video**, **Audio**, **Others**, in that order — each with **All Files** / **Same Category**. The walk is anchored on the first file pinned, so a picture walks pictures while a document walks end to end.
     - The walk is the pin's own: one playlist spawned when the pin is taken up and stepped along, so a **Previous** is the file the walk came from and the **Next** after it is the file it was interrupted on. A file picked in the listing inside that folder carries the playlist on; one anywhere else starts fresh.
-    - Video and Audio start at **Same Category**, Others at **All Files**.
+    - Image, Video and Audio start at **Same Category**, Others at **All Files**.
     - Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them.
     - The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front.
     - `Space` in a pinned sound pauses and resumes it, on the same terms.
     - `Escape` in a pinned window closes it.
     - **All Files** — Every file this build can preview, in the folder the pin was taken up in and not any subfolder of it, in the order the Explorer listing is showing them. A video sits beside a sound.
-    - **Same Category** — Only the files of the walk's anchor category: video, audio, or the anchor's own kind for Others.
+    - **Same Category** — Only the files of the walk's anchor category: image, video, audio, or the anchor's own kind for Others.
       - A camera raw is a picture and a book is a document, because that is what you call them.
       - A kind switched off under **Preview Types**, or one with no engine installed on the machine, is not a step either way.
       - A file this build *could* preview but that will not open is a step the window steps over rather than one it stops on.

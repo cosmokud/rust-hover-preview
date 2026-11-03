@@ -32,7 +32,7 @@ use super::setting_types::{
     DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SEEK,
     DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
-    DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_NAV_IMAGE, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
     DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_TEXT_SCALE, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_LOOP, DEFAULT_ZOOM_BACKGROUND,
@@ -121,6 +121,8 @@ pub struct AppConfig {
     /// the keyboard from the listing; off, the pin stays exactly where the user's own clicks put it
     /// (see `pin_update_enabled`).
     pub pin_update_move_to_top: bool,
+    /// What a walk anchored on a picture steps through (see `DEFAULT_PIN_NAV_IMAGE`).
+    pub pin_nav_image: PinNavFileTypes,
     /// What a walk anchored on a video steps through (see `DEFAULT_PIN_NAV_VIDEO`).
     pub pin_nav_video: PinNavFileTypes,
     /// What a walk anchored on a sound steps through (see `DEFAULT_PIN_NAV_AUDIO`).
@@ -708,6 +710,7 @@ impl Default for AppConfig {
             pin_update_enabled: DEFAULT_PIN_UPDATE_ENABLED,
             pin_update_on_hover: DEFAULT_PIN_UPDATE_ON_HOVER,
             pin_update_move_to_top: DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
+            pin_nav_image: DEFAULT_PIN_NAV_IMAGE,
             pin_nav_video: DEFAULT_PIN_NAV_VIDEO,
             pin_nav_audio: DEFAULT_PIN_NAV_AUDIO,
             pin_nav_others: DEFAULT_PIN_NAV_OTHERS,
