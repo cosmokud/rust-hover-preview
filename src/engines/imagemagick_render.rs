@@ -3,21 +3,25 @@
 //! A camera raw is a sensor reading rather than a picture: a `.nef`, a `.cr3`, an `.arw`,
 //! a `.raf` or a `.dng` holds what the sensor saw, a picture wrapped around it and the
 //! recipe for turning one into the other, and every application that shows one does the
-//! same two things — demosaic the reading and develop it. This app has no reader for any
-//! of it, and Windows has no codec for one either, so a hover onto a raw shows nothing at
-//! all. ImageMagick is the tool that has the reader: the raw decoder it is built with,
-//! LibRaw, is the library the whole world develops raws with, and its coders cover the
-//! rest of the formats beside them that nothing else on the machine opens.
+//! same two things — demosaic the reading and develop it. So does the codec Windows has, where
+//! the Raw Image Extension is installed, and that is what the reader in `wic_image` asks; the
+//! engine is what answers on the machine without it. ImageMagick is the tool that has the
+//! reader for everything else beside them: the raw decoder it is built with, LibRaw, is the
+//! library the whole world develops raws with, and its coders cover the formats nothing else on
+//! the machine opens at all.
 //!
-//! So where ImageMagick is installed it is asked first, and what it hands back is a PNG —
-//! the picture, developed, turned the right way up and resized to the box the preview is
-//! shown at. That picture is read the way any picture of this app's is read: decoded into a
-//! frame, composited over `image_background`, held in the image cache under the file, its
-//! version and the pixel size it was made for. Nothing of the engine reaches the screen:
-//! what is drawn is a picture of this app's, which is why a `.nef` follows the picture scale
-//! and the picture backdrop rather than a scale and a backdrop of its own, and it is also
-//! the whole point of the kind — a developed raw shown at the size it hovers as a photograph
-//! rather than as a thumbnail.
+//! So the engine is asked for two groups of files and they are asked differently. A name of
+//! `[magick]`'s is the engine's outright — nothing here opens one — and a picture of `[image]`'s
+//! is the readers of this app's first, with the engine behind them for the codec package the
+//! machine has not been given (see `magick_formats` and `routing::chain`). And what it hands
+//! back is a PNG — the picture, developed, turned the right way up and resized to the box the
+//! preview is shown at. That picture is read the way any picture of this app's is read: decoded
+//! into a frame, composited over `image_background`, held in the image cache under the file, its
+//! version and the pixel size it was made for. Nothing of the engine reaches the screen: what is
+//! drawn is a picture of this app's, which is why a `.nef` follows the picture scale and the
+//! picture backdrop rather than a scale and a backdrop of its own, and it is also the whole point
+//! of the kind — a developed raw shown at the size it hovers as a photograph rather than as a
+//! thumbnail.
 //!
 //! The engine is a converter rather than an application: `magick.exe` reads a file, writes
 //! one and exits, so there is nothing to hold open between files, and what it writes is
