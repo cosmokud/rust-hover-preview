@@ -3056,7 +3056,14 @@ pub fn run_preview_window() {
             // hover it came from is what knows how to draw it again, at the scale of
             // the display the pointer is on now. A newer message in hand is left to
             // speak for itself, and the flag waits for a tick where none does.
-            if latest_preview_msg.is_none() && DISPLAY_RESET.swap(false, Ordering::AcqRel) {
+            // A hand carrying the pin owns the box a re-layout would rewrite, and a release
+            // that has already asked for one owns this tick's: the flag is left standing for
+            // the tick after, rather than taken here and dropped (see `apply_pin_drag`).
+            if latest_preview_msg.is_none()
+                && pin_request.is_none()
+                && !(pinned() && pin_is_dragging())
+                && DISPLAY_RESET.swap(false, Ordering::AcqRel)
+            {
                 if pinned() {
                     // A pin is not replayed from a hover: it is put back on the display it has
                     // to be on now, at the box that display can show of it.
