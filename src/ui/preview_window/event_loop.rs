@@ -398,6 +398,10 @@ pub fn run_preview_window() {
             // tick by the ordinary swap rather than here, so that a bubble is shown a file the
             // same way a window is (see `pin_bubble_pick`).
             let mut pin_swap_requested: Option<PathBuf> = None;
+            // How many times the pin's window has been painted before this tick's messages were
+            // pumped, taken here so that a paint the pump itself asks for is counted as one (see
+            // `the_pin_owes_a_paint`).
+            let paints_before_the_pump = PIN_PAINTS.load(Ordering::Relaxed);
 
             // Check for Windows messages
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
@@ -1652,7 +1656,11 @@ pub fn run_preview_window() {
                 )
             });
 
-            if needs_repaint && first_frame_landed.is_none() {
+            if the_pin_owes_a_paint(
+                needs_repaint,
+                first_frame_landed.is_some(),
+                paints_before_the_pump,
+            ) {
                 render_layered_preview(hwnd);
             }
 

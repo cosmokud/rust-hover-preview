@@ -1522,3 +1522,35 @@ fn a_pin_put_back_on_another_display_keeps_its_box_and_a_maximized_one_refits_to
         "a maximized pin did not fill the room of the display it landed on"
     );
 }
+
+/// **A frame the hand's own message has already painted is not painted again by the tick that
+/// follows it**, which is what keeps a resize to one paint a frame.
+///
+/// A resize commits its step in the message that carried the pointer — the new box, the picture
+/// sampled into it and the window's own size are one `UpdateLayeredWindow` (`apply_pin_drag`) — and
+/// for a playing picture the tick after it advances a frame and would paint the same window again: two
+/// bands of a display's worth of pixels for one of the display's frames, on the one thread that has to
+/// advance the animation too. What the tick has to add is a frame the step has not drawn, and one
+/// frame of delay spends the hand over an edge cheaper than that.
+#[test]
+fn a_pin_the_pointer_has_already_painted_is_not_painted_again_by_the_tick() {
+    let paints = PIN_PAINTS.load(Ordering::Relaxed);
+
+    assert!(
+        the_pin_owes_a_paint(true, false, paints),
+        "something to draw, and nothing painted the window since this tick's messages were pumped"
+    );
+    assert!(
+        !the_pin_owes_a_paint(false, false, paints),
+        "a tick with nothing to draw paints nothing"
+    );
+    assert!(
+        !the_pin_owes_a_paint(true, true, paints),
+        "and a first frame's reveal is its own paint, whatever was painted before it"
+    );
+    assert!(
+        !the_pin_owes_a_paint(true, false, u64::MAX),
+        "while a paint that landed after the pump — a resize step's, a swap's — is this frame's \
+         paint, so the tick adds nothing to it"
+    );
+}
