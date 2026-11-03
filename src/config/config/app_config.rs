@@ -14,7 +14,7 @@ use super::defaults::{
     DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER, DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS,
     DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
-    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_DONT_PREVIEW_SECRETS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TEXT_SHOW_EXTENSIONLESS, DEFAULT_TICK_MS,
     DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
     DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES,
@@ -615,6 +615,8 @@ pub struct AppConfig {
     pub text_scroll_far_edge_grace_pixels: f32,
     /// Whether files without any extension are previewed as text.
     pub text_show_extensionless: bool,
+    /// Whether to refuse previewing secret and sensitive files.
+    pub text_dont_preview_secrets: bool,
     /// Extensions previewed as images, already normalized for lookup.
     pub image_extensions: Vec<String>,
     /// The video names the media engine Windows has is asked to play, as `[video] extensions`
@@ -792,6 +794,7 @@ impl Default for AppConfig {
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
             text_show_extensionless: DEFAULT_TEXT_SHOW_EXTENSIONLESS,
+            text_dont_preview_secrets: DEFAULT_TEXT_DONT_PREVIEW_SECRETS,
             image_extensions: Vec::new(),
             video_extensions: Vec::new(),
             ffmpeg_extensions: Vec::new(),

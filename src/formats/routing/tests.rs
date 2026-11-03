@@ -165,7 +165,10 @@ const SHARED: &[(&str, PreviewType)] = &[
 /// app ships was in both — which is why it went unnoticed — and this is what says so.
 #[test]
 fn every_shipped_name_reaches_the_kind_its_list_is_written_for() {
-    let config = AppConfig::default();
+    let config = AppConfig {
+        text_dont_preview_secrets: false,
+        ..Default::default()
+    };
     let lists = shipped_lists(&config);
     let mut unexpected: Vec<String> = Vec::new();
 
@@ -641,7 +644,10 @@ fn a_sound_is_the_name_it_carries_or_the_streams_a_probe_found() {
 /// app's, which is what `chain` is for (see [`DrawnBy`]).
 #[test]
 fn a_route_says_what_the_four_questions_it_is_made_of_say() {
-    let config = AppConfig::default();
+    let config = AppConfig {
+        text_dont_preview_secrets: false,
+        ..Default::default()
+    };
 
     for (kind, paths) in shipped_lists(&config) {
         for path in paths {
@@ -730,4 +736,30 @@ fn extensionless_files_route_to_text_when_enabled() {
     assert_eq!(kind_of(extensionless_path, &config), None);
     assert!(named_as(txt_path, &config, PreviewType::Text));
     assert_eq!(kind_of(txt_path, &config), Some(PreviewType::Text));
+}
+
+#[test]
+fn secret_files_are_not_previewed_when_enabled_and_previewed_when_disabled() {
+    let mut config = AppConfig::default();
+    let env_file = Path::new(".env");
+    let env_local = Path::new(".env.local");
+    let env_example = Path::new(".env.example");
+
+    // Enabled by default: secrets are blocked
+    assert!(config.text_dont_preview_secrets);
+    assert!(!named_as(env_file, &config, PreviewType::Text));
+    assert_eq!(kind_of(env_file, &config), None);
+    assert!(!named_as(env_local, &config, PreviewType::Text));
+    assert_eq!(kind_of(env_local, &config), None);
+
+    // .env.example is an exempt template, so it is previewed
+    assert!(named_as(env_example, &config, PreviewType::Text));
+    assert_eq!(kind_of(env_example, &config), Some(PreviewType::Text));
+
+    // When disabled: secrets in text lists can be previewed
+    config.text_dont_preview_secrets = false;
+    assert!(named_as(env_file, &config, PreviewType::Text));
+    assert_eq!(kind_of(env_file, &config), Some(PreviewType::Text));
+    assert!(named_as(env_local, &config, PreviewType::Text));
+    assert_eq!(kind_of(env_local, &config), Some(PreviewType::Text));
 }

@@ -537,6 +537,14 @@ fn the_defaults_the_tray_marks_are_the_ones_the_app_starts_at() {
         !config.text_show_extensionless,
         "extensionless files are not previewed by default"
     );
+    assert_eq!(
+        config.text_dont_preview_secrets,
+        DEFAULT_TEXT_DONT_PREVIEW_SECRETS
+    );
+    assert!(
+        config.text_dont_preview_secrets,
+        "secret files are not previewed by default"
+    );
 }
 
 /// The settings reset puts every setting back where this build starts it, and the lists
