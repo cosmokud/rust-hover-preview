@@ -1,12 +1,18 @@
-//! Which files are previewed by ImageMagick rather than by a reader of this app's own.
+//! Which files are previewed by ImageMagick, and which it is the fallback for.
 //!
 //! ImageMagick is the one tool that opens nearly every picture ever written: its own coders for
-//! the formats nobody else kept, and the camera raw formats through the raw decoder it is built
-//! with — LibRaw, the library behind `dcraw`. A camera writes a `.nef`, a `.cr3`, a `.arw`, a
-//! `.raf` or a `.dng` — a raw sensor reading with a picture wrapped around it, which no decoder
-//! of this app reads and Windows has no codec for — and where ImageMagick is installed this app
-//! asks it to draw one as a picture (see `imagemagick_render`). What is listed here is which of
-//! those names this app hands over.
+//! the formats nobody else kept, and the camera raws through the raw decoder it is built with —
+//! LibRaw, the library behind `dcraw`. Two groups of names are handed over, and the difference
+//! between them is who is asked first:
+//!
+//! * **What nothing else here opens.** The engine's own names — the list below — have no reader of
+//!   this app's and no codec Windows has. Nothing is asked before the engine, and a machine
+//!   without it shows nothing for one (see `DEFAULT_MAGICK_EXTENSIONS`).
+//! * **What the readers of this app were asked about first.** A picture of the master list — a
+//!   `.dng`, a `.nef`, a `.cr3`, a `.heic`, a `.jxl`, a `.cur` — is decoded by this app or by the
+//!   codec Windows has, and the engine is behind them: it is asked only where that read came back
+//!   with nothing, which on a machine without the codec package is every camera raw there is (see
+//!   `DEFAULT_IMAGE_EXTENSIONS` and `routing::chain`).
 //!
 //! The list is built from the engine's own registry rather than from what it is said to support:
 //! every name in it was read one at a time out of `magick -list format` on an installed engine,
@@ -77,8 +83,10 @@ use crate::formats::lists;
 use crate::CONFIG;
 use std::path::Path;
 
-/// Whether the engine is the one that develops this file at all: a name its own list carries,
-/// or the bytes of a picture it reads under a name no list holds.
+/// Whether the image converter may be asked about this file at all: a name of its own list, which
+/// nothing else here opens, or a picture of the master list whose format no decoder in this binary
+/// carries — one the codec Windows has is asked about, where the engine is the fallback for a
+/// machine that codec is missing from (see `wic_image`).
 ///
 /// It is the question the request side asks before it asks the engine for a picture — a
 /// drawing renamed to `.bin` is still a picture the engine reads, and one whose bytes name
@@ -86,8 +94,27 @@ use std::path::Path;
 /// `libre_formats::engine_page_kind` asks it for the render engine: the file's own bytes
 /// first, the name it carries after them. What it is *not* is a gate: whether that kind may be
 /// shown is the caller's to ask (`PreviewType::enabled`), because the same question is asked
-/// of a preview that is already on screen when a switch is thrown.
+/// of a preview that is already on screen when a switch is thrown. Whether the engine is *owed* a
+/// picture yet is a second question: a picture of the master list is the readers of this app first
+/// (see `is_the_only_reader` and `magick_render_is_due`).
 pub fn is_engine_picture(path: &Path) -> bool {
+    use crate::formats::content_type::Content;
+
+    match crate::formats::content_type::of_reaching_config(path) {
+        Content::Kind(PreviewType::Magick) => true,
+        Content::Kind(PreviewType::Images) | Content::Unknown => {
+            crate::readers::wic_image::is_codec_file(path)
+        }
+        Content::Kind(_) | Content::Foreign => false,
+    }
+}
+
+/// Whether the engine is the *only* reader of this file: a name of its own list, in front of which
+/// the readers of this app and the codecs Windows has have nothing to try.
+///
+/// A picture of the master list is not one of those, however the engine is spelled: it is read here
+/// first, and the engine is what answers where that read came back with nothing.
+pub fn is_the_only_reader(path: &Path) -> bool {
     use crate::formats::content_type::Content;
 
     // The entry is read before the lock, so the guard is not held across the read (see
@@ -100,8 +127,8 @@ pub fn is_engine_picture(path: &Path) -> bool {
         Content::Kind(_) | Content::Foreign => false,
         Content::Unknown => CONFIG
             .lock()
-            .map(|config| lists::MAGICK.claims(path, &config))
-            .unwrap_or(false),
+            .ok()
+            .is_some_and(|config| lists::MAGICK.claims(path, &config)),
     }
 }
 
@@ -177,27 +204,14 @@ mod tests {
         }
     }
 
-    /// And the names it does hold are the camera raws above all, which is what the list
-    /// exists for: nothing else on the machine opens one.
+    /// And the names it does hold are the ones nothing else here opens, which is what the list
+    /// exists for: the camera raws are no longer among them — the master list's now, with the
+    /// engine behind them — and what is left is the engine's own coders.
     #[test]
-    fn holds_the_camera_raw_formats_and_the_pictures_beside_them() {
+    fn holds_the_pictures_nothing_else_opens() {
         let config = crate::config::config::AppConfig::default();
 
         for name in [
-            "shot.nef",
-            "shot.NEF",
-            "shot.cr2",
-            "shot.cr3",
-            "shot.arw",
-            "shot.dng",
-            "shot.raf",
-            "shot.orf",
-            "shot.rw2",
-            "shot.pef",
-            "shot.srw",
-            "shot.x3f",
-            "shot.3fr",
-            "shot.raw",
             "scan.dcm",
             "frame.dpx",
             "sky.fits",
@@ -215,12 +229,38 @@ mod tests {
             "picture.pfm",
             "picture.vicar",
             "picture.wbmp",
-            "cursor.cur",
             "fax.dcx",
         ] {
             assert!(
                 crate::formats::lists::MAGICK.claims(std::path::Path::new(name), &config),
-                "`{name}` is one of the engine's pictures"
+                "`{name}` is one of the engine's own pictures"
+            );
+        }
+
+        // And the pictures the codecs Windows has decode are the master list's rather than the
+        // engine's, the camera raws and the cursor included: the engine is the fallback behind
+        // those readers rather than a second home for them.
+        for name in [
+            "shot.nef",
+            "shot.NEF",
+            "shot.cr2",
+            "shot.cr3",
+            "shot.arw",
+            "shot.dng",
+            "shot.raf",
+            "shot.orf",
+            "shot.rw2",
+            "shot.pef",
+            "shot.srw",
+            "shot.x3f",
+            "shot.3fr",
+            "shot.raw",
+            "cursor.cur",
+            "bitmap.rle",
+        ] {
+            assert!(
+                !crate::formats::lists::MAGICK.claims(std::path::Path::new(name), &config),
+                "`{name}` is a picture the readers of this app are asked about first"
             );
         }
     }

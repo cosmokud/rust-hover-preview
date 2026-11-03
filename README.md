@@ -24,11 +24,23 @@ Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. 
 
 | Engine                                                                   | `config.ini` | Default extensions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | --- | --- | --- |
-| This app's own decoders and the codecs Windows ships                     | `[image]`    | apng, avci, avif, bmp, dds, exr, ff, gif, hdr, heic, heif, ico, jfif, jpe, jpeg, jpg, jxl, pam, pbm, pgm, png, pnm, ppm, qoi, tga, tif, tiff, webp                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| [ImageMagick](#optional-enable-camera-raw-and-more-pictures-imagemagick) | `[magick]`   | 3fr, aai, art, arw, ase, aseprite, bayer, bayera, bgr, bgra, bgro, c2pa, cal, cals, cmyk, cmyka, cr2, cr3, crw, cube, cur, cut, dcm, dcr, dcx, dng, dpx, dxt1, dxt5, erf, fax, fff, fit, fits, fl32, fts, ftxt, g3, g4, gray, graya, group4, hrz, icb, iiq, ipl, j2c, j2k, jng, jnx, jp2, jpc, jpm, jpt, k25, kdc, mac, map, mat, mdc, mef, miff, mng, mono, mos, mpc, mrw, mtv, nef, nrw, orf, otb, pal, palm, pango, pcds, pef, pes, pfm, pgx, phm, picon, pict, pix, pwp, raf, raw, rgb, rgb565, rgba, rgbo, rgf, rla, rle, rmf, rw2, rwl, scr, sct, sf3, sfw, sgi, six, sixel, sr2, srf, srw, stegano, sun, tim, tm2, uyvy, vda, vicar, viff, vips, vst, wbinfo, wbmp, x3f, xbm, xcf, xpm, xv, ycbcr, ycbcra, yuv |
+| This app's own decoders and the codecs Windows ships                     | `[image]`    | 3fr, apng, arw, avci, avcs, avif, avifs, bmp, cr2, cr3, crw, cur, dcr, dds, dib, dng, erf, exr, exif, ff, fff, gif, hdr, heic, heics, heif, heifs, hif, ico, icon, iiq, jfif, jpe, jpeg, jpg, jxl, jxr, k25, kdc, mef, mos, mrw, nef, nrw, orf, pam, pbm, pef, pgm, png, pnm, ppm, qoi, raf, raw, rle, rw2, rwl, sr2, srf, srw, tga, tif, tiff, wdp, webp, x3f                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| [ImageMagick](#optional-enable-camera-raw-and-more-pictures-imagemagick) | `[magick]`   | aai, art, ase, aseprite, bayer, bayera, bgr, bgra, bgro, c2pa, cal, cals, cmyk, cmyka, cube, cut, dcm, dcx, dpx, dxt1, dxt5, fax, fit, fits, fl32, fts, ftxt, g3, g4, gray, graya, group4, hrz, icb, ipl, j2c, j2k, jng, jnx, jp2, jpc, jpm, jpt, mac, map, mat, mdc, miff, mng, mono, mpc, mtv, otb, pal, palm, pango, pcds, pes, pfm, pgx, phm, picon, pict, pix, pwp, rgb, rgb565, rgba, rgbo, rgf, rla, rmf, scr, sct, sf3, sfw, sgi, six, sixel, stegano, sun, tim, tm2, uyvy, vda, vicar, viff, vips, vst, wbinfo, wbmp, xbm, xcf, xpm, xv, ycbcr, ycbcra, yuv |
 
 
-`heic`, `heif`, `avif`, `avci`, `jxl` and a still `webp` are decoded by a codec Windows provides rather than one this app carries, so each of those six stills needs its [Store extension](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs) installed once; every other entry of `[image]` needs nothing installed.
+`[image]` is the master list for pictures, and it holds everything Windows decodes that *is* a
+picture: the ones this app decodes itself and the ones a codec Windows ships decodes — `heic`,
+`heif`, `avif`, `avci`, `jxl`, `jxr`, `wdp`, a still `webp`, the icon and cursor resources
+`ico`/`icon`/`cur`, the bitmap shapes `dib`/`rle`/`exif`, and every camera raw from `3fr` to
+`x3f`. A document, a project or a dataset is another list's however an engine could rasterise it:
+`xcf` stays in `[magick]` and so does `dcm`.
+
+Everything an extension provides has to be installed once — the ones a codec Windows ships
+(`heic`, `heif`, `avif`, `avci`, `jxl`, `jxr`, `wdp`, `webp`) come from the [Store
+extensions](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs), and the camera
+raws from the **Raw Image Extension** beside them — and every other entry of `[image]` needs
+nothing installed. Where a codec is missing, a [ImageMagick](#optional-enable-camera-raw-and-more-pictures-imagemagick)
+install develops the picture instead of Windows.
 
 ### Videos
 
@@ -199,6 +211,7 @@ A **still** `heic`, `heif`, `avif`, `jxl`, and still `webp` is decoded by a code
 | `avif`         | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)   |
 | `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
 | `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG) — optional: the app decodes WebP without it                               |
+| camera raws (`3fr` … `x3f`) | [Raw Image Extension](https://apps.microsoft.com/search?query=raw+image+extension) — optional: an installed ImageMagick develops one without it |
 
 
 All are free, official from Microsoft. Windows 11 often has HEIF, AV1, and WebP already. Where one is missing, hovering such a file shows no preview rather than an error.
@@ -219,7 +232,12 @@ Or download the official installer from [https://www.libreoffice.org/download/](
 
 ### Optional: Enable Camera Raw and More Pictures (ImageMagick)
 
-`nef` and everything else in the `[magick]` list is developed by **ImageMagick**, which this app runs where it finds it — nothing is bundled with the app and there is nothing to configure. Install it once:
+The camera raws and the pictures beside them in `[image]` are decoded by the codecs Windows has
+where those are installed — the **Raw Image Extension** for a `.nef`, a `.cr3`, a `.dng` or any
+other raw, and the HEIF, JPEG XL or WebP extension for the still beside them. Where one of those
+codecs is missing, and for everything in the `[magick]` list, **ImageMagick** develops the picture
+— which this app runs where it finds it, with nothing bundled and nothing to configure. Install it
+once:
 
 ```text
 winget install -e --id ImageMagick.ImageMagick

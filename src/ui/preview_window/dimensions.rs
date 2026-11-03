@@ -557,7 +557,10 @@ pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &Path) -> Option
         return None;
     }
 
-    picture_box(path)
+    // The readers of this app first, and the installed image converter behind them: a picture they
+    // will not measure — a camera raw on a machine without the codec for it, a `.heic` with no HEIF
+    // extension — is the wait for the engine, which is what its own box is (see `magick_box`).
+    picture_box(path).or_else(|| magick_box(path))
 }
 
 /// The box for one of the kinds a file's content answered with — see `content_type`.
@@ -601,7 +604,7 @@ pub(super) fn media_dimensions_of_kind(kind: PreviewType, path: &Path) -> Option
         PreviewType::Fonts => webview_preview::can_draw()
             .then(|| font_box(path))
             .flatten(),
-        PreviewType::Images => picture_box(path),
+        PreviewType::Images => picture_box(path).or_else(|| magick_box(path)),
     }
 }
 
@@ -662,6 +665,10 @@ pub(super) fn calibre_box(path: &Path) -> Option<(u32, u32)> {
 /// The box a picture the ImageMagick engine develops is placed at: the size the engine
 /// developed it at, the wait for one that is on its way, and nothing at all for a file the
 /// engine has turned down or for a machine with no engine to develop one with.
+///
+/// It is the engine's own kind's box, and it is the box the picture kind falls back to where the
+/// readers of this app measure nothing — a camera raw on a machine without the codec for it, a
+/// `.heic` with no HEIF extension (see `picture_box` and `get_media_dimensions`).
 ///
 /// The size is the picture's own — read from the header of the bytes the engine wrote, which
 /// is the size the preview is drawn at under the picture scale — and it is what the layout

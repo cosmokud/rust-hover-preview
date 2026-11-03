@@ -393,6 +393,123 @@ fn every_shipped_drawing_name_reaches_one_half_and_the_list_agrees() {
     );
 }
 
+/// The picture list is the master bucket for everything Windows decodes that *is* a picture, and
+/// only for those: the ten spellings of the codecs beside the ones that were always there, and the
+/// camera raws, the cursor and the run-length bitmap the engine's picture converter was the only
+/// home for. What is not a picture is another kind's however an engine draws it — a layered
+/// document, a scanner's dataset, a page of rich text — and that is the half of the rule this
+/// test is as much about as the names it does move.
+#[test]
+fn the_pictures_windows_decodes_are_the_picture_lists() {
+    let config = AppConfig::default();
+
+    for name in [
+        // The ten spellings of the codecs there already were.
+        "picture.dib",
+        "picture.exif",
+        "picture.heics",
+        "picture.heifs",
+        "picture.avcs",
+        "picture.avifs",
+        "picture.hif",
+        "picture.icon",
+        "picture.jxr",
+        "picture.wdp",
+        // And the camera raws, the cursor and the run-length bitmap.
+        "shot.3fr",
+        "shot.arw",
+        "shot.cr2",
+        "shot.cr3",
+        "shot.crw",
+        "shot.dcr",
+        "shot.dng",
+        "shot.erf",
+        "shot.fff",
+        "shot.iiq",
+        "shot.k25",
+        "shot.kdc",
+        "shot.mef",
+        "shot.mos",
+        "shot.mrw",
+        "shot.nef",
+        "shot.nrw",
+        "shot.orf",
+        "shot.pef",
+        "shot.raf",
+        "shot.raw",
+        "shot.rw2",
+        "shot.rwl",
+        "shot.sr2",
+        "shot.srf",
+        "shot.srw",
+        "shot.x3f",
+        "cursor.cur",
+        "bitmap.rle",
+    ] {
+        let path = Path::new(name);
+
+        assert_eq!(
+            kind_of_name(path, &config),
+            Some(PreviewType::Images),
+            "`{name}` is a picture, and its name is what says so"
+        );
+        assert!(
+            named_as(path, &config, PreviewType::Images),
+            "`{name}` is the picture list's"
+        );
+        assert!(
+            !named_as(path, &config, PreviewType::Magick),
+            "and not the image converter's as well: a name sits in exactly one list"
+        );
+    }
+
+    // What is not a picture is another kind's, however an engine could rasterise it. The
+    // layered document and the scanner's dataset stay the image converter's, a metafile is the
+    // drawing layer's, and a page of rich text is the text kind's.
+    for (name, kind) in [
+        ("picture.xcf", PreviewType::Magick),
+        ("scan.dcm", PreviewType::Magick),
+        ("picture.miff", PreviewType::Magick),
+        ("still.jp2", PreviewType::Magick),
+        ("drawing.emf", PreviewType::Vector),
+        ("drawing.wmf", PreviewType::Vector),
+    ] {
+        let path = Path::new(name);
+
+        assert_eq!(
+            kind_of_name(path, &config),
+            Some(kind),
+            "`{name}` is the {kind:?} kind's"
+        );
+        assert!(
+            !named_as(path, &config, PreviewType::Images),
+            "`{name}` is not a picture of the master list"
+        );
+    }
+
+    // And a page of rich text is the text kind's: it is drawn as a page rather than shown as a
+    // picture, and a name that is the text list's today is not to be moved by a later change.
+    assert_eq!(
+        kind_of_name(Path::new("page.rtf"), &config),
+        Some(PreviewType::Text),
+        "a `.rtf` is a page of text"
+    );
+
+    // The two readers of the picture kind, and the one of the converter's, are what the chains say
+    // as well: the pictures are read here first and developed by the engine only where that read
+    // answered nothing.
+    assert_eq!(
+        chain(PreviewType::Images),
+        &[Reader::Native, Reader::ImageMagick],
+        "a picture is the readers of this app first"
+    );
+    assert_eq!(
+        chain(PreviewType::Magick),
+        &[Reader::ImageMagick],
+        "the engine's own names have no reader in front of it"
+    );
+}
+
 /// The walk narrows a chain and never reorders it: what a file can be asked of is what its
 /// kind declares, less whatever this machine cannot answer with, in the order the kind
 /// names them — so the reader asked first is the first of the chain that can answer.
@@ -403,8 +520,9 @@ fn the_readers_a_file_is_asked_of_are_its_chain_narrowed() {
         ("help.chm", PreviewType::Peazip),
         ("book.epub", PreviewType::Calibre),
         ("drawing.cdr", PreviewType::Libre),
-        ("shot.nef", PreviewType::Magick),
+        ("picture.xcf", PreviewType::Magick),
         ("photo.jpg", PreviewType::Images),
+        ("shot.nef", PreviewType::Images),
         ("film.mp4", PreviewType::Videos),
         ("notes.txt", PreviewType::Text),
     ] {
@@ -558,8 +676,14 @@ fn the_chain_names_the_readers_of_each_kind() {
     );
     assert_eq!(
         chain(PreviewType::Images),
-        &[Reader::Native],
-        "a picture has one reader, which is the file's own question"
+        &[Reader::Native, Reader::ImageMagick],
+        "a picture is the readers of this app first, and the image converter behind them for the \
+         codec package the machine has not been given"
+    );
+    assert_eq!(
+        chain(PreviewType::Magick),
+        &[Reader::ImageMagick],
+        "and a name of the engine's own has no reader in front of it: nothing here opens one"
     );
 
     for (name, kind) in [

@@ -1,17 +1,17 @@
 use super::*;
 use std::time::Instant;
 
-/// The engine is never started for a name its own list does not hold: a picture this
-/// app decodes itself, a document an engine of its own draws and a video are all
-/// somebody else's, and asking an image converter about one would cost a launch and
-/// answer nothing.
+/// The engine is never started for a format that is somebody else's alone: a picture this app
+/// decodes itself, a document an engine of its own draws and a video are all another reader's,
+/// and asking an image converter about one would cost a launch and answer nothing. And it is
+/// asked about two groups rather than one: the names nothing here opens, and the pictures of the
+/// master list whose format is a codec package — where it is the fallback for a machine the
+/// package is missing from (see `magick_formats::is_the_only_reader`).
 #[test]
 fn asks_the_engine_only_about_the_names_it_reads() {
     for name in [
         "photo.png",
         "photo.jpg",
-        "photo.heic",
-        "texture.dds",
         "render.exr",
         "drawing.svg",
         "report.pdf",
@@ -26,10 +26,31 @@ fn asks_the_engine_only_about_the_names_it_reads() {
         );
     }
 
-    for name in ["shot.nef", "shot.CR3", "shot.arw", "shot.dng", "scan.dcm"] {
+    // The names it is the only reader of, which are its own list's.
+    for name in ["scan.dcm", "picture.xcf", "picture.miff"] {
+        assert!(
+            crate::formats::magick_formats::is_the_only_reader(Path::new(name)),
+            "`{name}` is one of its formats"
+        );
+    }
+
+    // And the pictures whose format is a codec package, where it is the fallback behind the
+    // readers of this app rather than a reader in front of them.
+    for name in [
+        "shot.nef",
+        "shot.CR3",
+        "shot.arw",
+        "shot.dng",
+        "photo.heic",
+        "texture.dds",
+    ] {
         assert!(
             crate::formats::magick_formats::is_engine_picture(Path::new(name)),
             "`{name}` is one of its formats"
+        );
+        assert!(
+            !crate::formats::magick_formats::is_the_only_reader(Path::new(name)),
+            "`{name}` is the readers of this app first"
         );
     }
 }
