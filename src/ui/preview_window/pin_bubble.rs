@@ -1568,6 +1568,14 @@ pub(super) unsafe fn hide_pinned_windows() {
     // window, and one left on the screen is a picture of a pin that has been put away.
     pin_real_window::hide_real_pin_window();
 
+    // **And the caption's popup, which is the one strip no parent takes down with it.** The strips
+    // the chrome rides in are children of the pin's window and go off the screen with its
+    // visibility; the caption over a page the Shell composes into the pin is a window of the
+    // desktop's, owned by the pin's (see `the_caption_popup_at`), and an owner going hidden hides
+    // nothing it owns. Left to the paint road it stands there until the next pin paints — a title
+    // bar over a window nobody can see, and one that takes no press.
+    pin_chrome_strips::hide_the_caption_popup();
+
     hide_pinned_siblings();
 }
 
