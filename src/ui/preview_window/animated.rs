@@ -191,13 +191,21 @@ pub(super) fn load_animated_gif(
             // Whether the file has to be decoded again is settled under the same
             // lock the player takes before it gives frames back, so that a release
             // and the end of a pass cannot pass each other: whichever happens
-            // first, the other sees it. A pass that ends with nothing given back
-            // leaves every frame in the player's hands — the file is its own
-            // memory from there, and no frame of it is ever decoded again — while a
-            // pass that ends after frames were given back is one to run again.
+            // first, the other sees it. A pass that ends after frames were given
+            // back is one to run again. So is a pass that began part-way through
+            // the file, whatever it ended with: it began where a box change asked
+            // the decode to begin, which leaves the file's head undecoded, so it is
+            // always followed by the pass that begins at the first frame — and the
+            // frames a resumed decode ends up holding are the file's in play order,
+            // the tail it began at and then the head, which is the order the player
+            // and the release window already work in. A pass that began at the
+            // first frame and gave nothing back is the one that leaves every frame
+            // in the player's hands: the file is its own memory from there, and no
+            // frame of it is ever decoded again.
+            let began_part_way = skip > 0;
             let replay = match shared_clone.lock() {
                 Ok(mut streamed) => {
-                    if streamed.released {
+                    if streamed.released || began_part_way {
                         true
                     } else {
                         streamed.decoded = true;
@@ -211,6 +219,8 @@ pub(super) fn load_animated_gif(
             if cancelled || !replay {
                 break;
             }
+            // Whatever the pass that ended was, the one that follows begins the file
+            // at its first frame.
             skip = 0;
         }
 
@@ -432,13 +442,21 @@ pub(super) fn load_animated_apng(
             // Whether the file has to be decoded again is settled under the same
             // lock the player takes before it gives frames back, so that a release
             // and the end of a pass cannot pass each other: whichever happens
-            // first, the other sees it. A pass that ends with nothing given back
-            // leaves every frame in the player's hands — the file is its own
-            // memory from there, and no frame of it is ever decoded again — while a
-            // pass that ends after frames were given back is one to run again.
+            // first, the other sees it. A pass that ends after frames were given
+            // back is one to run again. So is a pass that began part-way through
+            // the file, whatever it ended with: it began where a box change asked
+            // the decode to begin, which leaves the file's head undecoded, so it is
+            // always followed by the pass that begins at the first frame — and the
+            // frames a resumed decode ends up holding are the file's in play order,
+            // the tail it began at and then the head, which is the order the player
+            // and the release window already work in. A pass that began at the
+            // first frame and gave nothing back is the one that leaves every frame
+            // in the player's hands: the file is its own memory from there, and no
+            // frame of it is ever decoded again.
+            let began_part_way = skip > 0;
             let replay = match shared_clone.lock() {
                 Ok(mut streamed) => {
-                    if streamed.released {
+                    if streamed.released || began_part_way {
                         true
                     } else {
                         streamed.decoded = true;
@@ -452,6 +470,8 @@ pub(super) fn load_animated_apng(
             if cancelled || !replay {
                 break;
             }
+            // Whatever the pass that ended was, the one that follows begins the file
+            // at its first frame.
             skip = 0;
         }
 
@@ -700,13 +720,21 @@ pub(super) fn load_animated_webp(
             // Whether the file has to be decoded again is settled under the same
             // lock the player takes before it gives frames back, so that a release
             // and the end of a pass cannot pass each other: whichever happens
-            // first, the other sees it. A pass that ends with nothing given back
-            // leaves every frame in the player's hands — the file is its own
-            // memory from there, and no frame of it is ever decoded again — while a
-            // pass that ends after frames were given back is one to run again.
+            // first, the other sees it. A pass that ends after frames were given
+            // back is one to run again. So is a pass that began part-way through
+            // the file, whatever it ended with: it began where a box change asked
+            // the decode to begin, which leaves the file's head undecoded, so it is
+            // always followed by the pass that begins at the first frame — and the
+            // frames a resumed decode ends up holding are the file's in play order,
+            // the tail it began at and then the head, which is the order the player
+            // and the release window already work in. A pass that began at the
+            // first frame and gave nothing back is the one that leaves every frame
+            // in the player's hands: the file is its own memory from there, and no
+            // frame of it is ever decoded again.
+            let began_part_way = skip > 0;
             let replay = match shared_clone.lock() {
                 Ok(mut streamed) => {
-                    if streamed.released {
+                    if streamed.released || began_part_way {
                         true
                     } else {
                         streamed.decoded = true;
@@ -720,6 +748,8 @@ pub(super) fn load_animated_webp(
             if cancelled || !replay {
                 break;
             }
+            // Whatever the pass that ended was, the one that follows begins the file
+            // at its first frame.
             skip = 0;
         }
         loaded_flag_clone.store(true, Ordering::Release);

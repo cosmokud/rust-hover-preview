@@ -269,6 +269,21 @@ impl MediaData {
         self.current_frame().map(|frame| frame.file_index)
     }
 
+    /// The index among the frames in hand of the frame carrying the file's first frame, which is
+    /// where a media that has played to the end of what it holds wraps round to.
+    ///
+    /// The frames are the file's in play order and not from its first frame — a decode begun at a
+    /// place answers the file's tail and then its head — so the start of the file is found by the
+    /// index each frame carries rather than by its place in the list. A media whose head a cancelled
+    /// decode never delivered has no frame carrying `0`, and its own first frame is the nearest thing
+    /// it has to a start.
+    fn frame_of_file_start(&self) -> usize {
+        self.frames
+            .iter()
+            .position(|frame| frame.file_index == 0)
+            .unwrap_or(0)
+    }
+
     pub(super) fn current_pixels(&self) -> &[u8] {
         self.current_frame()
             .map(|frame| frame.pixels.as_slice())
@@ -507,9 +522,11 @@ impl MediaData {
                     self.last_frame_time += delay;
                     advanced = true;
                 } else if fully_loaded && !self.frames_were_released() {
-                    // All frames decoded and still in memory — safe to loop back
-                    // to start
-                    self.current_frame = 0;
+                    // Every frame is in memory, so the playhead wraps round to the frame carrying
+                    // the file's first frame: looping back to the list's first frame is only right
+                    // for a file whose list begins at zero, since a decode begun at a place answers
+                    // the file's tail and then its head.
+                    self.current_frame = self.frame_of_file_start();
                     self.last_frame_time += delay;
                     advanced = true;
                 } else {
