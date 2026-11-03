@@ -146,9 +146,9 @@ pub(super) fn refresh_pin_media_buttons(kind: Option<MediaType>, playing: bool) 
 /// press with no meaning rather than a press to guess at.
 pub(super) fn pin_media_button_command(id: u32) -> Option<PinCommand> {
     match id {
-        PIN_MEDIA_PREVIOUS => Some(PinCommand::Previous),
+        PIN_MEDIA_PREVIOUS => Some(PinCommand::PreviousFile),
         PIN_MEDIA_PLAY_PAUSE => Some(PinCommand::TogglePlayback),
-        PIN_MEDIA_NEXT => Some(PinCommand::Next),
+        PIN_MEDIA_NEXT => Some(PinCommand::NextFile),
         _ => None,
     }
 }
@@ -490,7 +490,7 @@ mod tests {
     fn the_three_buttons_are_the_pins_own_three_commands() {
         assert_eq!(
             pin_media_button_command(PIN_MEDIA_PREVIOUS),
-            Some(PinCommand::Previous)
+            Some(PinCommand::PreviousFile)
         );
         assert_eq!(
             pin_media_button_command(PIN_MEDIA_PLAY_PAUSE),
@@ -498,7 +498,7 @@ mod tests {
         );
         assert_eq!(
             pin_media_button_command(PIN_MEDIA_NEXT),
-            Some(PinCommand::Next)
+            Some(PinCommand::NextFile)
         );
 
         assert_eq!(pin_media_button_command(0), None);
@@ -514,7 +514,7 @@ mod tests {
 
         assert_eq!(
             pin_media_button_click(clicked(PIN_MEDIA_NEXT)),
-            Some(PinCommand::Next)
+            Some(PinCommand::NextFile)
         );
         assert_eq!(
             pin_media_button_click(clicked(PIN_MEDIA_PLAY_PAUSE)),

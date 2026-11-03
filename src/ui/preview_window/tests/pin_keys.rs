@@ -1236,6 +1236,18 @@ fn a_pin_holding_a_page_answers_the_keys_the_page_owns() {
     // frame for a scroll, and `Home`/`End` for the line's two ends — the document's under `Ctrl`.
     // Every one of them is the page taking the key, which is what stops `pin_command_request`
     // walking the folder instead (see `text_caret::command_move`).
+    //
+    // The press comes first because a page is drawn unfocused: until it is pressed into, its keys are
+    // the folder's (see `text_caret::page_has_focus`).
+    assert_eq!(
+        text_caret::command_move(PinCommand::CaretDown),
+        None,
+        "a page nobody has pressed into answers none of its keys"
+    );
+    assert!(
+        begin_text_selection(25, 10),
+        "a press on the page's own text is the page's to answer"
+    );
     for command in [
         PinCommand::PageOn,
         PinCommand::PageBack,
@@ -1312,6 +1324,10 @@ fn a_page_key_writes_its_move_down_and_the_page_is_scrolled_only_to_show_the_car
         0,
         "a page nobody has pressed a key over has no move in hand"
     );
+    // The press a user makes before the keys are the page's, and it queues no move of its own: what it
+    // does is put the caret down and focus the page (see `text_caret::page_has_focus`).
+    assert!(begin_text_selection(25, 10), "a press on the page's text");
+    assert_eq!(queued(), 0, "and the press queued no move");
     assert_eq!(
         text_caret::command_move(PinCommand::CaretDown),
         Some(()),

@@ -15,6 +15,16 @@
 //! and `Ctrl`+`C` are the page's (they read, they do not write), and a press on the page, a drag, a
 //! double press and `Ctrl`+`F` are untouched (see `text_selection` and `text_find`).
 //!
+//! **The page answers the caret's keys only once it has the reader's focus.** A pin is drawn
+//! unfocused, with no caret and no key of the page's: every walk key — `←`/`→`, `↑`/`↓`,
+//! `PgUp`/`PgDn`, `Home`/`End` — steps the folder, exactly as it does over a picture. A press
+//! inside the page's body focuses it, which is the press that already put the caret down or began a
+//! selection; a press on the pin's caption takes the focus away again — its walk, its buttons and the
+//! empty drag area, and nothing else, so the scrollbar, the transport bar, the find bar, an edge, the
+//! menu and the wheel all leave the page focused. **Focus is not the caret**: taking it away clears no
+//! caret, no column and no selection, and only stops the bar being drawn and the keys being answered,
+//! so a page pressed into again comes back where it was left (see `page_has_focus`).
+//!
 //! **A move is queued rather than made where it lands.** The keys arrive in the window procedure, on
 //! the message road, where a document may not be read and a page may not be painted — so the move is
 //! written down and the tick that may take the lock runs it (see `settle`). That is the same road the
@@ -34,9 +44,9 @@ pub(super) struct CaretMove {
 }
 
 /// What a command pressed on a pinned page asks its caret for, or `None` for one the caret does not
-/// own — a pin that holds no page, or a command that is not a move. Answering `Some(())` is the
-/// page taking the key, which is what tells the page's caret from the folder's walk (see
-/// `pin_command_request`).
+/// own — a pin that holds no page, a page nobody has pressed into, or a command that is not a move.
+/// Answering `Some(())` is the page taking the key, which is what tells the page's caret from the
+/// folder's walk (see `pin_command_request` and `page_has_focus`).
 ///
 /// The table is the reader's own: the four arrows, the two page keys, the two ends, and the two
 /// document ends under `Ctrl`. `Home`/`End` are the *line's* ends and `Ctrl`+`Home`/`Ctrl`+`End` the
@@ -54,7 +64,9 @@ pub(super) struct CaretMove {
 /// that would cut and paste are all absent, and `window_proc` swallows them rather than passing them
 /// on (see the module documentation).
 pub(super) fn command_move(command: PinCommand) -> Option<()> {
-    if !holds_a_page() {
+    // A page nobody has pressed into has no keys of its own: every one of them is the folder's, which
+    // is what `None` here becomes at each of `pin_command_request`'s arms.
+    if !holds_a_page() || !page_has_focus() {
         return None;
     }
 
@@ -125,8 +137,12 @@ pub(super) fn note(movement: CaretMove) {
 }
 
 /// Whether the pin on screen is holding a page of text, which is what tells a key that is the page's
-/// from one the folder's: a pin holding a page answers the caret's keys even before a caret has been
-/// put down, because the first `↓` is what puts one there.
+/// from one the folder's: a pin holding a page has somewhere for the caret's keys to go, and one
+/// holding anything else has not.
+///
+/// **The page's focus is a second question and this is not it.** A page can be held and unfocused —
+/// every page is, until it is pressed into — and until then its keys are the folder's (see
+/// `page_has_focus`).
 ///
 /// **The page on the screen is asked first and the media second, and in that order.** What the last
 /// paint published is the answer to whether the preview is a page (see `TEXT_PREVIEW_HOLDING`), and a
@@ -148,6 +164,42 @@ pub(super) fn holds_a_page() -> bool {
                 .map(|state| !state.lines.is_empty())
         })
         .unwrap_or(false)
+}
+
+/// Whether the page on screen has the reader's focus, which is what the caret and the caret's keys
+/// are the page's by.
+///
+/// **Asked beside `holds_a_page` rather than folded into it**, because a page can be held and
+/// unfocused: what a key means is the two questions together, and a pin holding no page at all
+/// answers this one whatever it says.
+///
+/// Focus is taken by a press inside the page's body — the same press that puts the caret down or
+/// begins a selection (see `text_selection::begin_text_selection`) — and given up by a press on the
+/// pin's caption (see `unfocus_page`). Nothing else on the pin takes or gives it.
+pub(super) fn page_has_focus() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| state.focused)
+        })
+        .unwrap_or(false)
+}
+
+/// Give up the page's focus, which is what a press on the pin's caption asks for.
+///
+/// **Nothing of where the caret stands is cleared**: not the place, not the column a vertical move
+/// aims at, not the selection. Only the drawing of the bar and the answering of the keys stop, so a
+/// page pressed into again comes back exactly where it was left rather than homed.
+pub(super) fn unfocus_page() {
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(state) = media.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.focused = false;
+        }
+    }
 }
 
 /// Run every move the page was told since the last tick, and draw what changed.
@@ -284,6 +336,13 @@ pub(super) fn caret_mark() -> Option<text_preview::TextCaret> {
     let media = CURRENT_MEDIA.lock().ok()?;
     let state = media.as_ref()?.text_state.as_ref()?;
 
+    // Nothing is drawn for a page the reader has not pressed into, whether or not it holds a caret and
+    // a selection from the last time it did: the bar is the page's focus made visible, and the wash a
+    // selection lays is the frame's own and stays drawn (see `page_has_focus`).
+    if !state.focused {
+        return None;
+    }
+
     let selection = state.selection.filter(|selection| !selection.is_empty());
     let at = match selection {
         Some(selection) => selection.caret,
@@ -304,8 +363,10 @@ pub(super) fn the_caret_turned() -> bool {
         return false;
     };
     // A selection holds the bar solid, and a page with no caret has no bar at all: neither is a bar
-    // that blinks, so neither asks for a repaint twice a second.
-    if state.caret.is_none()
+    // that blinks, so neither asks for a repaint twice a second. Nor is one on a page nobody has
+    // pressed into, which draws no bar to turn over (see `caret_mark`).
+    if !state.focused
+        || state.caret.is_none()
         || state
             .selection
             .is_some_and(|selection| !selection.is_empty())

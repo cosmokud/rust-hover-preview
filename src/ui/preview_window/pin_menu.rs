@@ -1014,11 +1014,11 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
             false
         }
         Some(PinMenuRow::NextFile) => {
-            ask_pin(PinCommand::Next);
+            ask_pin(PinCommand::NextFile);
             false
         }
         Some(PinMenuRow::PreviousFile) => {
-            ask_pin(PinCommand::Previous);
+            ask_pin(PinCommand::PreviousFile);
             false
         }
         // The two ways out to another program, armed here and made on the release: the program

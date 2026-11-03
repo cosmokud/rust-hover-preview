@@ -1066,17 +1066,21 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
 - Text pin = full mode (`current_text_options`): scroll/select/clipboard (`Ctrl+C/A`, menu), scrollbar (`bar_row` shared
   geometry), wrap-to-width + pull-back + end rule, `text_cache_mb` frames, `Refresh` rebuilds from recorded hover;
   journey+preview regions published per tick. **The page is a read-only editor rather than a scroll box, and it is the
-  one media a pin's own keyboard reaches**: `↑`/`↓` move a caret a line at a time with the column kept over the short
-  lines in between, `←`/`→` a character across the ends of lines, `Ctrl`+arrows a word by the page's own run rule,
-  `Home`/`End` the line's two ends and `Ctrl`+`Home`/`End` the document's, `PgUp`/`PgDn` a screenful
-  (`PinCommand::CaretUp/CaretDown/Previous/Next/PageTop/PageBottom/PageBack/PageOn`, asked where the file in the window
-  is known, the folder still walking for anything else), `Shift` grows the selection and a bare move collapses it, and the
-  page scrolls **only** to keep the caret on it (`text_preview::moved` for the arithmetic, `text_caret` for the keys — a
-  key writes its move down and the tick that may read the document makes it, because a window procedure may not). Nothing
-  that writes reaches the document: a typed character, `Backspace`, `Delete` and `Ctrl`+`X`/`Ctrl`+`V` all change nothing,
-  since a cut that cannot cut is worse than a chord that does nothing, while `Ctrl`+`A`/`C` still read it. The caret
-  blinks at the pace the system names while the page holds one. `F3`, and the page's **Find Next** row, take it to the
-  next place the selection appears
+  one media a pin's own keyboard reaches — once a press inside its body has given it the focus**: `↑`/`↓` move a caret a
+  line at a time with the column kept over the short lines in between, `←`/`→` a character across the ends of lines,
+  `Ctrl`+arrows a word by the page's own run rule, `Home`/`End` the line's two ends and `Ctrl`+`Home`/`End` the
+  document's, `PgUp`/`PgDn` a screenful (`PinCommand::CaretUp/CaretDown/Previous/Next/PageTop/PageBottom/PageBack/PageOn`,
+  asked where the file in the window is known, the folder still walking for anything else), `Shift` grows the selection
+  and a bare move collapses it, and the page scrolls **only** to keep the caret on it (`text_preview::moved` for the
+  arithmetic, `text_caret` for the keys — a key writes its move down and the tick that may read the document makes it,
+  because a window procedure may not). **A page is drawn unfocused**, with no caret and every one of those keys stepping
+  the folder as it does over a picture, and a press on the caption — its walk, its buttons and the empty drag area, and
+  nothing else — gives the focus up again, clearing none of the caret, its column or the selection; `Ctrl`+`A`/`C`, `F3`
+  and `Ctrl`+`F` read the page rather than move a caret in it and are the page's either way. Nothing that writes reaches
+  the document: a typed character, `Backspace`, `Delete` and `Ctrl`+`X`/`Ctrl`+`V` all change nothing, since a cut that
+  cannot cut is worse than a chord that does nothing, while `Ctrl`+`A`/`C` still read it. The caret blinks at the pace
+  the system names while the page has the focus and a caret. `F3`, and the page's **Find Next** row, take it to the next
+  place the selection appears
   (`find_next`: exact, case-sensitive, from just after the selection, wrapping to end where it began) — or, while a find
   bar is up, to the next place that bar's query appears — and `Ctrl` and a wheel steps the page's own size
   through the tray's list (`PIN_TEXT_SIZE_DELTA`) — a size the pin carries across a resize and a walk and gives up when
