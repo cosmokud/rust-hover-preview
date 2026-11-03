@@ -23,10 +23,11 @@ use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_FORCE_ICONIC_REPRESENTATION, DWMWA_HAS_ICONIC_BITMAP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, IsIconic, IsWindow, SetWindowTextW, SC_CLOSE, SC_MINIMIZE, SC_RESTORE,
-    SHOW_WINDOW_CMD, SW_MINIMIZE, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WA_ACTIVE,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_DWMSENDICONICTHUMBNAIL, WM_QUERYOPEN,
-    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    DestroyWindow, IsIconic, IsWindow, SendMessageW, SetWindowTextW, ICON_BIG, ICON_SMALL,
+    SC_CLOSE, SC_MINIMIZE, SC_RESTORE, SHOW_WINDOW_CMD, SW_MINIMIZE, SW_SHOWMINNOACTIVE,
+    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND,
+    WM_DWMSENDICONICTHUMBNAIL, WM_QUERYOPEN, WM_SETICON, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP,
+    WS_SYSMENU,
 };
 /// The class the taskbar stand-in is created from.
 pub(super) const PIN_TASKBAR_CLASS: PCWSTR = w!("RustHoverPreviewPinTaskbar");
@@ -472,6 +473,13 @@ pub(super) unsafe fn pin_taskbar_window() -> Option<HWND> {
     .ok()?;
 
     PIN_TASKBAR_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
+    // The window's own icon, both sizes: the small one is what a taskbar button draws, and the
+    // large one what anything listing the window as a window draws.
+    let icon = unsafe { crate::shell::app_icon::app_icon() };
+    let icon = LPARAM(icon.0 as isize);
+    let _ = unsafe { SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_BIG as usize), icon) };
+    let _ = unsafe { SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_SMALL as usize), icon) };
 
     // And the Shell is told that this window will supply the still its button's hover is drawn of, so
     // that a put-away pin's button holds the pin rather than the icon the Shell falls back on for a
