@@ -195,11 +195,13 @@ fn write_test_gif(path: &Path, frames: usize) {
     std::fs::write(path, bytes).expect("a written GIF");
 }
 
-/// **A decode asked to begin at a place begins there, and the stream goes on from it.** A box change of
-/// a pin that plays decodes the file from the place its playhead is at rather than from the file's first
-/// frame (see `keep_animation_place`), so what the loader answers with is the frames from that place
-/// onward — each carrying where it is in the file — and every frame the stream decodes after them goes
-/// on down the file rather than starting it again.
+/// **A decode asked to begin at a place begins there, and the stream goes on from it and then round to the
+/// file's head.** A box change of a pin that plays decodes the file from the place its playhead is at rather
+/// than from the file's first frame (see `keep_animation_place`), so what the loader answers with is the
+/// frames from that place onward — each carrying where it is in the file — and every frame the stream decodes
+/// after them goes on down the file rather than starting it again. A pass that began part-way through the file
+/// is then followed by the pass that begins at its first frame, so the frames in hand are the file in play
+/// order: the tail the decode began at, and the head it left undecoded.
 #[test]
 fn a_decode_begun_at_a_place_answers_from_it_and_the_stream_goes_on_from_there() {
     let folder = std::env::temp_dir().join("rhp-animated-resume-fixtures");
@@ -228,32 +230,111 @@ fn a_decode_begun_at_a_place_answers_from_it_and_the_stream_goes_on_from_there()
         "and the frame the preview opens on is the place the decode was asked to begin at"
     );
     assert_eq!(
-        loaded
-            .frames
-            .iter()
-            .map(|frame| frame.file_index)
-            .collect::<Vec<_>>(),
+        ids(&loaded),
         vec![4, 5],
         "the ids are the frames' own, from the file's first frame"
     );
 
     // The decoder runs on down the file from where the startup answer ended.
     let deadline = Instant::now() + Duration::from_secs(10);
-    while loaded.frames.len() < 4 && Instant::now() < deadline {
+    while ids(&loaded).len() < 4 && Instant::now() < deadline {
         loaded.sync_shared_frames();
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(
-        loaded
-            .frames
-            .iter()
-            .map(|frame| frame.file_index)
-            .collect::<Vec<_>>(),
-        vec![4, 5, 6, 7],
-        "the streamed frames continue the file's run rather than restarting it at zero"
+    assert!(
+        ids(&loaded).starts_with(&[4, 5, 6, 7]),
+        "the streamed frames continue the file's run rather than restarting it at zero ({:?})",
+        ids(&loaded)
+    );
+
+    // Past the tail the stream owes the file's head: the pass it began at the fifth frame left the four
+    // before it undecoded, and the file is not decoded until the pass that begins at its first frame is.
+    while !loaded.is_fully_loaded() && Instant::now() < deadline {
+        loaded.sync_shared_frames();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    loaded.sync_shared_frames();
+    assert!(loaded.is_fully_loaded(), "the decoder finished the file");
+    assert!(
+        ids(&loaded).starts_with(&[4, 5, 6, 7, 0, 1, 2, 3]),
+        "the head follows the tail, so a file decoded whole is the file in play order rather than the \
+         part a decode begun at the fifth frame happened to have ({:?})",
+        ids(&loaded)
     );
 
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// The ids the frames in hand carry, which is where each of them is in the file.
+fn ids(media: &MediaData) -> Vec<usize> {
+    media.frames.iter().map(|frame| frame.file_index).collect()
+}
+
+/// **A media a decode began part-way through wraps onto the frame carrying the file's first frame**, not onto
+/// the frame its list happens to begin with. The frames in hand are the file in play order — the tail the decode
+/// began at and then its head — so the start of the file sits in the middle of the list, and a player that looped
+/// back to the list's first frame looped over the part of the file the decode happened to have, for good (see
+/// `MediaData::advance_frame`).
+#[test]
+fn a_media_decoded_at_a_place_wraps_onto_the_frame_carrying_the_file_s_first() {
+    // The sixth frame of a file to its end, and then its first frame to the sixth.
+    let mut media = a_playing_media(&[5, 6, 7, 0, 1, 2, 3, 4]);
+    media.current_frame = media.frames.len() - 1;
+    assert_eq!(
+        media.current_frame_of_file(),
+        Some(4),
+        "the playhead is on the frame before the one the list begins with"
+    );
+    media.last_frame_time = Instant::now() - Duration::from_millis(1001);
+
+    assert!(
+        media.advance_frame(),
+        "the frame the list ends on hands the playhead on"
+    );
+    assert_eq!(
+        media.current_frame_of_file(),
+        Some(0),
+        "to the file's first frame, which is in hand because the decode finished the file it began in \
+         the middle of"
+    );
+    assert_eq!(
+        media.current_frame, 3,
+        "at the place in the list that frame has, and not at the list's first frame"
+    );
+}
+
+/// **A media whose head a decode never delivered wraps onto its own first frame.** A decode cancelled before the
+/// pass that begins at the file's first frame leaves no frame carrying frame zero — what it answered is installed
+/// as it came — so the wrap falls back to the first frame in hand rather than stalling on the end of the list.
+#[test]
+fn a_media_whose_head_was_never_delivered_wraps_onto_its_own_first_frame() {
+    let mut media = a_playing_media(&[5, 6, 7]);
+    media.current_frame = media.frames.len() - 1;
+    media.last_frame_time = Instant::now() - Duration::from_millis(1001);
+
+    assert!(
+        media.advance_frame(),
+        "a file that ends on the part it began in the middle of still plays round"
+    );
+    assert_eq!(
+        (media.current_frame, media.current_frame_of_file()),
+        (0, Some(5)),
+        "to its own first frame, which is the nearest thing it has to the start of the file"
+    );
+}
+
+/// A media that plays, holding the frames of the given ids and decoded whole: nothing is streaming and nothing
+/// has been given back, so the playhead is the only thing that moves.
+fn a_playing_media(file_indices: &[usize]) -> MediaData {
+    let frame = |file_index: usize| {
+        let mut frame = ImageFrame::new(vec![0u8; 4], 1, 1, 1000);
+        frame.file_index = file_index;
+        Arc::new(frame)
+    };
+    let mut media = static_image_media(frame(file_indices[0]), MediaType::AnimatedGif);
+    media.frames = file_indices.iter().copied().map(frame).collect();
+    media.all_frames_loaded = Some(Arc::new(AtomicBool::new(true)));
+    media
 }
 
 /// A video's size is a setting of its own: a video the probe has answered for keeps
