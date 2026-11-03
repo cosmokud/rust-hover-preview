@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The pin road's trace names the window in front, and what stands over one** — `RHP_PIN_TRACE` describes a window rather than leaving it as `other`: `class:pid (image)` for any window Windows can still be asked about, `none` for a handle that names no window and `invalid` for one that names none any more, and this app's own by the words they already had (`pin`, `host`, `preview`, `bubble`, `stand-in`). Every line that reads the front carries it — `set_foreground … -> foreground=… pin above=…`, the band flip with the road that asked for it (`band taken and given back: a press`, `a preview update`, `a press on a running page`, `the pin appeared`), the host's show, `pin above:` after a show, the keyboard hand-back at a collapse and at an end, the player's topmost show — and every message a pin's window is handed carries an `above=` beside its `foreground=` and `focus=`. A pin another program put down, or one left behind by a box change, is read from those lines rather than guessed at from the hole it left on the screen.
+
+### Fixed
+
+- **A pin is not put behind the listing by its own gesture** — a maximize, its restore, a reset size, the end of a resize and a double press on a pin's own picture are all made inside the pin, and the press that ends one used to be read against whatever the window had moved over: a film's host answers `HTTRANSPARENT`, so the hit test under the pin's picture named the listing the pin was fitted over, the point held the gap between the rows, and a press that named no file was answered by lowering the pin behind that listing until a click brought it back. A press whose point is inside the pin's own box is now the pin's own whatever the hit test names under it, and a press read on the very tick this app's own window moved is neither a pick nor a no-pick, since the hand did not move and what reads under the point is whatever the move uncovered — a gesture that changed the box leaves the point *outside* the new one, which is why the box alone cannot refuse that press. Neither reading is answered as a pick of a row either, so a pin carried over a file by its own gesture no longer picks it.
+
 ## [0.4.6] - 2026-11-03
 
 ### Added
