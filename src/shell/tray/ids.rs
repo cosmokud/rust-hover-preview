@@ -510,6 +510,8 @@ pub(super) const ID_TRAY_RENDER_HTML: u16 = 1058;
 /// The `Text → Preview All Extensionless` row: whether an extensionless file is previewed by the text
 /// preview.
 pub(super) const ID_TRAY_TEXT_SHOW_EXTENSIONLESS: u16 = 1059;
+/// The `Text → Don't Preview Secret Files` row: whether secret and sensitive files are blocked from text preview.
+pub(super) const ID_TRAY_TEXT_DONT_PREVIEW_SECRETS: u16 = 1060;
 /// The `Preview Types` submenu, one command per kind of preview.
 pub(super) const ID_TRAY_TYPE_IMAGES: u16 = 1062;
 pub(super) const ID_TRAY_TYPE_VIDEOS: u16 = 1063;

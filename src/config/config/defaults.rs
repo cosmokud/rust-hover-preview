@@ -166,6 +166,8 @@ pub const DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 40.0;
 pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
 /// Whether an extensionless file is previewed by the text preview by default.
 pub const DEFAULT_TEXT_SHOW_EXTENSIONLESS: bool = false;
+/// Whether to refuse previewing secret and sensitive files by default.
+pub const DEFAULT_TEXT_DONT_PREVIEW_SECRETS: bool = true;
 /// How long the pointer rests on a file before a preview is put up for it, in
 /// milliseconds.
 ///

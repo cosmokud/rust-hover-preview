@@ -501,10 +501,12 @@ pub fn named_as(path: &Path, config: &AppConfig, kind: PreviewType) -> bool {
         // none — which is what `matches_text_lists` used to be, before the two rows became the
         // only place either list is read from. Also extensionless files when configured.
         PreviewType::Text => {
-            lists::TEXT.claims(path, config)
-                || lists::NAMES.claims(path, config)
-                || (config.text_show_extensionless
-                    && crate::formats::text_formats::is_extensionless(path))
+            !(config.text_dont_preview_secrets
+                && crate::formats::secret_files::is_secret_file(path))
+                && (lists::TEXT.claims(path, config)
+                    || lists::NAMES.claims(path, config)
+                    || (config.text_show_extensionless
+                        && crate::formats::text_formats::is_extensionless(path)))
         }
         PreviewType::Audio => lists::AUDIO.claims(path, config),
         PreviewType::Ebook => lists::EBOOK.claims(path, config),
@@ -807,6 +809,9 @@ fn claim_text(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
+    if config.text_dont_preview_secrets && crate::formats::secret_files::is_secret_file(path) {
+        return None;
+    }
     (lists::TEXT.claims(path, config)
         || lists::NAMES.claims(path, config)
         || (config.text_show_extensionless && crate::formats::text_formats::is_extensionless(path)))

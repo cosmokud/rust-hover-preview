@@ -13,5 +13,6 @@ pub(crate) mod native_formats;
 pub(crate) mod office_formats;
 pub(crate) mod peazip_formats;
 pub(crate) mod routing;
+pub(crate) mod secret_files;
 pub(crate) mod text_formats;
 pub(crate) mod video_formats;
