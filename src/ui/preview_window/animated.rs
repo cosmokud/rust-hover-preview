@@ -135,7 +135,8 @@ pub(super) fn load_animated_gif(
     let loaded_flag_clone = Arc::clone(&loaded_flag);
     // The startup fill stopped after every frame it read from `resume_at` onward, so the stream picks
     // up after those; a replay begins the file at its first frame (`skip = 0` below).
-    let skip_frames = resume_at.saturating_add(initial_frames.len());
+    let startup_frames = initial_frames.len();
+    let skip_frames = resume_at.saturating_add(startup_frames);
     let path_clone = path.clone();
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
@@ -202,7 +203,10 @@ pub(super) fn load_animated_gif(
             // first frame and gave nothing back is the one that leaves every frame
             // in the player's hands: the file is its own memory from there, and no
             // frame of it is ever decoded again.
-            let began_part_way = skip > 0;
+            // A pass that began past the frames the startup answer already holds is the one
+            // `resume_at` asked for; the startup frames are skipped by the stream as well, and
+            // skipping them is not beginning part-way through the file.
+            let began_part_way = skip > startup_frames;
             let replay = match shared_clone.lock() {
                 Ok(mut streamed) => {
                     if streamed.released || began_part_way {
@@ -396,7 +400,8 @@ pub(super) fn load_animated_apng(
     let loaded_flag_clone = Arc::clone(&loaded_flag);
     // The startup fill stopped after every frame it read from `resume_at` onward, so the stream picks
     // up after those; a replay begins the file at its first frame (`skip = 0` below).
-    let skip_frames = resume_at.saturating_add(initial_frames.len());
+    let startup_frames = initial_frames.len();
+    let skip_frames = resume_at.saturating_add(startup_frames);
     let (target_width, target_height) = target_size?;
 
     let path_clone = path.clone();
@@ -453,7 +458,10 @@ pub(super) fn load_animated_apng(
             // first frame and gave nothing back is the one that leaves every frame
             // in the player's hands: the file is its own memory from there, and no
             // frame of it is ever decoded again.
-            let began_part_way = skip > 0;
+            // A pass that began past the frames the startup answer already holds is the one
+            // `resume_at` asked for; the startup frames are skipped by the stream as well, and
+            // skipping them is not beginning part-way through the file.
+            let began_part_way = skip > startup_frames;
             let replay = match shared_clone.lock() {
                 Ok(mut streamed) => {
                     if streamed.released || began_part_way {
@@ -664,7 +672,8 @@ pub(super) fn load_animated_webp(
     let loaded_flag_clone = Arc::clone(&loaded_flag);
     // The startup fill stopped after every frame it read from `resume_at` onward, so the stream picks
     // up after those; a replay begins the file at its first frame (`skip = 0` below).
-    let skip_frames = resume_at.saturating_add(initial_frames.len());
+    let startup_frames = initial_frames.len();
+    let skip_frames = resume_at.saturating_add(startup_frames);
 
     drop(iterator);
     let buffer_clone = Arc::clone(&buffer);
@@ -731,7 +740,10 @@ pub(super) fn load_animated_webp(
             // first frame and gave nothing back is the one that leaves every frame
             // in the player's hands: the file is its own memory from there, and no
             // frame of it is ever decoded again.
-            let began_part_way = skip > 0;
+            // A pass that began past the frames the startup answer already holds is the one
+            // `resume_at` asked for; the startup frames are skipped by the stream as well, and
+            // skipping them is not beginning part-way through the file.
+            let began_part_way = skip > startup_frames;
             let replay = match shared_clone.lock() {
                 Ok(mut streamed) => {
                     if streamed.released || began_part_way {
