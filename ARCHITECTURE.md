@@ -2195,12 +2195,12 @@ the machine says so: `.cargo/config.toml` includes an optional, git-ignored `tar
 (`[build] target-dir`), which the `post-checkout` hook writes from `git config rhp.targetDir` — and `git worktree add`
 runs that hook, so a new worktree shares the build cache with no manual step — one directory for every checkout on the
 machine, so a dependency is compiled and stored once. What one directory cannot share is this package: cargo's artifact
-and fingerprint names carry no part of a checkout's path, so a build in one checkout can be called fresh against
-another's recorded inputs and do nothing at all, leaving that tree's binary behind. The hook therefore writes the
-checkout's own path beside the directory (`[env] RHP_WORKTREE`), and `build.rs` watches it, which rebuilds this package
-— and nothing else — where the two differ. With nothing set the hook writes nothing and cargo uses the checkout's own
-`target/`, which is what CI and every other clone get; the setting lives in git config rather than in a committed file
-so no machine's drive letter leaks into a clone.
+and fingerprint names carry no part of a checkout's path, and cargo never looks at the artifact's own mtime, so a build
+in one checkout can be called fresh against another's recorded inputs and do nothing at all, leaving that tree's binary
+behind. The hook therefore touches `src/main.rs`, which dirties the package through the `cargo:rerun-if-changed=src`
+`build.rs` prints, and the next build relinks this package — and nothing else — where the two differ. With nothing set
+the hook writes nothing and cargo uses the checkout's own `target/`, which is what CI and every other clone get; the
+setting lives in git config rather than in a committed file so no machine's drive letter leaks into a clone.
 
 ## Test isolation (the app's own folders under `#[cfg(test)]`)
 

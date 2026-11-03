@@ -177,8 +177,8 @@ fn no_file_names_an_account_directory() {
 
 /// A file the repository ignores is machine-local by definition, and the one this repository
 /// writes itself names the checkout by an absolute path: `post-checkout` rewrites
-/// `.cargo/target-dir.local.toml` with `RHP_WORKTREE` on every switch. Reading the directory
-/// instead of what git publishes therefore fails every push on a machine that set
+/// `.cargo/target-dir.local.toml` with the machine's `target-dir` on every switch. Reading the
+/// directory instead of what git publishes therefore fails every push on a machine that set
 /// `rhp.targetDir`, which is the workflow CONTRIBUTING.md asks for.
 #[test]
 fn a_file_git_ignores_is_not_read() {
