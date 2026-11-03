@@ -20,13 +20,12 @@ pub(super) static PIN_MEDIA_LEFT_DOWN: AtomicBool = AtomicBool::new(false);
 /// way: what this side asks is whether the count has moved, which is the question a press is.
 pub(super) static PIN_MEDIA_LEFT_PRESSES: AtomicU64 = AtomicU64::new(0);
 
-/// Whether a pinned window's pointer is carrying it or pulling it to a new size right now.
+/// Whether the pointer is carrying the pinned window, or pulling it to a new size, right now.
 ///
-/// What a press, a drag and their ends do to the film is **nothing**: the film is a thumbnail of a
-/// source window no gesture moves, so a plain click and a drag that carries the window are the
-/// same answer to the player — it plays on untouched (see `begin_pin_drag`). This is read for the
-/// window's own work and by a test that asks whether a hand is on it.
-#[cfg(test)]
+/// Press, drag and ends do **nothing** to the film: a film's thumbnail is of a source window
+/// no gesture moves, so a plain click or a drag carries the window and leaves the player
+/// playing untouched (see `begin_pin_drag`). And the tick asks it to leave a pending
+/// re-layout alone while a hand owns the box (see `DISPLAY_RESET`).
 pub(super) fn pin_is_dragging() -> bool {
     pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin.dragging.is_some()))

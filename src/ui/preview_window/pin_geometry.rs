@@ -78,37 +78,99 @@ pub(super) fn current_media_type() -> Option<MediaType> {
         .and_then(|media| media.as_ref().map(|media| media.media_type))
 }
 
-/// Put a pinned window back on the display it is on now, after the desktop was rearranged or a
-/// display's scale changed: the box is kept where the display still has room for it and pulled
-/// back into the work area where it does not, and the media is laid out again for the display
-/// it ended up on.
+/// The pinned window put back on the display it is on now, after the desktop has been
+/// rearranged or a display's scale has changed: a box the display still has room for is kept
+/// where it is and pulled back into the work area where it does not, and the media is laid out
+/// again for the display it ended up on.
+///
+/// Nothing here is asked of the pointer and nothing is taken down: a pin is the one thing on
+/// screen whose media cannot be replayed from where the pointer is (see
+/// `reset_preview_after_display_change`).
 pub(super) fn replace_pinned_window() -> Option<PreviewMessage> {
-    let mut pinned = pin_state()?;
-    let pin = pinned.pin_mut()?;
-
-    pin.dpi = dpi_at(pin.content.0, pin.content.1);
-    let bounds = work_area_at(pin.content.0, pin.content.1);
-    let room = pinned_room(bounds, pin.dpi, pin.transport_bar, pin.overlay, pin.caption);
-    let shape = (
-        (pin.content.2 - pin.content.0).max(1) as u32,
-        (pin.content.3 - pin.content.1).max(1) as u32,
-    );
-    let (width, height) = pinned_media_box(shape, room, PreviewScale::Percent(100));
+    // What the pin has is read out in one look and the lock let go of before anything is
+    // measured, as every other box decision keeps: measure is a file read, and this is the
+    // thread that pumps the pinned window's own messages (see `pin_swap_space`).
+    let PinBoxInputs {
+        path,
+        frame,
+        overlay,
+        transport_bar,
+        content,
+        restore,
+        ..
+    } = pin_box_inputs()?;
+    // The display it landed on answers everything below, and not the one it left: two
+    // displays of different scales are two rooms and two scales, and the pin's box is on one
+    // of them now.
+    let dpi = dpi_at(content.0, content.1);
+    let bounds = work_area_at(content.0, content.1);
+    // Caption's measurements are the scale's, as transport bar's are asked afresh on every
+    // paint: a caption left at the old display's pixels is strip buttons no longer fit in.
+    let caption = pinned_caption_height(dpi, current_media_type());
+    let room = pinned_room(bounds, dpi, transport_bar, overlay, caption);
+    // Asked only of a maximized pin, whose box is its file fitted to room rather than a size
+    // a hand left behind.
+    let shape = restore
+        .is_some()
+        .then(|| media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape)))
+        .flatten();
     let content = clamp_pinned_box(
-        (
-            pin.content.0,
-            pin.content.1,
-            pin.content.0 + width,
-            pin.content.1 + height,
-        ),
-        pin.dpi,
+        pin_replaced_box(PinMaximize {
+            frame,
+            content,
+            restore,
+            shape,
+            room,
+        }),
+        dpi,
         &DESKTOPS,
     );
-
+    let mut pinned = pin_state()?;
+    let pin = pinned.pin_mut()?;
+    // Box decided above is this pin's as it stood when read: a walk that landed another file
+    // in between makes it another file's box, and the tick answering that walk lays its own
+    // out over this one (see `toggle_pin_maximized`).
+    if pin.path != path || pin.restore != restore {
+        return None;
+    }
+    pin.dpi = dpi;
+    pin.caption = caption;
     pin.content = content;
-    pin.restore = None;
     reset_pin_zoom(pin);
     Some(PreviewMessage::PinBox(content))
+}
+
+/// The box a pin stands in once it is put back on a display: a maximized one fitted to that
+/// display's room again, and any other the pixel box the hand left it in.
+///
+/// Nothing here is scaled by the two displays' DPI ratio: what the room has and has not is the
+/// whole question, and the box itself is the hand's (see `pinned_media_box`). And a maximized
+/// pin asks maximize again rather than restoring it — it is still maximized, and the box it
+/// went up from is still the one a restore owes (see `pin_maximize_decided`).
+pub(super) fn pin_replaced_box(asked: PinMaximize) -> ScreenRegion {
+    let PinMaximize {
+        frame,
+        content,
+        restore,
+        shape,
+        room,
+    } = asked;
+    if restore.is_none() {
+        let size = (
+            (content.2 - content.0).max(1) as u32,
+            (content.3 - content.1).max(1) as u32,
+        );
+        let (width, height) = pinned_media_box(size, room, PreviewScale::Percent(100));
+        return (content.0, content.1, content.0 + width, content.1 + height);
+    }
+    pin_maximize_decided(PinMaximize {
+        frame,
+        content,
+        restore: None,
+        shape,
+        room,
+    })
+    .0
 }
 
 /// Maximize a pinned window, or restore one that is maximized.

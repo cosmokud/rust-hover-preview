@@ -1356,3 +1356,87 @@ fn a_resize_step_writes_its_box_its_direction_and_the_costs_it_paid() {
     assert!(line.contains("shrank"), "{line}");
     assert!(line.contains("paint - host 1.000ms"), "{line}");
 }
+
+/// A pin put back on the display it landed on keeps the pixel box the hand left it in, and a
+/// maximized pin is maximized again there rather than given up.
+///
+/// Crossing two displays of different scales is what this is for, and the two ways it can go are
+/// the two assertions first below: a room that has the box shows it exactly as it went in, since
+/// nothing here is rescaled by the ratio of the two displays' DPIs, and a room that has not is
+/// fitted down to what it does have. A maximized pin is the one case whose box is not the hand's,
+/// and its box is its file fitted to the new room rather than the old display's box left standing.
+#[test]
+fn a_pin_put_back_on_another_display_keeps_its_box_and_a_maximized_one_refits_to_the_room() {
+    // A media box carried across, in the pixels the hand left it in: 600 by 400.
+    let carried = (2000, 200, 2600, 600);
+    let big = ScreenBounds {
+        left: 1920,
+        top: 0,
+        right: 3840,
+        bottom: 2160,
+    };
+    let room = pinned_room(big, 192, false, false, pinned_caption_height(192, None));
+    assert_eq!(
+        pin_replaced_box(PinMaximize {
+            frame: PinFrame::Shaped,
+            content: carried,
+            restore: None,
+            shape: None,
+            room,
+        }),
+        carried,
+        "a box the new display has room for was resized by the crossing"
+    );
+    // Same box landing on display with no room for it: fitted down to that room, and left where
+    // it stands — the clamp after this is what pulls one back inside the work area.
+    let small = ScreenBounds {
+        left: 1920,
+        top: 0,
+        right: 2320,
+        bottom: 400,
+    };
+    let room = pinned_room(small, 96, false, false, pinned_caption_height(96, None));
+    let cut_down = pin_replaced_box(PinMaximize {
+        frame: PinFrame::Shaped,
+        content: carried,
+        restore: None,
+        shape: None,
+        room,
+    });
+    assert_eq!(
+        (cut_down.0, cut_down.1),
+        (carried.0, carried.1),
+        "{cut_down:?} was moved, not fitted"
+    );
+    assert_eq!(
+        (cut_down.2 - cut_down.0, cut_down.3 - cut_down.1),
+        (400, 267),
+        "{cut_down:?} is not the box fitted into room the new display has"
+    );
+    // And a maximized pin, whose box is the room's fit of the file rather than a size the hand
+    // chose — it is still maximized on the display it landed on.
+    let display = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+    let room = pinned_room(display, 96, false, false, pinned_caption_height(96, None));
+    let standing_in = (700, 400, 1700, 1000);
+    let maximized = pin_replaced_box(PinMaximize {
+        frame: PinFrame::Shaped,
+        content: standing_in,
+        restore: Some(standing_in),
+        shape: Some((1920, 1080)),
+        room,
+    });
+    assert_ne!(
+        maximized, standing_in,
+        "a maximized pin was put back in the box it was maximized from"
+    );
+    assert_eq!(
+        (maximized.2 - maximized.0, maximized.3 - maximized.1),
+        (1867, 1050),
+        "a maximized pin did not fill the room of the display it landed on"
+    );
+}
