@@ -1299,6 +1299,11 @@ fn a_pin_holding_a_page_answers_the_keys_the_page_owns() {
 #[test]
 fn a_page_key_writes_its_move_down_and_the_page_is_scrolled_only_to_show_the_caret() {
     let _room = the_room_to_itself();
+    // A page carries the state that is selected in it only in full mode, which is what a *pin* makes
+    // of it rather than anything the configuration says (`current_text_options`): a page loaded with
+    // no pin up has no caret to move and no selection to make, so this test used to pass only by
+    // standing on the pin another test had left up.
+    a_pin_awaiting_a_press();
     let _page = PagePutBack::put(
         &(0..40).map(|n| format!("line {n}\n")).collect::<String>(),
         "a-page-a-caret-walks.txt",
