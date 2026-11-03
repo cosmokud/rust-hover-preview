@@ -219,9 +219,11 @@ fn caption_popup() -> Option<HWND> {
     (hwnd != 0).then_some(HWND(hwnd as *mut _))
 }
 
-/// Take the caption's popup off the screen, keeping it: the gate stopped matching, or the pin is not
-/// asking for a caption this paint (see `the_strips_state`).
-fn hide_the_caption_popup() {
+/// Take the caption's popup off the screen, keeping it: the gate stopped matching, the pin is not
+/// asking for a caption this paint (see `the_strips_state`), or the pin itself is going down — it is
+/// the one strip the pin's own window does not carry with it, being a window of the desktop's rather
+/// than a child of the pin's (see `hide_pinned_windows`).
+pub(super) fn hide_the_caption_popup() {
     let Some(popup) = caption_popup() else {
         return;
     };
@@ -324,6 +326,19 @@ unsafe fn place_the_caption_popup(
 ///
 /// Gated: a pin that is not on the popup road, or whose popup is not standing, asks no window anything.
 pub(super) unsafe fn follow_the_pin(pin: HWND) {
+    // **The pin's own visibility is asked before pin's state is, and that order is the whole of it.**
+    // A pin going down clears its state before its windows go (see `end_pin`), so the state below
+    // answers nothing by the time the window is hidden — and a popup left waiting on a state that is
+    // gone stands over the desktop as the title bar of a window that is not there: it is a window of
+    // the desktop's, so no parent of it goes off the screen, and one wearing `WS_EX_TRANSPARENT`
+    // takes no press, which is a caption nobody can click away. That is what a pin closed from its
+    // own close button left behind, on every pin whose caption rides in a popup (see
+    // `the_caption_rides_in_a_popup`): the document and the specimen.
+    if !unsafe { IsWindowVisible(pin) }.as_bool() {
+        hide_the_caption_popup();
+        return;
+    }
+
     let Some(state) = the_strips_state() else {
         return;
     };
