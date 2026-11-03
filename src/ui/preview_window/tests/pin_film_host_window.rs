@@ -5269,7 +5269,9 @@ fn a_message_the_host_is_handed_is_written_down_with_its_decision() {
         message.contains(" pinned=1 collapsed=0 pin-window=1 always-on-top=0 visible="),
         "and the pin's state beside it, which is what the same message means twice: {message}"
     );
-    // The two windows are named rather than printed, whatever this machine's desktop is doing.
+    // The two windows are described rather than printed, whatever this machine's desktop is doing:
+    // this app's own are named, and a window of nobody's is its class and pid rather than a handle
+    // (see `pin_trace::a_window_description`).
     for field in ["foreground=", "focus="] {
         let value = message
             .split(field)
@@ -5277,11 +5279,9 @@ fn a_message_the_host_is_handed_is_written_down_with_its_decision() {
             .and_then(|rest| rest.split(' ').next())
             .unwrap_or_default();
         assert!(
-            matches!(
-                value,
-                "host" | "pin" | "preview" | "bubble" | "stand-in" | "none" | "other"
-            ),
-            "a window is named by what this app knows of it, never by a handle: {field}{value}"
+            is_a_window_description(value),
+            "a window is described by what this app knows of it or by its class, never by a handle: \
+             {field}{value}"
         );
     }
     assert!(
@@ -8933,6 +8933,30 @@ fn the_line_that_names(lines: &[String], named: &str) -> usize {
         .iter()
         .position(|noted| noted.starts_with(named))
         .unwrap_or_else(|| panic!("no line this run wrote begins `{named}`: {lines:?}"))
+}
+
+/// Whether a word a line wrote is a window described rather than a handle printed (see
+/// `pin_trace::a_window_description`): this app's own by the name it knows them by, a window of
+/// anybody's as `class:pid` with the image the process runs in parentheses where Windows answers for
+/// it, and the two handles with nothing behind them as `none` and `invalid`.
+fn is_a_window_description(value: &str) -> bool {
+    if matches!(
+        value,
+        "pin" | "host" | "preview" | "bubble" | "stand-in" | "none" | "invalid"
+    ) {
+        return true;
+    }
+
+    // The class the pid is asked beside: a handle printed into the line is a number with no class
+    // before it, and is what this refuses.
+    let Some((class, rest)) = value.rsplit_once(':') else {
+        return false;
+    };
+    !class.is_empty()
+        && rest
+            .split(' ')
+            .next()
+            .is_some_and(|pid| pid.parse::<u32>().is_ok())
 }
 
 /// **The pair is put in its band after the host that carries the film is on the screen, and only on
