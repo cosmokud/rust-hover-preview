@@ -700,8 +700,8 @@ as given (`set_pin_volume`, `settle_pin_volume`).
   `PinStep/pin_walk/pin_step_off` (skip bad, forward-only, `show_pin_failure→MediaType::Unplayable/PIN_FAILURE_SIDE`,
   each other file offered at most once); `step_pinned_file` copies config (no lock across IO); arrows only when pin
   focused (no `GetAsyncKeyState` steal); `pin_command_request/ask_pin` single door (`navigating` flag); width =
-  per-anchor `pin_nav_video`/`pin_nav_audio`/`pin_nav_others` (`all`/`category`; Video/Category, Audio/Category,
-  Others/All by default; old `pin_nav_file_types` seeds all three once).
+  per-anchor `pin_nav_image`/`pin_nav_video`/`pin_nav_audio`/`pin_nav_others` (`all`/`category`; Image/Category,
+  Video/Category, Audio/Category, Others/All by default; old `pin_nav_file_types` seeds all four once).
 
 The walk has to reproduce the order the user _sees_, not alphabetical order, so it asks Explorer's own view for its sort
 columns via `IFolderView2::GetSortColumns` and falls back to natural order only when the view will not say. The file
@@ -2058,9 +2058,9 @@ while **System → Theme** still re-styles a card on screen.
   band without taking the keyboard, and the row is greyed while `pin_update_enabled` is off),
   `pin_double_click_center`/`pin_double_click_reset_size` (both `true`: a double-click lays a pin out again at the size
   its kind's scale names and puts it in the middle of the screen it stands on),
-  `pin_nav_video`/`pin_nav_audio`/`pin_nav_others` (`all`/`category`; Video/Category, Audio/Category, Others/All by
-  default; a file written before any of them existed walks as the fresh defaults do, and one holding only the old
-  `pin_nav_file_types` seeds all three once), `pin_minimize_to` (`bubble`/`taskbar`, default `bubble`),
+  `pin_nav_image`/`pin_nav_video`/`pin_nav_audio`/`pin_nav_others` (`all`/`category`; Image/Category,
+  Video/Category, Audio/Category, Others/All by default; a file written before any of them existed walks as the fresh
+  defaults do, and one holding only the old `pin_nav_file_types` seeds all four once), `pin_minimize_to` (`bubble`/`taskbar`, default `bubble`),
   `pin_pause_audio`/`pin_pause_video`, `remember_audio_volume`/`remember_video_volume`, `pin_mode_audio_seek` (`start`
   default — a pinned sound starts at the beginning, where a hover's own `audio_seek` defaults to `remember`),
   `pin_mode_audio_end_of_file`/`pin_mode_video_end_of_file` (`pause`/`loop`/`continue`, default `loop`),
@@ -2123,7 +2123,8 @@ still the user's choice, an entry that is gone is not written back, and `config.
   with two `Seek` rows, one outside `Pin Mode` for a hovered sound and one inside for a pinned one; `Image` a `Pin Mode`
   submenu with the picture's `Shuffle` and its `Zoom Background` (the band a zoom opens behind an opaque picture; a
   transparent one keeps its own kind's backdrop, `image_background`); `Text` the font size, Markdown mode and Render
-  HTML. `Pin Mode → Navigation` is the three walk anchors. Gate/type change rebuilds that kind (`Refresh` recomposites
+  HTML. `Pin Mode → Navigation` is the four walk anchors, `Image` first. Gate/type change rebuilds that kind
+  (`Refresh` recomposites
   others, text rebuilds frame).
 
 The tray is generated from the config rather than written against it, which is what makes a restructure like

@@ -1091,7 +1091,7 @@ fn reads_the_hover_loop_and_a_films_end_of_file_from_their_own_keys() {
     );
 }
 
-/// Which files a pin's own previous/next buttons step through is three keys of its own, one
+/// Which files a pin's own previous/next buttons step through is four keys of its own, one
 /// per anchor, written under the names the tray's `Navigation` submenu shows:
 /// `category` is the walk narrowed to the anchor's kind, and what a file that names
 /// neither — or names nothing at all — is read as is each anchor's fresh default.
@@ -1099,6 +1099,11 @@ fn reads_the_hover_loop_and_a_films_end_of_file_from_their_own_keys() {
 fn reads_which_files_the_pin_steps_through_from_its_own_key() {
     let mut ini = Ini::new();
     ini.set(CONFIG_SECTION, "pin_nav_audio", Some("all".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "pin_nav_image",
+        Some("category".to_string()),
+    );
     ini.set(
         CONFIG_SECTION,
         "pin_nav_video",
@@ -1111,6 +1116,7 @@ fn reads_which_files_the_pin_steps_through_from_its_own_key() {
     );
     let config = read_file(&mut ini);
     assert_eq!(config.pin_nav_audio, PinNavFileTypes::All);
+    assert_eq!(config.pin_nav_image, PinNavFileTypes::Category);
     assert_eq!(config.pin_nav_video, PinNavFileTypes::Category);
     assert_eq!(config.pin_nav_others, PinNavFileTypes::Category);
 
@@ -1126,15 +1132,21 @@ fn reads_which_files_the_pin_steps_through_from_its_own_key() {
         "a value the app cannot read is answered with what a fresh one walks rather than \
          guessed at"
     );
+    assert_eq!(
+        read_file(&mut unknown).pin_nav_image,
+        DEFAULT_PIN_NAV_IMAGE,
+        "an anchor with no value of its own is one a fresh configuration answers for"
+    );
 
     let mut older = Ini::new();
     older.set(CONFIG_SECTION, "pin_key", Some("space".to_string()));
     let config = read_file(&mut older);
+    assert_eq!(config.pin_nav_image, DEFAULT_PIN_NAV_IMAGE);
     assert_eq!(config.pin_nav_video, DEFAULT_PIN_NAV_VIDEO);
     assert_eq!(config.pin_nav_audio, DEFAULT_PIN_NAV_AUDIO);
     assert_eq!(config.pin_nav_others, DEFAULT_PIN_NAV_OTHERS);
 
-    // A file holding only the retired single key seeds all three with it, once.
+    // A file holding only the retired single key seeds all four with it, once.
     let mut legacy = Ini::new();
     legacy.set(
         CONFIG_SECTION,
@@ -1142,6 +1154,7 @@ fn reads_which_files_the_pin_steps_through_from_its_own_key() {
         Some("category".to_string()),
     );
     let config = read_file(&mut legacy);
+    assert_eq!(config.pin_nav_image, PinNavFileTypes::Category);
     assert_eq!(config.pin_nav_video, PinNavFileTypes::Category);
     assert_eq!(config.pin_nav_audio, PinNavFileTypes::Category);
     assert_eq!(config.pin_nav_others, PinNavFileTypes::Category);
@@ -1155,6 +1168,7 @@ fn reads_which_files_the_pin_steps_through_from_its_own_key() {
 fn the_pin_navigation_setting_survives_a_write_and_a_read() {
     let config = AppConfig {
         pin_nav_audio: PinNavFileTypes::All,
+        pin_nav_image: PinNavFileTypes::Category,
         ..AppConfig::default()
     };
 
@@ -1163,6 +1177,10 @@ fn the_pin_navigation_setting_survives_a_write_and_a_read() {
     assert_eq!(
         written.get(CONFIG_SECTION, "pin_nav_audio"),
         Some("all".to_string())
+    );
+    assert_eq!(
+        written.get(CONFIG_SECTION, "pin_nav_image"),
+        Some("category".to_string())
     );
     assert_eq!(written.get(CONFIG_SECTION, "pin_nav_file_types"), None);
 
@@ -1173,6 +1191,10 @@ fn the_pin_navigation_setting_survives_a_write_and_a_read() {
     assert_eq!(
         read_file(&mut read_back).pin_nav_audio,
         PinNavFileTypes::All
+    );
+    assert_eq!(
+        read_file(&mut read_back).pin_nav_image,
+        PinNavFileTypes::Category
     );
 }
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`Pin Mode → Navigation → Image`** — the walk's anchors are four now, and the picture is the first of them: above Video, with the same **All Files** / **Same Category** pair, starting at `Same Category` (`pin_nav_image` in `config.ini`). A file holding only the old `pin_nav_file_types` seeds it with the other three. Pictures used to be Others files, so a walk anchored on one steps through the folder's pictures rather than end to end; a document still walks end to end.
+
 ### Fixed
 
 - **An image pin moved from the bubble into the taskbar keeps its picture in the button's hover.** A pin that stands in a window of its own wears its own taskbar button, and the row that moves one from the bubble into the taskbar minimized a window that had been hidden since the collapse — a window with no composition for the Shell to freeze, and no picture taken of it — so the hover fell back to the icon. The picture is now taken at the collapse, while that window is still on the screen, and the window is made supplying the still its button is drawn of and answers the Shell's ask for it; a pin restored, ended, or up again gives the still back and forgets the picture, so the direct minimize keeps the Shell's own freeze it has always had.

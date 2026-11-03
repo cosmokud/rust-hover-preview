@@ -21,6 +21,7 @@ pin_double_click_reset_size=true
 pin_enabled=true
 pin_key=mouse3,space
 pin_nav_audio=category
+pin_nav_image=category
 pin_nav_others=all
 pin_nav_video=category
 pin_update_enabled=true
@@ -223,12 +224,12 @@ spinner_delay_ms=250
   - The keyboard half follows Explorer, so it is inert while a pinned window holds the keyboard — click back into the listing and it resumes.
 - `pin_update_on_hover`: whether that following includes the pointer's own hover, or only what a click or a key asks for. Default `false`; greyed in the tray while `pin_update_enabled` is off.
 - `pin_update_move_to_top`: whether a file an update shows also puts the pin at the top of its own band, without taking the keyboard from the listing. Default `true`; greyed in the tray while `pin_update_enabled` is off.
-- `pin_nav_video` / `pin_nav_audio` / `pin_nav_others`: what the caption's **Previous** and **Next** buttons step through, by the walk's anchor — the first file pinned. Video and Audio default to `category`, Others to `all`.
+- `pin_nav_image` / `pin_nav_video` / `pin_nav_audio` / `pin_nav_others`: what the caption's **Previous** and **Next** buttons step through, by the walk's anchor — the first file pinned. Image, Video and Audio default to `category`, Others to `all`.
   - `all` is every file this build can preview, so a video steps to the sound beside it.
-  - `category` narrows the walk to the anchor's category — video, audio, or the anchor's own kind for Others, where a camera raw is a picture and a book is a document.
+  - `category` narrows the walk to the anchor's category — image, video, audio, or the anchor's own kind for Others, where a camera raw is a picture and a book is a document.
   - The walk is the folder the pin was taken up in and no subfolder of it, is in the order the Explorer listing is showing, wraps at both ends, and is held per folder, read on the first press rather than when the pin is taken up.
   - A file it reaches that the window cannot show is stepped over, and the walk is bounded by the folder: each other file is offered at most once, so a folder of nothing this build can read ends the walk instead of going round for ever.
-  - A file holding only the old `pin_nav_file_types` seeds all three with it; a file written before any of them existed walks as the fresh defaults do.
+  - A file holding only the old `pin_nav_file_types` seeds all four with it; a file written before any of them existed walks as the fresh defaults do.
 - `pin_zoom_bounce_ms` / `pin_zoom_bounce_gate` / `pin_zoom_bounce_speed_ms` / `pin_zoom_bounce_power`: the landing a wheel zoom out ends with — how long the image takes to swing back to its place (`100` default), whether the swing past its place is on (`true` default), how fast it snaps back (`0` default), and how far past it drifts as a share of the offset it is coming home from (`0.04` default). A hand-edited value past the ceiling is reduced to it.
 - `pin_minimize_to`: where a pin put away by the window's own **Minimize** button goes. `bubble` (default) leaves the round bubble on the desktop and keeps this app out of the taskbar; `taskbar` takes the window off the screen and shows this app's own taskbar button — named for the pinned file and wearing this app's icon, its hover holding the pin with **Previous**, **Play/Pause** and **Next** for a film or a sound — which brings the pin back where it stood when clicked and closes it on a right-click. Read when the button is pressed, so a change reaches the next minimize; a file written before this setting existed is read as `bubble`.
 - `pin_pause_video` / `pin_pause_audio`: whether a pin put away into its bubble or the taskbar holds what it was playing where it stands, and starts it again at the second it stopped at when the window comes back up. Both default `true`. They are two switches because a video and a sound are two different things to want quiet.
@@ -268,7 +269,7 @@ spinner_delay_ms=250
 - `libre_preview_enabled` and `libre_scale`: gone. Use `document_preview_enabled` and `document_scale`.
 - `office_cache_mb` and `libre_cache_mb`: gone. Use `document_cache_mb`. If both old ones exist, the larger is read once, then both are removed.
 - `text_preview_full_mode`: gone. A pinned text preview comes up in full mode instead, so it scrolls and its text can be selected and copied.
-- `pin_nav_file_types`: gone. Use `pin_nav_video`, `pin_nav_audio` and `pin_nav_others`; a file holding only the old key seeds all three with it.
+- `pin_nav_file_types`: gone. Use `pin_nav_image`, `pin_nav_video`, `pin_nav_audio` and `pin_nav_others`; a file holding only the old key seeds all four with it.
 - `video_jump_enabled` / `audio_jump_enabled`: gone. Use `video_loop` / `audio_loop`.
 - `pin_mode_video_jump_enabled`, `pin_mode_audio_jump_enabled`, `pin_mode_video_jump`, `pin_mode_audio_jump` and `pin_mode_audio_loop`: gone, replaced by `pin_mode_video_end_of_file`/`pin_mode_audio_end_of_file` beside `pin_mode_video_shuffle`/`pin_mode_audio_shuffle`. A file holding one is read once into the settings that replaced it — `…_jump_enabled = false` as `pause`, `…_jump = shuffle` as `continue` with shuffle on, an old `…_loop` as `continue` — and the retired keys are dropped on the next save.
 - `office_engine_persistent`, `libreoffice_persistent` and `webview_persistent`: no longer written and read only once — `false` reads as `away`, `true` as that engine's `*_idle`, or `indefinitely` where it names nothing — and a save drops them.

@@ -87,12 +87,13 @@ pub(crate) fn wanted_category(current: &Path, config: &AppConfig) -> Option<rout
     routing::kind_of(current, config).map(routing::nav_category)
 }
 
-/// Which walk a file anchored on `wanted` takes: videos answer to the Video switch, sounds
-/// to the Audio switch, and everything else — including a file nothing claims — to Others.
-/// The walk is anchored on the first file pinned, so a document walks end to end while a
-/// sound walks sounds only (see `list_for`).
+/// Which walk a file anchored on `wanted` takes: pictures answer to the Image switch, videos
+/// to the Video switch, sounds to the Audio switch, and everything else — including a file
+/// nothing claims — to Others. The walk is anchored on the first file pinned, so a document
+/// walks end to end while a sound walks sounds only (see `list_for`).
 pub fn nav_mode_for(wanted: Option<routing::NavCategory>, config: &AppConfig) -> PinNavFileTypes {
     match wanted {
+        Some(routing::NavCategory::Images) => config.pin_nav_image,
         Some(routing::NavCategory::Video) => config.pin_nav_video,
         Some(routing::NavCategory::Audio) => config.pin_nav_audio,
         _ => config.pin_nav_others,
@@ -482,7 +483,7 @@ pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::config::config::{
-        DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
+        DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_IMAGE, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
     };
 
     /// A folder of a test's own under the temp folder, named by the test and cleared first,
@@ -534,6 +535,7 @@ mod tests {
         FOLDERS.lock().expect("the walk's own map").clear();
 
         let config = AppConfig {
+            pin_nav_image: mode,
             pin_nav_video: mode,
             pin_nav_audio: mode,
             pin_nav_others: mode,
@@ -799,6 +801,30 @@ mod tests {
         );
     }
 
+    /// A picture is an anchor of its own: the Image switch is what a walk anchored on one
+    /// reads, so under `All` a photo sits beside the song and the document next to it, and
+    /// under `Category` the pictures of the folder are the walk.
+    #[test]
+    fn a_walk_anchored_on_a_picture_reads_the_image_switch() {
+        let folder = folder_named("picture-anchor");
+        let photo = file_of(&folder, "a.png", 10);
+        file_of(&folder, "b.mp3", 10);
+        file_of(&folder, "c.txt", 10);
+        file_of(&folder, "d.jpg", 10);
+
+        assert_eq!(
+            walked(&folder, &photo, PinNavFileTypes::All),
+            vec!["a.png", "b.mp3", "c.txt", "d.jpg"],
+            "`All` walks the folder end to end, so a photo sits beside a sound"
+        );
+
+        assert_eq!(
+            walked(&folder, &photo, PinNavFileTypes::Category),
+            vec!["a.png", "d.jpg"],
+            "`Category` walks the pictures, and `.jpg` is a picture the same way `.png` is"
+        );
+    }
+
     /// A kind the tray has switched off is not walked, whatever else it is: a file a pin
     /// could step onto and then show nothing of is a step into nowhere, and the walk is of
     /// the files this configuration previews rather than of the files on the disk.
@@ -968,12 +994,13 @@ mod tests {
         );
     }
 
-    /// Video and Audio start narrow and Others starts wide, so a film never steps into a
+    /// Image, Video and Audio start narrow and Others starts wide, so a film never steps into a
     /// song while a document walks end to end — which is what a `config.ini` written
     /// before these settings existed is read as, and what a file naming a value this
     /// build cannot read is left at.
     #[test]
     fn a_pin_walks_everything_unless_it_is_told_otherwise() {
+        assert_eq!(DEFAULT_PIN_NAV_IMAGE, PinNavFileTypes::Category);
         assert_eq!(DEFAULT_PIN_NAV_VIDEO, PinNavFileTypes::Category);
         assert_eq!(DEFAULT_PIN_NAV_AUDIO, PinNavFileTypes::Category);
         assert_eq!(DEFAULT_PIN_NAV_OTHERS, PinNavFileTypes::All);
