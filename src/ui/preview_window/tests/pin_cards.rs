@@ -2145,6 +2145,10 @@ fn the_tick_asks_for_the_window_buttons_where_a_hand_is_near_the_top_border() {
 /// pixel past the margin is past the buttons, whatever its row.
 #[test]
 fn a_sounds_window_buttons_are_asked_for_on_both_axes() {
+    // The options the span and the band are measured from are the configuration's, and this test
+    // asks them twice — once for the test's own `right` and once inside `pin_audio_window_buttons_at`
+    // — so a test that folded a card with another scale in between is a span the two disagree about.
+    let _room = the_room_to_itself();
     for dpi in [96u32, 192] {
         let mut pin = sound_pin();
         pin.dpi = dpi;
