@@ -141,8 +141,15 @@ pub(super) fn load_animated_gif(
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
         let mut skip = skip_frames;
+        // Whether the file's head — the frames before the place a box change asked the decode to
+        // begin at — is in hand. A resumed pass owes it, and the pass that answers it ends where
+        // that place begins: the frames after the place are the ones the decode already answered
+        // with, and decoding them again would hold the file's tail twice (see the pass rule below).
+        let mut head_done = resume_at == 0;
 
         loop {
+            let head_pass = skip == 0 && !head_done;
+            let stop_at = head_pass.then_some(resume_at);
             let file = match File::open(&path_clone) {
                 Ok(f) => f,
                 Err(_) => break,
@@ -187,6 +194,15 @@ pub(super) fn load_animated_gif(
                     }
                 }
                 frame_idx += 1;
+                // The head pass ends where the resumed one began, the frames between being the ones
+                // it already answered with (see `head_done`).
+                if stop_at.is_some_and(|stop| frame_idx >= stop) {
+                    break;
+                }
+            }
+
+            if head_pass {
+                head_done = true;
             }
 
             // Whether the file has to be decoded again is settled under the same
@@ -408,8 +424,15 @@ pub(super) fn load_animated_apng(
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
         let mut skip = skip_frames;
+        // Whether the file's head — the frames before the place a box change asked the decode to
+        // begin at — is in hand. A resumed pass owes it, and the pass that answers it ends where
+        // that place begins: the frames after the place are the ones the decode already answered
+        // with, and decoding them again would hold the file's tail twice (see the pass rule below).
+        let mut head_done = resume_at == 0;
 
         loop {
+            let head_pass = skip == 0 && !head_done;
+            let stop_at = head_pass.then_some(resume_at);
             let frames = match apng_frames(&path_clone) {
                 Some(frames) => frames,
                 None => break,
@@ -442,6 +465,16 @@ pub(super) fn load_animated_apng(
                 if let Ok(mut streamed) = shared_clone.lock() {
                     streamed.queue.push_back(img);
                 }
+                // The head pass ends where the resumed one began, the frames between being the ones
+                // it already answered with (see `head_done`).
+                let passed = skip.saturating_add(index).saturating_add(1);
+                if stop_at.is_some_and(|stop| passed >= stop) {
+                    break;
+                }
+            }
+
+            if head_pass {
+                head_done = true;
             }
 
             // Whether the file has to be decoded again is settled under the same
@@ -680,8 +713,15 @@ pub(super) fn load_animated_webp(
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
         let mut skip = skip_frames;
+        // Whether the file's head — the frames before the place a box change asked the decode to
+        // begin at — is in hand. A resumed pass owes it, and the pass that answers it ends where
+        // that place begins: the frames after the place are the ones the decode already answered
+        // with, and decoding them again would hold the file's tail twice (see the pass rule below).
+        let mut head_done = resume_at == 0;
 
         loop {
+            let head_pass = skip == 0 && !head_done;
+            let stop_at = head_pass.then_some(resume_at);
             let options = webp_animation::DecoderOptions {
                 use_threads: true,
                 color_mode: webp_animation::ColorMode::Bgra,
@@ -724,6 +764,15 @@ pub(super) fn load_animated_webp(
                         streamed.queue.push_back(img);
                     }
                 }
+                // The head pass ends where the resumed one began, the frames between being the ones
+                // it already answered with (see `head_done`).
+                if stop_at.is_some_and(|stop| frame_idx + 1 >= stop) {
+                    break;
+                }
+            }
+
+            if head_pass {
+                head_done = true;
             }
 
             // Whether the file has to be decoded again is settled under the same
