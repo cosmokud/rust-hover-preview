@@ -1544,18 +1544,19 @@ fn a_checkerboard_backdrop_keeps_its_squares_wherever_the_picture_leaves_it() {
     );
 }
 
-/// **A page too narrow for its caption is still the whole of a window.**
+/// **A page too narrow for all of its caption is still the whole of a window.**
 ///
-/// A caption too narrow to be a command bar is drawn none at all, and the rows it would have taken
-/// are rows the window still has (see `caption_fits` and `pinned_band_rows`). A picture draws its
-/// chrome *over* its media, so the media is under those rows and owes nothing; a page is drawn
-/// *between* its chrome, so a paint that stops at the band would leave them as the surface was
-/// emptied — a hole across the top of the window, with the desktop showing through the pin and a
-/// press falling through it, since a layered window is hit-tested by the shape of its pixels. What
-/// stands in them is the pin's own claim instead: the strips carry the chrome, and the bitmap owes
-/// those rows only the least pixel a press can land on (see `chrome_rows_are_hit_testable`).
+/// A caption is drawn for any width a window has — a narrow one has given up its name and then the
+/// buttons it had no room for, one at a time from the left, and a bare bar is the last of it (see
+/// `caption_fits` and `button_boxes`). So the rows it takes are rows the window still has, and the page
+/// owes nothing under them. A picture draws its chrome *over* its media, so the media is under those rows
+/// and owes nothing; a page is drawn *between* its chrome, so a paint that stops at the band would leave
+/// them as the surface was emptied — a hole across the top of the window, with the desktop showing
+/// through the pin and a press falling through it, since a layered window is hit-tested by the shape of
+/// its pixels. What stands in them is the pin's own claim, with the caption painted once for the strips
+/// beside it (see `chrome_rows_are_hit_testable` and `CHROME_SURFACE`).
 #[test]
-fn a_page_too_narrow_for_its_caption_is_still_a_whole_window() {
+fn a_page_too_narrow_for_all_of_its_caption_is_still_a_whole_window() {
     let _room = the_room_to_itself();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
@@ -1563,7 +1564,8 @@ fn a_page_too_narrow_for_its_caption_is_still_a_whole_window() {
     // A page on a band of its own colour, so every row of the window says where it came from.
     let page = [200u8, 200, 200, 255];
 
-    // A box the hand has narrowed a page to: there is no room in it for the caption's own buttons.
+    // A box the hand has narrowed a page to: there is room in it for close and the buttons beside it,
+    // and not for the walk.
     let content = (100, 80, 220, 300);
     let mut pin = overlay_pin(content, PinChrome::always());
     pin.dpi = 96;
@@ -1575,8 +1577,12 @@ fn a_page_too_narrow_for_its_caption_is_still_a_whole_window() {
 
     let (width, height) = the_pins_window_size();
     assert!(
-        caption > 0 && !pin_chrome::caption_fits(width, 96, true),
-        "a page this narrow has no room for its caption's buttons, so none of it is drawn"
+        caption > 0 && pin_chrome::caption_fits(width, 96, true),
+        "a caption is drawn at any width the window has"
+    );
+    assert!(
+        pin_chrome::button_boxes(width, caption, 96, true).len() < 8,
+        "and this page is narrow enough that it has given up buttons: {width} wide"
     );
 
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -1594,8 +1600,8 @@ fn a_page_too_narrow_for_its_caption_is_still_a_whole_window() {
             assert_eq!(
                 surface_pixel(&painted, (width as u32, height as u32), row, column),
                 &[1, 1, 1, 1],
-                "row {row} column {column} is the pin's own claim even though the caption is not \
-                 drawn, rather than a hole across the top of the window"
+                "row {row} column {column} is the pin's own claim, rather than a hole across the top \
+                 of the window"
             );
         }
     }
@@ -1605,9 +1611,22 @@ fn a_page_too_narrow_for_its_caption_is_still_a_whole_window() {
         "while the media's own rows under the bar are the page's, not the bar's"
     );
 
+    // And the caption itself was painted, for the strip that carries it: a band a page owes no rows of
+    // is a band the strips still draw, whatever it has had to give up.
+    CHROME_SURFACE.with(|cell| {
+        assert_eq!(
+            cell.borrow()
+                .as_ref()
+                .map(|surface| (surface.width, surface.height)),
+            Some((width as u32, caption as u32)),
+            "a page this narrow still has its caption painted, for the strips"
+        );
+    });
+
     // And a picture of the same narrowness owes none of it: its chrome is drawn over the media, so
-    // the rows the caption gave up are the picture's own — filling them would paint the bar across
-    // the top of somebody's picture, which is the band the strip was given up not to take.
+    // the rows the caption's band would have taken are the picture's own — the bar is painted for the
+    // strips and never into the bitmap, which is what keeps a picture's chrome a band over its media
+    // rather than a band taken from it.
     with_pin(|pin| {
         pin.frame = PinFrame::Shaped;
         pin.overlay = true;
@@ -1624,7 +1643,7 @@ fn a_page_too_narrow_for_its_caption_is_still_a_whole_window() {
     assert_eq!(
         surface_pixel(&painted, (width as u32, height as u32), 0, 0),
         page,
-        "a picture's own pixels stand in the rows a caption that does not fit would have taken"
+        "a picture's own pixels stand in the rows the caption's band would have taken"
     );
 
     stand_pin(previous_pin);

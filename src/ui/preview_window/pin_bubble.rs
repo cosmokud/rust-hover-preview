@@ -1132,8 +1132,9 @@ pub(super) fn pinned_minimize_box(pin: &PinnedPreview) -> ScreenRegion {
     .into_iter()
     .find(|button| button.kind == pin_chrome::CaptionButton::Minimize);
 
-    // Every caption carries a minimize (see `pin_chrome::button_boxes`); a window whose caption
-    // somehow did not is a window whose own box is the place a bubble goes.
+    // A caption carries a minimize only while it has room for one: a narrow one has dropped it along
+    // with everything to the left of it, and a window whose caption did not is a window whose own box
+    // is the place a bubble goes (see `pin_chrome::button_boxes`).
     let Some(button) = minimize else {
         return window;
     };

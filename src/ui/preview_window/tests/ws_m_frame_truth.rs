@@ -234,9 +234,9 @@ fn clean_slate() {
 
 /// The pin taken up for the first file, at a box on the display.
 ///
-/// It is wide on purpose: the walk's four buttons are dropped whole from a
-/// caption too narrow to carry them, and every question about a caption button
-/// would then be about the three a window keeps for itself.
+/// It is wide on purpose: a caption gives its buttons up one at a time from the left, so
+/// a pin narrower than the row would answer no `Previous` and every question about a
+/// caption button would be about the ones a window keeps for itself.
 fn take_up_a_video_pin() {
     let first = PathBuf::from("ws-m-frame-truth-first.mkv");
     install(take_up_pinned_window(&first, (100, 80, 800, 320)));
