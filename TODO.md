@@ -2,6 +2,7 @@
 
 ## Features
 
+- **Detach mode:** detach the pin mode window individually, completely disconnected from hover preview, enabling multiple detached windows to be spawned.
 - Add preview integration for voidtools Everything search.
 - Add preview integration for third-party file managers (e.g., Q-Dir)
 - **File Format Support:**
