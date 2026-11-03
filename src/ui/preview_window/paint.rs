@@ -234,6 +234,12 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock, taken only where a resize step is being
     // measured (see `pin_resize_probe`).
     let started = pin_resize_probe::a_step_started();
+    // **The pan the pin holds is what this paint draws, so it owes nothing more.** Spent here rather than
+    // at the end of the paint because of the road that finds no pin at all: a latch left standing by a
+    // paint that could not happen is a repaint the loop owes on every tick for the rest of the pin's life
+    // (see `A_PAN_OWES_A_REPAINT`). Nothing can move the pan between here and the compose below, since
+    // a point that moves it arrives as a message on this same thread.
+    the_pan_was_drawn();
     let Some(paint) = pinned_paint() else {
         return;
     };

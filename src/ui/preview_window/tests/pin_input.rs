@@ -500,6 +500,80 @@ fn a_press_on_a_picture_bigger_than_its_window_carries_the_picture_rather_than_t
     stand_pin(previous_pin);
 }
 
+/// **A pan leaves the paint to the loop rather than taking one per position the pointer reports.**
+///
+/// A pan is the one gesture whose paint is the whole band composed through the sampler, because the
+/// picture being carried is drawn larger than its window (see `resample_into_band`) — 2.3 ms of a
+/// 1920x1080 band off a 3840x2160 frame, before the surface is cleared and `UpdateLayeredWindow` is
+/// handed it. A mouse reports a thousand positions a second, so a paint per position is four bands per
+/// frame of a 144 Hz display that display never puts up, on the one thread the preview loop's tick is
+/// also on: the tick that advances a playing picture does not come, and the animation stops while the
+/// hand moves and jumps when it has stopped.
+///
+/// What the move does instead is write where the picture has got to and say that the window owes one
+/// paint; the loop draws it on its own tick, its wait paced by the compositor while a pan is up. And
+/// the paint spends that: every paint of a pinned window composes the pan the pin holds at the moment
+/// it is drawn, whichever road asked for it (see `a_pan_owes_a_repaint`).
+#[test]
+fn a_pan_owes_the_loop_the_paint_that_carries_the_picture() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let hwnd = HWND(0x1000 as *mut _);
+    let window = a_window_at(content);
+    let dragging = || pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging));
+
+    the_pan_was_drawn();
+    assert!(
+        !pin_is_panning(),
+        "a pin with no hand on it is not a pan the loop keeps the frame cadence for"
+    );
+
+    stand_pin(Some(with_pin_zoom(
+        overlay_pin(content, PinChrome::always()),
+        3.0,
+    )));
+    assert!(begin_pin_pan(hwnd, &window), "the picture is taken hold of");
+    assert!(
+        pin_is_panning(),
+        "and the loop knows the hand is carrying the picture rather than the window, which is \
+         what its wait is paced by"
+    );
+    assert!(
+        !the_pan_owes_a_repaint(),
+        "a press that has not moved yet owes no paint"
+    );
+
+    super::probes::step_the_pin_drag_by(40, 25);
+    unsafe { apply_pin_drag(hwnd) };
+
+    assert!(
+        dragging().is_some(),
+        "the drag is still in the hand, so the paint is still owed to the loop"
+    );
+    assert!(
+        the_pan_owes_a_repaint(),
+        "the move wrote where the picture is and left the paint that shows it to the loop"
+    );
+    the_pan_was_drawn();
+    assert!(
+        !the_pan_owes_a_repaint(),
+        "and the paint spends it: the picture on screen is the pan the pin holds"
+    );
+
+    // A hand that has not moved asks for nothing, and the point is read live rather than from the
+    // message, so the same position twice is one answer (see `apply_pin_drag`).
+    unsafe { apply_pin_drag(hwnd) };
+    assert!(
+        !the_pan_owes_a_repaint(),
+        "a pointer that did not move owes no paint"
+    );
+
+    stand_pin(None);
+    stand_pin(previous_pin);
+}
+
 /// **The first press takes the pointer before it asks for the keyboard**, and that order is the
 /// whole of what makes a drag work on the first press rather than the second.
 ///
@@ -642,4 +716,72 @@ fn the_first_press_takes_the_pointer_before_it_asks_for_the_keyboard() {
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = previous_media;
     }
+}
+
+/// **A resize is the one drag the message pump takes a position at a time**, and the answer is what the
+/// pump asks before it leaves the rest of the pointer's positions for the tick after it.
+///
+/// A step of a resize is a paint — the whole band composed through the sampler at the box the window is
+/// being pulled to — so dispatching every position the pointer reports is a pump that never empties, and
+/// the tick below it is the one that advances a playing picture. A pan and a move are not that: both
+/// write where the hand has got to and nothing else (see `apply_pin_drag`), so their positions cost a
+/// lock each and the pump drains them all.
+#[test]
+fn only_a_resize_is_a_drag_the_pump_takes_a_position_at_a_time() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let window = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .unwrap_or(content);
+    let dragging = |action: Option<PinDragAction>| {
+        with_pin(|pin| {
+            pin.dragging = action.map(|action| PinDrag {
+                from: (0, 0),
+                window,
+                action,
+                delivered: true,
+                carried: (i32::MIN, i32::MIN),
+            });
+        });
+    };
+
+    stand_pin(Some(with_pin_zoom(
+        overlay_pin(content, PinChrome::always()),
+        3.0,
+    )));
+    assert!(
+        !pin_is_resizing() && !pin_is_panning(),
+        "a pin with no hand on it is drag the pump paces nothing for"
+    );
+
+    // A move carries the window and a pan the picture inside it: neither composes a band in the
+    // pointer's own message, so both are drained as fast as the pointer reports them.
+    dragging(Some(PinDragAction::Move));
+    assert!(
+        !pin_is_resizing() && !pin_is_panning(),
+        "a window being carried is neither a resize nor a pan"
+    );
+    dragging(Some(PinDragAction::Pan { from: (0.0, 0.0) }));
+    assert!(
+        pin_is_panning() && !pin_is_resizing(),
+        "and a pan of the picture is the loop's own paint rather than a step of the pump's"
+    );
+
+    // An edge pulled is the one that paints where the pointer's message put it.
+    dragging(Some(PinDragAction::Resize(edge(false, false, true, true))));
+    assert!(
+        pin_is_resizing() && !pin_is_panning(),
+        "a resize is the drag whose step is a band composed, so the pump takes one position a tick"
+    );
+
+    dragging(None);
+    assert!(
+        !pin_is_resizing(),
+        "and a drag let go of is no longer one anything is paced for"
+    );
+
+    stand_pin(None);
+    stand_pin(previous_pin);
 }

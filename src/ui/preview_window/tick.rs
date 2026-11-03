@@ -104,6 +104,31 @@ pub(super) fn needs_a_full_media_look(
         || since_the_last_one >= Duration::from_millis(STATIC_MEDIA_REFRESH_MS)
 }
 
+/// Whether this tick owes the window on screen a paint of its own: it has something to draw, the
+/// reveal of a video's first frame is not that something, and nothing has painted the window since
+/// this tick's messages were pumped.
+///
+/// The last of those three is what makes a **resize** one paint a frame rather than two. A hand
+/// pulling an edge commits its step — the new box, the picture sampled into it, and the window's own
+/// size — in the message that carried the pointer, because the box and the picture in it are one call
+/// (`apply_pin_drag`); the tick that follows advances a playing picture and would paint the same
+/// window again, a band of the display's worth of pixels a second time for one of the display's
+/// frames. What is worth waiting for is the frame the step has not drawn yet, and a frame of delay
+/// while the hand is on an edge is cheaper than painting everything twice (see `PIN_PAINTS`).
+///
+/// A preview that is not a pin never moves that count — a hover's own paints are not counted — so for
+/// one this is the question it always was; and a pin whose paint failed is painted by the tick after
+/// it, because a paint that did not happen does not count.
+pub(super) fn the_pin_owes_a_paint(
+    needs_repaint: bool,
+    the_reveal_is_this_paint: bool,
+    paints_before_the_pump: u64,
+) -> bool {
+    needs_repaint
+        && !the_reveal_is_this_paint
+        && PIN_PAINTS.load(Ordering::Relaxed) == paints_before_the_pump
+}
+
 /// How often the player's window is put back in front, which is split by what is competing with
 /// it for the top of the z-order.
 ///

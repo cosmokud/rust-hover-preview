@@ -862,12 +862,12 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
 
     // A pan is the picture moving while the window holds still, so it is answered before the box is
     // asked about at all: the pointer's travel is added to where the pan stood when the press began,
-    // and the window is painted again at the place it already stands — which is the whole of what
-    // makes a drag of a zoomed-in picture smooth, since a window that was `SetWindowPos`-ed for every
-    // pointer move would be this app moving a box the hand never asked it to move (see `PinZoom`).
+    // and the window keeps the place it already stands — which is the whole of what makes a drag of a
+    // zoomed-in picture smooth, since a window that was `SetWindowPos`-ed for every pointer move would
+    // be this app moving a box the hand never asked it to move (see `PinZoom`).
     if let PinDragAction::Pan { from } = drag.action {
         let carried = (from.0 + dx as f32, from.1 + dy as f32);
-        let painted = pin_state().and_then(|mut pinned| {
+        let moved = pin_state().and_then(|mut pinned| {
             let pin = pinned.pin_mut()?;
             let zoom = pin.zoom?;
             // A hand carrying a picture that is all but the window's own size is carrying it into room
@@ -896,11 +896,13 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             if let Some(drag) = pin.dragging.as_mut() {
                 drag.carried = point;
             }
-            Some(pin.content)
+            Some(())
         });
 
-        if let Some(content) = painted {
-            render_pinned_preview_at(hwnd, content.0, content.1);
+        // And the window is drawn where the hand has carried the picture — by the loop, on its own
+        // tick, rather than here on every position the pointer reports (see `a_pan_owes_a_repaint`).
+        if moved.is_some() {
+            a_pan_owes_a_repaint();
         }
         return;
     }
@@ -1033,6 +1035,28 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         }
         pin_resize_probe::end_step();
 
+        // **And the hand's next step is a frame away rather than a position away.** A resize is the
+        // second gesture whose paint is a composed band — the box is being dragged and the frame is
+        // sampled into it (see `resample_into_band`) — and a pointer reports up to a thousand
+        // positions a second, several of them per frame the display can show: a step would be replaced
+        // before it was ever put up, and the preview loop, whose tick advances a playing picture on
+        // this same thread, would have no tick left to do it in. That is the stutter a pan of the
+        // picture had, one gesture over.
+        //
+        // `DwmFlush` is what the wheel's travel and a pan are paced by (see `wait_for_the_compositor`),
+        // and the block it puts here is what coalesces the hand's positions into the one it has
+        // reached: the pointer is read live by the pass after this, so the positions in between cost a
+        // move each and no paint (see the early return above). A machine whose compositor answers no
+        // flush has no frame to be paced by, and is left the pointer's own pace rather than a made-up
+        // one.
+        //
+        // The step's own paint is also the frame the tick after it would otherwise draw again, which is
+        // why the tick asks `the_pin_owes_a_paint` rather than `needs_repaint` alone.
+        //
+        // SAFETY: `DwmFlush` takes no arguments and touches no state of this app's; it asks the
+        // compositor to flush a frame and answers whether it could.
+        let _ = DwmFlush();
+
         // The band is not re-asked here. It is a question about the setting rather than about the
         // box (`band_place`), so a step that re-asked it was a DWM reorder per pointer move for a
         // window already in the band it named — and the drag's own two ends ask it once each (see
@@ -1059,6 +1083,45 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // above).
         place_pinned_siblings();
     }
+}
+
+/// Whether a hand carrying the picture inside its window has moved it since the pin's window was last
+/// drawn, which is a repaint the preview loop owes rather than one the pointer's own messages take (see
+/// `apply_pin_drag`).
+///
+/// **A pan is the one gesture whose paint is the whole band composed through the sampler**, because the
+/// picture being carried is drawn larger than its window and no paint of it is a copy of rows (see
+/// `resample_into_band`): 2.3 ms of composing a 1920x1080 band off a 3840x2160 frame on the machine
+/// this was measured on, before the surface is cleared and `UpdateLayeredWindow` is handed it. A mouse
+/// that reports a thousand positions a second asks for four of those per frame of a 144 Hz display, and
+/// every one of them is a band the display never puts up — on the one thread the preview loop's tick is
+/// also on, so the tick that advances a playing picture does not come: the animation stops while the
+/// hand moves and jumps when the hand stops, and the pan carries the band at the pace of the sampler
+/// rather than the pace of the hand.
+///
+/// So the move writes where the picture is and the loop draws it, on its own tick, with its wait paced
+/// by the compositor while the hand is carrying the picture (`wait_for_the_compositor`). What that
+/// leaves is one paint a frame, and it is the pan's paint and a playing picture's in the same call.
+static A_PAN_OWES_A_REPAINT: AtomicBool = AtomicBool::new(false);
+
+/// Note that a pan has carried the picture somewhere the window has not been drawn at yet.
+pub(super) fn a_pan_owes_a_repaint() {
+    A_PAN_OWES_A_REPAINT.store(true, Ordering::Release);
+}
+
+/// Whether the pan is a frame behind — what the loop asks before it paints one (see
+/// `A_PAN_OWES_A_REPAINT`).
+pub(super) fn the_pan_owes_a_repaint() -> bool {
+    A_PAN_OWES_A_REPAINT.load(Ordering::Acquire)
+}
+
+/// Note that the window has been drawn, and that the pan it was drawn at is the one on screen.
+///
+/// Asked of every paint of a pinned window rather than of the pan's own, because every one of them
+/// composes the pan the pin holds at that moment — the loop's tick, the wheel's travel and a resize all
+/// draw the picture where `PinZoom` says it is (see `render_pinned_preview_at`).
+pub(super) fn the_pan_was_drawn() {
+    A_PAN_OWES_A_REPAINT.store(false, Ordering::Release);
 }
 
 /// Whether a resize step grows the window, which is the whole of what decides the order its two
