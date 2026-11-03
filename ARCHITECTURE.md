@@ -1938,7 +1938,11 @@ generation so stale answers are ignored, abandon the thread, and clean up condit
   the film's own pixels (`hover_preview_scale_of`, `effective_preview_scale`) — beside `animated_scale`/`preview_scale`
   for GIF/WebP/PNG via `image_is_animated`; a video larger than its box is scaled up to fill it rather than drawn
   native-size in the middle, and a letterboxed picture is cropped to what is in it (`cropdetect`) whichever engine plays
-  it; mpv/ffplay per-hover window-as-preview (layered hidden;
+  it — the detector floors to an 8-px grid (`VIDEO_CROPDETECT_ROUND`), which every common frame height is a multiple of,
+  so a whole frame measures as itself and the full-frame refusal takes it, where a 16-px grid floored 1080 to 1072 and
+  was accepted as a letterbox and sized a maximized pin to 1920x1072; a crop that trims under 16 px off *both* axes
+  (`VIDEO_CROP_MIN_AXIS_TRIM_PX`) is refused as codec padding (H.264 pads 1080 to 1088) or rounding, and
+  `validate_detected_crop` keeps its ratio cap and its asymmetry cap beside that; mpv/ffplay per-hover window-as-preview (layered hidden;
   `VideoStart/VIDEO_HWND/player_wait/kill_stray_video_process`, kill-only stop, PID-handle+create-time record,
   hook+preview-thread re-check, `pinned()` exempts pin player; mpv's `--geometry` names the box — its size on the
   primary display's scale, since mpv creates the window there and Windows rescales it to the display it is moved to,
