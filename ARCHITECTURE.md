@@ -1281,19 +1281,25 @@ not a preview. The only way out is to stop resizing the film.
   after its launch and answers nothing at all, is given the size the probe measured the same film at before the launch
   — *the probe's measurement is what FFmpeg's player contributes to this road*. A player that has not answered yet is
   waited for rather than guessed at. A resize changes the content geometry under the thumbnail; a move does not. The
-  client and the picture's shape are therefore constants for the pin's life, and they are invalidated with the film:
-  teardown forgets them, adopting another window resets them, and every frame checks the record belongs to the source it
-  was placed for — so the film that follows can never be cropped by the shape of the one that ended.
+  picture's shape is therefore a constant for the pin's life, and it is invalidated with the film:
+  teardown forgets it, adopting another window resets it, and every frame checks the record belongs to the source it
+  was placed for — so the film that follows can never be cropped by the shape of the one that ended. **The client is not
+  a constant, and is not assumed to be one**: nothing this app does resizes the source, but Windows rescales a window
+  carried to a display of another scale and mpv takes the suggested rectangle as it stands (see
+  `video_launch::mpv_box_size`), so the crop is fitted into the client the window answers with now. A pair built for the
+  placed client was a crop of the top-left quarter of the rescaled surface, stretched into the band — the pin that read
+  as zoomed in (measured: `cli 3840x2160 pic 1920x1080 asked 1920x1080`, with no `thumbnail update` after it). A window
+  that answers nothing is cropped by the placed client, so a failed read is the pair that already stands.
 - **The destination is always the whole box, never a fitted sub-rect.** A destination smaller than the client leaves a
   rectangle over, and no ordering of the two shapes keeps it from showing; a destination that is the client leaves
   nothing to get wrong. The host erases that same client under the picture, because a DWM thumbnail composes over the
   destination's content — the host's own black is what a client the Shell has not composed yet shows instead of the
   desktop.
-- **The crop is `cover`, from the centre, and a pure function of three numbers**: the source's constant client, the
+- **The crop is `cover`, from the centre, and a pure function of three numbers**: the source's live client, the
   film's constant picture shape, and the box. It is the largest rectangle of the picture that has the box's shape,
   centred in it — so a box of another shape crops the film instead of letterboxing it, and a box larger than the picture
   on an axis is the picture whole, upscaled by the Shell from the film's own pixels. Nothing in the crop reads a window
-  or a player, so a frame can only change with the box.
+  or a player, so a frame can only change with the box or with a source resized under it.
 - **A resize gesture may move nothing but the box and the source's position.** The source is native-sized and does not
   follow the pin, so a pin at an edge or a corner of the desktop would have the piece of the source the Shell samples
   hanging off it: the source is slid the shortest way back onto the monitor's work area, and that slide is `SWP_NOSIZE`
@@ -1529,7 +1535,8 @@ is worth reading. The rectangles in the `thumbnail update` line are the whole di
 
 | the trace says | what it means | what to suspect |
 | --- | --- | --- |
-| `pic` ≠ `cli` | the crop's window is not the source's live client | the source was resized under the crop: a second placement, or a player that made its window again |
+| `thumbnail source resized cli … placed …` | the source is not at the box the one placement asked for, and the crop is fitted into the client it is in now | something outside this app resized it — Windows rescaling mpv on a display change is expected at a seam, anything else is a path that resizes the source |
+| `pic` ≠ `cli` | nothing: the crop is fitted into the source's live client, so the two are one number | a pair built by something other than `settle_the_registration` |
 | `src` not inside `cli` or `pic` | the crop samples past the surface | the pair was built for another client, another film's shape, or a geometry that has moved |
 | `dest` ≠ the host's client, or `dest` not at `0,0` | the destination is not the whole box | a fitted destination is back, or the pair was built from a box that has since moved |
 | `host` ≠ `box`, or the host's place not the pin's band | the film is drawn at a size or place that is not the box | the host was not placed at the band this frame, or the band and the film are two windows again |
@@ -1538,7 +1545,7 @@ is worth reading. The rectangles in the `thumbnail update` line are the whole di
 | `box 0x0` or `src 0x0`, or `thumbnail register failed` / `thumbnail properties failed` | a pair with no rectangle, or one the Shell refused | a window that has gone, a source not drawing, or a pair built before the host had a client |
 | `thumbnail source not ready cli … asked …` | a source adopted to replace the picture cannot draw yet | a player that has not taken the box it was placed at, or an output not configured for a frame; the picture before it is still drawing, and this is the wait the swap is bounded by |
 | `thumbnail swapped old … new … after …ms` | the picture changed hands in one step | clean, one per replacement; a swap with no not-ready line before it is a source that was ready at once |
-| `seek picture cli … pic … asked … source …` | the frame a seek landed on, and what it is drawn from | `cli != asked` is a surface the crop was not built for — the smaller-than-the-box frame a seek was reported as; `pic != asked` is a film the player is fitting inside its own window; `pic none` is a player that reports no picture at all, which is nothing read rather than a mismatch; three equal numbers say the flash is not in the geometry |
+| `seek picture cli … pic … asked … source …` | the frame a seek landed on, and what it is drawn from | `cli != asked` is the source away from the box the one placement put it at — a window Windows rescaled on a display change, which the crop follows (see `thumbnail source resized`); `pic != asked` is a film the player is fitting inside its own window, which the crop was not built for; `pic none` is a player that reports no picture at all, which is nothing read rather than a mismatch; three equal numbers say the flash is not in the geometry |
 
 `thumbnail source moved` is not a fault — it is the slide at an edge — and `thumbnail source cannot hold the crop on screen` names the one case no position can fix (a crop longer than the work area). `thumbnail source native unknown`, `late` and `unobtainable` say which of the placement roads a film got.
 

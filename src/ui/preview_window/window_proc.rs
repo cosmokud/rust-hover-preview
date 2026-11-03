@@ -239,7 +239,14 @@ pub(super) unsafe extern "system" fn window_proc(
 
     match msg {
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
-            reset_preview_after_display_change(hwnd);
+            // A pin is not replayed from the pointer and its media is not something the pointer
+            // can be asked for again, so it survives the display it crossed to: nothing is put
+            // away, nothing is stopped and nothing is hidden, and the tick re-boxes it for the
+            // display it landed on (see `replace_pinned_window`). Hover is put away and drawn
+            // again, as it always has been.
+            if !pinned() {
+                reset_preview_after_display_change(hwnd);
+            }
             DISPLAY_RESET.store(true, Ordering::Release);
             LRESULT(0)
         }
