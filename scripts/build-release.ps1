@@ -80,7 +80,13 @@ if ($stamp -ne $head) {
     Write-Host ("build-release: the exe was '{0}' and this checkout is '{1}', so it is rebuilt" -f $stamp, $head)
     # Dirt this checkout's own fingerprint, which is what makes cargo compile again: the artifact's
     # mtime does not count, and neither does another checkout's recorded inputs.
+    #
+    # Two files, because the stamp is the *build script's* output and the crate is only what carries
+    # it: another checkout's build may already have recorded this `build.rs` as unchanged, in which
+    # case recompiling the crate alone relinks the resource of that older script — an exe with no
+    # stamp in it, which is the mismatch this block is here to clear.
     (Get-Item -LiteralPath (Join-Path $repoRoot "src\main.rs")).LastWriteTime = Get-Date
+    (Get-Item -LiteralPath (Join-Path $repoRoot "build.rs")).LastWriteTime = Get-Date
 }
 
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
