@@ -1052,9 +1052,6 @@ pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
         size.1,
         SWP_NOACTIVATE | SWP_NOZORDER,
     );
-    // Traced rather than answered: what a run needs is what stands over the pin after a box change
-    // (see `pin_trace::watch_the_ladder_after_a_box_change`).
-    pin_trace::watch_the_ladder_after_a_box_change();
     place_pinned_siblings();
 }
 

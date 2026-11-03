@@ -382,10 +382,6 @@ pub fn run_preview_window() {
             // `preview_stall_ms`).
             note_preview_alive();
 
-            // And the ladder a box change hung comes round here, on the loop's own tick rather than on
-            // a thread of its own (see `sample_the_ladder_where_due`).
-            pin_trace::sample_the_ladder_where_due();
-
             // And the same note for the pin, which is a narrower question with a much
             // shorter bound: a loop that is not turning while a window the user is
             // looking at is up is a window whose buttons do nothing, and the thread that
@@ -4208,11 +4204,6 @@ pub fn run_preview_window() {
                         // land over the line this has just drawn (see `relayout_pinned_media`).
                         relayout_text_for_the_box(content);
                         show_pinned_window(hwnd);
-                        // **The box a gesture gave the pin is traced here**, because what a raise after
-                        // it answered is exactly what a run cannot see from the desktop afterwards: the
-                        // ladder is sampled over the next two seconds (see
-                        // `pin_trace::watch_the_ladder_after_a_box_change`).
-                        pin_trace::watch_the_ladder_after_a_box_change();
                         place_pinned_siblings();
                         publish_pointer_hold(hwnd);
                     }
