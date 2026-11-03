@@ -710,6 +710,12 @@ fn extensionless_files_route_to_text_when_enabled() {
     let extensionless_path = Path::new("extensionless_sample");
     let txt_path = Path::new("notes.txt");
 
+    assert!(!config.text_show_extensionless);
+    assert!(!named_as(extensionless_path, &config, PreviewType::Text));
+    assert_eq!(kind_of(extensionless_path, &config), None);
+    assert!(named_as(txt_path, &config, PreviewType::Text));
+    assert_eq!(kind_of(txt_path, &config), Some(PreviewType::Text));
+
     config.text_show_extensionless = true;
     assert!(named_as(extensionless_path, &config, PreviewType::Text));
     assert_eq!(

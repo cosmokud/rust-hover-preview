@@ -502,7 +502,7 @@ pub(super) const ID_TRAY_MARKDOWN_SOURCE: u16 = 1053; // Highlighted Markdown so
 /// submenu that has gone (see `ID_TRAY_FONT_BACKGROUND_BASE` for why that block was moved):
 /// the setting is the same question `Full Mode` was asked and one this app still asks.
 pub(super) const ID_TRAY_RENDER_HTML: u16 = 1058;
-/// The `Text → Show Extensionless` row: whether an extensionless file is previewed by the text
+/// The `Text → Preview All Extensionless` row: whether an extensionless file is previewed by the text
 /// preview.
 pub(super) const ID_TRAY_TEXT_SHOW_EXTENSIONLESS: u16 = 1059;
 /// The `Preview Types` submenu, one command per kind of preview.
