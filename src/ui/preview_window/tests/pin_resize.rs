@@ -1554,3 +1554,168 @@ fn a_pin_the_pointer_has_already_painted_is_not_painted_again_by_the_tick() {
          paint, so the tick adds nothing to it"
     );
 }
+
+/// **A box a playing frame already covers is no read of the file, and the frame keeps playing.** The
+/// frames of a GIF or an animated WebP are decoded at a box as a picture's are, so the frames a smaller
+/// box would be given are frames the pin already has — and every later enlargement is stretched from
+/// those, which is a pin dragged small and opened again played back out of a thumbnail for as long as
+/// it stands. A decode would also spend more than sharpness: it begins the file at its first frame
+/// (see `keep_animation_place`).
+#[test]
+fn a_box_a_playing_frame_already_covers_owes_the_resize_no_decode() {
+    let _room = the_room_to_itself();
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    // A pin part-way through its file, holding frames decoded at a box the size of a display.
+    let held = |kind: MediaType, width: u32, height: u32| {
+        let frame = |width: u32, height: u32| {
+            Arc::new(ImageFrame::new(
+                vec![0u8; (width * height * 4) as usize],
+                width,
+                height,
+                0,
+            ))
+        };
+        let mut media = static_image_media(frame(width, height), kind);
+        media.frames = vec![frame(width, height), frame(width, height)];
+        media.current_frame = 1;
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(media);
+        }
+    };
+    let playhead = || {
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media
+                .as_ref()
+                .map(|media| (media.media_type, media.current_frame))
+        })
+    };
+
+    let path = PathBuf::from("a-playing-frame.gif");
+    for kind in [
+        MediaType::AnimatedGif,
+        MediaType::AnimatedApng,
+        MediaType::AnimatedWebP,
+        MediaType::AnimatedHeif,
+        MediaType::AnimatedJxl,
+    ] {
+        held(kind, 1600, 1200);
+        assert!(
+            relayout_pinned_media(
+                &path,
+                (100, 100, 500, 400),
+                96,
+                None,
+                PinRelayoutRoad::BoxChange
+            )
+            .is_none(),
+            "{kind:?} in a box its own frames cover is every pixel that box would have been \
+             decoded to, and the frame an enlargement back is stretched from"
+        );
+        assert_eq!(
+            playhead(),
+            Some((kind, 1)),
+            "and the frame it was playing is the one still in hand: no decode was asked for it"
+        );
+        // A box they do not cover is the read that carries the playhead across rather than one that
+        // begins the file again (see `keep_animation_place`), and a take-up is the pin built whole
+        // for a file it has not stood on.
+        assert!(
+            relayout_pinned_media(
+                &path,
+                (100, 100, 1900, 1525),
+                96,
+                None,
+                PinRelayoutRoad::BoxChange
+            )
+            .is_some(),
+            "while {kind:?} in a box bigger than its frames is decoded for it"
+        );
+    }
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous;
+    }
+}
+
+/// **The frame a box change decodes is the one it installs carrying the place the animation had got
+/// to**, rather than the file begun again at its opening frame: the frames of the new media are the
+/// same file's frames in the same order, so the index carries, and the wait the frame had already
+/// served carries with it — otherwise the frame the pin was showing is held for one more of its own
+/// delays, a beat of the animation shown twice.
+#[test]
+fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let frame = |width: u32, height: u32| {
+        Arc::new(ImageFrame::new(
+            vec![0u8; (width * height * 4) as usize],
+            width,
+            height,
+            0,
+        ))
+    };
+    let frames = |width: u32, height: u32, count: usize| {
+        (0..count).map(|_| frame(width, height)).collect::<Vec<_>>()
+    };
+
+    let path = PathBuf::from("a-playing-frame-carried.gif");
+    let mut pin = overlay_pin((100, 100, 500, 400), PinChrome::always());
+    pin.path = path.clone();
+    stand_pin(Some(pin));
+
+    // The pin is on the fourth frame of five, 40 ms into a 100 ms delay.
+    let mut playing = static_image_media(frame(400, 300), MediaType::AnimatedGif);
+    playing.frames = frames(400, 300, 5);
+    playing.current_frame = 3;
+    playing.last_frame_time = Instant::now() - Duration::from_millis(40);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(playing);
+    }
+
+    // The decode the box change asked for, answered at the box it was asked at.
+    let (answer, answers) = channel();
+    let mut decoded = static_image_media(frame(800, 600), MediaType::AnimatedGif);
+    decoded.frames = frames(800, 600, 5);
+    answer.send(Some(decoded)).ok();
+
+    let mut relayout = Some(PinRelayout {
+        path,
+        answer: answers,
+    });
+    assert!(
+        take_pin_relayout(&mut relayout),
+        "the answer of a relayout standing on the pin's own file is installed"
+    );
+
+    let installed = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media.as_ref().map(|media| {
+            (
+                media.current_frame,
+                media.current_width(),
+                media.current_height(),
+                media.last_frame_time.elapsed(),
+            )
+        })
+    });
+    let Some((place, width, height, served)) = installed else {
+        panic!("a frame was installed over the pin's own media");
+    };
+    assert_eq!(
+        (place, width, height),
+        (3, 800, 600),
+        "the frame the pin was on, of the frames decoded for the box it is now drawn at"
+    );
+    assert!(
+        served >= Duration::from_millis(40),
+        "and the wait that frame had served is the wait it has, so the beat of the animation is \
+         not shown twice"
+    );
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous;
+    }
+    stand_pin(previous_pin);
+}

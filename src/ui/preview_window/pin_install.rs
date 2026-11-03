@@ -1505,9 +1505,13 @@ pub(super) fn relayout_pinned_media(
         // which is the answer a picture that fills its window is given and the one a still picture
         // is drawn from while a decode of it is in flight (see `compose_media_into_band`).
         //
-        // A box change is not this: a pin put into a box of another size is one the hand has asked
-        // to be shown at that size, and a decode of it is worth the animation's place (see
-        // `PinRelayoutRoad::BoxChange`). And a take-up has no frame of this file to keep at all.
+        // A box change is not this, and it is not the restart it used to be either. A box the frames
+        // in hand already cover — a pin dragged small, and every step of a drag back out until the
+        // box outgrows them — owes no decode at all (see `box_is_covered`): the band stretches the
+        // bigger frame down into the smaller box, which keeps the animation's place *and* the pixels
+        // the way back out is stretched from. And a box they do not cover is a decode that carries
+        // that place across, the frames of the new media being the same file's frames in the same
+        // order (see `keep_animation_place`). A take-up has no frame of this file to keep at all.
         Some(kind) if kind.is_animation() && matches!(road, PinRelayoutRoad::Zoom) => None,
         // And a box change that the frame on screen already covers owes nothing at all: the band is
         // the window's own box and stretches whatever frame is there into it, so a decode here would
@@ -1557,6 +1561,13 @@ pub(super) fn relayout_pinned_media(
 /// listing and a sound's card are the others, and each is laid out again as it always was — the card
 /// above, where its clock is, and the listing below.
 ///
+/// **A frame that plays is one of these kinds too, and the one the rule matters most for.** Its
+/// frames are decoded at a box as a picture's are, so the frames a smaller box would be given are
+/// frames it already has — and every later enlargement is stretched from *those*, which is a pin
+/// dragged small and opened again played back out of a thumbnail for as long as it stands. A decode
+/// here spends more than sharpness: a frame that plays is one begun again at the file's first frame,
+/// so the resize puts the picture back at its opening seconds as well (see `keep_animation_place`).
+///
 /// A *take-up* is never covered, whatever the frame says: the media on screen is the file the pin is
 /// leaving, and the size of its frame says nothing about the file arriving (see `PinRelayoutRoad`).
 fn box_is_covered(
@@ -1569,7 +1580,12 @@ fn box_is_covered(
     matches!(road, PinRelayoutRoad::BoxChange | PinRelayoutRoad::Zoom)
         && matches!(
             kind,
-            MediaType::StaticImage
+            MediaType::AnimatedGif
+                | MediaType::AnimatedApng
+                | MediaType::AnimatedWebP
+                | MediaType::AnimatedHeif
+                | MediaType::AnimatedJxl
+                | MediaType::StaticImage
                 | MediaType::Dds
                 | MediaType::Design
                 | MediaType::Magick
@@ -1668,6 +1684,7 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
 
     let Some(media) = media else { return false };
     let media = keep_text_place(media);
+    let media = keep_animation_place(media);
     let Ok(mut current) = CURRENT_MEDIA.lock() else {
         return false;
     };
@@ -1721,5 +1738,57 @@ pub(super) fn keep_text_place(media: MediaData) -> MediaData {
         state.selection = old.selection;
         state.options.font_scale_percent = old.options.font_scale_percent;
     }
+    media
+}
+
+/// Carry where a playing animation had got to — the frame it was on, and how much of that frame's
+/// wait it had already served — from the media being replaced onto the one that replaces it.
+///
+/// A decode of a GIF, an animated WebP or any other frame that plays begins the file at its opening
+/// frame, so the frame a box change installs is the animation *started again*: a pin put into another
+/// box is the same picture at another size, and the one thing the resize must not spend for it is
+/// where the picture had got to. What carries is the index, because the frames of the new media are
+/// the same file's frames in the same order — and it carries only while the media being replaced still
+/// holds the file's first frame: a playhead the player has released frames behind is an index into a
+/// window that begins somewhere else, and a number from it would be a frame the new media's first one
+/// is not (see `release_played_frames`).
+///
+/// The clock carries beside the index because a frame's delay is the file's own. The new media arrives
+/// with `last_frame_time` at the instant it was decoded, which would hold the frame the pin is already
+/// showing for one of its delays again — a beat of the animation shown twice — so the wait that frame
+/// has already served is subtracted from it, and the next frame falls due when it would have without
+/// the resize. A frame the new media has not decoded yet is one the tick catches up on as it arrives,
+/// which is the road a streamed animation takes: the playhead is carried as far as the frames in hand
+/// reach, and the rest is skipped forward as they land.
+///
+/// It takes the lock itself and is called *before* the one above is taken, for the reason
+/// `keep_text_place` is.
+pub(super) fn keep_animation_place(media: MediaData) -> MediaData {
+    if !media.media_type.is_animation() {
+        return media;
+    }
+    let Ok(current) = CURRENT_MEDIA.lock() else {
+        return media;
+    };
+    let Some(old) = current
+        .as_ref()
+        .filter(|old| old.media_type == media.media_type)
+    else {
+        return media;
+    };
+    // A playhead that has released its frames is an index into a window that no longer begins at the
+    // file's first frame, and nothing of it can be carried onto a decode that does.
+    if old.frames_were_released() {
+        return media;
+    }
+    let place = old.current_frame;
+    let served = old.last_frame_time.elapsed();
+
+    let mut media = media;
+    let last = media.frames.len().saturating_sub(1);
+    media.current_frame = place.min(last);
+    media.last_frame_time = Instant::now()
+        .checked_sub(served)
+        .unwrap_or_else(Instant::now);
     media
 }

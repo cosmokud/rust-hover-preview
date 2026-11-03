@@ -953,7 +953,15 @@ the pin only when nothing has since the messages were pumped (`the_pin_owes_a_pa
 paint a frame as well. What is left is the pump: a step per position reported is a `PeekMessageW` loop that never empties,
 which starves the tick the animation is advanced on for as long as the hand keeps moving, so the pump dispatches one move
 a tick while a resize is in flight and leaves the rest for the tick after it — the system coalesces them to where the hand
-has got to, and the tick reads the pointer live anyway (`pin_is_resizing`).
+has got to, and the tick reads the pointer live anyway (`pin_is_resizing`). The box the hand leaves behind is the one
+decode a resize still owes, and for a picture that *plays* it is two things rather than one: a decode begins the file at
+its first frame, so where the animation had got to would go with it — the frame the pin is on and the wait that frame has
+already served are carried onto the frames decoded for the new box instead (`keep_animation_place`), which is the answer
+a wheel's notch already gives by decoding nothing at all (see "Wheel zoom"). And a box the frames in hand already cover
+is no decode either: a playing frame used to be re-read at every box the hand left it at, which replaced the pixels every
+later enlargement is stretched from with a thumbnail of them — so a pin dragged small and pulled back out played on from
+the small size it had been decoded at (`box_is_covered`, which now counts the kinds that play among the kinds a box gives
+another size to).
 
 - Wheel zoom (`pin_zoom.rs`): a notch over a pinned picture is counted by the same low-level wheel hook that swallows
   one over a text preview — a third owner beside the two the hook already had (`wheel_input::take_pin_zoom_delta`,
@@ -970,7 +978,8 @@ has got to, and the tick reads the pointer live anyway (`pin_is_resizing`).
   at that size (`PinRelayoutRoad::Zoom`, `pin_zoom_oversize_box`) — a page is rasterized at it — sharp as the source
   allows rather than a stretched last frame; a frame that *plays* is the one kind that is not, since a decode begins the
   file at its first frame and where an animation had got to is the whole of what it was showing, so its frame is
-  stretched into the box the picture is drawn at and plays on (`MediaType::is_animation`). The image a zoom out brings
+  stretched into the box the picture is drawn at and plays on (`MediaType::is_animation`). A box change is the one road
+  that still decodes it, and it now carries that place across rather than spending it (see the resize paragraph above). The image a zoom out brings
   home swings past its place and comes back (`pin_zoom_step`, the `pin_zoom_bounce_*` settings). Which kinds zoom is
   `MediaType::is_zoomable_picture`: every picture kind, a page among them, and never a video, whose picture belongs to a
   player's window.
