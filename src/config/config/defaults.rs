@@ -164,6 +164,8 @@ pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
 pub const DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 40.0;
 pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
+/// Whether an extensionless file is previewed by the text preview by default.
+pub const DEFAULT_TEXT_SHOW_EXTENSIONLESS: bool = true;
 /// How long the pointer rests on a file before a preview is put up for it, in
 /// milliseconds.
 ///

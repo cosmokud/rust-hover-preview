@@ -96,7 +96,12 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "Text Preview",
-        &["markdown_mode", "render_html", "text_font_scale"],
+        &[
+            "markdown_mode",
+            "render_html",
+            "text_font_scale",
+            "text_show_extensionless",
+        ],
     ),
     (
         "Timing",

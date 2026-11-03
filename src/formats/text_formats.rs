@@ -44,6 +44,23 @@ pub fn is_html_extension(path: &Path) -> bool {
     )
 }
 
+/// Whether `path` has no extension.
+///
+/// A file like `README`, `Makefile`, or `notes` has no extension. Dotfiles like `.gitignore`
+/// are treated by the app as having an extension (`gitignore`), so they are not considered extensionless here.
+pub fn is_extensionless(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if name.is_empty() {
+        return false;
+    }
+    match lookup_extension(path) {
+        None => true,
+        Some(ext) => ext.is_empty(),
+    }
+}
+
 /// The extension `path` will be looked up by.
 ///
 /// A dot file is the reason this is not one call to `Path::extension`: `.gitignore`
@@ -152,6 +169,39 @@ mod tests {
             assert!(
                 !is_html_extension(Path::new(name)),
                 "`{name}` is not one of the two names"
+            );
+        }
+    }
+
+    #[test]
+    fn extensionless_identifies_files_without_extensions() {
+        for name in [
+            "Makefile",
+            "README",
+            "LICENSE",
+            "notes",
+            "some/sub/folder/plain_file",
+            "file_with_trailing_dot.",
+        ] {
+            assert!(
+                is_extensionless(Path::new(name)),
+                "`{name}` should be extensionless"
+            );
+        }
+
+        for name in [
+            "file.txt",
+            "file.rs",
+            "archive.tar.gz",
+            ".gitignore",
+            ".env",
+            "",
+            ".",
+            "..",
+        ] {
+            assert!(
+                !is_extensionless(Path::new(name)),
+                "`{name}` should not be extensionless"
             );
         }
     }
