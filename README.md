@@ -131,8 +131,6 @@ For smoother playback and a better picture, install mpv: videos then play throug
 
 The app finds `mpv.exe` beside itself, in your `PATH`, in `MPV Player` under Program Files, and in SVP 4's `mpv64`; where more than one is found, **Codecs → Videos → MPV** lets you pick which one plays.
 
-mpv ships no installer of its own, so grab a Windows build from [mpv's own installation page](https://mpv.io/installation/).
-
 **Option A: winget**
 
 ```powershell
@@ -262,7 +260,7 @@ Or download the official installer from [https://calibre-ebook.com/download_wind
 4. Use the middle mouse button or `Space` (by default) to pin the preview.
 5. Right-click the tray icon to configure behavior.
 
-Pin mode works like Quick Look: pressing the middle mouse button or `Space` (`pin_key`, watched while `pin_enabled`) turns the settled preview into a window of its own — always on top unless **Pin Mode → Always On Top** is off, in which case it is an ordinary window that also wears this app's own taskbar button while it is up. `Space` in a focused pin pauses and resumes a sound; a minimized pin sits in a draggable bubble — or in that taskbar button — that a middle click or `Space` in Explorer brings back. Arrow keys walk siblings, `Escape` closes. A right-click on a pinned window opens its own menu, and a press inside a pinned page of text gives it the caret: the arrows then move it a line at a time and the page keys a screenful, `Ctrl+F` opens a find bar, `F3` finds the next place the selection appears, and `Ctrl` and a wheel changes that page's text size. Until that press the arrows walk the folder, and a press on the page's caption gives them back.
+Pin mode works like QuickLook: pressing the middle mouse button or `Space` (`pin_key`, watched while `pin_enabled`) turns the settled preview into a window of its own — always on top unless **Pin Mode → Always On Top** is off, in which case it is an ordinary window that also wears this app's own taskbar button while it is up. `Space` in a focused pin pauses and resumes a sound; a minimized pin sits in a draggable bubble — or in that taskbar button — that a middle click or `Space` in Explorer brings back. Arrow keys walk siblings, `Escape` closes. A right-click on a pinned window opens its own menu, and a press inside a pinned page of text gives it the caret: the arrows then move it a line at a time and the page keys a screenful, `Ctrl+F` opens a find bar, `F3` finds the next place the selection appears, and `Ctrl` and a wheel changes that page's text size. Until that press the arrows walk the folder, and a press on the page's caption gives them back.
 
 ## System Tray Menu
 
