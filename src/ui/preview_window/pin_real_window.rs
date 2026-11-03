@@ -20,8 +20,10 @@
 //! What is *not* here is as much the point: no message of its own for presses, because Windows
 //! activates the window a press lands on and a press on this window is a press on the pin; no
 //! stand-in in the taskbar, because this window brings its own button; no mirror, because the Shell
-//! draws a thumbnail of the window itself. A pin that is a window needs none of that, and the first
-//! ticket of this module is the window alone so that the rest can be proven one kind at a time.
+//! draws a thumbnail of the window itself while it is up. A pin that is a window needs none of that,
+//! and the first ticket of this module is the window alone so that the rest can be proven one kind at
+//! a time. What it does owe is the still of that button once it is down, which is why it is made
+//! supplying its own (see `pin_taskbar::supply_the_stills_of_this_window`).
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::Once;
@@ -266,6 +268,11 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
     .ok()?;
 
     REAL_PIN_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+    // **The window that wears the button is the one that says it supplies the still of it.** What the
+    // Shell draws the hover of a window that is down from is the bitmap the app hands it, and a window
+    // that never said it would supply one is asked for nothing — the hover falls back to the icon (see
+    // `pin_taskbar::supply_the_stills_of_this_window`, `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
+    unsafe { super::pin_taskbar::supply_the_stills_of_this_window(hwnd) };
     // The chrome the pin is carried in is made with the window that carries it, on every road —
     // a hosted film, a park, a cover, FFmpeg's player, or this app's own picture — and kept for
     // the window's life (see `pin_chrome_strips`).

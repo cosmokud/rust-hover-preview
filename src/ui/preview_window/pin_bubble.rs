@@ -684,9 +684,9 @@ pub(super) fn the_pin_is_being_put_down() -> bool {
 ///
 /// Nothing is taken for a stand-in either: no stand-in wears this pin's button, so a picture of the pin
 /// taken for one is a picture of nothing. What *is* taken is the picture of the window that wears the
-/// button — the film host, where the pin has one — because the hover of a button that is down is a still
-/// of the window and a host's own rows are the black behind its film (see
-/// `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
+/// button — the film host where the pin has one, and the pin's own window where it has none — because
+/// the hover of a button that is down is a still of the window and a host's own rows are the black
+/// behind its film (see `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
 unsafe fn put_the_pins_window_in_the_taskbar() {
     // **The picture the button is to hold is taken before the pin leaves the screen**, and of the host
     // itself: a picture of a window that has been taken off the screen is a picture of nothing, and the
@@ -694,6 +694,21 @@ unsafe fn put_the_pins_window_in_the_taskbar() {
     // `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
     if let Some(host) = pin_film_host::film_host() {
         unsafe { pin_film_host::keep_the_pins_picture_for_the_taskbar(host) };
+    } else if pin_is_its_own_window() {
+        // **A pin whose button is its own window's, reaching here from the bubble.** The picture of that
+        // window was taken at its collapse — the last moment it was on the screen — so what this row owes
+        // is the rest of the same call: the stills told to be out of date, and the button told to hold the
+        // app's own bitmap, since a window that has been off the screen since has no composition of its
+        // own for the Shell to freeze (see `pin_film_host::keep_the_pins_picture_for_the_taskbar`).
+        //
+        // **Only for a window that is already down**, which is what tells this row's two roads apart: the
+        // direct minimize has the window still on the screen here, and the Shell's own freeze of it is the
+        // picture that road has always had, so nothing is forced over it.
+        if let Some(pin) = pin_real_window::real_pin_window() {
+            if pin_lifecycle::the_pin_window_is_down(pin) {
+                unsafe { pin_film_host::keep_the_pins_picture_for_the_taskbar(pin) };
+            }
+        }
     }
 
     hide_pinned_siblings();
@@ -844,6 +859,14 @@ pub(super) fn collapse_pin_to_at(target: PinMinimizeTo, point: Option<(i32, i32)
         // that button is handed (see `pin_film_host::take_the_pins_picture`).
         if let Some(host) = pin_film_host::film_host() {
             pin_film_host::take_the_pins_picture(host);
+        } else if pin_is_its_own_window() {
+            // **A pin whose window wears the button has no host to be pictured**, and its own window is
+            // what the bubble's own row later puts away: a window taken off the screen then is no picture
+            // at all, so the frame composed here is the one its button is handed (see
+            // `put_the_pins_window_in_the_taskbar`).
+            if let Some(pin) = pin_real_window::real_pin_window() {
+                pin_film_host::take_the_pins_picture(pin);
+            }
         }
 
         hide_pinned_windows();
@@ -1257,6 +1280,16 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
     // the source the Shell draws through it are shown here, with the still the button was holding given
     // up for the live picture a pin that is up owes its button (see `pin_film_host::bring_the_film_back`).
     unsafe { pin_film_host::bring_the_film_back() };
+
+    // **And a pin whose own window wears the button is drawn live again.** The still stood for a window
+    // that is not on the screen, and a forced one would freeze the hover of a pin the user is watching —
+    // the same two things the film host's restore answers (see `pin_film_host::bring_the_film_back`).
+    if pin_is_its_own_window() {
+        if let Some(pin) = pin_real_window::real_pin_window() {
+            unsafe { pin_taskbar::the_buttons_still_is_the_apps_own(pin, false) };
+        }
+        pin_taskbar_mirror::forget_the_pin_picture();
+    }
 }
 
 /// What the bubble a collapsed pin left has parked, if anything (see `BubblePause`).

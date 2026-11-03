@@ -41,12 +41,13 @@
 //! with nothing of its own: the window's icon, stretched into whatever box the stand-in was sized to,
 //! which is what a put-away pin's hover showed for every kind of pin.
 //!
-//! **The other window that wears a button is a film's host**, and it is pictured by *itself*: the film in
-//! it is a thumbnail the Shell composes over its client and no part of its own rows, so the picture the
-//! button holds is taken of the host as the desktop shows it, film and chrome together (see
+//! **The other windows that wear a button are the ones a pin stands in of its own** — a film's host, and
+//! the pin's own window on every kind that is not a film — and they are pictured by *themselves*: the film
+//! in a host is a thumbnail the Shell composes over its client and no part of its own rows, so the picture
+//! the button holds is taken of the host as the desktop shows it, film and chrome together (see
 //! `pin_film_host::keep_the_pins_picture_for_the_taskbar`). Which window a picture is taken of is
 //! therefore the caller's to name — the stand-in is pictured by the window the pin's picture is really
-//! in, and the host by itself.
+//! in, and a window that wears the button by itself.
 
 use super::*;
 

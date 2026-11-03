@@ -2567,6 +2567,125 @@ fn a_pin_that_is_a_window_goes_to_the_taskbar_from_its_bubble_as_a_window() {
     forget_the_stand_in();
 }
 
+/// **An image pin moved from the bubble into the taskbar keeps the picture its bubble collapse took.**
+///
+/// The fault this is a regression test for: a picture wears a taskbar button of its own — the window the
+/// pin stands in — and that window has no composition for the Shell to freeze once it is hidden. So a pin
+/// the bubble's own row moved on to the taskbar was put away with no picture taken of it and no still
+/// forced, and the hover of its button was the icon. The picture is taken at the collapse, which is the
+/// last moment that window is on the screen (see `collapse_pin_to`), and the row hands the held picture
+/// over when the Shell asks for the still (see `put_the_pins_window_in_the_taskbar`,
+/// `answer_a_thumbnail_ask`).
+#[test]
+fn an_own_window_pin_moved_from_the_bubble_into_the_taskbar_holds_the_picture_its_collapse_took() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_own = pin_is_its_own_window();
+
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 240,
+    );
+
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+
+    forget_the_stand_in();
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+    // Safety: the window is this test's own, and it is asked to be on the screen — which is what makes
+    // it a picture rather than one more window nothing composes.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+    // The box the picture is to be of, read before the collapse: a hidden window is still measurable,
+    // but the picture is of the window as it stood on the screen.
+    let picture_box = unsafe { the_client_box(pin_hwnd) };
+    forget_the_pin_picture();
+    let forced = stills_forced();
+
+    // The road the user takes: the pin goes away into the round bubble first.
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    assert!(
+        !unsafe { IsWindowVisible(pin_hwnd) }.as_bool(),
+        "the bubble's collapse takes the pin's own window off the screen"
+    );
+    let (_, width, height) = the_pin_picture().expect(
+        "the bubble's collapse takes the picture the button of a pin moved from it into the taskbar \
+         is to hold",
+    );
+    assert_eq!(
+        (width as i32, height as i32),
+        picture_box,
+        "and it is taken of the window's own client area, before the collapse takes it off the screen"
+    );
+
+    // The bubble's own menu row moves the pin into the taskbar, where the button is that window's.
+    bubble_to_taskbar();
+    assert!(
+        unsafe { IsWindowVisible(pin_hwnd) }.as_bool() && unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the pin's own window is the one put away, and put away visibly: a hidden window wears no \
+         button at all"
+    );
+    assert_eq!(
+        stills_forced(),
+        forced + 1,
+        "and its button is told to hold the app's own still, because a window that has been off the \
+         screen since the collapse has no composition for the Shell to freeze"
+    );
+    let (_, width, height) =
+        the_pin_picture().expect("and the picture the collapse took is the one kept");
+    assert_eq!(
+        (width as i32, height as i32),
+        picture_box,
+        "a row with no window of the pin's on the screen takes no second picture"
+    );
+
+    // And the Shell's ask for the still of that button is answered with it: the high word of the
+    // message's `lparam` is the widest thumbnail it will take and the low word the tallest. The box here
+    // is one a desk's own stills are taken in — DWM refuses a bitmap past the largest it asks for.
+    let handed_over = thumbnails_handed_over();
+    unsafe { answer_a_thumbnail_ask(pin_hwnd, LPARAM((96 << 16) | 72)) };
+    assert_eq!(
+        thumbnails_handed_over(),
+        handed_over + 1,
+        "the ask is answered with a bitmap made in the box it asked in"
+    );
+
+    // And a pin that is up again is drawn live: the still it was put away with is given back and the
+    // picture forgotten, or the hover of the pin the user is watching is frozen.
+    let given_back = stills_given_back();
+    restore_pin(&a_restored_window(), PinRestore::Pressed);
+    assert!(!pin_is_collapsed(), "the pin is up again");
+    assert_eq!(
+        stills_given_back(),
+        given_back + 1,
+        "the button is told its still is its window's own again"
+    );
+    assert!(
+        the_pin_picture().is_none(),
+        "and the picture it held is forgotten with it"
+    );
+
+    // Safety: the window is this test's own, and every global written here is put back as it was.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+    hide_pin_bubble();
+    forget_the_stand_in();
+}
+
 /// An update brings a pin that is put away into the taskbar back on top of the listing the file was
 /// picked in — and leaves it where the minimize put it where `Pin Mode → Update Preview → Move To Top`
 /// is off.

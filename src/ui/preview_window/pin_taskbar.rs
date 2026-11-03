@@ -167,12 +167,16 @@ pub(super) unsafe fn show_pin_taskbar() {
 /// picture of the pin, and forcing the bitmap on it would freeze the film the user is watching in the
 /// button.
 ///
-/// Asked of both windows a pin can be put away as: the stand-in (see `show_pin_taskbar`), and the film
-/// host that owns a pin's chrome on a film a player draws (see `pin_film_host`).
+/// Asked of every window a pin can be put away as: the stand-in (see `show_pin_taskbar`), the film
+/// host that owns a pin's chrome on a film a player draws (see `pin_film_host`), and the window a pin
+/// that stands in its own — a picture, a page, a card — wears its button on (see
+/// `put_the_pins_window_in_the_taskbar`).
 pub(super) unsafe fn the_buttons_still_is_the_apps_own(hwnd: HWND, the_apps_own: bool) {
     #[cfg(test)]
     if the_apps_own {
         STILLS_FORCED.fetch_add(1, Ordering::SeqCst);
+    } else {
+        STILLS_GIVEN_BACK.fetch_add(1, Ordering::SeqCst);
     }
     let forced = BOOL(the_apps_own as i32);
     let _ = DwmSetWindowAttribute(
@@ -195,6 +199,18 @@ static STILLS_FORCED: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 pub(super) fn stills_forced() -> u32 {
     STILLS_FORCED.load(Ordering::SeqCst)
+}
+
+/// How many times this run has told the Shell that a button's still is the window's own again: the other
+/// half of a still's road, and the one a test can see a pin that is up again by (see
+/// `the_buttons_still_is_the_apps_own`).
+#[cfg(test)]
+static STILLS_GIVEN_BACK: AtomicU32 = AtomicU32::new(0);
+
+/// The asks this run has made for a button's still to be its window's own (see `STILLS_GIVEN_BACK`).
+#[cfg(test)]
+pub(super) fn stills_given_back() -> u32 {
+    STILLS_GIVEN_BACK.load(Ordering::SeqCst)
 }
 
 /// Put the stand-in up in the form that shows the pin: off the screen, and *shown* — a window the
