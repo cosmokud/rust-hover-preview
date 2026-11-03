@@ -35,6 +35,7 @@ impl TextPagePutBack {
             }],
             selection: None,
             selecting: false,
+            focused: false,
             caret: None,
             caret_goal: None,
             caret_blink: text_find_field::CaretBlink::default(),

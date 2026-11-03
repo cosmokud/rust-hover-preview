@@ -1062,6 +1062,12 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
     }
 
     if y < caption.height {
+        // A press on the caption is the page letting go of the reader's focus: its walk, its buttons
+        // and the empty drag area alike, which is the whole of the scope the user chose for this. Every
+        // other place on the pin — an edge above this arm, the transport bar, the find bar, the
+        // scrollbar, the menu, the wheel — leaves the page focused (see `text_caret::page_has_focus`).
+        text_caret::unfocus_page();
+
         // The buttons are drawn over the picture only while the chrome is there to be used: with
         // it gone, the strip across the top of a pinned picture is the picture, and a press on it
         // is the handle every other part of the media is (see `PinChrome`). A kind with no caption

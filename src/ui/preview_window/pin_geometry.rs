@@ -677,13 +677,28 @@ pub(super) unsafe fn pin_command_request(
                     ),
                 }
             }
-            // And the two ends, which are the line's where the page holds a caret and nothing at all to
-            // a pin that holds no page: a picture has no beginning to go back to, so `Home` is swallowed
-            // rather than answered by a walk the user did not ask for. `Ctrl` makes them the document's,
-            // which is the same question asked of the frame's end rather than the line's.
+            // And the two ends: the line's where the page has the reader's focus, the document's under
+            // `Ctrl` — and the walk of one file where the pin holds a page nobody has pressed into, which
+            // is what every other walk key of an unfocused pin does (see `text_caret::page_has_focus`).
+            //
+            // **A pin holding no page at all still swallows them**, and that is the one thing this arm has
+            // to keep apart: a picture has no beginning for `Home` to go back to, so the question is
+            // `holds_a_page` — a page that is held but unfocused — and never "the caret did not take it",
+            // which is equally true of both.
             command @ (PinCommand::PageTop | PinCommand::PageBottom) => {
-                let _ = text_caret::command_move(command);
-                None
+                if text_caret::holds_a_page() {
+                    step_pinned_file(
+                        if matches!(command, PinCommand::PageTop) {
+                            -1
+                        } else {
+                            1
+                        },
+                        wait,
+                        anchor,
+                    )
+                } else {
+                    None
+                }
             }
             // A find is the page's own as well: it looks for what the page has selected in the document
             // behind it, and it is nothing at all to a window with no page or with nothing selected
