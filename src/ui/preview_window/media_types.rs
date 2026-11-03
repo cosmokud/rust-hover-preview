@@ -538,6 +538,16 @@ pub(super) struct ImageFrame {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) delay_ms: u32, // Delay before next frame (for animations)
+    /// The frame's index from the file's first frame, which is what the place a picture that plays
+    /// has got to is a place *in*: the frames of such a file are one ordered run, and a playhead
+    /// moves through that run rather than through the frames in hand — the player gives back the
+    /// frames it has played, and a decode may be begun part-way through the file, so a frame's
+    /// index among the frames in hand is not the same number (see `release_played_frames` and
+    /// `current_frame_of_file`).
+    ///
+    /// Every frame of a file that does not play is `0`: a picture, a page, a card and a film's
+    /// thumbnail are each the whole of what they show, and there is no run to be part of.
+    pub(super) file_index: usize,
     /// Whether every pixel of the frame has an alpha of 255, which is what lets a repaint
     /// copy the frame instead of blending it pixel by pixel.
     ///
@@ -568,6 +578,7 @@ impl ImageFrame {
             width,
             height,
             delay_ms,
+            file_index: 0,
             opaque,
         }
     }

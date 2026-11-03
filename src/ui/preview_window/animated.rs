@@ -29,6 +29,7 @@ pub(super) fn load_animated_gif(
     max_height: u32,
     preview_scale: PreviewScale,
     cancel: Arc<AtomicBool>,
+    resume_at: usize,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
         return None;
@@ -52,6 +53,7 @@ pub(super) fn load_animated_gif(
     let mut initial_frames = Vec::new();
     let mut initial_bytes: usize = 0;
     let mut reached_end = false;
+    let mut file_index = 0usize;
 
     while initial_frames.len() < ANIMATION_STARTUP_FRAMES {
         if cancel.load(Ordering::Acquire) {
@@ -68,8 +70,15 @@ pub(super) fn load_animated_gif(
         };
 
         composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
+        // The frames before the resume are composited all the same — a GIF frame is a patch of the
+        // one before it — and are not scaled into a box they are never drawn in.
+        if file_index < resume_at {
+            file_index += 1;
+            continue;
+        }
+
         let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
-        let img = decode_gif_frame_to_image(
+        let mut img = decode_gif_frame_to_image(
             &canvas,
             gif_width,
             gif_height,
@@ -77,6 +86,8 @@ pub(super) fn load_animated_gif(
             target_height,
             delay_ms,
         )?;
+        img.file_index = file_index;
+        file_index += 1;
         initial_bytes = initial_bytes.saturating_add(img.pixels.len());
         if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
@@ -84,8 +95,18 @@ pub(super) fn load_animated_gif(
         initial_frames.push(Arc::new(img));
     }
 
-    if initial_frames.is_empty() || (reached_end && initial_frames.len() <= 1) {
+    if initial_frames.is_empty() {
         return None;
+    }
+
+    // A file that ends within a frame of the place the decode began at is nothing to play, so the
+    // whole file is read from its first frame instead — and the install still lands on the place,
+    // the ids saying where it is among the frames (see `keep_animation_place`).
+    if reached_end && initial_frames.len() <= 1 {
+        if resume_at == 0 {
+            return None;
+        }
+        return load_animated_gif(path, max_width, max_height, preview_scale, cancel, 0);
     }
 
     if reached_end {
@@ -112,14 +133,23 @@ pub(super) fn load_animated_gif(
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
-    let skip_frames = initial_frames.len();
-
+    // The startup fill stopped after every frame it read from `resume_at` onward, so the stream picks
+    // up after those; a replay begins the file at its first frame (`skip = 0` below).
+    let startup_frames = initial_frames.len();
+    let skip_frames = resume_at.saturating_add(startup_frames);
     let path_clone = path.clone();
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
         let mut skip = skip_frames;
+        // Whether the file's head — the frames before the place a box change asked the decode to
+        // begin at — is in hand. A resumed pass owes it, and the pass that answers it ends where
+        // that place begins: the frames after the place are the ones the decode already answered
+        // with, and decoding them again would hold the file's tail twice (see the pass rule below).
+        let mut head_done = resume_at == 0;
 
         loop {
+            let head_pass = skip == 0 && !head_done;
+            let stop_at = head_pass.then_some(resume_at);
             let file = match File::open(&path_clone) {
                 Ok(f) => f,
                 Err(_) => break,
@@ -150,7 +180,7 @@ pub(super) fn load_animated_gif(
                 }
 
                 let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
-                if let Some(img) = decode_gif_frame_to_image(
+                if let Some(mut img) = decode_gif_frame_to_image(
                     &canvas,
                     gif_width,
                     gif_height,
@@ -158,23 +188,44 @@ pub(super) fn load_animated_gif(
                     target_height,
                     delay_ms,
                 ) {
+                    img.file_index = frame_idx;
                     if let Ok(mut streamed) = shared_clone.lock() {
                         streamed.queue.push_back(img);
                     }
                 }
                 frame_idx += 1;
+                // The head pass ends where the resumed one began, the frames between being the ones
+                // it already answered with (see `head_done`).
+                if stop_at.is_some_and(|stop| frame_idx >= stop) {
+                    break;
+                }
+            }
+
+            if head_pass {
+                head_done = true;
             }
 
             // Whether the file has to be decoded again is settled under the same
             // lock the player takes before it gives frames back, so that a release
             // and the end of a pass cannot pass each other: whichever happens
-            // first, the other sees it. A pass that ends with nothing given back
-            // leaves every frame in the player's hands — the file is its own
-            // memory from there, and no frame of it is ever decoded again — while a
-            // pass that ends after frames were given back is one to run again.
+            // first, the other sees it. A pass that ends after frames were given
+            // back is one to run again. So is a pass that began part-way through
+            // the file, whatever it ended with: it began where a box change asked
+            // the decode to begin, which leaves the file's head undecoded, so it is
+            // always followed by the pass that begins at the first frame — and the
+            // frames a resumed decode ends up holding are the file's in play order,
+            // the tail it began at and then the head, which is the order the player
+            // and the release window already work in. A pass that began at the
+            // first frame and gave nothing back is the one that leaves every frame
+            // in the player's hands: the file is its own memory from there, and no
+            // frame of it is ever decoded again.
+            // A pass that began past the frames the startup answer already holds is the one
+            // `resume_at` asked for; the startup frames are skipped by the stream as well, and
+            // skipping them is not beginning part-way through the file.
+            let began_part_way = skip > startup_frames;
             let replay = match shared_clone.lock() {
                 Ok(mut streamed) => {
-                    if streamed.released {
+                    if streamed.released || began_part_way {
                         true
                     } else {
                         streamed.decoded = true;
@@ -188,6 +239,8 @@ pub(super) fn load_animated_gif(
             if cancelled || !replay {
                 break;
             }
+            // Whatever the pass that ended was, the one that follows begins the file
+            // at its first frame.
             skip = 0;
         }
 
@@ -261,6 +314,7 @@ pub(super) fn load_animated_apng(
     max_height: u32,
     preview_scale: PreviewScale,
     cancel: Arc<AtomicBool>,
+    resume_at: usize,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
         return None;
@@ -272,6 +326,7 @@ pub(super) fn load_animated_apng(
     let mut initial_bytes: usize = 0;
     let mut reached_end = false;
     let mut target_size: Option<(u32, u32)> = None;
+    let mut file_index = 0usize;
 
     while initial_frames.len() < ANIMATION_STARTUP_FRAMES {
         if cancel.load(Ordering::Acquire) {
@@ -286,6 +341,13 @@ pub(super) fn load_animated_apng(
                 break;
             }
         };
+
+        // The frames before the resume are read through all the same — the decoder composites each
+        // one onto the last — and are not scaled into a box they are never drawn in.
+        if file_index < resume_at {
+            file_index += 1;
+            continue;
+        }
 
         let (target_width, target_height) = match target_size {
             Some(size) => size,
@@ -303,7 +365,10 @@ pub(super) fn load_animated_apng(
         };
 
         let delay_ms = apng_frame_delay_ms(&frame);
-        let img = decode_apng_frame_to_image(frame.buffer(), target_width, target_height, delay_ms);
+        let mut img =
+            decode_apng_frame_to_image(frame.buffer(), target_width, target_height, delay_ms);
+        img.file_index = file_index;
+        file_index += 1;
         initial_bytes = initial_bytes.saturating_add(img.pixels.len());
         if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
@@ -311,8 +376,18 @@ pub(super) fn load_animated_apng(
         initial_frames.push(Arc::new(img));
     }
 
-    if initial_frames.is_empty() || (reached_end && initial_frames.len() <= 1) {
+    if initial_frames.is_empty() {
         return None;
+    }
+
+    // A file that ends within a frame of the place the decode began at is nothing to play, so the
+    // whole file is read from its first frame instead — and the install still lands on the place,
+    // the ids saying where it is among the frames (see `keep_animation_place`).
+    if reached_end && initial_frames.len() <= 1 {
+        if resume_at == 0 {
+            return None;
+        }
+        return load_animated_apng(path, max_width, max_height, preview_scale, cancel, 0);
     }
 
     if reached_end {
@@ -339,22 +414,34 @@ pub(super) fn load_animated_apng(
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
-    let skip_frames = initial_frames.len();
+    // The startup fill stopped after every frame it read from `resume_at` onward, so the stream picks
+    // up after those; a replay begins the file at its first frame (`skip = 0` below).
+    let startup_frames = initial_frames.len();
+    let skip_frames = resume_at.saturating_add(startup_frames);
     let (target_width, target_height) = target_size?;
 
     let path_clone = path.clone();
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
         let mut skip = skip_frames;
+        // Whether the file's head — the frames before the place a box change asked the decode to
+        // begin at — is in hand. A resumed pass owes it, and the pass that answers it ends where
+        // that place begins: the frames after the place are the ones the decode already answered
+        // with, and decoding them again would hold the file's tail twice (see the pass rule below).
+        let mut head_done = resume_at == 0;
 
         loop {
+            let head_pass = skip == 0 && !head_done;
+            let stop_at = head_pass.then_some(resume_at);
             let frames = match apng_frames(&path_clone) {
                 Some(frames) => frames,
                 None => break,
             };
 
             let mut cancelled = false;
-            for frame in frames.skip(skip) {
+            // The index a frame has from the file's first frame is the one the pass began skipping
+            // at and the count of frames read since.
+            for (index, frame) in frames.skip(skip).enumerate() {
                 let frame = match frame {
                     Ok(frame) => frame,
                     Err(_) => break,
@@ -368,27 +455,49 @@ pub(super) fn load_animated_apng(
                 }
 
                 let delay_ms = apng_frame_delay_ms(&frame);
-                let img = decode_apng_frame_to_image(
+                let mut img = decode_apng_frame_to_image(
                     frame.buffer(),
                     target_width,
                     target_height,
                     delay_ms,
                 );
+                img.file_index = skip.saturating_add(index);
                 if let Ok(mut streamed) = shared_clone.lock() {
                     streamed.queue.push_back(img);
                 }
+                // The head pass ends where the resumed one began, the frames between being the ones
+                // it already answered with (see `head_done`).
+                let passed = skip.saturating_add(index).saturating_add(1);
+                if stop_at.is_some_and(|stop| passed >= stop) {
+                    break;
+                }
+            }
+
+            if head_pass {
+                head_done = true;
             }
 
             // Whether the file has to be decoded again is settled under the same
             // lock the player takes before it gives frames back, so that a release
             // and the end of a pass cannot pass each other: whichever happens
-            // first, the other sees it. A pass that ends with nothing given back
-            // leaves every frame in the player's hands — the file is its own
-            // memory from there, and no frame of it is ever decoded again — while a
-            // pass that ends after frames were given back is one to run again.
+            // first, the other sees it. A pass that ends after frames were given
+            // back is one to run again. So is a pass that began part-way through
+            // the file, whatever it ended with: it began where a box change asked
+            // the decode to begin, which leaves the file's head undecoded, so it is
+            // always followed by the pass that begins at the first frame — and the
+            // frames a resumed decode ends up holding are the file's in play order,
+            // the tail it began at and then the head, which is the order the player
+            // and the release window already work in. A pass that began at the
+            // first frame and gave nothing back is the one that leaves every frame
+            // in the player's hands: the file is its own memory from there, and no
+            // frame of it is ever decoded again.
+            // A pass that began past the frames the startup answer already holds is the one
+            // `resume_at` asked for; the startup frames are skipped by the stream as well, and
+            // skipping them is not beginning part-way through the file.
+            let began_part_way = skip > startup_frames;
             let replay = match shared_clone.lock() {
                 Ok(mut streamed) => {
-                    if streamed.released {
+                    if streamed.released || began_part_way {
                         true
                     } else {
                         streamed.decoded = true;
@@ -402,6 +511,8 @@ pub(super) fn load_animated_apng(
             if cancelled || !replay {
                 break;
             }
+            // Whatever the pass that ended was, the one that follows begins the file
+            // at its first frame.
             skip = 0;
         }
 
@@ -470,6 +581,7 @@ pub(super) fn load_animated_webp(
     max_height: u32,
     preview_scale: PreviewScale,
     cancel: Arc<AtomicBool>,
+    resume_at: usize,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
         return None;
@@ -509,6 +621,7 @@ pub(super) fn load_animated_webp(
     let mut initial_bytes: usize = 0;
     let mut previous_timestamp = 0i32;
     let mut reached_end = false;
+    let mut file_index = 0usize;
     let mut iterator = decoder.into_iter();
 
     while initial_frames.len() < ANIMATION_STARTUP_FRAMES {
@@ -528,7 +641,14 @@ pub(super) fn load_animated_webp(
         let delay_ms = (timestamp - previous_timestamp).max(0) as u32;
         previous_timestamp = timestamp;
 
-        let img = decode_webp_animation_frame_to_image(
+        // The frames before the resume are read through all the same — each one's timestamp is the
+        // next one's delay — and are not scaled into a box they are never drawn in.
+        if file_index < resume_at {
+            file_index += 1;
+            continue;
+        }
+
+        let mut img = decode_webp_animation_frame_to_image(
             frame.data(),
             orig_width,
             orig_height,
@@ -536,6 +656,8 @@ pub(super) fn load_animated_webp(
             target_height,
             delay_ms,
         )?;
+        img.file_index = file_index;
+        file_index += 1;
         initial_bytes = initial_bytes.saturating_add(img.pixels.len());
         if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
@@ -543,8 +665,18 @@ pub(super) fn load_animated_webp(
         initial_frames.push(Arc::new(img));
     }
 
-    if initial_frames.is_empty() || (reached_end && initial_frames.len() <= 1) {
+    if initial_frames.is_empty() {
         return None;
+    }
+
+    // A file that ends within a frame of the place the decode began at is nothing to play, so the
+    // whole file is read from its first frame instead — and the install still lands on the place,
+    // the ids saying where it is among the frames (see `keep_animation_place`).
+    if reached_end && initial_frames.len() <= 1 {
+        if resume_at == 0 {
+            return None;
+        }
+        return load_animated_webp(path, max_width, max_height, preview_scale, cancel, 0);
     }
 
     if reached_end {
@@ -571,15 +703,25 @@ pub(super) fn load_animated_webp(
     let shared_clone = Arc::clone(&shared);
     let loaded_flag = Arc::new(AtomicBool::new(false));
     let loaded_flag_clone = Arc::clone(&loaded_flag);
-    let skip_frames = initial_frames.len();
+    // The startup fill stopped after every frame it read from `resume_at` onward, so the stream picks
+    // up after those; a replay begins the file at its first frame (`skip = 0` below).
+    let startup_frames = initial_frames.len();
+    let skip_frames = resume_at.saturating_add(startup_frames);
 
     drop(iterator);
     let buffer_clone = Arc::clone(&buffer);
     let cancel_clone = Arc::clone(&cancel);
     std::thread::spawn(move || {
         let mut skip = skip_frames;
+        // Whether the file's head — the frames before the place a box change asked the decode to
+        // begin at — is in hand. A resumed pass owes it, and the pass that answers it ends where
+        // that place begins: the frames after the place are the ones the decode already answered
+        // with, and decoding them again would hold the file's tail twice (see the pass rule below).
+        let mut head_done = resume_at == 0;
 
         loop {
+            let head_pass = skip == 0 && !head_done;
+            let stop_at = head_pass.then_some(resume_at);
             let options = webp_animation::DecoderOptions {
                 use_threads: true,
                 color_mode: webp_animation::ColorMode::Bgra,
@@ -609,7 +751,7 @@ pub(super) fn load_animated_webp(
                     continue;
                 }
 
-                if let Some(img) = decode_webp_animation_frame_to_image(
+                if let Some(mut img) = decode_webp_animation_frame_to_image(
                     frame.data(),
                     orig_width,
                     orig_height,
@@ -617,22 +759,43 @@ pub(super) fn load_animated_webp(
                     target_height,
                     delay_ms,
                 ) {
+                    img.file_index = frame_idx;
                     if let Ok(mut streamed) = shared_clone.lock() {
                         streamed.queue.push_back(img);
                     }
                 }
+                // The head pass ends where the resumed one began, the frames between being the ones
+                // it already answered with (see `head_done`).
+                if stop_at.is_some_and(|stop| frame_idx + 1 >= stop) {
+                    break;
+                }
+            }
+
+            if head_pass {
+                head_done = true;
             }
 
             // Whether the file has to be decoded again is settled under the same
             // lock the player takes before it gives frames back, so that a release
             // and the end of a pass cannot pass each other: whichever happens
-            // first, the other sees it. A pass that ends with nothing given back
-            // leaves every frame in the player's hands — the file is its own
-            // memory from there, and no frame of it is ever decoded again — while a
-            // pass that ends after frames were given back is one to run again.
+            // first, the other sees it. A pass that ends after frames were given
+            // back is one to run again. So is a pass that began part-way through
+            // the file, whatever it ended with: it began where a box change asked
+            // the decode to begin, which leaves the file's head undecoded, so it is
+            // always followed by the pass that begins at the first frame — and the
+            // frames a resumed decode ends up holding are the file's in play order,
+            // the tail it began at and then the head, which is the order the player
+            // and the release window already work in. A pass that began at the
+            // first frame and gave nothing back is the one that leaves every frame
+            // in the player's hands: the file is its own memory from there, and no
+            // frame of it is ever decoded again.
+            // A pass that began past the frames the startup answer already holds is the one
+            // `resume_at` asked for; the startup frames are skipped by the stream as well, and
+            // skipping them is not beginning part-way through the file.
+            let began_part_way = skip > startup_frames;
             let replay = match shared_clone.lock() {
                 Ok(mut streamed) => {
-                    if streamed.released {
+                    if streamed.released || began_part_way {
                         true
                     } else {
                         streamed.decoded = true;
@@ -646,6 +809,8 @@ pub(super) fn load_animated_webp(
             if cancelled || !replay {
                 break;
             }
+            // Whatever the pass that ended was, the one that follows begins the file
+            // at its first frame.
             skip = 0;
         }
         loaded_flag_clone.store(true, Ordering::Release);
@@ -686,6 +851,7 @@ pub(super) fn load_animated_heif(
     max_height: u32,
     _preview_scale: PreviewScale,
     cancel: Arc<AtomicBool>,
+    _resume_at: usize,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
         return None;
@@ -700,13 +866,13 @@ pub(super) fn load_animated_heif(
     }
 
     let mut frames = Vec::with_capacity(sequence.frames.len());
-    for (pixels, delay_ms) in sequence.frames {
-        frames.push(Arc::new(ImageFrame::new(
-            pixels,
-            sequence.width,
-            sequence.height,
-            delay_ms,
-        )));
+    // The whole sequence is decoded here and nothing is streamed, so a decode begun at a place in the
+    // file would be a second read for frames already in hand: every frame is returned, carrying where
+    // it is in the file, and the install lands on the place among them (see `keep_animation_place`).
+    for (file_index, (pixels, delay_ms)) in sequence.frames.into_iter().enumerate() {
+        let mut frame = ImageFrame::new(pixels, sequence.width, sequence.height, delay_ms);
+        frame.file_index = file_index;
+        frames.push(Arc::new(frame));
     }
 
     Some(MediaData {
@@ -739,6 +905,7 @@ pub(super) fn load_animated_jxl(
     max_height: u32,
     _preview_scale: PreviewScale,
     cancel: Arc<AtomicBool>,
+    _resume_at: usize,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
         return None;
@@ -797,12 +964,16 @@ pub(super) fn load_animated_jxl(
         // still timebase, which is zero too — is a frame the playhead would advance
         // through as fast as the message pump allows, spinning the render loop on a
         // picture that never appears to change.
-        frames.push(Arc::new(ImageFrame::new(
+        // Every frame of the file is decoded here, so each carries its own place in it and the
+        // install lands on the one the pin was at (see `keep_animation_place`).
+        let mut frame = ImageFrame::new(
             pixels,
             orig_width,
             orig_height,
             delay_ms.max(MIN_ANIMATION_FRAME_DELAY_MS),
-        )));
+        );
+        frame.file_index = index;
+        frames.push(Arc::new(frame));
     }
 
     Some(MediaData {

@@ -99,9 +99,11 @@ fn office_hover_probe() {
             layout.max_height,
             scale,
             dpi,
-            // A probe's own load, with no reader's size to carry (see `load_media`).
+            // A probe's own load, with no reader's size to carry (see `load_media`), and
+            // one that begins the file at its first frame.
             None,
             Arc::clone(&cancel),
+            0,
         ) {
             Some(media) => println!(
                 "loaded: {}x{}, {} frame(s), in {:?}",
@@ -263,9 +265,11 @@ fn libre_hover_probe() {
             layout.max_height,
             scale,
             dpi,
-            // A probe's own load, with no reader's size to carry (see `load_media`).
+            // A probe's own load, with no reader's size to carry (see `load_media`), and
+            // one that begins the file at its first frame.
             None,
             Arc::clone(&cancel),
+            0,
         ) {
             Some(media) => println!(
                 "loaded: {}x{}, {} frame(s), in {:?}",
@@ -432,9 +436,11 @@ fn peazip_hover_probe() {
             layout.max_height,
             scale,
             dpi,
-            // A probe's own load, with no reader's size to carry (see `load_media`).
+            // A probe's own load, with no reader's size to carry (see `load_media`), and
+            // one that begins the file at its first frame.
             None,
             Arc::clone(&cancel),
+            0,
         ) {
             Some(media) => println!(
                 "loaded: {}x{}, {} frame(s), in {:?}",
@@ -561,9 +567,11 @@ fn comic_hover_probe() {
             layout.max_height,
             scale,
             dpi,
-            // A probe's own load, with no reader's size to carry (see `load_media`).
+            // A probe's own load, with no reader's size to carry (see `load_media`), and
+            // one that begins the file at its first frame.
             None,
             Arc::clone(&cancel),
+            0,
         ) {
             Some(media) => println!(
                 "loaded: {}x{}, {} frame(s), in {:?}",
@@ -731,9 +739,11 @@ fn calibre_hover_probe() {
             layout.max_height,
             scale,
             dpi,
-            // A probe's own load, with no reader's size to carry (see `load_media`).
+            // A probe's own load, with no reader's size to carry (see `load_media`), and
+            // one that begins the file at its first frame.
             None,
             Arc::clone(&cancel),
+            0,
         ) {
             Some(media) => println!(
                 "loaded: {}x{}, {} frame(s), in {:?}",
@@ -793,6 +803,7 @@ fn sliding_window_probe() {
         1080,
         PreviewScale::Percent(100),
         Arc::clone(&cancel),
+        0,
     ) else {
         println!("load: None");
         return;

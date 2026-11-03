@@ -26,6 +26,13 @@ use super::*;
 /// The one source with no frame to draw is an SVG document, which is the engine's: what
 /// comes back for one is the kind alone, and the install path hands the hover over
 /// rather than putting anything of this app's up (see `MediaType::EngineSvg`).
+///
+/// `resume_at` is the place in the file the decode begins at, and it is nothing but the place a
+/// picture that plays is at: a decode began the file at its first frame always, so a box change
+/// that carried a playhead across was a resize that undid it (see `keep_animation_place`). Every
+/// other road — a hover, a take-up, a walk — is a file begun at its first frame and passes `0`, as
+/// does every kind that does not play, which has no run of frames to be part of.
+#[allow(clippy::too_many_arguments)] // Each one is a fact about the load, and the place it begins at is one of them.
 pub(super) fn load_media(
     path: &PathBuf,
     max_width: u32,
@@ -34,6 +41,7 @@ pub(super) fn load_media(
     dpi: u32,
     text_font_scale_percent: Option<u32>,
     cancel: Arc<AtomicBool>,
+    resume_at: usize,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
         return None;
@@ -77,7 +85,14 @@ pub(super) fn load_media(
             return webview_preview::draws(path).then(engine_svg_media);
         }
 
-        return load_picture(path, max_width, max_height, preview_scale, &cancel);
+        return load_picture(
+            path,
+            max_width,
+            max_height,
+            preview_scale,
+            &cancel,
+            resume_at,
+        );
     }
 
     load_media_of_kind(
@@ -89,6 +104,7 @@ pub(super) fn load_media(
         dpi,
         text_font_scale_percent,
         cancel,
+        resume_at,
     )
 }
 
@@ -111,6 +127,7 @@ pub(super) fn load_media_of_kind(
     dpi: u32,
     text_font_scale_percent: Option<u32>,
     cancel: Arc<AtomicBool>,
+    resume_at: usize,
 ) -> Option<MediaData> {
     match hover.routed_kind() {
         Some(PreviewType::Videos) => {
@@ -214,9 +231,14 @@ pub(super) fn load_media_of_kind(
         Some(PreviewType::Fonts) => (font_preview::probe(path).is_some()
             && webview_preview::draws(path))
         .then(engine_font_media),
-        Some(PreviewType::Images) => {
-            load_picture(path, max_width, max_height, preview_scale, &cancel)
-        }
+        Some(PreviewType::Images) => load_picture(
+            path,
+            max_width,
+            max_height,
+            preview_scale,
+            &cancel,
+            resume_at,
+        ),
 
         // A file whose content named no kind and whose name no list claims is the picture
         // path's, and the caller above has already answered that one — a name no list has ever
@@ -240,6 +262,7 @@ pub(super) fn load_picture(
     max_height: u32,
     preview_scale: PreviewScale,
     cancel: &Arc<AtomicBool>,
+    resume_at: usize,
 ) -> Option<MediaData> {
     let job = native_formats::picture_job(path);
 
@@ -251,6 +274,7 @@ pub(super) fn load_picture(
                 max_height,
                 preview_scale,
                 Arc::clone(cancel),
+                resume_at,
             ) {
                 return Some(media);
             }
@@ -262,6 +286,7 @@ pub(super) fn load_picture(
                 max_height,
                 preview_scale,
                 Arc::clone(cancel),
+                resume_at,
             ) {
                 return Some(media);
             }
@@ -273,6 +298,7 @@ pub(super) fn load_picture(
                 max_height,
                 preview_scale,
                 Arc::clone(cancel),
+                resume_at,
             ) {
                 return Some(media);
             }
@@ -284,6 +310,7 @@ pub(super) fn load_picture(
                 max_height,
                 preview_scale,
                 Arc::clone(cancel),
+                resume_at,
             ) {
                 return Some(media);
             }
@@ -295,6 +322,7 @@ pub(super) fn load_picture(
                 max_height,
                 preview_scale,
                 Arc::clone(cancel),
+                resume_at,
             ) {
                 return Some(media);
             }
@@ -429,6 +457,8 @@ pub(super) fn spawn_load_worker(
                     // configuration says (see `load_media`).
                     None,
                     Arc::clone(&request.cancel),
+                    // A hover's file is read from its first frame.
+                    0,
                 )
             }))
             .unwrap_or(None);

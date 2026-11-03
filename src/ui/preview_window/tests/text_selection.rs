@@ -1302,7 +1302,7 @@ fn a_page_laid_out_again_is_loaded_at_the_size_the_reader_put_it_to() {
     }
 
     // The box change a maximize asks for, on the road the pin's own load runs on.
-    let answer = pin_media_load(&path, 400, 300, 96, PreviewScale::FitToScreen);
+    let answer = pin_media_load(&path, 400, 300, 96, PreviewScale::FitToScreen, 0);
     let Some(relaid) = answer
         .recv_timeout(Duration::from_secs(5))
         .expect("the load answered")
@@ -1334,7 +1334,7 @@ fn a_page_laid_out_again_is_loaded_at_the_size_the_reader_put_it_to() {
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
         *slot = None;
     }
-    let answer = pin_media_load(&path, 400, 300, 96, PreviewScale::FitToScreen);
+    let answer = pin_media_load(&path, 400, 300, 96, PreviewScale::FitToScreen, 0);
     let Some(plain) = answer
         .recv_timeout(Duration::from_secs(5))
         .expect("the load answered")
