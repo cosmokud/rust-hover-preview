@@ -1666,16 +1666,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // block below `Performance`, which is about what those engines cost while they are up.
     let engine_menu = CreatePopupMenu().unwrap();
 
-    // How long Explorer has to be out of reach before an engine set to `Away` is let go. It is
-    // the first row here because it is what the `Away` item of the four TTL submenus below is
-    // answered against: a time those offer is what an engine given one is kept by, and this is
-    // what bounds the engines that are not (see `app::afk`).
-    append_afk_timer_menu(engine_menu);
-
     // Add the "Video Engine" and "Office Engine" submenus: which
     // engine each kind of document is asked of, where there is a
     // choice to make. They are the first of the rows that name an
-    // engine, above the three that say how long each engine this app
+    // engine, above the block that says how long each engine this app
     // starts is kept — the applications they name are the ones those
     // are about. Office is the only kind with two engines to choose
     // between; video has four, of which `Best` is the machine's own
@@ -1683,22 +1677,18 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     append_video_engine_menu(engine_menu);
     append_office_engine_menu(engine_menu);
 
-    // MPV TTL: how long the mpv a film is played by is kept between films. Nothing keeps one
-    // warm yet — this is the setting and its menu, and what reads it comes with the engine
-    // that is held — so what is listed is an engine's TTL and nothing more. It is greyed out
-    // on a machine with no `mpv.exe`, since there is nothing there to keep.
-    let mpv_idle = CONFIG
-        .lock()
-        .map(|c| c.video_engine_idle)
-        .unwrap_or(EngineIdle::Away);
+    // Choices above, keeping times below.
+    let _ = AppendMenuW(engine_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
-    append_engine_idle_menu(
-        engine_menu,
-        w!("MPV TTL"),
-        ID_TRAY_MPV_IDLE_BASE,
-        mpv_idle,
-        codecs::mpv_available(),
-    );
+    // How long Explorer has to be out of reach before an engine set to `Away` is let go. It is
+    // the second of the three blocks here, below the engine choices and above the TTLs, because
+    // it is what the `Away` item of the four TTL submenus below is answered against: a time
+    // those offer is what an engine given one is kept by, and this is what bounds the engines
+    // that are not (see `app::afk`).
+    append_afk_timer_menu(engine_menu);
+
+    // `Away Timer` bounds the engines kept by `Away`; the TTLs below bound the ones given a time.
+    let _ = AppendMenuW(engine_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
     // Microsoft Office TTL: how long the Office engine a family started is kept after
     // that family's last page. Nothing is asked of an engine while it is being kept
@@ -1776,6 +1766,23 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_WEBVIEW_IDLE_BASE,
         webview_idle,
         webview_preview::is_available(),
+    );
+
+    // MPV TTL: how long the mpv a film is played by is kept between films. Nothing keeps one
+    // warm yet — this is the setting and its menu, and what reads it comes with the engine
+    // that is held — so what is listed is an engine's TTL and nothing more. It is greyed out
+    // on a machine with no `mpv.exe`, since there is nothing there to keep.
+    let mpv_idle = CONFIG
+        .lock()
+        .map(|c| c.video_engine_idle)
+        .unwrap_or(EngineIdle::Away);
+
+    append_engine_idle_menu(
+        engine_menu,
+        w!("MPV TTL"),
+        ID_TRAY_MPV_IDLE_BASE,
+        mpv_idle,
+        codecs::mpv_available(),
     );
 
     let _ = AppendMenuW(

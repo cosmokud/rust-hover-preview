@@ -1194,13 +1194,13 @@ pub(super) fn append_office_engine_menu(parent: HMENU) {
 }
 
 /// The `Away Timer` submenu: how long Explorer may be out of reach before an
-/// engine set to `Until away` is let go. The setting it asks
+/// engine set to `Until Away` is let go. The setting it asks
 /// about is `afk_timer_seconds`, which keeps its name.
 ///
 /// It is one setting for every engine this app keeps, because the question it answers is
 /// about the user rather than about an engine: nothing this app holds is being looked at
 /// while no Explorer window is reachable, and which of those engines is worth holding until
-/// the user comes back is what the `Until away` item of each `… TTL` submenu below is for. It
+/// the user comes back is what the `Until Away` item of each `… TTL` submenu below is for. It
 /// is listed longest first, like every other menu of times here, and it marks the time it is
 /// on: a value a hand-edited `config.ini` asks for that is not one of these is shown with
 /// nothing marked rather than rounded to the nearest.
@@ -1265,7 +1265,7 @@ pub(super) fn append_afk_timer_menu(parent: HMENU) {
 /// engine is on marked and nothing marked for a time the menu does not offer — which is what a
 /// hand-edited `config.ini` can ask for.
 ///
-/// What each item means is its own answer: `Until away` is `Engine → Away Timer`, which keeps
+/// What each item means is its own answer: `Until Away` is `Engine → Away Timer`, which keeps
 /// the engine while Explorer is in front of the user and lets it go once it has not been for
 /// that long, while a time is how long the engine is kept after its last document whatever the
 /// user is doing. `Indefinitely` is never, and `Never (0 seconds)` is as soon as it has drawn
@@ -1606,7 +1606,7 @@ fn codec_row(index: usize) -> Option<Row> {
 /// minutes.
 pub(super) fn engine_idle_label(idle: EngineIdle) -> String {
     match idle {
-        EngineIdle::Away => "Until away (Default)",
+        EngineIdle::Away => "Until Away (Default)",
         EngineIdle::Indefinite => "Indefinitely",
         EngineIdle::Seconds(0) => "Never (0 seconds)",
         EngineIdle::Seconds(30) => "30 seconds",
@@ -1624,7 +1624,7 @@ pub(super) fn engine_idle_at(index: u16) -> Option<EngineIdle> {
 }
 
 /// What an away time is called in the `Away Timer` submenu: the time, with
-/// the one an engine set to `Until away` is bounded by marked as the default.
+/// the one an engine set to `Until Away` is bounded by marked as the default.
 ///
 /// Three of the seven are not a whole number of minutes, and each says itself which one it
 /// is — a half of a minute and a quarter of one are what the bottom of the list is for, so

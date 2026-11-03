@@ -185,9 +185,6 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - It is mpv's switch and nobody else's: FFmpeg's player is given no decode device, and the bubble's own frame reader decodes on a core.
     - A machine with no `mpv.exe` has no player for the switch to act on, so the row is greyed and unchecked there and a `config.ini` that says on is read as off.
 - **Engine**
-  - **Away Timer** — How long Explorer may be unreachable before an engine set to **Until away** is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`.
-    - Counts time when no Explorer window is reachable on any monitor.
-    - A second Explorer window keeps engines warm.
   - **Video Engine** — Which engine plays a video.
     - **Best** (`default`) — The machine's own answer: mpv for every video where it is installed, and otherwise the media engine for a film at or under 3.2 megapixels and FFmpeg's player for a larger one or one it could not measure.
     - **MPV** — mpv alone.
@@ -201,17 +198,20 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **Microsoft Office** (`default`) — Uses the format's own app and falls back to LibreOffice.
     - **LibreOffice** — Draws every Office document.
     - LibreOffice is greyed out if not installed.
-  - **MPV TTL** — How long the player is kept between films: **Until away** (`default`), `30 seconds`, `1 minute`, `5 minutes`, `10 minutes`, `30 minutes`, `1 hour`, `Indefinitely`, `Never (0 seconds)`.
-    - One mpv is kept warm between hovers and every film is loaded into it; this is what ends it — **Until away** while you are at the keyboard, a time that long after its last film, **Indefinitely** until the app exits, and **Never (0 seconds)** the moment a film ends. A pin that takes that player over keeps it for as long as the pin is up (`video_engine_idle`).
-    - Greyed out where `mpv` is not installed.
-  - **Microsoft Office TTL** — How long a family's Office app stays warm: **Until away** (`default`), `30 seconds`, `1 minute`, `5 minutes`, `10 minutes`, `30 minutes`, `1 hour`, `Indefinitely`, `Never (0 seconds)`.
-    - **Until away** is kept while Explorer is reachable, then let go by **Away Timer**; a time is that long after the family's last page.
+  - **Away Timer** — How long Explorer may be unreachable before an engine set to **Until Away** is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`.
+    - Counts time when no Explorer window is reachable on any monitor.
+    - A second Explorer window keeps engines warm.
+  - **Microsoft Office TTL** — How long a family's Office app stays warm: `Indefinitely`, `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute`, `30 seconds`, `Never (0 seconds)`, **Until Away** (`default`).
+    - **Until Away** is kept while Explorer is reachable, then let go by **Away Timer**; a time is that long after the family's last page.
   - **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats.
     - A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB.
     - `Never (0 seconds)` means one engine per document.
     - Greyed out if LibreOffice is not installed.
-  - **WebView2 TTL** — How long the SVG browser stays warm: the same nine answers, **Until away** at the top.
+  - **WebView2 TTL** — How long the SVG browser stays warm: the same nine answers, `Indefinitely` at the top and **Until Away** (`default`) at the bottom.
     - Greyed out if WebView2 is missing.
+  - **MPV TTL** — How long the player is kept between films: `Indefinitely`, `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute`, `30 seconds`, `Never (0 seconds)`, **Until Away** (`default`).
+    - One mpv is kept warm between hovers and every film is loaded into it; this is what ends it — **Until Away** while you are at the keyboard, a time that long after its last film, **Indefinitely** until the app exits, and **Never (0 seconds)** the moment a film ends. A pin that takes that player over keeps it for as long as the pin is up (`video_engine_idle`).
+    - Greyed out where `mpv` is not installed.
   - No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
 - **Codecs** — What this machine has: Videos, Audio, Images, Engines.
   - A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
