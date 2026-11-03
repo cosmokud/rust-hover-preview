@@ -265,6 +265,13 @@ impl PinUpdateWatch {
             clicked && pin_caption_button_covers((pointer.point.x, pointer.point.y));
         let on_the_pins_chrome = press_is_the_pins_chrome(clicked, on_a_caption_button);
 
+        // **A press inside the pin's own box is the pin's own, whatever is under the point.** A
+        // film's host answers `HTTRANSPARENT`, so the window read under the pin's picture is the
+        // listing the pin was fitted over, and a press read as that listing's is a press that picked
+        // nothing — which lowers the pin behind the listing it stands on (see `press_is_on_the_pin`,
+        // `pin_press_was_not_a_pick` and `lower_pinned_preview`).
+        let on_the_pin = press_is_on_the_pin(clicked, pointer.point, self.pin_box);
+
         // A press on one of this app's own panels spends the rest of the hand, so that the rest is not
         // read as a hover of the file the panel was covering (see `a_rest_is_a_hover`). Asked on both
         // ticks the press could be read on: while the panel is still up, and on the poll after the
@@ -334,6 +341,7 @@ impl PinUpdateWatch {
         // picked (see `window_is_menu_popup_chrome`).
         let pick = clicked
             && !on_the_pins_chrome
+            && !on_the_pin
             && self.press_is_a_pick(pointer.point, threshold, now)
             && press_is_a_listing(
                 over_explorer,
@@ -392,8 +400,11 @@ impl PinUpdateWatch {
         // shell has not named yet is left for the retry below rather than guessed at either way.
         //
         // A press on this app's own window is left out: it is the pin being used rather than the
-        // listing under it being picked, and what the pin stands over is not changed by it.
+        // listing under it being picked, and what the pin stands over is not changed by it. So is a
+        // press whose point is inside the pin's box, which is the same press read off the box where
+        // the hit test under it names the listing the pin stands on (see `press_is_on_the_pin`).
         if !on_the_pins_chrome
+            && !on_the_pin
             && press_is_answered(
                 clicked,
                 over_explorer,

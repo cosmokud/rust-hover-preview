@@ -77,6 +77,64 @@ fn a_click_on_a_pinned_window_is_a_click_on_the_listing_under_it() {
     );
 }
 
+/// A press whose point is inside the pin's own box is a press on the pin, whatever the hit test
+/// under it names.
+///
+/// The reported fault: a maximized pin's double-clicked content lowered it behind Explorer. A film's
+/// host answers `HTTRANSPARENT`, so `WindowFromPoint` over the pin names the Explorer frame the pin
+/// was fitted over; read as that frame's, the press holds the gap between the rows, picks no file,
+/// and the pin is put back behind the listing for it. The box is what refuses that answer, and it
+/// refuses it whether or not a file is under the point: a press on the pin is not the listing's.
+#[test]
+fn a_press_inside_the_pins_own_box_is_the_pins_own() {
+    let pin_box = (100, 100, 400, 300);
+    let inside = POINT { x: 200, y: 150 };
+    let over_explorer = true;
+    let over_our_own = false;
+
+    assert!(
+        press_is_a_listing(over_explorer, over_our_own, false, false, false),
+        "the window read under the point is the listing's, which is what the press is read by"
+    );
+    assert!(
+        press_is_answered(true, over_explorer, over_our_own, false),
+        "and the same reading answers it, which is the lowering road"
+    );
+
+    let on_the_pin = press_is_on_the_pin(true, inside, Some(pin_box));
+    assert!(on_the_pin, "and the point is inside the pin's own box");
+    assert!(
+        !(press_is_a_listing(over_explorer, over_our_own, false, false, false) && !on_the_pin),
+        "so no file under the pin is offered to it"
+    );
+    assert!(
+        !(press_is_answered(true, over_explorer, over_our_own, false) && !on_the_pin),
+        "and nothing answers it: a press that picked nothing is not put behind the listing"
+    );
+
+    // The box is the pin's own reading and not the point's: a press outside it is the listing's
+    // whatever else is true, and a watch with no box in hand — the first tick of one — has none.
+    assert!(
+        !press_is_on_the_pin(true, POINT { x: 40, y: 60 }, Some(pin_box)),
+        "a press outside the pin's box is not the pin's"
+    );
+    assert!(
+        !press_is_on_the_pin(true, inside, None),
+        "and a tick that has no box in hand names no press of the pin's"
+    );
+    assert!(
+        !press_is_on_the_pin(false, inside, Some(pin_box)),
+        "a tick that read no press takes nothing"
+    );
+
+    // The reading a window gives the right and bottom edges: outside the box, as every other box
+    // this hook holds is read (see `point_in_box`).
+    assert!(
+        !press_is_on_the_pin(true, POINT { x: 400, y: 150 }, Some(pin_box)),
+        "the box's own right edge is outside it"
+    );
+}
+
 /// A press on the pin's own caption buttons is the pin's, not the listing the pin stands over.
 ///
 /// The reported fault: the hand is on a file in Explorer, the pin stands over it, and the user
