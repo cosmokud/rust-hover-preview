@@ -1360,6 +1360,7 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_MARKDOWN_SOURCE,
             ID_TRAY_RENDER_HTML,
             ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
+            ID_TRAY_TEXT_DONT_PREVIEW_SECRETS,
             ID_TRAY_TYPE_IMAGES,
             ID_TRAY_TYPE_VIDEOS,
             ID_TRAY_TYPE_AUDIO,

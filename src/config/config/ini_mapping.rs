@@ -526,6 +526,11 @@ impl AppConfig {
             "text_show_extensionless",
             Some(self.text_show_extensionless.to_string()),
         );
+        ini.set(
+            CONFIG_SECTION,
+            "text_dont_preview_secrets",
+            Some(self.text_dont_preview_secrets.to_string()),
+        );
         // Every list the configuration holds is one row of the table to write (see
         // `formats::lists`).
         lists::write_all(self, &mut ini);
@@ -1210,6 +1215,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_show_extensionless") {
             self.text_show_extensionless = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_dont_preview_secrets") {
+            self.text_dont_preview_secrets = value;
         }
         // Every list the configuration holds is read out of the file by the table, one row
         // each (see `formats::lists`).

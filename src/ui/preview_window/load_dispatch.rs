@@ -184,6 +184,14 @@ pub(super) fn load_media_of_kind(
         // A page of HTML the engine draws is handed over the way a document is: the media carries
         // the kind and no frame, and the engine's window is the preview (see `engine_svg_media`).
         Some(PreviewType::Text) => {
+            if CONFIG
+                .lock()
+                .map(|c| c.text_dont_preview_secrets)
+                .unwrap_or(true)
+                && crate::formats::secret_files::is_secret_file(path)
+            {
+                return None;
+            }
             if hover.html_drawn_by_the_engine() {
                 Some(engine_svg_media())
             } else {

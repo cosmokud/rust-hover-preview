@@ -99,6 +99,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "markdown_mode",
             "render_html",
+            "text_dont_preview_secrets",
             "text_font_scale",
             "text_show_extensionless",
         ],
