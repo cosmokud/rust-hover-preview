@@ -626,27 +626,27 @@ pub(crate) const FONT_SIZE_CHOICES: [(u32, u16); 12] = [
 /// it lists them, nine apiece. They sit past every id the app used to hand out — the pin rows
 /// end at 1679, but for the `Image` anchor's pair at 1716/1717 — so a click on a TTL is never
 /// read as another submenu's row, and the four
-/// ranges are handed out in the order the submenus are listed: `MPV TTL`,
-/// `Microsoft Office TTL`, `LibreOffice TTL`, `WebView2 TTL`.
-pub(super) const ID_TRAY_MPV_IDLE_BASE: u16 = 1680;
-pub(super) const ID_TRAY_ENGINE_IDLE_BASE: u16 = 1689;
-pub(super) const ID_TRAY_LIBREOFFICE_IDLE_BASE: u16 = 1698;
-pub(super) const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1707;
-/// The idle times every `… TTL` submenu offers, in the order it lists them: the `Away` one an
-/// engine that is not given a time of its own is kept by at the top, then a time each below it,
-/// then the engine that is never let go and the one let go as soon as it has drawn a page at the
-/// bottom. A value a hand-edited `config.ini` asks for that is not one of these is shown with
-/// nothing marked rather than rounded to the nearest.
+/// ranges are handed out in the order the submenus are listed: `Microsoft Office TTL`,
+/// `LibreOffice TTL`, `WebView2 TTL`, `MPV TTL`.
+pub(super) const ID_TRAY_ENGINE_IDLE_BASE: u16 = 1680;
+pub(super) const ID_TRAY_LIBREOFFICE_IDLE_BASE: u16 = 1689;
+pub(super) const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1698;
+pub(super) const ID_TRAY_MPV_IDLE_BASE: u16 = 1707;
+/// The idle times every `… TTL` submenu offers, in the order it lists them: longest first, the
+/// engine that is never let go at the top, then a time each below it, then the two shortest —
+/// `Never (0 seconds)` second to bottom, and `Away` at the bottom, which is the default an engine
+/// that is not given a time of its own is kept by. A value a hand-edited `config.ini` asks for
+/// that is not one of these is shown with nothing marked rather than rounded to the nearest.
 pub(super) const ENGINE_IDLE_CHOICES: [EngineIdle; 9] = [
-    EngineIdle::Away,
-    EngineIdle::Seconds(30),
-    EngineIdle::Seconds(60),
-    EngineIdle::Seconds(300),
-    EngineIdle::Seconds(600),
-    EngineIdle::Seconds(1800),
-    EngineIdle::Seconds(3600),
     EngineIdle::Indefinite,
+    EngineIdle::Seconds(3600),
+    EngineIdle::Seconds(1800),
+    EngineIdle::Seconds(600),
+    EngineIdle::Seconds(300),
+    EngineIdle::Seconds(60),
+    EngineIdle::Seconds(30),
     EngineIdle::Seconds(0),
+    EngineIdle::Away,
 ];
 /// The `Engine → Away Timer` submenu: one command per away time it offers, in the order it
 /// lists them. It sits past every other range the app hands out — the `Explorer Poll` range is

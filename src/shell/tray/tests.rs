@@ -2,32 +2,54 @@ use super::*;
 use crate::config::config::DEFAULT_IMAGE_CACHE_MB;
 use std::path::PathBuf;
 
-/// Every `… TTL` submenu offers the same nine answers in the same order: the `Away` one an
-/// engine nobody has given a time is kept by at the top, a time each below it, and the two
-/// ends — never let go, and let go at once — at the bottom. `Until away` is the item the app
-/// starts at, which is why it is the one labelled as the default.
+/// Every `… TTL` submenu offers the same nine answers in the same order: longest first, the
+/// engine nobody has given a time is kept by at the bottom, and a time each above it — the
+/// never-let-go one at the top, then `Never (0 seconds)` second to bottom. `Until Away` is the
+/// item the app starts at, which is why it is the one labelled as the default.
 #[test]
-fn engine_idle_is_offered_away_first_and_never_last() {
+fn engine_idle_is_offered_longest_first_and_away_last() {
     assert_eq!(
         ENGINE_IDLE_CHOICES.map(engine_idle_label),
         [
-            "Until away (Default)".to_string(),
-            "30 seconds".to_string(),
-            "1 minute".to_string(),
-            "5 minutes".to_string(),
-            "10 minutes".to_string(),
-            "30 minutes".to_string(),
-            "1 hour".to_string(),
             "Indefinitely".to_string(),
+            "1 hour".to_string(),
+            "30 minutes".to_string(),
+            "10 minutes".to_string(),
+            "5 minutes".to_string(),
+            "1 minute".to_string(),
+            "30 seconds".to_string(),
             "Never (0 seconds)".to_string(),
+            "Until Away (Default)".to_string(),
         ]
     );
 
     assert_eq!(
-        ENGINE_IDLE_CHOICES[0],
+        ENGINE_IDLE_CHOICES[ENGINE_IDLE_CHOICES.len() - 1],
         crate::config::config::AppConfig::default().office_engine_idle,
-        "the item the app starts at is the first one"
+        "the item the app starts at is the last one"
     );
+}
+
+/// The list reads down the menu: no time is longer than the one above it, and the default sits
+/// below `Never (0 seconds)` last.
+#[test]
+fn engine_idle_times_are_listed_longest_first() {
+    fn rank(idle: EngineIdle) -> u64 {
+        match idle {
+            EngineIdle::Indefinite => u64::MAX,
+            EngineIdle::Away => 0,
+            EngineIdle::Seconds(seconds) => seconds,
+        }
+    }
+
+    assert!(
+        ENGINE_IDLE_CHOICES[..8]
+            .windows(2)
+            .all(|pair| rank(pair[0]) > rank(pair[1])),
+        "every time is shorter than the one above it: {ENGINE_IDLE_CHOICES:?}"
+    );
+    assert_eq!(ENGINE_IDLE_CHOICES[7], EngineIdle::Seconds(0));
+    assert_eq!(ENGINE_IDLE_CHOICES[8], EngineIdle::Away);
 }
 
 /// The submenu a person opens is that list: nine radios, in that order, with the one the
@@ -1570,9 +1592,9 @@ fn every_offered_idle_time_is_one_the_setting_keeps() {
         "an id past the last item is not one the menu offered"
     );
     assert_eq!(
-        engine_idle_at(0),
+        engine_idle_at(ENGINE_IDLE_CHOICES.len() as u16 - 1),
         Some(EngineIdle::Away),
-        "the top item is the one an engine nobody has given a time is kept by"
+        "the bottom item is the one an engine nobody has given a time is kept by"
     );
 }
 

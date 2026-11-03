@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **The `Engine` submenu reads in the order its rows are used** — `Video Engine`, `Office Engine`, a separator, `Away Timer`, a separator, then the four TTLs: `Microsoft Office TTL`, `LibreOffice TTL`, `WebView2 TTL`, `MPV TTL`.
+
+### Fixed
+
+- **Every `… TTL` submenu lists its idle times longest first** — `Indefinitely` at the top, then `1 hour` down to `30 seconds`, with `Never (0 seconds)` second to bottom and the default now reading `Until Away (Default)` at the bottom.
+
 ## [0.4.9] - 2026-11-04
 
 ### Changed
