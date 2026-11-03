@@ -93,101 +93,41 @@ fn real_pin_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
 pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) {
     if unsafe { set_an_ex_style(hwnd, WS_EX_APPWINDOW, app_window) } {
         unsafe { ask_the_window_to_re_read_its_style(hwnd) };
+
+        // **A window the user is in keeps the show it was given, because the show that re-reads the
+        // bit is one the user watches.** The Shell reads whether a window is listed from the show
+        // that put it on the screen, so the only way to have it read a bit written now is to put the
+        // window down and up again — and a window put down is a window the desktop behind it shows
+        // through. Under the hand that pressed `Always On Top`, that is the sound card blinking out
+        // on every press: the pin is the window the user is in (a press on it took the caret, see
+        // `pin_take_focus`), so the bit is written here and read at the pin's next show rather than
+        // paid for now. A button that is one show late is the smaller price than a hole where the
+        // card was.
+        if unsafe { GetForegroundWindow() } == hwnd && the_pins_own_window(hwnd) {
+            note_pin_trace!(
+                "appwindow {} of {}: the user is in it, read at its next show",
+                app_window as u8,
+                super::pin_trace::window_name(hwnd),
+            );
+            return;
+        }
+
+        // A window that is down is left alone as well: the show it is owed is the one that brings it,
+        // and that show reads the bit (see `pin_film_host::create` and `promote_the_hover_film_host`,
+        // which write the bit before any show rather than paying for one here).
         if unsafe { IsWindowVisible(hwnd) }.as_bool() {
             #[cfg(test)]
             if let Ok(mut shown) = APPWINDOW_SHOWS.lock() {
                 shown.push(hwnd.0 as isize);
             }
-            // **The foreground the put-down costs is given straight back where the window put down
-            // is the one the user was in.** A window hidden by the process that owns it has its
-            // activation handed to the window next in the z-order — and the pin's own answer to the
-            // `WM_ACTIVATE` that follows hands that window the foreground for good (see
-            // `pin_release_focus`). On the click that turns `Always On Top` off, that window is the
-            // listing, raised over a pin that has just been taken out of the topmost band: the card
-            // vanished behind Explorer on the button the user had just pressed. The put-down is this
-            // app's own and only the Shell's button needs it, so the caret it costs is asked for
-            // again from the same place every press asks (see `pin_take_focus`).
-            let front_before = unsafe { GetForegroundWindow() };
-            let owes_the_foreground_back =
-                a_put_down_owes_the_foreground_back(front_before, hwnd, the_pins_own_window(hwnd));
-            note_pin_trace!(
-                "appwindow {} of {}: caret in {} owed back {}",
-                app_window as u8,
-                super::pin_trace::window_name(hwnd),
-                super::pin_trace::window_name(front_before),
-                owes_the_foreground_back as u8,
-            );
-
-            // **The show the Shell reads is played off every display, because a show the user sees is
-            // the pin gone for as long as it takes.** The put-down is real — a hidden window is a
-            // window the desktop behind it shows through — and the pin is on the screen under the
-            // hand that pressed the button, so hiding it where it stands is the card blinking out on
-            // every press of `Always On Top`. Moved off the screen first, the same put-down and show
-            // read to the Shell and to nothing else, and the box the hand left is where the window is
-            // put back (see `pin_bubble::window_origin` and `ask_of_the_shown_desktop`).
-            let box_before = super::pin_bubble::window_origin(hwnd);
-            if let Some((left, top, width, height)) = box_before {
-                let _ = unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        None,
-                        OFF_EVERY_DISPLAY.0,
-                        OFF_EVERY_DISPLAY.1,
-                        0,
-                        0,
-                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                    )
-                };
-                let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-                let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
-                let _ = unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        None,
-                        left,
-                        top,
-                        width,
-                        height,
-                        SWP_NOZORDER | SWP_NOACTIVATE,
-                    )
-                };
-            } else {
-                let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-                let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
-            }
-
-            if owes_the_foreground_back {
-                unsafe {
-                    super::pin_model::pin_take_focus(hwnd, &super::pin_lifecycle::Win32PinWindow);
-                }
-            }
-            note_pin_trace!(
-                "appwindow {} of {}: caret now {}",
-                app_window as u8,
-                super::pin_trace::window_name(hwnd),
-                super::pin_trace::window_name(unsafe { GetForegroundWindow() }),
-            );
+            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+            let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
         }
     }
 }
 
-/// Where a window is put while the Shell is asked to re-read it: off every display, the corner the
-/// stand-ins are parked in, so the show that is read is a show nothing draws (see
+/// Whether `hwnd` is the window a pin of this app's stands in right now (see
 /// `set_the_pin_window_appwindow`).
-const OFF_EVERY_DISPLAY: (i32, i32) = (-32000, -32000);
-
-/// Whether the show a taskbar bit costs owes the window the foreground back: only the pin's own
-/// window, and only where it was the window the user was in when it was put down.
-fn a_put_down_owes_the_foreground_back(
-    the_front_before: HWND,
-    hwnd: HWND,
-    the_pins_own_window: bool,
-) -> bool {
-    the_pins_own_window && the_front_before == hwnd
-}
-
-/// Whether `hwnd` is the window a pin of this app's stands in right now, which is the one window a
-/// put-down owes the foreground back to (see `a_put_down_owes_the_foreground_back`).
 fn the_pins_own_window(hwnd: HWND) -> bool {
     super::pinned() && super::pinned_window() == hwnd
 }
@@ -443,37 +383,9 @@ mod tests {
         REAL_PIN_HWND.store(0, Ordering::SeqCst);
     }
 
-    /// The foreground a taskbar bit's put-down costs is owed back only to the pin's own window, and
-    /// only where that window was the one the user was in.
-    ///
-    /// This is the answer the `Always On Top` button's own click turns on: Explorer getting the
-    /// caret the put-down dropped is Explorer raised over a pin that has just left the topmost band,
-    /// which is the card the user had just pressed vanishing behind the listing (see
-    /// `a_put_down_owes_the_foreground_back`).
-    #[test]
-    fn a_put_down_owes_the_foreground_back_only_to_the_window_that_had_it() {
-        let pin = HWND(0x1234 as *mut _);
-        let listing = HWND(0x5678 as *mut _);
-
-        assert!(
-            a_put_down_owes_the_foreground_back(pin, pin, true),
-            "the pin the user had just clicked is the window the put-down takes the caret from"
-        );
-        assert!(
-            !a_put_down_owes_the_foreground_back(listing, pin, true),
-            "a pin the user was not in has no caret to lose, and asking for it would be a raise"
-        );
-        assert!(
-            !a_put_down_owes_the_foreground_back(pin, pin, false),
-            "a window that is no pin's own keeps its hand-off: the caret is the Shell's answer"
-        );
-    }
-
-    /// **The show a taskbar bit costs is played where nothing draws.** The pin is put down and up
-    /// again to make the Shell re-read its button, and a put-down at the pin's own place is the card
-    /// blinking out over the desktop on every press of `Always On Top` — so the same show is played
-    /// off every display, and the box the hand left is where the window is put back (see
-    /// `set_the_pin_window_appwindow` and `OFF_EVERY_DISPLAY`).
+    /// **The show a taskbar bit costs leaves the window where it stands.** A window put down and up
+    /// again so the Shell reads its button is a window that keeps the box it was placed in — what
+    /// moves is whether the Shell lists it, not where it is (see `set_the_pin_window_appwindow`).
     #[test]
     fn the_put_down_that_re_reads_a_button_leaves_the_window_where_it_stands() {
         let _room = the_room_to_itself();
