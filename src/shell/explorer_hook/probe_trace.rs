@@ -447,6 +447,10 @@ pub(super) fn is_media_file(path: &Path) -> bool {
 /// content says it is, decided the way it is decided everywhere else (see
 /// `crate::formats::head::Facts`).
 pub(super) fn is_media_file_with_facts(path: &Path, facts: &crate::formats::head::Facts) -> bool {
+    if !facts.is_file() {
+        return false;
+    }
+
     let Ok(config) = CONFIG.lock() else {
         return false;
     };

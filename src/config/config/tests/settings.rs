@@ -529,6 +529,14 @@ fn the_defaults_the_tray_marks_are_the_ones_the_app_starts_at() {
     assert_eq!(config.tick_ms, 15, "the loop looks once a system tick");
     assert_eq!(config.video_volume, DEFAULT_VIDEO_VOLUME);
     assert_eq!(config.video_volume, 0, "a hover never makes a sound");
+    assert_eq!(
+        config.text_show_extensionless,
+        DEFAULT_TEXT_SHOW_EXTENSIONLESS
+    );
+    assert!(
+        !config.text_show_extensionless,
+        "extensionless files are not previewed by default"
+    );
 }
 
 /// The settings reset puts every setting back where this build starts it, and the lists

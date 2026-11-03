@@ -521,6 +521,11 @@ impl AppConfig {
                     .to_string(),
             ),
         );
+        ini.set(
+            CONFIG_SECTION,
+            "text_show_extensionless",
+            Some(self.text_show_extensionless.to_string()),
+        );
         // Every list the configuration holds is one row of the table to write (see
         // `formats::lists`).
         lists::write_all(self, &mut ini);
@@ -1202,6 +1207,9 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "text_scroll_far_edge_grace_pixels") {
             self.text_scroll_far_edge_grace_pixels =
                 sanitize_text_scroll_far_edge_grace_pixels(value as f32);
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "text_show_extensionless") {
+            self.text_show_extensionless = value;
         }
         // Every list the configuration holds is read out of the file by the table, one row
         // each (see `formats::lists`).
