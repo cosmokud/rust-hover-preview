@@ -968,14 +968,20 @@ decode a resize still owes, and for a picture that *plays* it is asked for from 
 than from the file's first frame: a decode begins a file at its opening frame, so a box the frames in hand do not cover
 would otherwise be the animation started again. The place is read once, at the box the change is fixing, and the decode
 begins there — the frames before it composited for the canvas they are part of and not scaled for a box they are never
-drawn in (`pin_media_load`, `resume_at`). Each frame carries the index it has from the file's first frame
-(`ImageFrame::file_index`), so the install lands the answer on the frame carrying the place and carries the wait that
-frame had already served with it (`keep_animation_place`): one number, whatever the decode began at, whatever the player
-has given back behind it, and wherever a file that has looped stands — which is why a window whose frames were released
-and a file decoded again from its first frame can no longer lose it, and why the landing is no clamp to the frames in
-hand. A kind that does not play has no run of frames to be part of: every one of its frames is the whole of what it
-shows, and it begins where it always did. This is the answer a wheel's notch already gives by decoding nothing at all
-(see "Wheel zoom"). And a box the frames in hand already cover
+drawn in (`pin_media_load`, `resume_at`). A file answered from a place is the file from that place to its end and then
+from its first frame to that place: the pass that began in the middle of the file leaves its head undecoded, so it is
+always followed by the pass that begins at the first frame (`load_animated_gif`, and the APNG and WebP loaders beside
+it), and the frames a resumed decode ends up holding are the file in play order — its tail, then its head. Each frame
+carries the index it has from the file's first frame (`ImageFrame::file_index`), so the install lands the answer on the
+frame carrying the place and carries the wait that frame had already served with it (`keep_animation_place`): one
+number, whatever the decode began at, whatever the player has given back behind it, and wherever a file that has looped
+stands — which is why a window whose frames were released and a file decoded again from its first frame can no longer
+lose it, and why the landing is no clamp to the frames in hand. That order is also the order the player loops in: a
+media that has played to the end of what it holds wraps onto the frame carrying the file's first frame rather than onto
+the first of the list (`frame_of_file_start`), which is what a file decoded at a place could not do while index zero was
+the list's own first frame. A kind that does not play has no run of frames to be part of: every one of its frames is the
+whole of what it shows, and it begins where it always did. This is the answer a wheel's notch already gives by decoding
+nothing at all (see "Wheel zoom"). And a box the frames in hand already cover
 is no decode either: a playing frame used to be re-read at every box the hand left it at, which replaced the pixels every
 later enlargement is stretched from with a thumbnail of them — so a pin dragged small and pulled back out played on from
 the small size it had been decoded at (`box_is_covered`, which now counts the kinds that play among the kinds a box gives
