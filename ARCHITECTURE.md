@@ -603,7 +603,12 @@ asking to end it, a config change turning the mode off, the media disappearing, 
 `end_pin`, so there is no path where the window survives its own state. `Hung` is the state after which the watchdog is
 allowed to kill, and only via a message on the loop, because killing from the watchdog thread would leave the loop
 painting a dead window. Focus is authority-checked with `GetFocus` rather than remembered, since Windows can move focus
-behind this process's back.
+behind this process's back. A pinned window survives display and DPI changes (`WM_DISPLAYCHANGE`,
+`WM_DPICHANGED`): while hover previews are replayed from the pointer and reset on display changes,
+a pin keeps its window, media, and playback (`!pinned()` in `window_proc`). The next tick re-boxes it for the
+display it landed on (`replace_pinned_window`) — clamped to the destination work area, re-measuring the
+caption and transport bar at the destination DPI, and re-maximizing a maximized pin in the new room while
+deferring during manual drags.
 
 What counts as "the media is still there" is answered per kind (`pin_media_is_alive`): a `BubblePause` the collapse
 parked — the media engine paused where it stood, or FFmpeg's player ended at a recorded second — is the pin's media
@@ -774,7 +779,9 @@ rather than retried.
 - Chrome: same window grows (caption up, transport down; overlay kinds draw over). `pin_chrome` GDI strokes whose marks
   are drawn with coverage rather than in whole columns; the window group is **Always On
   Top**, **Minimize**, **Maximize** (where the kind offers one) and **Close**, with the pin's own four
-  (prev/next/open/open-with-list) left-packed (`button_boxes`); tooltips (`PinTooltip/PIN_TOOLTIP_DELAY`,
+  (prev/next/open/open-with-list) left-packed (`button_boxes`); as a window narrows, buttons collapse one by one
+  from the left (`Previous` first, `Close` last) so the strip remains as a bare hairline bar (`width > 0`)
+  instead of disappearing, and title text only reappears when all buttons fit (`buttons_fit`); tooltips (`PinTooltip/PIN_TOOLTIP_DELAY`,
   `AssocQueryStringW` once); `Open With`=`ShellExecuteExW(open)+plain_path` on the pin's own monitor (pin
   `HWND`+`SEE_MASK_HMONITOR`) then `request_pin_end` (=`WM_CLOSE` road);
   `Open With...`=`rundll32 shell32.dll,OpenAs_RunDLL` raw tail, carried onto the pin's box on its own thread
@@ -798,7 +805,10 @@ stand *under* the picture while its buttons still took the press. Over such a pa
 window owned by the pin and mirroring its band (`the_caption_popup_at`), `WS_EX_LAYERED | WS_EX_TRANSPARENT` — a
 disabled top-level popup is not skipped by `WindowFromPoint`, `WS_EX_TRANSPARENT` is (measured) — placed again on the
 pin's own `WM_MOVE`/`WM_WINDOWPOSCHANGED` because a window that moves repaints nothing (`follow_the_pin`), and hidden
-for a pin that is minimized, invisible or no longer drawing a page. Which caption a pin gets is
+for a pin that is minimized, invisible or no longer drawing a page. Because an owned popup is a top-level
+desktop window rather than a Win32 child, the Shell does not hide it when its owner hides; `hide_pinned_windows`
+explicitly hides it (`hide_the_caption_popup`), and `follow_the_pin` checks the pin's visibility before querying
+pin state so closing from the caption button never leaves an unclickable titlebar orphan on the desktop. Which caption a pin gets is
 `pin_overlay_chrome(kind, page_runs)`: a page that runs keeps its bands, and a page the pin draws has the caption and
 bar floating over it. `Open With` deliberately ends the
 pin: it hands the file to another application, and keeping a preview up over a file the user has just opened in Word is
