@@ -32,6 +32,24 @@ pub(super) fn pin_is_dragging() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the hand is carrying the *picture* rather than the window — a pan, the one gesture of the
+/// three whose frames are movement inside the window rather than a box under it (see
+/// `begin_pin_pan`).
+///
+/// What asks is the preview loop, which keeps the frame cadence for a pan and lets the compositor
+/// pace its wait as it does a wheel's travel: a picture being carried is drawn again on every frame
+/// the display shows and on none it does not (see `apply_pin_drag`).
+pub(super) fn pin_is_panning() -> bool {
+    pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                pin.dragging
+                    .is_some_and(|drag| matches!(drag.action, PinDragAction::Pan { .. }))
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// Set the cursor for where the pointer is on a pinned window, answering whether this app set it.
 ///
 /// A resize is the one gesture a window gives away with the shape of the pointer rather than with
