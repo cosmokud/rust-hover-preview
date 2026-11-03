@@ -117,8 +117,45 @@ pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) 
                 super::pin_trace::window_name(front_before),
                 owes_the_foreground_back as u8,
             );
-            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-            let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+
+            // **The show the Shell reads is played off every display, because a show the user sees is
+            // the pin gone for as long as it takes.** The put-down is real — a hidden window is a
+            // window the desktop behind it shows through — and the pin is on the screen under the
+            // hand that pressed the button, so hiding it where it stands is the card blinking out on
+            // every press of `Always On Top`. Moved off the screen first, the same put-down and show
+            // read to the Shell and to nothing else, and the box the hand left is where the window is
+            // put back (see `pin_bubble::window_origin` and `ask_of_the_shown_desktop`).
+            let box_before = super::pin_bubble::window_origin(hwnd);
+            if let Some((left, top, width, height)) = box_before {
+                let _ = unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        None,
+                        OFF_EVERY_DISPLAY.0,
+                        OFF_EVERY_DISPLAY.1,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    )
+                };
+                let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+                let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+                let _ = unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        None,
+                        left,
+                        top,
+                        width,
+                        height,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    )
+                };
+            } else {
+                let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+                let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+            }
+
             if owes_the_foreground_back {
                 unsafe {
                     super::pin_model::pin_take_focus(hwnd, &super::pin_lifecycle::Win32PinWindow);
@@ -134,12 +171,13 @@ pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) 
     }
 }
 
+/// Where a window is put while the Shell is asked to re-read it: off every display, the corner the
+/// stand-ins are parked in, so the show that is read is a show nothing draws (see
+/// `set_the_pin_window_appwindow`).
+const OFF_EVERY_DISPLAY: (i32, i32) = (-32000, -32000);
+
 /// Whether the show a taskbar bit costs owes the window the foreground back: only the pin's own
 /// window, and only where it was the window the user was in when it was put down.
-///
-/// A window that is not the one in front has no foreground to lose — the put-down is the show the
-/// Shell reads and nothing else — and neither has a host the pin's button is not the host's to wear
-/// (see `set_the_pin_window_appwindow`).
 fn a_put_down_owes_the_foreground_back(
     the_front_before: HWND,
     hwnd: HWND,
@@ -308,9 +346,10 @@ pub(super) unsafe fn hide_real_pin_window() {
 mod tests {
     use super::super::tests::the_room_to_itself;
     use super::*;
+    use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        DestroyWindow, GetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TOPMOST,
+        DestroyWindow, GetWindowLongPtrW, GetWindowRect, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     /// What makes a window a window as far as the Shell is concerned, and what makes it not one: the
@@ -428,6 +467,49 @@ mod tests {
             !a_put_down_owes_the_foreground_back(pin, pin, false),
             "a window that is no pin's own keeps its hand-off: the caret is the Shell's answer"
         );
+    }
+
+    /// **The show a taskbar bit costs is played where nothing draws.** The pin is put down and up
+    /// again to make the Shell re-read its button, and a put-down at the pin's own place is the card
+    /// blinking out over the desktop on every press of `Always On Top` — so the same show is played
+    /// off every display, and the box the hand left is where the window is put back (see
+    /// `set_the_pin_window_appwindow` and `OFF_EVERY_DISPLAY`).
+    #[test]
+    fn the_put_down_that_re_reads_a_button_leaves_the_window_where_it_stands() {
+        let _room = the_room_to_itself();
+
+        let box_ = (-20000, -20000, -19680, -19760);
+        let hwnd = unsafe { real_pin_window_at(box_) }.expect("the pin's own window");
+        let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+
+        let mut before = RECT::default();
+        assert!(
+            unsafe { GetWindowRect(hwnd, &mut before) }.is_ok(),
+            "the stand's window is a window, so its box is readable"
+        );
+
+        // The bit the window was made with is taken off it: the change is a put-down and a show.
+        unsafe { set_the_pin_window_appwindow(hwnd, false) };
+
+        assert!(
+            unsafe { IsWindowVisible(hwnd) }.as_bool(),
+            "the window the Shell was shown is a window on the screen"
+        );
+        let mut after = RECT::default();
+        assert!(
+            unsafe { GetWindowRect(hwnd, &mut after) }.is_ok(),
+            "and the box is readable after the show as before it"
+        );
+        assert_eq!(
+            (after.left, after.top, after.right, after.bottom),
+            (before.left, before.top, before.right, before.bottom),
+            "the box the hand left is where the show is played out: nothing of the pin is moved"
+        );
+
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        REAL_PIN_HWND.store(0, Ordering::SeqCst);
     }
 
     /// The styles above are the styles of the window that is actually made: a plain `STATIC` window
