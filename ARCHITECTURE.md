@@ -939,7 +939,14 @@ where the hand ended — because an **animated** drawing's compositor is already
 resume of the browser, its backdrop, its bounds, and a show) drove the engine's thread into the ground until the picture
 stopped following the window and then stopped answering at all. A pinned FFmpeg video plays through a drag and a resize
 untouched: the film is a thumbnail of a source window that is placed once and never moved by the gesture, so there is no
-held frame, no cover and no reload (see "The film road").
+held frame, no cover and no reload (see "The film road"). A **pan** — the picture carried *inside* a window it is drawn
+larger than — is the one gesture whose paint is the whole band composed through the sampler (2.3 ms of a 1920x1080 band
+off a 3840x2160 frame, before the surface is cleared and `UpdateLayeredWindow` is handed it), so its frames are the
+display's rather than the pointer's: the move writes where the picture has got to and the loop draws it on its own tick,
+its wait paced by the compositor while a pan is up (`a_pan_owes_a_repaint`, `pin_is_panning`, `wait_for_the_compositor`).
+A paint per position reported is four bands per frame of a 144 Hz display that the display never puts up, on the same
+thread the tick that advances a playing picture is on — which is seen as an animation that stops while the hand moves and
+jumps when it stops.
 
 - Wheel zoom (`pin_zoom.rs`): a notch over a pinned picture is counted by the same low-level wheel hook that swallows
   one over a text preview — a third owner beside the two the hook already had (`wheel_input::take_pin_zoom_delta`,
