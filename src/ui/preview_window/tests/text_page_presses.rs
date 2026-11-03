@@ -51,6 +51,7 @@ impl PageOfAFile {
             lines: frame.lines,
             selection: None,
             selecting: false,
+            focused: false,
             caret: Some((0, 0)),
             caret_goal: None,
             caret_blink: text_find_field::CaretBlink::default(),
@@ -75,6 +76,72 @@ impl PageOfAFile {
         text_caret::caret_now().map(|place| place.0)
     }
 
+    /// The moves the page has been told since the last tick.
+    fn queued(&self) -> usize {
+        CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| {
+                media
+                    .as_ref()
+                    .and_then(|media| media.text_state.as_ref())
+                    .map(|state| state.pending_caret.len())
+            })
+            .unwrap_or(0)
+    }
+
+    /// The selection the page holds now, if any.
+    fn selection(&self) -> Option<text_preview::Selection> {
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .and_then(|state| state.selection)
+        })
+    }
+
+    /// A press inside the page's body, which is the only way the caret's keys become the page's: the
+    /// caret lands where the press did and the page takes the reader's focus (see
+    /// `begin_text_selection` and `text_caret::page_has_focus`).
+    fn press_page(&self, x: i32, y: i32) {
+        assert!(
+            begin_text_selection(x, y),
+            "a press on the page's own text is the page's to answer"
+        );
+    }
+
+    /// The point at the left edge of a place's own character, in the frame's coordinates: a press
+    /// there lands on that place and no other (see `text_preview::caret_rect` and `position_in`).
+    fn point_at(&self, place: (usize, usize)) -> (i32, i32) {
+        let rect = CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| {
+                media.as_ref().and_then(|media| {
+                    media
+                        .text_state
+                        .as_ref()
+                        .and_then(|state| text_preview::caret_rect(&state.lines, place))
+                })
+            })
+            .expect("the page draws a character at that place");
+
+        (rect.left + 1, (rect.top + rect.bottom) / 2)
+    }
+
+    /// The step the loop was asked for, taken off the planner's slot so the next ask is its own.
+    fn walked_step(&self) -> Option<i32> {
+        PIN_JOBS
+            .0
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.take())
+            .and_then(|job| match job {
+                PinJob::Walk { step, .. } => Some(step),
+                _ => None,
+            })
+    }
+
     /// The line the frame starts at.
     fn first_line(&self) -> Option<usize> {
         CURRENT_MEDIA.lock().ok().and_then(|media| {
@@ -90,13 +157,9 @@ impl PageOfAFile {
         ask_pin(PinCommand::CaretDown);
     }
 
-    /// Answer every press left since the last answer, the way the tick does.
-    fn press_down(&self) {
-        self.queue_down();
-        self.answer_left_presses();
-    }
-
-    fn answer_left_presses(&self) {
+    /// Answer every press left since the last answer, the way the tick does, and answer what the
+    /// loop was asked for: the wait a walk leaves behind, or nothing where the pin answered alone.
+    fn answer_left_presses(&self) -> Option<PinWait> {
         let mut request = None;
         let mut wait = None;
         let mut started = None;
@@ -114,6 +177,13 @@ impl PageOfAFile {
                 None,
             );
         }
+        wait
+    }
+
+    /// A press of `down` left for the loop, answered at once the way a tick answers it.
+    fn press_down(&self) {
+        self.queue_down();
+        self.answer_left_presses();
     }
 
     /// Run the caret's moves the way the tick does.
@@ -163,6 +233,10 @@ fn a_warm_caret_move_reads_nothing_from_the_disk() {
     let _pin = APinForThePage::stand();
     TEXT_PREVIEW_HOLDING.store(true, Ordering::Release);
 
+    // The press a user makes in the page before the caret's keys are the page's, and nothing of the
+    // disk is read for it (see `text_caret::page_has_focus`).
+    page.press_page(5, 5);
+
     // The render that put the page up is the one that pays the stat; everything after it is the
     // reader's.
     let stats = text_preview::document_stat_count();
@@ -200,6 +274,8 @@ fn a_backlog_of_presses_is_one_move_of_the_caret_and_one_frame() {
     let _pin = APinForThePage::stand();
     TEXT_PREVIEW_HOLDING.store(true, Ordering::Release);
 
+    page.press_page(5, 5);
+
     let frames = text_preview::frame_render_count();
     for _ in 0..5 {
         page.queue_down();
@@ -235,6 +311,8 @@ fn a_caret_press_costs_less_than_a_frame() {
     let _pin = APinForThePage::stand();
     TEXT_PREVIEW_HOLDING.store(true, Ordering::Release);
 
+    page.press_page(5, 5);
+
     let mut took = Vec::new();
     for _ in 0..8 {
         let began = Instant::now();
@@ -253,6 +331,498 @@ fn a_caret_press_costs_less_than_a_frame() {
     assert!(
         page.first_line().is_some_and(|first| first > 0),
         "and one of them scrolled the page, which is the press this measures"
+    );
+
+    TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
+}
+
+/// A chevron on the caption above a page of text and the menu's `Next File` row over it are the
+/// folder's walk whatever the pin holds: the page answers the arrows, and nothing a hand pressed
+/// (see `PinCommand::NextFile` and `pin_command_request`).
+#[test]
+fn a_caption_chevron_and_a_menu_row_step_the_folder_over_a_page_of_text() {
+    let _room = the_room_to_itself();
+    let page = PageOfAFile::put("walk", 40);
+    let _pin = APinForThePage::stand();
+    TEXT_PREVIEW_HOLDING.store(true, Ordering::Release);
+
+    // Wide enough for a caption carrying the whole of its walk, which a narrow one drops whole.
+    let mut pin = PinnedPreview::for_test();
+    pin.content = (100, 100, 800, 300);
+    stand_pin(Some(pin));
+
+    let queued = || {
+        CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| {
+                media
+                    .as_ref()
+                    .and_then(|media| media.text_state.as_ref())
+                    .map(|state| state.pending_caret.len())
+            })
+            .unwrap_or(0)
+    };
+    // One press through the loop's own drain, as the tick makes it: the wait a walk owes, and nothing
+    // a caret move would have left behind.
+    let answer_left_presses = || {
+        let mut request = None;
+        let mut wait = None;
+        let mut started = None;
+        let mut offset = 0.0;
+        let mut paused = None;
+        unsafe {
+            pin_command_request(
+                HWND(0x1000 as *mut _),
+                &mut request,
+                &mut wait,
+                &mut started,
+                &mut offset,
+                &mut paused,
+                true,
+                None,
+            );
+        }
+        wait
+    };
+
+    let stood = page.caret_line();
+
+    let (x, y) = super::ws_k_chrome_nav::a_caption_button_point(pin_chrome::CaptionButton::Next);
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on the caption's walk is the caption's to answer"
+    );
+    let window = super::pin_input::CapturingWindow::around(RecordedPinWindow::new(0x1000));
+    assert!(
+        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "and its release asks the step"
+    );
+    let asked = take_pin_command();
+    assert_eq!(
+        asked,
+        Some(PinCommand::NextFile),
+        "a chevron is the folder's, whatever page the pin holds"
+    );
+    // Left for the loop again, the way the window leaves a command it asked for.
+    ask_pin(asked.expect("the press asked for a step"));
+    assert!(
+        answer_left_presses().is_some(),
+        "so the loop asked the folder for the next file"
+    );
+    assert_eq!(queued(), 0, "and the press queued no move of the page");
+
+    if let Ok(mut pending) = PIN_JOBS.0.lock() {
+        *pending = None;
+    }
+
+    // The menu's `Next File` row, found by what it says rather than by arithmetic on the rows.
+    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 20, 20, PinMenuPage::Body) };
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let row = paint
+        .rows
+        .iter()
+        .position(|row| row.label == "Next File")
+        .expect("the panel holds the walk's row");
+    let band = paint
+        .popup
+        .bands
+        .iter()
+        .find(|band| band.answers == row)
+        .expect("the row is laid out in a band");
+    let (x, y) = (
+        (paint.popup.panel.left + paint.popup.panel.right) / 2,
+        band.top + band.height / 2,
+    );
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on the row is the menu's"
+    );
+    let asked = take_pin_command();
+    assert_eq!(
+        asked,
+        Some(PinCommand::NextFile),
+        "and the row is the same walk the chevron asks for"
+    );
+    ask_pin(asked.expect("the row asked for a step"));
+    assert!(
+        answer_left_presses().is_some(),
+        "which the loop asks the folder for"
+    );
+    assert_eq!(queued(), 0, "and neither press queued a caret move");
+    assert_eq!(page.caret_line(), stood, "so the caret is where it stood");
+
+    if let Ok(mut pending) = PIN_JOBS.0.lock() {
+        *pending = None;
+    }
+    TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
+}
+
+/// A point on the caption that is no button and no resize edge: the empty drag area of the title
+/// bar, which is a press that carries the window.
+fn a_caption_drag_area_point() -> (i32, i32) {
+    let caption = pinned_caption_geometry().expect("a pin with a caption above it");
+    let framed = caption.frame != PinFrame::None;
+
+    (0..caption.height)
+        .flat_map(|y| (0..caption.width).map(move |x| (x, y)))
+        .find(|(x, y)| {
+            pin_chrome::button_at(*x, *y, caption.width, caption.height, caption.dpi, framed)
+                .is_none()
+                && !pin_state().is_some_and(|pinned| {
+                    pinned
+                        .pin()
+                        .is_some_and(|pin| pin.resize_edge(*x, *y).is_some())
+                })
+        })
+        .expect("this caption draws an empty drag area")
+}
+
+/// A point on the page's own scrollbar, in the frame's coordinates.
+fn a_scrollbar_point() -> (i32, i32) {
+    let scrollbar = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .and_then(|state| state.scrollbar)
+        })
+        .expect("a page longer than its box draws a scrollbar");
+    let (left, top, right, bottom) = scrollbar.track;
+
+    ((left + right) / 2, (top + bottom) / 2)
+}
+
+/// A page nobody has pressed into walks the folder with every key the caret would take: the four
+/// arrows, the two page keys and the two ends are the folder's until the page has the reader's
+/// focus, and none of them queues a move of a caret the page is not drawing (see
+/// `text_caret::page_has_focus` and `pin_command_request`).
+#[test]
+fn an_unfocused_page_walks_the_folder_with_every_walk_key() {
+    let _room = the_room_to_itself();
+    let page = PageOfAFile::put("walk-unfocused", 40);
+    let _pin = APinForThePage::stand();
+    TEXT_PREVIEW_HOLDING.store(true, Ordering::Release);
+
+    assert!(
+        !text_caret::page_has_focus(),
+        "a page that has just been pinned is nobody's focus"
+    );
+
+    for (command, step) in [
+        (PinCommand::Next, 1),
+        (PinCommand::CaretDown, 1),
+        (PinCommand::PageOn, 1),
+        (PinCommand::PageBottom, 1),
+        (PinCommand::Previous, -1),
+        (PinCommand::CaretUp, -1),
+        (PinCommand::PageBack, -1),
+        (PinCommand::PageTop, -1),
+    ] {
+        ask_pin(command);
+        assert!(
+            page.answer_left_presses().is_some(),
+            "{command:?} over a page nobody has pressed into is the folder's"
+        );
+        assert_eq!(
+            page.walked_step(),
+            Some(step),
+            "{command:?} asked the folder for that file"
+        );
+        assert_eq!(
+            page.queued(),
+            0,
+            "{command:?} queued no move of a page that has no focus"
+        );
+    }
+
+    assert_eq!(
+        page.caret_line(),
+        Some(0),
+        "and the caret the page was drawn with has not moved"
+    );
+
+    TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
+}
+
+/// The focus is the page's to take and the caption's to take away: a press inside the body makes the
+/// arrow the caret's, and a press on the caption — its empty drag area and its walk alike — hands the
+/// arrow back to the folder (see `text_caret::page_has_focus` and `unfocus_page`).
+#[test]
+fn a_page_press_takes_the_focus_and_a_caption_press_gives_it_back() {
+    let _room = the_room_to_itself();
+    let page = PageOfAFile::put("focus", 40);
+    let _pin = APinForThePage::stand();
+    TEXT_PREVIEW_HOLDING.store(true, Ordering::Release);
+
+    // Wide enough for a caption carrying the whole of its walk.
+    let mut pin = PinnedPreview::for_test();
+    pin.content = (100, 100, 800, 300);
+    stand_pin(Some(pin));
+
+    let hwnd = HWND(0x1000 as *mut _);
+
+    // The page is drawn unfocused, so the arrow is the folder's.
+    ask_pin(PinCommand::Next);
+    assert!(
+        page.answer_left_presses().is_some(),
+        "an unfocused page walks"
+    );
+    assert_eq!(page.queued(), 0, "and queues nothing of its own");
+
+    // A press in the body: the caret is the page's, and the arrow with it.
+    page.press_page(5, 5);
+    assert!(
+        text_caret::page_has_focus(),
+        "a press in the page is what gives it the focus"
+    );
+    ask_pin(PinCommand::Next);
+    assert!(
+        page.answer_left_presses().is_none(),
+        "a focused page answers the arrow rather than walking the folder"
+    );
+    assert_eq!(
+        page.queued(),
+        1,
+        "and what it did was queue a move of the caret"
+    );
+    page.settle();
+
+    // The empty drag area of the caption: the focus goes and the arrow walks again.
+    let (x, y) = a_caption_drag_area_point();
+    assert!(
+        unsafe { pinned_press(hwnd, x, y) },
+        "a hand on the caption is the caption's to answer"
+    );
+    assert!(
+        !text_caret::page_has_focus(),
+        "a press on the caption gives the page's focus up"
+    );
+    ask_pin(PinCommand::Next);
+    assert!(
+        page.answer_left_presses().is_some(),
+        "so the arrow is the folder's again"
+    );
+    assert_eq!(page.queued(), 0, "and the page queued nothing");
+    page.walked_step();
+
+    // And a button on the caption is the same press as far as the page is concerned.
+    page.press_page(5, 5);
+    assert!(text_caret::page_has_focus());
+    let (x, y) = super::ws_k_chrome_nav::a_caption_button_point(pin_chrome::CaptionButton::Next);
+    assert!(unsafe { pinned_press(hwnd, x, y) });
+    assert!(
+        !text_caret::page_has_focus(),
+        "a caption button gives the focus up too"
+    );
+    ask_pin(PinCommand::Next);
+    assert!(
+        page.answer_left_presses().is_some(),
+        "and the arrow walks the folder from there"
+    );
+
+    if let Ok(mut pending) = PIN_JOBS.0.lock() {
+        *pending = None;
+    }
+    TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
+}
+
+/// A press that is not on the caption leaves the page focused: the scrollbar and the find bar are
+/// the page's own tools rather than the window's chrome, so the caret's keys stay the page's across
+/// them (see `text_caret::unfocus_page`).
+#[test]
+fn a_press_on_the_scrollbar_or_the_find_bar_leaves_the_page_focused() {
+    let _room = the_room_to_itself();
+    let page = PageOfAFile::put("scroll-and-bar", 40);
+    let _pin = APinForThePage::stand();
+    TEXT_PREVIEW_HOLDING.store(true, Ordering::Release);
+
+    let mut pin = PinnedPreview::for_test();
+    pin.content = (100, 100, 800, 300);
+    stand_pin(Some(pin));
+
+    let hwnd = HWND(0x1000 as *mut _);
+    page.press_page(5, 5);
+    assert!(text_caret::page_has_focus());
+
+    // The scrollbar's column, in the window's coordinates rather than the page's.
+    let (x, y) = a_scrollbar_point();
+    let caption = pinned_caption_geometry()
+        .expect("a pin with a caption above it")
+        .height;
+    assert!(
+        !unsafe { pinned_press(hwnd, x, y + caption) },
+        "a press on the scrollbar is neither the caption's nor the window's to carry"
+    );
+    assert!(
+        text_caret::page_has_focus(),
+        "so the page keeps the focus a press in it gave"
+    );
+    ask_pin(PinCommand::Next);
+    assert!(
+        page.answer_left_presses().is_none(),
+        "and the arrow is still the caret's"
+    );
+    assert_eq!(page.queued(), 1);
+    page.settle();
+
+    // The find bar's query, floating over the page's top-right corner.
+    text_find::open_text_find();
+    unsafe { text_find::settle(hwnd) };
+    let card = text_find::find_bar()
+        .expect("the card the bar is drawn in")
+        .card;
+    let (x, y) = (
+        (card.query.left + card.query.right) / 2,
+        (card.query.top + card.query.bottom) / 2,
+    );
+    assert!(text_find::press(x, y), "a press in the query is the bar's");
+    assert!(
+        text_caret::page_has_focus(),
+        "and a press on the bar leaves the page focused"
+    );
+
+    // With the bar away again the arrow is the page's still.
+    text_find::note(FindEdit::Close);
+    unsafe { text_find::settle(hwnd) };
+    ask_pin(PinCommand::Next);
+    assert!(
+        page.answer_left_presses().is_none(),
+        "the page answers the arrow it was pressed into for"
+    );
+    assert_eq!(page.queued(), 1, "which is a move of its caret");
+
+    TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
+}
+
+/// The caret is drawn only while the page has the focus, and taking the focus away moves it nowhere:
+/// a page pressed into again draws the bar exactly where it was left, at the place a press at its own
+/// coordinates lands on (see `text_caret::caret_mark` and `page_has_focus`).
+#[test]
+fn the_caret_is_drawn_only_while_the_page_has_the_focus() {
+    let _room = the_room_to_itself();
+    let page = PageOfAFile::put("caret-drawn", 40);
+    let _pin = APinForThePage::stand();
+    TEXT_PREVIEW_HOLDING.store(true, Ordering::Release);
+
+    let mut pin = PinnedPreview::for_test();
+    pin.content = (100, 100, 800, 300);
+    stand_pin(Some(pin));
+
+    assert!(
+        text_caret::caret_mark().is_none(),
+        "a page nobody has pressed into draws no caret, though it holds one"
+    );
+
+    page.press_page(5, 5);
+    let drawn = text_caret::caret_mark().expect("a focused page draws the caret it holds");
+    assert!(drawn.lit, "and it is solid from the press that put it down");
+
+    // A few characters along, so the bar taken away is one the press below has to find again.
+    for _ in 0..8 {
+        ask_pin(PinCommand::Next);
+        page.answer_left_presses();
+    }
+    page.settle();
+    let stood = text_caret::caret_mark()
+        .expect("the caret is drawn where the moves left it")
+        .at;
+
+    let (x, y) = a_caption_drag_area_point();
+    assert!(unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) });
+    assert!(
+        text_caret::caret_mark().is_none(),
+        "a press on the caption draws no caret"
+    );
+    assert_eq!(
+        text_caret::caret_now(),
+        Some(stood),
+        "and the caret is still the page's, where it was left"
+    );
+
+    let (x, y) = page.point_at(stood);
+    page.press_page(x, y);
+    assert_eq!(
+        text_caret::caret_mark()
+            .expect("the page draws the caret again")
+            .at,
+        stood,
+        "a press at the caret's own coordinates draws it where it stood"
+    );
+
+    TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
+}
+
+/// A page that has not been pressed into still reads: `Ctrl`+`A`, `Ctrl`+`C`, `F3` and `Ctrl`+`F` are
+/// the page's whether or not it has the focus, because they read the document rather than move a
+/// caret in it (see `text_caret::page_has_focus`).
+#[test]
+fn a_read_key_is_still_answered_while_the_page_is_unfocused() {
+    let _room = the_room_to_itself();
+    let page = PageOfAFile::put("read-keys", 40);
+    let _pin = APinForThePage::stand();
+    TEXT_PREVIEW_HOLDING.store(true, Ordering::Release);
+
+    // Wide enough for a caption carrying the whole of its walk, which a narrow one drops whole.
+    let mut pin = PinnedPreview::for_test();
+    pin.content = (100, 100, 800, 300);
+    stand_pin(Some(pin));
+
+    let hwnd = HWND(0x1000 as *mut _);
+
+    // A page that was worked in and then clicked away from: a press on a word, the second press that
+    // takes it, and the caption pressed to give the focus up. What the reader selected is the page's
+    // and stays, which is the selection the find below looks for.
+    let (x, y) = page.point_at((0, 3));
+    page.press_page(x, y);
+    page.press_page(x, y);
+    let taken = page
+        .selection()
+        .expect("a second press takes the word under it");
+    assert!(
+        !taken.is_empty(),
+        "which is a selection rather than a place"
+    );
+    let (x, y) = a_caption_drag_area_point();
+    assert!(unsafe { pinned_press(hwnd, x, y) });
+    assert!(
+        !text_caret::page_has_focus(),
+        "the caption gave the page's focus up"
+    );
+    assert_eq!(
+        page.selection(),
+        Some(taken),
+        "and the selection it was left with is untouched"
+    );
+
+    // `F3`, the page's own find next, through the loop the window leaves it with.
+    ask_pin(PinCommand::FindNext);
+    page.answer_left_presses();
+    let found = page.selection().expect("the page still holds a selection");
+    assert_ne!(
+        found, taken,
+        "`F3` took the selection to the next place it is found"
+    );
+    assert!(
+        (found.anchor.0, found.anchor.1) > (taken.anchor.0, taken.anchor.1),
+        "which is ahead of it in the document, and found with no focus on the page"
+    );
+
+    // `Ctrl`+`A`, which the tick answers with the whole page selected.
+    unsafe { select_all_text_preview(hwnd) };
+    assert_eq!(
+        page.selection().map(|all| all.anchor),
+        Some((0, 0)),
+        "the whole page is selected from its beginning"
+    );
+
+    // And `Ctrl`+`F`, which opens the bar over it.
+    text_find::open_text_find();
+    assert!(
+        text_find::is_open(),
+        "the bar comes up over a page nobody has pressed into"
     );
 
     TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);

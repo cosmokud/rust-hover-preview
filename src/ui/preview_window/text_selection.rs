@@ -38,6 +38,10 @@ pub(super) fn begin_text_selection(x: i32, y: i32) -> bool {
     // after it copies what the reader selected here rather than a query they left selected in the bar
     // (see `FindFocus`).
     state.find.focused = FindFocus::Page;
+    // And the page itself is focused, which is the only way it is ever taken: this is the press that
+    // puts the caret down, and the caret and its keys are the page's from here on until a press on the
+    // pin's caption gives the focus up again (see `text_caret::page_has_focus` and `unfocus_page`).
+    state.focused = true;
 
     // What a double click takes is kept for as long as the drag that follows it runs: the word
     // under the hand is what that drag is grown from, and it is grown by whole runs of characters

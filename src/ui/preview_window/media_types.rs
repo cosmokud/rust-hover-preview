@@ -625,6 +625,12 @@ pub(super) struct TextPreviewState {
     /// extending it.
     pub(super) selection: Option<text_preview::Selection>,
     pub(super) selecting: bool,
+    /// Whether the page has the reader's focus: the caret is drawn and the caret's keys are answered
+    /// only while it does. A page is drawn unfocused and takes the focus from a press in its body,
+    /// and loses it to a press on the pin's caption — and nothing else about the page is touched
+    /// either way, so a page pressed into again comes back to the caret it was left at (see
+    /// `text_caret::page_has_focus`).
+    pub(super) focused: bool,
     /// Where the page's caret stands, and the column a vertical move is aimed at.
     ///
     /// The page is a document the reader moves through rather than a box they scroll, so the caret

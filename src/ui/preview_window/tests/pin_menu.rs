@@ -782,7 +782,7 @@ fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
     );
     assert_eq!(
         take_pin_command(),
-        Some(PinCommand::Next),
+        Some(PinCommand::NextFile),
         "and it is the row the picture's own menu holds there"
     );
 }
@@ -852,8 +852,8 @@ fn a_press_on_a_row_a_pin_shares_with_a_bubble_leaves_its_ask() {
 
     // What each row is for, as the ask it leaves behind with the loop.
     let asks = [
-        ("Next File", PinCommand::Next),
-        ("Previous File", PinCommand::Previous),
+        ("Next File", PinCommand::NextFile),
+        ("Previous File", PinCommand::PreviousFile),
         ("Close", PinCommand::Close),
         ("To Bubble", PinCommand::MinimizeTo(PinMinimizeTo::Bubble)),
         ("To Taskbar", PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
@@ -1013,7 +1013,7 @@ fn a_press_on_a_row_over_the_title_bar_is_the_rows_own() {
     );
     assert_eq!(
         take_pin_command(),
-        Some(PinCommand::Next),
+        Some(PinCommand::NextFile),
         "the row the hand was on is the row that answered"
     );
     assert!(
@@ -1409,8 +1409,8 @@ fn the_rows_that_do_something_leave_their_ask_with_the_loop() {
         ("To Taskbar", PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
         ("Close", PinCommand::Close),
         ("Play", PinCommand::TogglePlayback),
-        ("Next File", PinCommand::Next),
-        ("Previous File", PinCommand::Previous),
+        ("Next File", PinCommand::NextFile),
+        ("Previous File", PinCommand::PreviousFile),
     ];
 
     for (label, command) in asks {

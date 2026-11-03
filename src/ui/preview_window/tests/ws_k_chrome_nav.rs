@@ -264,7 +264,7 @@ fn wide_banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
 /// down to a point that is not also on a resize edge — because the frame is asked about
 /// before the caption is (see `pinned_press`), so the two share the three places a window
 /// can be resized from and only the caption keeps the rest.
-fn a_caption_button_point(kind: pin_chrome::CaptionButton) -> (i32, i32) {
+pub(super) fn a_caption_button_point(kind: pin_chrome::CaptionButton) -> (i32, i32) {
     let caption = pinned_caption_geometry().expect("a pin with a caption above it");
     let framed = caption.frame != PinFrame::None;
 
@@ -328,8 +328,11 @@ fn every_caption_button_asks_its_command_on_a_press_and_a_release() {
     let previous_media = stand_video_media();
 
     for (kind, command) in [
-        (pin_chrome::CaptionButton::Previous, PinCommand::Previous),
-        (pin_chrome::CaptionButton::Next, PinCommand::Next),
+        (
+            pin_chrome::CaptionButton::Previous,
+            PinCommand::PreviousFile,
+        ),
+        (pin_chrome::CaptionButton::Next, PinCommand::NextFile),
         (pin_chrome::CaptionButton::Minimize, PinCommand::Minimize),
         (pin_chrome::CaptionButton::Maximize, PinCommand::Maximize),
         (pin_chrome::CaptionButton::Close, PinCommand::Close),
@@ -865,7 +868,7 @@ fn a_step_from_the_caption_leaves_the_chrome_up_until_the_file_it_asked_for_land
         unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
         "and its release asks the step"
     );
-    assert_eq!(take_pin_command(), Some(PinCommand::Next));
+    assert_eq!(take_pin_command(), Some(PinCommand::NextFile));
 
     let mut wait: Option<PinWait> = None;
     assert!(
@@ -946,7 +949,7 @@ fn a_step_ask_leaves_the_chrome_up_while_the_outgoing_film_is_live() {
     assert!(unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) });
     let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
     assert!(unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) });
-    assert_eq!(take_pin_command(), Some(PinCommand::Next));
+    assert_eq!(take_pin_command(), Some(PinCommand::NextFile));
     let mut wait = None;
     assert!(step_pinned_file(1, &mut wait, None).is_none());
     assert!(wait.is_some(), "the planner owes the step an answer");
