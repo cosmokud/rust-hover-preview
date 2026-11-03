@@ -547,9 +547,30 @@ app's own media (`is_showing`), so the window that comes up is an ordinary pinne
   back by its button or its bubble stands over whatever was opened over it. Such a pin wears the app's own taskbar
   button while it is up, and the wheel is the pin's only while the pin is the window the user is in
   (`pin_owns_foreground`) — a hover preview is unchanged. The app-window bit is the setting's rather than the take-up's:
-  written on the window of the pair that owns the chrome, off while **Always On Top** is on, a change to a window already
-  on screen followed by the hide and show the Shell reads (`a_button_is_owed`, `set_the_pin_window_appwindow`), and the
-  demotion asks every window the pin draws through, the chrome included.
+  written on the window of the pair that owns the chrome, off while **Always On Top** is on, and the demotion asks every
+  window the pin draws through, the chrome included. The Shell reads whether a window is listed from the show that put
+  it on the screen, so a bit written behind a visible window's back is not re-read for it: a window that is on the screen
+  when its bit changes pays a hide and a re-show (`a_button_is_owed`, `set_the_pin_window_appwindow`), which a test holds
+  to the same box. **Except the pin the user is in.** A press on a pin took the caret, so the `Always On Top` click is a
+  click on the very window the hide would be seen through: its bit is written and read at the pin's next show, while
+  every other window — a film's host at its promotion, a pin nobody is in — still pays the show.
+
+  **Taking the ordinary band is a flip, not one write, and the place is settled after the bit road.** `HWND_NOTOPMOST`
+  on a demoted window is the front of the band only where the process holds the foreground; otherwise it lands just under
+  the foreground window, which is the listing the user works in — the same wall a press meets, and the same road over it
+  (`take_the_band_and_give_it_back`, `place_the_pin_where_the_setting_names`). And the hide a visible window's button
+  costs hands the caret to the window next in the z-order, which the pin's own `WM_ACTIVATE` answer gives the listing for
+  good, so `settle_the_pin_after_the_setting_moved` runs after the loop's bit read and raises the pin only where the
+  window in front is one it belongs over: the listing it was picked in, the pin itself, the desktop. A pin behind any
+  other program is where the user's own click put it.
+
+  **A box change is not answered by a raise of this app's own.** A maximize, its restore, a reset size and the end of a
+  resize are all made inside the pin, and the raise a show makes is a question about the foreground — which a box change
+  leaves as a film's host, the page under the pointer or the pair's own menu as often as the listing. So a gesture's own
+  box is left to the raise the show makes, and a pin that would still go behind after one is read from the trace rather
+  than raised on a guess; what the same gesture used to owe the front for is the press the pin no longer answers as a
+  no-pick (see Explorer hook → Picks). The two move roads that moved a window with `HWND_TOPMOST` beside
+  `SWP_NOZORDER` now name no band at all, since that argument is dropped and the call read as a raise it never made.
 
 - State:
   `pin_window::{PinState::Down/Up(PinUp)/Ending(Reason), PinExit, end_pin, Closed/Asked/SwitchedOff/MediaGone/Hung}`;
@@ -1488,9 +1509,12 @@ is worth reading. The rectangles in the `thumbnail update` line are the whole di
 
 **Where a window ended up, and who was in front.** Every line that reads the front carries `above=`, the window directly
 over it in the z-order, and most carry `foreground=`, the window holding the front: `band placed`, `band taken and given
-back: <why>` — with the road that asked for the flip, `a press`, `a preview update`, `a press on a running page` or `the
-pin appeared` — the host's show, `pin above:` after a show, the keyboard hand-back at a collapse and at an end,
-`set_foreground … -> foreground=… pin above=…`, and the player's topmost show. Every message a pin's window is handed
+back: <why>` — with the road that asked for the flip, `a press`, `a preview update`, `a press on a running page`, `the
+pin appeared`, `a box change`, `the setting named the ordinary band` or `the setting was turned off` — the host's show,
+`pin above:` after a show, the keyboard hand-back at a collapse and at an end,
+`set_foreground … -> foreground=… pin above=…`, and the player's topmost show. The `Always On Top` road is read on its
+own lines as well: `setting names <band>: … holds-band …`, `appwindow <0|1> of <window>: the user is in it, read at its
+next show`, `settle after the setting moved: caret in … stands-over … raisable …` and `settled: …`. Every message a pin's window is handed
 carries an `above=` beside its `foreground=` and `focus=`. Both readings are described rather than left as `other`:
 `class:pid (image)` for any window Windows can still be asked about, this app's own by the word `window_name` gives them
 (`pin`, `host`, `preview`, `bubble`, `stand-in`), `none` for a handle that names no window at all, and `invalid` for one
