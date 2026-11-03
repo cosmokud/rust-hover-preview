@@ -66,6 +66,11 @@ pub fn take_pin_resumed() -> bool {
     pin_window::take_pin_resumed()
 }
 
+/// Whether a press was made against the pin's own menu, cleared on the read.
+pub fn take_pin_menu_pressed() -> bool {
+    pin_menu::take_pin_menu_pressed()
+}
+
 /// The file the pinned window is showing, if there is one. It is what the Explorer hook reads
 /// to know whether the file the pointer picks is a file the pin is already showing, and it is
 /// the file a *new* pin is told apart from an old one by (see `PinState`).

@@ -323,7 +323,7 @@ pub(super) fn get_explorer_state() -> ExplorerState {
 /// answers nothing: out of the item the view has the focus on, which is where a click's own
 /// selection is answered from the view's side (see `PinUpdateWatch::click_picked_item`).
 pub(super) fn is_our_own_window(window: HWND) -> bool {
-    if preview_window_is_at(window) {
+    if preview_window_is_at(window) || press_is_on_the_pins_own_menu(window) {
         return true;
     }
 
@@ -481,6 +481,20 @@ pub(super) fn press_is_on_the_pin(
     pin_box: Option<(i32, i32, i32, i32)>,
 ) -> bool {
     pressed && pin_box.is_some_and(|pin_box| point_in_box(point, pin_box))
+}
+
+/// Whether a press is one the pin's own menu answered: either recorded by the menu's own press
+/// handler, or read while the pointer is over the menu window (or was on the tick before).
+pub(super) fn press_is_on_the_pins_menu(
+    menu_pressed: bool,
+    pressed: bool,
+    window: HWND,
+    previous_window: Option<HWND>,
+) -> bool {
+    menu_pressed
+        || (pressed
+            && (press_is_on_the_pins_own_menu(window)
+                || previous_window.is_some_and(press_is_on_the_pins_own_menu)))
 }
 
 /// Whether a press is one the pin answers at all, whatever it turned out to name.
