@@ -20,6 +20,15 @@ fn main() {
         stop_running_app();
     }
 
+    // The commit this build is of, stamped into the executable so that a binary can be told from
+    // the one another checkout linked over it at the shared target dir (see
+    // `scripts/build-release.ps1`). The stamp is asked for here, where every recompile of this
+    // crate passes through, and `cargo:rerun-if-changed=src` above is what brings a build script
+    // back for one: the file it is written into is relinked with the crate, so the two can never
+    // disagree.
+    let commit = the_commit();
+    println!("cargo:rustc-env=RHP_COMMIT={commit}");
+
     // The resources belong to the Windows executable this tree links, and Windows is the only
     // host it is built on, so the gate is on the host. Should that stop being true, it has to
     // be asked of the *target* instead (`CARGO_CFG_TARGET_OS`): this gate answers for whoever
@@ -32,6 +41,9 @@ fn main() {
         res.set("ProductName", "Rust Hover Preview");
         res.set("FileDescription", "Rust Hover Preview");
         res.set("LegalCopyright", "Copyright 2026");
+        // Read back as `(Get-Item <exe>).VersionInfo.Comments`, which is how the build tells a
+        // binary of this checkout from one another checkout left at the same path.
+        res.set("Comments", commit.as_str());
         // And the version lie with it. An executable with no manifest is given the compatibility
         // of the oldest Windows there is: `GetVersionExW` answers 6.2 on a machine far past it and
         // the pre-Win8 semantics come with it, and one of those is that a `WS_CHILD` window may
@@ -84,6 +96,26 @@ fn main() {
             env::var("CARGO_PKG_NAME").expect("cargo sets CARGO_PKG_NAME"),
             resource_file.display()
         );
+    }
+}
+
+/// The commit this build is of, or `"unknown"` where git cannot say: a source tarball has no git
+/// and still has to build, and a stamp nobody can read has to compare unequal to every HEAD.
+fn the_commit() -> String {
+    let commit = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"))
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        .unwrap_or_default();
+
+    if commit.is_empty() {
+        "unknown".to_owned()
+    } else {
+        commit
     }
 }
 
