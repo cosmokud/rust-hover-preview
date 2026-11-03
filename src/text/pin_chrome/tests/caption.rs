@@ -3,7 +3,9 @@ use super::*;
 // a name's room and whether there is one are questions the caption asks itself, and the test of that
 // rule has to reach them where they live rather than through the glob — which finds the *test* module
 // named `caption` first.
-use crate::text::pin_chrome::caption::{title_fits, title_fits_beside_pill, title_room};
+use crate::text::pin_chrome::caption::{
+    buttons_fit, title_fits, title_fits_beside_pill, title_room,
+};
 
 #[test]
 fn a_cut_name_is_the_whole_name_where_it_fits_and_the_longest_beginning_where_it_does_not() {
@@ -170,17 +172,16 @@ fn every_button_of_a_caption_is_the_one_under_the_pointer() {
     );
 }
 
-/// A caption too narrow for the walk carries the window's buttons and nothing else. A
-/// pin is worth less than a window it can be closed from, and half a walk is a set of
-/// targets with no known order to them — so the whole group goes, and the buttons that
-/// stay are exactly where they would have been on a caption wide enough to carry it.
+/// A caption too narrow for the walk carries the window's buttons and nothing else. A pin is worth
+/// less than a window it can be closed from, and the buttons that stay are the ones a hand has been
+/// reaching for on every window it has ever had — so the walk goes first, from its own left end, and
+/// close keeps the right edge of the strip.
 #[test]
 fn a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons() {
     let narrow = button_boxes(200, 30, 96, true);
 
-    // The buttons are 46 wide either way here — 200 / 3 is 66, and the width is the
-    // smaller of the two — so the walk's own four would need 7 * 46 = 322 of a strip
-    // 200 wide, and the strip is the window's alone.
+    // Buttons are 46 wide and never narrower, so a strip 200 wide holds four of them: the window's
+    // own, taken from close at the right edge back to the left (see `button_boxes`).
     assert_eq!(narrow.len(), 4);
     assert_eq!(narrow[0].kind, CaptionButton::AlwaysOnTop);
     assert_eq!(narrow[1].kind, CaptionButton::Minimize);
@@ -205,6 +206,184 @@ fn a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons() {
         assert!(
             narrow.iter().all(|button| button.kind != kind),
             "a caption too narrow for the walk does not carry {kind:?}"
+        );
+    }
+}
+
+/// A caption narrows one button at a time, and in the one order a window owes: the walk from its own
+/// left end, then the window's own from nothing to close last, so that the button that closes the
+/// window is the one a caption keeps longest.
+///
+/// The widths are the boundaries of the rule rather than a sample of it: each one is either side of a
+/// button being lost, because a caption that dropped two at once, or the wrong one, would still answer
+/// right at every width in the middle of a step.
+#[test]
+fn a_caption_gives_up_its_buttons_one_at_a_time_from_the_left() {
+    const ORDER: [CaptionButton; 8] = [
+        CaptionButton::Previous,
+        CaptionButton::Next,
+        CaptionButton::OpenWith,
+        CaptionButton::OpenWithList,
+        CaptionButton::AlwaysOnTop,
+        CaptionButton::Minimize,
+        CaptionButton::Maximize,
+        CaptionButton::Close,
+    ];
+
+    let boundaries = [
+        (8 * 46, 8),
+        (8 * 46 - 1, 7),
+        (7 * 46, 7),
+        (7 * 46 - 1, 6),
+        (6 * 46, 6),
+        (6 * 46 - 1, 5),
+        (5 * 46, 5),
+        (5 * 46 - 1, 4),
+        (4 * 46, 4),
+        (4 * 46 - 1, 3),
+        (3 * 46, 3),
+        (3 * 46 - 1, 2),
+        (2 * 46, 2),
+        (2 * 46 - 1, 1),
+        (46, 1),
+        (45, 0),
+        (1, 0),
+    ];
+    for (width, kept) in boundaries {
+        let boxes = button_boxes(width, 30, 96, true);
+        assert_eq!(
+            boxes.iter().map(|button| button.kind).collect::<Vec<_>>(),
+            ORDER[ORDER.len() - kept..],
+            "a caption {width} wide carries {kept} buttons, taken from the right"
+        );
+        assert_eq!(buttons_fit(width, 96, true), kept == ORDER.len());
+
+        // Close is against the right edge and its neighbours stand beside it without a gap: the
+        // survivors keep the places they had on a caption wide enough to carry all of them.
+        assert_eq!(
+            boxes.last().map(|button| (button.kind, button.rect.right)),
+            (kept > 0).then_some((CaptionButton::Close, width)),
+            "close is the last button and the right edge of the strip, at width {width}"
+        );
+        for pair in boxes.windows(2) {
+            assert_eq!(pair[0].rect.right, pair[1].rect.left, "no gap at {width}");
+            assert_eq!(
+                pair[1].rect.right - pair[1].rect.left,
+                46,
+                "no shrinking at {width}"
+            );
+        }
+    }
+}
+
+/// A caption too narrow for even close is still a bar: the background with its hairline under it, and
+/// nothing on it to press. A title bar that vanished when the window was dragged narrow and came back
+/// on the way out would be a band that flickered with the drag; this one just runs out of buttons.
+#[test]
+fn a_caption_too_narrow_for_close_still_paints_its_bar() {
+    let palette = ChromePalette {
+        background: [250, 250, 250],
+        foreground: [30, 30, 30],
+        accent: [10, 90, 200],
+        dark: false,
+    };
+    let (width, height) = (30u32, 30u32);
+    assert!(
+        button_boxes(width as i32, height as i32, 96, true).is_empty(),
+        "a caption narrower than one button has none"
+    );
+
+    let surface = DibSurface::create(width, height).expect("a surface");
+    let caption = Caption {
+        title: "notes.txt",
+        read_only: false,
+        maximized: false,
+        maximizable: true,
+        always_on_top: true,
+        hovered: None,
+        pressed: None,
+    };
+    paint_caption(&surface, &palette, &caption, 96);
+
+    // The surface is the desktop's own byte order, so a pixel is read back the way it was written.
+    let pixels = surface.pixels();
+    let at = |x: u32, y: u32| {
+        let index = (y as usize * width as usize + x as usize) * 4;
+        [pixels[index + 2], pixels[index + 1], pixels[index]]
+    };
+    let hairline = palette.hover(0.18);
+    for y in 0..height - 1 {
+        for x in 0..width {
+            assert_eq!(
+                at(x, y),
+                palette.background,
+                "the bar is its own background at {x},{y}"
+            );
+        }
+    }
+    for x in 0..width {
+        assert_eq!(
+            at(x, height - 1),
+            hairline,
+            "and its hairline runs the whole of the bottom row, at {x}"
+        );
+    }
+}
+
+/// A name is not said beside a row of buttons a caption has given up, even where the room the missing
+/// ones left would be room for a name: the name belongs to the caption that is whole, and one said
+/// beside a row that grows and shrinks as the window is dragged would be a title whose own buttons
+/// moved out from under a hand reaching for one (see `title_fits`).
+#[test]
+fn a_name_is_not_said_beside_buttons_a_caption_has_given_up() {
+    let palette = ChromePalette {
+        background: [250, 250, 250],
+        foreground: [30, 30, 30],
+        accent: [10, 90, 200],
+        dark: false,
+    };
+    let strip = |width: u32, title: &str| {
+        let surface = DibSurface::create(width, 30).expect("a surface");
+        let caption = Caption {
+            title,
+            read_only: false,
+            maximized: false,
+            maximizable: true,
+            always_on_top: true,
+            hovered: None,
+            pressed: None,
+        };
+        paint_caption(&surface, &palette, &caption, 96);
+        surface.pixels()
+    };
+
+    // A caption 240 wide has dropped three of its eight buttons and still says nothing.
+    assert!(
+        !buttons_fit(240, 96, true) && !title_fits(240, 96, true),
+        "a caption with buttons missing has given the name up"
+    );
+    assert_eq!(
+        strip(240, "notes.txt"),
+        strip(240, ""),
+        "a strip with buttons missing painted a name beside them"
+    );
+
+    // And a caption that carries all eight says the name it has room for.
+    assert!(
+        buttons_fit(440, 96, true) && title_fits(440, 96, true),
+        "a caption with every button has room for a name beside them"
+    );
+    assert_ne!(
+        strip(440, "notes.txt"),
+        strip(440, ""),
+        "a whole caption did not paint the name it had room for"
+    );
+
+    // The two questions cannot disagree: no width says a name beside a row that is short a button.
+    for width in 1..1200 {
+        assert!(
+            !(title_fits(width, 96, true) && !buttons_fit(width, 96, true)),
+            "a caption {width} wide gave the name room beside buttons it had given up"
         );
     }
 }
@@ -958,20 +1137,20 @@ fn the_chevrons_arms_carry_a_share_of_the_ink() {
     );
 }
 
-/// A caption is narrowed in three steps, and each is the width the one before it stopped being worth
-/// it at: the name is cut, then the name is given up, then the strip is.
+/// A caption is narrowed in steps, and each is the width the one before it stopped being worth it at:
+/// the name is cut, then the name is given up, then the buttons go one at a time, and the bare bar is
+/// the last of it.
 ///
-/// It is one test rather than three because the three are one rule read at three widths, and the thing
+/// It is one test rather than several because they are one rule read at several widths, and the thing
 /// worth pinning down is the *order*: a name given up before it was cut would be a title that vanished
-/// at the size it most needed to say something, and a strip given up at the same moment as the name
-/// would be a command bar thrown away while it still carried a row of buttons that work on it.
+/// at the size it most needed to say something, and a caption given up while it still carried a row of
+/// buttons that work on it would be a command bar thrown away with work left in it.
 #[test]
 fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
-    // Buttons are 46 logical pixels at 100% and the padding at either end of the name is 12, so a
-    // caption's room for its name is its width less the buttons it carries and less those 24. A
-    // caption wide enough for the pin's own walk carries eight buttons — the walk's four packed beside
-    // the window's four — and one too narrow drops the walk whole, which is why the room is not
-    // simply the width less a fixed number (see `button_boxes`).
+    // Buttons are 46 logical pixels at 100% and are never shrunk, so a caption carries as many of them
+    // as its width divides into 46, counted from close at the right edge back to the left (see
+    // `button_boxes`), and its room for a name is its width less those buttons and less the 24 of
+    // padding at either end of the run.
     assert_eq!(
         title_room(600, 96, true),
         600 - 8 * 46 - 24,
@@ -979,22 +1158,26 @@ fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
     );
     assert_eq!(
         title_room(240, 96, true),
-        240 - 4 * 46 - 24,
-        "and one too narrow for it carries the window's four alone"
+        240 - 5 * 46 - 24,
+        "and a narrower one carries only the five buttons that fit"
     );
 
-    // The three steps, at a width each of them is still worth taking at and one it is not.
+    // The steps, at a width each of them is still worth taking at and one it is not.
     assert!(
         title_fits(600, 96, true) && caption_fits(600, 96, true),
         "a wide caption says the name of what is pinned"
     );
     assert!(
         !title_fits(240, 96, true) && caption_fits(240, 96, true),
-        "a narrow one gives the name up and keeps the strip: 240 less 208 is 32, which is room for the ellipsis and not for a name"
+        "a narrow one gives the name up and keeps the strip: it still carries five buttons, which is not a name's worth of room"
     );
     assert!(
-        !title_fits(210, 96, true) && !caption_fits(210, 96, true),
-        "and one too narrow even for the ellipsis gives itself up, because a row of window buttons over the top of somebody's picture is not worth the band of the picture"
+        !title_fits(210, 96, true) && caption_fits(210, 96, true),
+        "and one narrower still keeps its caption: four buttons and no name is a command bar, not a strip to give up"
+    );
+    assert!(
+        caption_fits(20, 96, true),
+        "and a caption too narrow for even close is a bare bar rather than no bar at all"
     );
 
     // A pin with nothing to maximize carries three window buttons rather than four, so it has a button's
@@ -1010,7 +1193,6 @@ fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
     // measured in the same doubled pixels.
     assert!(!title_fits(240, 96, true) && !title_fits(480, 192, true));
     assert!(caption_fits(240, 96, true) && caption_fits(480, 192, true));
-    assert!(!caption_fits(210, 96, true) && !caption_fits(420, 192, true));
 }
 
 /// The strip a page's window carries says the page is read only, and the strips of every other kind

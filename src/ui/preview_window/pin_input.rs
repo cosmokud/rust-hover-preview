@@ -227,10 +227,10 @@ pub(super) fn pinned_caption_geometry() -> Option<PinnedCaption> {
             dpi: pin.dpi,
             width,
             frame: pin.frame,
-            // A caption showing *and* wide enough to be one: a strip too narrow for its own buttons
-            // and a stub of a name is not drawn, so its buttons are not there to be pressed — what is
-            // under them then is the picture, which is a handle for moving the window (see
-            // `caption_fits`).
+            // A caption that is showing, and its buttons are answered for wherever it drew them: a
+            // narrow one has dropped the buttons it had no room for, and a bare one has dropped all of
+            // them, so `button_at` finds nothing to press and what is under the pointer is the picture —
+            // a handle for moving the window (see `caption_fits`).
             wanted: pin.chrome.caption
                 && pin_chrome::caption_fits(width, pin.dpi, pin.frame != PinFrame::None),
         }

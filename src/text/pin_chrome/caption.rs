@@ -8,6 +8,12 @@
 //! so a close button that moved because a pin grew a walk is not a close button in a new place on
 //! every caption the moment this app was updated.
 //!
+//! A caption never disappears for being narrow. As a window is narrowed the name is cut, then given
+//! up, and then the buttons go one at a time from the left, in the order `CaptionButton` writes them,
+//! so that close - the one button a window cannot be without - is the last to go and the strip itself
+//! outlasts every one of them. A caption too narrow even for close is a bare bar: the background and
+//! its hairline, with nothing on it to press.
+//!
 //! A strip is kept whole and copied rather than drawn again when it is asked for twice unchanged,
 //! because a pinned window repaints sixty times a second to move a playhead that is drawn on the
 //! bar rather than on this (`CaptionStrip`). What a button says is not drawn here at all: a tooltip
@@ -34,17 +40,6 @@ use windows::Win32::Graphics::Gdi::{GetTextExtentPoint32W, SelectObject};
 /// delete on every pointer move across a caption. What it is for is the width at which a name stops
 /// being worth saying, and no name that matters is longer or shorter than another by this much.
 pub(super) const TITLE_MIN_PIXELS: f32 = 42.0;
-
-/// How much room a caption needs beside its buttons to be a command bar at all, rather than a row of
-/// buttons over somebody's picture.
-///
-/// The bar goes when even the *ellipsis* has nowhere to go, which is the one thing left that a
-/// caption could still be saying: three steps go as a window is narrowed, in the order a window owes
-/// them. The name is cut first, which is `fit_title`'s own business. Then the name goes altogether,
-/// because a name with room for two characters in it is not a name. And then the strip goes, because
-/// there is nothing left for it to say and a row of window buttons over the top of a picture is not
-/// worth the band of it.
-pub(super) const CAPTION_MIN_PIXELS: f32 = 10.0;
 
 /// How wide a caption button is, in the units a display's scale multiplies: the width
 /// Windows 11 gives one, so the three land where a hand expects them.
@@ -98,17 +93,6 @@ pub(crate) enum CaptionButton {
     Close,
 }
 
-/// The pin's own four, in the order they are packed. They are separate from the window's
-/// group because a window's group is measured by itself and cannot give any of its room:
-/// a close button that moved because a pin grew a walk would be a close button in a new
-/// place on every caption the moment this app was updated.
-const NAV_BUTTONS: [CaptionButton; 4] = [
-    CaptionButton::Previous,
-    CaptionButton::Next,
-    CaptionButton::OpenWith,
-    CaptionButton::OpenWithList,
-];
-
 /// What a caption is drawn from: the name of what is pinned, whether it is maximized, whether it
 /// offers a maximize at all, which button the pointer is on, and whether the window is a page of
 /// text that cannot be written to.
@@ -140,43 +124,78 @@ pub(crate) struct Caption<'a> {
 /// close button that moved because the window it is on has nothing to maximize would be a
 /// window whose close button is where a maximize is on every other one.
 ///
-/// The pin's own four — the file before, the file after, the file opened by whatever
-/// the machine has filed it under, and the file opened by a program named out loud — are packed
-/// beside that group and not inside it, and are dropped whole where a caption is too narrow to
-/// carry them. Which of the two is given up is not a question: the walk is a thing a window
-/// only has once it is a pin, and closing a pin is not.
+/// The buttons a caption carries in the order they sit in, left to right: the pin's own four —
+/// the file before, the file after, the file opened by whatever the machine has filed it under,
+/// and the file opened by a program named out loud — and then the window's own.
+///
+/// That order is the order they are given up in, reversed, which is why it is written down once
+/// (see `button_boxes`): close is the last button on the right and the last to go.
+fn caption_button_kinds(maximizable: bool) -> &'static [CaptionButton] {
+    const MAXIMIZABLE_KINDS: [CaptionButton; 8] = [
+        CaptionButton::Previous,
+        CaptionButton::Next,
+        CaptionButton::OpenWith,
+        CaptionButton::OpenWithList,
+        CaptionButton::AlwaysOnTop,
+        CaptionButton::Minimize,
+        CaptionButton::Maximize,
+        CaptionButton::Close,
+    ];
+    const KINDS: [CaptionButton; 7] = [
+        CaptionButton::Previous,
+        CaptionButton::Next,
+        CaptionButton::OpenWith,
+        CaptionButton::OpenWithList,
+        CaptionButton::AlwaysOnTop,
+        CaptionButton::Minimize,
+        CaptionButton::Close,
+    ];
+
+    if maximizable {
+        &MAXIMIZABLE_KINDS
+    } else {
+        &KINDS
+    }
+}
+
+/// How many buttons a caption carries when every one of them fits, which is the width at which a
+/// caption is whole (see `buttons_fit`).
+fn full_kind_count(maximizable: bool) -> usize {
+    caption_button_kinds(maximizable).len()
+}
+
+/// The buttons a caption's width has room for: as many of `caption_button_kinds` as fit at one
+/// button's width, taken from the right, so the ones a window is owed longest are the ones left.
+///
+/// Buttons are never shrunk to fit: a hand's memory of where close is is a memory of a button the
+/// width Windows gives one, and a row of narrower targets is a row of targets found rather than
+/// reached for. So a caption that runs out of room loses buttons from the left end of the ordering
+/// — `Previous` first, `Close` last — one at a time, each survivor keeping its own button's width
+/// and the right edge of the strip.
+///
+/// A width with room for none of them is a bare bar: no buttons at all, and the strip's background
+/// is what a caption too narrow even for close still draws (see `paint_caption`).
 pub(crate) fn button_boxes(
     width: i32,
     height: i32,
     dpi: u32,
     maximizable: bool,
 ) -> Vec<CaptionButtonBox> {
-    let kinds: &[CaptionButton] = if maximizable {
-        &[
-            CaptionButton::AlwaysOnTop,
-            CaptionButton::Minimize,
-            CaptionButton::Maximize,
-            CaptionButton::Close,
-        ]
-    } else {
-        &[
-            CaptionButton::AlwaysOnTop,
-            CaptionButton::Minimize,
-            CaptionButton::Close,
-        ]
-    };
+    let kinds = caption_button_kinds(maximizable);
+    // One size, measured once: the buttons a caption carries are all this width whatever else the
+    // caption is doing (see the module documentation on the window's group keeping its places).
+    let button = text_paint::scaled(BUTTON_PIXELS as i32, dpi as f32 / 96.0).max(1);
+    let capacity = (width / button).max(0) as usize;
+    if capacity == 0 {
+        return Vec::new();
+    }
 
-    // Measured off the window's group alone, so the walk beside it can be any width at all and
-    // the three land where they landed before it existed.
-    let button = text_paint::scaled(BUTTON_PIXELS as i32, dpi as f32 / 96.0)
-        .max(1)
-        .min((width / kinds.len().max(1) as i32).max(1));
+    let kept = &kinds[kinds.len() - capacity.min(kinds.len())..];
 
-    let mut boxes: Vec<CaptionButtonBox> = kinds
-        .iter()
+    kept.iter()
         .enumerate()
         .map(|(index, kind)| {
-            let from_the_right = kinds.len() as i32 - 1 - index as i32;
+            let from_the_right = kept.len() as i32 - 1 - index as i32;
             let right = width - from_the_right * button;
             CaptionButtonBox {
                 kind: *kind,
@@ -188,46 +207,15 @@ pub(crate) fn button_boxes(
                 },
             }
         })
-        .collect();
+        .collect()
+}
 
-    // The walk is packed against the group it hangs off, as wide as the buttons beside it: a
-    // caption's buttons are one size, and a narrower one in the middle of them is a row of
-    // targets a hand has to find rather than count.
-    //
-    // A caption too narrow for all four keeps the window's group and loses the walk whole.
-    // The buttons a hand has been reaching for on every window it has ever had are the ones
-    // that are not given up, and half a walk beside them is a set of targets with no known
-    // order to them.
-    if width - (kinds.len() as i32 + NAV_BUTTONS.len() as i32) * button < 0 {
-        return boxes;
-    }
-
-    // Packed from the group's own left edge outward, so the walk reads left-to-right in the
-    // order it is written: the file before this one, the file after it, the hand-off to
-    // another program, and then the hand-off to one named out loud. Walking out from the edge
-    // and reversing would put them the other way round, which puts `Next` where a hand reaches
-    // for `Previous` — and puts the list beside the default rather than beyond it, which is
-    // where a hand that has just tried the default and found it wanting goes next.
-    let group_left = width - kinds.len() as i32 * button;
-    let mut nav: Vec<CaptionButtonBox> = NAV_BUTTONS
-        .iter()
-        .enumerate()
-        .map(|(index, kind)| {
-            let left = group_left - (NAV_BUTTONS.len() as i32 - index as i32) * button;
-            CaptionButtonBox {
-                kind: *kind,
-                rect: RECT {
-                    left,
-                    top: 0,
-                    right: left + button,
-                    bottom: height,
-                },
-            }
-        })
-        .collect();
-    nav.append(&mut boxes);
-
-    nav
+/// Whether a caption of this width carries every button it has, which is what a name needs beside
+/// it: a name that came back while a button was still missing would be a title bar that shifted its
+/// own buttons every time a window was dragged a few pixels wider, and the widened window would
+/// still be one whose close button was not where it was drawn a moment ago.
+pub(super) fn buttons_fit(width: i32, dpi: u32, maximizable: bool) -> bool {
+    button_boxes(width, 1, dpi, maximizable).len() == full_kind_count(maximizable)
 }
 
 /// One caption button and the box it occupies.
@@ -298,45 +286,45 @@ pub(crate) fn title_room_beside_pill(width: i32, dpi: u32, maximizable: bool) ->
     title_room(width, dpi, maximizable) - pill
 }
 
-/// Whether a caption of this width is a command bar that can be shown without cutting anything, which
-/// is a question asked of two roads at once: the strip is drawn on one, and a press is answered on the
-/// other (see `pinned_paint` and `pinned_caption_geometry`).
+/// Whether a caption of this width can be shown at all, which is a question asked of two roads at
+/// once: the strip is drawn on one, and a press is answered on the other (see `pinned_paint` and
+/// `pinned_caption_geometry`).
 ///
-/// Three steps go as a window is narrowed, in the order a window owes them. The name is cut first,
-/// which is `fit_title`'s own business and happens below `TITLE_MIN_PIXELS`. Then the name goes
-/// altogether, because a name with room for two characters in it is not a name and an ellipsis alone
-/// says nothing about anything. And then the strip goes, because what is left of it is the window's
-/// own buttons over the top of somebody's picture — and those are not worth a band of the picture and
-/// are not what the strip is for.
-///
-/// All three come back as it is widened, which is the whole of what makes this a rule rather than a
-/// threshold: the question is asked of the width the window has now, every time it changes.
-pub(crate) fn caption_fits(width: i32, dpi: u32, maximizable: bool) -> bool {
-    let scale = dpi as f32 / 96.0;
-    let least = text_paint::scaled(CAPTION_MIN_PIXELS as i32, scale);
-
-    title_room(width, dpi, maximizable) >= least
+/// It is every width a real window can have. A caption never gives itself up for being narrow: the name
+/// is cut first, which is `fit_title`'s own business and happens below `TITLE_MIN_PIXELS`; then the name
+/// goes altogether, because a name with room for two characters in it is not a name and an ellipsis
+/// alone says nothing about anything; and then the buttons go one at a time from the left, `Previous`
+/// first and `Close` last, so that the strip is still a strip with nothing on it before it is nothing at
+/// all (see `button_boxes`). A band of a bare bar is what a window owes the pin that is its own, and a
+/// caption that vanished would be a title bar that came and went with a drag.
+pub(crate) fn caption_fits(width: i32, _dpi: u32, _maximizable: bool) -> bool {
+    width > 0
 }
 
 /// Whether there is room in a caption to say the name of what is pinned at all, which is the step
-/// above the one that gives the strip up: a name cut to two characters and an ellipsis is not a name,
+/// above the one that gives the buttons up: a name cut to two characters and an ellipsis is not a name,
 /// and one the caption cannot say is one it is better off without.
+///
+/// The name is only said of a caption that carries every one of its buttons (`buttons_fit`). A name that
+/// came back the moment there was room for it beside the buttons that were left would be a title bar
+/// whose buttons moved out from under a hand still reaching for one, every few pixels of a drag.
 pub(crate) fn title_fits(width: i32, dpi: u32, maximizable: bool) -> bool {
     let scale = dpi as f32 / 96.0;
     let least = text_paint::scaled(TITLE_MIN_PIXELS as i32, scale);
 
-    title_room(width, dpi, maximizable) >= least
+    buttons_fit(width, dpi, maximizable) && title_room(width, dpi, maximizable) >= least
 }
 
 /// The same question for a caption carrying the **Read only** pill: a name and a pill together, at the
 /// room the pill leaves. A caption too narrow for the two keeps the name and gives the pill up — the
 /// pill is what the strip is saying about the file, and a strip that cannot say the file's name has
-/// nothing for the pill to be about.
+/// nothing for the pill to be about. It follows the name it describes, so it is given up wherever the
+/// name is (see `title_fits`).
 pub(super) fn title_fits_beside_pill(width: i32, dpi: u32, maximizable: bool) -> bool {
     let scale = dpi as f32 / 96.0;
     let least = text_paint::scaled(TITLE_MIN_PIXELS as i32, scale);
 
-    title_room_beside_pill(width, dpi, maximizable) >= least
+    buttons_fit(width, dpi, maximizable) && title_room_beside_pill(width, dpi, maximizable) >= least
 }
 
 /// Paint a caption into a surface the size of the strip: the bar, the three buttons with
