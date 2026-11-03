@@ -12,383 +12,125 @@
 
 ## Multi-Frame Formats The Front Does Not Count
 
-The still-or-moving question is settled from the head of the file, and `ARCHITECTURE.md` states
-the probe that does it — a brand list rather than the one at the front for an ISO base media
-file, a decoder for a `.jxl`, and so on. What is below is what the probe cannot reach: a second
-picture nothing in the front of the file announces, so each is drawn as its first frame, and
-each would take a reader rather than a byte to change.
+The still-or-moving question is settled from the head of the file, and `ARCHITECTURE.md` states the probe that does it — a brand list rather than the one at the front for an ISO base media file, a decoder for a `.jxl`, and so on. What is below is what the probe cannot reach: a second picture nothing in the front of the file announces, so each is drawn as its first frame, and each would take a reader rather than a byte to change.
 
-- **A stereo or multi-picture JPEG (`.jpg` `.jpeg` `.jpe` `.jfif`).** The second picture is
-  named in an `APP2` segment, and an Exif segment of any size may sit in front of it, so
-  counting one is a walk of the segment chain rather than a read of the file's front.
-- **A multi-frame DICOM (`.dcm`).** The frame count is the dataset's `(0028,0008)` element,
-  behind the tag structure rather than at a fixed offset; the front of a `.dcm` is a preamble
-  of zero bytes, so nothing at all is read of one before the byte tables name it.
-- **A layered XCF (`.xcf`).** Its layers are the file's own layer structure — the question the
-  merged picture a `.psd` keeps is already read for, and this would be the same walk over a
-  different container.
-- **A `.dds` with more than one surface, and a multi-extension FITS (`.fits`).** Both carry
-  more than one picture behind a header this app reads only the first surface of.
-- **A multi-image HEIC — a camera burst — carries its pictures as items behind a `mif1`
-  brand**, and `mif1` is the generic HEIF *image* brand an ordinary single-image HEIC is
-  written under, so treating it as a sequence would hand every camera photo the animated
-  scaling and a pointless attempt to open it as one. What would change that is a walk of the
-  `meta` box counting the items behind the brand rather than reading the brand.
-- **An animated AVIF and an animated HEIF sequence** are drawn as their first frame, and the
-  reason is not a guess: the media engine Windows has was asked directly, on files whose
-  brands are exactly the ones this is about, and it refused every one of them —
-  `MFCreateSourceReaderFromByteStream` answering `0x80004005` for an `avis` AVIF and an `msf1`
-  HEIC alike, while an AV1 `.mp4` and an HEVC `.mp4` through the same calls came back with
-  frames at 100 ms and 33 ms on the same machine. So the engine is not missing the codec, and
-  never was: it decodes both, and has no demuxer for the image-sequence brands. The reader
-  that asked it (`heif_sequence`) is still wired in, still returns `None` for these, and
-  still falls through to the first frame. What is needed is a demuxer for `avis` and `msf1`
-  that this graph does not have, and the ways to get one are not small: **libheif** (which
-  brings libde265 for HEVC, and is the first C/C++ build in a tree that compiles none), or a
-  pure-Rust container reader that hands its samples to a decoder the same way this one does —
-  [`heic`](https://github.com/imazen/heic) parses `msf1`/`moov` in pure Rust, but is AGPL-3.0
-  or a paid commercial licence, decodes HEVC I-slices only with no inter prediction, and reads
-  a movie structure for its first I-frame rather than a whole sequence, so it may land in the
-  same place this did. Neither is a decision to make without a licence answer first.
+- **A stereo or multi-picture JPEG (`.jpg` `.jpeg` `.jpe` `.jfif`).** The second picture is named in an `APP2` segment, and an Exif segment of any size may sit in front of it, so counting one is a walk of the segment chain rather than a read of the file's front.
+- **A multi-frame DICOM (`.dcm`).** The frame count is the dataset's `(0028,0008)` element, behind the tag structure rather than at a fixed offset; the front of a `.dcm` is a preamble of zero bytes, so nothing at all is read of one before the byte tables name it.
+- **A layered XCF (`.xcf`).** Its layers are the file's own layer structure — the question the merged picture a `.psd` keeps is already read for, and this would be the same walk over a different container.
+- **A `.dds` with more than one surface, and a multi-extension FITS (`.fits`).** Both carry more than one picture behind a header this app reads only the first surface of.
+- **A multi-image HEIC — a camera burst — carries its pictures as items behind a `mif1` brand**, and `mif1` is the generic HEIF *image* brand an ordinary single-image HEIC is written under, so treating it as a sequence would hand every camera photo the animated scaling and a pointless attempt to open it as one. What would change that is a walk of the `meta` box counting the items behind the brand rather than reading the brand.
+- **An animated AVIF and an animated HEIF sequence** are drawn as their first frame, and the reason is not a guess: the media engine Windows has was asked directly, on files whose brands are exactly the ones this is about, and it refused every one of them — `MFCreateSourceReaderFromByteStream` answering `0x80004005` for an `avis` AVIF and an `msf1` HEIC alike, while an AV1 `.mp4` and an HEVC `.mp4` through the same calls came back with frames at 100 ms and 33 ms on the same machine. So the engine is not missing the codec, and never was: it decodes both, and has no demuxer for the image-sequence brands. The reader that asked it (`heif_sequence`) is still wired in, still returns `None` for these, and still falls through to the first frame. What is needed is a demuxer for `avis` and `msf1` that this graph does not have, and the ways to get one are not small: **libheif** (which brings libde265 for HEVC, and is the first C/C++ build in a tree that compiles none), or a pure-Rust container reader that hands its samples to a decoder the same way this one does — [`heic`](https://github.com/imazen/heic) parses `msf1`/`moov` in pure Rust, but is AGPL-3.0 or a paid commercial licence, decodes HEVC I-slices only with no inter prediction, and reads a movie structure for its first I-frame rather than a whole sequence, so it may land in the same place this did. Neither is a decision to make without a licence answer first.
 
 ## Unsupported Audio Formats
 
-A sound is played by the engine Windows has where its decoders reach the format and by an
-installed FFmpeg where they do not, so what is below is not "this machine cannot play it" —
-that is the question `Codecs → Audio` answers per machine, and a format neither engine reaches
-on the machine in hand is a card that never appears rather than a broken one. What is here is
-what *no* installation reaches. Beside each name is the one thing that would change it.
+A sound is played by the engine Windows has where its decoders reach the format and by an installed FFmpeg where they do not, so what is below is not "this machine cannot play it" — that is the question `Codecs → Audio` answers per machine, and a format neither engine reaches on the machine in hand is a card that never appears rather than a broken one. What is here is what *no* installation reaches. Beside each name is the one thing that would change it.
 
 **A format neither engine decodes at all**
 
-- **MIDI** (`.mid`, `.midi`, `.rmi`, `.kar`). The GS Wavetable synthesizer Windows ships is a
-  MIDI *out* device and not a decoder: Media Foundation is never handed a `.mid`, and FFmpeg's
-  own demuxer produces MIDI events that no decoder of its consumes — its player shows the
-  file's name and plays silence. What it would take is a synthesizer rather than a decoder: a
-  SoundFont engine (FluidSynth, or `munt` for the MT-32 files) driven beside the two players
-  the way the engines of the other kinds are driven, which is another program to detect.
-- **The tracker modules** (`.mod`, `.xm`, `.it`, `.s3m`, `.669`, `.stm`, `.amf`, `.far`). Their
-  instruments are samples inside the file and the player *is* the synthesizer, which is why no
-  decoder for one is in FFmpeg's default build: libopenmpt is a build option there, and an
-  FFmpeg built with it plays every one of them. A machine whose `ffplay` carries libopenmpt
-  needs only the name added to `[audio]` by hand; everyone else needs another program
-  (OpenMPT) driven as an engine.
-- **The protected files** (`.m4p`, `.aa`, `.aax`). DRM: an iTunes purchase and an Audible book
-  are encrypted, and neither engine decrypts one. No list entry reaches them, and what it would
-  take is a decryption this app has no business doing.
+- **MIDI** (`.mid`, `.midi`, `.rmi`, `.kar`). The GS Wavetable synthesizer Windows ships is a MIDI *out* device and not a decoder: Media Foundation is never handed a `.mid`, and FFmpeg's own demuxer produces MIDI events that no decoder of its consumes — its player shows the file's name and plays silence. What it would take is a synthesizer rather than a decoder: a SoundFont engine (FluidSynth, or `munt` for the MT-32 files) driven beside the two players the way the engines of the other kinds are driven, which is another program to detect.
+- **The tracker modules** (`.mod`, `.xm`, `.it`, `.s3m`, `.669`, `.stm`, `.amf`, `.far`). Their instruments are samples inside the file and the player *is* the synthesizer, which is why no decoder for one is in FFmpeg's default build: libopenmpt is a build option there, and an FFmpeg built with it plays every one of them. A machine whose `ffplay` carries libopenmpt needs only the name added to `[audio]` by hand; everyone else needs another program (OpenMPT) driven as an engine.
+- **The protected files** (`.m4p`, `.aa`, `.aax`). DRM: an iTunes purchase and an Audible book are encrypted, and neither engine decrypts one. No list entry reaches them, and what it would take is a decryption this app has no business doing.
 
 **A file that is not a sound under a name that says it is**
 
-- **The playlists** (`.m3u`, `.m3u8`, `.pls`, `.wpl`, `.asx`, `.cue`). They are text that
-  *names* other files, so what a preview of one could show is the list rather than a sound —
-  and the text preview already reads them as the text they are, which is a better answer than
-  a card with nothing behind it. Adding one to `[audio]` is a line, and the answer it buys is
-  a card for a file with no audio in it.
-- **A CD audio track** (`.cda`). Forty-four bytes naming a track on a disc, with no audio in
-  the file at all: an honest preview is a card with the disc's name on it, and there is no
-  disc to read here.
+- **The playlists** (`.m3u`, `.m3u8`, `.pls`, `.wpl`, `.asx`, `.cue`). They are text that *names* other files, so what a preview of one could show is the list rather than a sound — and the text preview already reads them as the text they are, which is a better answer than a card with nothing behind it. Adding one to `[audio]` is a line, and the answer it buys is a card for a file with no audio in it.
+- **A CD audio track** (`.cda`). Forty-four bytes naming a track on a disc, with no audio in the file at all: an honest preview is a card with the disc's name on it, and there is no disc to read here.
 
-**And the two that are a question about the machine rather than about the format.** A name
-whose decoder is missing is a name that shows nothing until the codec is installed — the
-`Codecs → Audio` menu is where that is seen, and the **Web Media Extensions** package is what
-Vorbis and Opus are waiting for. A name whose engine is missing is the same question one
-level up: a `.flac` on a machine with no Media Foundation and no FFmpeg is a file with no
-preview at all, which is the answer every engine-drawn kind gives when its engine is gone.
+**And the two that are a question about the machine rather than about the format.** A name whose decoder is missing is a name that shows nothing until the codec is installed — the `Codecs → Audio` menu is where that is seen, and the **Web Media Extensions** package is what Vorbis and Opus are waiting for. A name whose engine is missing is the same question one level up: a `.flac` on a machine with no Media Foundation and no FFmpeg is a file with no preview at all, which is the answer every engine-drawn kind gives when its engine is gone.
 
 ## Unsupported LibreOffice Format
 
-Two gaps. The first is a file that is shown only when its name is right, because nothing
-in the file itself says what it is. The second is a file the app cannot show at all.
-Beside each name is the one thing that would change that.
+Two gaps. The first is a file that is shown only when its name is right, because nothing in the file itself says what it is. The second is a file the app cannot show at all. Beside each name is the one thing that would change that.
 
 **Nothing in the file confirms what it is**
 
-- **A container with no label inside it.** A zip (`.apk` `.cbz` `.jar` `.xpi` `.zipx`, and
-  the `.fig` `.procreate` `.sketch` `.xd` design projects), an Office package (`.docm`
-  `.dotm` `.dotx` `.potm` `.potx` `.ppsm` `.ppsx` `.pptm` `.xlsm` `.xlsb` `.xltm` `.xltx`),
-  an iWork document (`.key` `.numbers` `.pages`), an older Office, Visio or Publisher file
-  (`.dot` `.pot` `.pps` `.xlt` `.vsd` `.pub`) or a newer Visio one (`.vsdm` `.vsdx` `.vstx`),
-  a StarOffice 5 document (`.sda` `.sdc` `.sdd` `.sdw`), a Pocket Word `.psw`, a Zoner
-  `.zmf`, or a gzip stream (`.tar.gz` `.tgz` `.gnumeric` `.gnm` `.abw` `.zabw`). The bytes
-  are the same whatever the box holds, so a renamed file cannot be sorted out.
-  OpenDocuments, StarOffice XML documents and Krita projects are the exception: each writes
-  its own type inside itself, and that is what they are read by.
-- **A format whose marker sits at the end of the file, or past what is read.** `.tga` (its
-  marker is the last 18 bytes), `.flm` (36 bytes from the end), a TiVo `.ty` or `.ty+` (its
-  markers repeat every 128 KB). Only the first 4 KB of a file is read.
-- **A format whose signature is its own text.** `.svg` `.svgz`, a flat OpenDocument
-  (`.fodt` `.fodg` `.fodp`), a Visio `.vdx`. Text is left to the text preview: guessing a
-  format from text would misread ordinary documents.
-- **A format with no marker at all, or none FFmpeg reads.** `.mvi` `.mxg` `.psp` `.vw`, and
-  `.cin`, whose FFmpeg demuxer is gone. These preview only when the name is right.
-- **A marker too weak to trust.** `.mw` (MacWrite): its header is two bytes that any file
-  could have, so a guess from them would mislabel ordinary files as documents.
+- **A container with no label inside it.** A zip (`.apk` `.cbz` `.jar` `.xpi` `.zipx`, and the `.fig` `.procreate` `.sketch` `.xd` design projects), an Office package (`.docm` `.dotm` `.dotx` `.potm` `.potx` `.ppsm` `.ppsx` `.pptm` `.xlsm` `.xlsb` `.xltm` `.xltx`), an iWork document (`.key` `.numbers` `.pages`), an older Office, Visio or Publisher file (`.dot` `.pot` `.pps` `.xlt` `.vsd` `.pub`) or a newer Visio one (`.vsdm` `.vsdx` `.vstx`), a StarOffice 5 document (`.sda` `.sdc` `.sdd` `.sdw`), a Pocket Word `.psw`, a Zoner `.zmf`, or a gzip stream (`.tar.gz` `.tgz` `.gnumeric` `.gnm` `.abw` `.zabw`). The bytes are the same whatever the box holds, so a renamed file cannot be sorted out. OpenDocuments, StarOffice XML documents and Krita projects are the exception: each writes its own type inside itself, and that is what they are read by.
+- **A format whose marker sits at the end of the file, or past what is read.** `.tga` (its marker is the last 18 bytes), `.flm` (36 bytes from the end), a TiVo `.ty` or `.ty+` (its markers repeat every 128 KB). Only the first 4 KB of a file is read.
+- **A format whose signature is its own text.** `.svg` `.svgz`, a flat OpenDocument (`.fodt` `.fodg` `.fodp`), a Visio `.vdx`. Text is left to the text preview: guessing a format from text would misread ordinary documents.
+- **A format with no marker at all, or none FFmpeg reads.** `.mvi` `.mxg` `.psp` `.vw`, and `.cin`, whose FFmpeg demuxer is gone. These preview only when the name is right.
+- **A marker too weak to trust.** `.mw` (MacWrite): its header is two bytes that any file could have, so a guess from them would mislabel ordinary files as documents.
 
 **A file was offered to an engine that could not read it**
 
-- `qxp` (older QuarkXPress), `pm3` `pm4` `pm5` (PageMaker before 6), `vssm` `vst` `vstm`
-  `vtx` `vsx` (Visio stencils and templates), `epub` — LibreOffice was asked, answered
-  nothing, and each cost a launch and showed nothing, so they are out of the `[libre]` list.
-  What its filters do read are the neighbouring names `qxd` `qxt`, `pm` `p65` `pm6` `pmd`,
-  and `vdx` `vsd` `vsdm` `vsdx` `vstx`.
-- `agd` `fhd` `jtd` `jtt` `plt` `pxl` `rl` `sdp` `sgf` `sgl` `uof` `uop` `uos` `uot` `vor` —
-  no LibreOffice filter claims them at all. A reader for one is a piece of work of its own
-  (Ichitaro, the uniform office formats), with nothing here to test it against.
-- `swf` — a Flash animation. The engine did not fail on it, it froze, so the name was taken
-  out a step earlier and is played as a video instead.
-- Any of them comes back with a reader, or an engine that has the filter: add the name to
-  `[libre]` in `config.ini` on a machine whose LibreOffice reads it.
-- The engine also reads names the list has never held — `qxd` `qxt` (QuarkXPress) and `p65`
-  (PageMaker) — which could be added just as the list stands; what is missing is a file of
-  one to settle that it converts.
+- `qxp` (older QuarkXPress), `pm3` `pm4` `pm5` (PageMaker before 6), `vssm` `vst` `vstm` `vtx` `vsx` (Visio stencils and templates), `epub` — LibreOffice was asked, answered nothing, and each cost a launch and showed nothing, so they are out of the `[libre]` list. What its filters do read are the neighbouring names `qxd` `qxt`, `pm` `p65` `pm6` `pmd`, and `vdx` `vsd` `vsdm` `vsdx` `vstx`.
+- `agd` `fhd` `jtd` `jtt` `plt` `pxl` `rl` `sdp` `sgf` `sgl` `uof` `uop` `uos` `uot` `vor` — no LibreOffice filter claims them at all. A reader for one is a piece of work of its own (Ichitaro, the uniform office formats), with nothing here to test it against.
+- `swf` — a Flash animation. The engine did not fail on it, it froze, so the name was taken out a step earlier and is played as a video instead.
+- Any of them comes back with a reader, or an engine that has the filter: add the name to `[libre]` in `config.ini` on a machine whose LibreOffice reads it.
+- The engine also reads names the list has never held — `qxd` `qxt` (QuarkXPress) and `p65` (PageMaker) — which could be added just as the list stands; what is missing is a file of one to settle that it converts.
 
 ## Unsupported ImageMagick File Format
 
-Every name an installed engine's own registry carries — `magick -list format`, the same list the
-built-in `[magick]` extensions were read out of one name at a time — and this app does not preview
-through it: 80 of them, measured against ImageMagick 7.1.2 Q16-HDRI for Windows, which is the
-build whose coders the `[magick]` list was settled on. Another build carries what its own coders
-are built with, so `magick -list format` on the machine in hand is the question to ask there. None
-of the names below is missing by accident: the groups are the reasons, and what each would take is
-beside it. Adding a name to `[magick]` in `config.ini` is the whole change wherever the engine here
-really reads the format; the rest is a reader, a delegate or a build feature.
+Every name an installed engine's own registry carries — `magick -list format`, the same list the built-in `[magick]` extensions were read out of one name at a time — and this app does not preview through it: 80 of them, measured against ImageMagick 7.1.2 Q16-HDRI for Windows, which is the build whose coders the `[magick]` list was settled on. Another build carries what its own coders are built with, so `magick -list format` on the machine in hand is the question to ask there. None of the names below is missing by accident: the groups are the reasons, and what each would take is beside it. Adding a name to `[magick]` in `config.ini` is the whole change wherever the engine here really reads the format; the rest is a reader, a delegate or a build feature.
 
-What the list is made of is the camera raw formats and, beside them, the names the engine will read
-when it is forced and the raw sample dumps. Every name the engine draws when forced is an entry
-there — the second spelling of a format another list holds (`pict`, `sun`, `pcds`, `dxt1`, `dxt5`,
-`group4`, `icb`, `vda`, `vst`, `picon`) as much as the formats no preview was ever asked for (an
-`.hrz`, a `.fax`, a `.mac`, a `.wbinfo`) — and the dumps (`rgb`, `rgba`, `gray`, `cmyk` and their
-kin) are read at a shape worked out from the file's own length, since a dump has no header to read
-one out of. What is left below is what neither of those reaches.
+What the list is made of is the camera raw formats and, beside them, the names the engine will read when it is forced and the raw sample dumps. Every name the engine draws when forced is an entry there — the second spelling of a format another list holds (`pict`, `sun`, `pcds`, `dxt1`, `dxt5`, `group4`, `icb`, `vda`, `vst`, `picon`) as much as the formats no preview was ever asked for (an `.hrz`, a `.fax`, a `.mac`, a `.wbinfo`) — and the dumps (`rgb`, `rgba`, `gray`, `cmyk` and their kin) are read at a shape worked out from the file's own length, since a dump has no header to read one out of. What is left below is what neither of those reaches.
 
-**A second name for a format this app already previews** — the engine is never asked for one of
-these, and a file carrying one shows nothing although its bytes are a format this app reads:
-`bmp2` `bmp3`, `gif87`, `jps` `pjpeg` `mpo`, `png8` `png00` `png24` `png32` `png48` `png64`, `tiff64`
-`ptif`, `icn` `icon`, `farbfeld`. Most are the engine's own output selectors rather than names a
-file arrives under; the ones a real file could carry are each one entry in the list that already
-holds the format — `mpo` (the multi-picture JPEG a phone writes) in `[image]` beside `jpg`, and
-`farbfeld` beside `ff`.
+**A second name for a format this app already previews** — the engine is never asked for one of these, and a file carrying one shows nothing although its bytes are a format this app reads: `bmp2` `bmp3`, `gif87`, `jps` `pjpeg` `mpo`, `png8` `png00` `png24` `png32` `png48` `png64`, `tiff64` `ptif`, `icn` `icon`, `farbfeld`. Most are the engine's own output selectors rather than names a file arrives under; the ones a real file could carry are each one entry in the list that already holds the format — `mpo` (the multi-picture JPEG a phone writes) in `[image]` beside `jpg`, and `farbfeld` beside `ff`.
 
-**A font the specimen cannot draw** — `pfa` `pfb` (PostScript Type 1, ASCII and binary) and `dfont`
-(a Macintosh suitcase). Both routes are closed, and each is closed by the thing the format would
-have to be drawn with. A specimen of ours is text the browser engine draws in a font it is pointed
-at, and every font a page asks for goes through that engine's own sanitizer — the OpenType
-Sanitizer, which parses OpenType in its two shapes and the two WebFont containers and turns
-everything else down — so a Type 1 face and a suitcase are files the specimen can be given and
-cannot be drawn with: measured on the runtime this app uses, a `.ttf` loads and an 11 KB Windows
-bitmap font (`.fon`) beside it is refused. ImageMagick is the other route and reads all three
-through FreeType, but a font is the font preview's kind: what it would show is a rendering of a
-face rather than our lines about it, which is the shape of work a raw takes rather than a list
-entry. `.ttf`, `.otf`, `.ttc`, `.woff` and `.woff2` stay the whole of the font list for that
-reason.
+**A font the specimen cannot draw** — `pfa` `pfb` (PostScript Type 1, ASCII and binary) and `dfont` (a Macintosh suitcase). Both routes are closed, and each is closed by the thing the format would have to be drawn with. A specimen of ours is text the browser engine draws in a font it is pointed at, and every font a page asks for goes through that engine's own sanitizer — the OpenType Sanitizer, which parses OpenType in its two shapes and the two WebFont containers and turns everything else down — so a Type 1 face and a suitcase are files the specimen can be given and cannot be drawn with: measured on the runtime this app uses, a `.ttf` loads and an 11 KB Windows bitmap font (`.fon`) beside it is refused. ImageMagick is the other route and reads all three through FreeType, but a font is the font preview's kind: what it would show is a rendering of a face rather than our lines about it, which is the shape of work a raw takes rather than a list entry. `.ttf`, `.otf`, `.ttc`, `.woff` and `.woff2` stay the whole of the font list for that reason.
 
-**A document rather than a picture** — `ps` `pcl` `xps` (all drawn through Ghostscript), `djvu`
-(through DjVuLibre), `gv` (through Graphviz — `dot`, its other spelling, is a name our office list
-already claims as Word's template), and the engine's own page languages `mvg` `msl` `pocketmod`.
-The engine draws the first three through a delegate rather than itself, and none of the three
-delegates is on the machine this was measured on — no `gswin64c`, no `dot`, no `ddjvu` — so each of
-these answers nothing here today, before a list entry is even reached. A page is also what the PDF
-path and the render engine are for, so a name here is a third way to draw one. (`mvg` is the one of
-them that needs no delegate: forced it works, but only where the coder is named — `mvg:file.mvg` —
-because a plain path is not recognized as its own format.)
+**A document rather than a picture** — `ps` `pcl` `xps` (all drawn through Ghostscript), `djvu` (through DjVuLibre), `gv` (through Graphviz — `dot`, its other spelling, is a name our office list already claims as Word's template), and the engine's own page languages `mvg` `msl` `pocketmod`. The engine draws the first three through a delegate rather than itself, and none of the three delegates is on the machine this was measured on — no `gswin64c`, no `dot`, no `ddjvu` — so each of these answers nothing here today, before a list entry is even reached. A page is also what the PDF path and the render engine are for, so a name here is a third way to draw one. (`mvg` is the one of them that needs no delegate: forced it works, but only where the coder is named — `mvg:file.mvg` — because a plain path is not recognized as its own format.)
 
-**The engine's own notation** — names of images to _make_, and of things that are not files: `xc`
-`canvas` `caption` `label` `gradient` `fractal` `plasma` `hald` `histogram` `pattern` `tile` `null`
-`strimg` `vid` `inline` `data` `clipboard` `file` `http` `https` `ftp` `screenshot` `thumbnail`
-`mask` `clip` `msvg` `rsvg` `dcraw`. A hover on a file called `https` is a hover on nothing.
+**The engine's own notation** — names of images to _make_, and of things that are not files: `xc` `canvas` `caption` `label` `gradient` `fractal` `plasma` `hald` `histogram` `pattern` `tile` `null` `strimg` `vid` `inline` `data` `clipboard` `file` `http` `https` `ftp` `screenshot` `thumbnail` `mask` `clip` `msvg` `rsvg` `dcraw`. A hover on a file called `https` is a hover on nothing.
 
-**A name this build cannot read at all** — the registry carries it and the mode says no read, so
-nothing can be asked of it until a delegate is installed or a build feature is turned on: `bie`
-`jbg` `jbig` (JBIG), `flif`, `fpx` (FlashPix), `dmr`, `dps` (Display PostScript), `uhdr` (Ultra
-HDR), and the write-only rest, which are files the engine _makes_ rather than opens — `ashlar`
-`brf` `cip` `eps2` `eps3` `info` `isobrl` `isobrl6` `kernel` `matte` `ps2` `ps3` `shtml` `ubrl`
-`ubrl6` `uil`. `xwd` belongs here too although no registry entry of this build lists it: the format
-is documented, the coder for it is not among the modules the installer put down, so the name would
-be asked for and would answer nothing.
+**A name this build cannot read at all** — the registry carries it and the mode says no read, so nothing can be asked of it until a delegate is installed or a build feature is turned on: `bie` `jbg` `jbig` (JBIG), `flif`, `fpx` (FlashPix), `dmr`, `dps` (Display PostScript), `uhdr` (Ultra HDR), and the write-only rest, which are files the engine _makes_ rather than opens — `ashlar` `brf` `cip` `eps2` `eps3` `info` `isobrl` `isobrl6` `kernel` `matte` `ps2` `ps3` `shtml` `ubrl` `ubrl6` `uil`. `xwd` belongs here too although no registry entry of this build lists it: the format is documented, the coder for it is not among the modules the installer put down, so the name would be asked for and would answer nothing.
 
-**And one the registry does not carry, because this build has no coder for it** — `xwd`, the X11
-window dump. ImageMagick has the coder (registered as `_XWD`) and the Windows installers leave its
-module out, so asking one of those builds for a `.xwd` fails looking for a module that is not
-there, and `magick -list format` — which names the formats whose coders are installed — does not
-name it at all. A build that ships it declares it, and then the name is one entry away like the
-rest.
+**And one the registry does not carry, because this build has no coder for it** — `xwd`, the X11 window dump. ImageMagick has the coder (registered as `_XWD`) and the Windows installers leave its module out, so asking one of those builds for a `.xwd` fails looking for a module that is not there, and `magick -list format` — which names the formats whose coders are installed — does not name it at all. A build that ships it declares it, and then the name is one entry away like the rest.
 
 ## Unsupported PeaZip File Format
 
-The archives PeaZip opens that nothing here shows. They are of two kinds, and neither is a name
-missing from `[peazip]` by accident: a name put in that list is a name the engine is *asked*
-about, and one it turns down costs a launch before the answer is remembered, so a name the
-engine cannot read is left out on purpose and written down here instead.
+The archives PeaZip opens that nothing here shows. They are of two kinds, and neither is a name missing from `[peazip]` by accident: a name put in that list is a name the engine is *asked* about, and one it turns down costs a launch before the answer is remembered, so a name the engine cannot read is left out on purpose and written down here instead.
 
 Beside each name is the one thing that would change it.
 
-**A format PeaZip handles with another of its own tools** — the engine this app drives is the
-console archiver PeaZip carries, and these are the formats its other backends handle: `pea`
-(PeaZip's own format), `paq8`, `upx`, and the codecs its build carries no format for — `lz4`,
-`lz5`, `lizard`, `flzma2`. Asking the archiver for one of them is answered with `Cannot open the
-file as archive`, measured against PeaZip 10.9.0. The tools beside it are driven now — `arc`,
-`zpaq`, `zst`, `br`, `bcm` and `lpaq8` are entries of `[peazip]`, and each is read by the tool
-inside the installation that reads it (see `peazip_formats::Backend`) — so what is left here is
-the rest:
+**A format PeaZip handles with another of its own tools** — the engine this app drives is the console archiver PeaZip carries, and these are the formats its other backends handle: `pea` (PeaZip's own format), `paq8`, `upx`, and the codecs its build carries no format for — `lz4`, `lz5`, `lizard`, `flzma2`. Asking the archiver for one of them is answered with `Cannot open the file as archive`, measured against PeaZip 10.9.0. The tools beside it are driven now — `arc`, `zpaq`, `zst`, `br`, `bcm` and `lpaq8` are entries of `[peazip]`, and each is read by the tool inside the installation that reads it (see `peazip_formats::Backend`) — so what is left here is the rest:
 
-- `pea`: there is no list command to drive. The PEA documentation says so — "there is no
-  separate list/test command" — and what the format holds is written in object headers that its
-  extractor walks. A reader here would be a walk of those headers (they are not compressed), or
-  a preview built by extracting a copy to a temp folder, which is an extraction this app makes
-  for nothing else.
-- `lz4`, `lz5`, `lizard`, `flzma2`: single-stream codecs the console archiver carries and no
-  tool of the installation opens a file of. `br` was the same case until `brotli.exe` was routed
-  for it; these four have no executable beside them at all — measured, the whole of `res\bin`
-  holds `7z`, `arc`, `brotli`, `lpaq`, `quad` and `zstd` — so there is nothing to route them to.
-- `paq8`: the PAQ8 family's tool is not in this installation. `res\bin\paq` holds no executable
-  while `res\bin\lpaq` beside it holds the `lpaq8.exe` that reads an `.lpaq8`, which is why that
-  name is in the list and this one is not; a build that ships `paq\paq8.exe` would be one entry
-  in the list and one arm of the routing away.
-- `upx`: not an archive at all. UPX packs an executable, and what it lists of a file is how that
-  one file was packed rather than what is inside it — and a program is not an archive, which is
-  the same reason `exe` and `dll` are not entries of the list.
+- `pea`: there is no list command to drive. The PEA documentation says so — "there is no separate list/test command" — and what the format holds is written in object headers that its extractor walks. A reader here would be a walk of those headers (they are not compressed), or a preview built by extracting a copy to a temp folder, which is an extraction this app makes for nothing else.
+- `lz4`, `lz5`, `lizard`, `flzma2`: single-stream codecs the console archiver carries and no tool of the installation opens a file of. `br` was the same case until `brotli.exe` was routed for it; these four have no executable beside them at all — measured, the whole of `res\bin` holds `7z`, `arc`, `brotli`, `lpaq`, `quad` and `zstd` — so there is nothing to route them to.
+- `paq8`: the PAQ8 family's tool is not in this installation. `res\bin\paq` holds no executable while `res\bin\lpaq` beside it holds the `lpaq8.exe` that reads an `.lpaq8`, which is why that name is in the list and this one is not; a build that ships `paq\paq8.exe` would be one entry in the list and one arm of the routing away.
+- `upx`: not an archive at all. UPX packs an executable, and what it lists of a file is how that one file was packed rather than what is inside it — and a program is not an archive, which is the same reason `exe` and `dll` are not entries of the list.
 
-What showed `arc` and `zpaq`, and what is worth knowing about them now that they are here:
-`Arc.exe v` is FreeArc's verbose listing, its one listing that carries the attributes a folder is
-told by, and its packed column is block accounting rather than a size per entry — the second file
-of a solid block is reported as taking nothing — so no packed total is read out of it; `zpaq.exe l`
-lists the latest version of every name it holds; and the zpaq PeaZip 10.9.0 ships is zpaqfranz,
-which does not come back at all from a file that is not a zpaq, so a `.zpaq` whose bytes are
-something else is a hover the give-up answers.
+What showed `arc` and `zpaq`, and what is worth knowing about them now that they are here: `Arc.exe v` is FreeArc's verbose listing, its one listing that carries the attributes a folder is told by, and its packed column is block accounting rather than a size per entry — the second file of a solid block is reported as taking nothing — so no packed total is read out of it; `zpaq.exe l` lists the latest version of every name it holds; and the zpaq PeaZip 10.9.0 ships is zpaqfranz, which does not come back at all from a file that is not a zpaq, so a `.zpaq` whose bytes are something else is a hover the give-up answers.
 
-**And a format whose marker a hover cannot reach.** An `.iso` and a `.udf` say what they are
-thirty-two kilobytes into the file — `CD001` at 32769, a UDF descriptor at 32768 — and what a
-hover reads of any file is its first four kilobytes, so neither can be confirmed by its own
-bytes. Both preview by name, through the engine, and a renamed one is a file nothing recognizes
-rather than a file shown wrongly. `lzma` and a split archive's `001` are here for the plainer
-version of the same thing: neither has a marker at all, so both are the name's business, and
-that is the whole of what can be done with them.
+**And a format whose marker a hover cannot reach.** An `.iso` and a `.udf` say what they are thirty-two kilobytes into the file — `CD001` at 32769, a UDF descriptor at 32768 — and what a hover reads of any file is its first four kilobytes, so neither can be confirmed by its own bytes. Both preview by name, through the engine, and a renamed one is a file nothing recognizes rather than a file shown wrongly. `lzma` and a split archive's `001` are here for the plainer version of the same thing: neither has a marker at all, so both are the name's business, and that is the whole of what can be done with them.
 
-What is *not* here is the names the engine reads and this app leaves out on purpose — the
-programs it lists as resources (`exe`, `dll`, `sys`, `obj`, `elf`, `macho`), the names that are
-words rather than formats (`img`, `ext`, `fat`, `mbr`, `gpt`), and the index files beside a
-compiled help file. Each of those *could* be shown, and each is left out for a reason that is
-written where the list is (`peazip_formats`), because a preview nobody asked for is worse than
-none.
+What is *not* here is the names the engine reads and this app leaves out on purpose — the programs it lists as resources (`exe`, `dll`, `sys`, `obj`, `elf`, `macho`), the names that are words rather than formats (`img`, `ext`, `fat`, `mbr`, `gpt`), and the index files beside a compiled help file. Each of those *could* be shown, and each is left out for a reason that is written where the list is (`peazip_formats`), because a preview nobody asked for is worse than none.
 
 ## Unsupported Calibre File Format
 
-The books the ebook engine is asked about are the `[calibre]` list's; what is below is every other name
-its own conversion pipeline declares that this app does not hand over, read one at a time out of the
-engine's own documentation of it. None of them is missing by accident: the groups are the reasons, and
-what each would take is beside it.
+The books the ebook engine is asked about are the `[calibre]` list's; what is below is every other name its own conversion pipeline declares that this app does not hand over, read one at a time out of the engine's own documentation of it. None of them is missing by accident: the groups are the reasons, and what each would take is beside it.
 
-**A name another list of this app's already reads** — the engine is never asked about one of these, and
-the file is shown by the kind that holds it, which for most of them is a preview at least as good as a
-converted page: `cbz`, `cbr` and `cbc` (comics — the `[ebook]` list's, which this app reads itself and
-shows the first plate of; see **Unsupported Comic Formats** below for what is left of them), `docx`
-(the Office list), `odt` and `pdb` (`[libre]` — LibreOffice's own filters read AportisDoc and
-OpenDocument), `html`, `rtf` and `txt` (the text lists, which read and highlight them), `chm` (the
-`[peazip]` list's), and `pdf`, which is this app's own page reader. Adding one to `[calibre]` would be a
-second engine asked about a file another already answers, which is the one thing the lists exist to
-prevent.
+**A name another list of this app's already reads** — the engine is never asked about one of these, and the file is shown by the kind that holds it, which for most of them is a preview at least as good as a converted page: `cbz`, `cbr` and `cbc` (comics — the `[ebook]` list's, which this app reads itself and shows the first plate of; see **Unsupported Comic Formats** below for what is left of them), `docx` (the Office list), `odt` and `pdb` (`[libre]` — LibreOffice's own filters read AportisDoc and OpenDocument), `html`, `rtf` and `txt` (the text lists, which read and highlight them), `chm` (the `[peazip]` list's), and `pdf`, which is this app's own page reader. Adding one to `[calibre]` would be a second engine asked about a file another already answers, which is the one thing the lists exist to prevent.
 
-A compiled help file is the one name in that group whose other preview is *not* the better one, and the
-judgement is worth writing down because it is the only place this app trades a page for a wait: the engine
-draws a real page for a `.chm` and takes two to three seconds to draw it, and what a help file is hovered
-for is usually nothing — so it is listed instead, immediately, and the page is given up knowingly. It was
-in `[calibre]` for one build and is `[peazip]`'s again, while `lit` beside it and the comics below stayed
-where the page was worth having — the difference between them is what the file is hovered *for*, not what
-can be drawn. A machine that would rather have the page has it by moving `chm` into `[calibre]` by hand,
-which is a line, and an immediate answer is exactly what that line costs.
+A compiled help file is the one name in that group whose other preview is *not* the better one, and the judgement is worth writing down because it is the only place this app trades a page for a wait: the engine draws a real page for a `.chm` and takes two to three seconds to draw it, and what a help file is hovered for is usually nothing — so it is listed instead, immediately, and the page is given up knowingly. It was in `[calibre]` for one build and is `[peazip]`'s again, while `lit` beside it and the comics below stayed where the page was worth having — the difference between them is what the file is hovered *for*, not what can be drawn. A machine that would rather have the page has it by moving `chm` into `[calibre]` by hand, which is a line, and an immediate answer is exactly what that line costs.
 
-**A format the engine does not read at all** — no list entry can reach these, and the work is a reader
-or a plugin rather than a name: `tpz`, Amazon's Topaz, which the engine detects and *refuses* with a
-message saying it cannot be converted; `kfx`, the format the current Kindle store serves, which is read
-by a third-party plugin (`KFX Input`) rather than by the engine itself and which this app has no way to
-drive; and `recipe`, which is not a file format at all but a Python script the engine fetches feeds
-with.
+**A format the engine does not read at all** — no list entry can reach these, and the work is a reader or a plugin rather than a name: `tpz`, Amazon's Topaz, which the engine detects and *refuses* with a message saying it cannot be converted; `kfx`, the format the current Kindle store serves, which is read by a third-party plugin (`KFX Input`) rather than by the engine itself and which this app has no way to drive; and `recipe`, which is not a file format at all but a Python script the engine fetches feeds with.
 
-**A spelling the engine's own plugin does not declare** — `lrx`, the protected spelling of the Sony LRF
-container. The engine's LRF input plugin declares `.lrf` and not `.lrx`, so the name is left out of
-`[calibre]`: a name the engine cannot open costs a conversion before the answer is remembered. A
-machine whose engine turns out to read one has it back by adding `lrx` to the list by hand.
+**A spelling the engine's own plugin does not declare** — `lrx`, the protected spelling of the Sony LRF container. The engine's LRF input plugin declares `.lrf` and not `.lrx`, so the name is left out of `[calibre]`: a name the engine cannot open costs a conversion before the answer is remembered. A machine whose engine turns out to read one has it back by adding `lrx` to the list by hand.
 
-**And a book no engine here can open, which is not a list's business** — the Kindle family above all.
-An `.azw`, an `.azw3` or an `.azw4` bought from Amazon is encrypted, and `ebook-convert` will not open
-one: what a hover on it shows is the spinner and then nothing, once, and then nothing at all until the
-refusal ages out. That is the answer the engine gives rather than a gap in the list, and it is written
-down here because it is the file a user is most likely to hover first — a protected book is a book no
-engine this app drives can convert, whatever list its name is in.
+**And a book no engine here can open, which is not a list's business** — the Kindle family above all. An `.azw`, an `.azw3` or an `.azw4` bought from Amazon is encrypted, and `ebook-convert` will not open one: what a hover on it shows is the spinner and then nothing, once, and then nothing at all until the refusal ages out. That is the answer the engine gives rather than a gap in the list, and it is written down here because it is the file a user is most likely to hover first — a protected book is a book no engine this app drives can convert, whatever list its name is in.
 
 ## Unsupported Comic Formats
 
-A comic's first plate is read out of the container by this app itself — the `[ebook]` list's comics are
-`cbz`, `cbr` and `cbc`, and what a hover shows is the first picture inside one (see `comic_preview`).
-What is below is everything that reader does not reach, with what each would take.
+A comic's first plate is read out of the container by this app itself — the `[ebook]` list's comics are `cbz`, `cbr` and `cbc`, and what a hover shows is the first picture inside one (see `comic_preview`). What is below is everything that reader does not reach, with what each would take.
 
-**A plate written in a format only the codec Windows has can decode** — `webp` and `avif`, and with them
-`heic` and `jxl`. It is the one gap a reader of real comics meets: a `.cbz` of plates is very often a
-WebP set on the sites that publish digital manga, and a hover on one shows nothing at all today. The
-reason is not the format but the *side*: every plate is decoded from **bytes read out of a member**
-rather than from a file, and this app's decoders for those four formats are handed a path — the codec
-Windows has is asked for a file through the WIC factory, and the app's own libwebp binding reads a file
-too. What it would take is a stream over memory for each: an `IStream` over the buffer the member was
-inflated into — the in-memory sibling of the file stream this app already builds a page out of — and a
-decoder taken from that rather than from a path. Until then those four names are deliberately *not* in
-`PAGE_NAMES`, so a container whose plates are all WebP is answered with no preview rather than with a
-page that failed to decode.
+**A plate written in a format only the codec Windows has can decode** — `webp` and `avif`, and with them `heic` and `jxl`. It is the one gap a reader of real comics meets: a `.cbz` of plates is very often a WebP set on the sites that publish digital manga, and a hover on one shows nothing at all today. The reason is not the format but the *side*: every plate is decoded from **bytes read out of a member** rather than from a file, and this app's decoders for those four formats are handed a path — the codec Windows has is asked for a file through the WIC factory, and the app's own libwebp binding reads a file too. What it would take is a stream over memory for each: an `IStream` over the buffer the member was inflated into — the in-memory sibling of the file stream this app already builds a page out of — and a decoder taken from that rather than from a path. Until then those four names are deliberately *not* in `PAGE_NAMES`, so a container whose plates are all WebP is answered with no preview rather than with a page that failed to decode.
 
-**A comic in one of the other boxes** — `cb7` (a 7z), `cbt` (a tar) and `cbz`'s cousins are the same
-thing in another container, and neither of the two is in `[ebook]`: what `archive_listing::entry_bytes`
-reads is a zip and a rar, because those are what a comic is published in. Both would be small pieces of
-work rather than new readers — the `sevenz-rust2` and `tar` crates this app already links can each hand
-over one member by name — and a name added to `[ebook]` by hand shows nothing today for exactly this
-reason: the container is the comic reader's to read, and it reads two of them.
+**A comic in one of the other boxes** — `cb7` (a 7z), `cbt` (a tar) and `cbz`'s cousins are the same thing in another container, and neither of the two is in `[ebook]`: what `archive_listing::entry_bytes` reads is a zip and a rar, because those are what a comic is published in. Both would be small pieces of work rather than new readers — the `sevenz-rust2` and `tar` crates this app already links can each hand over one member by name — and a name added to `[ebook]` by hand shows nothing today for exactly this reason: the container is the comic reader's to read, and it reads two of them.
 
-**A `.cbc` whose comics are boxes inside it rather than pages.** Calibre's own container is a zip with a
-`comics.txt` index, and the two descriptions of what the index names disagree: one tool writes the
-**plates** of every comic into the archive under a folder per comic, and Calibre's own documentation
-speaks of the comic *files* it holds. This reader assumes the first — the plates — and it is the shape
-that makes a CBC one step rather than two. A CBC that holds whole `.cbz` and `.cbr` files instead is a
-file with no plate at the top level, so it shows nothing; what it would take is a nested read, which for
-an inner **zip** is a reader over bytes this app already has but for an inner **rar** is a spill to a
-temp file, because UnRAR is handed a path. No sample of the format was available to settle which shape
-it is, so the first is what was coded against and this is written down rather than guessed at twice.
+**A `.cbc` whose comics are boxes inside it rather than pages.** Calibre's own container is a zip with a `comics.txt` index, and the two descriptions of what the index names disagree: one tool writes the **plates** of every comic into the archive under a folder per comic, and Calibre's own documentation speaks of the comic *files* it holds. This reader assumes the first — the plates — and it is the shape that makes a CBC one step rather than two. A CBC that holds whole `.cbz` and `.cbr` files instead is a file with no plate at the top level, so it shows nothing; what it would take is a nested read, which for an inner **zip** is a reader over bytes this app already has but for an inner **rar** is a spill to a temp file, because UnRAR is handed a path. No sample of the format was available to settle which shape it is, so the first is what was coded against and this is written down rather than guessed at twice.
 
-**And a first plate that says nothing.** A converted book is previewed from the first of its pages that
-holds more than one colour, so a cover that is a colour swatch — which is what Calibre's quick start
-guides carry — is skipped for the page behind it (see `pdf_preview::book_page`). A comic's plate is
-chosen by *name* and shown as it is, so a scan that opens on a blank leaf, or a container whose `000.jpg`
-is a solid colour, shows that. The same walk would answer it — read the next plate by name when the
-first is one colour — and what it costs is one more decode per plate, which is why it is a change of its
-own rather than part of the reader.
+**And a first plate that says nothing.** A converted book is previewed from the first of its pages that holds more than one colour, so a cover that is a colour swatch — which is what Calibre's quick start guides carry — is skipped for the page behind it (see `pdf_preview::book_page`). A comic's plate is chosen by *name* and shown as it is, so a scan that opens on a blank leaf, or a container whose `000.jpg` is a solid colour, shows that. The same walk would answer it — read the next plate by name when the first is one colour — and what it costs is one more decode per plate, which is why it is a change of its own rather than part of the reader.
 
 ## What A Running Page Is Still Not Given
 
-A page drawn by `render_html` is the one document this app hands to the browser whole rather than
-as a picture, and the one document it runs: the wrapper frame is given `allow-scripts` beside
-`allow-same-origin`, and the engine's scripting is set per document rather than for the engine
-(`set_scripts`), so a page that draws *itself* — a WebGL canvas, a game — is a page shown by a run.
-That was measured on a single-file WebGL2 raytracer (`quasar.html`) with no network, no audio and no
-external references, and under the old rule it came up a blank black canvas. The pointer and the
-keyboard follow: the page's own rectangle holds the pointer, a drag that began there survives the
-pointer leaving it, and a click into the page activates it and its keys arrive. What is left over is
-the two things a run on its own does not bring, and each is a browser argument this app does not
-pass:
+A page drawn by `render_html` is the one document this app hands to the browser whole rather than as a picture, and the one document it runs: the wrapper frame is given `allow-scripts` beside `allow-same-origin`, and the engine's scripting is set per document rather than for the engine (`set_scripts`), so a page that draws *itself* — a WebGL canvas, a game — is a page shown by a run. That was measured on a single-file WebGL2 raytracer (`quasar.html`) with no network, no audio and no external references, and under the old rule it came up a blank black canvas. The pointer and the keyboard follow: the page's own rectangle holds the pointer, a drag that began there survives the pointer leaving it, and a click into the page activates it and its keys arrive. What is left over is the two things a run on its own does not bring, and each is a browser argument this app does not pass:
 
-- **Autoplay.** A page with sound of its own needs `--autoplay-policy=no-user-gesture-required`, and
-  `BROWSER_ARGUMENTS` passes only `--host-resolver-rules="MAP * ~NOTFOUND" --hide-scrollbars`, so
-  there is no flag for it. A page can still make a sound on a click, which is the page's own business
-  and is not withheld.
-- **Local file access.** A page that reads its siblings needs
-  `--allow-file-access-from-files`. Without it a page reaches its own file and nothing beside it,
-  and the page's own origin is what lets a page load its relative stylesheets and pictures at all —
-  which is also why the two sandbox allowances together are not the loosening they would be for
-  same-origin content: the wrapper is a file of this run's profile folder and the document is
-  another file, so the two are separate origins whatever the sandbox is told.
+- **Autoplay.** A page with sound of its own needs `--autoplay-policy=no-user-gesture-required`, and `BROWSER_ARGUMENTS` passes only `--host-resolver-rules="MAP * ~NOTFOUND" --hide-scrollbars`, so there is no flag for it. A page can still make a sound on a click, which is the page's own business and is not withheld.
+- **Local file access.** A page that reads its siblings needs `--allow-file-access-from-files`. Without it a page reaches its own file and nothing beside it, and the page's own origin is what lets a page load its relative stylesheets and pictures at all — which is also why the two sandbox allowances together are not the loosening they would be for same-origin content: the wrapper is a file of this run's profile folder and the document is another file, so the two are separate origins whatever the sandbox is told.
 
-Fullscreen is refused rather than missing (`allowfullscreen` is not given to the frame), and the
-browser's own furniture — context menus, devtools, zoom, the accelerator keys a browser answers for
-itself — is taken away for a page as it is for a drawing.
+Fullscreen is refused rather than missing (`allowfullscreen` is not given to the frame), and the browser's own furniture — context menus, devtools, zoom, the accelerator keys a browser answers for itself — is taken away for a page as it is for a drawing.
 
-WebGL2 is not on this list because nothing here blocks it: the runtime has it, and what stood in
-front of it was the script that is now given.
+WebGL2 is not on this list because nothing here blocks it: the runtime has it, and what stood in front of it was the script that is now given.
 
 ## Configuration
 
