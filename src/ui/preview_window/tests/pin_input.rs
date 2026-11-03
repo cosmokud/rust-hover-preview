@@ -717,3 +717,71 @@ fn the_first_press_takes_the_pointer_before_it_asks_for_the_keyboard() {
         *current = previous_media;
     }
 }
+
+/// **A resize is the one drag the message pump takes a position at a time**, and the answer is what the
+/// pump asks before it leaves the rest of the pointer's positions for the tick after it.
+///
+/// A step of a resize is a paint — the whole band composed through the sampler at the box the window is
+/// being pulled to — so dispatching every position the pointer reports is a pump that never empties, and
+/// the tick below it is the one that advances a playing picture. A pan and a move are not that: both
+/// write where the hand has got to and nothing else (see `apply_pin_drag`), so their positions cost a
+/// lock each and the pump drains them all.
+#[test]
+fn only_a_resize_is_a_drag_the_pump_takes_a_position_at_a_time() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let window = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .unwrap_or(content);
+    let dragging = |action: Option<PinDragAction>| {
+        with_pin(|pin| {
+            pin.dragging = action.map(|action| PinDrag {
+                from: (0, 0),
+                window,
+                action,
+                delivered: true,
+                carried: (i32::MIN, i32::MIN),
+            });
+        });
+    };
+
+    stand_pin(Some(with_pin_zoom(
+        overlay_pin(content, PinChrome::always()),
+        3.0,
+    )));
+    assert!(
+        !pin_is_resizing() && !pin_is_panning(),
+        "a pin with no hand on it is drag the pump paces nothing for"
+    );
+
+    // A move carries the window and a pan the picture inside it: neither composes a band in the
+    // pointer's own message, so both are drained as fast as the pointer reports them.
+    dragging(Some(PinDragAction::Move));
+    assert!(
+        !pin_is_resizing() && !pin_is_panning(),
+        "a window being carried is neither a resize nor a pan"
+    );
+    dragging(Some(PinDragAction::Pan { from: (0.0, 0.0) }));
+    assert!(
+        pin_is_panning() && !pin_is_resizing(),
+        "and a pan of the picture is the loop's own paint rather than a step of the pump's"
+    );
+
+    // An edge pulled is the one that paints where the pointer's message put it.
+    dragging(Some(PinDragAction::Resize(edge(false, false, true, true))));
+    assert!(
+        pin_is_resizing() && !pin_is_panning(),
+        "a resize is the drag whose step is a band composed, so the pump takes one position a tick"
+    );
+
+    dragging(None);
+    assert!(
+        !pin_is_resizing(),
+        "and a drag let go of is no longer one anything is paced for"
+    );
+
+    stand_pin(None);
+    stand_pin(previous_pin);
+}
