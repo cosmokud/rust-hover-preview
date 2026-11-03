@@ -901,7 +901,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                 MF_UNCHECKED
             },
         ID_TRAY_TEXT_SHOW_EXTENSIONLESS as usize,
-        w!("Show Extensionless"),
+        w!("Preview All Extensionless"),
     );
 
     let _ = AppendMenuW(
