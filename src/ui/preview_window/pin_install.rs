@@ -1496,6 +1496,19 @@ pub(super) fn relayout_pinned_media(
         // with the gutter, and the take-up's own arm asks for exactly that (see
         // `PinRelayoutRoad::TakeUp`). And a zoom never reaches a page at all.
         Some(MediaType::Text) if matches!(road, PinRelayoutRoad::BoxChange) => None,
+        // **And a frame that plays is not laid out again by a zoom, whatever box the picture has
+        // been taken out to.** A decode begins the file at its first frame, so the frame a relayout
+        // installs over an animation is the animation *started again*: where it had got to is the
+        // whole of what it was showing, and a wheel turned a notch at a time puts it back at the
+        // beginning on every notch it settles at, rather than growing a picture that plays on. The
+        // band stretches the frame the pin already holds into the box the picture is drawn at,
+        // which is the answer a picture that fills its window is given and the one a still picture
+        // is drawn from while a decode of it is in flight (see `compose_media_into_band`).
+        //
+        // A box change is not this: a pin put into a box of another size is one the hand has asked
+        // to be shown at that size, and a decode of it is worth the animation's place (see
+        // `PinRelayoutRoad::BoxChange`). And a take-up has no frame of this file to keep at all.
+        Some(kind) if kind.is_animation() && matches!(road, PinRelayoutRoad::Zoom) => None,
         // And a box change that the frame on screen already covers owes nothing at all: the band is
         // the window's own box and stretches whatever frame is there into it, so a decode here would
         // be paid to *replace* pixels the smaller box already has — and it is those pixels that

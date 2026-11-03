@@ -954,9 +954,12 @@ held frame, no cover and no reload (see "The film road").
   what is left within a tenth of the second (`PIN_ZOOM_RELEASE_SECONDS`), so a notch in and a notch out divide rather
   than step and leave the picture exactly where it was. A picture past the box it is drawn at is the file laid out again
   at that size (`PinRelayoutRoad::Zoom`, `pin_zoom_oversize_box`) — a page is rasterized at it — sharp as the source
-  allows rather than a stretched last frame. The image a zoom out brings home swings past its place and comes back
-  (`pin_zoom_step`, the `pin_zoom_bounce_*` settings). Which kinds zoom is `MediaType::is_zoomable_picture`: every
-  picture kind, a page among them, and never a video, whose picture belongs to a player's window.
+  allows rather than a stretched last frame; a frame that *plays* is the one kind that is not, since a decode begins the
+  file at its first frame and where an animation had got to is the whole of what it was showing, so its frame is
+  stretched into the box the picture is drawn at and plays on (`MediaType::is_animation`). The image a zoom out brings
+  home swings past its place and comes back (`pin_zoom_step`, the `pin_zoom_bounce_*` settings). Which kinds zoom is
+  `MediaType::is_zoomable_picture`: every picture kind, a page among them, and never a video, whose picture belongs to a
+  player's window.
 - Bubble picture (`pin_bubble.rs`, `bubble_stream.rs`): a collapsed film's circle is painted by this app on every route,
   and the picture is **one decode of the file begun where the player is** (`wanted_stream`: keyed by path, the player's
   own start moment and the square's side; 25 fps, scaled and cropped to the square, everything but the newest frame
