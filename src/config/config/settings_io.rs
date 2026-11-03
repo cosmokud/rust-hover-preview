@@ -64,6 +64,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "pin_enabled",
             "pin_key",
             "pin_nav_audio",
+            "pin_nav_image",
             "pin_nav_others",
             "pin_nav_video",
             "pin_update_enabled",

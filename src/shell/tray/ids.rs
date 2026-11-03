@@ -378,9 +378,9 @@ pub(super) const CODEC_COMMANDS: u16 = 64;
 /// out — and is wider than any machine's install list is likely to be.
 pub(super) const ID_TRAY_MPV_BASE: u16 = 1664;
 pub(super) const MPV_COMMANDS: u16 = 8;
-/// The `Pin Mode → Navigation` rows: three anchors — Video, Audio, Others — each
-/// with All and Same Category. They sit past every id the app hands out, so no click is
-/// read as another submenu's item (see `PinNavFileTypes`). The old single-pair ids
+/// The `Pin Mode → Navigation` rows: four anchors — Image, Video, Audio, Others — in menu
+/// order, each with All and Same Category. They sit past every id the app hands out, so no click
+/// is read as another submenu's item (see `PinNavFileTypes`). The old single-pair ids
 /// 1014/1015 are retired, not reused.
 pub(super) const ID_TRAY_PIN_NAV_VIDEO_ALL: u16 = 1672;
 pub(super) const ID_TRAY_PIN_NAV_VIDEO_CATEGORY: u16 = 1673;
@@ -388,6 +388,11 @@ pub(super) const ID_TRAY_PIN_NAV_AUDIO_ALL: u16 = 1674;
 pub(super) const ID_TRAY_PIN_NAV_AUDIO_CATEGORY: u16 = 1675;
 pub(super) const ID_TRAY_PIN_NAV_OTHERS_ALL: u16 = 1676;
 pub(super) const ID_TRAY_PIN_NAV_OTHERS_CATEGORY: u16 = 1677;
+/// The `Image` anchor's pair is listed first in the menu and numbered last: 1680 up to 1715
+/// belongs to the engine-idle ranges, so 1716 is the first id free past them (see
+/// `ID_TRAY_MPV_IDLE_BASE`).
+pub(super) const ID_TRAY_PIN_NAV_IMAGE_ALL: u16 = 1716;
+pub(super) const ID_TRAY_PIN_NAV_IMAGE_CATEGORY: u16 = 1717;
 pub(super) const ID_TRAY_PIN_ALWAYS_ON_TOP: u16 = 1678;
 /// The `Pin Mode → Update Preview → Move To Top` row: whether an update also brings a pin that was
 /// behind in front of the window covering it. It sits past every id the app hands out, beside the
@@ -593,7 +598,8 @@ pub(super) const ID_TRAY_FONT_80: u16 = 1081;
 pub(super) const ID_TRAY_FONT_70: u16 = 1082;
 /// `110%` is listed between `125%` and `100%` and carries one of the ids the font sizes
 /// leave: every id below the `theme` folder's own that no row above claims is free slack — the
-/// engine-idle ranges take 1680 up to 1715, past the pin rows — and the `theme` folder's own
+/// engine-idle ranges take 1680 up to 1715, with the `Navigation → Image` pair at 1716 and 1717
+/// after them — and the `theme` folder's own
 /// items begin at 1100.
 pub(super) const ID_TRAY_FONT_110: u16 = 1097;
 /// The sizes the `Text → Font Size` submenu offers, in the order it lists them —
@@ -616,7 +622,8 @@ pub(crate) const FONT_SIZE_CHOICES: [(u32, u16); 12] = [
 ];
 /// The four `Engine → … TTL` submenus: one command per idle time each offers, in the order
 /// it lists them, nine apiece. They sit past every id the app used to hand out — the pin rows
-/// end at 1679 — so a click on a TTL is never read as another submenu's row, and the four
+/// end at 1679, but for the `Image` anchor's pair at 1716/1717 — so a click on a TTL is never
+/// read as another submenu's row, and the four
 /// ranges are handed out in the order the submenus are listed: `MPV TTL`,
 /// `Microsoft Office TTL`, `LibreOffice TTL`, `WebView2 TTL`.
 pub(super) const ID_TRAY_MPV_IDLE_BASE: u16 = 1680;

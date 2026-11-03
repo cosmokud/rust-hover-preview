@@ -68,7 +68,7 @@ use crate::config::config::{
     DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SEEK,
     DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
-    DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_NAV_IMAGE, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
     DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_PREVIEW_SCALE, DEFAULT_REMEMBER_AUDIO_VOLUME,
     DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
@@ -156,6 +156,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         pin_update,
         pin_update_on_hover,
         pin_update_move_to_top,
+        pin_nav_image,
         pin_nav_video,
         pin_nav_audio,
         pin_nav_others,
@@ -170,6 +171,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                 c.pin_update_enabled,
                 c.pin_update_on_hover,
                 c.pin_update_move_to_top,
+                c.pin_nav_image,
                 c.pin_nav_video,
                 c.pin_nav_audio,
                 c.pin_nav_others,
@@ -183,6 +185,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_PIN_UPDATE_ENABLED,
             DEFAULT_PIN_UPDATE_ON_HOVER,
             DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
+            DEFAULT_PIN_NAV_IMAGE,
             DEFAULT_PIN_NAV_VIDEO,
             DEFAULT_PIN_NAV_AUDIO,
             DEFAULT_PIN_NAV_OTHERS,
@@ -313,10 +316,17 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Minimize"),
     );
 
-    // The `Navigation` submenu: three anchors — Video, Audio, Others — each with
-    // its own All/Same Category pair. The walk is anchored on the first file pinned,
-    // so a video walks videos while a document walks end to end (see `nav_mode_for`).
-    append_pin_nav_menu(pin_menu, pin_nav_video, pin_nav_audio, pin_nav_others);
+    // The `Navigation` submenu: four anchors — Image, Video, Audio, Others, in menu
+    // order — each with its own All/Same Category pair. The walk is anchored on the first
+    // file pinned, so a video walks videos while a document walks end to end (see
+    // `nav_mode_for`).
+    append_pin_nav_menu(
+        pin_menu,
+        pin_nav_image,
+        pin_nav_video,
+        pin_nav_audio,
+        pin_nav_others,
+    );
 
     let _ = AppendMenuW(
         menu,

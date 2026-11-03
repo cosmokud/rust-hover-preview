@@ -1050,6 +1050,9 @@ impl PinNavFileTypes {
     }
 }
 
+/// What a walk anchored on a picture steps through: only pictures, so a photo never steps
+/// into a film (see `Pin Mode → Navigation → Image`).
+pub const DEFAULT_PIN_NAV_IMAGE: PinNavFileTypes = PinNavFileTypes::Category;
 /// What a walk anchored on a video steps through: only videos, so a film never steps
 /// into a song (see `Pin Mode → Navigation → Video`).
 pub const DEFAULT_PIN_NAV_VIDEO: PinNavFileTypes = PinNavFileTypes::Category;
