@@ -300,11 +300,11 @@ pub(super) fn shared_menu_row_press(
             false
         }
         BubbleMenuRow::NextFile => {
-            ask_pin(PinCommand::Next);
+            ask_pin(PinCommand::NextFile);
             false
         }
         BubbleMenuRow::PreviousFile => {
-            ask_pin(PinCommand::Previous);
+            ask_pin(PinCommand::PreviousFile);
             false
         }
         BubbleMenuRow::Close => {

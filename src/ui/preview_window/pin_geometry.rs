@@ -634,6 +634,12 @@ pub(super) unsafe fn pin_command_request(
                 Some(()) => None,
                 None => step_pinned_file(1, wait, anchor),
             },
+            // And the walk the chrome asks for, which is the folder's whichever file the pin holds: a
+            // chevron pressed over a pinned page steps the folder rather than the page's caret, and
+            // a command of its own is what keeps the arrow keys' answer to itself (see
+            // `PinCommand::PreviousFile`).
+            PinCommand::PreviousFile => step_pinned_file(-1, wait, anchor),
+            PinCommand::NextFile => step_pinned_file(1, wait, anchor),
             // An up arrow and a down arrow are the same answer one line at a time: the page's caret where
             // the pin holds one, and the walk where it does not.
             //

@@ -243,9 +243,25 @@ pub(crate) enum PinCommand {
     /// them. It goes through the loop like the rest, because the file it names is a walk of
     /// the folder and the loop is what owns the configuration the walk is read under (see
     /// `shell::pin_navigation`).
+    ///
+    /// **What a `Left` arrow asks for, and what it means is the file in the window's answer:**
+    /// the page's caret where the pin holds one, and the walk where it does not (see
+    /// `pin_command_request`). A chevron clicked over a pin of any kind wants the walk and
+    /// nothing else, which is `PreviousFile`'s.
     Previous,
-    /// The file after the one pinned, the same walk the other way.
+    /// The file after the one pinned, the same walk the other way, and the same question of the
+    /// file in the window: what a `Right` arrow means is the page's caret a character on where the
+    /// pin holds one.
     Next,
+    /// The file before the one pinned, always: the walk the caption's chevrons, the menu's
+    /// `Previous File` row, the collapse bubble's own and the taskbar thumbnail's button ask for.
+    ///
+    /// **A command of its own rather than `Previous`**, because a press on the chrome is the
+    /// folder's whatever the pin holds: asked as `Previous`, a chevron over a pinned page of
+    /// text would move the page's caret and never reach the walk (see `pin_command_request`).
+    PreviousFile,
+    /// The file after the one pinned, always, the same walk the other way.
+    NextFile,
     Minimize,
     /// Collapse the pin into a place of the asker's own choosing, rather than into the one
     /// `Pin Mode → Minimize to` has it put: what a menu's `To Taskbar` row asks for, which says

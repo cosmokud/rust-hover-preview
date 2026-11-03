@@ -257,3 +257,125 @@ fn a_caret_press_costs_less_than_a_frame() {
 
     TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
 }
+
+/// A chevron on the caption above a page of text and the menu's `Next File` row over it are the
+/// folder's walk whatever the pin holds: the page answers the arrows, and nothing a hand pressed
+/// (see `PinCommand::NextFile` and `pin_command_request`).
+#[test]
+fn a_caption_chevron_and_a_menu_row_step_the_folder_over_a_page_of_text() {
+    let _room = the_room_to_itself();
+    let page = PageOfAFile::put("walk", 40);
+    let _pin = APinForThePage::stand();
+    TEXT_PREVIEW_HOLDING.store(true, Ordering::Release);
+
+    // Wide enough for a caption carrying the whole of its walk, which a narrow one drops whole.
+    let mut pin = PinnedPreview::for_test();
+    pin.content = (100, 100, 800, 300);
+    stand_pin(Some(pin));
+
+    let queued = || {
+        CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| {
+                media
+                    .as_ref()
+                    .and_then(|media| media.text_state.as_ref())
+                    .map(|state| state.pending_caret.len())
+            })
+            .unwrap_or(0)
+    };
+    // One press through the loop's own drain, as the tick makes it: the wait a walk owes, and nothing
+    // a caret move would have left behind.
+    let answer_left_presses = || {
+        let mut request = None;
+        let mut wait = None;
+        let mut started = None;
+        let mut offset = 0.0;
+        let mut paused = None;
+        unsafe {
+            pin_command_request(
+                HWND(0x1000 as *mut _),
+                &mut request,
+                &mut wait,
+                &mut started,
+                &mut offset,
+                &mut paused,
+                true,
+                None,
+            );
+        }
+        wait
+    };
+
+    let stood = page.caret_line();
+
+    let (x, y) = super::ws_k_chrome_nav::a_caption_button_point(pin_chrome::CaptionButton::Next);
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on the caption's walk is the caption's to answer"
+    );
+    let window = super::pin_input::CapturingWindow::around(RecordedPinWindow::new(0x1000));
+    assert!(
+        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "and its release asks the step"
+    );
+    let asked = take_pin_command();
+    assert_eq!(
+        asked,
+        Some(PinCommand::NextFile),
+        "a chevron is the folder's, whatever page the pin holds"
+    );
+    // Left for the loop again, the way the window leaves a command it asked for.
+    ask_pin(asked.expect("the press asked for a step"));
+    assert!(
+        answer_left_presses().is_some(),
+        "so the loop asked the folder for the next file"
+    );
+    assert_eq!(queued(), 0, "and the press queued no move of the page");
+
+    if let Ok(mut pending) = PIN_JOBS.0.lock() {
+        *pending = None;
+    }
+
+    // The menu's `Next File` row, found by what it says rather than by arithmetic on the rows.
+    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 20, 20, PinMenuPage::Body) };
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let row = paint
+        .rows
+        .iter()
+        .position(|row| row.label == "Next File")
+        .expect("the panel holds the walk's row");
+    let band = paint
+        .popup
+        .bands
+        .iter()
+        .find(|band| band.answers == row)
+        .expect("the row is laid out in a band");
+    let (x, y) = (
+        (paint.popup.panel.left + paint.popup.panel.right) / 2,
+        band.top + band.height / 2,
+    );
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on the row is the menu's"
+    );
+    let asked = take_pin_command();
+    assert_eq!(
+        asked,
+        Some(PinCommand::NextFile),
+        "and the row is the same walk the chevron asks for"
+    );
+    ask_pin(asked.expect("the row asked for a step"));
+    assert!(
+        answer_left_presses().is_some(),
+        "which the loop asks the folder for"
+    );
+    assert_eq!(queued(), 0, "and neither press queued a caret move");
+    assert_eq!(page.caret_line(), stood, "so the caret is where it stood");
+
+    if let Ok(mut pending) = PIN_JOBS.0.lock() {
+        *pending = None;
+    }
+    TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
+}
