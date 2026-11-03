@@ -29,14 +29,14 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::Once;
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, GetForegroundWindow, GetWindowLongPtrW, IsWindowVisible, MoveWindow,
-    RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED,
-    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE,
+    ICON_BIG, ICON_SMALL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETICON, WNDCLASSEXW,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
 use super::pin_trace::note_pin_trace;
@@ -205,10 +205,13 @@ static REAL_PIN_CLASS_REGISTERED: Once = Once::new();
 unsafe fn register_real_pin_class() {
     REAL_PIN_CLASS_REGISTERED.call_once(|| {
         let hinstance = GetModuleHandleW(None).expect("the module's own handle");
+        let icon = unsafe { crate::shell::app_icon::app_icon() };
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(window_proc),
             hInstance: hinstance.into(),
+            hIcon: icon,
+            hIconSm: icon,
             lpszClassName: REAL_PIN_CLASS,
             ..Default::default()
         };
@@ -268,6 +271,14 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
     .ok()?;
 
     REAL_PIN_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
+    // The window's own icon, both sizes: the small one is what a taskbar button draws, and the
+    // large one what anything listing the window as a window draws.
+    let icon = unsafe { crate::shell::app_icon::app_icon() };
+    let icon = LPARAM(icon.0 as isize);
+    let _ = unsafe { SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_BIG as usize), icon) };
+    let _ = unsafe { SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_SMALL as usize), icon) };
+
     // **The window that wears the button is the one that says it supplies the still of it.** What the
     // Shell draws the hover of a window that is down from is the bitmap the app hands it, and a window
     // that never said it would supply one is asked for nothing — the hover falls back to the icon (see
@@ -295,7 +306,7 @@ mod tests {
     use super::*;
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        DestroyWindow, GetWindowLongPtrW, GetWindowRect, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+        DestroyWindow, GetWindowLongPtrW, GetWindowRect, GWL_EXSTYLE, WM_GETICON, WS_EX_NOACTIVATE,
         WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
@@ -452,6 +463,13 @@ mod tests {
         assert_eq!(ex & WS_EX_LAYERED, WS_EX_LAYERED);
         assert_eq!(ex & WS_EX_TOOLWINDOW, WINDOW_EX_STYLE::default());
         assert_eq!(ex & WS_EX_NOACTIVATE, WINDOW_EX_STYLE::default());
+
+        let icon =
+            unsafe { SendMessageW(hwnd, WM_GETICON, WPARAM(ICON_BIG as usize), LPARAM(0)).0 };
+        assert_ne!(icon, 0, "the window has its big icon set");
+        let icon_sm =
+            unsafe { SendMessageW(hwnd, WM_GETICON, WPARAM(ICON_SMALL as usize), LPARAM(0)).0 };
+        assert_ne!(icon_sm, 0, "the window has its small icon set");
 
         unsafe {
             let _ = DestroyWindow(hwnd);
