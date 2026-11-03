@@ -306,6 +306,15 @@ pub(in super::super) fn toggle_text_show_extensionless() {
     refresh_preview();
 }
 
+/// Whether secret and sensitive files are refused for text preview.
+pub(in super::super) fn toggle_text_dont_preview_secrets() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.text_dont_preview_secrets = !config.text_dont_preview_secrets;
+        config.save();
+    }
+    refresh_preview();
+}
+
 /// The switch above a sound's levels: whether a file's measured loudness is brought to one level
 /// before it is played, which is read where a player is started the way the level
 /// beside it is — nothing on screen is rebuilt, and a sound already playing is left where it is.
