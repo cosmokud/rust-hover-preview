@@ -407,6 +407,27 @@ pub fn run_preview_window() {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+                // **A hand pulling an edge gets one position a tick, and the rest are left for the tick
+                // after it.**
+                //
+                // A step of a resize is the whole band composed through the sampler — the frame the box
+                // is being dragged to, sampled into it, plus the window's own size in the same call (see
+                // `apply_pin_drag`) — and a pointer reports up to a thousand positions a second. Dispatching
+                // every one of them is a pump that never empties: each dispatch is a band, the next move is
+                // already queued behind it, and the tick below this loop — the one that advances a playing
+                // picture, and the only thing that was going to draw its next frame — is not reached until
+                // the hand stops. That is seen as an animation frozen for the whole of a resize and playing
+                // again the moment the button is let go; measured on a 1920x1080 pin, one band is 2.3 ms of
+                // composing before the surface is cleared and `UpdateLayeredWindow` is handed it.
+                //
+                // One move dispatched per tick is what the moves left behind cost nothing: the system
+                // coalesces them into the position the hand has reached, and the tick that reads it reads
+                // the pointer live rather than the position the message carried (`apply_pin_drag`). The
+                // pump is left not emptied, so the wait below returns at once and this loop goes straight
+                // round to dispatch the next one (see `wait_preview_channel`).
+                if msg.message == WM_MOUSEMOVE && pin_is_resizing() {
+                    break;
+                }
             }
 
             // Detect resume from sleep (WM_POWERBROADCAST handler sets this flag).

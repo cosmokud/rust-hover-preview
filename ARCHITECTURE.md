@@ -948,9 +948,12 @@ A paint per position reported is four bands per frame of a 144 Hz display that t
 thread the tick that advances a playing picture is on — which is seen as an animation that stops while the hand moves and
 jumps when it stops. A **resize** paints a composed band too, and is paced the same way but in place: its step is one
 `UpdateLayeredWindow` that is also the box's own commit, so it stays in the pointer's message rather than moving to the
-loop, and waits on `DwmFlush` after it rather than before the next one (`apply_pin_drag`); the tick that follows it paints
-the pin only when nothing has since the messages were pumped (`the_pin_owes_a_paint`, `PIN_PAINTS`), so a resize is one
-paint a frame as well.
+loop, waits on `DwmFlush` after it rather than before the next one (`apply_pin_drag`), and the tick that follows it paints
+the pin only when nothing has since the messages were pumped (`the_pin_owes_a_paint`, `PIN_PAINTS`) — so a resize is one
+paint a frame as well. What is left is the pump: a step per position reported is a `PeekMessageW` loop that never empties,
+which starves the tick the animation is advanced on for as long as the hand keeps moving, so the pump dispatches one move
+a tick while a resize is in flight and leaves the rest for the tick after it — the system coalesces them to where the hand
+has got to, and the tick reads the pointer live anyway (`pin_is_resizing`).
 
 - Wheel zoom (`pin_zoom.rs`): a notch over a pinned picture is counted by the same low-level wheel hook that swallows
   one over a text preview — a third owner beside the two the hook already had (`wheel_input::take_pin_zoom_delta`,
