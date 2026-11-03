@@ -340,6 +340,102 @@ fn a_video_list_of_the_users_own_is_left_as_it_is() {
     );
 }
 
+/// The picture list is the master bucket for everything Windows decodes that is a picture, and a
+/// file holding exactly the entries it held before that was true has never been edited: it is
+/// brought up to the list of now, which is how an installation that already exists gets the ten
+/// spellings of the codecs and the camera raws, the cursor and the run-length bitmap beside them.
+/// What it costs is the other half of the same rule — a list holding the entries of now with one
+/// taken out is not one this app wrote, and is left as it is.
+#[test]
+fn a_list_holding_the_apps_own_pictures_takes_the_codecs_added_to_them() {
+    let mut ini = Ini::new();
+    ini.set(
+        lists::IMAGE.section,
+        "extensions",
+        Some(lists::IMAGE_EXTENSIONS_BEFORE_THE_WIC_SPELLINGS.to_string()),
+    );
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.image_extensions,
+        lists::sanitize_extension_list(lists::DEFAULT_IMAGE_EXTENSIONS),
+        "the list the app shipped before is read as the list it ships now"
+    );
+    for name in [
+        "dib", "exif", "heics", "heifs", "avcs", "avifs", "hif", "icon", "jxr", "wdp", "nef",
+        "cr3", "dng", "raw", "cur", "rle",
+    ] {
+        assert!(
+            config.image_extensions.iter().any(|entry| entry == name),
+            "`{name}` is one of the names added since"
+        );
+    }
+
+    // The same list with one entry of the user's own in it is the user's, and is kept.
+    let written = format!("mypic,{}", lists::IMAGE_EXTENSIONS_BEFORE_THE_WIC_SPELLINGS);
+    let mut ini = Ini::new();
+    ini.set(lists::IMAGE.section, "extensions", Some(written.clone()));
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.image_extensions,
+        lists::sanitize_extension_list(&written),
+        "an edit is read as the edit it is"
+    );
+    assert!(
+        !config.image_extensions.contains(&"nef".to_string()),
+        "and the names added since are not put into it"
+    );
+}
+
+/// And the list the engine's own pictures are in loses the names the codecs Windows has took
+/// over: a file holding exactly the entries this app shipped while a `.nef`, a `.cur` and a
+/// `.rle` were still the engine's is this app's own, so it is brought up to the list of now —
+/// which is what stops an installation that already exists asking the engine about a picture the
+/// readers here are asked about first. A list anybody edited is kept as written.
+#[test]
+fn a_list_holding_the_apps_own_engine_pictures_loses_the_names_the_codecs_took() {
+    let mut ini = Ini::new();
+    ini.set(
+        lists::MAGICK.section,
+        "extensions",
+        Some(lists::MAGICK_EXTENSIONS_BEFORE_THE_NATIVE_MOVES.to_string()),
+    );
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.magick_extensions,
+        lists::sanitize_extension_list(lists::DEFAULT_MAGICK_EXTENSIONS),
+        "the list the app shipped before is read as the list it ships now"
+    );
+    for name in ["nef", "cr3", "dng", "raw", "cur", "rle", "3fr", "x3f"] {
+        assert!(
+            !config.magick_extensions.iter().any(|entry| entry == name),
+            "`{name}` is a picture the readers of this app are asked about first"
+        );
+    }
+    assert!(
+        config.magick_extensions.iter().any(|entry| entry == "xcf"),
+        "and the names nothing else opens are still the engine's"
+    );
+
+    // The same list with one entry of the user's own in it is the user's, and is kept.
+    let written = format!("mycam,{}", lists::MAGICK_EXTENSIONS_BEFORE_THE_NATIVE_MOVES);
+    let mut ini = Ini::new();
+    ini.set(lists::MAGICK.section, "extensions", Some(written.clone()));
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.magick_extensions,
+        lists::sanitize_extension_list(&written),
+        "an edit is read as the edit it is"
+    );
+}
+
 /// And the same for the `[peazip]` list, which is new to this table with the backends beside
 /// the console archiver: a file holding the entries this app shipped before those tools were
 /// driven has never been edited, so it is brought up to the list of now — which is how an

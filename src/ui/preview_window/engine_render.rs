@@ -298,7 +298,26 @@ pub(super) fn request_libre_render(path: &Path, generation: u64) -> Option<(Path
 /// it: the layout, which measures a file like this as the wait for a picture; the loader, which
 /// answers with it that a hover is still waiting rather than failed; and the loop, which asks
 /// the engine for the picture only where there is one to ask for.
+///
+/// A name of the engine's own list has nothing in front of it, so it is owed a picture as soon as
+/// the file is one of those. A picture of the master list has the readers of this app in front of
+/// it, and the engine is owed one only where that read came back with nothing — which is what the
+/// box the layout measured already says (see `picture_box` and `held_box`): a picture with a size
+/// is one this app reads, and asking the engine about it would be a launch for a preview that is
+/// already in hand.
 pub(super) fn magick_render_is_due(path: &Path) -> bool {
+    magick_formats::is_the_only_reader(path)
+        || (measured_as_nothing(path) && magick_fallback_is_due(path))
+}
+
+/// Whether the image converter is the one that develops this file, with nothing of the picture in
+/// hand: the question `magick_render_is_due` is made of, without the half about who is asked first.
+///
+/// It is what the loader asks where its own read of a picture has just come back with nothing — a
+/// load that fails *is* the measure that says the readers of this app have no answer — and what
+/// `magick_render_is_due` asks the box the layout holds for, in the places a wait is placed before
+/// anything has been read.
+pub(super) fn magick_fallback_is_due(path: &Path) -> bool {
     // The file's own bytes first, the name after them, exactly as the render engine's own
     // question asks it: a picture renamed to a name no list holds is still the engine's to
     // develop, and one whose bytes are another kind is not a file to start it for (see

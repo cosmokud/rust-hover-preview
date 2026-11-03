@@ -8,6 +8,13 @@
 /// The extensions written to `config.ini` on first run: the still and animated picture formats a
 /// hover is expected to meet.
 ///
+/// **This is the master bucket for pictures, and for pictures only** — everything the readers of
+/// this app and the codecs Windows has can decode that *is* a picture: a photograph, a bitmap, an
+/// icon, a cursor, a texture. A document, a project or a dataset belongs to another kind even
+/// where an installed engine could rasterise it into something that looks like a picture, which
+/// is why `xcf` is a layered document and `dcm` a scanner's dataset rather than entries here (see
+/// `DEFAULT_MAGICK_EXTENSIONS`).
+///
 /// `apng` is a name like any other here — an animated PNG is recognized by its own `acTL` chunk
 /// rather than by what it is called — and `gif`, `png` and `webp` are each both an animated
 /// format and a still one. `avci`, `avif`, `heic`, `heif`, `jxl` and a still `webp` are pictures
@@ -20,12 +27,28 @@
 /// that codec does not read — the uncompressed ones, BC4 and BC5 — are read by a decoder of this
 /// app's own; see `dds_image`.
 ///
+/// Around those sit the other spellings of the same codecs and the pictures that are only ever
+/// theirs: `dib` and `rle` for the device-independent and run-length shapes of a bitmap, `exif`
+/// for a picture that carries its own camera record, `ico`, `icon` and `cur` for the icon and
+/// cursor resources, `heics`, `heifs`, `avcs`, `avifs` and `hif` for the HEIF family, and `jxr` and
+/// `wdp` for JPEG XR. The camera raws — `3fr`, `arw`,
+/// `cr2`, `cr3`, `crw`, `dcr`, `dng`, `erf`, `fff`, `iiq`, `k25`, `kdc`, `mef`, `mos`, `mrw`,
+/// `nef`, `nrw`, `orf`, `pef`, `raf`, `raw`, `rw2`, `rwl`, `sr2`, `srf`, `srw` and `x3f` — are
+/// photographs the Raw Image Extension decodes, and are here for that reason rather than in
+/// `[magick]`, which is where they were while nothing on a Windows machine opened one. Where the
+/// codec a name needs is not installed, the installed ImageMagick is the fallback behind it — the
+/// one reader here that is an engine, and the second of the picture kind's chain; see
+/// `magick_formats` and `routing::chain`.
+///
 /// `svg` and `svgz` are not entries of this list, though they were while the kind they are under
 /// was called SVG: what draws one is a browser rather than a decoder, so they are entries of the
 /// vector list and are gated — and sized, and drawn over — by that kind; see `vector_formats` and
 /// `svg_preview`.
 pub const DEFAULT_IMAGE_EXTENSIONS: &str =
-    "apng,avci,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp";
+    "3fr,apng,arw,avci,avcs,avif,avifs,bmp,cr2,cr3,crw,cur,dcr,dds,dib,dng,erf,exr,exif,ff,fff,\
+gif,hdr,heic,heics,heif,heifs,hif,ico,icon,iiq,jfif,jpe,jpeg,jpg,jxl,jxr,k25,kdc,mef,mos,mrw,\
+nef,nrw,orf,pam,pbm,pef,pgm,png,pnm,ppm,qoi,raf,raw,rle,rw2,rwl,sr2,srf,srw,tga,tif,tiff,\
+wdp,webp,x3f";
 
 /// The built-in image list as it stood while `svg` and `svgz` were entries of it.
 ///
@@ -59,6 +82,19 @@ pub const IMAGE_EXTENSIONS_BEFORE_DDS: &str =
 /// `repair_older_lists`).
 pub const IMAGE_EXTENSIONS_BEFORE_AVCI: &str =
     "apng,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp";
+
+/// The built-in image list as it stood before the pictures the codecs Windows has read were moved
+/// into it: the ten spellings of those codecs and the camera raws above them, thirty-nine names in
+/// all.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's edit —
+/// nobody has touched it — so it is brought up to the built-in list rather than kept as written.
+/// Without that, the names would reach a fresh installation only: every `config.ini` already
+/// written holds the list as it was, and a list that differs is otherwise the user's own (see
+/// `repair_older_lists`). Its entries are the ones `IMAGE_EXTENSIONS_BEFORE_AVCI` holds as well:
+/// the two moves were written down from the same list.
+pub const IMAGE_EXTENSIONS_BEFORE_THE_WIC_SPELLINGS: &str =
+    "apng,avci,avif,bmp,dds,exr,ff,gif,hdr,heic,heif,ico,jfif,jpe,jpeg,jpg,jxl,pam,pbm,pgm,png,pnm,ppm,qoi,tga,tif,tiff,webp";
 
 /// The built-in image list as it stood before the formats Windows has a codec for were added to
 /// it: `avif`, `heic`, `heif` and `jxl`.
@@ -376,15 +412,19 @@ pub const DEFAULT_LIBRE_EXTENSIONS: &str = "123,602,abw,cdr,cgm,cmx,cwk,dbf,dif,
 pub const LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ: &str = "123,602,abw,agd,cdr,cgm,cmx,cwk,dbf,dif,dxf,epub,fhd,fodg,fodp,fodt,gnm,gnumeric,hwp,jtd,jtt,key,lwp,mcw,met,mw,numbers,odb,odc,odf,odg,odm,odp,ods,odt,oth,otg,otm,otp,ots,ott,pages,pcd,pct,pcx,pdb,plt,pm3,pm4,pm5,pm6,pmd,psw,pub,pxl,qxp,ras,rl,sda,sdc,sdd,sdp,sdw,sgf,sgl,slk,stc,std,sti,stw,svm,swf,sxd,sxg,sxi,sxm,sxw,uof,uop,uos,uot,vdx,vor,vsd,vsdm,vsdx,vssm,vst,vstm,vstx,vtx,vsx,wb2,wk1,wk3,wk4,wks,wpg,wq1,wq2,wpd,wps,wri,xlw,zabw,zmf";
 
 /// The extensions written to `config.ini` on first run: the picture formats ImageMagick reads and
-/// this app has no reader of its own for.
+/// this app has no reader of its own for, and the fallback behind the readers of this app for the
+/// pictures they were asked about and could not read.
 ///
-/// The camera raw formats come first in spirit if not in order — `3fr`, `arw`, `cr2`, `cr3`,
-/// `crw`, `dcr`, `dng`, `erf`, `fff`, `iiq`, `k25`, `kdc`, `mdc`, `mef`, `mos`, `mrw`, `nef`,
-/// `nrw`, `orf`, `pef`, `raf`, `raw`, `rmf`, `rw2`, `rwl`, `sr2`, `srf`, `srw` and `x3f`, from
-/// the raw decoder the engine is built with, which is every raw format a camera writes that is
-/// still met with — and they are what this list is mostly about: nothing else on a Windows
-/// machine opens one, the shell shows a thumbnail from the picture the camera left inside the file
-/// and nothing else, and a hover onto one shows nothing at all rather than the photograph.
+/// **What is here is what nothing else on the machine opens.** The engine's own names have no
+/// reader of this app's and no codec Windows has in front of them: the medical scanner's `dcm`,
+/// the film scanner's `dcx` and `dpx`, the astronomer's `fit`, `fits` and `fts`, the compositor's
+/// `j2c`, `j2k`, `jp2`, `jpc`, `jpm` and `jpt`, the animator's `jng` and `mng`, the illustrator's
+/// `xcf`, `xbm` and `xpm`, the painter's `sgi`, the engineer's `vicar`, the phone's `wbmp`, and
+/// the engine's own `miff`. The camera raws, the cursor's `cur` and the run-length bitmap's `rle`
+/// were of that group once and are not any more: the picture list is the master bucket for
+/// pictures, and Windows has a codec for every one of those, so they are `[image]`'s and the
+/// engine is the fallback behind that codec rather than the only reader of them (see
+/// `DEFAULT_IMAGE_EXTENSIONS` and `IMAGE_EXTENSIONS_BEFORE_THE_WIC_SPELLINGS`).
 ///
 /// What follows them, in the order the module documentation is written in:
 ///
@@ -392,10 +432,10 @@ pub const LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ: &str = "123,60
 ///   scanner's `dcm`, the film scanner's `dcx` and `dpx`, the astronomer's `fit`, `fits` and
 ///   `fts`, the compositor's `j2c`, `j2k`, `jp2`, `jpc`, `jpm` and `jpt`, the animator's `jng` and
 ///   `mng`, the illustrator's `xcf`, `xbm` and `xpm`, the painter's `sgi`, the engineer's `vicar`,
-///   the phone's `wbmp`, the cursor's `cur`, and the engine's own `miff`.
+///   the phone's `wbmp`, and the engine's own `miff`.
 /// * The formats the registry declares read support for that no preview was ever asked for: a
 ///   pixel-art program's sprites (`ase`, `aseprite`), a floppy-era paint program's pictures
-///   (`mac`, `pix`, `rla`, `rle`, `art`, `cut`, `wbinfo`), a fax machine's pages (`fax`, `g3`,
+///   (`mac`, `pix`, `rla`, `art`, `cut`, `wbinfo`), a fax machine's pages (`fax`, `g3`,
 ///   `g4`), a scanner's `pgx`, a texture of a console's (`tim`, `tm2`), an icon of a robot's
 ///   (`rgf`), an embroidery machine's pattern (`pes`), a spectrum analyser's screen (`scr`), a
 ///   telescope's or a satellite's frame (`hrz`, `ipl`, `fl32`, `sct`, `jnx`), a colour lookup
@@ -414,11 +454,12 @@ pub const LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ: &str = "123,60
 /// What is deliberately *not* here is named in the module documentation: the alternative spelling
 /// of a name another list already claims, the fonts, the documents that need a delegate, the
 /// engine's own notation, and `xwd`, which this build ships no coder for.
-pub const DEFAULT_MAGICK_EXTENSIONS: &str = "3fr,aai,art,arw,ase,aseprite,bayer,bayera,bgr,bgra,bgro,c2pa,cal,cals,cmyk,cmyka,cr2,cr3,crw,cube,cur,cut,\
-dcm,dcr,dcx,dng,dpx,dxt1,dxt5,erf,fax,fff,fit,fits,fl32,fts,ftxt,g3,g4,gray,graya,group4,hrz,icb,iiq,ipl,j2c,\
-j2k,jng,jnx,jp2,jpc,jpm,jpt,k25,kdc,mac,map,mat,mdc,mef,miff,mng,mono,mos,mpc,mrw,mtv,nef,nrw,orf,otb,pal,\
-palm,pango,pcds,pef,pes,pfm,pgx,phm,picon,pict,pix,pwp,raf,raw,rgb,rgb565,rgba,rgbo,rgf,rla,rle,rmf,rw2,rwl,\
-scr,sct,sf3,sfw,sgi,six,sixel,sr2,srf,srw,stegano,sun,tim,tm2,uyvy,vda,vicar,viff,vips,vst,wbinfo,wbmp,x3f,\
+pub const DEFAULT_MAGICK_EXTENSIONS: &str =
+    "aai,art,ase,aseprite,bayer,bayera,bgr,bgra,bgro,c2pa,cal,cals,cmyk,cmyka,cube,cut,\
+dcm,dcx,dpx,dxt1,dxt5,fax,fit,fits,fl32,fts,ftxt,g3,g4,gray,graya,group4,hrz,icb,ipl,j2c,\
+j2k,jng,jnx,jp2,jpc,jpm,jpt,mac,map,mat,mdc,miff,mng,mono,mpc,mtv,otb,pal,\
+palm,pango,pcds,pes,pfm,pgx,phm,picon,pict,pix,pwp,rgb,rgb565,rgba,rgbo,rgf,rla,rmf,\
+scr,sct,sf3,sfw,sgi,six,sixel,stegano,sun,tim,tm2,uyvy,vda,vicar,viff,vips,vst,wbinfo,wbmp,\
 xbm,xcf,xpm,xv,ycbcr,ycbcra,yuv";
 
 /// The built-in list as it stood while it held the camera raw formats and the pictures beside them
@@ -431,6 +472,22 @@ xbm,xcf,xpm,xv,ycbcr,ycbcra,yuv";
 /// names would reach a fresh installation only, since every `config.ini` already written holds the
 /// list as it was (see `repair_older_lists`).
 pub const MAGICK_EXTENSIONS_BEFORE_THE_REST: &str = "3fr,arw,cr2,cr3,crw,cur,dcm,dcr,dcx,dng,dpx,erf,fff,fit,fits,fts,iiq,j2c,j2k,jng,jp2,jpc,jpm,jpt,k25,kdc,mdc,mef,miff,mng,mos,mrw,nef,nrw,orf,pef,pfm,raf,raw,rmf,rw2,rwl,sgi,sr2,srf,srw,vicar,wbmp,x3f,xbm,xcf,xpm";
+
+/// The built-in list as it stood while the camera raws, the cursor and the run-length bitmap were
+/// still entries of it — what this app wrote before the codecs Windows has were found to decode
+/// them, and before the picture list became the master bucket for pictures.
+///
+/// A file holding exactly these entries is the app's own older list rather than a user's edit —
+/// nobody has touched it — so it is brought up to the built-in list rather than kept as written,
+/// which is what takes those names out of a file this app wrote before. Without it an
+/// installation that already exists would keep asking the engine about a `.nef`, and the readers
+/// of this app would never be asked first (see `repair_older_lists` and `DEFAULT_IMAGE_EXTENSIONS`).
+pub const MAGICK_EXTENSIONS_BEFORE_THE_NATIVE_MOVES: &str = "3fr,aai,art,arw,ase,aseprite,bayer,bayera,bgr,bgra,bgro,c2pa,cal,cals,cmyk,cmyka,cr2,cr3,crw,cube,cur,cut,\
+dcm,dcr,dcx,dng,dpx,dxt1,dxt5,erf,fax,fff,fit,fits,fl32,fts,ftxt,g3,g4,gray,graya,group4,hrz,icb,iiq,ipl,j2c,\
+j2k,jng,jnx,jp2,jpc,jpm,jpt,k25,kdc,mac,map,mat,mdc,mef,miff,mng,mono,mos,mpc,mrw,mtv,nef,nrw,orf,otb,pal,\
+palm,pango,pcds,pef,pes,pfm,pgx,phm,picon,pict,pix,pwp,raf,raw,rgb,rgb565,rgba,rgbo,rgf,rla,rle,rmf,rw2,rwl,\
+scr,sct,sf3,sfw,sgi,six,sixel,sr2,srf,srw,stegano,sun,tim,tm2,uyvy,vda,vicar,viff,vips,vst,wbinfo,wbmp,x3f,\
+xbm,xcf,xpm,xv,ycbcr,ycbcra,yuv";
 
 /// The extensions written to `config.ini` on first run: the names the tools of an installed
 /// PeaZip can be asked about, that no list of this app's own already claims, and that are
