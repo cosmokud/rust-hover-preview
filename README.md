@@ -57,6 +57,8 @@ For video, **mpv is recommended** for performance, hardware acceleration, reliab
 | This app, syntax-highlighted | `[text]` `extensions` | adb, adoc, ads, asciidoc, asm, asp, aspx, astro, awk, bash, bat, bib, bzl, c, cc, cfg, cg, cjs, clj, cljc, cljs, cmake, cmd, comp, conf, cpp, cs, csh, cshtml, css, csv, csx, cts, cxx, d, dart, diff, diz, edn, ejs, el, elm, env, erb, erl, ex, exs, f, f03, f77, f90, f95, fish, for, frag, fs, fsi, fsx, ftn, fx, geom, glsl, go, gql, gradle, graphql, groovy, h, haml, hbs, hcl, hh, hlsl, hpp, hrl, hs, htm, html, hxx, inc, ini, ipynb, java, jl, js, json, json5, jsonc, jsonl, jsp, jsx, ksh, kt, kts, latex, less, lhs, liquid, lisp, ll, lock, log, lsp, lua, m, mak, man, markdown, md, mdown, metal, mjs, mk, mkd, ml, mli, mm, mts, mustache, nasm, nfo, nim, ninja, nix, njk, org, pas, patch, php, phtml, pl, plist, pm, properties, proto, ps1, psd1, psm1, py, pyi, pyw, r, rake, rb, rkt, rmd, rs, rst, rtf, s, sass, scala, scm, scss, sh, slim, sol, sql, srt, ss, styl, sv, svelte, svh, swift, tcl, tex, text, tf, tfvars, toml, ts, tsv, tsx, twig, txt, v, vbs, vert, vhd, vhdl, vtt, vue, wat, wgsl, xhtml, xml, xsd, xsl, xslt, yaml, yml, zig, zsh |
 | This app, as plain text      | `[text]` `names`      | authors, .babelrc, brewfile, caddyfile, changelog, changes, .clang-format, .clang-tidy, cmakelists.txt, code\_of\_conduct, containerfile, contributing, contributors, copying, copyright, dockerfile, .dockerignore, .editorconfig, .env, .env.example, .env.local, .eslintignore, .eslintrc, gemfile, .gitattributes, .gitconfig, .gitignore, .gitkeep, .gitmodules, gnumakefile, .golangci.yml, history, .htaccess, install, jenkinsfile, justfile, licence, license, .mailmap, makefile, makefile.am, makefile.in, notice, .npmignore, .prettierignore, .prettierrc, procfile, rakefile, readme, .rustfmt.toml, security, .stylelintrc, unlicense, vagrantfile                                                                                                                                                                                                                                                                                                                                                                                                               |
 
+A secret or credential file is never previewed while **Don't Preview Secret Files** is on, which it is by default: `.env` and its variants, `id_rsa` and the like, key and keystore extensions, and anything under `~/.ssh`, `~/.aws` or a coding agent's credential folder. A file with no extension at all is previewed as text only under **Preview All Extensionless**, which is off by default.
+
 
 ### Ebook
 
@@ -266,9 +268,10 @@ On Top** is off, in which case it is an ordinary window that also wears this app
 button while it is up. `Space` in a focused pin pauses and resumes a sound; a minimized pin
 sits in a draggable bubble — or in that taskbar button — that a middle click or `Space` in Explorer brings back.
 Arrow keys walk siblings, `Escape` closes. A right-click on a pinned window opens its own menu,
-and a pinned page of text takes the keyboard: the arrows move a caret a line at a time and the
-page keys a screenful, `Ctrl+F` opens a find bar, `F3` finds the next place the selection appears,
-and `Ctrl` and a wheel changes that page's text size.
+and a press inside a pinned page of text gives it the caret: the arrows then move it a line at a time and the
+page keys a screenful, `Ctrl+F` opens a find bar, `F3` finds the next place the selection appears, and `Ctrl` and
+a wheel changes that page's text size. Until that press the arrows walk the folder, and a press on the page's
+caption gives them back.
 
 ## System Tray Menu
 

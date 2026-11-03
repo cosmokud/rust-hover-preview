@@ -6,9 +6,23 @@
 
 - **`Pin Mode → Navigation → Image`** — the walk's anchors are four now, and the picture is the first of them: above Video, with the same **All Files** / **Same Category** pair, starting at `Same Category` (`pin_nav_image` in `config.ini`). A file holding only the old `pin_nav_file_types` seeds it with the other three. Pictures used to be Others files, so a walk anchored on one steps through the folder's pictures rather than end to end; a document still walks end to end.
 
+- **`Preview Settings → Text → Preview All Extensionless`** — off by default: on, a file with no extension at all (`README`, `notes`, a source file a repository left bare) is previewed as text, where before only the names list (`LICENSE`, `Makefile`, `.gitignore` and the rest) counted. `text_show_extensionless` in `config.ini`.
+
+- **`Preview Settings → Text → Don't Preview Secret Files`** — on by default: `.env` and its variants, `id_rsa`/`id_ed25519`/`credentials` and their suffixed copies, key, certificate, keystore, VPN and password-database extensions, and anything under `~/.ssh`, `~/.aws`, `~/.gcp`, `~/.kube`, `~/.docker` or a coding agent's credential path are not previewed at all, rather than shown as the text they are. `*.pub` and the `.env.example`/`.sample`/`.template`/`.tpl`/`.defaults` templates are still read. `text_dont_preview_secrets` in `config.ini`.
+
+### Changed
+
+- **A pinned page's caret keys are the page's only once a press inside it has given it the focus** — a page came up answering the arrows, `PgUp`/`PgDn`, `Home`/`End` and their `Ctrl` forms with its caret, so the walk the caption offers could not be stepped from the keyboard. It is drawn unfocused now, with no caret and every one of those keys stepping the folder as it does over a picture; a press in its body focuses it — the same press that puts the caret down or begins a selection — and a press on the caption (its walk, its buttons and the empty drag area) gives the focus up again, clearing none of the caret, its column or the selection, so a page pressed into again comes back where it was left. `Ctrl+A`/`C`, `F3` and `Ctrl+F` read the page rather than move a caret in it and are the page's either way.
+
 ### Fixed
 
 - **An image pin moved from the bubble into the taskbar keeps its picture in the button's hover.** A pin that stands in a window of its own wears its own taskbar button, and the row that moves one from the bubble into the taskbar minimized a window that had been hidden since the collapse — a window with no composition for the Shell to freeze, and no picture taken of it — so the hover fell back to the icon. The picture is now taken at the collapse, while that window is still on the screen, and the window is made supplying the still its button is drawn of and answers the Shell's ask for it; a pin restored, ended, or up again gives the still back and forgets the picture, so the direct minimize keeps the Shell's own freeze it has always had.
+
+- **A press on a pin's own menu is the pin's gesture** — the menu is a layered popup that takes no input of its own, so its presses arrive at the card's window and were read by the Explorer hook as presses on the listing underneath: on a menu clamped under the pointer at a screen edge, a press on a row lowered the pin behind that listing and the menu came away. Such a press is neither a pick nor a no-pick now, it spends the rest of the hand, and the menu's own window counts as the pin's when the dismiss ask is read, so a press that lands on the menu puts away nothing.
+
+- **The caption's chevrons step the folder over a pinned page of text** — a chevron asked for `Previous`/`Next`, which are the arrow keys' commands and became the page's caret wherever a page held one, so a press on the chrome moved the caret and never reached the walk. The chrome, the menu's rows, a bubble's rows and the taskbar's buttons now ask `PreviousFile`/`NextFile`, which are the walk whatever the pin holds.
+
+- **The pin's own window and the taskbar stand-in wear this app's icon** — neither was given one, so a pinned picture's button (and the stand-in a bubble's button is made from) drew whatever Windows falls back on. Both sizes are set on both windows, the small one being what a taskbar button draws.
 
 ## [0.4.7] - 2026-11-03
 

@@ -99,7 +99,7 @@ src/app/                    single_instance, startup (registry sync/repair), upd
 src/config/                 config (AppConfig, PreviewType/PreviewScale/..., DEFAULT_*, sanitize_*, save/ordered_text/differs/repair_older_lists), engines_in_effect, theme_files
 src/shell/                  explorer_hook/, wheel_input, key_input, hook_thread, cloud_files, pin_navigation, app_icon, tray/
 src/ui/                     preview_window.rs + preview_window/ (pin_*, layout, load*, paint, media_*, video_*, bubble_stream, audio_meter, tick, displays, ...); pin_window, displays seam (Desktop real vs recorder)
-src/formats/                routing, native_formats::NativeJob/job_for, content_type::{Probe,Content}, head, codecs, lists (16 rows), *_formats (see below)
+src/formats/                routing, native_formats::NativeJob/job_for, content_type::{Probe,Content}, head, codecs, secret_files::is_secret_file, lists (16 rows), *_formats (see below)
 src/readers/                wic_image, dds_image, bcn/{bc6h,bc7,block_formats}, webp_image, jxl_image, heif_sequence, tone_map::{ToneMap,Curve},
                             psd_image, project_image (+cdr_image), eps_image, metafile_image, svg_preview, font_preview/{font_tables,specimen},
                             pdf_preview::{BookPage,book_page}, comic_preview, archive_listing::entry_bytes, office_preview::{measure,render,WAITING_BOX,source_kind,page_is_workbook_picture},
@@ -163,6 +163,18 @@ second exhaustive match so the six `current_*_background` settings are read once
   kind the bytes name outright is that kind, a format no kind previews is drawn as nothing, and `is_video`/`is_audio`
   ask the route the way `is_text` already did — the `.ts`/`.mts` pair both video lists carry is what a name-only answer
   got wrong, a source whose probe never answered and whose pin held its swap on that same wait.
+
+- The text kind's two gates ahead of its lists, read by every caller alike (`claim_text` and `named_as`, so the hook, the
+  walk and the loader cannot disagree; `load_dispatch` asks the secret one again where the page is built):
+  `text_dont_preview_secrets` (default `true`) refuses what `secret_files::is_secret_file` names — `.env` and its
+  variants, `id_rsa`/`credentials` and their suffixed copies, key, certificate, keystore and password-database
+  extensions, and anything under `~/.ssh`, `~/.aws`, `~/.gcp`, `~/.kube`, `~/.docker` or a coding agent's credential
+  path — with `*.pub` and the `.env.example`/`.sample`/`.template`/`.tpl`/`.defaults` templates exempt, since those are
+  the ones a repository means to be read; `text_show_extensionless` (default `false`) extends the kind to a name with no
+  extension at all, where the names list covers only the repository files it names. A refusal is a name no kind claims,
+  not a text preview of nothing, which is what keeps the hover's window away rather than opening one that is empty. And
+  a folder is never a file whatever its name looks like (`probe_trace::is_media_file_with_facts` asks `Facts::is_file`
+  first), so an extensionless folder is not walked into as one.
 
 `content_type::Probe` is the read-and-forget half: sixteen bytes tell you most of a format, and if they do not you
 escalate to a 4 KB window. The still-vs-moving question is the interesting one, because a GIF and an animated WebP are
@@ -472,9 +484,9 @@ transiently", which is what stops a deleting file from being retried forever.
   `press_is_a_listing` (window is Explorer's or this app's own, still there, not menu-popup chrome — current _or_
   previous tick); a press the pin itself takes is neither a pick nor a no-pick — its point inside the pin's own box
   whatever the hit test names under it (`press_is_on_the_pin`), or read on the tick that box changed under a hand
-  nobody moved (`press_is_the_pins_own_gesture`); click read through own windows (`is_our_own_window` = preview or
-  engine HWND/children) else the focused item in the click's own place; item and view caches dropped on the foreground
-  handoff; a click that answers nothing is held and re-asked while the pointer stays put, and given up the moment this
+  nobody moved (`press_is_the_pins_own_gesture`); click read through own windows (`is_our_own_window` = preview,
+  engine HWND/children, or the pin's own menu) else the focused item in the click's own place; item and view caches
+  dropped on the foreground handoff; a click that answers nothing is held and re-asked while the pointer stays put, and given up the moment this
   app's own window moves (`preview_window_rect`, noted on every pinned tick), so a double-click that centers a pin is
   not answered against the point the move uncovered.
 
@@ -499,6 +511,14 @@ button's own press reads
 (`pin_button_covers`); it is no pick, it spends the rest of the hand, and a click held from before it is dropped
 rather than answered out of the listing the chrome covered.
 
+**A press on the pin's own menu is the pin's own as well** (`note_pin_menu_pressed` where the card's or the bubble's own
+press handler answers it, `press_is_on_the_pins_menu` — the note, or the pointer over the menu window this tick or the
+last). The menu is a layered popup that takes no input of its own, so it is never the window the press is read on, and a
+menu clamped under the pointer at a screen edge sits over the listing rather than over the pin: read as the listing's, a
+press on a row or on the panel lowered the pin behind it. Such a press now spends the hand and is neither a pick nor a
+no-pick, and the dismiss ask counts the menu's own window as the pin's (`pin_menu_window_is_at`) beside the bubble's, so
+a press that lands on the menu puts away nothing.
+
 **A press inside the pin's own box is the pin's own, and so is one read on the tick the pin moved.** A pin shows its
 picture in a host, and a host answers `HTTRANSPARENT` so the press reaches the pin's chrome: `WindowFromPoint` over the
 pin's picture therefore names the *listing* the pin was fitted over. Read as that listing's, a press on the pin held the
@@ -515,7 +535,7 @@ second press of a double press that moved the window is refused as the gesture i
 
 > How a hover becomes a persistent topmost window. Pin key freezes hover machinery, stands a window of the pin's own with caption/transport chrome, and swaps media in place for picks or prev/next walks — same file, no re-resolve.
 
-The design decision that shapes all of this: the pin is a window of this app's own, and the hover's window is not it. A hover is made a non-activating tool window on purpose — it appears under a pointer that may be in the middle of renaming a file, and a window that took the focus would swallow the name being typed — while what Windows decides from a window's styles (whether a click may activate it, whether it is listed, whether it can be minimized and restored) is asked of that window once, when it is made. A pin is the opposite case, so it gets `pin_real_window`'s class: `WS_POPUP` with `WS_SYSMENU | WS_MINIMIZEBOX`, layered because its edges are alpha, no band in its styles at all (the setting asks for the band when the pin is shown), and no stand-in of its own for the taskbar, because this window brings its own button — and, put away into the taskbar, supplies the still of it. Everything that would require re-resolving a file is still free — the pin already knows the folder, the window, the sort order, and the config.
+The design decision that shapes all of this: the pin is a window of this app's own, and the hover's window is not it. A hover is made a non-activating tool window on purpose — it appears under a pointer that may be in the middle of renaming a file, and a window that took the focus would swallow the name being typed — while what Windows decides from a window's styles (whether a click may activate it, whether it is listed, whether it can be minimized and restored) is asked of that window once, when it is made. A pin is the opposite case, so it gets `pin_real_window`'s class: `WS_POPUP` with `WS_SYSMENU | WS_MINIMIZEBOX`, layered because its edges are alpha, no band in its styles at all (the setting asks for the band when the pin is shown), and no stand-in of its own for the taskbar, because this window brings its own button — and, put away into the taskbar, supplies the still of it, which is why it is made supplying its stills and why it wears the app's own icon in both the sizes a window is asked for (`WM_SETICON` with `app_icon`, the small one being what a taskbar button draws; the stand-in a bubble's button is made from is given the same pair). Everything that would require re-resolving a file is still free — the pin already knows the folder, the window, the sort order, and the config.
 
 - Take-up: `pin_key` (Mouse3 or Space) on settled preview (`pin_screen_is_settled`), never spinner; engine kinds install `pinned_engine_media`. `key_input`/`wheel_input` LL hooks + per-tick counter; `refresh` on config/tray.
 - The key a setting names: `key_binding` reads a binding as alternatives separated by `,` and the keys of one alternative by `+` — `space,page_down`, `ctrl+alt+space`, `ctrl+mouse4` — where the last key of an alternative is the press counted and the rest only have to be held. Mouse buttons are `mouse3`–`mouse5`, carried as their Windows virtual keys so one down-state read answers for both kinds, and left and right are not names it takes; an unreadable or empty `pin_key` falls back to `DEFAULT_PIN_KEY` (`mouse3,space`). The same parse answers `trigger_key` and `toggle_key`, and every stored spelling keeps working.
@@ -699,7 +719,9 @@ as given (`set_pin_volume`, `settle_pin_volume`).
   per-kind reader check, capped map) + `IFolderView2::GetSortColumns/sort_key_of` else natural order, wrap;
   `PinStep/pin_walk/pin_step_off` (skip bad, forward-only, `show_pin_failure→MediaType::Unplayable/PIN_FAILURE_SIDE`,
   each other file offered at most once); `step_pinned_file` copies config (no lock across IO); arrows only when pin
-  focused (no `GetAsyncKeyState` steal); `pin_command_request/ask_pin` single door (`navigating` flag); width =
+  focused (no `GetAsyncKeyState` steal); `pin_command_request/ask_pin` single door (`navigating` flag); the chrome, a
+  menu's rows, a bubble's rows and the taskbar's buttons ask `PreviousFile`/`NextFile`, which are the walk whatever the
+  pin holds, while `Previous`/`Next` stay the arrows' and are the page's caret where a focused page holds one; width =
   per-anchor `pin_nav_image`/`pin_nav_video`/`pin_nav_audio`/`pin_nav_others` (`all`/`category`; Image/Category,
   Video/Category, Audio/Category, Others/All by default; old `pin_nav_file_types` seeds all four once).
 
@@ -715,8 +737,8 @@ has focus, and never via `GetAsyncKeyState`, which would steal keys from whateve
 
 How wide the walk is, is the anchor's own switch (`nav_mode_for`): **All** steps through every file this build could
 preview, so a video sits beside a sound; **Category** narrows it to the first file pinned's kind of thing — a camera raw
-is a picture and a book is a document, because that is what you call them. Video and Audio start narrow, Others starts
-wide, so `PDF → MP3 → DOCX` walks end to end while `MP3 → FLAC` never reaches a document.
+is a picture and a book is a document, because that is what you call them. Image, Video and Audio start narrow, Others
+starts wide, so `PDF → MP3 → DOCX` walks end to end while `MP3 → FLAC` never reaches a document.
 
 The walk is the pin's **session**, not one ask's answer (`PinUp::walk`, `state.walk()`/`walk_mut()`, `session_walk`,
 `take_pin_walk`, `pin_walk_synced_its_playlist`): one playlist (`PinStep::order`) spawned when the pin is triggered and
@@ -1076,8 +1098,11 @@ machine's answer rather than a setting: the media engine Windows has is asked fi
   because a window procedure may not). **A page is drawn unfocused**, with no caret and every one of those keys stepping
   the folder as it does over a picture, and a press on the caption — its walk, its buttons and the empty drag area, and
   nothing else — gives the focus up again, clearing none of the caret, its column or the selection; `Ctrl`+`A`/`C`, `F3`
-  and `Ctrl`+`F` read the page rather than move a caret in it and are the page's either way. Nothing that writes reaches
-  the document: a typed character, `Backspace`, `Delete` and `Ctrl`+`X`/`Ctrl`+`V` all change nothing, since a cut that
+  and `Ctrl`+`F` read the page rather than move a caret in it and are the page's either way. `Home`/`End` on a page that
+  is held but has not been pressed into step the folder rather than being swallowed, which is what tells such a page from
+  a pin holding no page at all (`holds_a_page`) — a picture has no beginning for `Home` to go back to. Nothing that
+  writes reaches the document: a typed character, `Backspace`, `Delete` and `Ctrl`+`X`/`Ctrl`+`V` all change nothing,
+  since a cut that
   cannot cut is worse than a chord that does nothing, while `Ctrl`+`A`/`C` still read it. The caret blinks at the pace
   the system names while the page has the focus and a caret. `F3`, and the page's **Find Next** row, take it to the next
   place the selection appears
@@ -1828,8 +1853,9 @@ actually has — gated on `cmap`, all-or-nothing, because a specimen where half 
 one showing the font's own characters. `font_scale` gives fonts half the room an image would get, and the ink colour is
 chosen against the kind's backdrop rather than being fixed.
 
-- Text (`text_preview/*`, `text_paint`, `text_theme`, `text_formats`): `config.ini` lists (ext + namelist for
-  LICENSE/Makefile/.gitignore); measure→`render` at DPI (`GetDpiForMonitor`), `effective_preview_scale`=100% +
+- Text (`text_preview/*`, `text_paint`, `text_theme`, `text_formats`, `secret_files`): `config.ini` lists (ext + namelist
+  for LICENSE/Makefile/.gitignore) behind the kind's two gates — an extensionless name, and a secret refused
+  (`claim_text`); measure→`render` at DPI (`GetDpiForMonitor`), `effective_preview_scale`=100% +
   `text_box_room(text_scale)` + re-measure-on-wrap + `TextMetrics(text_font_scale 0.25–16×)`; `PreviewType::Text` gates
   incl. `text_preview_enabled` in `is_text_file`; kind-change rebuilds that kind only; themes `theme/`+bundled
   (`custom:<name>`, menu lists, default fallback, drop on open); producers syntect/two-face + pulldown-cmark + RTF
@@ -2126,8 +2152,9 @@ still the user's choice, an entry that is gone is not written back, and `config.
   `Subtitles` row, `Loop`, and a `Pin Mode` submenu (`Pause on Minimize`, `Shuffle`, `End of File`); `Audio` the same
   with two `Seek` rows, one outside `Pin Mode` for a hovered sound and one inside for a pinned one; `Image` a `Pin Mode`
   submenu with the picture's `Shuffle` and its `Zoom Background` (the band a zoom opens behind an opaque picture; a
-  transparent one keeps its own kind's backdrop, `image_background`); `Text` the font size, Markdown mode and Render
-  HTML. `Pin Mode → Navigation` is the four walk anchors, `Image` first. Gate/type change rebuilds that kind
+  transparent one keeps its own kind's backdrop, `image_background`); `Text` the font size, Markdown mode, Render HTML,
+  and the two gates — **Preview All Extensionless** and **Don't Preview Secret Files**. `Pin Mode → Navigation` is the
+  four walk anchors, `Image` first. Gate/type change rebuilds that kind
   (`Refresh` recomposites
   others, text rebuilds frame).
 
