@@ -1401,14 +1401,23 @@ pub(super) fn adopt_a_stranded_ffplay_into_the_pin_host(pid: u32, path: &Path) -
 }
 
 /// Whether this file is shown in a host this app owns: a film pinned in a window of the pin's own,
-/// whichever engine plays it. Asked of the route rather than of the player's process because it is
-/// the *launch* that decides where the picture is drawn (see `start_video_playback`).
+/// whichever engine plays it, or a model drawn in one by f3d. Asked of the route rather than of the
+/// player's process because it is the *launch* that decides where the picture is drawn (see
+/// `start_video_playback`).
 pub(super) fn the_film_is_shown_in_a_host(path: &Path, kind: Option<MediaType>) -> bool {
     // A sound's player is FFmpeg's too, and a sound's route would match the film routes below: the
     // media on screen has to be a film before any host road is asked (see `MediaType::is_audio`).
     pin_is_its_own_window()
-        && kind.or_else(current_media_type) == Some(MediaType::Video)
-        && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
+        && match kind.or_else(current_media_type) {
+            Some(MediaType::Video) => {
+                matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
+            }
+            // A model is the one kind whose picture is a window of somebody else's on every road,
+            // and the engine that draws it is on this machine or the file has no preview at all
+            // (see `f3d_render`).
+            Some(MediaType::Model) => f3d_render::available(),
+            _ => false,
+        }
 }
 
 /// The box the host is placed at, from the band the pin says its picture stands in. The band *is* a

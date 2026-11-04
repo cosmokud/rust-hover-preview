@@ -889,8 +889,34 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
         // Safety: as above, and the alpha is this app's own to give a window of another process's. The
         // one step from nothing, `LWA_ALPHA`, is what keeps the window drawn (and therefore
         // thumbnailable) while nothing of it reaches the screen.
-        let applied =
-            unsafe { SetLayeredWindowAttributes(source, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA) };
+        //
+        // **And the ask is made again where the window had not taken the style yet.** A style written
+        // behind a window's back is not one it presents with until it is asked to read it, and an alpha
+        // asked for before that is refused: a window left `WS_EX_LAYERED` with no alpha at all is a
+        // window that draws nothing, which the Shell thumbnails as a black band. Measured on a
+        // viewer's own window (f3d 4.0.1), the first ask is refused about as often as it is taken; the
+        // frame change below is what makes the style effective, and the ask after it is the one that
+        // holds.
+        let ask = || unsafe {
+            SetLayeredWindowAttributes(source, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA)
+        };
+        let first = ask();
+        let applied = if first.is_ok() {
+            first
+        } else {
+            let _ = unsafe {
+                SetWindowPos(
+                    source,
+                    HWND::default(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                )
+            };
+            ask()
+        };
         note_pin_trace!(
             "source invisible {:?} layered alpha {} applied ok {} (RHP_THUMBNAIL_INVISIBLE)",
             source,
@@ -955,7 +981,12 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
         .and_then(|held| held.source)
         // A shape recorded for another film is not this one's: the placement is this film's first.
         .filter(|shape| shape.belongs_to(source, pid));
-    let native = the_films_native_size(pid).map_or(NativeSize::NotYet, NativeSize::Known);
+    // **A model's picture is a window its renderer draws the scene into, and its client is the whole
+    // of what it draws**: the picture has no size of its own to be asked for, so what it does answer
+    // is the box it stands at, which is the box it was launched with (see `f3d_player`).
+    let native = the_films_native_size(pid)
+        .or_else(|| f3d_player::the_box_of_a_model(pid))
+        .map_or(NativeSize::NotYet, NativeSize::Known);
     let placed = place_the_source(source, host, pid, placed, native);
     let pending = the_pending_source_for(source.0 as isize, pid).is_some();
     if let Some(placed) = placed.filter(|_| pending) {

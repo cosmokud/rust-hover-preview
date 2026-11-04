@@ -112,9 +112,15 @@ pub(super) fn note_hover_film_host_player(pid: u32, path: &Path) {
 /// The hover's host, where this player is the one begun into it for this file and is already
 /// drawing there: the host a pin can move into its own window instead of beginning a second player.
 pub(super) fn the_hover_film_to_adopt(path: &Path) -> Option<HWND> {
-    if current_media_type() != Some(MediaType::Video)
-        || !matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
-    {
+    // A film whichever player draws it, and a model if a viewer is here to draw one: the two kinds
+    // whose picture is a window of somebody else's, which is the only thing a host can hold (see
+    // `the_hover_film_is_kept_in_a_host`).
+    let hostable = match current_media_type() {
+        Some(MediaType::Video) => matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay),
+        Some(MediaType::Model) => f3d_render::available(),
+        _ => false,
+    };
+    if !hostable {
         return None;
     }
 
@@ -158,7 +164,10 @@ pub(super) fn forget_the_hover_film_host_that_was_handed_over(host: HWND) {
 /// player through `start_audio_player` and never asks here (see `the_hover_film_to_adopt` for the
 /// media-type gate every take-up asks, where the media on screen is the one that decides).
 pub(super) fn the_hover_film_is_kept_in_a_host(path: &Path) -> bool {
-    !pinned() && pin_enabled() && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
+    !pinned()
+        && pin_enabled()
+        && (matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
+            || (f3d_render::available() && named_as(path, PreviewType::Models)))
 }
 
 /// Whether the player this app is holding was begun into the hover's host.
