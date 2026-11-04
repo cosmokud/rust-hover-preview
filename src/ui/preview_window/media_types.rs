@@ -301,17 +301,14 @@ pub(super) enum MediaType {
     /// for and nothing to keep.
     Comic,
     /// A model drawn by an installed f3d: a mesh, a CAD exchange document, a point cloud, a
-    /// scientific dataset. What comes back is a picture of the scene, which is drawn like any
-    /// other — a frame of this app's own, over the backdrop a picture is drawn over — while the
-    /// window it is drawn in is f3d's rather than this one's.
+    /// scientific dataset. Nothing of the scene is a frame of this app's — the picture is f3d's own
+    /// window, shown in-place for a hover and through a host's thumbnail for a pin, the way a film's
+    /// player's window is (see `f3d_player`) — and what this app draws behind it is the box it would
+    /// be drawn in.
     ///
     /// It is a kind of its own rather than the picture kind's second half: the switch over it is
     /// its own, because an engine a user did not install is a setting worth being able to reach,
     /// and because nothing else here opens a model at all.
-    ///
-    /// Nothing constructs one yet: what would is the host window f3d's picture is drawn in, which
-    /// is the phase after this one.
-    #[allow(dead_code)]
     Model,
     /// A file the pin was shown and its player could not draw, standing as the cross
     /// `pin_chrome::paint_failure_mark` draws. It is a kind of its own because it has to be:
