@@ -12,8 +12,8 @@ use super::app_config::AppConfig;
 use super::defaults::{
     parse_text_font_scale, sanitize_audio_mark_offset_y, sanitize_decode_budget_gb,
     sanitize_document_cache_mb, sanitize_general_disk_cache_mb, sanitize_hdr_exposure,
-    sanitize_image_cache_mb, sanitize_image_disk_cache_mb, sanitize_mpv_path,
-    sanitize_pin_zoom_bounce_ms, sanitize_pin_zoom_bounce_power, sanitize_pin_zoom_bounce_speed_ms,
+    sanitize_image_cache_mb, sanitize_image_disk_cache_mb, sanitize_pin_zoom_bounce_ms,
+    sanitize_pin_zoom_bounce_power, sanitize_pin_zoom_bounce_speed_ms, sanitize_program_path,
     sanitize_spinner_delay_ms, sanitize_text_font_scale_percent,
     sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms, sanitize_ttc_face,
     sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
@@ -433,6 +433,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "f3d_preview_enabled",
+            Some(self.f3d_preview_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "document_cache_mb",
             Some(sanitize_document_cache_mb(self.document_cache_mb).to_string()),
         );
@@ -463,6 +468,7 @@ impl AppConfig {
         );
         // The one setting that holds a path: written as it stands, trimmed on the way back in.
         ini.set(CONFIG_SECTION, "mpv_path", Some(self.mpv_path.clone()));
+        ini.set(CONFIG_SECTION, "f3d_path", Some(self.f3d_path.clone()));
         ini.set(
             CONFIG_SECTION,
             "video_subtitles",
@@ -1126,6 +1132,9 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "vector_preview_enabled") {
             self.vector_preview_enabled = value;
         }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "f3d_preview_enabled") {
+            self.f3d_preview_enabled = value;
+        }
         // The budget of the folder both engines' pages are kept in, which is one setting where
         // there used to be two — each engine had a cache of its own. A file an older build
         // wrote names one or both of those keys, and what it asks for is honoured once: the
@@ -1178,7 +1187,10 @@ impl AppConfig {
         // A value that cannot be read — a key that is gone, or one that is not text — is nobody's
         // pick, which is the empty path the setting starts at (see `DEFAULT_MPV_PATH`).
         if let Some(value) = ini.get(CONFIG_SECTION, "mpv_path") {
-            self.mpv_path = sanitize_mpv_path(&value);
+            self.mpv_path = sanitize_program_path(&value);
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "f3d_path") {
+            self.f3d_path = sanitize_program_path(&value);
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_subtitles") {
             self.video_subtitles = value;

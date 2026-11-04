@@ -531,6 +531,13 @@ pub(super) const ID_TRAY_TYPE_DESIGN: u16 = 1071;
 /// kind SVG documents have always had — the id is the one this gate carried under that name
 /// — and the metafiles and encapsulated PostScript files the same kind grew to hold.
 pub(super) const ID_TRAY_TYPE_VECTOR: u16 = 1069;
+/// The `3D` gate: the models an installed f3d draws, which are the one kind of preview this app
+/// has no reader of its own for — a scene cannot be decoded into a frame, only rendered.
+///
+/// Its id is the one left in the gap between the text preview's own rows and the block of gates
+/// that begins at 1062: 1061 was where the font sizes began before the gates moved here, and
+/// nothing has claimed it since.
+pub(super) const ID_TRAY_TYPE_MODELS: u16 = 1061;
 /// The `Audio` gate: the sounds this app plays, which are the one kind of preview that is
 /// heard rather than looked at — and the reason `Volume` has two halves (see
 /// `ID_TRAY_AUDIO_VOLUME_BASE`).

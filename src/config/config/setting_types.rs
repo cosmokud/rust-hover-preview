@@ -657,6 +657,14 @@ pub enum PreviewType {
     /// not a decoder but an engine, so its switch is this one rather than the switch for
     /// pictures; see `svg_preview`.
     Vector,
+    /// Three-dimensional models, drawn by an installed f3d rather than by anything here: a mesh, a
+    /// CAD exchange document, a point cloud, a scientific dataset — what such a file holds is a
+    /// scene, and nothing about one can be decoded into a frame without a renderer. It is the one
+    /// kind whose only reader is an engine, which is why it is a kind rather than a half of
+    /// another: the switch over it is its own, and a row of its own under `Preview Types` is that
+    /// switch. See `DEFAULT_F3D_EXTENSIONS` for what is listed and `f3d_render` for how one is
+    /// drawn.
+    Models,
     /// Documents this app hands to a render engine rather than reading — CorelDRAW above
     /// all, and the word processors, spreadsheets, presentations and drawings whose own
     /// formats no reader here has. What draws one is LibreOffice where it is installed, and
@@ -726,6 +734,7 @@ impl PreviewType {
             Self::Fonts => config.font_preview_enabled,
             Self::Design => config.design_preview_enabled,
             Self::Vector => config.vector_preview_enabled,
+            Self::Models => config.f3d_preview_enabled,
         }
     }
 
@@ -743,6 +752,7 @@ impl PreviewType {
             Self::Fonts => config.font_preview_enabled = enabled,
             Self::Design => config.design_preview_enabled = enabled,
             Self::Vector => config.vector_preview_enabled = enabled,
+            Self::Models => config.f3d_preview_enabled = enabled,
         }
     }
 }

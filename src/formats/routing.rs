@@ -104,7 +104,7 @@ pub fn nav_category(kind: PreviewType) -> NavCategory {
         PreviewType::Archives | PreviewType::Peazip => NavCategory::Archives,
         PreviewType::Text => NavCategory::Text,
         PreviewType::Fonts => NavCategory::Fonts,
-        PreviewType::Design | PreviewType::Vector => NavCategory::Design,
+        PreviewType::Design | PreviewType::Vector | PreviewType::Models => NavCategory::Design,
     }
 }
 
@@ -118,16 +118,16 @@ pub fn nav_category(kind: PreviewType) -> NavCategory {
 /// The entry is `None` for a question about a name alone, which never touches the disk: the
 /// caller has already read the file, and the read that would settle the name is the one that was
 /// made. It is a parameter rather than something each claim works out for itself so that one entry
-/// read serves all fourteen (see [`claims`]), and it is the whole of what two of the fourteen need
+/// read serves all fifteen (see [`claims`]), and it is the whole of what two of the fifteen need
 /// it for: the probe's answer is held under the version of the file it was read at, and whether an
 /// `.ai`'s content is on this machine is a question about its entry.
 ///
-/// Every claim is a function rather than a row of data, and the reason is that ten of the fourteen
+/// Every claim is a function rather than a row of data, and the reason is that ten of the fifteen
 /// are a row's own answer and four are not: a video's two names the text lists share are the
 /// file's bytes, a sound is a container a probe found a sound in, a book is a page the PDF reader
 /// draws, and a picture is a drawing when the name is one. A table of `kind` plus `list` plus a
-/// flag for each of those four would be fourteen arms of data and a dispatch over a five-armed
-/// enum, which is more machinery than fourteen one-line functions whose prose says what each is
+/// flag for each of those four would be fifteen arms of data and a dispatch over a five-armed
+/// enum, which is more machinery than fifteen one-line functions whose prose says what each is
 /// for. The one fact they all share — which row names which kind — is not in them at all: it is
 /// [`named_as`], one exhaustive match, because that is the question eleven of the fourteen used to
 /// be asked of a list of their own inside a module apiece.
@@ -159,6 +159,7 @@ const CLAIMS: &[Claim] = &[
     claim_vector,
     claim_text,
     claim_fonts,
+    claim_models,
     claim_images,
 ];
 
@@ -279,7 +280,7 @@ pub fn backdrop_of(kind: PreviewType, web: Option<WebPage>) -> Backdrop {
     }
 
     match kind {
-        PreviewType::Images | PreviewType::Magick => Backdrop::Image,
+        PreviewType::Images | PreviewType::Magick | PreviewType::Models => Backdrop::Image,
         PreviewType::Fonts => Backdrop::Font,
         PreviewType::Design => Backdrop::Design,
         PreviewType::Vector => Backdrop::Vector,
@@ -424,13 +425,15 @@ fn drawn_by_of(
         // A specimen is reached here only as itself — a file whose bytes are a font's and whose
         // name is not, which the browser still draws.
         Some(PreviewType::Fonts) => DrawnBy::WebView(WebPage::FontSpecimen),
-        // The four kinds an engine draws, and nothing at all: their answer is the engine's own
-        // window, which is not a kind of reader of this app's own, and a file no list claims is
-        // the picture the loader's own chain ends at.
+        // The four halves of a kind an engine draws and the one kind it is the whole reader of,
+        // and nothing at all: their answer is the engine's own window, which is not a kind of
+        // reader of this app's own, and a file no list claims is the picture the loader's own chain
+        // ends at.
         Some(PreviewType::Calibre)
         | Some(PreviewType::Document)
         | Some(PreviewType::Libre)
         | Some(PreviewType::Magick)
+        | Some(PreviewType::Models)
         | None => DrawnBy::Nothing,
     }
 }
@@ -519,6 +522,9 @@ pub fn named_as(path: &Path, config: &AppConfig, kind: PreviewType) -> bool {
         PreviewType::Design => lists::DESIGN.claims(path, config),
         PreviewType::Vector => lists::VECTOR.claims(path, config),
         PreviewType::Fonts => lists::FONT.claims(path, config),
+        // The names an installed f3d reads and no other list has already claimed, so a file of
+        // one is a model and nothing else (see `DEFAULT_F3D_EXTENSIONS`).
+        PreviewType::Models => lists::F3D.claims(path, config),
         PreviewType::Images => lists::IMAGE.claims(path, config),
     }
 }
@@ -588,7 +594,7 @@ fn claim_video(
 ) -> Option<PreviewType> {
     // Asked of the key the walk already has, and of the path only where there is none. The
     // probe's answer is a set in memory, so the entry that keys it is the only thing the
-    // question needs from the disk, and the walk has read it once for all fourteen claims.
+    // question needs from the disk, and the walk has read it once for all fifteen claims.
     let probed = match entry.map(crate::formats::head::Facts::key) {
         Some(key) => audio_formats::probed_audio_only_in(key),
         None => audio_formats::probed_audio_only(path),
@@ -865,6 +871,24 @@ pub fn drawing_of(path: &Path) -> Drawing {
     }
 }
 
+/// A model: a name an installed f3d reads that no other list has claimed, which is the whole of
+/// what the kind is — nothing here reads one, so there is no second question to ask about it.
+///
+/// It is asked before the pictures for the reason the pictures are asked last: the image list is
+/// the master bucket for pictures, and a name in two of them would be drawn as whichever was
+/// asked first. What the subtraction in `DEFAULT_F3D_EXTENSIONS` leaves behind is a name no image
+/// list holds, so this entry and that one cannot both claim a file.
+fn claim_models(
+    path: &Path,
+    config: &AppConfig,
+    _asked: Asked,
+    _entry: Option<&crate::formats::head::Facts>,
+) -> Option<PreviewType> {
+    lists::F3D
+        .claims(path, config)
+        .then_some(PreviewType::Models)
+}
+
 /// A picture — and the one entry that can answer with a kind that is not its own.
 ///
 /// A drawing is not a picture, and the image list is where the drawings of that kind were until
@@ -926,6 +950,10 @@ pub fn chain(kind: PreviewType) -> &'static [Reader] {
 
         PreviewType::Libre => &[Reader::LibreOffice],
         PreviewType::Magick => &[Reader::ImageMagick],
+
+        // A model is the one kind with a single reader that is an engine: there is no decoder for
+        // a scene, so what draws one is the installed f3d or nothing at all (see `f3d_render`).
+        PreviewType::Models => &[Reader::F3d],
 
         // A design document is read for the picture its own format keeps of the whole thing,
         // and a page an engine has already drawn of one is preferred to that thumbnail.

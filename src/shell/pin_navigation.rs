@@ -366,7 +366,8 @@ fn kind_rank(kind: PreviewType) -> u8 {
         PreviewType::Vector => 10,
         PreviewType::Text => 11,
         PreviewType::Fonts => 12,
-        PreviewType::Images => 13,
+        PreviewType::Models => 13,
+        PreviewType::Images => 14,
     }
 }
 

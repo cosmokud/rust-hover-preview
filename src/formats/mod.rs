@@ -4,6 +4,7 @@ pub(crate) mod calibre_formats;
 pub(crate) mod codecs;
 pub(crate) mod content_type;
 pub(crate) mod ebook_formats;
+pub(crate) mod f3d_render;
 pub(crate) mod font_formats;
 pub(crate) mod head;
 pub(crate) mod libre_formats;

@@ -605,6 +605,10 @@ pub(super) fn media_dimensions_of_kind(kind: PreviewType, path: &Path) -> Option
             .then(|| font_box(path))
             .flatten(),
         PreviewType::Images => picture_box(path).or_else(|| magick_box(path)),
+        // A model has no size of the file's own to be placed at — the picture the engine draws of
+        // one is drawn at the room the display has, and nothing draws here yet (see
+        // `f3d_render`).
+        PreviewType::Models => None,
     }
 }
 

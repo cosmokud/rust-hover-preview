@@ -221,6 +221,72 @@ fn an_engine_drawn_kind_is_switched_by_the_kind_it_belongs_to() {
     }
 }
 
+/// The models an installed f3d is asked about are a list and a gate of their own, and that gate is
+/// all this app knows about them: nothing here reads a scene, so the list is the whole of what is
+/// asked of the engine and a machine without it has no model preview at all (see `f3d_render`).
+///
+/// The gate is the kind's own rather than a neighbour's — it is not a half of another kind the way
+/// a picture a converter develops is — so switching models off leaves the pictures, the drawings
+/// and the documents where they were.
+#[test]
+fn the_models_the_f3d_engine_is_asked_about_are_a_list_and_a_gate_of_their_own() {
+    let config = AppConfig::default();
+    assert_eq!(
+        config.f3d_extensions,
+        lists::sanitize_extension_list(lists::DEFAULT_F3D_EXTENSIONS)
+    );
+
+    let mut ini = Ini::new();
+    ini.set(
+        lists::F3D.section,
+        "extensions",
+        Some(".STL,obj".to_string()),
+    );
+
+    let config = read_file(&mut ini);
+    assert_eq!(config.f3d_extensions, vec!["stl", "obj"]);
+
+    // A section that is gone is answered with the built-in list, and the file is one to write out
+    // again with it, since a key that is gone is not what the app is using.
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "run_at_startup", Some("true".to_string()));
+
+    let config = read_file(&mut ini);
+    assert_eq!(
+        config.f3d_extensions,
+        lists::sanitize_extension_list(lists::DEFAULT_F3D_EXTENSIONS)
+    );
+    assert!(
+        config.differs(&ini),
+        "and the file, which has no such section, is one to write"
+    );
+
+    // And the gate is over the list rather than through it, and over no other kind: a user who
+    // switches models off has not edited which models the engine is asked about, and has not said
+    // anything about pictures or drawings either.
+    let mut config = AppConfig::default();
+    PreviewType::Models.set_enabled_in(&mut config, false);
+    assert!(!PreviewType::Models.enabled_in(&config));
+    for other in [
+        PreviewType::Images,
+        PreviewType::Vector,
+        PreviewType::Design,
+        PreviewType::Document,
+    ] {
+        assert!(
+            other.enabled_in(&config),
+            "{other:?} came down with the models"
+        );
+    }
+    assert_eq!(
+        config.f3d_extensions,
+        lists::sanitize_extension_list(lists::DEFAULT_F3D_EXTENSIONS)
+    );
+
+    PreviewType::Models.set_enabled_in(&mut config, true);
+    assert!(PreviewType::Models.enabled_in(&config));
+}
+
 /// The switch over the two names a page of HTML goes by is a key of its own, and it
 /// starts off: a `.htm` is a page of text until something says otherwise, which is what
 /// every file written before the setting existed says by not having it.

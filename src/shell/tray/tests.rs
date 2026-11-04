@@ -1409,6 +1409,7 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_TYPE_FONTS,
             ID_TRAY_TYPE_DESIGN,
             ID_TRAY_TYPE_VECTOR,
+            ID_TRAY_TYPE_MODELS,
         ]
         .map(|id| (id, id + 1)),
     );

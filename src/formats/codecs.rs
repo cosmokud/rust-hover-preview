@@ -637,12 +637,12 @@ pub fn resolve_mpv(chosen: Option<&Path>, installs: &[PathBuf]) -> Option<PathBu
     }
 }
 
-/// Where a program of FFmpeg's is, by the name it is installed under: the same two places
-/// `Command::new` looks for it, and nothing started to ask.
+/// Where a program is, by the name it is installed under — FFmpeg's and f3d's alike: the same two
+/// places `Command::new` looks for it, and nothing started to ask.
 ///
 /// Spawning the program to ask whether it exists would be a program started to answer a
 /// question about a program, and the `PATH` already holds the answer.
-fn find_program(name: &str) -> Option<PathBuf> {
+pub(crate) fn find_program(name: &str) -> Option<PathBuf> {
     let mut folders: Vec<PathBuf> = Vec::new();
 
     if let Some(own_folder) = std::env::current_exe()

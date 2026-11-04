@@ -1,7 +1,7 @@
 use super::*;
 
-/// The one sanitiser, read by four rules: what each of them keeps is the whole of what sixteen
-/// lists that are one function are sixteen lists.
+/// The one sanitiser, read by four rules: what each of them keeps is the whole of what seventeen
+/// lists that are one function are seventeen lists.
 ///
 /// The failures are the ones the rules exist for — a compound name the archive list claims by
 /// silently ceasing to be claimed, a C# project of the text list not being a text file, and a
@@ -139,12 +139,57 @@ fn a_section_that_arrived_with_its_kind_is_not_walked() {
         );
     }
 
-    for name in ["font", "audio", "office", "ebook", "text"] {
+    for name in ["font", "audio", "office", "ebook", "text", "f3d"] {
         assert!(
             LISTS
                 .iter()
                 .any(|list| list.section == name && !list.repaired),
             "a kind that arrived with its section is not walked by the repair"
+        );
+    }
+}
+
+/// The model list is new with its kind and is the one list of the seventeen a reader here can never
+/// read: every entry is a name an installed f3d was measured to open, and no entry is one another
+/// list already claims — a name in two lists is a file whose preview depends on the order the rows
+/// are asked in rather than on the name (see `DEFAULT_F3D_EXTENSIONS`).
+///
+/// What is held here is the shape the subtraction left: alphabetical, deduplicated, lowercase, no
+/// single-character name — too broad a claim for a file manager — and not one entry shared with
+/// the row of any other kind.
+#[test]
+fn the_model_list_is_sorted_and_holds_no_name_another_list_claims() {
+    let config = AppConfig::default();
+    let models = F3D.entries(&config);
+
+    assert!(
+        models.len() > 20,
+        "the engine opens far more names than this, so the list is not being read"
+    );
+
+    let mut sorted = models.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(models, &sorted[..], "the list is written unsorted or twice");
+
+    for entry in models {
+        assert!(
+            entry.len() > 1,
+            "`{entry}` is one character long, which is too broad a claim for a file manager"
+        );
+        assert_eq!(*entry, entry.to_lowercase(), "`{entry}` is not lowercase");
+
+        let claiming: Vec<&str> = LISTS
+            .iter()
+            .filter(|other| other.section != F3D.section)
+            .filter(|other| other.built_in().iter().any(|held| held == entry))
+            .map(|other| other.section)
+            .collect();
+        assert!(
+            claiming.is_empty(),
+            "`{entry}` is in `[{}]` and in {claiming:?}, so which kind claims it is the order's \
+             answer rather than the name's",
+            F3D.section
         );
     }
 }
