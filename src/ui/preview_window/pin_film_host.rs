@@ -133,6 +133,16 @@ pub(super) unsafe fn answer_a_host(
         note_a_message_of_a_window("film host", hwnd, msg, wparam, lparam);
     }
 
+    // **A band standing in a model is the model's, and it is asked before the press is handed down**:
+    // the hit test below routes a film's band to the pin, and a hand on a scene means to turn it rather
+    // than to carry the window it is shown in (see `f3d_player::answer_a_models_band`).
+    if film_host() == Some(hwnd) {
+        if let Some(answer) = unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
+        {
+            return Some(answer);
+        }
+    }
+
     // **A press on the picture is a press on the pin, and the hit test is what keeps it off this
     // window.** `HTTRANSPARENT` is the documented answer for "route this mouse message to the window
     // under this one, in this thread": the pin's chrome and its strips stand under the host, so a
