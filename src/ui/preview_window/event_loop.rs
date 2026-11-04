@@ -3681,6 +3681,10 @@ pub fn run_preview_window() {
                 let mut show_spinner_layout: Option<PreviewLayout> = None;
                 let mut show_placement: Option<HoverPlacement> = None;
                 let mut show_is_video: bool = false;
+                // Whether this hover is a model an installed f3d draws, which is the same kind of
+                // answer `show_is_video` is: a hover shown through a player's own window rather
+                // than through a frame of this app's (see `f3d_player`).
+                let mut show_is_model: bool = false;
                 // Whether this hover is waiting on a video's probe rather than on the
                 // video itself (see `video_probe_due`).
                 let mut show_video_probe: bool = false;
@@ -3755,7 +3759,8 @@ pub fn run_preview_window() {
                             // measure the layout has just started, and it belongs at the hand
                             // that asked (see `measure_waiting`).
                             let measuring = measure_waiting(&path);
-                            let is_video = hover.is_video();
+                            show_is_model = hover.is_a_model();
+                            let is_video = hover.is_video() || show_is_model;
                             let mut placement = HoverPlacement {
                                 orig_dims,
                                 avoid,
@@ -3833,7 +3838,8 @@ pub fn run_preview_window() {
                         preview_scale = hover_preview_scale_of(&hover, hover.scales);
 
                         if let Some(orig_dims) = media_dimensions_of(&hover, &path, bounds, dpi) {
-                            let is_video = hover.is_video();
+                            show_is_model = hover.is_a_model();
+                            let is_video = hover.is_video() || show_is_model;
                             let placement = KeyboardPlacement {
                                 item_rect: (il, it, ir, ib),
                                 avoid,
@@ -4448,7 +4454,8 @@ pub fn run_preview_window() {
                             spawn_video_probe(path, gen);
                         }
                     } else if show_is_video
-                        && matches!(video_route(&path), VideoRoute::Ffplay | VideoRoute::Mpv)
+                        && (show_is_model
+                            || matches!(video_route(&path), VideoRoute::Ffplay | VideoRoute::Mpv))
                     {
                         // Cancel any in-flight image load before switching to video.
                         current_generation += 1;
@@ -4514,7 +4521,10 @@ pub fn run_preview_window() {
                                     // reaches again by the same route. Only a pinned window is
                                     // remembering a track of its own (see `next_subtitle`).
                                     None,
-                                    None,
+                                    // A model is the one file this branch launches that is not a
+                                    // film, and it is the launch that asks the kind (see
+                                    // `f3d_player`).
+                                    show_is_model.then_some(MediaType::Model),
                                 );
                                 let pid = video_process
                                     .as_ref()

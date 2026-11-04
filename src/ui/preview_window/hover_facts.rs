@@ -401,6 +401,9 @@ pub(super) struct HoverFacts {
     /// The three of the tray's switches that gate the three kinds whose gate changes what is
     /// drawn rather than whether it is, and so are asked inside the predicates that gate.
     pub(super) video_enabled: bool,
+    /// Whether the `3D` gate of the tray is open, asked inside `is_a_model` for the reason
+    /// `video_enabled` is asked inside `is_video`.
+    pub(super) model_enabled: bool,
     pub(super) audio_enabled: bool,
     pub(super) text_enabled: bool,
     /// What of this app's own reads this file, asked with the kind already settled — which is
@@ -462,6 +465,7 @@ impl HoverFacts {
                 archive_named: false,
                 peazip_named: false,
                 video_enabled: false,
+                model_enabled: false,
                 audio_enabled: false,
                 text_enabled: false,
                 native_job: None,
@@ -484,6 +488,7 @@ impl HoverFacts {
         let archive_named = crate::formats::lists::ARCHIVE.claims(path, &config);
         let peazip_named = crate::formats::lists::PEAZIP.claims(path, &config);
         let video_enabled = PreviewType::Videos.enabled_in(&config);
+        let model_enabled = PreviewType::Models.enabled_in(&config);
         let audio_enabled = PreviewType::Audio.enabled_in(&config);
         let text_enabled = PreviewType::Text.enabled_in(&config);
         let scales = HoverScales::of(&config);
@@ -512,6 +517,7 @@ impl HoverFacts {
             archive_named,
             peazip_named,
             video_enabled,
+            model_enabled,
             audio_enabled,
             text_enabled,
             native_job,
@@ -689,6 +695,25 @@ impl HoverFacts {
         };
 
         named && self.video_enabled
+    }
+
+    /// Whether the preview of this file is a model an installed f3d draws.
+    ///
+    /// It is asked the way `is_video` is asked and for the same reason: a model is not drawn by
+    /// this app at all — what is on screen is f3d's own window — so the layout has to know one when
+    /// it sees one. A name is the whole of the question: nothing reads a model to tell it from
+    /// something else, which is what the router's answer already is (see `f3d_render`).
+    pub(super) fn is_a_model(&self) -> bool {
+        let named = match self.route.content {
+            crate::formats::content_type::Content::Kind(PreviewType::Models) => true,
+            crate::formats::content_type::Content::Kind(_)
+            | crate::formats::content_type::Content::Foreign => false,
+            crate::formats::content_type::Content::Unknown => {
+                self.route.named == Some(PreviewType::Models)
+            }
+        };
+
+        named && self.model_enabled
     }
 
     /// Whether the preview of this file is a sound: what the file's own bytes say it is — the

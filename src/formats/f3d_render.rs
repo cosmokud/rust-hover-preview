@@ -10,18 +10,102 @@
 //! `DEFAULT_F3D_EXTENSIONS`, which is that list minus the names another kind of this app has
 //! already claimed — so a picture or a document never pays for a launch that could not answer.
 //!
-//! **Nothing is launched here yet.** The picture f3d draws is shown in a window of its own, which
-//! this module is the detection half of: what a machine has, and which of its installations is the
-//! one to run. The host window, the mouse the model turns under and the process a hover starts are
-//! the phases after this one.
+//! **The command line is this module's, and the window is not.** `launch_args` is the whole of
+//! what f3d is told, and it is a pure function so that the one thing a wrong flag costs — an f3d
+//! that exits with no window and a preview that silently shows nothing — is testable without a
+//! desktop. What begins it, waits for its window and dresses it is `f3d_player`, beside the two
+//! players this app already hosts.
 
+use crate::config::config::TransparentBackground;
 use crate::formats::codecs;
 use once_cell::sync::Lazy;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-/// The program inside an installation that draws a model.
-const F3D_NAME: &str = "f3d.exe";
+/// The program inside an installation that draws a model. Also the image name a model's process
+/// is recorded and verified under, beside `ffplay.exe` and `mpv.exe`.
+pub const F3D_NAME: &str = "f3d.exe";
+
+/// The box a model's hover is laid out at, in the shape a picture's preview takes: a scene has no
+/// size of its own to be measured by — it is drawn at whatever box it is given, the way a page the
+/// browser draws is — so what a hover asks for is this box scaled by the picture share (see
+/// `scale_of_kind`).
+pub const MODEL_WIDTH: u32 = 1280;
+pub const MODEL_HEIGHT: u32 = 800;
+
+/// The box a model's preview is laid out at (see `MODEL_WIDTH`).
+pub fn model_box() -> (u32, u32) {
+    (MODEL_WIDTH, MODEL_HEIGHT)
+}
+
+/// The backdrop a model is drawn over, as f3d names one: the app's own picture backdrop, which is
+/// what stands behind every other kind of preview (see `routing::backdrop_of`).
+///
+/// **A checkerboard is answered with its darker square**, and a backdrop that shows the desktop
+/// through with the same grey: f3d paints one colour and has no squares to paint, so the choice is
+/// which of the app's own greys a scene reads best against, and that is the darker one.
+pub fn background_argument(backdrop: TransparentBackground) -> String {
+    // `0.565` is 144/255, the dark square of `checkerboard_color`.
+    let value = match backdrop {
+        TransparentBackground::White => "1.000,1.000,1.000",
+        TransparentBackground::Black => "0.000,0.000,0.000",
+        TransparentBackground::Checkerboard | TransparentBackground::Transparent => {
+            "0.565,0.565,0.565"
+        }
+    };
+
+    value.to_string()
+}
+
+/// What a launch tells f3d, as the command line it is begun with.
+///
+/// **The configuration is kept and the overlays are turned off one at a time.** `--no-config`
+/// exists in f3d 4.0.1 and is not used: it drops the per-format configs as well as the stock one,
+/// and those are what stand an `.stl` the right way up (`10_native.json` sets its `up` axis and
+/// camera direction). Measured against the installed 4.0.1 — the same file rendered with
+/// `--no-config` and with these switches is the same picture as the stock configuration's, with
+/// the axis, the grid and the filename gone.
+///
+/// Every switch below was checked against `f3d --help` and by rendering with it: `-D` takes
+/// `option=value` as one argument, an option f3d does not know is warned about and ignored, and
+/// the names are the flat ones the config files themselves use (`filename`, not `ui.filename`).
+/// The three `ui.` entries are the window's own furniture and take that prefix.
+///
+/// `--position` is the **decorated** window's origin and `--resolution` its client size, both
+/// verified: the frame is stripped after the launch (see `f3d_player`), and where the window is
+/// finally placed is this app's to say rather than the player's.
+pub fn launch_args(path: &Path, box_: (i32, i32, i32, i32), background: &str) -> Vec<OsString> {
+    let (x, y, width, height) = box_;
+    let mut args: Vec<OsString> = vec![
+        "--resolution".into(),
+        format!("{},{}", width.max(1), height.max(1)).into(),
+        "--position".into(),
+        format!("{},{}", x, y).into(),
+        "--multi-file-mode".into(),
+        "single".into(),
+    ];
+
+    for option in [
+        "ui.console=false",
+        "ui.cheatsheet=false",
+        "ui.drop_zone.enable=false",
+        "axis=false",
+        "grid=false",
+        "filename=false",
+        "hdri-filename=false",
+        "notifications=false",
+        "loading-progress=false",
+        "animation-progress=none",
+    ] {
+        args.push("-D".into());
+        args.push(option.into());
+    }
+
+    args.push("-D".into());
+    args.push(format!("background-color={background}").into());
+    args.push(path.as_os_str().to_os_string());
+    args
+}
 
 /// The folder the Windows installer writes, beside the other installations a machine may have.
 ///
@@ -98,6 +182,61 @@ fn install_folder(program_files: Option<&OsStr>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The launch is the file, the box, and every switch that keeps f3d's own furniture off the
+    /// screen**, and nothing else is asserted: the flags themselves are the measurement (see
+    /// `launch_args`), and what a test can hold is that the one that matters most — the stock
+    /// configuration's axis, grid and filename — is turned off rather than the configuration being
+    /// dropped for the per-format camera with it.
+    #[test]
+    fn the_launch_asks_for_the_box_and_turns_every_overlay_off() {
+        let args = launch_args(Path::new("a-model.stl"), (10, 20, 640, 480), "0.5,0.5,0.5");
+        let asked: Vec<String> = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let has = |argument: &str| asked.iter().any(|asked| asked == argument);
+
+        assert!(has("640,480"), "the client size asked for: {asked:?}");
+        assert!(has("10,20"), "and where the window is asked to be");
+        assert!(has("single"), "one file is one scene");
+        for overlay in ["axis=false", "grid=false", "filename=false"] {
+            assert!(has(overlay), "{overlay} is turned off: {asked:?}");
+        }
+        assert!(has("background-color=0.5,0.5,0.5"), "the app's backdrop");
+        assert!(
+            !has("--no-config"),
+            "the per-format camera configs are kept (see `launch_args`)"
+        );
+        assert_eq!(
+            asked.last().map(String::as_str),
+            Some("a-model.stl"),
+            "the file is last, which is where f3d takes it"
+        );
+    }
+
+    /// A model's backdrop is the app's own, colour for colour: the two flat ones as themselves,
+    /// and the two a viewer cannot paint as the darker of the squares a picture is drawn over.
+    #[test]
+    fn the_backdrop_is_the_apps_own_colour() {
+        assert_eq!(
+            background_argument(TransparentBackground::White),
+            "1.000,1.000,1.000"
+        );
+        assert_eq!(
+            background_argument(TransparentBackground::Black),
+            "0.000,0.000,0.000"
+        );
+        assert_eq!(
+            background_argument(TransparentBackground::Checkerboard),
+            "0.565,0.565,0.565"
+        );
+        assert_eq!(
+            background_argument(TransparentBackground::Transparent),
+            background_argument(TransparentBackground::Checkerboard),
+            "a viewer has no squares and no desktop to show through"
+        );
+    }
 
     /// The three places are preferred in the order a launch depends on: a path the user set is
     /// their choice and wins wherever it points, `f3d.exe` on the `PATH` comes next, and the

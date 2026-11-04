@@ -140,6 +140,16 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
         return windows::Win32::Foundation::BOOL(1);
     }
 
+    // **A window too narrow to be the picture is not the picture.** f3d makes transient
+    // `vtkOpenGL` windows of its own while it starts — one of no height, one 300x300 — and only the
+    // last of them is the window it was asked for (see `f3d_player`). Every player of this app's
+    // draws in a window wider than this at any box the preview is laid out at.
+    if video_process_image() == crate::formats::f3d_render::F3D_NAME
+        && width < MIN_A_MODELS_WINDOW_WIDTH
+    {
+        return windows::Win32::Foundation::BOOL(1);
+    }
+
     // Keep the largest candidate; this is typically the player's real output window.
     if area > data.best_area {
         data.best_area = area;
@@ -197,6 +207,10 @@ pub(super) fn player_ex_style_for(current: isize) -> isize {
     style
 }
 
+/// The window the largest-area pick refuses for a model: a viewer's transient windows are the
+/// smaller ones (see `enum_windows_callback`).
+pub(super) const MIN_A_MODELS_WINDOW_WIDTH: i64 = 200;
+
 /// The host this app has recorded as holding the player `pid`, where it has recorded one.
 ///
 /// It is where a player of a film is adopted as the picture, from the window the player made for
@@ -216,6 +230,31 @@ pub(super) fn host_for_a_hosted_player(pid: u32) -> Option<HWND> {
     None
 }
 
+/// The window belonging to `pid` as it stands right now, found by looking rather than by the
+/// record: the pick `enum_windows_callback` makes, for a caller that has to have the handle before
+/// the monitor's next pass and cannot wait on it (see `f3d_player`).
+///
+/// Safety: the handle is a window of a process this app began, and the question is about it.
+#[cfg(not(test))]
+pub(super) unsafe fn a_players_window_now(pid: u32) -> Option<HWND> {
+    if pid == 0 {
+        return None;
+    }
+    let mut data = EnumWindowsData {
+        target_pid: pid,
+        found_hwnd: HWND::default(),
+        best_area: 0,
+    };
+    let _ = unsafe {
+        EnumWindows(
+            Some(enum_windows_callback),
+            LPARAM(&mut data as *mut EnumWindowsData as isize),
+        )
+    };
+
+    (!data.found_hwnd.is_invalid()).then_some(data.found_hwnd)
+}
+
 /// Style and raise a player's known window.
 pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // **A hosted player's window is not this app's to style or to publish.** It is the source the
@@ -229,6 +268,13 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
 
     // Store the video window HWND for cursor-over-preview detection
     VIDEO_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
+    // **A viewer's frame is asserted off on every pass it is styled.** f3d has no flag for a
+    // chrome-less window (see `f3d_player::strip_the_frame`), and a style a viewer writes back on
+    // itself is a title bar over the preview until the next pass takes it off again.
+    if video_process_image() == crate::formats::f3d_render::F3D_NAME {
+        unsafe { f3d_player::strip_the_frame(hwnd) };
+    }
 
     // The decision this function is the raise half of, asked once so that the style it writes and
     // the raise it holds off are the same answer (see `player_order`).
