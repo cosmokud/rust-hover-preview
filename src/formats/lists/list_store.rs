@@ -1,23 +1,23 @@
-//! The row that is a list: what each of the sixteen holds, where the file writes it, and the four
+//! The row that is a list: what each of the seventeen holds, where the file writes it, and the four
 //! moves over the table — the read out of a file, the write into one, the two resets and the
 //! repair that brings a file an older build wrote up to the list of now.
 //!
 //! The entries a row is read by are named rather than inlined, so a change of rule is a change of
-//! one [`Entries`] and not of sixteen call sites; the lists themselves are in `built_ins`.
+//! one [`Entries`] and not of seventeen call sites; the lists themselves are in `built_ins`.
 
 use super::built_ins::{
     ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS, CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS,
     CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE, DEFAULT_ARCHIVE_EXTENSIONS, DEFAULT_AUDIO_EXTENSIONS,
     DEFAULT_CALIBRE_EXTENSIONS, DEFAULT_DESIGN_EXTENSIONS, DEFAULT_EBOOK_EXTENSIONS,
-    DEFAULT_FFMPEG_EXTENSIONS, DEFAULT_FONT_EXTENSIONS, DEFAULT_IMAGE_EXTENSIONS,
-    DEFAULT_LIBRE_EXTENSIONS, DEFAULT_MAGICK_EXTENSIONS, DEFAULT_OFFICE_EXTENSIONS,
-    DEFAULT_PEAZIP_EXTENSIONS, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
-    DEFAULT_VECTOR_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
-    DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE, DESIGN_EXTENSIONS_WITH_CDR,
-    IMAGE_EXTENSIONS_BEFORE_AVCI, IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
-    IMAGE_EXTENSIONS_BEFORE_DDS, IMAGE_EXTENSIONS_BEFORE_SVG,
-    IMAGE_EXTENSIONS_BEFORE_THE_WIC_SPELLINGS, IMAGE_EXTENSIONS_WITH_SVG,
-    LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ,
+    DEFAULT_F3D_EXTENSIONS, DEFAULT_FFMPEG_EXTENSIONS, DEFAULT_FONT_EXTENSIONS,
+    DEFAULT_IMAGE_EXTENSIONS, DEFAULT_LIBRE_EXTENSIONS, DEFAULT_MAGICK_EXTENSIONS,
+    DEFAULT_OFFICE_EXTENSIONS, DEFAULT_PEAZIP_EXTENSIONS, DEFAULT_TEXT_EXTENSIONS,
+    DEFAULT_TEXT_NAMES, DEFAULT_VECTOR_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS,
+    DESIGN_EXTENSIONS_BEFORE_AI, DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
+    DESIGN_EXTENSIONS_WITH_CDR, IMAGE_EXTENSIONS_BEFORE_AVCI,
+    IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS, IMAGE_EXTENSIONS_BEFORE_DDS,
+    IMAGE_EXTENSIONS_BEFORE_SVG, IMAGE_EXTENSIONS_BEFORE_THE_WIC_SPELLINGS,
+    IMAGE_EXTENSIONS_WITH_SVG, LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ,
     MAGICK_EXTENSIONS_BEFORE_THE_NATIVE_MOVES, MAGICK_EXTENSIONS_BEFORE_THE_REST,
     PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS, PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS,
     PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE, VECTOR_EXTENSIONS_BEFORE_SVG,
@@ -86,7 +86,7 @@ impl List {
     ///
     /// It is the row's own `held` under a name a caller can write, and that is the whole of it:
     /// the alternative is the field of the configuration behind the row, and a list read by field
-    /// is a list read from a second place — which is what the sixteen modules this table replaced
+    /// is a list read from a second place — which is what the seventeen modules this table replaced
     /// were, each holding its list's one read of the configuration and its own copy of the
     /// question.
     pub(crate) fn entries<'a>(&self, config: &'a AppConfig) -> &'a [String] {
@@ -352,8 +352,21 @@ pub(crate) const CALIBRE: List = List {
     set: |config, list| config.calibre_extensions = list,
 };
 
+/// The `[f3d]` list: the scenes an installed f3d is asked to draw, which are the only preview
+/// of the kind there is — nothing here reads a model.
+pub(crate) const F3D: List = List {
+    section: "f3d",
+    key: "extensions",
+    defaults: DEFAULT_F3D_EXTENSIONS,
+    before: &[],
+    entries: Entries::Bare,
+    repaired: false,
+    held: |config| &config.f3d_extensions,
+    set: |config, list| config.f3d_extensions = list,
+};
+
 /// The `[text] extensions` key: the extensions read as text, and the one extension list of the
-/// sixteen that admits a `#` so that a C# project is a text file.
+/// seventeen that admits a `#` so that a C# project is a text file.
 pub(crate) const TEXT: List = List {
     section: "text",
     key: "extensions",
@@ -384,8 +397,8 @@ pub(crate) const NAMES: List = List {
 /// two things that walk this list in step — the settings reset and the lists reset — are both
 /// walking the same one.
 pub(crate) const LISTS: &[List] = &[
-    ARCHIVE, AUDIO, CALIBRE, DESIGN, EBOOK, FONT, FFMPEG, IMAGE, LIBRE, MAGICK, OFFICE, PEAZIP,
-    TEXT, NAMES, VECTOR, VIDEO,
+    ARCHIVE, AUDIO, CALIBRE, DESIGN, EBOOK, F3D, FONT, FFMPEG, IMAGE, LIBRE, MAGICK, OFFICE,
+    PEAZIP, TEXT, NAMES, VECTOR, VIDEO,
 ];
 
 /// Every list, read out of the file into the configuration.

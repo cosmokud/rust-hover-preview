@@ -7,8 +7,8 @@ use crate::readers::tone_map::Curve;
 use super::defaults::{
     DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_MARK_OFFSET_Y,
     DEFAULT_AUDIO_VOLUME, DEFAULT_CHECK_FOR_UPDATES, DEFAULT_DECODE_BUDGET_GB,
-    DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE,
-    DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_F3D_PATH, DEFAULT_GENERAL_DISK_CACHE_MB,
+    DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH, DEFAULT_NORMALIZE_VIDEO_VOLUME,
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_ZOOM_BOUNCE_GATE,
     DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER, DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS,
@@ -508,6 +508,9 @@ pub struct AppConfig {
     /// Whether vector drawings are previewed at all, ahead of the vector list their names
     /// are entries of, and of the browser engine a document of that kind is drawn by.
     pub vector_preview_enabled: bool,
+    /// Whether three-dimensional models are previewed at all, ahead of the model list their names
+    /// are entries of, and of the f3d that is the only thing able to draw one.
+    pub f3d_preview_enabled: bool,
     /// How much of what the engines drew is kept between hovers, in megabytes: the pages the
     /// render tier exported and the pages the engine beside it converted, kept as files under
     /// the temp folder and given up least recently used first. See
@@ -549,6 +552,11 @@ pub struct AppConfig {
     /// machine with one mpv reads it as. A path that has gone is not fatal either: the first
     /// install is used instead and the submenu re-marks it (see `codecs::resolve_mpv`).
     pub mpv_path: String,
+    /// The `f3d.exe` a model is drawn by, which is empty until one is picked: the first
+    /// installation `f3d_render::program` finds is then the one run — beside the app, on the
+    /// `PATH`, or in the folder the Windows installer writes. A path that has gone is not fatal
+    /// either; what is installed is used instead.
+    pub f3d_path: String,
     /// Whether an explicitly chosen engine that cannot play a given file falls through to the
     /// others, which is the `Fallback` switch at the top of the same submenu. It is read only
     /// where the choice names an engine rather than `Best`, since `Best` is a walk of the same
@@ -686,6 +694,9 @@ pub struct AppConfig {
     pub ebook_extensions: Vec<String>,
     /// Extensions previewed as vector drawings, already normalized for lookup.
     pub vector_extensions: Vec<String>,
+    /// The model names an installed f3d is asked about, as `[f3d] extensions` in `config.ini`:
+    /// every format that renderer opens that no list of this app's own has already claimed.
+    pub f3d_extensions: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -777,12 +788,14 @@ impl Default for AppConfig {
             font_preview_enabled: true,
             design_preview_enabled: true,
             vector_preview_enabled: true,
+            f3d_preview_enabled: true,
             document_cache_mb: DEFAULT_DOCUMENT_CACHE_MB,
             image_disk_cache_mb: DEFAULT_IMAGE_DISK_CACHE_MB,
             general_disk_cache_mb: DEFAULT_GENERAL_DISK_CACHE_MB,
             office_engine: DEFAULT_OFFICE_ENGINE,
             video_engine: DEFAULT_VIDEO_ENGINE,
             mpv_path: DEFAULT_MPV_PATH.to_string(),
+            f3d_path: DEFAULT_F3D_PATH.to_string(),
             video_engine_fallback: DEFAULT_VIDEO_ENGINE_FALLBACK,
             video_subtitles: DEFAULT_VIDEO_SUBTITLES,
             video_engine_idle: EngineIdle::Away,
@@ -814,6 +827,7 @@ impl Default for AppConfig {
             calibre_extensions: Vec::new(),
             ebook_extensions: Vec::new(),
             vector_extensions: Vec::new(),
+            f3d_extensions: Vec::new(),
         }
         .with_built_in_lists()
     }
@@ -824,7 +838,7 @@ impl AppConfig {
     ///
     /// The lists are not written out here one field each, which is what they used to be: what
     /// each one holds is a row of the table in `formats::lists`, and a kind added to the app is a
-    /// row added to that. So the sixteen empty lists above are the only mention of them in this
+    /// row added to that. So the seventeen empty lists above are the only mention of them in this
     /// file, and it is this line that says what they are for.
     fn with_built_in_lists(mut self) -> Self {
         lists::reset_built_in(&mut self);

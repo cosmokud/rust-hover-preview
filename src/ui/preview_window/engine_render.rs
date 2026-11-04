@@ -462,11 +462,13 @@ pub(super) fn request_engine_render(
             crate::formats::routing::Reader::PeaZip => request_peazip_render(path, generation),
             crate::formats::routing::Reader::Calibre => request_calibre_render(path, generation),
 
-            // A reader of this app's own owes the loop no wait, and neither do the two the loop
-            // does not ask: a video's player is started where the video is shown, and a document
-            // the browser draws is a hover handed over rather than a page waited on.
+            // A reader of this app's own owes the loop no wait, and neither do the three the loop
+            // does not ask: a video's player is started where the video is shown, a document the
+            // browser draws is a hover handed over rather than a page waited on, and a model's
+            // picture is drawn in a window of its own that is not here yet (see `f3d_render`).
             crate::formats::routing::Reader::Native
             | crate::formats::routing::Reader::Ffmpeg
+            | crate::formats::routing::Reader::F3d
             | crate::formats::routing::Reader::WebView2 => None,
         };
 

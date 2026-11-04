@@ -300,6 +300,19 @@ pub(super) enum MediaType {
     /// and note that what draws it is this window rather than an engine — there is nothing to wait
     /// for and nothing to keep.
     Comic,
+    /// A model drawn by an installed f3d: a mesh, a CAD exchange document, a point cloud, a
+    /// scientific dataset. What comes back is a picture of the scene, which is drawn like any
+    /// other — a frame of this app's own, over the backdrop a picture is drawn over — while the
+    /// window it is drawn in is f3d's rather than this one's.
+    ///
+    /// It is a kind of its own rather than the picture kind's second half: the switch over it is
+    /// its own, because an engine a user did not install is a setting worth being able to reach,
+    /// and because nothing else here opens a model at all.
+    ///
+    /// Nothing constructs one yet: what would is the host window f3d's picture is drawn in, which
+    /// is the phase after this one.
+    #[allow(dead_code)]
+    Model,
     /// A file the pin was shown and its player could not draw, standing as the cross
     /// `pin_chrome::paint_failure_mark` draws. It is a kind of its own because it has to be:
     /// the whole of what it is for is that `pin_media_is_alive` reads it as *there* — a frame
@@ -362,6 +375,9 @@ impl MediaType {
             // switch for books and nothing else.
             Self::Comic => Some(PreviewType::Ebook),
             Self::Vector => Some(PreviewType::Vector),
+            // A model is its own kind in the tray as well as here: what a user turns off is the
+            // switch over the model list, and nothing else of this app's draws one.
+            Self::Model => Some(PreviewType::Models),
             // The mark a failed file stands as is this app's own answer rather than a preview of
             // the file's kind, so it is behind no gate: turning a kind off is a statement about
             // what the pointer is offered, and a window already standing over a file it could not

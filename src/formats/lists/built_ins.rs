@@ -593,6 +593,35 @@ taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zst";
 pub const DEFAULT_CALIBRE_EXTENSIONS: &str =
     "azw,azw3,azw4,djvu,epub,fb2,htmlz,lit,lrf,mobi,pml,prc,snb,tcr";
 
+/// The extensions written to `config.ini` on first run: the model, scene and dataset formats an
+/// installed f3d reads, and nothing else.
+///
+/// What is listed is f3d 4.0.1's own reader list — the names it answers `--list-readers` with —
+/// *minus every name another list of this app's already claims*, because a name sits in exactly one
+/// list and what another kind already draws is a preview with a reader here. Four kinds of name
+/// came out that way: the pictures (`bmp`, `exr`, `hdr`, `jpeg`, `jpg`, `png`, `tga`, `tif`, `tiff`,
+/// `webp`), which a decoder here draws and f3d would only decode again; the scanner's dataset an
+/// installed ImageMagick develops (`dcm`); the drawing and the point cloud the render engine's list
+/// already names (`dxf`, `pcd`); and the container FFmpeg's demuxers have (`drc`). Fourteen names,
+/// and none of them a loss.
+///
+/// Two rules are applied on top of that, and both are this app's rather than the engine's. f3d's
+/// single-character names — `e`, `g` and `x` — are dropped: too broad a claim for a file manager,
+/// where a `.x` is as often a tree of sources as a scene, and where a name that short is met by
+/// files nothing here has a reader for. And the list is written lowercase, deduplicated and in
+/// alphabetical order, the way the lists beside it are, because an entry is looked up by the name
+/// in it rather than by the spelling a vendor wrote it in.
+///
+/// `obj` is here though a `.obj` is also a compiled object file, and `bin` though it is a name half
+/// the machine's own formats share: both are what the engine is asked about as a model, and what a
+/// preview of one comes down to is a launch that answers nothing for the file that is not one (see
+/// `f3d_render`). `stl`, `3mf`, `gltf` and `ply` — the four names a user's own models are most
+/// often under — are here too, and are the reason the kind exists at all.
+pub const DEFAULT_F3D_EXTENSIONS: &str =
+    "210,3ds,3mf,abc,amf,bin,bpf,brep,cdf,csd,dae,ex2,exo,fbx,fcstd,glb,gltf,gml,ifc,iges,igs,\
+las,laz,mdl,mha,mhd,nc,ncdf,nhdr,nrrd,obj,off,p21,pic,ply,pts,ptx,qi,sbet,slpk,splat,spz,\
+step,stl,stp,stpnc,usd,usda,usdc,usdz,vdb,vrml,vti,vtk,vtkhdf,vtm,vtp,vtr,vts,vtu,wrl,xbf";
+
 /// The built-in `[calibre]` list as it stood while a compiled help file was this engine's to draw.
 ///
 /// `chm` was in this list for one build and is not any more: the page the engine draws for one is

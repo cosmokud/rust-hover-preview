@@ -90,6 +90,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "ebook_preview_enabled",
             "font_preview_enabled",
             "image_preview_enabled",
+            "f3d_preview_enabled",
             "text_preview_enabled",
             "vector_preview_enabled",
             "video_preview_enabled",
@@ -185,6 +186,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
         "Engine",
         &[
             "afk_timer_seconds",
+            "f3d_path",
             "libreoffice_idle",
             "mpv_path",
             "office_engine",

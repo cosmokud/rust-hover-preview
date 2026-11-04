@@ -246,6 +246,10 @@ pub(super) fn load_media_of_kind(
         // `magick_box`).
         .or_else(|| load_magick_picture(path, max_width, max_height, preview_scale, &cancel)),
 
+        // A model is drawn by an installed f3d into a window of its own, which this phase does not
+        // have yet: nothing is loaded and nothing is launched (see `f3d_render`).
+        Some(PreviewType::Models) => None,
+
         // A file whose content named no kind and whose name no list claims is the picture
         // path's, and the caller above has already answered that one — a name no list has ever
         // claimed is the picture it ends up decoded as.

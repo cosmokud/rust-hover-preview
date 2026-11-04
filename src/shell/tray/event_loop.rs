@@ -69,8 +69,8 @@ use super::ids::{
     ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE, ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE,
     ID_TRAY_TRIGGER_ENABLE, ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO,
     ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS,
-    ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
-    ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
+    ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_MODELS, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR,
+    ID_TRAY_TYPE_VIDEOS, ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
     ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
     ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
@@ -458,6 +458,7 @@ unsafe extern "system" fn tray_window_proc(
                     ID_TRAY_TYPE_FONTS => toggle_preview_type(PreviewType::Fonts),
                     ID_TRAY_TYPE_DESIGN => toggle_preview_type(PreviewType::Design),
                     ID_TRAY_TYPE_VECTOR => toggle_preview_type(PreviewType::Vector),
+                    ID_TRAY_TYPE_MODELS => toggle_preview_type(PreviewType::Models),
                     // An engine's TTL, by the position it was listed at: the player, then the
                     // three engines this app keeps warm between documents.
                     cmd if (ID_TRAY_MPV_IDLE_BASE

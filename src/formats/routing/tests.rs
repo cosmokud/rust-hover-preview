@@ -17,6 +17,7 @@ const KIND_OF_SECTION: &[(&str, &str, PreviewType)] = &[
     ("calibre", "extensions", PreviewType::Calibre),
     ("design", "extensions", PreviewType::Design),
     ("ebook", "extensions", PreviewType::Ebook),
+    ("f3d", "extensions", PreviewType::Models),
     ("ffmpeg", "extensions", PreviewType::Videos),
     ("font", "extensions", PreviewType::Fonts),
     ("image", "extensions", PreviewType::Images),
@@ -508,6 +509,32 @@ fn the_pictures_windows_decodes_are_the_picture_lists() {
         &[Reader::ImageMagick],
         "the engine's own names have no reader in front of it"
     );
+
+    // A model is the kind whose only reader is an engine, and whose list is the one that says so:
+    // a `.stl` is a model by its name alone, and it is no other kind's read off the same name.
+    let model = Path::new("model.stl");
+    assert_eq!(
+        kind_of_name(model, &config),
+        Some(PreviewType::Models),
+        "a `.stl` is a model"
+    );
+    assert_eq!(
+        chain(PreviewType::Models),
+        &[Reader::F3d],
+        "and what draws one is the installed renderer or nothing"
+    );
+    assert!(named_as(model, &config, PreviewType::Models));
+    for other in [
+        PreviewType::Images,
+        PreviewType::Vector,
+        PreviewType::Design,
+        PreviewType::Magick,
+    ] {
+        assert!(
+            !named_as(model, &config, other),
+            "a model is not the {other:?} kind's as well: a name sits in exactly one list"
+        );
+    }
 }
 
 /// The walk narrows a chain and never reorders it: what a file can be asked of is what its
@@ -595,6 +622,7 @@ fn a_kind_folds_into_the_thing_a_user_would_call_it() {
         (PreviewType::Fonts, NavCategory::Fonts),
         (PreviewType::Design, NavCategory::Design),
         (PreviewType::Vector, NavCategory::Design),
+        (PreviewType::Models, NavCategory::Design),
     ] {
         assert_eq!(nav_category(kind), expected, "{kind:?} is a {expected:?}");
     }
@@ -621,6 +649,7 @@ fn the_kinds_that_share_a_switch_share_a_category() {
         PreviewType::Fonts,
         PreviewType::Design,
         PreviewType::Vector,
+        PreviewType::Models,
     ];
 
     // The whole set is switched off one kind at a time, and every kind whose own gate
@@ -638,6 +667,7 @@ fn the_kinds_that_share_a_switch_share_a_category() {
         probe.font_preview_enabled = false;
         probe.design_preview_enabled = false;
         probe.vector_preview_enabled = false;
+        probe.f3d_preview_enabled = false;
         kind.set_enabled_in(&mut probe, true);
 
         let switched = kind.enabled_in(&probe);
@@ -808,15 +838,17 @@ fn a_route_says_what_the_four_questions_it_is_made_of_say() {
                 );
             }
 
-            // The four engine kinds and nothing else are drawn by an engine's own window
-            // rather than by a reader of this app's, so they are the four arms that answer
-            // `Nothing` — the only way a claimed kind has no hand to be drawn by.
+            // The kinds an engine's own window draws rather than a reader of this app's, so they
+            // are the arms that answer `Nothing` — the only way a claimed kind has no hand to be
+            // drawn by. It is the four half-kinds an engine draws *for* another kind, and the one
+            // kind that has no reader here at all.
             let engine_kind = matches!(
                 route.named,
                 Some(PreviewType::Document)
                     | Some(PreviewType::Libre)
                     | Some(PreviewType::Calibre)
                     | Some(PreviewType::Magick)
+                    | Some(PreviewType::Models)
             );
 
             assert_eq!(
