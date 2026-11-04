@@ -426,6 +426,9 @@ impl MediaType {
                 !(pin_is_its_own_window()
                     && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay))
             }
+            // **A model is drawn by f3d on every road there is**: a pin at it shows the renderer's
+            // window through its host, and a hover shows the window itself (see `f3d_player`).
+            Self::Model => true,
             _ => self.is_engine(),
         }
     }

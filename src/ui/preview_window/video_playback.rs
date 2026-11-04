@@ -557,6 +557,20 @@ fn start_video_playback_where(
     // for both** (see `bubble_players_box`).
     let (x, y) = bubble_players_box(x, y, width);
 
+    // **A model is drawn by f3d's own window rather than by either player below**, and the box,
+    // the host road and the no-activate ask are this function's while nothing else of a film's
+    // launch is: the file, the box it stands in and whether it is a hover's or a pin's are the
+    // whole of the launch (see `f3d_player`).
+    if kind == Some(MediaType::Model) {
+        return f3d_player::launch(
+            path,
+            (x, y, x + width, y + height),
+            kind,
+            allow_the_hover_host,
+            for_a_hover,
+        );
+    }
+
     // The soundtrack's own measured gain, where `Normalize` is on for videos and one has been
     // measured. It is read here rather than below because both routes want it, and on the same
     // terms: a film nothing has measured is played as the file holds it, and what measures it is a
@@ -1330,7 +1344,11 @@ fn start_mpv_video_playback(
 /// is a relaunch, and a relaunch has to be told where to put its window — the film is not drawn
 /// into a surface of this app's, so the replacement's window has to be placed rather than laid
 /// out (see `video_loop_action`).
-fn note_player_started(
+///
+/// **A model is booked in through here too**, with no loop and no second of its own: f3d draws a
+/// scene that stands still, and the window, the image name and the record of the process are the
+/// whole of what a viewer owes the rest of this app (see `f3d_player`).
+pub(super) fn note_player_started(
     image: &'static str,
     path: &Path,
     player: &PlayerProcess,

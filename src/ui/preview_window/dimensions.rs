@@ -441,6 +441,13 @@ pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &Path) -> Option
         return video_box(path);
     }
 
+    // A model is measured where the content question above measures it, and this is the road a file
+    // whose *name* no list claims takes: a `.stl` is binary and its bytes name no kind, so the
+    // router's answer is the name's and the box is this app's own (see `media_dimensions_of_kind`).
+    if previewed_as(path, PreviewType::Models) {
+        return media_dimensions_of_kind(PreviewType::Models, path);
+    }
+
     // A PDF is measured from its own first page; one that cannot be read as a
     // PDF reports no dimensions, which drops the preview instead of guessing.
     if pdf_preview::is_pdf_preview(path) {
@@ -605,10 +612,12 @@ pub(super) fn media_dimensions_of_kind(kind: PreviewType, path: &Path) -> Option
             .then(|| font_box(path))
             .flatten(),
         PreviewType::Images => picture_box(path).or_else(|| magick_box(path)),
-        // A model has no size of the file's own to be placed at — the picture the engine draws of
-        // one is drawn at the room the display has, and nothing draws here yet (see
-        // `f3d_render`).
-        PreviewType::Models => None,
+        // A model has no size of the file's own to be placed at: the picture f3d draws of one is
+        // drawn at whatever box it is asked for, so what the layout is given is this box of the
+        // app's own scaled by the picture share (see `f3d_render::model_box`). A machine with no
+        // f3d reports no size, which is how a model comes to show nothing rather than a box nothing
+        // would be drawn into.
+        PreviewType::Models => f3d_render::available().then(f3d_render::model_box),
     }
 }
 
