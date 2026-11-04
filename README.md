@@ -211,7 +211,7 @@ A **still** `heic`, `heif`, `avif`, `jxl`, and still `webp` is decoded by a code
 | `avif`         | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)   |
 | `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
 | `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG) — optional: the app decodes WebP without it                               |
-| camera raws (`3fr` … `x3f`) | [Raw Image Extension](https://apps.microsoft.com/search?query=raw+image+extension) — optional: an installed ImageMagick develops one without it |
+| camera raws (`3fr` … `x3f`) | [Raw Image Extension](https://apps.microsoft.com/detail/9NCTDW2W1BH8) — optional: an installed ImageMagick develops one without it |
 
 
 All are free, official from Microsoft. Windows 11 often has HEIF, AV1, and WebP already. Where one is missing, hovering such a file shows no preview rather than an error.
