@@ -55,9 +55,10 @@ pub(super) struct PinMenu {
     /// holding its rows alone. Only one flyout is ever up: opening one puts
     /// the other away (see `refresh_pin_menu`).
     pub(super) end_of_file: bool,
-    /// Whether the Seek row's flyout is up beside the menu, for the same reason
-    /// the End of File row's is.
-    pub(super) seek: bool,
+    /// Whether the Hover Seek row's flyout is up beside the menu.
+    pub(super) hover_seek: bool,
+    /// Whether the Pin Mode Seek row's flyout is up beside the menu.
+    pub(super) pin_mode_seek: bool,
     /// The hand-off to another program a press on one of the menu's last two rows has armed,
     /// answered on the release rather than where it was pressed: the program or the Shell's
     /// list is a window that comes up under the hand, and one raised while the mouse button is
@@ -79,11 +80,16 @@ pub(super) struct PinMenu {
     /// pointer leaves the row, so that a hand only passing over it
     /// opens nothing (see `refresh_pin_menu`).
     pub(super) end_of_file_since: Option<Instant>,
-    /// When the pointer came onto the Seek row, while the hover timer
+    /// When the pointer came onto the Hover Seek row, while the hover timer
     /// that opens the flyout is running: cleared the moment the
     /// pointer leaves the row, so that a hand only passing over it
     /// opens nothing (see `refresh_pin_menu`).
-    pub(super) seek_since: Option<Instant>,
+    pub(super) hover_seek_since: Option<Instant>,
+    /// When the pointer came onto the Pin Mode Seek row, while the hover timer
+    /// that opens the flyout is running: cleared the moment the
+    /// pointer leaves the row, so that a hand only passing over it
+    /// opens nothing (see `refresh_pin_menu`).
+    pub(super) pin_mode_seek_since: Option<Instant>,
 }
 
 /// Which of the menu's two ways out to another program a press has armed: the hand-off the
@@ -328,8 +334,10 @@ pub(super) enum PinMenuRow {
     Shuffle,
     /// The door the ends of file are chosen through.
     EndOfFile,
-    /// The door the seeks are chosen through.
-    Seek,
+    /// The door the hover seeks are chosen through.
+    HoverSeek,
+    /// The door the pin mode seeks are chosen through.
+    PinModeSeek,
     /// Hand the file to whatever the system has filed against it — the same hand-off the
     /// card's own `Open With` button makes (see `open_path_with_default_app`).
     OpenInDefaultApp,
@@ -339,14 +347,14 @@ pub(super) enum PinMenuRow {
 }
 
 /// The rows the card's menu holds, from the top of the panel to the bottom: the two ways out
-/// of the pin, the rule, the playback of the file in it, the rule again, the three
-/// settings the pin plays by — the shuffle that answers on the spot, and the two doors the
+/// of the pin, the rule, the playback of the file in it, the rule again, the four
+/// settings the pin plays by — the shuffle that answers on the spot, and the three doors the
 /// flyouts hang from — and, below the last of them, the rule and the two ways out to another
 /// program, which are the card's own buttons by another name (see `card_menu_press`).
 ///
-/// The same two doors are what the hover timers watch and what a press on either opens (see
+/// The same three doors are what the hover timers watch and what a press on any opens (see
 /// `refresh_pin_menu`).
-const PIN_MENU_ROWS: [PinMenuRow; 14] = [
+const PIN_MENU_ROWS: [PinMenuRow; 15] = [
     PinMenuRow::ToBubble,
     PinMenuRow::ToTaskbar,
     PinMenuRow::Close,
@@ -357,7 +365,8 @@ const PIN_MENU_ROWS: [PinMenuRow; 14] = [
     PinMenuRow::Separator,
     PinMenuRow::Shuffle,
     PinMenuRow::EndOfFile,
-    PinMenuRow::Seek,
+    PinMenuRow::HoverSeek,
+    PinMenuRow::PinModeSeek,
     PinMenuRow::Separator,
     PinMenuRow::OpenInDefaultApp,
     PinMenuRow::OpenWithList,
@@ -381,7 +390,8 @@ impl PinMenuRow {
             PinMenuRow::PreviousFile => "Previous File",
             PinMenuRow::Shuffle => "Shuffle",
             PinMenuRow::EndOfFile => "End of File",
-            PinMenuRow::Seek => "Seek",
+            PinMenuRow::HoverSeek => "Hover Seek",
+            PinMenuRow::PinModeSeek => "Pin Mode Seek",
             PinMenuRow::OpenInDefaultApp => "Open in Default App",
             PinMenuRow::OpenWithList => "Open With...",
         }
@@ -392,7 +402,9 @@ impl PinMenuRow {
     fn mark(self) -> pin_chrome::MenuMark {
         match self {
             PinMenuRow::Separator => pin_chrome::MenuMark::Separator,
-            PinMenuRow::EndOfFile | PinMenuRow::Seek => pin_chrome::MenuMark::Door,
+            PinMenuRow::EndOfFile | PinMenuRow::HoverSeek | PinMenuRow::PinModeSeek => {
+                pin_chrome::MenuMark::Door
+            }
             PinMenuRow::Shuffle => pin_chrome::MenuMark::Check(pin_audio_shuffle()),
             PinMenuRow::ToBubble
             | PinMenuRow::ToTaskbar
@@ -484,16 +496,7 @@ pub(super) fn end_of_file_rows() -> Vec<pin_chrome::MenuRow> {
         .collect()
 }
 
-/// The rows the Seek row's flyout holds: the four
-/// seek choices, in the order the tray lists them
-/// in, with the one the pin plays by carrying its
-/// disc.
-///
-/// Read out of the configuration for the same
-/// reason the main menu's rows are (see
-/// `menu_rows`).
-pub(super) fn seek_rows() -> Vec<pin_chrome::MenuRow> {
-    let current = pin_mode_audio_seek();
+fn seek_choice_rows(current: AudioSeek) -> Vec<pin_chrome::MenuRow> {
     SEEK_CHOICES
         .iter()
         .zip(SEEK_LABELS)
@@ -506,6 +509,38 @@ pub(super) fn seek_rows() -> Vec<pin_chrome::MenuRow> {
             },
         })
         .collect()
+}
+
+/// The rows the Hover Seek row's flyout holds: the four
+/// seek choices, in the order the tray lists them
+/// in, with the one the hover preview plays by carrying its
+/// disc.
+pub(super) fn hover_seek_rows() -> Vec<pin_chrome::MenuRow> {
+    seek_choice_rows(hover_audio_seek())
+}
+
+/// The rows the Pin Mode Seek row's flyout holds: the four
+/// seek choices, in the order the tray lists them
+/// in, with the one the pin plays by carrying its
+/// disc.
+pub(super) fn pin_mode_seek_rows() -> Vec<pin_chrome::MenuRow> {
+    seek_choice_rows(pin_mode_audio_seek())
+}
+
+/// Where a hovered sound starts, which is the audio setting's answer.
+fn hover_audio_seek() -> AudioSeek {
+    CONFIG
+        .lock()
+        .ok()
+        .map(|config| config.audio_seek)
+        .unwrap_or(DEFAULT_AUDIO_SEEK)
+}
+
+fn set_hover_audio_seek(seek: AudioSeek) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.audio_seek = seek;
+        config.save();
+    }
 }
 
 /// Where a pinned sound starts, which is the pin's own setting's answer.
@@ -637,24 +672,29 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> PinMenuPaint {
             rows
         }
     };
-    // The End of File row's flyout where it is up, else the Seek row's: only one flyout is
-    // ever up, so the one that is up is the panel's, and both hang off rows only a sound's
-    // card carries (see `refresh_pin_menu`).
+    // The End of File row's flyout where it is up, else Hover Seek, else Pin Mode Seek:
+    // only one flyout is ever up, so the one that is up is the panel's, and all hang off
+    // rows only a sound's card carries (see `refresh_pin_menu`).
     let choices = if !card {
         None
     } else if pin.menu.end_of_file {
         Some(end_of_file_rows())
-    } else if pin.menu.seek {
-        Some(seek_rows())
+    } else if pin.menu.hover_seek {
+        Some(hover_seek_rows())
+    } else if pin.menu.pin_mode_seek {
+        Some(pin_mode_seek_rows())
     } else {
         None
     };
     // Which row of the main menu the flyout hangs from: the row the hand opened it from,
     // which is the named door that flyout hangs from, wherever the panel now holds it (see
     // `row_of`).
-    let hang_row = row_of(match pin.menu.end_of_file {
-        true => PinMenuRow::EndOfFile,
-        false => PinMenuRow::Seek,
+    let hang_row = row_of(if pin.menu.end_of_file {
+        PinMenuRow::EndOfFile
+    } else if pin.menu.hover_seek {
+        PinMenuRow::HoverSeek
+    } else {
+        PinMenuRow::PinModeSeek
     })
     .unwrap_or(0);
     // The panel is placed on the screen rather than inside the card: the window it is drawn
@@ -758,19 +798,26 @@ pub(super) fn refresh_pin_menu(
         .as_ref()
         .and_then(|flyout| at.and_then(|(x, y)| pin_chrome::menu_row_at(&flyout.popup, x, y)));
 
-    // The End of File row and the Seek row are the doors the flyouts hang from, named rather
+    // The End of File row, Hover Seek row, and Pin Mode Seek row are the doors the flyouts hang from, named rather
     // than numbered, whatever the panel holds (see `row_of`). The rows between them answer on
     // the spot or rule the two groups apart, so no timer watches them — a check is a press
     // rather than a rest, and a rule is nothing at all (see `pinned_menu_press`). The rows
     // counted here are the rows a hand counts, which for this
     // panel is every row of it.
     let on_end_of_file = row_of(PinMenuRow::EndOfFile).is_some_and(|row| hover_main == Some(row));
-    let on_seek = row_of(PinMenuRow::Seek).is_some_and(|row| hover_main == Some(row));
+    let on_hover_seek = row_of(PinMenuRow::HoverSeek).is_some_and(|row| hover_main == Some(row));
+    let on_pin_mode_seek =
+        row_of(PinMenuRow::PinModeSeek).is_some_and(|row| hover_main == Some(row));
     // And the row the flyout that is up hangs from, which is the row the crossing between
     // the two panels is measured at (see `pinned_menu_paint`).
-    let hang_row = match pin.menu.end_of_file {
-        true => row_of(PinMenuRow::EndOfFile),
-        false => row_of(PinMenuRow::Seek),
+    let hang_row = if pin.menu.end_of_file {
+        row_of(PinMenuRow::EndOfFile)
+    } else if pin.menu.hover_seek {
+        row_of(PinMenuRow::HoverSeek)
+    } else if pin.menu.pin_mode_seek {
+        row_of(PinMenuRow::PinModeSeek)
+    } else {
+        None
     };
 
     // The timers: each starts when the pointer comes onto its row and is
@@ -779,14 +826,20 @@ pub(super) fn refresh_pin_menu(
         true => pin.menu.end_of_file_since.or(Some(now)),
         false => None,
     };
-    let seek_since = match on_seek {
-        true => pin.menu.seek_since.or(Some(now)),
+    let hover_seek_since = match on_hover_seek {
+        true => pin.menu.hover_seek_since.or(Some(now)),
+        false => None,
+    };
+    let pin_mode_seek_since = match on_pin_mode_seek {
+        true => pin.menu.pin_mode_seek_since.or(Some(now)),
         false => None,
     };
     let rested_end_of_file =
         end_of_file_since.is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
-    let rested_seek =
-        seek_since.is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
+    let rested_hover_seek =
+        hover_seek_since.is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
+    let rested_pin_mode_seek =
+        pin_mode_seek_since.is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
 
     // Whether a flyout that is up is still wanted: the pointer is on its row,
     // the gap, or the flyout itself.
@@ -799,30 +852,41 @@ pub(super) fn refresh_pin_menu(
             })
         });
     let kept_end_of_file = on_end_of_file || (pin.menu.end_of_file && in_flyout);
-    let kept_seek = on_seek || (pin.menu.seek && in_flyout);
+    let kept_hover_seek = on_hover_seek || (pin.menu.hover_seek && in_flyout);
+    let kept_pin_mode_seek = on_pin_mode_seek || (pin.menu.pin_mode_seek && in_flyout);
 
     let mut end_of_file = (pin.menu.end_of_file || rested_end_of_file) && kept_end_of_file;
-    let mut seek = (pin.menu.seek || rested_seek) && kept_seek;
+    let mut hover_seek = (pin.menu.hover_seek || rested_hover_seek) && kept_hover_seek;
+    let mut pin_mode_seek = (pin.menu.pin_mode_seek || rested_pin_mode_seek) && kept_pin_mode_seek;
     // Only one flyout is ever up: a hand that has rested on one row has left the
     // other, so the rested one wins and the kept one goes with the row it hung from.
     if rested_end_of_file {
-        seek = false;
-    } else if rested_seek {
+        hover_seek = false;
+        pin_mode_seek = false;
+    } else if rested_hover_seek {
         end_of_file = false;
+        pin_mode_seek = false;
+    } else if rested_pin_mode_seek {
+        end_of_file = false;
+        hover_seek = false;
     }
 
     let changed = pin.menu.hover_main != hover_main
         || pin.menu.hover_flyout != hover_flyout
         || pin.menu.end_of_file != end_of_file
-        || pin.menu.seek != seek
+        || pin.menu.hover_seek != hover_seek
+        || pin.menu.pin_mode_seek != pin_mode_seek
         || pin.menu.end_of_file_since != end_of_file_since
-        || pin.menu.seek_since != seek_since;
+        || pin.menu.hover_seek_since != hover_seek_since
+        || pin.menu.pin_mode_seek_since != pin_mode_seek_since;
     pin.menu.hover_main = hover_main;
     pin.menu.hover_flyout = hover_flyout;
     pin.menu.end_of_file = end_of_file;
-    pin.menu.seek = seek;
+    pin.menu.hover_seek = hover_seek;
+    pin.menu.pin_mode_seek = pin_mode_seek;
     pin.menu.end_of_file_since = end_of_file_since;
-    pin.menu.seek_since = seek_since;
+    pin.menu.hover_seek_since = hover_seek_since;
+    pin.menu.pin_mode_seek_since = pin_mode_seek_since;
 
     changed
 }
@@ -969,15 +1033,26 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
         Some(PinMenuRow::EndOfFile) => {
             with_pin(|pin| {
                 pin.menu.end_of_file = true;
-                pin.menu.seek = false;
+                pin.menu.hover_seek = false;
+                pin.menu.pin_mode_seek = false;
             });
             true
         }
-        // The other door, the same bargain the other way.
-        Some(PinMenuRow::Seek) => {
+        // The Hover Seek door.
+        Some(PinMenuRow::HoverSeek) => {
             with_pin(|pin| {
-                pin.menu.seek = true;
+                pin.menu.hover_seek = true;
                 pin.menu.end_of_file = false;
+                pin.menu.pin_mode_seek = false;
+            });
+            true
+        }
+        // The Pin Mode Seek door.
+        Some(PinMenuRow::PinModeSeek) => {
+            with_pin(|pin| {
+                pin.menu.pin_mode_seek = true;
+                pin.menu.end_of_file = false;
+                pin.menu.hover_seek = false;
             });
             true
         }
@@ -1045,14 +1120,22 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
             // plays by from then on, and the whole menu goes away with
             // the answer — both panels, because the flyout is the
             // menu's own — the way a menu a choice was made in does. The
-            // End of File flyout's rows are the ends of file; the Seek flyout's are the seeks.
+            // End of File flyout's rows are the ends of file; the Seek flyouts' are the seeks.
             Some(index) => {
-                let end_of_file_open = pin_state()
-                    .and_then(|pinned| pinned.pin().map(|pin| pin.menu.end_of_file))
-                    .unwrap_or(false);
+                let (end_of_file_open, hover_seek_open) = pin_state()
+                    .and_then(|pinned| {
+                        pinned
+                            .pin()
+                            .map(|pin| (pin.menu.end_of_file, pin.menu.hover_seek))
+                    })
+                    .unwrap_or((false, false));
                 if end_of_file_open {
                     if let Some(end_of_file) = END_OF_FILE_CHOICES.get(index) {
                         set_pin_audio_end_of_file(*end_of_file);
+                    }
+                } else if hover_seek_open {
+                    if let Some(choice) = SEEK_CHOICES.get(index) {
+                        set_hover_audio_seek(*choice);
                     }
                 } else if let Some(choice) = SEEK_CHOICES.get(index) {
                     set_pin_mode_audio_seek(*choice);
@@ -1144,12 +1227,14 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32, page: PinMenuPage
         pin.menu.open = true;
         pin.menu.page = page;
         pin.menu.end_of_file = false;
-        pin.menu.seek = false;
+        pin.menu.hover_seek = false;
+        pin.menu.pin_mode_seek = false;
         pin.menu.point = (x, y);
         pin.menu.hover_main = None;
         pin.menu.hover_flyout = None;
         pin.menu.end_of_file_since = None;
-        pin.menu.seek_since = None;
+        pin.menu.hover_seek_since = None;
+        pin.menu.pin_mode_seek_since = None;
         pin.menu.hand_off = None;
     });
     // The menu is this window's own, so the window takes the pointer while
