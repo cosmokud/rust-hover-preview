@@ -189,7 +189,8 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
             "",
             "Shuffle",
             "End of File",
-            "Seek",
+            "Hover Seek",
+            "Pin Mode Seek",
             "",
             "Open in Default App",
             "Open With...",
@@ -214,8 +215,18 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         "and the row between the doors is the check the shuffle is the face of"
     );
     assert!(
-        matches!(top[row_at(&top, "Seek")].mark, pin_chrome::MenuMark::Door),
-        "and so is the seek row"
+        matches!(
+            top[row_at(&top, "Hover Seek")].mark,
+            pin_chrome::MenuMark::Door
+        ),
+        "and so is the hover seek row"
+    );
+    assert!(
+        matches!(
+            top[row_at(&top, "Pin Mode Seek")].mark,
+            pin_chrome::MenuMark::Door
+        ),
+        "and so is the pin mode seek row"
     );
 
     let ends = end_of_file_rows();
@@ -230,7 +241,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         "the pin steps on at the end of a file, so that choice is the one marked"
     );
 
-    let choices = seek_rows();
+    let choices = pin_mode_seek_rows();
     let labels: Vec<&str> = choices.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(
         labels,
@@ -271,7 +282,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         Some(1),
         "a pinned sound loops, so that choice is the one marked"
     );
-    let choices = seek_rows();
+    let choices = pin_mode_seek_rows();
     let marked = choices
         .iter()
         .position(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet));
@@ -380,7 +391,8 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
             "",
             "Shuffle",
             "End of File",
-            "Seek",
+            "Hover Seek",
+            "Pin Mode Seek",
             "",
             "Open in Default App",
             "Open With...",
@@ -402,10 +414,17 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     );
     assert!(
         matches!(
-            paint.rows[row_at(&paint.rows, "Seek")].mark,
+            paint.rows[row_at(&paint.rows, "Hover Seek")].mark,
             pin_chrome::MenuMark::Door
         ),
-        "and so is the seek row"
+        "and so is the hover seek row"
+    );
+    assert!(
+        matches!(
+            paint.rows[row_at(&paint.rows, "Pin Mode Seek")].mark,
+            pin_chrome::MenuMark::Door
+        ),
+        "and so is the pin mode seek row"
     );
     assert!(
         paint.flyout.is_none(),
@@ -1060,7 +1079,7 @@ fn the_menu_carries_its_arrow_with_the_flyout_down() {
     // arrow is the side its panel is on — the same arrow the
     // menu carried without it.
     let arrow = paint.popup.arrow;
-    with_pin(|pin| pin.menu.seek = true);
+    with_pin(|pin| pin.menu.pin_mode_seek = true);
     let Some(paint) = pinned_menu_geometry() else {
         panic!("the menu is still up");
     };
@@ -1153,7 +1172,8 @@ fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
             "",
             "Shuffle",
             "End of File",
-            "Seek",
+            "Hover Seek",
+            "Pin Mode Seek",
             "",
             "Open in Default App",
             "Open With...",
@@ -1249,17 +1269,17 @@ fn the_flyout_opens_right_of_the_menu_unless_the_screens_right_edge_says_otherwi
     // came from.
     unsafe { open_pin_menu(hwnd, 120, 120, PinMenuPage::Chrome) };
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Pin Mode Seek"));
     assert!(
         unsafe { pinned_menu_press(hwnd, x, y) },
-        "a press on the Seek row is the menu's own"
+        "a press on the Pin Mode Seek row is the menu's own"
     );
     let paint = pinned_menu_geometry().expect("the menu is up");
     let flyout = paint.flyout.as_ref().expect("the flyout is up");
     assert_eq!(
         paint.popup.arrow,
         pin_chrome::MenuArrow::Right,
-        "the Seek row's door points at the flyout on its right"
+        "the Pin Mode Seek row's door points at the flyout on its right"
     );
     assert!(
         flyout.popup.panel.left >= paint.popup.panel.right,
@@ -1270,17 +1290,17 @@ fn the_flyout_opens_right_of_the_menu_unless_the_screens_right_edge_says_otherwi
     // Windows behaviour — with the menu itself left where the click put it.
     unsafe { open_pin_menu(hwnd, screen.right - 2, screen.top + 20, PinMenuPage::Chrome) };
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Pin Mode Seek"));
     assert!(
         unsafe { pinned_menu_press(hwnd, x, y) },
-        "a press on the Seek row is the menu's own"
+        "a press on the Pin Mode Seek row is the menu's own"
     );
     let paint = pinned_menu_geometry().expect("the menu is up");
     let flyout = paint.flyout.as_ref().expect("the flyout is up");
     assert_eq!(
         paint.popup.arrow,
         pin_chrome::MenuArrow::Left,
-        "the Seek row's door points at the flyout on its left near the screen's own edge"
+        "the Pin Mode Seek row's door points at the flyout on its left near the screen's own edge"
     );
     assert!(
         flyout.popup.panel.right <= paint.popup.panel.left,
@@ -1502,21 +1522,21 @@ fn the_seek_row_opens_its_flyout_beside_the_menu() {
 
     with_pin(|pin| {
         pin.menu.open = true;
-        pin.menu.seek = true;
+        pin.menu.pin_mode_seek = true;
     });
 
     let Some(paint) = pinned_menu_geometry() else {
         panic!("a menu that is up is painted");
     };
     let Some(flyout) = paint.flyout.as_ref() else {
-        panic!("the Seek row puts the flyout up")
+        panic!("the Pin Mode Seek row puts the flyout up")
     };
 
     // The flyout is beside the main menu, not over it:
     // its panel starts a small gap right of the main
     // menu's own right edge — the gap a panel is held
     // off the panel beside it — and its top is
-    // the Seek row's own top, the row the flyout is
+    // the Pin Mode Seek row's own top, the row the flyout is
     // hung from.
     assert_eq!(
         flyout.popup.panel.left,
@@ -1525,8 +1545,8 @@ fn the_seek_row_opens_its_flyout_beside_the_menu() {
     );
     assert_eq!(
         flyout.popup.panel.top,
-        paint.popup.bands[row_at(&paint.rows, "Seek")].top,
-        "the flyout is top-aligned with the Seek row"
+        paint.popup.bands[row_at(&paint.rows, "Pin Mode Seek")].top,
+        "the flyout is top-aligned with the Pin Mode Seek row"
     );
 
     // The main menu is still inside the screen and
@@ -1598,7 +1618,7 @@ fn the_flyout_s_rows_answer_presses() {
     for (index, choice) in choices.into_iter().enumerate() {
         with_pin(|pin| {
             pin.menu.open = true;
-            pin.menu.seek = true;
+            pin.menu.pin_mode_seek = true;
         });
         let Some(paint) = pinned_menu_geometry() else {
             panic!("a menu that is up is painted");
@@ -1651,7 +1671,7 @@ fn a_choice_made_in_the_flyout_is_written_down_and_puts_the_whole_menu_away() {
 
     with_pin(|pin| {
         pin.menu.open = true;
-        pin.menu.seek = true;
+        pin.menu.pin_mode_seek = true;
     });
     let Some(paint) = pinned_menu_geometry() else {
         panic!("a menu that is up is painted");
@@ -1699,6 +1719,48 @@ fn a_choice_made_in_the_flyout_is_written_down_and_puts_the_whole_menu_away() {
     );
 }
 
+#[test]
+fn a_choice_made_in_the_hover_seek_flyout_sets_hover_audio_seek() {
+    let _room = the_room_to_itself();
+
+    let _file = ConfigFilePutBack::take();
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.audio_seek = AudioSeek::Start;
+    }
+
+    with_pin(|pin| {
+        pin.menu.open = true;
+        pin.menu.hover_seek = true;
+    });
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("a menu that is up is painted");
+    };
+    let Some(flyout) = paint.flyout.as_ref() else {
+        panic!("the flyout is up")
+    };
+
+    // The middle of the flyout's last row, which is the Random choice.
+    let x = (flyout.popup.panel.left + flyout.popup.panel.right) / 2;
+    let y = flyout.popup.rows_top + 3 * flyout.popup.row_height + flyout.popup.row_height / 2;
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on a row of the hover seek flyout is the menu's own"
+    );
+
+    assert_eq!(
+        CONFIG.lock().expect("the configuration").audio_seek,
+        AudioSeek::Random,
+        "the press chose Random for hover audio seek"
+    );
+    assert!(
+        pinned_menu_geometry().is_none(),
+        "the menu goes away with the choice"
+    );
+}
+
 /// A press on the Seek row is the door the flyout comes through: the
 /// flyout opens beside the menu, and the menu itself stays up, its
 /// two rows still showing. A hand that has come to press rather than
@@ -1717,11 +1779,11 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
     };
     assert!(paint.flyout.is_none(), "the menu opens on its main page");
 
-    // The middle of the Seek row, the last of the menu's own rows.
-    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    // The middle of the Pin Mode Seek row, the last of the menu's own settings rows.
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Pin Mode Seek"));
     assert!(
         unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
-        "a hand on the Seek row is the menu's own"
+        "a hand on the Pin Mode Seek row is the menu's own"
     );
 
     // The menu is still up, on its own rows, with the flyout up
@@ -1744,11 +1806,43 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
             "",
             "Shuffle",
             "End of File",
-            "Seek",
+            "Hover Seek",
+            "Pin Mode Seek",
             "",
             "Open in Default App",
             "Open With...",
         ]
+    );
+}
+
+#[test]
+fn a_press_on_the_hover_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
+    let _room = the_room_to_itself();
+
+    let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
+
+    with_pin(|pin| pin.menu.open = true);
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("a menu that is up is painted");
+    };
+    assert!(paint.flyout.is_none(), "the menu opens on its main page");
+
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Hover Seek"));
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on the Hover Seek row is the menu's own"
+    );
+
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("the menu is still up")
+    };
+    assert!(paint.flyout.is_some(), "the press opened the flyout");
+    assert_eq!(
+        paint.popup.arrow,
+        pin_chrome::MenuArrow::Right,
+        "the door arrow points right"
     );
 }
 
@@ -1818,7 +1912,7 @@ fn a_press_outside_both_panels_puts_the_whole_menu_away() {
 
     with_pin(|pin| {
         pin.menu.open = true;
-        pin.menu.seek = true;
+        pin.menu.pin_mode_seek = true;
     });
     let Some(paint) = pinned_menu_geometry() else {
         panic!("a menu that is up is painted");
@@ -1843,7 +1937,7 @@ fn a_press_outside_both_panels_puts_the_whole_menu_away() {
     for (x, y) in presses {
         with_pin(|pin| {
             pin.menu.open = true;
-            pin.menu.seek = true;
+            pin.menu.pin_mode_seek = true;
         });
         assert!(
             unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
@@ -1941,10 +2035,10 @@ fn tick(cursor: Option<(i32, i32)>, now: Instant) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether the pin that is up has its Seek flyout up.
+/// Whether the pin that is up has its Pin Mode Seek flyout up.
 fn flyout_is_up() -> bool {
     pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| pin.menu.seek))
+        .and_then(|pinned| pinned.pin().map(|pin| pin.menu.pin_mode_seek))
         .unwrap_or(false)
 }
 
@@ -1965,7 +2059,7 @@ fn hovering_the_seek_row_opens_the_flyout_after_a_short_delay() {
         pin.menu.point = on_screen((20, 20));
     });
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    let seek = menu_row_point(&paint, row_at(&paint.rows, "Pin Mode Seek"));
 
     let t0 = Instant::now();
 
@@ -2004,7 +2098,7 @@ fn leaving_the_seek_row_before_the_delay_cancels_its_flyout() {
         pin.menu.point = on_screen((20, 20));
     });
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    let seek = menu_row_point(&paint, row_at(&paint.rows, "Pin Mode Seek"));
     let end_of_file = menu_row_point(&paint, row_at(&paint.rows, "End of File"));
 
     let t0 = Instant::now();
@@ -2039,7 +2133,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
 
     // Open the flyout by resting on the Seek row past the delay.
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    let seek = menu_row_point(&paint, row_at(&paint.rows, "Pin Mode Seek"));
     let t0 = Instant::now();
     tick(Some(seek), t0);
     tick(Some(seek), t0 + Duration::from_millis(200));
@@ -2061,7 +2155,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
     let flyout = paint.flyout.as_ref().expect("the flyout is up");
     let gap = (
         (paint.popup.panel.right + flyout.popup.panel.left) / 2,
-        menu_row_point(&paint, row_at(&paint.rows, "Seek")).1,
+        menu_row_point(&paint, row_at(&paint.rows, "Pin Mode Seek")).1,
     );
     tick(Some(gap), t0 + Duration::from_millis(400));
     assert!(
@@ -2081,7 +2175,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
     );
 
     // Opened again, then the pointer leaves the menu entirely: it hides.
-    let seek = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    let seek = menu_row_point(&paint, row_at(&paint.rows, "Pin Mode Seek"));
     tick(Some(seek), t0 + Duration::from_millis(600));
     tick(Some(seek), t0 + Duration::from_millis(800));
     assert!(flyout_is_up(), "the flyout opened again");
@@ -2108,7 +2202,7 @@ fn the_row_under_the_pointer_is_the_row_that_is_washed() {
         pin.menu.point = on_screen((20, 20));
     });
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek_row = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    let seek_row = menu_row_point(&paint, row_at(&paint.rows, "Pin Mode Seek"));
     let t0 = Instant::now();
 
     assert!(
@@ -2118,7 +2212,7 @@ fn the_row_under_the_pointer_is_the_row_that_is_washed() {
     let paint = pinned_menu_geometry().expect("the menu is up");
     assert_eq!(
         paint.hover,
-        Some(row_at(&paint.rows, "Seek")),
+        Some(row_at(&paint.rows, "Pin Mode Seek")),
         "the Seek row is the one the pointer is on"
     );
     assert!(
@@ -2127,7 +2221,7 @@ fn the_row_under_the_pointer_is_the_row_that_is_washed() {
     );
 
     // And on the flyout: its own row is the one washed.
-    with_pin(|pin| pin.menu.seek = true);
+    with_pin(|pin| pin.menu.pin_mode_seek = true);
     let paint = pinned_menu_geometry().expect("the menu is up");
     let flyout = paint.flyout.as_ref().expect("the flyout is up");
     let choice = (
@@ -2161,7 +2255,7 @@ fn the_loop_takes_a_foreign_press_ask_and_puts_the_menu_away() {
     // A menu that is up with its flyout beside it: both panels are what the ask puts away.
     with_pin(|pin| {
         pin.menu.open = true;
-        pin.menu.seek = true;
+        pin.menu.pin_mode_seek = true;
     });
     assert!(pinned_menu_geometry().is_some(), "the menu is up");
 
