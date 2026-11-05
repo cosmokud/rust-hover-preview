@@ -71,6 +71,7 @@ fn every_ttl_submenu_offers_nine_radios_with_the_setting_marked() {
         ID_TRAY_ENGINE_IDLE_BASE,
         ID_TRAY_LIBREOFFICE_IDLE_BASE,
         ID_TRAY_WEBVIEW_IDLE_BASE,
+        ID_TRAY_F3D_IDLE_BASE,
     ] {
         for (index, idle) in ENGINE_IDLE_CHOICES.iter().enumerate() {
             let parent = unsafe { CreatePopupMenu().unwrap() };
@@ -1289,6 +1290,10 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
         (
             ID_TRAY_LIBREOFFICE_IDLE_BASE,
             ID_TRAY_LIBREOFFICE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_F3D_IDLE_BASE,
+            ID_TRAY_F3D_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16,
         ),
         // The cache sizes, one range per cache.
         (
