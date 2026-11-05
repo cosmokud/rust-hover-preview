@@ -305,6 +305,16 @@ pub(super) fn the_models_window() -> Option<HWND> {
     )
 }
 
+/// Whether a pinned model's picture is still on the screen.
+///
+/// **f3d's window is the picture, and f3d can close it**: its own Esc or its own quit bind is a hand on
+/// the scene rather than on the pin, so a handle written down when the window was there is a handle to
+/// nothing afterwards. The pin is a window onto that scene, and a scene that has gone is a pin that has
+/// come apart like any other (see `pin_media_is_alive`).
+pub(super) fn the_model_window_is_up() -> bool {
+    the_models_window().is_some_and(|window| unsafe { IsWindow(window) }.as_bool())
+}
+
 /// The window the model's picture is drawn in, from the two roads that name one.
 ///
 /// **The published window is the picture's own** — the monitor writes it the moment f3d's window exists,
