@@ -20,13 +20,17 @@
 //! hand is on there is this app's window, which thumbnails the engine's window through the pin's host (see
 //! `answer_a_models_band`). The press, the drag, the release and the notch are posted on to f3d in f3d's
 //! own coordinates — posted and never sent, because a sent message is this app's thread waiting on the one
-//! drawing the scene.
+//! drawing the scene. **And a drag's moves are coalesced to one at a time** rather than posted as they
+//! arrive, because the engine draws a whole frame for every message it is handed and a hand makes one per
+//! sample: the queue those samples make is a scene still turning long after the hand has let go (see
+//! `carry_a_models_turn`).
 
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_LBUTTON;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GWL_STYLE, HTCLIENT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCHITTEST, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    GetClientRect, SendMessageTimeoutW, GWL_STYLE, HTCLIENT, SMTO_ABORTIFHUNG, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_NULL, WS_CAPTION, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::*;
@@ -348,6 +352,22 @@ fn a_model_takes_the_pointer(kind: Option<MediaType>) -> bool {
 /// `settle_a_models_drag`).
 static MODEL_DRAG: AtomicIsize = AtomicIsize::new(0);
 
+/// The point the drag has reached, in the band's own client, packed as a message's two words pack one —
+/// and whether the engine has been given it yet.
+///
+/// **A move is noted where it arrives and posted from the tick**, because the engine coalesces nothing:
+/// every message it is handed is a whole frame of its own, and a hand over a band makes one per sample.
+/// Measured on 4.0.1 here, a posted move costs about 31 ms at 480×360 and 70 ms at 900×700 — so a posted
+/// move per sample is a queue the engine is still draining long after the hand has let go, which is a
+/// scene that "glides" on and a band that answers nothing until it has. One move at a time, always the
+/// last one the hand made, is what the system does for a window of its own (see `carry_a_models_turn`).
+static MODEL_MOVE: AtomicIsize = AtomicIsize::new(0);
+static MODEL_MOVE_WAITING: AtomicBool = AtomicBool::new(false);
+
+/// How long the engine is given to answer a sent no-op before the tick takes it as busy and leaves the
+/// drag's move for a later tick (see `the_engine_is_at_its_pump`).
+const THE_ENGINE_IS_GIVEN: u32 = 10;
+
 /// `MK_LBUTTON`, the key-state word a press and a move of a drag carry (see `post_a_band_message`).
 const MK_LBUTTON: usize = 0x0001;
 
@@ -366,7 +386,8 @@ const MK_LBUTTON: usize = 0x0001;
 /// **The pair's two windows ask it on two roads**: the host asks it for anything landing on its own
 /// client, and the pin's own window asks `press_the_models_band` once the chrome's own arms above it have
 /// had the press (see `pin_input::pinned_press_on`). Whichever window took the down is the one that posts
-/// the rest of the drag, and the loop ends what neither is sent (see `settle_a_models_drag`).
+/// the rest of the drag — the press and the release here, and the moves from the loop's own tick, one at a
+/// time (see `carry_a_models_turn`) — and the loop ends what neither is sent (see `settle_a_models_drag`).
 ///
 /// Safety: the answers are those of a window of this app's own, asked from its own window procedure.
 pub(super) unsafe fn answer_a_models_band(
@@ -386,6 +407,8 @@ pub(super) unsafe fn answer_a_models_band(
             // own capture on the down is what hands it the real moves of the rest of the drag, and what is
             // taken here is the stretch before that down has been read (see `MODEL_DRAG`).
             MODEL_DRAG.store(host.0 as isize, Ordering::SeqCst);
+            // A move the last turn left unposted is no move of this one (see `MODEL_MOVE`).
+            MODEL_MOVE_WAITING.store(false, Ordering::SeqCst);
             let _ = unsafe { SetCapture(host) };
             unsafe { post_a_band_message(host, source, msg, message_point(lparam)) };
             Some(LRESULT(0))
@@ -401,7 +424,10 @@ pub(super) unsafe fn answer_a_models_band(
                 unsafe { end_the_models_drag(host, message_point(lparam)) };
                 return None;
             }
-            unsafe { post_a_band_message(host, source, msg, message_point(lparam)) };
+            // **The move is noted, never posted here**: the hand makes one per sample and the engine draws
+            // a frame for each one it is handed, so the tick posts the last point the hand reached, once the
+            // engine is free for it (see `carry_a_models_turn`).
+            note_the_bands_move(message_point(lparam));
             Some(LRESULT(0))
         }
         WM_LBUTTONUP => {
@@ -419,9 +445,20 @@ pub(super) unsafe fn answer_a_models_band(
 /// cleared**, because a latch that goes without it is a scene left turning under a hand that is up — and the
 /// capture is given back only where this window is the one holding it, since an engine that took the capture
 /// from us holds it to its own release (see `settle_a_models_drag`).
+///
+/// A move the tick has not posted yet is posted ahead of the release, so the scene ends where the hand
+/// let go rather than a tick short of it (see `carry_a_models_turn`).
 unsafe fn end_the_models_drag(host: HWND, point: (i32, i32)) {
-    if let Some(source) = the_models_window() {
-        unsafe { post_a_band_message(host, source, WM_LBUTTONUP, point) };
+    match the_models_window() {
+        Some(source) => {
+            if let Some(waiting) = take_the_bands_move() {
+                unsafe { post_a_band_message(host, source, WM_MOUSEMOVE, waiting) };
+            }
+            unsafe { post_a_band_message(host, source, WM_LBUTTONUP, point) };
+        }
+        None => {
+            let _ = take_the_bands_move();
+        }
     }
     MODEL_DRAG.store(0, Ordering::SeqCst);
     if unsafe { GetCapture() } == host {
@@ -429,17 +466,90 @@ unsafe fn end_the_models_drag(host: HWND, point: (i32, i32)) {
     }
 }
 
-/// End a model's turn no window of ours was sent the release of: the moves of a drag are the engine's once
-/// it takes the capture on the down posted to it, so the level of the button is the one answer left — asked
-/// from the loop's own tick, with the release posted to the engine before the latch goes (see
-/// `answer_a_models_band`).
+/// Note the point a turn has reached, for the tick to post (see `carry_a_models_turn`).
+fn note_the_bands_move(point: (i32, i32)) {
+    MODEL_MOVE.store(a_point_in_a_message(point).0, Ordering::SeqCst);
+    MODEL_MOVE_WAITING.store(true, Ordering::SeqCst);
+}
+
+/// The point a turn has reached and the engine has not been given, or nothing where the last move of the
+/// drag has already gone.
+fn take_the_bands_move() -> Option<(i32, i32)> {
+    MODEL_MOVE_WAITING
+        .swap(false, Ordering::SeqCst)
+        .then(|| message_point(LPARAM(MODEL_MOVE.load(Ordering::SeqCst))))
+}
+
+/// Carry a turn a band is in: the point the hand has reached, posted to the engine when the engine is free
+/// to read it.
+///
+/// **One move at a time, and it is always the last one the hand made**: a move posted on every sample is a
+/// queue the engine drains at its own frame rate — 31 ms a move at 480×360 and 70 ms at 900×700, measured on
+/// 4.0.1 — so a turn of a second plays out for as many as the queue holds, and a press during it waits
+/// behind every one of them. What a window of the system's own is given is the last position the hand
+/// reached and nothing else, because the system coalesces the moves of a drag in the queue it keeps; the
+/// tick is that queue here (see `the_engine_is_at_its_pump` and `MODEL_MOVE`).
+unsafe fn carry_a_models_turn(host: HWND) {
+    let Some(source) = the_models_window() else {
+        let _ = take_the_bands_move();
+        return;
+    };
+    if !MODEL_MOVE_WAITING.load(Ordering::SeqCst) {
+        return;
+    }
+
+    // **Asked before the move, never after**: a sent no-op is answered where the engine reads its queue, so
+    // the one that comes back is the moment a posted move is read next rather than put behind others.
+    if !the_engine_is_at_its_pump(source) {
+        return;
+    }
+    let Some(point) = take_the_bands_move() else {
+        return;
+    };
+    unsafe { post_a_band_message(host, source, WM_MOUSEMOVE, point) };
+}
+
+/// Whether the engine is at its own message pump: a sent no-op it answers within `THE_ENGINE_IS_GIVEN`.
+///
+/// **A sent message is not a posted one**: it is answered at the pump, ahead of whatever is still queued, so
+/// this is a reading of how busy the engine is and never of how much it has left. That is the whole of what
+/// the tick needs, since it posts one move at a time and may keep that move for a later tick.
+///
+/// A window whose thread has gone answers nothing, which is the right reading too: a turn there is one
+/// nothing is drawing.
+fn the_engine_is_at_its_pump(source: HWND) -> bool {
+    let mut answer: usize = 0;
+    let asked = unsafe {
+        SendMessageTimeoutW(
+            source,
+            WM_NULL,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG,
+            THE_ENGINE_IS_GIVEN,
+            Some(&mut answer),
+        )
+    };
+    asked != LRESULT(0)
+}
+
+/// End a model's turn no window of ours was sent the release of, and carry one that is still in hand: the
+/// moves of a drag are the engine's once it takes the capture on the down posted to it, so the level of the
+/// button is the one answer left — asked from the loop's own tick, with the release posted to the engine
+/// before the latch goes (see `answer_a_models_band`), and every move of the drag posted from here while the
+/// button is still down (see `carry_a_models_turn`).
 pub(super) fn settle_a_models_drag() {
     let host = MODEL_DRAG.load(Ordering::SeqCst);
-    if host == 0 || the_left_button_is_down() {
+    if host == 0 {
         return;
     }
 
     let host = HWND(host as *mut _);
+    if the_left_button_is_down() {
+        unsafe { carry_a_models_turn(host) };
+        return;
+    }
+
     let point = the_pointer_in_the_band(host);
     unsafe { end_the_models_drag(host, point) };
 }
@@ -479,7 +589,39 @@ pub(super) unsafe fn press_the_models_band(hwnd: HWND, x: i32, y: i32) -> bool {
 /// `GetAsyncKeyState` answers is spent by any reader, and it is the Explorer hook's click (see
 /// `pin_drag::left_button_down`, which publishes the same state for the pin's own gestures).
 fn the_left_button_is_down() -> bool {
+    #[cfg(test)]
+    if let Some(held) = a_tests_own_button() {
+        return held;
+    }
+
     unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0 }
+}
+
+/// The button a test stood in the place of the real one, and what it says — see `stand_a_button_for_a_test`.
+#[cfg(test)]
+static A_TESTS_OWN_BUTTON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// **A test's own hand on the button**, because the level of the real one is the whole of the question a
+/// turn's moves are carried by and no test can press it: `Some(true)` holds the button for the drags of the
+/// test, `Some(false)` lets go of them, and `None` gives the real one back (see `the_left_button_is_down`).
+#[cfg(test)]
+pub(super) fn stand_a_button_for_a_test(held: Option<bool>) {
+    let state = match held {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    };
+    A_TESTS_OWN_BUTTON.store(state, Ordering::SeqCst);
+}
+
+/// Whether a test stood a button of its own, and what it says: nothing outside one that asked.
+#[cfg(test)]
+fn a_tests_own_button() -> Option<bool> {
+    match A_TESTS_OWN_BUTTON.load(Ordering::SeqCst) {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
 }
 
 /// Post one message of the pointer's to the engine's window, at a point in the band's own client area, and
