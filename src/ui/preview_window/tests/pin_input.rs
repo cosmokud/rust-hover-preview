@@ -366,6 +366,53 @@ fn a_paired_press_on_a_pinned_window_puts_it_in_the_middle_of_its_screen() {
     }
 }
 
+/// **A model's band carries nothing, on any road**: a press there is the scene's, and one the engine's
+/// road did not take is still nobody's rather than the window's under it — the whole of what a hand on a
+/// model means is that it turns the model (see `f3d_player::answer_a_models_band`).
+///
+/// Every other kind's picture is the window's (see `pinned_content_is_the_pins`), and it is the same point
+/// that asks both here, so a band that had stopped carrying every window would show.
+#[test]
+fn a_press_on_a_models_band_carries_nothing() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let room = work_area_at(0, 0);
+    let content = (room.left, room.top, room.left + 400, room.top + 300);
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        let mut media = create_loading_media(400, 300);
+        media.media_type = MediaType::StaticImage;
+        *current = Some(media);
+    }
+
+    // A point well inside the band, clear of the caption's buttons above it.
+    let (x, y) = (100, pinned_caption_height(96, None) + 100);
+    let hwnd = HWND(0x1000 as *mut _);
+
+    assert!(
+        unsafe { pinned_press(hwnd, x, y) },
+        "a picture is the window's to carry"
+    );
+
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.media_type = MediaType::Model;
+        }
+    }
+
+    assert!(
+        !unsafe { pinned_press(hwnd, x, y) },
+        "a model's band is the scene's: the press carries nothing rather than the pin"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}
+
 /// And where the configuration has the size reset on as well, the pair asks the loop for the size
 /// rather than writing one itself: a size is what a media is laid out at rather than a place it is
 /// carried to, so what a press leaves behind is the request and the box it stands in — the box the

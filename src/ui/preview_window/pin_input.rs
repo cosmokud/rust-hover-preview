@@ -1105,6 +1105,13 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
         return true;
     }
 
+    // **A model's band is the scene's and never the window's**: a press there turns the model, and one
+    // the engine's road did not take carries nothing rather than the window under it (see
+    // `f3d_player::answer_a_models_band`). The chrome's own rows above keep theirs.
+    if f3d_player::the_band_is_a_models() {
+        return false;
+    }
+
     if pinned_content_is_the_pins() {
         // A picture the wheel has taken inside its window is carried by the hand rather than the
         // window: the press that would move the window moves what is inside it instead. A pair of
