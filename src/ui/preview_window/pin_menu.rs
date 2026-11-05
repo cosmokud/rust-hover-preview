@@ -1206,6 +1206,29 @@ unsafe fn shared_menu_press(hwnd: HWND, paint: &PinMenuPaint, x: i32, y: i32) ->
     }
 }
 
+/// Whether a point in a pinned window's own coordinates is **a model's band**, which is f3d's pointer
+/// rather than this window's: a right or a middle press there is the engine's own (see
+/// `f3d_player::answer_a_models_band`), and the window's menu is the chrome above it.
+///
+/// **The chrome is the whole of what the menu keeps**, and the caption is the only strip of it over a
+/// model's picture: the media under that strip is the scene's, so the row a press landed in is the
+/// answer — the strip is the same rows whether it is drawn above the picture or over it, which is
+/// the answer `pin_right_click_page` gives the menu's own rows (see `pin_overlay_chrome`). A pin
+/// collapsed into its bubble has no picture on screen at all, and its rows are the bubble's.
+pub(super) fn pin_band_is_the_models(y: i32) -> bool {
+    if current_media_type_try() != Some(MediaType::Model) {
+        return false;
+    }
+    let Some(pinned) = pin_state() else {
+        return false;
+    };
+    let Some(pin) = pinned.pin() else {
+        return false;
+    };
+
+    !pin.collapsed && y >= pin.caption
+}
+
 /// The card's menu put up by a right-click on the pin's window, at the
 /// point the right-click landed: a second right-click while the panel is
 /// up moves it to the new point rather than putting it away.

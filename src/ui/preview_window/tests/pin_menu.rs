@@ -712,6 +712,42 @@ fn a_right_click_asks_for_the_page_its_row_of_the_window_holds() {
     );
 }
 
+/// **A model's band is the engine's, and its caption the window's**: f3d holds every press on the
+/// picture — its own menu on a right press and its own pan on a middle one — so the window's menu is
+/// the strip above it and nothing else (see `pin_band_is_the_models`).
+#[test]
+fn a_models_band_belongs_to_the_engine_and_its_caption_to_the_window() {
+    let _room = the_room_to_itself();
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _model = MediaKindPutBack::put(MediaType::Model);
+
+    let model = PinnedPreview::for_test();
+    let caption = model.caption;
+    stand_pin(Some(model));
+
+    assert!(!pin_band_is_the_models(0), "the title bar is the window's");
+    assert!(
+        !pin_band_is_the_models(caption - 1),
+        "and so is its last row"
+    );
+    assert!(
+        pin_band_is_the_models(caption),
+        "the picture under it is the engine's"
+    );
+    assert!(
+        pin_band_is_the_models(caption + 40),
+        "wherever in the picture the hand is"
+    );
+
+    // And a kind that is not a scene is no band of the engine's at all: its right press is the
+    // window's own menu and its middle one the window's own nothing.
+    let _picture = MediaKindPutBack::put(MediaType::StaticImage);
+    assert!(
+        !pin_band_is_the_models(caption + 40),
+        "a picture is not a scene"
+    );
+}
+
 /// A right-click in the text of a pinned page opens the window's own menu with the page's own
 /// commands above the rows the pin shares with a bubble, in the same panel and the same design
 /// (see `PinMenuPage` and `bubble_menu_rows`).

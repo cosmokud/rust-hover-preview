@@ -599,6 +599,14 @@ pub fn run_preview_window() {
                             }
                         }
                     }
+                } else if f3d_player::the_press_over_a_model_is_the_engines() {
+                    // **A middle press over a model's own window is the engine's**, and not also a
+                    // pin: f3d's window is the one under the pointer, so the press is delivered to
+                    // it whatever this app does with the key — and pinning on top of the scene's
+                    // own pan would be two answers to one press (see
+                    // `f3d_player::the_press_over_a_model_is_the_engines`). The key still pins a
+                    // model the preview is not showing in the engine's window, and a `Space` with
+                    // the pointer away from it pins as it always did.
                 } else if let Some(request) =
                     pin_what_is_on_screen(&current_show, pending_load.as_ref())
                 {

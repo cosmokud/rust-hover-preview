@@ -19,8 +19,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HTCLIENT, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOP,
     HWND_TOPMOST, SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOZORDER,
     SW_RESTORE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE,
-    WM_ERASEBKGND, WM_NCHITTEST, WM_QUERYOPEN, WM_SIZE, WM_SYSCOMMAND, WS_CHILD, WS_CLIPCHILDREN,
-    WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    WM_ERASEBKGND, WM_MOUSEFIRST, WM_MOUSELAST, WM_NCHITTEST, WM_QUERYOPEN, WM_SIZE, WM_SYSCOMMAND,
+    WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -4938,6 +4938,68 @@ fn a_release_no_window_of_the_pairs_was_sent_ends_a_models_turn() {
     unsafe { put_away_a_window_of_the_suite(source) };
 }
 
+/// **All three of a scene's buttons are the scene's**: f3d binds the middle press to its pan and the
+/// right to its own menu, so the band hands each press, the moves of its drag and its own release on —
+/// and a release of another button is no end of the turn in hand (see `f3d_player::BAND_BUTTONS` and
+/// `f3d_player::MODEL_BUTTON`).
+#[test]
+fn a_models_band_turns_on_each_of_its_three_buttons() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, put back by the stand's drop.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the pin's host");
+    let source = unsafe { a_source_of_the_host(host) };
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.media_type = MediaType::Model;
+        }
+    }
+    let at = |x: i32, y: i32| LPARAM((((y as u16 as u32) << 16) | x as u16 as u32) as i32 as isize);
+
+    f3d_player::stand_a_button_for_a_test(Some(true));
+    for (down, up) in [
+        (WM_MBUTTONDOWN, WM_MBUTTONUP),
+        (WM_RBUTTONDOWN, WM_RBUTTONUP),
+    ] {
+        assert_eq!(
+            take_the_pointer_messages_posted_to(source),
+            Vec::<u32>::new(),
+            "nothing is left over from the turn before"
+        );
+        let pressed = unsafe { f3d_player::answer_a_models_band(host, down, WPARAM(0), at(4, 4)) };
+        assert_eq!(pressed, Some(LRESULT(0)), "the press is the scene's");
+        assert_eq!(
+            take_the_pointer_messages_posted_to(source),
+            vec![down],
+            "and it is the press the engine is sent"
+        );
+
+        // A release of the button that is not in hand is not the end of this turn.
+        let other =
+            unsafe { f3d_player::answer_a_models_band(host, WM_LBUTTONUP, WPARAM(0), at(4, 4)) };
+        assert_eq!(
+            other, None,
+            "a hand that let go of another button ends nothing"
+        );
+        assert!(
+            take_the_pointer_messages_posted_to(source).is_empty(),
+            "and nothing is posted for it"
+        );
+
+        let released = unsafe { f3d_player::answer_a_models_band(host, up, WPARAM(0), at(6, 6)) };
+        assert_eq!(released, Some(LRESULT(0)), "its own release ends it");
+        assert_eq!(
+            take_the_pointer_messages_posted_to(source),
+            vec![up],
+            "and the engine is sent the release that ends it"
+        );
+    }
+
+    f3d_player::stand_a_button_for_a_test(None);
+    unsafe { put_away_a_window_of_the_suite(source) };
+}
+
 /// The pointer messages waiting on this thread's queue for one window, taken off it: how a road that talks
 /// to another process's window is read (see `f3d_player::answer_a_models_band`). The range is the
 /// pointer's own, so a window that owes a paint is not asked for one on every look.
@@ -4953,7 +5015,7 @@ fn take_the_pointer_messages_posted_to(window: HWND) -> Vec<u32> {
 fn take_the_pointer_messages_and_their_points(window: HWND) -> Vec<(u32, (i32, i32))> {
     let mut message = MSG::default();
     let mut taken = Vec::new();
-    while unsafe { PeekMessageW(&mut message, window, WM_MOUSEMOVE, WM_LBUTTONUP, PM_REMOVE) }
+    while unsafe { PeekMessageW(&mut message, window, WM_MOUSEFIRST, WM_MOUSELAST, PM_REMOVE) }
         .as_bool()
     {
         taken.push((message.message, message_point(message.lParam)));
