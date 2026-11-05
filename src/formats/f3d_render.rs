@@ -74,6 +74,17 @@ pub fn background_argument(backdrop: TransparentBackground) -> String {
 /// `--position` is the **decorated** window's origin and `--resolution` its client size, both
 /// verified: the frame is stripped after the launch (see `f3d_player`), and where the window is
 /// finally placed is this app's to say rather than the player's.
+///
+/// **One effect is turned on, and it is the one the stock configuration leaves off.** A model that
+/// carries no texture of its own — every `.stl`, most CAD exchanges — is one flat grey material
+/// under a single stock light, which measured as a silhouette whose luminance varied by about
+/// seven levels out of 255 across the whole body — a cut-out, not a solid (see
+/// `the_launch_asks_for_depth_as_well_as_the_box`). `ambient-occlusion` is
+/// the only switch that puts that back without touching a colour the file itself carries: it is
+/// screen-space contact shading, so creases, cavities and the seams between parts darken, and a
+/// plain grey mesh reads as a solid again. Tone mapping and anti-aliasing are deliberately *not*
+/// repeated here — the stock configuration already sets both, and a flag that agrees with it is
+/// noise that would have to be kept in step.
 pub fn launch_args(path: &Path, box_: (i32, i32, i32, i32), background: &str) -> Vec<OsString> {
     let (x, y, width, height) = box_;
     let mut args: Vec<OsString> = vec![
@@ -96,6 +107,8 @@ pub fn launch_args(path: &Path, box_: (i32, i32, i32, i32), background: &str) ->
         "notifications=false",
         "loading-progress=false",
         "animation-progress=none",
+        // The one effect this app asks for rather than inherits (see `launch_args`).
+        "ambient-occlusion=true",
     ] {
         args.push("-D".into());
         args.push(option.into());
@@ -213,6 +226,30 @@ mod tests {
             Some("a-model.stl"),
             "the file is last, which is where f3d takes it"
         );
+    }
+
+    /// **Depth is the one effect the launch adds**, and it is asked for by the name f3d's own
+    /// configuration files use: a plain grey mesh is lit as a near-uniform silhouette without it,
+    /// and the shading it buys is the only thing that makes one read as a solid rather than a cut
+    /// out. Nothing else is asked for that the stock configuration already sets — a switch that
+    /// agreed with it could drift out of step with the next f3d and would never be noticed.
+    #[test]
+    fn the_launch_asks_for_depth_as_well_as_the_box() {
+        let asked: Vec<String> = launch_args(Path::new("a-model.stl"), (0, 0, 640, 480), "0")
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(
+            asked.iter().any(|arg| arg == "ambient-occlusion=true"),
+            "contact shading is switched on: {asked:?}"
+        );
+        for inherited in ["tone-mapping=", "anti-aliasing=", "light-intensity="] {
+            assert!(
+                !asked.iter().any(|arg| arg.starts_with(inherited)),
+                "{inherited} is the stock configuration's to set: {asked:?}"
+            );
+        }
     }
 
     /// A model's backdrop is the app's own, colour for colour: the two flat ones as themselves,
