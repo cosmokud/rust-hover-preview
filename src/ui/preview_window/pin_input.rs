@@ -1105,11 +1105,11 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
         return true;
     }
 
-    // **A model's band is the scene's and never the window's**: a press there turns the model, and one
-    // the engine's road did not take carries nothing rather than the window under it (see
-    // `f3d_player::answer_a_models_band`). The chrome's own rows above keep theirs.
-    if f3d_player::the_band_is_a_models() {
-        return false;
+    // **A model's band is the scene's and never the window's**: a press there turns the model rather
+    // than carrying the pin, and it is asked last because the chrome's own rows above it are the pin's
+    // (see `f3d_player::press_the_models_band`).
+    if f3d_player::press_the_models_band(hwnd, x, y) {
+        return true;
     }
 
     if pinned_content_is_the_pins() {

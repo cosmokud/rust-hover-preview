@@ -4851,39 +4851,6 @@ fn a_models_band_turns_the_scene_and_its_host_follows_the_pins_band() {
         "and the scene is the source the pin's host is drawing"
     );
 
-    // **And the pin's own window is asked the same question**, for the band a hand finds it over
-    // rather than the host: whichever window of the pair the press lands on posts it on (see
-    // `f3d_player::answer_a_models_band`).
-    let band = pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| pin.content))
-        .expect("the pin this test put up");
-    let pack =
-        |x: i32, y: i32| LPARAM((((y as u16 as u32) << 16) | x as u16 as u32) as i32 as isize);
-    assert_eq!(
-        unsafe {
-            SendMessageW(
-                film.pin_hwnd,
-                WM_NCHITTEST,
-                WPARAM(0),
-                pack(band.0 + 4, band.1 + 4),
-            )
-        },
-        LRESULT(HTCLIENT as isize),
-        "a press in a model's band is the scene's on the pin's own window as much as on its host"
-    );
-    assert_eq!(
-        unsafe {
-            f3d_player::answer_a_models_band(
-                film.pin_hwnd,
-                WM_NCHITTEST,
-                WPARAM(0),
-                pack(film.box_.0 + 4, film.box_.1 - 4),
-            )
-        },
-        None,
-        "and the chrome's own rows above the band are not the model's, whatever the window under them"
-    );
-
     // A hand pulling the pin out to another box leaves nothing of the picture behind: the host *is*
     // the band, and the band is where the Shell stretches the engine's own window into.
     let wider = (
@@ -4901,6 +4868,88 @@ fn a_models_band_turns_the_scene_and_its_host_follows_the_pins_band() {
     );
 
     unsafe { put_away_a_window_of_the_suite(source) };
+}
+
+/// **A turn ends when the button comes up, capture or no capture**: the engine takes the pointer on the
+/// down posted to it, so neither window of the pair may be sent the release — and a drag whose state goes
+/// without that release is a scene turning under a hand that is up (see
+/// `f3d_player::settle_a_models_drag`).
+///
+/// Two roads end it: the loop's ask of the level of the button, and a move that arrives after the button is
+/// up (see `answer_a_models_band`). Each posts the release to the engine before the drag's own state goes.
+#[test]
+fn a_release_no_window_of_the_pairs_was_sent_ends_a_models_turn() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, put back the stand's drop.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the pin's host");
+    let source = unsafe { a_source_of_the_host(host) };
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.media_type = MediaType::Model;
+        }
+    }
+    let at = |x: i32, y: i32| LPARAM((((y as u16 as u32) << 16) | x as u16 as u32) as i32 as isize);
+
+    let down =
+        unsafe { f3d_player::answer_a_models_band(host, WM_LBUTTONDOWN, WPARAM(0), at(4, 4)) };
+    assert_eq!(down, Some(LRESULT(0)), "a press on the band is the scene's");
+    assert_eq!(
+        take_the_pointer_messages_posted_to(source),
+        vec![WM_LBUTTONDOWN],
+        "and it is the press the engine is sent"
+    );
+
+    // The engine's own capture on that press is what carries the rest of the drag, so this test's is given
+    // up: neither window of the pair is sent the release that follows (see `f3d_player::MODEL_DRAG`).
+    let _ = unsafe { ReleaseCapture() };
+
+    f3d_player::settle_a_models_drag();
+    assert_eq!(
+        take_the_pointer_messages_posted_to(source),
+        vec![WM_LBUTTONUP],
+        "the button up ends the turn the pair was never sent the end of"
+    );
+    f3d_player::settle_a_models_drag();
+    assert!(
+        take_the_pointer_messages_posted_to(source).is_empty(),
+        "and a drag ended once posts nothing more"
+    );
+
+    // The same end from the road a move of the pin's own arrives on: a move of a drag whose button is
+    // already up is no move of a drag.
+    let again =
+        unsafe { f3d_player::answer_a_models_band(host, WM_LBUTTONDOWN, WPARAM(0), at(4, 4)) };
+    assert_eq!(again, Some(LRESULT(0)), "a second press is the scene's too");
+    let _ = take_the_pointer_messages_posted_to(source);
+    let moved =
+        unsafe { f3d_player::answer_a_models_band(host, WM_MOUSEMOVE, WPARAM(0), at(8, 8)) };
+    assert_eq!(
+        moved, None,
+        "a move with the button up is answered by no drag"
+    );
+    assert_eq!(
+        take_the_pointer_messages_posted_to(source),
+        vec![WM_LBUTTONUP],
+        "it posts the release the engine was never sent, and lets the band go"
+    );
+
+    unsafe { put_away_a_window_of_the_suite(source) };
+}
+
+/// The pointer messages waiting on this thread's queue for one window, taken off it: how a road that talks
+/// to another process's window is read (see `f3d_player::answer_a_models_band`). The range is the
+/// pointer's own, so a window that owes a paint is not asked for one on every look.
+fn take_the_pointer_messages_posted_to(window: HWND) -> Vec<u32> {
+    let mut message = MSG::default();
+    let mut taken = Vec::new();
+    while unsafe { PeekMessageW(&mut message, window, WM_MOUSEMOVE, WM_LBUTTONUP, PM_REMOVE) }
+        .as_bool()
+    {
+        taken.push(message.message);
+    }
+    taken
 }
 
 /// **The Shell's own minimize of the pin's chrome is the same put-away as one of its host.** A film

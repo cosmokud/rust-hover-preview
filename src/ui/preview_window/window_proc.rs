@@ -505,29 +505,7 @@ pub(super) unsafe extern "system" fn window_proc(
             }
             LRESULT(1)
         }
-        // **A model's band is kept for the scene at the hit test**, so a press in it is a press this
-        // window answers by posting it on rather than one that falls to whatever stands under the pin
-        // (see `f3d_player::answer_a_models_band`).
-        windows::Win32::UI::WindowsAndMessaging::WM_NCHITTEST => {
-            if pinned() {
-                if let Some(answer) =
-                    unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
-                {
-                    return answer;
-                }
-            }
-            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
-        }
         WM_LBUTTONDOWN => {
-            // **A band standing in a model turns the scene rather than carrying the window**, and what
-            // the scene answered is what a press in it does (see `f3d_player::answer_a_models_band`).
-            if pinned() {
-                if let Some(answer) =
-                    unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
-                {
-                    return answer;
-                }
-            }
             let (x, y) = message_point(lparam);
             // The point on the screen the press landed at, which is what the card's menu is
             // asked in: its panels are drawn in a window of their own over the screen rather
@@ -596,7 +574,8 @@ pub(super) unsafe extern "system" fn window_proc(
         }
         WM_MOUSEMOVE => {
             // The rest of a drag a model's band owns: the window that took the down posts the moves, and
-            // no other of the pair's answers one (see `f3d_player::answer_a_models_band`).
+            // ends it on the level of the button where the release was the engine's (see
+            // `f3d_player::answer_a_models_band`).
             if pinned() {
                 if let Some(answer) =
                     unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
@@ -626,8 +605,8 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            // The release that ends a model's drag is the engine's, posted on and answered here so the
-            // pin's own arms never see the end of a press it did not take (see
+            // The release that ends a model's drag is posted on and answered here, whatever window holds
+            // the pointer, so the pin's own arms never see the end of a press it did not take (see
             // `f3d_player::answer_a_models_band`).
             if pinned() {
                 if let Some(answer) =
