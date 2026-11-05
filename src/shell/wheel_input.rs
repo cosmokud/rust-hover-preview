@@ -35,8 +35,8 @@ use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MBUTTONDOWN, WM_MBUTTONUP,
-    WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    CallNextHookEx, HC_ACTION, LLMHF_INJECTED, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 /// Wheel messages seen since startup; the hook thread is the only writer.
@@ -212,6 +212,15 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // would count every notch as zero. A horizontal wheel reports a delta here too
         // and is passed through rather than counted: nothing this app owns moves sideways.
         let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+
+        // **Input this app injected is not the user's**, and both answers this hook gives are about the
+        // user: a notch of its own must not be swallowed before it reaches the page or the picture it was
+        // sent for, and a press of its own must not be counted as one the hand made (see
+        // `f3d_player::inject_a_left_press` and `an_event_is_injected`).
+        if an_event_is_injected(info.flags) {
+            return CallNextHookEx(None, code, wparam, lparam);
+        }
+
         let notches = (info.mouseData >> 16) as u16 as i16 as i32;
 
         // A notch over the volume popup or the button that opens it is the level's, and it is
@@ -300,7 +309,33 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
     CallNextHookEx(None, code, wparam, lparam)
 }
 
+/// Whether a low-level mouse event was put there by `SendInput` rather than by the hand.
+///
+/// Asked of the flag Windows sets on every injected event, which is the only thing that tells the two apart:
+/// the point and the button of an injected press are the same as the hand's (see `wheel_hook_proc`).
+fn an_event_is_injected(flags: u32) -> bool {
+    flags & LLMHF_INJECTED != 0
+}
+
 fn point_in_region(point: POINT, region: (i32, i32, i32, i32)) -> bool {
     let (left, top, right, bottom) = region;
     point.x >= left && point.x < right && point.y >= top && point.y < bottom
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::LLMHF_LOWER_IL_INJECTED;
+
+    /// **A press this app injected is never read back as the hand's**, in either direction: the hook
+    /// swallows and counts notches, and both answers are about the user (see `an_event_is_injected`).
+    #[test]
+    fn an_injected_event_is_told_apart_from_the_hands() {
+        assert!(an_event_is_injected(LLMHF_INJECTED));
+        assert!(an_event_is_injected(
+            LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED
+        ));
+        assert!(!an_event_is_injected(0));
+        assert!(!an_event_is_injected(LLMHF_LOWER_IL_INJECTED));
+    }
 }
