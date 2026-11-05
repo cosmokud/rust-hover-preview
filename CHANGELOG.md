@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.10] - 2026-11-06
+
+### Added
+
+- **Camera raws and system picture formats decode through Windows natively** — `[image]` handles camera raws (`.raw`, `.nef`, `.cr2`, `.cr3`, `.dng`, etc.) via the Windows Raw Image Extension and system bitmap/cursor formats (`dib`, `rle`, `cur`) with WIC, falling back to ImageMagick only when the native codec is missing.
+- **The pinned sound card context menu configures both hover and pin seek modes** — right-clicking a pinned sound card offers separate `Hover Seek` and `Pin Mode Seek` flyout menus.
 
 ### Changed
 
