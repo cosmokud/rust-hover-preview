@@ -574,6 +574,15 @@ pub struct AppConfig {
     /// Stored and read back for that menu; nothing keeps mpv warm yet, so nothing reads it
     /// beyond the mark the menu puts on its item (see `EngineIdle`).
     pub video_engine_idle: EngineIdle,
+    /// How long the f3d a model was hovered by is kept after that hover ends, which is the tray's
+    /// `Engine → F3D TTL` setting.
+    ///
+    /// What it bounds is a viewer left running with the model's picture still in its host: f3d has
+    /// no way to open another file, so a kept one is only ever the *same* model hovered again — and
+    /// what a repeat hover costs without it is the launch, which is what the setting buys. The host
+    /// and its thumbnail registration are kept with it, so the second hover is the same window shown
+    /// again (see `hover_film_host`).
+    pub f3d_idle: EngineIdle,
     /// How long the Office engine a family started is kept after that family's
     /// last page, which is the tray's `Engine → Microsoft Office TTL` setting.
     pub office_engine_idle: EngineIdle,
@@ -799,6 +808,7 @@ impl Default for AppConfig {
             video_engine_fallback: DEFAULT_VIDEO_ENGINE_FALLBACK,
             video_subtitles: DEFAULT_VIDEO_SUBTITLES,
             video_engine_idle: EngineIdle::Away,
+            f3d_idle: EngineIdle::Away,
             office_engine_idle: EngineIdle::Away,
             webview_idle: EngineIdle::Away,
             libreoffice_idle: EngineIdle::Away,

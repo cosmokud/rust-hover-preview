@@ -77,6 +77,13 @@ pub(super) unsafe fn take_the_hover_down(
         }
         *current = None;
     }
+    // **A model kept warm is still where the hover left it**, so the loop goes on knowing which
+    // file the warm picture is and the box it stands in: the next hover of that file is the
+    // `should_start == false` replay rather than a launch of a second f3d, and a hover of anything
+    // else sweeps the kept player as a stray (see `hover_film_host::keep_a_model_warm`).
+    if hover_film_host::a_model_is_kept_warm() {
+        return;
+    }
     *current_video_path = None;
     *video_pos = (0, 0, 0, 0);
 

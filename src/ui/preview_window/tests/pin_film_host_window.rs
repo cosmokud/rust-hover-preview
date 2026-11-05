@@ -675,6 +675,9 @@ impl HostedHover {
             .expect("the hover's own host");
         hover_film_host::note_hover_film_host_player(pid, path);
         let source = unsafe { a_source_of_the_host(host) };
+        // A host is shown once the Shell has composed its registration, which a suite has no
+        // compositor to answer for (see `pin_film_thumbnail::stand_the_composed_road_in`).
+        pin_film_thumbnail::stand_the_composed_road_in(Some(true));
         unsafe { hover_film_host::reveal_the_hover_film_host(pid, film.box_) };
         note_video_loop(pid, path, film.box_, at, None);
         VIDEO_PID.store(pid, Ordering::SeqCst);
@@ -689,6 +692,7 @@ impl Drop for HostedHover {
             unsafe { hover_film_host::take_down_the_hover_film_host() };
         }
         forget_video_loop(self.pid);
+        pin_film_thumbnail::stand_the_composed_road_in(None);
         // The source this hover stood is the suite's own, and the stand is what made it: put away here,
         // so that a test that keeps the guard to the end of its body owes nothing for it.
         unsafe { put_away_a_window_of_the_suite(self.source) };
