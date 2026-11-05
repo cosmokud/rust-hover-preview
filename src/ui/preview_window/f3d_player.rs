@@ -26,11 +26,12 @@
 //! `carry_a_models_turn`).
 
 use windows::Win32::Graphics::Gdi::ScreenToClient;
-use windows::Win32::UI::Input::KeyboardAndMouse::VK_LBUTTON;
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LBUTTON, VK_MBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, SendMessageTimeoutW, GWL_STYLE, HTCLIENT, SMTO_ABORTIFHUNG, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_NULL, WS_CAPTION, WS_MAXIMIZEBOX,
-    WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_NULL,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
+    WS_THICKFRAME,
 };
 
 use super::*;
@@ -337,6 +338,10 @@ fn a_models_window(kind: Option<MediaType>, window: isize) -> Option<HWND> {
 /// else's: a scene. Every other kind either draws into this app's own window, whose presses this app
 /// answers itself, or is shown through the same host but is a film — a film's band is a hand on the pin
 /// (see `pin_film_host::answer_a_host`).
+///
+/// **All three buttons are the scene's** on such a band (see `BAND_BUTTONS`): f3d binds the left press to
+/// its turn and the middle and the right to whatever its own style gives them, and none of that is this
+/// app's to decide.
 fn a_model_takes_the_pointer(kind: Option<MediaType>) -> bool {
     kind == Some(MediaType::Model)
 }
@@ -351,6 +356,11 @@ fn a_model_takes_the_pointer(kind: Option<MediaType>) -> bool {
 /// ends: the level of the button ends it, from a move and from the loop's own tick (see
 /// `settle_a_models_drag`).
 static MODEL_DRAG: AtomicIsize = AtomicIsize::new(0);
+
+/// **Which of the three presses the turn in `MODEL_DRAG` is made with**, held as the message that
+/// began it, and nothing while no drag is on: a button's own release is the only one that ends its
+/// turn, and a second button pressed mid-drag is the engine's to read rather than an end of this.
+static MODEL_BUTTON: AtomicU32 = AtomicU32::new(0);
 
 /// The point the drag has reached, in the band's own client, packed as a message's two words pack one —
 /// and whether the engine has been given it yet.
@@ -368,11 +378,49 @@ static MODEL_MOVE_WAITING: AtomicBool = AtomicBool::new(false);
 /// drag's move for a later tick (see `the_engine_is_at_its_pump`).
 const THE_ENGINE_IS_GIVEN: u32 = 10;
 
-/// `MK_LBUTTON`, the key-state word a press and a move of a drag carry (see `post_a_band_message`).
+/// `MK_LBUTTON`, `MK_RBUTTON` and `MK_MBUTTON`: the key-state bits a press and the moves of its drag
+/// carry (see `post_a_band_message`). Written as numbers because the bindings keep them under a
+/// feature this app has no other use for.
 const MK_LBUTTON: usize = 0x0001;
+const MK_RBUTTON: usize = 0x0002;
+const MK_MBUTTON: usize = 0x0010;
+
+/// **The three presses a band answers, and what makes each of them**: the message that begins one,
+/// the message that ends it, the key-state bit its drag carries, and the virtual key its level is
+/// read at (see `post_a_band_message` and `the_drags_button_is_down`).
+///
+/// **All three are handed on, and none is given a meaning here.** What f3d binds each of them to is
+/// f3d's — the engine turns, pans and zooms by them, and its own right-click menu is its own — which
+/// is the whole of why this app forwards the press rather than deciding anything about it. What is
+/// this app's is the chrome above the band, and nothing else (see `pin_band_is_the_models`).
+const BAND_BUTTONS: [(u32, u32, usize, i32); 3] = [
+    (
+        WM_LBUTTONDOWN,
+        WM_LBUTTONUP,
+        MK_LBUTTON,
+        VK_LBUTTON.0 as i32,
+    ),
+    (
+        WM_MBUTTONDOWN,
+        WM_MBUTTONUP,
+        MK_MBUTTON,
+        VK_MBUTTON.0 as i32,
+    ),
+    (
+        WM_RBUTTONDOWN,
+        WM_RBUTTONUP,
+        MK_RBUTTON,
+        VK_RBUTTON.0 as i32,
+    ),
+];
 
 /// Answer a band standing in a model, in place of the pin: the scene's own pointer, which is the press, the
 /// drag and the release of it. `None` for every other message, and for every band that is not a model's.
+///
+/// **All three buttons are forwarded**, one turn at a time and each ending on its own release (see
+/// `BAND_BUTTONS` and `MODEL_BUTTON`): a scene is turned by a hand that pulls it, panned by one that pushes
+/// it, and its own menu is the right press's — this app holds no menu on the picture at all, which is why
+/// the pin's own menu is the chrome's and nothing else (see `pin_band_is_the_models`).
 ///
 /// **The band's hit test is answered here too, and it is the whole of why a press in it turns the scene**
 /// rather than carrying the window: a film's band is handed down to the pin with `HTTRANSPARENT`, which is
@@ -402,11 +450,12 @@ pub(super) unsafe fn answer_a_models_band(
         // **A band's own client is the picture and nothing else** — the chrome's rows over it are the
         // pin's own window's (see `pin_input::pinned_press_on`) — so a hand on it is the scene's.
         WM_NCHITTEST => Some(LRESULT(HTCLIENT as isize)),
-        WM_LBUTTONDOWN => {
+        WM_LBUTTONDOWN | WM_MBUTTONDOWN | WM_RBUTTONDOWN => {
             // **The pointer is taken before the down is posted**, and f3d takes it in turn: the engine's
             // own capture on the down is what hands it the real moves of the rest of the drag, and what is
             // taken here is the stretch before that down has been read (see `MODEL_DRAG`).
             MODEL_DRAG.store(host.0 as isize, Ordering::SeqCst);
+            MODEL_BUTTON.store(msg, Ordering::SeqCst);
             // A move the last turn left unposted is no move of this one (see `MODEL_MOVE`).
             MODEL_MOVE_WAITING.store(false, Ordering::SeqCst);
             let _ = unsafe { SetCapture(host) };
@@ -420,7 +469,7 @@ pub(super) unsafe fn answer_a_models_band(
             // **A drag whose release went to the engine is ended here**, on the level of the button: a
             // latched drag would post a press's moves on a hand that is only over the band, and one ended
             // without its release is a scene left turning (see `end_the_models_drag`).
-            if !the_left_button_is_down() {
+            if !the_drags_button_is_down() {
                 unsafe { end_the_models_drag(host, message_point(lparam)) };
                 return None;
             }
@@ -430,8 +479,14 @@ pub(super) unsafe fn answer_a_models_band(
             note_the_bands_move(message_point(lparam));
             Some(LRESULT(0))
         }
-        WM_LBUTTONUP => {
-            if MODEL_DRAG.load(Ordering::SeqCst) != host.0 as isize {
+        WM_LBUTTONUP | WM_MBUTTONUP | WM_RBUTTONUP => {
+            // **Only the release of the button in hand ends the turn.** A second button let go of
+            // mid-turn is a message the engine reads for itself, and answering it here would end a
+            // drag whose own hand is still down (see `MODEL_BUTTON`).
+            let in_hand = MODEL_DRAG.load(Ordering::SeqCst) == host.0 as isize;
+            let ends_it = a_band_button_of(msg)
+                .is_some_and(|(down, ..)| MODEL_BUTTON.load(Ordering::SeqCst) == down);
+            if !in_hand || !ends_it {
                 return None;
             }
             unsafe { end_the_models_drag(host, message_point(lparam)) };
@@ -448,19 +503,28 @@ pub(super) unsafe fn answer_a_models_band(
 ///
 /// A move the tick has not posted yet is posted ahead of the release, so the scene ends where the hand
 /// let go rather than a tick short of it (see `carry_a_models_turn`).
+///
+/// **The release is the button's own**, read off the turn before it is cleared: a middle press let go of
+/// is a `WM_MBUTTONUP` and a right one a `WM_RBUTTONUP`, and a scene handed the left button's release
+/// ends a gesture no hand made (see `BAND_BUTTONS`).
 unsafe fn end_the_models_drag(host: HWND, point: (i32, i32)) {
+    let turn = MODEL_BUTTON.load(Ordering::SeqCst);
+    let release = a_band_button_of(turn)
+        .map(|(_, up, ..)| up)
+        .unwrap_or(WM_LBUTTONUP);
     match the_models_window() {
         Some(source) => {
             if let Some(waiting) = take_the_bands_move() {
                 unsafe { post_a_band_message(host, source, WM_MOUSEMOVE, waiting) };
             }
-            unsafe { post_a_band_message(host, source, WM_LBUTTONUP, point) };
+            unsafe { post_a_band_message(host, source, release, point) };
         }
         None => {
             let _ = take_the_bands_move();
         }
     }
     MODEL_DRAG.store(0, Ordering::SeqCst);
+    MODEL_BUTTON.store(0, Ordering::SeqCst);
     if unsafe { GetCapture() } == host {
         let _ = unsafe { ReleaseCapture() };
     }
@@ -545,7 +609,7 @@ pub(super) fn settle_a_models_drag() {
     }
 
     let host = HWND(host as *mut _);
-    if the_left_button_is_down() {
+    if the_drags_button_is_down() {
         unsafe { carry_a_models_turn(host) };
         return;
     }
@@ -569,41 +633,72 @@ fn the_pointer_in_the_band(host: HWND) -> (i32, i32) {
 /// Turn the scene a press on a model's band is for, and answer whether the band under the press is a
 /// model's at all — a press it is on a model whose window is not up yet, which carries nothing rather than
 /// the window its picture is shown in (see `answer_a_models_band`).
+///
+/// The left button's, which is the one the pin's own press road asks (`a hand on a band is the scene's`,
+/// see `pin_input::pinned_press_on`); the other two are asked of `press_the_models_band_with` by the
+/// window procedure's own arms, because a right press on the chrome is the menu's and a middle one is
+/// nobody's (see `pin_band_is_the_models`).
 pub(super) unsafe fn press_the_models_band(hwnd: HWND, x: i32, y: i32) -> bool {
+    unsafe { press_the_models_band_with(hwnd, x, y, WM_LBUTTONDOWN) }
+}
+
+/// The same for a named button: begin a turn with `msg` at a point of a pinned window's own client,
+/// answering whether there was a model's band there to begin one in.
+pub(super) unsafe fn press_the_models_band_with(hwnd: HWND, x: i32, y: i32, msg: u32) -> bool {
     if !a_model_takes_the_pointer(current_media_type_try()) {
         return false;
     }
 
     unsafe {
-        answer_a_models_band(
-            hwnd,
-            WM_LBUTTONDOWN,
-            WPARAM(0),
-            a_point_in_a_message((x, y)),
-        );
+        answer_a_models_band(hwnd, msg, WPARAM(0), a_point_in_a_message((x, y)));
     }
     true
 }
 
-/// Whether the left button is down, read as a **level** and never for its press bit: the low bit
-/// `GetAsyncKeyState` answers is spent by any reader, and it is the Explorer hook's click (see
-/// `pin_drag::left_button_down`, which publishes the same state for the pin's own gestures).
-fn the_left_button_is_down() -> bool {
+/// Whether a model on screen is **f3d's own window under the pointer** rather than a picture of one this
+/// app hosts: the one case a press over it is delivered to the engine and to nothing of this app's — and
+/// so the case the pin key must not answer a middle press in as well (see `pin_what_is_on_screen`).
+///
+/// **A hosted picture is the other case, and the pin key's**: a hover's host is transparent to the
+/// pointer, so a press on it never reaches the engine at all and the only thing it can be is this app's
+/// (see `hover_film_host`).
+pub(super) fn the_press_over_a_model_is_the_engines() -> bool {
+    !pinned()
+        && a_model_takes_the_pointer(current_media_type_try())
+        && hover_film_host::hover_film_host().is_none()
+}
+
+/// Whether the button the turn in hand is made with is down, read as a **level** and never for its
+/// press bit: the low bit `GetAsyncKeyState` answers is spent by any reader, and it is the Explorer
+/// hook's click (see `pin_drag::left_button_down`, which publishes the same state for the pin's own
+/// gestures).
+///
+/// **The button is the one the drag began with**, not the left one: a middle press turns the scene
+/// by f3d's own pan and a right one by whatever f3d binds the right press to, and a drag carried by
+/// the left button's level would end the moment a hand let go of a button it never pressed (see
+/// `MODEL_BUTTON`).
+fn the_drags_button_is_down() -> bool {
     #[cfg(test)]
     if let Some(held) = a_tests_own_button() {
         return held;
     }
 
-    unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0 }
+    let vk = a_band_button_of(MODEL_BUTTON.load(Ordering::SeqCst))
+        .map(|(_, _, _, vk)| vk)
+        .unwrap_or(VK_LBUTTON.0 as i32);
+    unsafe { GetAsyncKeyState(vk) as u16 & 0x8000 != 0 }
 }
 
 /// The button a test stood in the place of the real one, and what it says — see `stand_a_button_for_a_test`.
 #[cfg(test)]
 static A_TESTS_OWN_BUTTON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-/// **A test's own hand on the button**, because the level of the real one is the whole of the question a
+/// A test's own hand on the button**, because the level of the real one is the whole of the question a
 /// turn's moves are carried by and no test can press it: `Some(true)` holds the button for the drags of the
-/// test, `Some(false)` lets go of them, and `None` gives the real one back (see `the_left_button_is_down`).
+/// test, `Some(false)` lets go of them, and `None` gives the real one back (see `the_drags_button_is_down`).
+///
+/// **The button is not named**: a test asks about one drag at a time, and which of the three a drag was begun
+/// with is the band's own business (see `MODEL_BUTTON`).
 #[cfg(test)]
 pub(super) fn stand_a_button_for_a_test(held: Option<bool>) {
     let state = match held {
@@ -630,14 +725,34 @@ unsafe fn post_a_band_message(host: HWND, source: HWND, msg: u32, point: (i32, i
     let Some(point) = (unsafe { the_point_in_the_source(host, source, point) }) else {
         return false;
     };
-    // A release carries no button; the down and every move of the drag carry the one that is held —
-    // `MK_LBUTTON`, which these bindings keep under a feature this app has no other use for.
-    let held = if msg == WM_LBUTTONUP {
-        WPARAM(0)
-    } else {
-        WPARAM(MK_LBUTTON)
-    };
+    // The press and the moves of its drag carry the button's own key-state bit, which is how the engine
+    // reads which hand made the gesture; a release carries none (see `BAND_BUTTONS`).
+    let held = WPARAM(a_key_state_of(msg));
     unsafe { PostMessageW(source, msg, held, a_point_in_a_message(point)).is_ok() }
+}
+
+/// The key-state word a message of the band's pointer carries: the press's own for a press, the turn's
+/// for every move of it, and nothing for a release.
+fn a_key_state_of(msg: u32) -> usize {
+    if msg == WM_MOUSEMOVE {
+        return a_band_button_of(MODEL_BUTTON.load(Ordering::SeqCst))
+            .map(|(_, _, held, _)| held)
+            .unwrap_or(0);
+    }
+
+    a_band_button_of(msg)
+        .filter(|(_, up, ..)| *up != msg)
+        .map(|(_, _, held, _)| held)
+        .unwrap_or(0)
+}
+
+/// The row of `BAND_BUTTONS` a message begins or ends, or nothing where it is not one of the three
+/// presses at all.
+fn a_band_button_of(msg: u32) -> Option<(u32, u32, usize, i32)> {
+    BAND_BUTTONS
+        .iter()
+        .copied()
+        .find(|(down, up, ..)| *down == msg || *up == msg)
 }
 
 /// The band's point in the engine window's client: the band mapped to the screen and the screen into the
@@ -872,6 +987,39 @@ mod tests {
             a_models_source(0, false, Some(0x1234)),
             0,
             "and a hover's own host is nobody's to turn"
+        );
+    }
+
+    /// **The three presses a band answers are each carried as their own button.** The key-state word a
+    /// press carries is the button's own bit, a move of a turn carries the bit of the button that began
+    /// it, and a release carries none — because the engine reads which hand made the gesture from that
+    /// word, and a middle press handed the left button's bit is a scene turning where the hand meant to
+    /// pan it (see `BAND_BUTTONS` and `a_key_state_of`).
+    #[test]
+    fn a_bands_three_presses_are_carried_as_their_own_buttons() {
+        for (down, up, held, _vk) in BAND_BUTTONS {
+            assert_eq!(
+                a_band_button_of(down).map(|facts| facts.0),
+                Some(down),
+                "a press is a button's own"
+            );
+            assert_eq!(a_band_button_of(up).map(|facts| facts.1), Some(up));
+            assert_eq!(a_key_state_of(down), held, "a press carries its own bit");
+            assert_eq!(a_key_state_of(up), 0, "and a release carries none");
+        }
+        assert_eq!(a_band_button_of(WM_MOUSEMOVE), None, "a move is no press");
+        assert_eq!(a_band_button_of(WM_MOUSEWHEEL), None);
+
+        // A move is the turn's, and the turn is the button that began it.
+        MODEL_BUTTON.store(WM_MBUTTONDOWN, Ordering::SeqCst);
+        assert_eq!(a_key_state_of(WM_MOUSEMOVE), MK_MBUTTON);
+        MODEL_BUTTON.store(WM_RBUTTONDOWN, Ordering::SeqCst);
+        assert_eq!(a_key_state_of(WM_MOUSEMOVE), MK_RBUTTON);
+        MODEL_BUTTON.store(0, Ordering::SeqCst);
+        assert_eq!(
+            a_key_state_of(WM_MOUSEMOVE),
+            0,
+            "and nothing at all while no turn is on"
         );
     }
 
