@@ -16,11 +16,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetForegroundWindow, GetParent,
     GetWindow, GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
-    SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
-    SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ERASEBKGND,
-    WM_NCHITTEST, WM_QUERYOPEN, WM_SIZE, WM_SYSCOMMAND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED,
-    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HTCLIENT, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOP,
+    HWND_TOPMOST, SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOZORDER,
+    SW_RESTORE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE,
+    WM_ERASEBKGND, WM_NCHITTEST, WM_QUERYOPEN, WM_SIZE, WM_SYSCOMMAND, WS_CHILD, WS_CLIPCHILDREN,
+    WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -4816,6 +4816,58 @@ fn a_press_on_the_band_is_kept_for_the_pin_by_the_hit_test() {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = before;
     }
+}
+
+/// **A model's band is the one band over a pin that is not the pin's**, and both halves of that are
+/// asked here. The press is the scene's, so the hit test answers `HTCLIENT` rather than the
+/// `HTTRANSPARENT` a film hands down — a band that handed a turn down would carry the window instead
+/// (see `f3d_player::answer_a_models_band`). And the host standing over the source follows the band a
+/// hand carries it to, because a picture left behind is a model that moves only once the hand lets go
+/// (see `place_pinned_siblings`).
+#[test]
+fn a_models_band_turns_the_scene_and_its_host_follows_the_pins_band() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, put back the stand's drop.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the pin's host");
+    let source = unsafe { a_source_of_the_host(host) };
+
+    // The kind is asked of the media on screen rather than of a flag, which is what every road below
+    // reads (see `f3d_player::the_models_window`).
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.media_type = MediaType::Model;
+        }
+    }
+
+    assert_eq!(
+        unsafe { pin_film_host::answer_a_host(host, WM_NCHITTEST, WPARAM(0), LPARAM(0)) },
+        Some(LRESULT(HTCLIENT as isize)),
+        "a press on a model's band turns the scene rather than carrying the window it is shown in"
+    );
+    assert!(
+        !source.is_invalid(),
+        "and the scene is the source the pin's host is drawing"
+    );
+
+    // A hand pulling the pin out to another box leaves nothing of the picture behind: the host *is*
+    // the band, and the band is where the Shell stretches the engine's own window into.
+    let wider = (
+        film.box_.0,
+        film.box_.1,
+        film.box_.0 + 400,
+        film.box_.1 + 300,
+    );
+    with_pin(|pin| pin.content = wider);
+    place_pinned_siblings();
+    assert_eq!(
+        unsafe { window_rect(host) },
+        wider,
+        "the host stands in the band the pin now shows the model through"
+    );
+
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **The Shell's own minimize of the pin's chrome is the same put-away as one of its host.** A film

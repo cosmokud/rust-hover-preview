@@ -2869,7 +2869,11 @@ pub(super) fn place_pinned_siblings() {
     let page = engine_page_in_the_band();
 
     match kind {
-        Some(MediaType::Video) => ensure_pinned_sibling_box(content),
+        // **A model is the same kind of thing as a film here** — a picture in a window of the host's,
+        // which is the box the Shell stretches f3d's own window into — so its band is owed the same
+        // placement, and a hand carrying or pulling the pin leaves the picture behind without it (see
+        // `f3d_player`).
+        Some(MediaType::Video) | Some(MediaType::Model) => ensure_pinned_sibling_box(content),
         // A document is the same kind of thing — a window of somebody else's standing in the pin's
         // band — and it is put back where it stands rather than asked for again: a page this
         // engine holds is a window that moves with the box rather than a document to navigate to
