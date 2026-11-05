@@ -300,7 +300,27 @@ unsafe fn place_the_window(window: HWND, box_: ScreenRegion) {
 /// says what the window is *for*: a player retired behind a new one, or a film begun after a model, is a
 /// window whose pid and handle say nothing about what it draws.
 pub(super) fn the_models_window() -> Option<HWND> {
-    a_models_window(current_media_type_try(), VIDEO_HWND.load(Ordering::SeqCst))
+    a_models_window(
+        current_media_type_try(),
+        a_models_source(
+            VIDEO_HWND.load(Ordering::SeqCst),
+            pinned(),
+            pin_film_thumbnail::the_source_window().map(|source| source.0 as isize),
+        ),
+    )
+}
+
+/// The window a model's band is turned in: **while a pin is up it is the source that pin's host
+/// thumbnails**, because a player begun into a host publishes nothing of the desktop's and the host
+/// stands over the source's own rectangle — so the published handle is nothing on every pinned model,
+/// and a press read off it would be a band with nothing to turn (see `pin_film_host::note_hosted_player`
+/// and `pin_film_thumbnail::the_source_window`). A hover keeps the published handle, which is the
+/// window the monitor found for it and the only one a hover host is not standing over.
+fn a_models_source(published: isize, pinned: bool, source: Option<isize>) -> isize {
+    if pinned {
+        return source.unwrap_or(published);
+    }
+    published
 }
 
 /// The rule `the_models_window` decides by, apart from the machine it reads: a model is the media on
@@ -617,6 +637,38 @@ mod tests {
             a_models_window(Some(MediaType::Model), 0),
             None,
             "a model mid-launch is a band with nothing to turn in it yet"
+        );
+    }
+
+    /// **A pinned model's band is turned in the source its host is drawing**, which is the one handle a
+    /// player begun into a host never publishes: `VIDEO_HWND` is nothing for such a player, and a band
+    /// read off that handle alone is a band with nothing to turn (see `the_models_window`).
+    #[test]
+    fn a_pinned_models_band_is_turned_in_the_source_its_host_draws() {
+        assert_eq!(
+            a_models_source(0, true, Some(0x1234)),
+            0x1234,
+            "the pin's own source stands where a hosted player published no window"
+        );
+        assert_eq!(
+            a_models_source(0x2000, true, Some(0x1234)),
+            0x1234,
+            "and it is the picture on the band, not an older player's window"
+        );
+        assert_eq!(
+            a_models_source(0, true, None),
+            0,
+            "a pin whose picture has not been adopted yet has nothing to turn"
+        );
+        assert_eq!(
+            a_models_source(0x2000, false, Some(0x1234)),
+            0x2000,
+            "a hover keeps the window the monitor found for it"
+        );
+        assert_eq!(
+            a_models_source(0, false, Some(0x1234)),
+            0,
+            "and a hover's own host is nobody's to turn"
         );
     }
 
