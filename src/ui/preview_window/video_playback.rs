@@ -2063,10 +2063,19 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // the whole of what the hover is owed; neither the host nor the player's window is enumerated or
     // styled as a top-level window of its own (see `hover_film_host`).
     let hover_pid = VIDEO_PID.load(Ordering::SeqCst);
-    if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid) {
+    // **A model kept warm is not on the screen, and nothing here is to put it back.** This road asks
+    // whether a picture is owed its place in the band, and a warm one is a picture the user has
+    // hovered away from: shown here it would be the hover coming back on a cadence of its own (see
+    // `hover_film_host::keep_a_model_warm`).
+    if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid)
+        && !hover_film_host::the_warm_model_holds(hover_pid)
+    {
         unsafe { hover_film_host::place_the_hover_film_host((x, y, x + width, y + height)) };
         let host = hover_film_host::hover_film_host().map_or(0, |host| host.0 as isize);
-        if hover_film_host::the_hover_player_is_drawing(hover_pid) {
+        // **Shown on the picture rather than on the window**: a host is black until the Shell has
+        // composed its registration, and this cadence lands on the same ticks a cold start does (see
+        // `hover_film_host::the_hover_picture_is_ready`).
+        if hover_film_host::the_hover_picture_is_ready(hover_pid) {
             trace_the_raised_film(host, "topmost shown: hover host drawing");
             unsafe { hover_film_host::set_the_hover_film_host_visible(true) };
         } else {

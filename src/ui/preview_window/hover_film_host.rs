@@ -23,9 +23,19 @@
 //! `pin_film_host::promote_the_hover_film_host`).
 //!
 //! The host belongs to the hover, not to the player: a hover that replaces this one takes the same
-//! host when the old player is still in it, and every road that ends the hover destroys it (see
-//! `kill_player_process`, `hide_preview`, and the loop's `Hide`). A host a pin took up belongs to
+//! host when the old player is still in it, and every road that ends the hover takes the host with it
+//! (see `kill_player_process`, `hide_preview`, and the loop's `Hide`). A host a pin took up belongs to
 //! the pin from then on (see `pin_film_host`).
+//!
+//! **A model's host outlives its hover, which is the one exception and the whole of `F3D TTL`.** f3d
+//! is launched with the file it draws and knows no way to open another, so a kept viewer is only ever
+//! the *same* model hovered again — and what that buys is the launch, which is the 200–400 ms a cold
+//! viewer takes to put a scene up. So the hover going away hides the host, keeps the player running
+//! and the registration in the window, and shows the same host again for the next hover of that file;
+//! the kept engine is bounded by `Engine → F3D TTL` and let go with its host, which is the only window
+//! it is ever ended through (see `keep_a_model_warm`, `the_warm_model_is_back` and
+//! `tick_the_warm_model`). A film keeps the road it always had: mpv's resident keeps the *player*, and
+//! the host is made again for the next film.
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Once;
