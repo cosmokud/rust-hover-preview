@@ -1179,6 +1179,19 @@ pub(super) fn the_picture_is_composed_in(host: HWND, pid: u32) -> bool {
     if !the_source_is_up(pid) {
         return false;
     }
+    // **And it is the transparent window this road asks for.** With the invisibility on, a source that
+    // has lost its layered bit is f3d's own window standing over the host it is supposed to be drawn
+    // *into* — the rectangle this gate exists to keep off the screen (see
+    // `keep_the_source_invisible`, which is the pass that puts the bit back).
+    if the_source_is_invisible() {
+        let Some(source) = the_source_window() else {
+            return false;
+        };
+        let ex = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
+        if ex & (WS_EX_LAYERED.0 as isize) == 0 {
+            return false;
+        }
+    }
     let drawn = THUMBNAIL.lock().is_ok_and(|held| {
         held.registration != 0
             && held.host == host.0 as isize
