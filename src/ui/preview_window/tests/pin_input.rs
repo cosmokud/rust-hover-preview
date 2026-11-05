@@ -369,7 +369,8 @@ fn a_paired_press_on_a_pinned_window_puts_it_in_the_middle_of_its_screen() {
 /// **A press on a model's band turns the scene, and the chrome's own rows over it stay the pin's**: a
 /// caption's button, the frame's corner and the transport's play button all answer on a pin standing in a
 /// model as they do on one standing in a picture — a button arms itself, a corner begins a resize — while a
-/// press on the picture itself carries nothing (see `f3d_player::press_the_models_band`).
+/// press on the picture itself carries nothing: the picture is f3d's own window, placed over the band,
+/// and a hand on it is the scene's and never the pin's (see `f3d_player::place_the_model_in_the_band`).
 ///
 /// The rows and the frame are the pin's because they are drawn over the picture, and a model's band is the
 /// whole of its window: a press taken for the scene before the chrome would be a box with no handle left on
