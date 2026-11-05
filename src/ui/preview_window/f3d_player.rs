@@ -403,7 +403,10 @@ pub(super) unsafe fn hand_the_band_over(hwnd: HWND) -> bool {
         )
     };
     let style = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
-    write_the_ex_style(source, the_handed_over_ex_style(style));
+    write_the_ex_style(
+        source,
+        the_handed_over_ex_style(style, pin_holds_the_front()),
+    );
 
     // **Our own capture is let go of before the press is injected**: a window holding the pointer is given every
     // move of the drag, and the engine would be turning a scene nothing was sent.
@@ -516,12 +519,20 @@ fn the_pins_band() -> Option<ScreenRegion> {
 /// pointer and a `WS_EX_LAYERED` one is composed rather than hit — and `WS_EX_NOACTIVATE` with them, which is
 /// what lets a press of the user's own activate the engine and give it its keyboard (see
 /// `ffplay_window::player_ex_style_for` for the style it wears at rest).
-fn the_handed_over_ex_style(source: isize) -> isize {
-    (source
+fn the_handed_over_ex_style(source: isize, holds_the_front: bool) -> isize {
+    let style = (source
         & !(WS_EX_TRANSPARENT.0 as isize)
         & !(WS_EX_LAYERED.0 as isize)
         & !(WS_EX_NOACTIVATE.0 as isize))
-        | WS_EX_TOOLWINDOW.0 as isize
+        | WS_EX_TOOLWINDOW.0 as isize;
+    // **The band the scene stands in is the pin's, topmost or not**: a window of the ordinary band can never be
+    // above a pin holding the front, so the scene would be behind the very pin it is a picture in (see
+    // `pin_holds_the_front` and `ffplay_window::player_ex_style_for`).
+    if holds_the_front {
+        style | WS_EX_TOPMOST.0 as isize
+    } else {
+        style & !(WS_EX_TOPMOST.0 as isize)
+    }
 }
 
 /// Write an extended style and make the window read it: a style is not a thing a window is told about live (see
@@ -681,13 +692,23 @@ mod tests {
         let source =
             WS_EX_TRANSPARENT.0 as isize | WS_EX_LAYERED.0 as isize | WS_EX_NOACTIVATE.0 as isize;
 
-        let handed_over = the_handed_over_ex_style(source);
+        let handed_over = the_handed_over_ex_style(source, false);
         assert_eq!(handed_over & WS_EX_TRANSPARENT.0 as isize, 0);
         assert_eq!(handed_over & WS_EX_LAYERED.0 as isize, 0);
         assert_eq!(handed_over & WS_EX_NOACTIVATE.0 as isize, 0);
         assert!(
             handed_over & WS_EX_TOOLWINDOW.0 as isize != 0,
             "and it is still a window the Shell lists no button for"
+        );
+
+        assert!(
+            the_handed_over_ex_style(source, true) & WS_EX_TOPMOST.0 as isize != 0,
+            "and the band it stands in is the pin's: topmost where the pin holds the front"
+        );
+        assert_eq!(
+            the_handed_over_ex_style(source, false) & WS_EX_TOPMOST.0 as isize,
+            0,
+            "and ordinary where it does not"
         );
 
         let mirror = pin_film_thumbnail::source_ex_style(handed_over, true);
