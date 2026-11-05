@@ -4851,6 +4851,39 @@ fn a_models_band_turns_the_scene_and_its_host_follows_the_pins_band() {
         "and the scene is the source the pin's host is drawing"
     );
 
+    // **And the pin's own window is asked the same question**, for the band a hand finds it over
+    // rather than the host: whichever window of the pair the press lands on posts it on (see
+    // `f3d_player::answer_a_models_band`).
+    let band = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+        .expect("the pin this test put up");
+    let pack =
+        |x: i32, y: i32| LPARAM((((y as u16 as u32) << 16) | x as u16 as u32) as i32 as isize);
+    assert_eq!(
+        unsafe {
+            SendMessageW(
+                film.pin_hwnd,
+                WM_NCHITTEST,
+                WPARAM(0),
+                pack(band.0 + 4, band.1 + 4),
+            )
+        },
+        LRESULT(HTCLIENT as isize),
+        "a press in a model's band is the scene's on the pin's own window as much as on its host"
+    );
+    assert_eq!(
+        unsafe {
+            f3d_player::answer_a_models_band(
+                film.pin_hwnd,
+                WM_NCHITTEST,
+                WPARAM(0),
+                pack(film.box_.0 + 4, film.box_.1 - 4),
+            )
+        },
+        None,
+        "and the chrome's own rows above the band are not the model's, whatever the window under them"
+    );
+
     // A hand pulling the pin out to another box leaves nothing of the picture behind: the host *is*
     // the band, and the band is where the Shell stretches the engine's own window into.
     let wider = (
