@@ -639,12 +639,6 @@ pub fn run_preview_window() {
                 // drag it means begun here (see `settle_pinned_engine_press`).
                 settle_pinned_engine_press(pinned_window(), &mut engine_press_seen);
 
-                // **A band handed over to the engine is the pair's while the front is the scene's own or
-                // one of the pin's**, and back to the mirror the moment it is not — the pin's foreground
-                // lost, the pin put away, or the engine's window gone (see
-                // `f3d_player::settle_the_band_hand_over`).
-                f3d_player::settle_the_band_hand_over(GetForegroundWindow());
-
                 // And a press on any of the preview's windows is the preview being asked for: the
                 // window comes forward whether or not Windows granted it the foreground, and
                 // whichever of its windows took the press (see `settle_pinned_press`).

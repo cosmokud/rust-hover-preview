@@ -366,12 +366,12 @@ fn a_paired_press_on_a_pinned_window_puts_it_in_the_middle_of_its_screen() {
     }
 }
 
-/// **A press on a model's band is handed to the scene, and the chrome's own rows over it stay the
-/// pin's**: the caption's button, the frame's corner and the transport's play button all answer on the
-/// pin standing in a model exactly as they do on one standing in a picture — the button arms itself, the
-/// corner begins a resize — while a press on the picture itself carries nothing of the pin's, because the
-/// pin hands that press over to the engine's own window rather than carrying it (see
-/// `f3d_player::hand_the_band_over`).
+/// **A press on a model's band is the scene's, and the chrome's own rows over it stay the pin's**: the
+/// caption's button, the frame's corner and the transport's play button all answer on the pin standing in a
+/// model exactly as they do on one standing in a picture — the button arms itself, the corner begins a
+/// resize — while a press on the picture itself carries nothing of the pin's, because the picture is f3d's
+/// own window standing inside the pin's host rather than a picture the pin draws (see
+/// `f3d_player::adopt_the_model_window`).
 ///
 /// The rows and the frame are the pin's because they are drawn over the picture, and the picture is the
 /// engine's own window for the whole of its band: a press taken for the scene before the chrome would be a
@@ -381,8 +381,9 @@ fn a_models_band_leaves_the_chrome_and_the_frame_to_the_pin() {
     let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-    // No player's window and no source, so nothing of a model's press is posted anywhere: what this test
-    // asks is which of the pin's own arms a press is given to (see `f3d_player::the_models_window`).
+    // No player's window and no adopted child, so nothing of a model's press leaves this window at all:
+    // what this test asks is which of the pin's own arms a press is given to (see
+    // `f3d_player::the_band_is_a_models_window`).
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
     pin_film_thumbnail::forget_the_thumbnail();
 

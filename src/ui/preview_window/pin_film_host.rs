@@ -64,8 +64,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW, GetClientRect,
     GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, RegisterClassExW,
     SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE,
-    GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL, SC_CLOSE,
-    SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
+    GWL_STYLE, HTCLIENT, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL,
+    SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE,
     WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLOSE, WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST,
     WM_PAINT, WM_QUERYOPEN, WM_SETFOCUS, WM_SETICON, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW,
@@ -152,6 +152,13 @@ pub(super) unsafe fn answer_a_host(
     // too, but it is not the pin's host, and it stays disabled and out of everything a button is (see
     // `hover_film_host::create`).
     if msg == WM_NCHITTEST && film_host() == Some(hwnd) {
+        // **A model's window is a child of this one, and only a hit test that names this client lets a
+        // press down into it.** `HTTRANSPARENT` is a route to a window *under* this one, and a child is
+        // not under it: the scene would be a picture no press could reach (see
+        // `f3d_player::adopt_the_model_window`).
+        if f3d_player::a_model_child_stands_in(hwnd) {
+            return Some(LRESULT(HTCLIENT as isize));
+        }
         return Some(LRESULT(HTTRANSPARENT as isize));
     }
 
@@ -1613,7 +1620,7 @@ pub(super) fn the_hosted_player_is_drawing(pid: u32) -> bool {
     film_host().is_some()
         && pid != 0
         && hosted_player_pid() == Some(pid)
-        && pin_film_thumbnail::the_source_is_up(pid)
+        && (pin_film_thumbnail::the_source_is_up(pid) || f3d_player::the_adopted_model_is_up(pid))
 }
 
 /// Whether this player has a window on screen: a source the Shell is drawing through a host of this
@@ -1860,6 +1867,10 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
     // resize step is being measured (see `pin_resize_probe`).
     let started = pin_resize_probe::a_step_started();
     let _ = SetWindowPos(host, HWND::default(), x, y, width, height, flags);
+    // **A model's window is a child of the host's, so a move carries it and a resize is one posted
+    // placement**: its box is the host's client, and nothing of f3d's is waited on for it (see
+    // `f3d_player::fit_the_adopted_model_window`).
+    f3d_player::fit_the_adopted_model_window(host);
     // **What a resize step costs on the thumbnail road is this one call**: the destination is the
     // host's new client area, and the film's window is not touched at all (see `pin_film_thumbnail`).
     pin_film_thumbnail::the_band_was_placed(host);
@@ -2033,6 +2044,10 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
 /// road is a film road to avoid (see `set_the_pin_film_host_visible` and
 /// `pin_film_thumbnail::forget_the_thumbnail`).
 pub(super) unsafe fn take_the_film_off_the_band() {
+    // **A model's window goes back to the desktop with the band it stood in**: it is a child of the host,
+    // and a child left standing is the last file's scene drawn over the next one's film (see
+    // `f3d_player::restore_the_adopted_model_window`).
+    unsafe { f3d_player::restore_the_adopted_model_window() };
     pin_film_thumbnail::forget_the_thumbnail_because("the film is leaving the pin");
     // A cover standing in the host is that film's, and the host is about to show another one (see
     // `put_the_cover_away`).
@@ -2167,6 +2182,10 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     // teardown that destroyed the owner first would take the pin's own window with it (see
     // `own_the_pin_window`).
     unsafe { own_the_pin_window(false) };
+    // **A model's window is given back before anything of it is touched**: it is a child of this host,
+    // and a child destroyed with its parent is a window f3d never got to close and a hover or the next
+    // pin has no window to re-use (see `f3d_player::restore_the_adopted_model_window`).
+    unsafe { f3d_player::restore_the_adopted_model_window() };
     // **The player is ended before the window it draws in is destroyed.** A player whose surface was
     // destroyed under it is a kill the player did not get to answer; the record below is what the
     // ordinary kill road retries to confirmation (see `terminate_player_pid`).

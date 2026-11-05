@@ -255,6 +255,23 @@ pub(super) unsafe fn a_players_window_now(pid: u32) -> Option<HWND> {
     (!data.found_hwnd.is_invalid()).then_some(data.found_hwnd)
 }
 
+/// The largest visible window `pid` has, which is the picture: a player's real output window, or the one
+/// f3d means rather than the transients it makes while it starts (see `enum_windows_callback`).
+fn the_players_largest_window(pid: u32) -> Option<HWND> {
+    let mut data = EnumWindowsData {
+        target_pid: pid,
+        found_hwnd: HWND::default(),
+        best_area: 0,
+    };
+    let _ = unsafe {
+        EnumWindows(
+            Some(enum_windows_callback),
+            LPARAM(&mut data as *mut EnumWindowsData as isize),
+        )
+    };
+    (!data.found_hwnd.is_invalid()).then_some(data.found_hwnd)
+}
+
 /// Style and raise a player's known window.
 pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // **A hosted player's window is not this app's to style or to publish.** It is the source the
@@ -378,6 +395,20 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
     // and the host shows it by the Shell's thumbnail rather than holding it (see
     // `pin_film_thumbnail`).
     if let Some(host) = host_for_a_hosted_player(pid) {
+        // **A pinned model's window is adopted into the host as a child of it**, which is the one picture
+        // on this road that is not the Shell's: f3d turns its scene from its own captured drag and its own
+        // binds, so the band is the engine's window rather than a thumbnail of it (see
+        // `f3d_player::adopt_the_model_window`). The latch is this road's own question because a child has
+        // no registration for `the_source_is_up` to stand for.
+        if f3d_player::a_pinned_model_holds_the_host(host) {
+            if f3d_player::the_adopted_model_is_up(pid) {
+                f3d_player::fit_the_adopted_model_window(host);
+            } else if let Some(source) = the_players_largest_window(pid) {
+                unsafe { f3d_player::adopt_the_model_window(source, pid, host) };
+            }
+            return false;
+        }
+
         // **The source is adopted once, and the host is whichever one is showing the film** — a
         // pin's, or the hover's the pin will take up, so that pinning it is a re-pointing of the same
         // picture rather than a second player (see `hover_film_host`). A window that replaced itself
@@ -385,17 +416,8 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
         // the adoption takes the new registration and drops the old (see
         // `pin_film_thumbnail::note_the_source`).
         if !pin_film_thumbnail::the_source_is_up(pid) {
-            let mut data = EnumWindowsData {
-                target_pid: pid,
-                found_hwnd: HWND::default(),
-                best_area: 0,
-            };
-            let _ = EnumWindows(
-                Some(enum_windows_callback),
-                LPARAM(&mut data as *mut EnumWindowsData as isize),
-            );
-            if !data.found_hwnd.is_invalid() {
-                unsafe { pin_film_thumbnail::adopt_the_source(data.found_hwnd, pid, host) };
+            if let Some(source) = the_players_largest_window(pid) {
+                unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
             }
         } else {
             // **And this is the pass that keeps the source invisible**: the style is put on at

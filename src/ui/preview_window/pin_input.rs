@@ -1016,12 +1016,6 @@ unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool, window: &dyn Pin
 /// recorder in front of (see `PinWindow`). Nothing else about the press is the window's: what a point
 /// means is the pin's.
 pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn PinWindow) -> bool {
-    // **A press on the pin's own window while the band is handed over is the chrome's**: the scene's
-    // window stands over the band and takes every press in it, so anything arriving here is a strip or
-    // the caption — and the band goes back to the mirror with it (see
-    // `f3d_player::return_the_band_to_the_mirror`).
-    f3d_player::return_the_band_to_the_mirror();
-
     // Whether this press is the second of a pair, asked before any of the arms below so that one
     // answer serves the whole window: what a pair means is the window put in the middle of its
     // screen, and the two arms it is put to are the two a press carries the window from (see
@@ -1111,11 +1105,12 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
         return true;
     }
 
-    // **A model's band is the scene's, and the press hands it over rather than carrying the pin**:
-    // the engine turns its scene from its own captured drag, so it is given a real press at the cursor
-    // and nothing of ours claims the band from here (see `f3d_player::hand_the_band_over`). Asked last,
-    // because the chrome's own rows above it are the pin's.
-    if unsafe { f3d_player::hand_the_band_over(hwnd) } {
+    // **A model's band is the scene's own window's, and nothing here carries the pin**: f3d's window is a
+    // child of the pin's host and takes every press in the band itself, so what reaches this window is the
+    // hairline inside the host's client — answered, because it is the pin's own window, and carrying nothing
+    // (see `f3d_player::adopt_the_model_window`). Asked last, because the chrome's own rows above it are the
+    // pin's.
+    if f3d_player::the_band_is_a_models_window() {
         return true;
     }
 
