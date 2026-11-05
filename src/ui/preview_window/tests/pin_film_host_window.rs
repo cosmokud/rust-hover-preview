@@ -4942,14 +4942,92 @@ fn a_release_no_window_of_the_pairs_was_sent_ends_a_models_turn() {
 /// to another process's window is read (see `f3d_player::answer_a_models_band`). The range is the
 /// pointer's own, so a window that owes a paint is not asked for one on every look.
 fn take_the_pointer_messages_posted_to(window: HWND) -> Vec<u32> {
+    take_the_pointer_messages_and_their_points(window)
+        .into_iter()
+        .map(|(message, _)| message)
+        .collect()
+}
+
+/// The same messages with the point each one carries, for the roads that ask *which* point a move is
+/// posted at (see `f3d_player::carry_a_models_turn`).
+fn take_the_pointer_messages_and_their_points(window: HWND) -> Vec<(u32, (i32, i32))> {
     let mut message = MSG::default();
     let mut taken = Vec::new();
     while unsafe { PeekMessageW(&mut message, window, WM_MOUSEMOVE, WM_LBUTTONUP, PM_REMOVE) }
         .as_bool()
     {
-        taken.push(message.message);
+        taken.push((message.message, message_point(message.lParam)));
     }
     taken
+}
+
+/// **A turn posts the last point the hand reached, and one move at a time**: the engine draws a whole
+/// frame for every message it is handed and coalesces nothing, so a move posted on every sample of a drag
+/// is a queue the engine is still draining after the hand has let go — a scene that "glides" on, and a
+/// band that answers nothing until it has (see `f3d_player::carry_a_models_turn`).
+///
+/// The press and the release still go as they land: they are what begins and ends the turn.
+#[test]
+fn a_models_turn_posts_the_last_move_the_hand_reached_and_one_at_a_time() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    // Safety: the pin and its host are this test's own, put back by the stand's drop.
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the pin's host");
+    let source = unsafe { a_source_of_the_host(host) };
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.media_type = MediaType::Model;
+        }
+    }
+    let at = |x: i32, y: i32| LPARAM((((y as u16 as u32) << 16) | x as u16 as u32) as i32 as isize);
+
+    // A hand on the button for this test: the level of the real one is what the tick carries a turn by,
+    // and no test can press it (see `f3d_player::stand_a_button_for_a_test`).
+    f3d_player::stand_a_button_for_a_test(Some(true));
+    let _ = unsafe { f3d_player::answer_a_models_band(host, WM_LBUTTONDOWN, WPARAM(0), at(4, 4)) };
+    assert_eq!(
+        take_the_pointer_messages_posted_to(source),
+        vec![WM_LBUTTONDOWN],
+        "the press goes as it lands, because it is what begins the turn"
+    );
+
+    for (x, y) in [(8, 8), (16, 16), (24, 24)] {
+        let _ =
+            unsafe { f3d_player::answer_a_models_band(host, WM_MOUSEMOVE, WPARAM(0), at(x, y)) };
+    }
+    assert!(
+        take_the_pointer_messages_posted_to(source).is_empty(),
+        "and the hand's own moves wait for the tick, however many of them it makes"
+    );
+
+    f3d_player::settle_a_models_drag();
+    assert_eq!(
+        take_the_pointer_messages_and_their_points(source),
+        vec![(WM_MOUSEMOVE, (24, 24))],
+        "the tick posts one move, and it is the point the hand last reached"
+    );
+
+    f3d_player::settle_a_models_drag();
+    assert!(
+        take_the_pointer_messages_posted_to(source).is_empty(),
+        "and a tick with no new point posts nothing at all: the engine is never handed a move it has"
+    );
+
+    f3d_player::stand_a_button_for_a_test(Some(false));
+    f3d_player::settle_a_models_drag();
+    assert_eq!(
+        take_the_pointer_messages_posted_to(source),
+        vec![WM_LBUTTONUP],
+        "the button up ends the turn and posts the release"
+    );
+    assert!(
+        take_the_pointer_messages_posted_to(source).is_empty(),
+        "and nothing follows it"
+    );
+
+    f3d_player::stand_a_button_for_a_test(None);
+    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **The Shell's own minimize of the pin's chrome is the same put-away as one of its host.** A film
