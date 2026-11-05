@@ -77,7 +77,6 @@ pub(super) fn launch(
         && hover_film_host::the_hover_film_is_kept_in_a_host(path))
     .then(|| unsafe { hover_film_host::take_up_the_hover_film_host(box_) })
     .flatten();
-    let into_a_host = the_pins_film || hover_host.is_some();
 
     let mut command = engine_processes::hidden_command(program);
     command
@@ -116,7 +115,16 @@ pub(super) fn launch(
 
     match wait_for_the_window(pid, &mut player) {
         Some(window) => {
-            unsafe { show_the_window(window, box_, into_a_host) };
+            // **Where a host is drawing this picture, the adoption is made here** rather than left
+            // to the monitor's first pass: the window f3d has just shown itself is the one thing
+            // that must not be on the screen, and the pass that would take it off one runs a
+            // hundred milliseconds later at best (see `show_the_window`).
+            let host = if the_pins_film {
+                pin_film_host::film_host()
+            } else {
+                hover_host
+            };
+            unsafe { show_the_window(window, pid, box_, host) };
             Some(player)
         }
         // A viewer that made no window is no preview: it is ended here rather than left standing
@@ -144,12 +152,26 @@ pub(super) fn launch(
 /// it** (see `apply_noactivate_to_hwnd`), so a model's window is styled, raised and shown by the
 /// same calls every player's window is.
 ///
-/// A window a host is keeping is not shown: it is the source a DWM thumbnail is cut from, and the
-/// Shell draws it into the host (see `pin_film_thumbnail::adopt_the_source`).
-pub(super) unsafe fn show_the_window(window: HWND, box_: ScreenRegion, into_a_host: bool) {
+/// **A window a host is drawing is never shown on the screen on any road**: it is the source a DWM
+/// thumbnail is cut from, and what the Shell draws into the host is the whole of what is seen of it
+/// (see `pin_film_thumbnail`). f3d shows its window itself the moment it has one — that is the grey
+/// rectangle a hovered model used to put up before its scene appeared — so the source is hidden
+/// here and immediately made the invisible `WS_EX_LAYERED` window the host's thumbnail needs (see
+/// `pin_film_thumbnail::adopt_the_source`, which is the style and the adoption in one call), and
+/// shown again transparent: **a hidden source is a thumbnail the Shell stops composing** (see the
+/// module note there), so transparent-but-visible is the state, not hidden.
+pub(super) unsafe fn show_the_window(
+    window: HWND,
+    pid: u32,
+    box_: ScreenRegion,
+    host: Option<HWND>,
+) {
     unsafe { strip_the_frame(window) };
     unsafe { place_the_window(window, box_) };
-    if into_a_host {
+    if let Some(host) = host {
+        let _ = unsafe { ShowWindow(window, SW_HIDE) };
+        unsafe { pin_film_thumbnail::adopt_the_source(window, pid, host) };
+        let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
         return;
     }
     // **The Shell lists a window as it is shown, so a button it has already listed is one the style

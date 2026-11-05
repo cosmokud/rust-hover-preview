@@ -479,6 +479,7 @@ impl AppConfig {
             "video_engine_idle",
             Some(self.video_engine_idle.as_str()),
         );
+        ini.set(CONFIG_SECTION, "f3d_idle", Some(self.f3d_idle.as_str()));
         ini.set(
             CONFIG_SECTION,
             "office_engine_idle",
@@ -1198,6 +1199,11 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "video_engine_idle") {
             if let Some(idle) = EngineIdle::from_str(&value) {
                 self.video_engine_idle = idle;
+            }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "f3d_idle") {
+            if let Some(idle) = EngineIdle::from_str(&value) {
+                self.f3d_idle = idle;
             }
         }
         self.office_engine_idle =

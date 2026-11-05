@@ -186,6 +186,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
         "Engine",
         &[
             "afk_timer_seconds",
+            "f3d_idle",
             "f3d_path",
             "libreoffice_idle",
             "mpv_path",

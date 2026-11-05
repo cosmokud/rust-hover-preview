@@ -85,10 +85,14 @@ fn window_rect(hwnd: HWND) -> (i32, i32, i32, i32) {
 }
 
 /// The film drawing in the hover's host, on the road both engines are on: a window of the player's
-/// own, recorded as the source the Shell draws into it (see `pin_film_thumbnail`). It is this
+/// own, adopted as the source the Shell draws into it (see `pin_film_thumbnail`). It is this
 /// process's window, which is the player every stand in this file records, and the caller destroys
 /// it — a window of the suite's own, off every display and composited as nothing, since a player's
 /// window is no part of what the user is meant to see here (see `a_window_of_the_suite`).
+///
+/// **It is adopted rather than only recorded**, because that is what a host is shown for: the
+/// registration made here is the picture, and the host a hover reveals is one the Shell has
+/// composed that registration in (see `pin_film_thumbnail::the_picture_is_composed_in`).
 unsafe fn a_source_of_the_host(pid: u32) -> HWND {
     let source = unsafe {
         a_window_of_the_suite(
@@ -98,7 +102,8 @@ unsafe fn a_source_of_the_host(pid: u32) -> HWND {
             (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 180),
         )
     };
-    pin_film_thumbnail::note_the_source(source, pid);
+    let host = hover_film_host::hover_film_host().expect("the hover's host to adopt into");
+    unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
     source
 }
 

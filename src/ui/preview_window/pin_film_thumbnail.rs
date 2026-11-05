@@ -1130,6 +1130,61 @@ pub(super) fn the_source_is_up(pid: u32) -> bool {
     }
 }
 
+// **A fourth knob, and not a setting either: whether the Shell is taken to have composed the
+// picture.** It exists for the suite alone: a registration between two windows of the suite's own
+// says nothing about a compositor the test run has in front of it, and every test that asks whether
+// a host may be shown is asking about the road rather than about this machine's display. Nothing
+// stands in unless a test says so, so the answer a test reads is the real one wherever it can be
+// (see `the_picture_is_composed_in`).
+#[cfg(test)]
+thread_local! {
+    static COMPOSED_STAND_IN: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Stand the composed answer in for this thread, or go back to asking the Shell (see
+/// `the_picture_is_composed_in`).
+#[cfg(test)]
+pub(super) fn stand_the_composed_road_in(answer: Option<bool>) {
+    COMPOSED_STAND_IN.with(|held| held.set(answer));
+}
+
+/// Whether the Shell is drawing this player's picture into `host` and **has composed it**: the source
+/// adopted for `pid` is still up, the registration standing is that source's and it is drawn into
+/// this very host, and one composition has been waited for.
+///
+/// **The registration is the picture, so the wait is for the Shell rather than for a tick.** A host
+/// is black until the Shell composes the thumbnail into it (see `pin_film_host`), so a host shown on
+/// the tick the registration is made shows its own erase for the frame the Shell takes to compose —
+/// the black rectangle a cold model's hover was seen as. `DwmFlush` is the call that says that frame
+/// has been composed, and it is asked here rather than the reveal deferred a tick because a tick is
+/// fifteen milliseconds of black, which is exactly the flash.
+///
+/// Nothing is stood in for a test: the registration a test's own adoption makes is a real one
+/// between real windows, and `DwmFlush` is a read of the compositor that a session without one
+/// answers with an error this function does not act on.
+pub(super) fn the_picture_is_composed_in(host: HWND, pid: u32) -> bool {
+    #[cfg(test)]
+    if let Some(answer) = COMPOSED_STAND_IN.with(|held| held.get()) {
+        return answer;
+    }
+    if !the_source_is_up(pid) {
+        return false;
+    }
+    let drawn = THUMBNAIL.lock().is_ok_and(|held| {
+        held.registration != 0
+            && held.host == host.0 as isize
+            && held.registered == SOURCE.load(Ordering::SeqCst)
+            && held.registered_process == pid
+    });
+    if !drawn {
+        return false;
+    }
+    // Safety: no handle of anyone's is passed — the call waits for the Shell's next frame and
+    // answers whether that wait was taken.
+    let _ = unsafe { windows::Win32::Graphics::Dwm::DwmFlush() };
+    true
+}
+
 /// Put the invisibility back where something took it off the source: the style monitor's pass over a
 /// player's window asks this, and it is the only caller.
 ///

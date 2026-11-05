@@ -719,6 +719,7 @@ const ANOTHER_VALUE: &[(&str, &str)] = &[
     ("design_scale", "50"),
     ("document_scale", "50"),
     ("ebook_scale", "50"),
+    ("f3d_idle", "30"),
     ("font_background", "black"),
     ("hdr_tone_map", "aces"),
     ("html_background", "black"),

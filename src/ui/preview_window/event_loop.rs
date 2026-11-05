@@ -1121,8 +1121,17 @@ pub fn run_preview_window() {
             if let Some(start) = video_start.take() {
                 // **A hosted hover's player is drawn through the hover's own host**, and the
                 // source adopted there is the window the wait is for — the same question a
-                // top-level player's window answers (see `the_players_window_is_up`).
-                let window_up = pin_film_host::the_players_window_is_up(start.pid);
+                // top-level player's window answers (see `the_players_window_is_up`). A hosted
+                // start asks it of the picture being *showable*: the Shell has to have composed
+                // the host's thumbnail, because a host shown before it is the host's own black
+                // erase (see `hover_film_host::the_hover_picture_is_ready`). A picture that never
+                // composes is not waited on forever: it runs out of this same start bound and
+                // takes the fallback launch below.
+                let window_up = if start.hosted {
+                    hover_film_host::the_hover_picture_is_ready(start.pid)
+                } else {
+                    pin_film_host::the_players_window_is_up(start.pid)
+                };
                 let alive = is_player_pid_alive(start.pid);
 
                 // The hover this player was started for may have moved on before its
@@ -1138,31 +1147,42 @@ pub fn run_preview_window() {
 
                 match outcome {
                     Some(PlayerWait::Arrived) => {
-                        // The video is what is on screen from here: the frame the player
-                        // plays into is the preview, and the spinner — this app's window,
-                        // which was standing in for it — comes down with the wait.
-                        if let Ok(mut media) = CURRENT_MEDIA.lock() {
-                            *media = Some(start.media);
-                        }
-
-                        // And the film is playing from here, which is what the loop it may be
-                        // giving is measured by: the clock was started when the process was
-                        // (see `rebase_video_loop_clock`).
-                        rebase_video_loop_clock(start.pid);
-
                         // A hosted hover's picture is the host, not the preview's own window:
-                        // show it at the hover's box once the player is drawing, so the wait ends
-                        // on the film rather than on the desktop (see `hover_film_host`).
-                        if start.hosted {
-                            hover_film_host::reveal_the_hover_film_host(
+                        // **the host goes up first and this app's window goes down in the same
+                        // tick** — a hidden window with nothing behind it is the hover closing
+                        // before the film opens, which is the flash a model's first hover was
+                        // seen as. A reveal that is still not composable leaves the spinner up
+                        // and the wait this is (see `hover_film_host`).
+                        let shown = !start.hosted
+                            || hover_film_host::reveal_the_hover_film_host(
                                 start.pid,
                                 hover_film_host::the_hover_box_as_a_region(video_pos),
                             );
-                        }
+                        if !shown {
+                            video_start = Some(start);
+                        } else {
+                            // The video is what is on screen from here: the frame the player
+                            // plays into is the preview, and the spinner — this app's window,
+                            // which was standing in for it — comes down with the wait.
+                            if let Ok(mut media) = CURRENT_MEDIA.lock() {
+                                *media = Some(start.media);
+                            }
 
-                        let _ = ShowWindow(hwnd, SW_HIDE);
-                        pending_load = None;
-                        clear_pointer_hold();
+                            // And the film is playing from here, which is what the loop it may be
+                            // giving is measured by: the clock was started when the process was
+                            // (see `rebase_video_loop_clock`).
+                            rebase_video_loop_clock(start.pid);
+
+                            if start.hosted {
+                                note_pin_trace!(
+                                    "hover window hidden for a hosted player {}",
+                                    start.pid
+                                );
+                            }
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+                            pending_load = None;
+                            clear_pointer_hold();
+                        }
                     }
                     Some(PlayerWait::Abandoned) => {
                         // The player is not coming, or the hover it was started for has
@@ -1302,6 +1322,12 @@ pub fn run_preview_window() {
             // whether it is still wanted: a fresh one a pin's take-over owes, and one standing by
             // that its `MPV TTL` setting has let go (see `mpv_resident`).
             mpv_resident::tick();
+
+            // And the viewer a model was hovered by, which the tick lets go once its `F3D TTL` has
+            // run out — the same question the resident's TTL is asked in the same place, because a
+            // kept engine is the hover road's own and the hover road is this tick (see
+            // `hover_film_host`).
+            hover_film_host::tick_the_warm_model();
 
             // A pin that still believes it holds the keyboard, and that Windows says does not, is
             // asked for it back. The player is begun again on every navigation and every resize, and
@@ -4500,11 +4526,26 @@ pub fn run_preview_window() {
                             // goes the moment the player's window is there (see
                             // `video_start` and `player_wait`). A hover replayed for a
                             // probe is already that wait, and it stays where it is.
-                            if !upgrading {
+                            //
+                            // **A model keeps that wait rather than being hidden for it.**
+                            // its picture is a viewer's own window, which this app has to
+                            // take out of the traffic before anything of it may be seen
+                            // (see `f3d_player`), so the window hidden here was the preview
+                            // closing and the spinner opening again a tick later — the two
+                            // flashes a hovered model was seen as. The spinner stands at the
+                            // pointer and goes in the tick the host is ready, which is the one
+                            // transition every other slow preview makes.
+                            if !upgrading && !show_is_model {
                                 let _ = ShowWindow(hwnd, SW_HIDE);
                             }
 
-                            let process_running = is_video_process_running();
+                            let process_running = is_video_process_running()
+                                // **A kept model is a running player this app still holds**, whose
+                                // process is out of the media the hover dropped and in the warm record
+                                // (see `hover_film_host::keep_a_model_warm`).
+                                || hover_film_host::the_warm_model_holds(
+                                    VIDEO_PID.load(Ordering::SeqCst),
+                                );
                             let should_start =
                                 current_video_path.as_ref() != Some(&path) || !process_running;
 
@@ -4603,6 +4644,21 @@ pub fn run_preview_window() {
                                 }
                             } else {
                                 video_pos = (pos_x, pos_y, media_width, media_height);
+                                // **A model kept warm is put back rather than begun again.** Its f3d
+                                // and its host outlived the hover that began them, the Shell has been
+                                // composing the picture all along, so the repeat hover is one instant
+                                // transition — the host placed and shown here, this app's own window
+                                // down in the same tick, and no spinner between them (see
+                                // `hover_film_host::the_warm_model_is_back`).
+                                let back = show_is_model
+                                    && hover_film_host::the_warm_model_is_back(
+                                        VIDEO_PID.load(Ordering::SeqCst),
+                                        hover_film_host::the_hover_box_as_a_region(video_pos),
+                                    );
+                                if back {
+                                    note_pin_trace!("hover window hidden for a warm model");
+                                    let _ = ShowWindow(hwnd, SW_HIDE);
+                                }
                                 let _ = ensure_video_window_topmost(
                                     pos_x,
                                     pos_y,

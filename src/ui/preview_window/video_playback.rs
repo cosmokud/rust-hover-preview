@@ -1572,8 +1572,10 @@ pub(super) fn stop_video_playback(media: &mut MediaData) {
 
     // With no pin up the hover's own host is the film no longer, whatever the media held: it goes
     // down on the preview thread that made it, so no black top-level window outlives the hover
-    // (see `hover_film_host`).
-    if !pinned() {
+    // (see `hover_film_host`). **Except the host a model was kept in**: that one goes off the screen
+    // and stays, with its registration, for the next hover of the same file (see
+    // `hover_film_host::keep_a_model_warm`, which answers by having taken the process).
+    if !pinned() && !hover_film_host::a_model_is_kept_warm() {
         unsafe { hover_film_host::take_down_the_hover_film_host() };
     }
 }
@@ -1598,6 +1600,15 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
             ffplay_window::clear_video_process_state(pid);
             return;
         }
+    }
+
+    // **And a model's viewer is kept rather than ended**, for the same reason read the other way
+    // round: a f3d has drawn a picture of a file nothing has moved, so the next hover of that file
+    // is the same window shown again instead of a launch (see `hover_film_host::keep_a_model_warm`).
+    // It is the model's own road — a film, a pin's player and everything else are killed below.
+    if hover_film_host::keep_a_model_warm(&mut media.video_process, Some(media.media_type)) {
+        VIDEO_HWND.store(0, Ordering::SeqCst);
+        return;
     }
 
     let killed = media.video_process.as_ref().map(|process| process.id());
