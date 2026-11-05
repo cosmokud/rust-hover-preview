@@ -4,7 +4,7 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in File Explorer for an instant preview, or middle-click (or press `Space`) to open a pinned preview window. Works with keyboard navigation, and customizes easily via the tray icon or a simple `config.ini`.
+Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in File Explorer for an instant preview, or press`Space`to open a pinned preview window. Works with keyboard navigation, and customizes easily via the tray icon or a simple `config.ini`.
 
 [Showcase.webm](https://github.com/user-attachments/assets/33ee1f35-d399-4226-8847-5bd50f867ebb)
 
