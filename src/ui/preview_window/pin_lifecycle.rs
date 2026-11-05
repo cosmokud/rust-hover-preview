@@ -1215,7 +1215,7 @@ pub(super) fn pin_media_is_alive(navigating: bool) -> bool {
         // **A model's player is one the user can close**, because the window the pin shows is f3d's own
         // and its quit bind is its own: the pin is a window onto that scene, and a scene that has gone
         // is a pin that has come apart like any other (see `f3d_player`).
-        MediaType::Model => f3d_player::the_models_window().is_some(),
+        MediaType::Model => f3d_player::the_model_window_is_up(),
         // A document or a specimen is the browser's, and what says it is still there is the
         // engine standing behind the file rather than a window with pixels in it: a window is
         // what a browser being *started* has none of yet, and reading that as "gone" closed a
