@@ -16,17 +16,13 @@
 //! box becomes its client — which is the rectangle a thumbnail's crop is cut from. And **the window
 //! is waited for**, because a viewer that has made no window is a preview with nothing in it.
 //!
-//! **And the pointer is forwarded**, because a pinned model's band is not the model's own window: what a
-//! hand is on there is this app's window, which thumbnails the engine's window through the pin's host (see
-//! `answer_a_models_band`). The press, the drag, the release and the notch are posted on to f3d in f3d's
-//! own coordinates — posted and never sent, because a sent message is this app's thread waiting on the one
-//! drawing the scene.
+//! **And what a pin shows of one is the window itself**, standing in the pin's band and taking the hand
+//! on it: f3d turns its scene from its own captured drag, so a press posted into it is a press it never
+//! reads (see `place_the_model_in_the_band`). A hover keeps the Shell's thumbnail of that same
+//! window.
 
-use windows::Win32::Graphics::Gdi::ScreenToClient;
-use windows::Win32::UI::Input::KeyboardAndMouse::VK_LBUTTON;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GWL_STYLE, HTCLIENT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCHITTEST, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    GWL_STYLE, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::*;
@@ -293,7 +289,7 @@ unsafe fn place_the_window(window: HWND, box_: ScreenRegion) {
     };
 }
 
-/// The engine window a band's press and notch belong to, where the picture standing in that band is a
+/// The engine window a model's picture is drawn in, where the picture standing in the preview is a
 /// model's: nothing for a film's player, whose window is no scene this app turns.
 ///
 /// The kind is asked of the media on screen rather than of a flag of this module's, because that is what
@@ -304,23 +300,23 @@ pub(super) fn the_models_window() -> Option<HWND> {
         current_media_type_try(),
         a_models_source(
             VIDEO_HWND.load(Ordering::SeqCst),
-            pinned(),
             pin_film_thumbnail::the_source_window().map(|source| source.0 as isize),
         ),
     )
 }
 
-/// The window a model's band is turned in: **while a pin is up it is the source that pin's host
-/// thumbnails**, because a player begun into a host publishes nothing of the desktop's and the host
-/// stands over the source's own rectangle — so the published handle is nothing on every pinned model,
-/// and a press read off it would be a band with nothing to turn (see `pin_film_host::note_hosted_player`
-/// and `pin_film_thumbnail::the_source_window`). A hover keeps the published handle, which is the
-/// window the monitor found for it and the only one a hover host is not standing over.
-fn a_models_source(published: isize, pinned: bool, source: Option<isize>) -> isize {
-    if pinned {
-        return source.unwrap_or(published);
+/// The window the model's picture is drawn in, from the two roads that name one.
+///
+/// **The published window is the picture's own** — the monitor writes it the moment f3d's window exists,
+/// and every road that places the picture reads it there. The source is what stands in for it in one
+/// case: a window a hover's host was showing publishes nothing of the desktop's until the pin's own road
+/// publishes it, and a promotion from a hover is that same window rather than a scene begun again (see
+/// `pin_film_thumbnail::the_source_window` and `place_the_model_in_the_band`).
+fn a_models_source(published: isize, source: Option<isize>) -> isize {
+    if published != 0 {
+        return published;
     }
-    published
+    source.unwrap_or(0)
 }
 
 /// The rule `the_models_window` decides by, apart from the machine it reads: a model is the media on
@@ -337,334 +333,165 @@ fn a_model_takes_the_pointer(kind: Option<MediaType>) -> bool {
     kind == Some(MediaType::Model)
 }
 
-/// The window of the pair that took the down on a model's band, and nothing while no drag is on —
-/// **the one that took the capture and posts the rest**: a move reaches the engine from the window the
-/// press landed on and from no other of the pair's.
+/// How far inside the pin's own band a model's window is placed.
 ///
-/// **Held because the release is the engine's as often as it is ours**: f3d takes the capture on the down
-/// it is posted, and the capture owner is given the real messages for the rest of the drag — so this window
-/// hears the up only when it kept the pointer, and a latch that waited for one would be a drag that never
-/// ends: the level of the button ends it, from a move and from the loop's own tick (see
-/// `settle_a_models_drag`).
-static MODEL_DRAG: AtomicIsize = AtomicIsize::new(0);
-
-/// `MK_LBUTTON`, the key-state word a press and a move of a drag carry (see `post_a_band_message`).
-const MK_LBUTTON: usize = 0x0001;
-
-/// Answer a band standing in a model, in place of the pin: the scene's own pointer, which is the press, the
-/// drag and the release of it. `None` for every other message, and for every band that is not a model's.
+/// **Nothing the pin paints can clip a window that stands over it.** A pinned model's window is f3d's
+/// own, standing over the pin's surface rather than under it, so the band is handed in by the frame the
+/// pin draws around it: what is left outside the scene is the pin's edge and its corner, and a scene
+/// drawn to the band's own rectangle would paint over both.
 ///
-/// **The band's hit test is answered here too, and it is the whole of why a press in it turns the scene**
-/// rather than carrying the window: a film's band is handed down to the pin with `HTTRANSPARENT`, which is
-/// what makes a hand on a film move the pin — and the same answer for a model would carry a window the hand
-/// meant to turn (see `pin_film_host::answer_a_host`).
+/// shortcut: the pinned band's paint is a hairline with no radius today, so one pixel a side; upgrade to
+/// the painted radius when the band's paint gains one.
+const MODEL_BAND_INSET: i32 = 1;
+
+/// The box a pinned model's window stands in, from the band the pin says its picture occupies.
 ///
-/// **Nothing is activated for any of it** (see `show_the_window`): f3d is given messages, no focus, and the
-/// press is answered here rather than by the pin so that the caret the pin takes on a press of its own is
-/// the one thing a band press does not ask for.
-///
-/// **The pair's two windows ask it on two roads**: the host asks it for anything landing on its own
-/// client, and the pin's own window asks `press_the_models_band` once the chrome's own arms above it have
-/// had the press (see `pin_input::pinned_press_on`). Whichever window took the down is the one that posts
-/// the rest of the drag, and the loop ends what neither is sent (see `settle_a_models_drag`).
-///
-/// Safety: the answers are those of a window of this app's own, asked from its own window procedure.
-pub(super) unsafe fn answer_a_models_band(
-    host: HWND,
-    msg: u32,
-    _wparam: WPARAM,
-    lparam: LPARAM,
-) -> Option<LRESULT> {
-    let source = the_models_window()?;
-
-    match msg {
-        // **A band's own client is the picture and nothing else** — the chrome's rows over it are the
-        // pin's own window's (see `pin_input::pinned_press_on`) — so a hand on it is the scene's.
-        WM_NCHITTEST => Some(LRESULT(HTCLIENT as isize)),
-        WM_LBUTTONDOWN => {
-            // **The pointer is taken before the down is posted**, and f3d takes it in turn: the engine's
-            // own capture on the down is what hands it the real moves of the rest of the drag, and what is
-            // taken here is the stretch before that down has been read (see `MODEL_DRAG`).
-            MODEL_DRAG.store(host.0 as isize, Ordering::SeqCst);
-            let _ = unsafe { SetCapture(host) };
-            unsafe { post_a_band_message(host, source, msg, message_point(lparam)) };
-            Some(LRESULT(0))
-        }
-        WM_MOUSEMOVE => {
-            if MODEL_DRAG.load(Ordering::SeqCst) != host.0 as isize {
-                return None;
-            }
-            // **A drag whose release went to the engine is ended here**, on the level of the button: a
-            // latched drag would post a press's moves on a hand that is only over the band, and one ended
-            // without its release is a scene left turning (see `end_the_models_drag`).
-            if !the_left_button_is_down() {
-                unsafe { end_the_models_drag(host, message_point(lparam)) };
-                return None;
-            }
-            unsafe { post_a_band_message(host, source, msg, message_point(lparam)) };
-            Some(LRESULT(0))
-        }
-        WM_LBUTTONUP => {
-            if MODEL_DRAG.load(Ordering::SeqCst) != host.0 as isize {
-                return None;
-            }
-            unsafe { end_the_models_drag(host, message_point(lparam)) };
-            Some(LRESULT(0))
-        }
-        _ => None,
-    }
-}
-
-/// Let go of a band the pointer was carrying: **the release is posted before the drag's own state is
-/// cleared**, because a latch that goes without it is a scene left turning under a hand that is up — and the
-/// capture is given back only where this window is the one holding it, since an engine that took the capture
-/// from us holds it to its own release (see `settle_a_models_drag`).
-unsafe fn end_the_models_drag(host: HWND, point: (i32, i32)) {
-    if let Some(source) = the_models_window() {
-        unsafe { post_a_band_message(host, source, WM_LBUTTONUP, point) };
-    }
-    MODEL_DRAG.store(0, Ordering::SeqCst);
-    if unsafe { GetCapture() } == host {
-        let _ = unsafe { ReleaseCapture() };
-    }
-}
-
-/// End a model's turn no window of ours was sent the release of: the moves of a drag are the engine's once
-/// it takes the capture on the down posted to it, so the level of the button is the one answer left — asked
-/// from the loop's own tick, with the release posted to the engine before the latch goes (see
-/// `answer_a_models_band`).
-pub(super) fn settle_a_models_drag() {
-    let host = MODEL_DRAG.load(Ordering::SeqCst);
-    if host == 0 || the_left_button_is_down() {
-        return;
-    }
-
-    let host = HWND(host as *mut _);
-    let point = the_pointer_in_the_band(host);
-    unsafe { end_the_models_drag(host, point) };
-}
-
-/// The pointer's place in a band's own client area, which is where the release of a drag no window of ours
-/// was sent is posted — and the band's own corner where the pointer cannot be read at all.
-fn the_pointer_in_the_band(host: HWND) -> (i32, i32) {
-    let Some((x, y)) = pin_input::cursor_screen_point() else {
-        return (0, 0);
-    };
-
-    let mut point = POINT { x, y };
-    let _ = unsafe { ScreenToClient(host, &mut point) };
-    (point.x, point.y)
-}
-
-/// Turn the scene a press on a model's band is for, and answer whether the band under the press is a
-/// model's at all — a press it is on a model whose window is not up yet, which carries nothing rather than
-/// the window its picture is shown in (see `answer_a_models_band`).
-pub(super) unsafe fn press_the_models_band(hwnd: HWND, x: i32, y: i32) -> bool {
-    if !a_model_takes_the_pointer(current_media_type_try()) {
-        return false;
-    }
-
-    unsafe {
-        answer_a_models_band(
-            hwnd,
-            WM_LBUTTONDOWN,
-            WPARAM(0),
-            a_point_in_a_message((x, y)),
-        );
-    }
-    true
-}
-
-/// Whether the left button is down, read as a **level** and never for its press bit: the low bit
-/// `GetAsyncKeyState` answers is spent by any reader, and it is the Explorer hook's click (see
-/// `pin_drag::left_button_down`, which publishes the same state for the pin's own gestures).
-fn the_left_button_is_down() -> bool {
-    unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0 }
-}
-
-/// Post one message of the pointer's to the engine's window, at a point in the band's own client area, and
-/// answer whether it went.
-unsafe fn post_a_band_message(host: HWND, source: HWND, msg: u32, point: (i32, i32)) -> bool {
-    let Some(point) = (unsafe { the_point_in_the_source(host, source, point) }) else {
-        return false;
-    };
-    // A release carries no button; the down and every move of the drag carry the one that is held —
-    // `MK_LBUTTON`, which these bindings keep under a feature this app has no other use for.
-    let held = if msg == WM_LBUTTONUP {
-        WPARAM(0)
-    } else {
-        WPARAM(MK_LBUTTON)
-    };
-    unsafe { PostMessageW(source, msg, held, a_point_in_a_message(point)).is_ok() }
-}
-
-/// The band's point in the engine window's client: the band mapped to the screen and the screen into the
-/// engine's own client (see `a_point_in_the_source`).
-unsafe fn the_point_in_the_source(
-    host: HWND,
-    source: HWND,
-    point: (i32, i32),
-) -> Option<(i32, i32)> {
-    let mut band = POINT::default();
-    let mut origin = POINT::default();
-    let mut client = RECT::default();
-    if !unsafe { ClientToScreen(host, &mut band) }.as_bool() {
-        return None;
-    }
-    if !unsafe { ClientToScreen(source, &mut origin) }.as_bool() {
-        return None;
-    }
-    if unsafe { GetClientRect(source, &mut client) }.is_err() {
-        return None;
-    }
-    a_point_in_the_source(
-        point,
-        (band.x, band.y),
-        (origin.x, origin.y),
-        (client.right, client.bottom),
+/// Pure so the inset can be asked without a window (see `MODEL_BAND_INSET`): every side moved in by the
+/// same count, and never past a box of one pixel on either axis.
+pub(super) fn the_models_band_inset(content: ScreenRegion) -> ScreenRegion {
+    let (left, top, right, bottom) = content;
+    let left = (left + MODEL_BAND_INSET).min(right - 1);
+    let top = (top + MODEL_BAND_INSET).min(bottom - 1);
+    (
+        left,
+        top,
+        (right - MODEL_BAND_INSET).max(left + 1),
+        (bottom - MODEL_BAND_INSET).max(top + 1),
     )
 }
 
-/// Where a point in a band's own client area falls in the engine window's client, or nothing where the
-/// engine's client is no box at all.
+/// Put a pinned model's window in the pin's band, and keep it there.
 ///
-/// **The two rectangles are mapped, never assumed equal.** What a band draws is the Shell's thumbnail of
-/// the source, cropped to the band (see `pin_film_thumbnail`), so a resize landing between two moves or a
-/// picture the host does not fill puts them out of step — and a message posted in the band's own numbers
-/// would be a press near the engine's own corner.
+/// **The picture is f3d's own window and not the Shell's thumbnail of it.** A hand on the band is a hand
+/// on the scene, and a scene behind a thumbnail is one nothing can turn — so every road that places a
+/// window standing beside the pin places this one, at the band inset by the frame the pin paints around
+/// it (see `the_models_band_inset`).
 ///
-/// A point outside the source is **clamped to its edge** rather than dropped or posted negative: f3d reads
-/// a client point outside its box as a press outside its window, and a hand run off the band is a turn
-/// still being asked for at the edge it left by (measured on 4.0.1).
-fn a_point_in_the_source(
-    point: (i32, i32),
-    band_origin: (i32, i32),
-    source_origin: (i32, i32),
-    source_client: (i32, i32),
-) -> Option<(i32, i32)> {
-    a_point_in_a_client(
-        (
-            band_origin.0 + point.0 - source_origin.0,
-            band_origin.1 + point.1 - source_origin.1,
-        ),
-        source_client,
-    )
-}
-
-/// A point clamped into a box, or nothing where the box has no room for one (see `a_point_in_the_source`).
-fn a_point_in_a_client(point: (i32, i32), client: (i32, i32)) -> Option<(i32, i32)> {
-    if client.0 <= 0 || client.1 <= 0 {
-        return None;
-    }
-    Some((
-        point.0.clamp(0, client.0 - 1),
-        point.1.clamp(0, client.1 - 1),
-    ))
-}
-
-/// The `lParam` a message carrying a point is posted with: the point's two words, low one first.
-fn a_point_in_a_message(point: (i32, i32)) -> LPARAM {
-    LPARAM((((point.1 as u16 as u32) << 16) | point.0 as u16 as u32) as i32 as isize)
-}
-
-/// The `wParam` a wheel message is posted with: the notch in the high word, where a wheel delta sits, and
-/// the key state — nothing — in the low one. Signed, so a notch back is the two's complement of one on.
-fn a_notch_in_a_message(notches: i32) -> WPARAM {
-    WPARAM(((notches as u16 as u32) << 16) as usize)
-}
-
-/// Hand a notch turned over a model's band to the model: f3d's wheel is its camera's zoom, so the notch is
-/// the engine's and nothing of this app's (see `pin_model::the_models_band`).
+/// **Over the pin and never over its chrome.** The pin's own surface under the scene is the frame and
+/// nothing else, and the band is the scene's: the pin is not put back over it as it is over a film, which
+/// would be the press taken from the scene (see `place_player_window`, whose pin-back a model does not
+/// get). What is drawn over the band still is: the caption's menu, raised by its own tick, and the
+/// windows the hold-off below leaves the scene where it stands for (see `player_order`).
 ///
-/// **The wheel's point is a screen point where the drag's is a client one** (measured on 4.0.1): the notch is
-/// read at the engine's own place on the desktop, so the point is clamped into the engine's client and given
-/// back out as the screen point that client point stands at — a band larger than the source would otherwise
-/// ask for a zoom outside the window the zoom is of.
-pub(crate) fn post_a_notch_to_the_model(point: POINT, notches: i32) {
-    let Some(source) = the_models_window() else {
+/// **Nothing of the pin's chrome crosses a model's band**: a model plays nothing, so there is no
+/// transport row and no volume popup over it, and the caption's rows are above the band (see
+/// `pin_transport_kind` and `pinned_caption_height`).
+///
+/// Safety: the window is f3d's, and everything here is a style, a placement and a show of it.
+pub(super) unsafe fn place_the_model_in_the_band(content: ScreenRegion) {
+    let Some(window) = the_models_window() else {
         return;
     };
-    let mut local = point;
-    let mut client = RECT::default();
-    if !unsafe { ScreenToClient(source, &mut local) }.as_bool() {
+
+    // **The style is the one every player's window goes through**, and the model's own answer is inside
+    // it: f3d's frame off, a press reaching the scene, and the bits that keep it out of the Shell's
+    // lists (see `ffplay_window::player_ex_style_for`).
+    let current = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
+    let styled = ffplay_window::player_ex_style_for(current);
+    if styled != current {
+        let _ = unsafe { SetWindowLongPtrW(window, GWL_EXSTYLE, styled) };
+    }
+
+    // **The raise is held off where something of the pin's is drawn over the band**, which is the one
+    // list every window in a band answers to (see `player_order`).
+    if video_playback::player_order(
+        video_process_image(),
+        true,
+        pin_chrome_up(),
+        pin_volume_open(),
+        pin_menu_open(),
+    ) == video_playback::PlayerOrder::Leave
+    {
         return;
     }
-    if unsafe { GetClientRect(source, &mut client) }.is_err() {
-        return;
+
+    let (left, top, right, bottom) = the_models_band_inset(content);
+    let (width, height) = ((right - left).max(1), (bottom - top).max(1));
+    // A window standing in front of a pin is raised by the list a running page is raised by: topmost
+    // while the pin holds the front, and the top of the ordinary band where it does not (see
+    // `webview_preview::raises`).
+    for raise in webview_preview::raises(true, pin_holds_the_front())
+        .into_iter()
+        .flatten()
+    {
+        let _ = unsafe {
+            SetWindowPos(
+                window,
+                raise.insert_after,
+                left,
+                top,
+                width,
+                height,
+                raise.flags,
+            )
+        };
     }
-    let Some((x, y)) = a_point_in_a_client((local.x, local.y), (client.right, client.bottom))
-    else {
-        return;
-    };
-    let mut packed = POINT { x, y };
-    if !unsafe { ClientToScreen(source, &mut packed) }.as_bool() {
-        return;
-    }
-    let _ = unsafe {
-        PostMessageW(
-            source,
-            WM_MOUSEWHEEL,
-            a_notch_in_a_message(notches),
-            a_point_in_a_message((packed.x, packed.y)),
-        )
-    };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// **A band's point is mapped into the engine's client and clamped at its edges**, and nothing is posted
-    /// for a source with no client at all. The band and the source are the same rectangle in the ordinary
-    /// case, and are not once a resize or a crop has put them out of step — which is the case the mapping
-    /// exists for.
+    /// **The band a model's window stands in is the pin's own, taken in by the frame the pin paints
+    /// around it**, because nothing the pin paints can clip a window standing over it (see
+    /// `the_models_band_inset`).
     #[test]
-    fn a_bands_point_is_mapped_into_the_source_and_clamped_to_it() {
-        let client = (600, 480);
-
+    fn a_pinned_models_band_is_inset_inside_the_frame_the_pin_paints() {
         assert_eq!(
-            a_point_in_the_source((10, 20), (100, 100), (100, 100), client),
-            Some((10, 20)),
-            "a band at the source is the source"
+            the_models_band_inset((100, 50, 300, 250)),
+            (101, 51, 299, 249),
+            "every side of the pin's band is taken in by the frame it paints around it"
         );
         assert_eq!(
-            a_point_in_the_source((10, 20), (200, 150), (180, 140), client),
-            Some((30, 30)),
-            "a band 20 right and 10 below the source is every point of it 20 right and 10 below"
-        );
-        assert_eq!(
-            a_point_in_the_source((300, 240), (100, 100), (180, 140), client),
-            Some((220, 200)),
-            "and a point in the middle of the source is the middle of it however the band is placed"
-        );
-
-        assert_eq!(
-            a_point_in_the_source((-40, 700), (100, 100), (100, 100), client),
-            Some((0, 479)),
-            "a point run off the band is the edge it left by, never a negative one"
-        );
-        assert_eq!(
-            a_point_in_the_source((600, 480), (0, 0), (0, 0), client),
-            Some((599, 479)),
-            "and the last pixel of the source is the last one the mapping names"
-        );
-        assert_eq!(
-            a_point_in_the_source((10, 10), (0, 0), (0, 0), (0, 0)),
-            None,
-            "a source with no client is no window to post to"
+            the_models_band_inset((10, 10, 12, 12)),
+            (11, 11, 12, 12),
+            "and a band too small to take in is still a box of a pixel: the scene is placed, never              handed a box of nothing"
         );
     }
 
-    /// **A press, a move and a release carry the point in the message's two words, low one first**, and a
-    /// notch carries its delta in the high word — where a wheel delta sits and where the negative one lives.
+    /// **A model in front of a pin is raised over the pin and never over what the pin draws over the
+    /// band**: the raise is the topmost one a window standing in front of a pin is raised by, and it is
+    /// held off while the pin's chrome, its volume popup or the caption's menu is up (see
+    /// `place_the_model_in_the_band`, `webview_preview::raises`, `video_playback::player_order`).
     #[test]
-    fn a_message_carries_its_point_and_its_notch_where_f3d_reads_them() {
-        assert_eq!(a_point_in_a_message((0x1234, 0x5678)).0, 0x5678_1234);
-        assert_eq!(message_point(a_point_in_a_message((300, 240))), (300, 240));
+    fn a_model_is_raised_over_the_pin_and_never_over_its_chrome() {
+        let raises = webview_preview::raises(true, false);
+        assert_eq!(
+            raises[0].map(|raise| raise.insert_after),
+            Some(HWND_TOPMOST)
+        );
+        assert_eq!(
+            raises[0].map(|raise| raise.flags),
+            Some(SWP_NOACTIVATE | SWP_SHOWWINDOW),
+            "a pin that does not hold the front is raised over, and shown, by the topmost call"
+        );
+        assert_eq!(
+            raises[1].map(|raise| raise.insert_after),
+            Some(HWND_NOTOPMOST),
+            "and dropped to the top of the ordinary band after it"
+        );
+        assert_eq!(
+            webview_preview::raises(true, true)[1],
+            None,
+            "while a pin that holds the front keeps the scene topmost with it"
+        );
 
-        assert_eq!(a_notch_in_a_message(120).0, 0x0078_0000);
-        assert_eq!(a_notch_in_a_message(-120).0, 0xFF88_0000);
-        assert_eq!(a_notch_in_a_message(0).0, 0);
+        for (chrome, volume, menu) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let order = video_playback::player_order("", true, chrome, volume, menu);
+            let asked = if chrome || volume || menu {
+                video_playback::PlayerOrder::Leave
+            } else {
+                video_playback::PlayerOrder::Raise
+            };
+            assert_eq!(
+                order, asked,
+                "chrome {chrome} volume {volume} menu {menu}: the band's window is raised over                  nothing the pin draws over it"
+            );
+        }
     }
 
     /// **Only a model is a band the pointer turns.** A film's band is a hand on the pin, and every kind drawn
@@ -698,38 +525,6 @@ mod tests {
             a_models_window(Some(MediaType::Model), 0),
             None,
             "a model mid-launch is a band with nothing to turn in it yet"
-        );
-    }
-
-    /// **A pinned model's band is turned in the source its host is drawing**, which is the one handle a
-    /// player begun into a host never publishes: `VIDEO_HWND` is nothing for such a player, and a band
-    /// read off that handle alone is a band with nothing to turn (see `the_models_window`).
-    #[test]
-    fn a_pinned_models_band_is_turned_in_the_source_its_host_draws() {
-        assert_eq!(
-            a_models_source(0, true, Some(0x1234)),
-            0x1234,
-            "the pin's own source stands where a hosted player published no window"
-        );
-        assert_eq!(
-            a_models_source(0x2000, true, Some(0x1234)),
-            0x1234,
-            "and it is the picture on the band, not an older player's window"
-        );
-        assert_eq!(
-            a_models_source(0, true, None),
-            0,
-            "a pin whose picture has not been adopted yet has nothing to turn"
-        );
-        assert_eq!(
-            a_models_source(0x2000, false, Some(0x1234)),
-            0x2000,
-            "a hover keeps the window the monitor found for it"
-        );
-        assert_eq!(
-            a_models_source(0, false, Some(0x1234)),
-            0,
-            "and a hover's own host is nobody's to turn"
         );
     }
 

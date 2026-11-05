@@ -470,10 +470,6 @@ fn a_models_band_leaves_the_chrome_and_the_frame_to_the_pin() {
         "and it arms the bar's own button"
     );
 
-    // A drag left latched by a press no release of this test's follows is another test's model turning:
-    // the level of a button nobody is holding ends it (see `f3d_player::settle_a_models_drag`).
-    f3d_player::settle_a_models_drag();
-
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     stand_pin(previous_pin);
     if let Ok(mut current) = CURRENT_MEDIA.lock() {

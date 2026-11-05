@@ -890,21 +890,6 @@ pub(crate) fn pin_zoom_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
     Some(pin.window_box())
 }
 
-/// The box of the pinned band a model stands in, or nothing where the pin up is no model's: asked without
-/// blocking, and asked from the wheel hook rather than from this thread (see `pin_zoom_keep_alive_try`,
-/// whose rules this one follows).
-///
-/// **It is asked before the pictures' zoom rather than beside it**, because a scene is no picture of this
-/// app's: a model's notch is the engine's camera's and a model has no `PinZoom` to give it to (see
-/// `pin_zoom_view`). The band and not the window's box, because a model's chrome is drawn in bands around
-/// its media (see `pin_overlay_chrome`).
-pub(crate) fn the_models_band() -> Option<(i32, i32, i32, i32)> {
-    f3d_player::the_models_window()?;
-    let pinned = pin_window::pin_state_try()?;
-    let pin = pinned.pin()?;
-    (!pin.collapsed && pin.dragging.is_none()).then_some(pin.content)
-}
-
 /// The name a pinned window's caption button is saying out loud, and the button it belongs to.
 ///
 /// A caption is drawn from glyphs, and a glyph is only a picture of an action. That is enough

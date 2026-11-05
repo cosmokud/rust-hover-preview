@@ -53,6 +53,7 @@ pub(crate) use api::{
     showing_hwnd, showing_path, take_failure_notice, the_shown_page_runs, Area,
 };
 pub(crate) use environment::{clear_stale_profiles, stale_profile_pids};
+pub(crate) use host::raises;
 pub(crate) use pages::{hide, hide_html_preview, place, raise, show, shutdown, wanted_here};
 
 // What the tests below and the pinned-preview tests elsewhere reach for, out of the five
