@@ -337,7 +337,9 @@ fn a_model_takes_the_pointer(kind: Option<MediaType>) -> bool {
     kind == Some(MediaType::Model)
 }
 
-/// The engine window a drag on a model's band is being forwarded to, and nothing while no drag is on.
+/// The window of the pair that took the down on a model's band, and nothing while no drag is on —
+/// **the one that took the capture and posts the rest**: a move reaches the engine from the window the
+/// press landed on and from no other of the pair's.
 ///
 /// **Held because the release is the engine's as often as it is ours**: f3d takes the capture on the down
 /// it is posted, and the capture owner is given the real messages for the rest of the drag — so this window
@@ -360,6 +362,10 @@ const MK_LBUTTON: usize = 0x0001;
 /// press is answered here rather than by the pin so that the caret the pin takes on a press of its own is
 /// the one thing a band press does not ask for.
 ///
+/// **Both windows of the pair ask it, and whichever one took the down is the one that posts**: the
+/// host is asked what stands under the hand over a band that is a hole in the pin's pixels, and the
+/// pin's own window is asked what stands over it (see `window_proc`).
+///
 /// Safety: the answers are those of a window of this app's own, asked from its own window procedure.
 pub(super) unsafe fn answer_a_models_band(
     host: HWND,
@@ -370,18 +376,26 @@ pub(super) unsafe fn answer_a_models_band(
     let source = the_models_window()?;
 
     match msg {
-        WM_NCHITTEST => Some(LRESULT(HTCLIENT as isize)),
+        // **A press only counts where it landed in the band**: the host's client *is* the band, and the
+        // pin's own window answers the hit test for the chrome's rows too (see
+        // `the_point_is_in_the_models_band`).
+        WM_NCHITTEST => {
+            the_point_is_in_the_models_band(host, msg, lparam).then_some(LRESULT(HTCLIENT as isize))
+        }
         WM_LBUTTONDOWN => {
+            if !the_point_is_in_the_models_band(host, msg, lparam) {
+                return None;
+            }
             // **The pointer is taken before the down is posted**, and f3d takes it in turn: the engine's
             // own capture on the down is what hands it the real moves of the rest of the drag, and what is
             // taken here is the stretch before that down has been read (see `MODEL_DRAG`).
-            MODEL_DRAG.store(source.0 as isize, Ordering::SeqCst);
+            MODEL_DRAG.store(host.0 as isize, Ordering::SeqCst);
             let _ = unsafe { SetCapture(host) };
             unsafe { post_a_band_message(host, source, msg, message_point(lparam)) };
             Some(LRESULT(0))
         }
         WM_MOUSEMOVE => {
-            if MODEL_DRAG.load(Ordering::SeqCst) != source.0 as isize {
+            if MODEL_DRAG.load(Ordering::SeqCst) != host.0 as isize {
                 return None;
             }
             // **A drag whose release went to the engine is ended here**: a latched drag would post a
@@ -394,7 +408,7 @@ pub(super) unsafe fn answer_a_models_band(
             Some(LRESULT(0))
         }
         WM_LBUTTONUP => {
-            if MODEL_DRAG.load(Ordering::SeqCst) != source.0 as isize {
+            if MODEL_DRAG.load(Ordering::SeqCst) != host.0 as isize {
                 return None;
             }
             unsafe { post_a_band_message(host, source, msg, message_point(lparam)) };
@@ -412,6 +426,41 @@ unsafe fn end_the_models_drag(host: HWND) {
     if unsafe { GetCapture() } == host {
         let _ = unsafe { ReleaseCapture() };
     }
+}
+
+/// Whether the point a message carries stands in the model's band: the whole of the window that *is*
+/// the band, and only part of the pin's own window drawn around it (see `pin_model::the_models_band`).
+fn the_point_is_in_the_models_band(window: HWND, msg: u32, lparam: LPARAM) -> bool {
+    // A host is placed at the band and its client is nothing else (see `the_film_host_box`), so its
+    // press is the band's wherever in it the hand landed — and the pin's state is not asked of it.
+    if pin_film_host::film_host() == Some(window) {
+        return true;
+    }
+
+    let Some((left, top, right, bottom)) = pin_model::the_models_band() else {
+        return false;
+    };
+
+    // A hit test carries the point on the screen, and a mouse message one in the window's own client.
+    let (x, y) = message_point(lparam);
+    let (x, y) = if msg == WM_NCHITTEST {
+        (x, y)
+    } else {
+        let mut point = POINT { x, y };
+        if !unsafe { ClientToScreen(window, &mut point) }.as_bool() {
+            return false;
+        }
+        (point.x, point.y)
+    };
+
+    x >= left && x < right && y >= top && y < bottom
+}
+
+/// Whether the band under the pin is a model's, which is then the pin's nowhere: a press in it turns the
+/// scene rather than carrying the window, and one the engine's road did not take carries nothing (see
+/// `answer_a_models_band`).
+pub(super) fn the_band_is_a_models() -> bool {
+    a_model_takes_the_pointer(current_media_type_try())
 }
 
 /// Whether the left button is down, read as a **level** and never for its press bit: the low bit
