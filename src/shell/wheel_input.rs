@@ -212,7 +212,6 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // would count every notch as zero. A horizontal wheel reports a delta here too
         // and is passed through rather than counted: nothing this app owns moves sideways.
         let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
-
         let notches = (info.mouseData >> 16) as u16 as i16 as i32;
 
         // A notch over the volume popup or the button that opens it is the level's, and it is
@@ -268,6 +267,21 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
             if let Some(region) = crate::ui::preview_window::text_size_keep_alive_try() {
                 if point_in_region(info.pt, region) && preview_takes_the_wheel() {
                     PIN_TEXT_SIZE_DELTA.fetch_add(notches, Ordering::AcqRel);
+                    return LRESULT(1);
+                }
+            }
+        }
+
+        // **A pinned model's notch is its own scene's**, and it is asked before the pictures' zoom below:
+        // f3d's wheel is its camera's and not a picture of this app's, so the notch is posted to the
+        // engine's window and swallowed here — the kinds a notch zooms are refused there rather than here
+        // (see `pin_zoom_view`), and no notch falls through to the listing under the pin.
+        if wparam.0 == WM_MOUSEWHEEL as usize {
+            if let Some(region) = crate::ui::preview_window::the_models_band() {
+                if point_in_region(info.pt, region) && preview_takes_the_wheel() {
+                    if notches != 0 {
+                        crate::ui::preview_window::post_a_notch_to_the_model(info.pt, notches);
+                    }
                     return LRESULT(1);
                 }
             }
