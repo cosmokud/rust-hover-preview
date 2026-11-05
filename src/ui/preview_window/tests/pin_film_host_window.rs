@@ -16,11 +16,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetForegroundWindow, GetParent,
     GetWindow, GetWindowLongPtrW, IsIconic, IsWindowVisible, MoveWindow, SendMessageW, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
-    SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
-    SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ERASEBKGND,
-    WM_NCHITTEST, WM_QUERYOPEN, WM_SIZE, WM_SYSCOMMAND, WS_CHILD, WS_CLIPCHILDREN, WS_DISABLED,
-    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
+    GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HTCLIENT, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOP,
+    HWND_TOPMOST, SC_MINIMIZE, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOZORDER,
+    SW_RESTORE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE,
+    WM_ERASEBKGND, WM_NCHITTEST, WM_QUERYOPEN, WM_SIZE, WM_SYSCOMMAND, WS_CHILD, WS_CLIPCHILDREN,
+    WS_DISABLED, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_POPUP, WS_VISIBLE,
 };
 
 /// The place a window of a test's own is put when it must not be on the user's screen.
@@ -4818,19 +4818,19 @@ fn a_press_on_the_band_is_kept_for_the_pin_by_the_hit_test() {
     }
 }
 
-/// **A model's band is the pin's like a film's**, and both halves of that are asked here. The press is
-/// the pin's, so the hit test answers `HTTRANSPARENT` as a film's does — and the pin hands that press
-/// over to the engine rather than carrying the window it shows (see `f3d_player::hand_the_band_over`).
-/// And the host standing over the source follows the band a hand carries it to, because a picture left
-/// behind is a model that moves only once the hand lets go (see `place_pinned_siblings`).
+/// **A model's window is a child of the pin's host, and that is what makes the band the scene's**: the
+/// styles it wears while the pin holds it and the ones it is given back, the box it stands in inside the
+/// host's client, and the hit test the band answers while it is there (see
+/// `f3d_player::adopt_the_model_window`).
 #[test]
-fn a_models_band_is_the_pins_and_its_host_follows_the_pins_band() {
+fn a_models_window_is_a_child_of_the_host_inside_the_band() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
     // Safety: the pin and its host are this test's own, put back the stand's drop.
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the pin's host");
-    let source = unsafe { a_source_of_the_host(host) };
+    let source = unsafe { a_players_own_window() };
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
 
     // The kind is asked of the media on screen rather than of a flag, which is what every road below
     // reads (see `f3d_player::the_models_window`).
@@ -4843,15 +4843,27 @@ fn a_models_band_is_the_pins_and_its_host_follows_the_pins_band() {
     assert_eq!(
         unsafe { pin_film_host::answer_a_host(host, WM_NCHITTEST, WPARAM(0), LPARAM(0)) },
         Some(LRESULT(HTTRANSPARENT as isize)),
-        "a press on a model's band goes down to the pin, which hands it over"
-    );
-    assert!(
-        !source.is_invalid(),
-        "and the scene is the source the pin's host is drawing"
+        "a band with no scene in it is still the pin's"
     );
 
-    // A hand pulling the pin out to another box leaves nothing of the picture behind: the host *is*
-    // the band, and the band is where the Shell stretches the engine's own window into.
+    unsafe { f3d_player::adopt_the_model_window(source, pid, host) };
+
+    assert_eq!(
+        unsafe { GetParent(source) }.ok(),
+        Some(host),
+        "the scene is the host's child, so the host clips it and carries it"
+    );
+    let style = unsafe { GetWindowLongPtrW(source, GWL_STYLE) };
+    assert_eq!(style & WS_CHILD.0 as isize, WS_CHILD.0 as isize);
+    assert_eq!(style & WS_POPUP.0 as isize, 0, "and no popup of its own");
+    assert_eq!(
+        unsafe { pin_film_host::answer_a_host(host, WM_NCHITTEST, WPARAM(0), LPARAM(0)) },
+        Some(LRESULT(HTCLIENT as isize)),
+        "and the band's press is the scene's now, down through the host's client"
+    );
+
+    // A hand pulling the pin out to another box carries the picture with it: the host is the band, and
+    // the child's box is measured inside the host's client rather than being a place of its own.
     let wider = (
         film.box_.0,
         film.box_.1,
@@ -4864,6 +4876,64 @@ fn a_models_band_is_the_pins_and_its_host_follows_the_pins_band() {
         unsafe { window_rect(host) },
         wider,
         "the host stands in the band the pin now shows the model through"
+    );
+    assert_eq!(
+        unsafe { GetParent(source) }.ok(),
+        Some(host),
+        "which is still the host's, a move of the pin being no placement of its own"
+    );
+
+    unsafe { f3d_player::restore_the_adopted_model_window() };
+    assert_eq!(
+        unsafe { GetParent(source) }.ok(),
+        None,
+        "and the window is the desktop's again once the pin is done with it"
+    );
+    let style = unsafe { GetWindowLongPtrW(source, GWL_STYLE) };
+    assert_eq!(style & WS_CHILD.0 as isize, 0, "no child bit left on it");
+    assert_eq!(
+        style & WS_POPUP.0 as isize,
+        WS_POPUP.0 as isize,
+        "and the popup it was made as"
+    );
+
+    unsafe { put_away_a_window_of_the_suite(source) };
+}
+
+/// **A pin's teardown gives the model's window back before the host that holds it goes**, which is the one
+/// order the pair can be taken down in: a child destroyed with its parent is a window f3d never got to
+/// close, and a hover or the next pin has no window to re-use (see `take_down_the_pin_film_host`).
+#[test]
+fn a_models_window_is_unparented_before_the_host_goes() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the pin's host");
+    let source = unsafe { a_players_own_window() };
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.media_type = MediaType::Model;
+        }
+    }
+
+    unsafe { f3d_player::adopt_the_model_window(source, pid, host) };
+    assert_eq!(unsafe { GetParent(source) }.ok(), Some(host));
+
+    unsafe { pin_film_host::take_down_the_pin_film_host() };
+
+    assert!(
+        unsafe { IsWindow(source) }.as_bool(),
+        "the scene's window outlives the host it was standing in"
+    );
+    assert_eq!(
+        unsafe { GetParent(source) }.ok(),
+        None,
+        "and it is nobody's child any more"
+    );
+    assert!(
+        !unsafe { IsWindow(host) }.as_bool(),
+        "while the host it was adopted into is gone"
     );
 
     unsafe { put_away_a_window_of_the_suite(source) };

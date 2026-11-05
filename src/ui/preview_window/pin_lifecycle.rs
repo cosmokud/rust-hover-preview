@@ -2566,13 +2566,6 @@ pub(super) unsafe fn front_ordinary_window(except: HWND) -> HWND {
 /// to the listing, and the front being the app's own is the app answering itself — the press that
 /// opened a menu, the click that took the pin's caption — which is not the user leaving the listing.
 pub(super) unsafe fn foreground_is_ours(window: HWND) -> bool {
-    // **The window the band was handed to is ours while the hand-over lasts**: it stands in the pin's band,
-    // over the pin's own window, and a front window this app does not own would give the band back and put
-    // the pin under the scene it is a window onto (see `f3d_player::hand_the_band_over`).
-    if f3d_player::the_handed_over_source_is(window) {
-        return true;
-    }
-
     let mut pid = 0u32;
     GetWindowThreadProcessId(window, Some(&mut pid));
     pid_is_the_previews(pid)

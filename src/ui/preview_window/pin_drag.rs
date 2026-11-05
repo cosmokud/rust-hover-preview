@@ -263,13 +263,6 @@ pub(super) unsafe fn settle_pinned_press(hwnd: HWND, seen_presses: &mut u64) {
         return;
     }
 
-    // **A press on a band handed over to the engine is the engine's**: raising the pin over the scene would
-    // take the pointer out of the engine's own drag, and the scene is what the hand is on (see
-    // `f3d_player::hand_the_band_over`).
-    if f3d_player::the_band_is_handed_over() {
-        return;
-    }
-
     let Some(point) = cursor_screen_point() else {
         return;
     };

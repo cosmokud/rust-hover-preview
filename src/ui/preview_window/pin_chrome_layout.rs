@@ -830,7 +830,6 @@ fn a_window_of_the_pins_own(under: isize) -> bool {
     pin_lifecycle::pid_is_the_previews(owner)
         || engine_processes::holds_a_player(owner)
         || pin_film_host::hosted_player_pid() == Some(owner)
-        || f3d_player::the_handed_over_source_is(HWND(under as *mut _))
 }
 
 /// The window under a screen point, which a test stands in rather than reading off the desktop:
