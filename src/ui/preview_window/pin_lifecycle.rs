@@ -1212,9 +1212,9 @@ pub(super) fn pin_media_is_alive(navigating: bool) -> bool {
         // between passes rather than gone — the whole of what is asked about here is above.
         MediaType::Audio => true,
         MediaType::NativeVideo => video_player::is_playing(),
-        // **A model's player is one the user can close**, because the window the pin shows is f3d's own
-        // and its quit bind is its own: the pin is a window onto that scene, and a scene that has gone
-        // is a pin that has come apart like any other (see `f3d_player`).
+        // **A model's player is one the user can close**, because the window the pin shows is f3d's own and
+        // its quit bind is its own: the pin is a window onto that scene, and a scene that has gone is a pin
+        // that has come apart like any other (see `f3d_player`).
         MediaType::Model => f3d_player::the_model_window_is_up(),
         // A document or a specimen is the browser's, and what says it is still there is the
         // engine standing behind the file rather than a window with pixels in it: a window is
@@ -2566,6 +2566,13 @@ pub(super) unsafe fn front_ordinary_window(except: HWND) -> HWND {
 /// to the listing, and the front being the app's own is the app answering itself — the press that
 /// opened a menu, the click that took the pin's caption — which is not the user leaving the listing.
 pub(super) unsafe fn foreground_is_ours(window: HWND) -> bool {
+    // **The window the band was handed to is ours while the hand-over lasts**: it stands in the pin's band,
+    // over the pin's own window, and a front window this app does not own would give the band back and put
+    // the pin under the scene it is a window onto (see `f3d_player::hand_the_band_over`).
+    if f3d_player::the_handed_over_source_is(window) {
+        return true;
+    }
+
     let mut pid = 0u32;
     GetWindowThreadProcessId(window, Some(&mut pid));
     pid_is_the_previews(pid)
@@ -2873,12 +2880,11 @@ pub(super) fn place_pinned_siblings() {
     let page = engine_page_in_the_band();
 
     match kind {
-        Some(MediaType::Video) => ensure_pinned_sibling_box(content),
-        // **A model's picture is f3d's own window standing in the band**, so its band is owed the
-        // window moved into it on every road a film's host is moved into its own — and nothing else: the
-        // window is f3d's from the launch, and a promotion from a hover is that same window placed
-        // rather than a scene begun again (see `f3d_player::place_the_model_in_the_band`).
-        Some(MediaType::Model) => unsafe { f3d_player::place_the_model_in_the_band(content) },
+        // **A model is the same kind of thing as a film here** — a picture in a window of the host's,
+        // which is the box the Shell stretches f3d's own window into — so its band is owed the same
+        // placement, and a hand carrying or pulling the pin leaves the picture behind without it (see
+        // `f3d_player`).
+        Some(MediaType::Video) | Some(MediaType::Model) => ensure_pinned_sibling_box(content),
         // A document is the same kind of thing — a window of somebody else's standing in the pin's
         // band — and it is put back where it stands rather than asked for again: a page this
         // engine holds is a window that moves with the box rather than a document to navigate to

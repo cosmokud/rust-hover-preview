@@ -262,7 +262,7 @@ thread_local! {
 /// it should it ever be in front of anything. `WS_EX_LAYERED` is the invisibility itself, and the app
 /// and topmost bits mpv opens with are cleared: this window is behind the pin and must never be held
 /// over it (see `video_launch::mpv_args`, which no longer asks for `--ontop` here).
-fn source_ex_style(current: isize, invisible: bool) -> isize {
+pub(super) fn source_ex_style(current: isize, invisible: bool) -> isize {
     let style = (current & !(WS_EX_APPWINDOW.0 as isize) & !(WS_EX_TOPMOST.0 as isize))
         | WS_EX_TOOLWINDOW.0 as isize
         | WS_EX_NOACTIVATE.0 as isize

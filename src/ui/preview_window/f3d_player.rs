@@ -16,13 +16,18 @@
 //! box becomes its client — which is the rectangle a thumbnail's crop is cut from. And **the window
 //! is waited for**, because a viewer that has made no window is a preview with nothing in it.
 //!
-//! **And what a pin shows of one is the window itself**, standing in the pin's band and taking the hand
-//! on it: f3d turns its scene from its own captured drag, so a press posted into it is a press it never
-//! reads (see `place_the_model_in_the_band`). A hover keeps the Shell's thumbnail of that same
-//! window.
+//! **And a pinned model's band is handed over to that window on the first press in it**: the pin draws the
+//! Shell's thumbnail of it, and the press that would carry the pin makes the engine's window the window the
+//! hand is on instead — parked in the band, raised over the pin and made hit-testable, with a real press
+//! injected at the cursor, because a scene turns from its own captured drag and never from a posted message
+//! (see `hand_the_band_over`).
 
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEINPUT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_STYLE, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    GetCursorPos, GWL_EXSTYLE, GWL_STYLE, WS_CAPTION, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::*;
@@ -289,7 +294,8 @@ unsafe fn place_the_window(window: HWND, box_: ScreenRegion) {
     };
 }
 
-/// The engine window a model's picture is drawn in, where the picture standing in the preview is a
+/// The engine window a model's band stands in, where the picture standing in that band is a model's: nothing
+/// for a film's player, whose window is no scene this app turns.
 /// model's: nothing for a film's player, whose window is no scene this app turns.
 ///
 /// The kind is asked of the media on screen rather than of a flag of this module's, because that is what
@@ -300,6 +306,7 @@ pub(super) fn the_models_window() -> Option<HWND> {
         current_media_type_try(),
         a_models_source(
             VIDEO_HWND.load(Ordering::SeqCst),
+            pinned(),
             pin_film_thumbnail::the_source_window().map(|source| source.0 as isize),
         ),
     )
@@ -307,26 +314,25 @@ pub(super) fn the_models_window() -> Option<HWND> {
 
 /// Whether a pinned model's picture is still on the screen.
 ///
-/// **f3d's window is the picture, and f3d can close it**: its own Esc or its own quit bind is a hand on
-/// the scene rather than on the pin, so a handle written down when the window was there is a handle to
-/// nothing afterwards. The pin is a window onto that scene, and a scene that has gone is a pin that has
-/// come apart like any other (see `pin_media_is_alive`).
+/// **f3d's window is the picture, and f3d can close it**: its own Esc or its own quit bind is a hand on the
+/// scene rather than on the pin, so a handle written down when the window was there is a handle to nothing
+/// afterwards. The pin is a window onto that scene, and a scene that has gone is a pin that has come apart
+/// like any other (see `pin_media_is_alive`).
 pub(super) fn the_model_window_is_up() -> bool {
     the_models_window().is_some_and(|window| unsafe { IsWindow(window) }.as_bool())
 }
 
-/// The window the model's picture is drawn in, from the two roads that name one.
-///
-/// **The published window is the picture's own** — the monitor writes it the moment f3d's window exists,
-/// and every road that places the picture reads it there. The source is what stands in for it in one
-/// case: a window a hover's host was showing publishes nothing of the desktop's until the pin's own road
-/// publishes it, and a promotion from a hover is that same window rather than a scene begun again (see
-/// `pin_film_thumbnail::the_source_window` and `place_the_model_in_the_band`).
-fn a_models_source(published: isize, source: Option<isize>) -> isize {
-    if published != 0 {
-        return published;
+/// The window a model's band is turned in: **while a pin is up it is the source that pin's host
+/// thumbnails**, because a player begun into a host publishes nothing of the desktop's and the host
+/// stands over the source's own rectangle — so the published handle is nothing on every pinned model,
+/// and a press read off it would be a band with nothing to turn (see `pin_film_host::note_hosted_player`
+/// and `pin_film_thumbnail::the_source_window`). A hover keeps the published handle, which is the
+/// window the monitor found for it and the only one a hover host is not standing over.
+fn a_models_source(published: isize, pinned: bool, source: Option<isize>) -> isize {
+    if pinned {
+        return source.unwrap_or(published);
     }
-    source.unwrap_or(0)
+    published
 }
 
 /// The rule `the_models_window` decides by, apart from the machine it reads: a model is the media on
@@ -343,22 +349,150 @@ fn a_model_takes_the_pointer(kind: Option<MediaType>) -> bool {
     kind == Some(MediaType::Model)
 }
 
-/// How far inside the pin's own band a model's window is placed.
+/// The window the band was handed over to, while the gesture is the engine's — zero otherwise.
+static HANDED_OVER: AtomicIsize = AtomicIsize::new(0);
+
+/// How far inside the pin's own band a handed-over model's window is placed.
 ///
-/// **Nothing the pin paints can clip a window that stands over it.** A pinned model's window is f3d's
-/// own, standing over the pin's surface rather than under it, so the band is handed in by the frame the
-/// pin draws around it: what is left outside the scene is the pin's edge and its corner, and a scene
-/// drawn to the band's own rectangle would paint over both.
+/// **Nothing the pin paints may clip the scene.** The band is framed by the pin's edge and its corner, and a
+/// scene drawn on the band's own rectangle paints over both.
 ///
-/// shortcut: the pinned band's paint is a hairline with no radius today, so one pixel a side; upgrade to
-/// the painted radius when the band's paint gains one.
+/// shortcut: the pinned band's paint is a hairline with no radius today, so one pixel a side; upgrade to the
+/// painted radius when the band's paint gains one.
 const MODEL_BAND_INSET: i32 = 1;
 
-/// The box a pinned model's window stands in, from the band the pin says its picture occupies.
+/// Hand the band over to the engine on the first left press in it: f3d's own window takes the hand, the
+/// gesture, and everything the gesture means from here.
 ///
-/// Pure so the inset can be asked without a window (see `MODEL_BAND_INSET`): every side moved in by the
-/// same count, and never past a box of one pixel on either axis.
-pub(super) fn the_models_band_inset(content: ScreenRegion) -> ScreenRegion {
+/// **A press posted into the engine is a press it never reads** — f3d turns its scene from its own captured
+/// drag — so the press that hands over is a real one, injected at the cursor once the window stands above the
+/// pin, hit-testable and able to activate (see `inject_a_left_press`). A window that cannot activate never gets
+/// its own keyboard binds or its own Esc either, so `WS_EX_NOACTIVATE` comes off for the length of this state.
+///
+/// Answer whether the band under the press is a model's at all: a press it is on a model whose window is not up
+/// yet carries nothing, rather than carrying the window its picture is shown in.
+///
+/// Safety: asked from the pin's own window procedure's press road, with that window.
+pub(super) unsafe fn hand_the_band_over(hwnd: HWND) -> bool {
+    if !a_model_takes_the_pointer(current_media_type_try()) {
+        return false;
+    }
+    let Some(source) = the_models_window() else {
+        return true;
+    };
+
+    // **The latch goes down before anything moves**: the window takes the press the moment it is on screen, and
+    // every road that asks whether the pair is still the interaction's answers from the latch rather than from
+    // where the window happens to stand (see `settle_the_band_hand_over`).
+    HANDED_OVER.store(source.0 as isize, Ordering::SeqCst);
+
+    // Above the pin's own window and below its chrome, which stands above the pin — a scene over the chrome
+    // would put the caption's own buttons out of the hand (see `pin_film_host::place_the_pin_in_the_band`).
+    if let Some(band) = the_pins_band() {
+        unsafe { place_the_window(source, the_models_band_inset(band)) };
+    }
+    let _ = unsafe {
+        SetWindowPos(
+            source,
+            hwnd,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    };
+    let style = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
+    write_the_ex_style(source, the_handed_over_ex_style(style));
+
+    // **Our own capture is let go of before the press is injected**: a window holding the pointer is given every
+    // move of the drag, and the engine would be turning a scene nothing was sent.
+    if unsafe { GetCapture() } == hwnd {
+        let _ = unsafe { ReleaseCapture() };
+    }
+
+    unsafe { inject_a_left_press() };
+    true
+}
+
+/// Whether the band is the engine's for now, and nothing of ours claims, forwards or hit-tests it (see
+/// `hand_the_band_over`).
+pub(super) fn the_band_is_handed_over() -> bool {
+    HANDED_OVER.load(Ordering::SeqCst) != 0
+}
+
+/// Whether `window` is the source this app handed the pointer to, which is one of ours for as long as the
+/// hand-over lasts: it stands in the pin's band, over the pin's own window.
+pub(super) fn the_handed_over_source_is(window: HWND) -> bool {
+    let held = HANDED_OVER.load(Ordering::SeqCst);
+    held != 0 && !window.is_invalid() && window.0 as isize == held
+}
+
+/// Put the band back the way the mirror leaves it: the engine's window pointer-transparent and layered again,
+/// standing where the pin's host thumbnails it from, and the latch gone.
+///
+/// **Asked from every road that says the gesture is over**: the pair no longer the interaction's, a press on the
+/// pin's own chrome, the pin put away, and the engine's window gone (see `settle_the_band_hand_over` and
+/// `pin_input::pinned_press_on`).
+pub(super) fn return_the_band_to_the_mirror() {
+    let held = HANDED_OVER.swap(0, Ordering::SeqCst);
+    if held == 0 {
+        return;
+    }
+    let source = HWND(held as *mut _);
+    if !unsafe { IsWindow(source) }.as_bool() {
+        return;
+    }
+
+    // **The mirror's own road puts the source back out of sight**: the style and alpha that make it a window
+    // the host thumbnails rather than one the hand is on, put on by the road that keeps it that way every tick
+    // (see `pin_film_thumbnail::keep_the_source_invisible`). Nothing is asked of the player.
+    unsafe { pin_film_thumbnail::keep_the_source_invisible() };
+
+    // **Rewound out of the pointer's way**: the box the host thumbnails from is the band's, and the window goes
+    // back to standing where a film's own player stands — under the host that draws it (see
+    // `pin_lifecycle::place_pinned_siblings`).
+    if pinned() {
+        if let Some(band) = the_pins_band() {
+            pin_lifecycle::ensure_pinned_sibling_box(band);
+        }
+    }
+}
+
+/// Whether the hand-over is over, decided apart from the desktop it reads: the pair is the interaction's while
+/// the window in front is the scene's own or one of the pin's, and nothing else (see
+/// `settle_the_band_hand_over`).
+fn the_hand_over_is_over(pinned: bool, source_up: bool, in_front_of_the_pair: bool) -> bool {
+    !pinned || !source_up || !in_front_of_the_pair
+}
+
+/// Settle the hand-over against the desktop: back to the mirror the moment the pair is not what the user is in,
+/// or the engine's window is gone.
+///
+/// **The window in front is the whole question.** The press that handed over makes the engine's window the one
+/// the user is in, and the pin's own chrome takes it back; anything else in front — the listing, another
+/// program, the desktop — is the gesture over, and the band goes back to being the pin's.
+pub(super) fn settle_the_band_hand_over(foreground: HWND) {
+    let held = HANDED_OVER.load(Ordering::SeqCst);
+    if held == 0 {
+        return;
+    }
+    let source = HWND(held as *mut _);
+    let in_front_of_the_pair = foreground == source || pin_lifecycle::a_window_of_ours(foreground);
+    if the_hand_over_is_over(
+        pinned(),
+        unsafe { IsWindow(source) }.as_bool(),
+        in_front_of_the_pair,
+    ) {
+        return_the_band_to_the_mirror();
+    }
+}
+
+/// The box a handed-over model's window stands in, from the band the pin says its picture occupies.
+///
+/// Pure so the inset can be asked without a window (see `MODEL_BAND_INSET`): every side moved in by the same
+/// count, and never past a box of one pixel on either axis.
+fn the_models_band_inset(content: ScreenRegion) -> ScreenRegion {
     let (left, top, right, bottom) = content;
     let left = (left + MODEL_BAND_INSET).min(right - 1);
     let top = (top + MODEL_BAND_INSET).min(bottom - 1);
@@ -370,142 +504,77 @@ pub(super) fn the_models_band_inset(content: ScreenRegion) -> ScreenRegion {
     )
 }
 
-/// Put a pinned model's window in the pin's band, and keep it there.
-///
-/// **The picture is f3d's own window and not the Shell's thumbnail of it.** A hand on the band is a hand
-/// on the scene, and a scene behind a thumbnail is one nothing can turn — so every road that places a
-/// window standing beside the pin places this one, at the band inset by the frame the pin paints around
-/// it (see `the_models_band_inset`).
-///
-/// **Over the pin and never over its chrome.** The pin's own surface under the scene is the frame and
-/// nothing else, and the band is the scene's: the pin is not put back over it as it is over a film, which
-/// would be the press taken from the scene (see `place_player_window`, whose pin-back a model does not
-/// get). What is drawn over the band still is: the caption's menu, raised by its own tick, and the
-/// windows the hold-off below leaves the scene where it stands for (see `player_order`).
-///
-/// **Nothing of the pin's chrome crosses a model's band**: a model plays nothing, so there is no
-/// transport row and no volume popup over it, and the caption's rows are above the band (see
-/// `pin_transport_kind` and `pinned_caption_height`).
-///
-/// Safety: the window is f3d's, and everything here is a style, a placement and a show of it.
-pub(super) unsafe fn place_the_model_in_the_band(content: ScreenRegion) {
-    let Some(window) = the_models_window() else {
+/// The pin's own band, read from the pin's state without waiting on it (see
+/// `pin_model::pin_zoom_keep_alive_try`, whose rules this follows). Nothing where no pin is readable, which
+/// leaves the scene where it stands rather than placing it somewhere worse.
+fn the_pins_band() -> Option<ScreenRegion> {
+    pin_window::pin_state_try().and_then(|pinned| pinned.pin().map(|pin| pin.content))
+}
+
+/// The style the engine's window wears while the band is handed over: **the scene is the picture and the hand is
+/// on it**, so the two bits a thumbnail source wears come off — a `WS_EX_TRANSPARENT` window is skipped by the
+/// pointer and a `WS_EX_LAYERED` one is composed rather than hit — and `WS_EX_NOACTIVATE` with them, which is
+/// what lets a press of the user's own activate the engine and give it its keyboard (see
+/// `ffplay_window::player_ex_style_for` for the style it wears at rest).
+fn the_handed_over_ex_style(source: isize) -> isize {
+    (source
+        & !(WS_EX_TRANSPARENT.0 as isize)
+        & !(WS_EX_LAYERED.0 as isize)
+        & !(WS_EX_NOACTIVATE.0 as isize))
+        | WS_EX_TOOLWINDOW.0 as isize
+}
+
+/// Write an extended style and make the window read it: a style is not a thing a window is told about live (see
+/// `ffplay_window::place_player_window`).
+fn write_the_ex_style(window: HWND, style: isize) {
+    if style == 0 || unsafe { SetWindowLongPtrW(window, GWL_EXSTYLE, style) } == 0 {
         return;
+    }
+    let _ = unsafe {
+        SetWindowPos(
+            window,
+            HWND::default(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
     };
+}
 
-    // **The style is the one every player's window goes through**, and the model's own answer is inside
-    // it: f3d's frame off, a press reaching the scene, and the bits that keep it out of the Shell's
-    // lists (see `ffplay_window::player_ex_style_for`).
-    let current = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
-    let styled = ffplay_window::player_ex_style_for(current);
-    if styled != current {
-        let _ = unsafe { SetWindowLongPtrW(window, GWL_EXSTYLE, styled) };
-    }
-
-    // **The raise is held off where something of the pin's is drawn over the band**, which is the one
-    // list every window in a band answers to (see `player_order`).
-    if video_playback::player_order(
-        video_process_image(),
-        true,
-        pin_chrome_up(),
-        pin_volume_open(),
-        pin_menu_open(),
-    ) == video_playback::PlayerOrder::Leave
-    {
+/// Press the left button for the engine, at the cursor: the press the hand has just made is the engine's from
+/// here — its own capture, its own orbit, its own binds.
+///
+/// **Nothing is injected where the cursor cannot be read**, and none of it re-enters this app: the window has
+/// already been placed, raised and made hit-testable by the caller, so the press lands in the scene; the app's
+/// own low-level mouse hook is the one place a press of its own could come back in, and it reads no injected
+/// event (see `crate::shell::wheel_input`).
+unsafe fn inject_a_left_press() {
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) }.is_err() {
         return;
     }
-
-    let (left, top, right, bottom) = the_models_band_inset(content);
-    let (width, height) = ((right - left).max(1), (bottom - top).max(1));
-    // A window standing in front of a pin is raised by the list a running page is raised by: topmost
-    // while the pin holds the front, and the top of the ordinary band where it does not (see
-    // `webview_preview::raises`).
-    for raise in webview_preview::raises(true, pin_holds_the_front())
-        .into_iter()
-        .flatten()
-    {
-        let _ = unsafe {
-            SetWindowPos(
-                window,
-                raise.insert_after,
-                left,
-                top,
-                width,
-                height,
-                raise.flags,
-            )
-        };
-    }
+    let press = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_LEFTDOWN,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let _ = unsafe { SendInput(&[press], std::mem::size_of::<INPUT>() as i32) };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// **The band a model's window stands in is the pin's own, taken in by the frame the pin paints
-    /// around it**, because nothing the pin paints can clip a window standing over it (see
-    /// `the_models_band_inset`).
-    #[test]
-    fn a_pinned_models_band_is_inset_inside_the_frame_the_pin_paints() {
-        assert_eq!(
-            the_models_band_inset((100, 50, 300, 250)),
-            (101, 51, 299, 249),
-            "every side of the pin's band is taken in by the frame it paints around it"
-        );
-        assert_eq!(
-            the_models_band_inset((10, 10, 12, 12)),
-            (11, 11, 12, 12),
-            "and a band too small to take in is still a box of a pixel: the scene is placed, never              handed a box of nothing"
-        );
-    }
 
-    /// **A model in front of a pin is raised over the pin and never over what the pin draws over the
-    /// band**: the raise is the topmost one a window standing in front of a pin is raised by, and it is
-    /// held off while the pin's chrome, its volume popup or the caption's menu is up (see
-    /// `place_the_model_in_the_band`, `webview_preview::raises`, `video_playback::player_order`).
-    #[test]
-    fn a_model_is_raised_over_the_pin_and_never_over_its_chrome() {
-        let raises = webview_preview::raises(true, false);
-        assert_eq!(
-            raises[0].map(|raise| raise.insert_after),
-            Some(HWND_TOPMOST)
-        );
-        assert_eq!(
-            raises[0].map(|raise| raise.flags),
-            Some(SWP_NOACTIVATE | SWP_SHOWWINDOW),
-            "a pin that does not hold the front is raised over, and shown, by the topmost call"
-        );
-        assert_eq!(
-            raises[1].map(|raise| raise.insert_after),
-            Some(HWND_NOTOPMOST),
-            "and dropped to the top of the ordinary band after it"
-        );
-        assert_eq!(
-            webview_preview::raises(true, true)[1],
-            None,
-            "while a pin that holds the front keeps the scene topmost with it"
-        );
-
-        for (chrome, volume, menu) in [
-            (false, false, false),
-            (true, false, false),
-            (false, true, false),
-            (false, false, true),
-        ] {
-            let order = video_playback::player_order("", true, chrome, volume, menu);
-            let asked = if chrome || volume || menu {
-                video_playback::PlayerOrder::Leave
-            } else {
-                video_playback::PlayerOrder::Raise
-            };
-            assert_eq!(
-                order, asked,
-                "chrome {chrome} volume {volume} menu {menu}: the band's window is raised over                  nothing the pin draws over it"
-            );
-        }
-    }
-
-    /// **Only a model is a band the pointer turns.** A film's band is a hand on the pin, and every kind drawn
-    /// into a window of this app's is a press this app answers itself (see `a_model_takes_the_pointer`), and
     /// no window of a model's is one until it has been made.
     #[test]
     fn a_model_takes_the_pointer_and_no_other_kind_does() {
@@ -538,6 +607,38 @@ mod tests {
         );
     }
 
+    /// **A pinned model's band is turned in the source its host is drawing**, which is the one handle a
+    /// player begun into a host never publishes: `VIDEO_HWND` is nothing for such a player, and a band
+    /// read off that handle alone is a band with nothing to turn (see `the_models_window`).
+    #[test]
+    fn a_pinned_models_band_is_turned_in_the_source_its_host_draws() {
+        assert_eq!(
+            a_models_source(0, true, Some(0x1234)),
+            0x1234,
+            "the pin's own source stands where a hosted player published no window"
+        );
+        assert_eq!(
+            a_models_source(0x2000, true, Some(0x1234)),
+            0x1234,
+            "and it is the picture on the band, not an older player's window"
+        );
+        assert_eq!(
+            a_models_source(0, true, None),
+            0,
+            "a pin whose picture has not been adopted yet has nothing to turn"
+        );
+        assert_eq!(
+            a_models_source(0x2000, false, Some(0x1234)),
+            0x2000,
+            "a hover keeps the window the monitor found for it"
+        );
+        assert_eq!(
+            a_models_source(0, false, Some(0x1234)),
+            0,
+            "and a hover's own host is nobody's to turn"
+        );
+    }
+
     /// **A model's window is its client**, and the bits that make that true are the frame's: every
     /// one of them goes, the popup bit the window ends up as comes on, and a window that already
     /// wears the answer is left alone so that the strip can be asked for on any pass.
@@ -556,5 +657,65 @@ mod tests {
         );
         assert!(is_chrome_less(bare), "and a second strip is no change");
         assert!(!is_chrome_less(decorated));
+    }
+    /// **A band stands in the pin's own frame**, and a scene drawn on the band's own rectangle would paint
+    /// over the edge and the corner the pin keeps (see `MODEL_BAND_INSET`).
+    #[test]
+    fn a_handed_overs_band_is_inset_by_the_pins_frame() {
+        assert_eq!(
+            the_models_band_inset((100, 50, 300, 250)),
+            (101, 51, 299, 249)
+        );
+
+        // A band too small to be inset is a box of one pixel rather than an inverted one: a placement that
+        // asks for a negative width is no placement at all.
+        assert_eq!(the_models_band_inset((10, 10, 12, 12)), (11, 11, 12, 12));
+        assert_eq!(the_models_band_inset((10, 10, 11, 11)), (10, 10, 11, 11));
+    }
+
+    /// **The hand-over's two bits come off and the mirror's go back on**: a scene the pointer cannot hit is a
+    /// scene nothing turns, and a film's source is exactly that (see `the_handed_over_ex_style` and
+    /// `ffplay_window::player_ex_style_for`, which is the style the mirror leaves it wearing).
+    #[test]
+    fn the_engine_window_is_hit_and_can_activate_only_while_handed_over() {
+        let source =
+            WS_EX_TRANSPARENT.0 as isize | WS_EX_LAYERED.0 as isize | WS_EX_NOACTIVATE.0 as isize;
+
+        let handed_over = the_handed_over_ex_style(source);
+        assert_eq!(handed_over & WS_EX_TRANSPARENT.0 as isize, 0);
+        assert_eq!(handed_over & WS_EX_LAYERED.0 as isize, 0);
+        assert_eq!(handed_over & WS_EX_NOACTIVATE.0 as isize, 0);
+        assert!(
+            handed_over & WS_EX_TOOLWINDOW.0 as isize != 0,
+            "and it is still a window the Shell lists no button for"
+        );
+
+        let mirror = pin_film_thumbnail::source_ex_style(handed_over, true);
+        assert!(
+            mirror & WS_EX_TRANSPARENT.0 as isize != 0
+                && mirror & WS_EX_LAYERED.0 as isize != 0
+                && mirror & WS_EX_NOACTIVATE.0 as isize != 0,
+            "which is the picture a thumbnail is cut from, and the band a hand carries"
+        );
+    }
+
+    /// **The hand-over is over the moment the pair is not what the user is in**, and not before: the scene's
+    /// window gone, the pin gone, or a window in front that is neither the scene's nor the pin's (see
+    /// `settle_the_band_hand_over`).
+    #[test]
+    fn the_hand_over_ends_on_every_road_but_the_pairs_own_front() {
+        assert!(
+            !the_hand_over_is_over(true, true, true),
+            "the scene is in front"
+        );
+        assert!(
+            the_hand_over_is_over(true, true, false),
+            "another program is"
+        );
+        assert!(
+            the_hand_over_is_over(true, false, true),
+            "the engine's window is gone"
+        );
+        assert!(the_hand_over_is_over(false, true, true), "the pin is gone");
     }
 }

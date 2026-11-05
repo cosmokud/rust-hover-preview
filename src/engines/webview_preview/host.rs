@@ -1041,9 +1041,9 @@ impl Drop for Host {
 ///
 /// The box is passed to every call; `SWP_NOMOVE|SWP_NOSIZE` is what makes a call ignore it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Raise {
-    pub(crate) insert_after: HWND,
-    pub(crate) flags: SET_WINDOW_POS_FLAGS,
+pub(super) struct Raise {
+    pub(super) insert_after: HWND,
+    pub(super) flags: SET_WINDOW_POS_FLAGS,
 }
 
 /// The calls that put the page in front, in the order they are made, absent where there is none.
@@ -1053,7 +1053,7 @@ pub(crate) struct Raise {
 /// stayed under Explorer. Claiming topmost and then giving it up is the pair a background process
 /// may make, and the second call is what drops the window to the *top* of the ordinary band
 /// instead of leaving it where it was.
-pub(crate) fn raises(pinned: bool, holds_front: bool) -> [Option<Raise>; 2] {
+pub(super) fn raises(pinned: bool, holds_front: bool) -> [Option<Raise>; 2] {
     let topmost = Raise {
         insert_after: HWND_TOPMOST,
         flags: SWP_NOACTIVATE | SWP_SHOWWINDOW,

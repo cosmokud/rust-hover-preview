@@ -1412,10 +1412,10 @@ pub(super) fn the_film_is_shown_in_a_host(path: &Path, kind: Option<MediaType>) 
             Some(MediaType::Video) => {
                 matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
             }
-            // **A model is the one kind a host never holds.** Its picture is a window of somebody
-            // else's that a hand turns, and a thumbnail of a scene is a scene nothing can turn: the
-            // window stands in the band itself, on the roads a page that runs stands in it (see
-            // `f3d_player::place_the_model_in_the_band`).
+            // A model is the one kind whose picture is a window of somebody else's on every road,
+            // and the engine that draws it is on this machine or the file has no preview at all
+            // (see `f3d_render`).
+            Some(MediaType::Model) => f3d_render::available(),
             _ => false,
         }
 }
