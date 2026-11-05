@@ -573,16 +573,6 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            // The rest of a drag a model's band owns: the window that took the down posts the moves, and
-            // ends it on the level of the button where the release was the engine's (see
-            // `f3d_player::answer_a_models_band`).
-            if pinned() {
-                if let Some(answer) =
-                    unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
-                {
-                    return answer;
-                }
-            }
             let (x, y) = message_point(lparam);
             if pinned() {
                 pinned_mouse_move(hwnd, x, y);
@@ -605,16 +595,6 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            // The release that ends a model's drag is posted on and answered here, whatever window holds
-            // the pointer, so the pin's own arms never see the end of a press it did not take (see
-            // `f3d_player::answer_a_models_band`).
-            if pinned() {
-                if let Some(answer) =
-                    unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
-                {
-                    return answer;
-                }
-            }
             let (x, y) = message_point(lparam);
             // A press the find bar's card answered is released here, before the pin's own arms: the
             // card owns the press from the moment it takes it, and a chevron held down stops where it

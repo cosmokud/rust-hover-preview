@@ -1212,6 +1212,10 @@ pub(super) fn pin_media_is_alive(navigating: bool) -> bool {
         // between passes rather than gone — the whole of what is asked about here is above.
         MediaType::Audio => true,
         MediaType::NativeVideo => video_player::is_playing(),
+        // **A model's player is one the user can close**, because the window the pin shows is f3d's own
+        // and its quit bind is its own: the pin is a window onto that scene, and a scene that has gone
+        // is a pin that has come apart like any other (see `f3d_player`).
+        MediaType::Model => f3d_player::the_models_window().is_some(),
         // A document or a specimen is the browser's, and what says it is still there is the
         // engine standing behind the file rather than a window with pixels in it: a window is
         // what a browser being *started* has none of yet, and reading that as "gone" closed a
@@ -2869,11 +2873,12 @@ pub(super) fn place_pinned_siblings() {
     let page = engine_page_in_the_band();
 
     match kind {
-        // **A model is the same kind of thing as a film here** — a picture in a window of the host's,
-        // which is the box the Shell stretches f3d's own window into — so its band is owed the same
-        // placement, and a hand carrying or pulling the pin leaves the picture behind without it (see
-        // `f3d_player`).
-        Some(MediaType::Video) | Some(MediaType::Model) => ensure_pinned_sibling_box(content),
+        Some(MediaType::Video) => ensure_pinned_sibling_box(content),
+        // **A model's picture is f3d's own window standing in the band**, so its band is owed the
+        // window moved into it on every road a film's host is moved into its own — and nothing else: the
+        // window is f3d's from the launch, and a promotion from a hover is that same window placed
+        // rather than a scene begun again (see `f3d_player::place_the_model_in_the_band`).
+        Some(MediaType::Model) => unsafe { f3d_player::place_the_model_in_the_band(content) },
         // A document is the same kind of thing — a window of somebody else's standing in the pin's
         // band — and it is put back where it stands rather than asked for again: a page this
         // engine holds is a window that moves with the box rather than a document to navigate to

@@ -133,16 +133,6 @@ pub(super) unsafe fn answer_a_host(
         note_a_message_of_a_window("film host", hwnd, msg, wparam, lparam);
     }
 
-    // **A band standing in a model is the model's, and it is asked before the press is handed down**:
-    // the hit test below routes a film's band to the pin, and a hand on a scene means to turn it rather
-    // than to carry the window it is shown in (see `f3d_player::answer_a_models_band`).
-    if film_host() == Some(hwnd) {
-        if let Some(answer) = unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
-        {
-            return Some(answer);
-        }
-    }
-
     // **A press on the picture is a press on the pin, and the hit test is what keeps it off this
     // window.** `HTTRANSPARENT` is the documented answer for "route this mouse message to the window
     // under this one, in this thread": the pin's chrome and its strips stand under the host, so a
@@ -1422,10 +1412,10 @@ pub(super) fn the_film_is_shown_in_a_host(path: &Path, kind: Option<MediaType>) 
             Some(MediaType::Video) => {
                 matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
             }
-            // A model is the one kind whose picture is a window of somebody else's on every road,
-            // and the engine that draws it is on this machine or the file has no preview at all
-            // (see `f3d_render`).
-            Some(MediaType::Model) => f3d_render::available(),
+            // **A model is the one kind a host never holds.** Its picture is a window of somebody
+            // else's that a hand turns, and a thumbnail of a scene is a scene nothing can turn: the
+            // window stands in the band itself, on the roads a page that runs stands in it (see
+            // `f3d_player::place_the_model_in_the_band`).
             _ => false,
         }
 }

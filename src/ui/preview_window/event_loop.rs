@@ -639,12 +639,6 @@ pub fn run_preview_window() {
                 // drag it means begun here (see `settle_pinned_engine_press`).
                 settle_pinned_engine_press(pinned_window(), &mut engine_press_seen);
 
-                // **And a model's turn ends on the level of the button too**, asked from this tick
-                // rather than from a window: the moves and the release of that drag are the engine's
-                // once it takes the capture on the press posted to it, so no window of the pair's may
-                // be sent either (see `f3d_player::settle_a_models_drag`).
-                f3d_player::settle_a_models_drag();
-
                 // And a press on any of the preview's windows is the preview being asked for: the
                 // window comes forward whether or not Windows granted it the foreground, and
                 // whichever of its windows took the press (see `settle_pinned_press`).

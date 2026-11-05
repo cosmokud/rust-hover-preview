@@ -195,6 +195,23 @@ pub(super) fn player_ex_style_for(current: isize) -> isize {
         return current;
     }
 
+    // **A model's window is the picture, and a hand on the band turns it.** `WS_EX_TRANSPARENT` is what
+    // a film's window wears so that the pin answers the press and carries the window it shows — and a
+    // scene that never sees a press is a scene nothing can turn, so it comes off here, with the
+    // invisibility a thumbnail source wears. What stays on is what keeps the window out of the Shell's
+    // lists and off the pin's own activation (see `f3d_player::place_the_model_in_the_band`).
+    if pinned() && current_media_type_try() == Some(MediaType::Model) {
+        let mut style = (current | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize)
+            & !(WS_EX_TRANSPARENT.0 as isize)
+            & !(WS_EX_LAYERED.0 as isize);
+        if pin_holds_the_front() {
+            style |= WS_EX_TOPMOST.0 as isize;
+        } else {
+            style &= !(WS_EX_TOPMOST.0 as isize);
+        }
+        return style;
+    }
+
     let mut style = current
         | WS_EX_NOACTIVATE.0 as isize
         | WS_EX_TOOLWINDOW.0 as isize
