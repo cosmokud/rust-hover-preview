@@ -1105,12 +1105,10 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
         return true;
     }
 
-    // **A model's band is the scene's own window's, and nothing here carries the pin**: f3d's window is a
-    // child of the pin's host and takes every press in the band itself, so what reaches this window is the
-    // hairline inside the host's client — answered, because it is the pin's own window, and carrying nothing
-    // (see `f3d_player::adopt_the_model_window`). Asked last, because the chrome's own rows above it are the
-    // pin's.
-    if f3d_player::the_band_is_a_models_window() {
+    // **A model's band is the scene's and never the window's**: a press there turns the model rather
+    // than carrying the pin, and it is asked last because the chrome's own rows above it are the pin's
+    // (see `f3d_player::press_the_models_band`).
+    if f3d_player::press_the_models_band(hwnd, x, y) {
         return true;
     }
 
