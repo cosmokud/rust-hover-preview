@@ -874,14 +874,12 @@ pub(super) fn the_standing_source_process(host: HWND) -> Option<u32> {
 /// a hover is shown through a thumbnail of its own (see `hover_film_host`). One source per live film,
 /// and the destination is whatever host is showing it — the source's box does not depend on which.
 ///
-/// Safety: `source` is a window the caller found by `pid` and this app did not make.
-pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
-    // **A window the still was taken of is not adopted again**: its player is ended the moment the
-    // still is painted, and this pass can arrive in between with the window still a window (see
-    // `STILL_PID`).
-    if STILL_PID.load(Ordering::SeqCst) == pid {
-        return;
-    }
+/// Put the invisibility on a player's own window and nothing else: the style half of
+/// `adopt_the_source`, for the road that has a source to keep off the screen before there is a host
+/// for it to be drawn through (see `f3d_player::show_the_window`).
+///
+/// Safety: `source` is a window of a player this app began, and the two calls only change its style.
+pub(super) unsafe fn make_the_source_invisible(source: HWND) {
     let ex = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
     let invisible = the_source_is_invisible();
     let _ = unsafe { SetWindowLongPtrW(source, GWL_EXSTYLE, source_ex_style(ex, invisible)) };
@@ -929,6 +927,17 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
             source,
         );
     }
+}
+
+/// Safety: `source` is a window the caller found by `pid` and this app did not make.
+pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
+    // **A window the still was taken of is not adopted again**: its player is ended the moment the
+    // still is painted, and this pass can arrive in between with the window still a window (see
+    // `STILL_PID`).
+    if STILL_PID.load(Ordering::SeqCst) == pid {
+        return;
+    }
+    unsafe { make_the_source_invisible(source) };
     lower_the_source(source);
     // **The new source has taken the picture, so the band a step held is the setting's again**:
     // the outgoing film is behind this one from here, and the pin goes back to being the ordinary

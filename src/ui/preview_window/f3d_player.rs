@@ -34,6 +34,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_THICKFRAME,
 };
 
+use super::pin_trace::note_pin_trace;
 use super::*;
 
 /// How long f3d is given to make its window: a player's own start bound, which is what a cold disk
@@ -77,6 +78,10 @@ pub(super) fn launch(
         && hover_film_host::the_hover_film_is_kept_in_a_host(path))
     .then(|| unsafe { hover_film_host::take_up_the_hover_film_host(box_) })
     .flatten();
+    // Whether the picture is drawn through a host at all, which is not the same question as having
+    // the host's handle in hand: a host this app has not made yet is still one the window must not
+    // be shown opaque for (see `show_the_window`).
+    let into_a_host = the_pins_film || hover_host.is_some();
 
     let mut command = engine_processes::hidden_command(program);
     command
@@ -92,6 +97,17 @@ pub(super) fn launch(
     let mut player = video_playback::spawn_player(&mut command)?;
     let pid = player.id();
     note_the_box(pid, box_);
+    // The first line of a model's own trace: the launch, the box it was begun at and whether a host
+    // is to draw it. What follows it is the source's adoption, the registration and the host's
+    // show, in that order (see `show_the_window` and `hover_film_host`).
+    note_pin_trace!(
+        "model launch pid {pid} at {}x{}+{}+{} hosted {}",
+        box_.2 - box_.0,
+        box_.3 - box_.1,
+        box_.0,
+        box_.1,
+        into_a_host as u8,
+    );
 
     // **The window is styled before it is shown.** f3d opens the window it is going to draw in the
     // moment it has one, and a window shown without `WS_EX_NOACTIVATE` takes the foreground from the
@@ -124,7 +140,7 @@ pub(super) fn launch(
             } else {
                 hover_host
             };
-            unsafe { show_the_window(window, pid, box_, host) };
+            unsafe { show_the_window(window, pid, box_, into_a_host, host) };
             Some(player)
         }
         // A viewer that made no window is no preview: it is ended here rather than left standing
@@ -164,14 +180,31 @@ pub(super) unsafe fn show_the_window(
     window: HWND,
     pid: u32,
     box_: ScreenRegion,
+    into_a_host: bool,
     host: Option<HWND>,
 ) {
     unsafe { strip_the_frame(window) };
     unsafe { place_the_window(window, box_) };
-    if let Some(host) = host {
+    if into_a_host {
         let _ = unsafe { ShowWindow(window, SW_HIDE) };
-        unsafe { pin_film_thumbnail::adopt_the_source(window, pid, host) };
+        match host {
+            Some(host) => unsafe { pin_film_thumbnail::adopt_the_source(window, pid, host) },
+            // **A host that is not in hand yet is still no reason to leave the window opaque**: the
+            // style is put on and it is shown transparent, and the pass that finds the player adopts
+            // it into the host when there is one (see `ffplay_window::try_apply_noactivate_style`).
+            None => unsafe { pin_film_thumbnail::make_the_source_invisible(window) },
+        }
         let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+        note_pin_trace!(
+            "model {:?} pid {} shown as a source at {}x{}+{}+{} (host {:?})",
+            window,
+            pid,
+            box_.2 - box_.0,
+            box_.3 - box_.1,
+            box_.0,
+            box_.1,
+            host,
+        );
         return;
     }
     // **The Shell lists a window as it is shown, so a button it has already listed is one the style

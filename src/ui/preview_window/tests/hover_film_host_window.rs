@@ -728,3 +728,194 @@ fn a_hosted_hover_that_never_draws_falls_back_once_without_a_host() {
         "the fallback launch is an ordinary top-level one"
     );
 }
+
+/// **The host is shown on the picture, not on the window.** A source merely recorded is a
+/// registration that is not there and a compositor that has drawn nothing, and a host shown with
+/// nothing composed in it is its own black erase — the rectangle a cold model's hover put up before
+/// its scene (see `pin_film_thumbnail::the_picture_is_composed_in`).
+#[test]
+fn the_host_is_shown_on_a_composed_picture_and_never_on_a_window_that_exists() {
+    let _room = the_room_to_itself();
+    let _stand = HoverHostStand::new(true);
+    let pid = unsafe { GetCurrentProcessId() };
+    let path = a_film();
+    let box_ = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 180);
+
+    let host = unsafe { hover_film_host::take_up_the_hover_film_host(box_) }.expect("the host");
+    hover_film_host::note_hover_film_host_player(pid, &path);
+    let source = unsafe {
+        a_window_of_the_suite(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 180),
+        )
+    };
+    pin_film_thumbnail::note_the_source(source, pid);
+
+    assert!(
+        hover_film_host::the_hover_player_is_drawing(pid),
+        "the player's own window is up, which is all a window can say"
+    );
+    assert!(
+        !hover_film_host::the_hover_picture_is_ready(pid),
+        "and nothing of it is composed in the host"
+    );
+    assert!(
+        !unsafe { hover_film_host::reveal_the_hover_film_host(pid, box_) },
+        "so the reveal is refused rather than the host being shown empty"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "and the spinner is what stays on the screen"
+    );
+
+    // The adoption is what makes the source a picture, and the registration is what the Shell draws.
+    unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
+    assert!(
+        unsafe { hover_film_host::reveal_the_hover_film_host(pid, box_) },
+        "once the registration is composed in it the host is the picture"
+    );
+    assert!(unsafe { IsWindowVisible(host) }.as_bool());
+
+    unsafe { put_away_a_window_of_the_suite(source) };
+}
+
+/// **A model hovered once is a viewer kept warm**, which is the whole of what makes the second
+/// hover of the same file one instant transition: the f3d and its host go off the screen together
+/// and stay, registration intact, until the hover comes back — or until whatever let the engine go
+/// takes the host down with it (see `hover_film_host::keep_a_model_warm`).
+#[test]
+fn a_model_is_kept_warm_and_a_repeat_hover_puts_the_same_host_back() {
+    let _room = the_room_to_itself();
+    let _stand = HoverHostStand::new(true);
+    let pid = unsafe { GetCurrentProcessId() };
+    let path = PathBuf::from("a-hovered-model.glb");
+    let box_ = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 180);
+    let moved = (NOWHERE, NOWHERE + 40, NOWHERE + 400, NOWHERE + 260);
+
+    let host = unsafe { hover_film_host::take_up_the_hover_film_host(box_) }.expect("the host");
+    hover_film_host::note_hover_film_host_player(pid, &path);
+    let source = unsafe { a_source_of_the_host(pid) };
+    assert!(unsafe { hover_film_host::reveal_the_hover_film_host(pid, box_) });
+    VIDEO_PID.store(pid, Ordering::SeqCst);
+
+    let mut media = video_media();
+    media.media_type = MediaType::Model;
+    media.video_process = Some(PlayerProcess::Noted(pid));
+    kill_player_process(&mut media);
+
+    assert!(
+        hover_film_host::a_model_is_kept_warm(),
+        "a model's viewer is kept rather than ended"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(host) }.as_bool(),
+        "off the screen the moment the hover goes"
+    );
+    assert!(
+        unsafe { IsWindow(host) }.as_bool(),
+        "and still a window, with the registration the Shell draws through"
+    );
+
+    assert!(
+        unsafe { hover_film_host::the_warm_model_is_back(pid, moved) },
+        "the repeat hover is that same host, shown again"
+    );
+    assert!(unsafe { IsWindowVisible(host) }.as_bool());
+    assert_eq!(
+        window_rect(host),
+        moved,
+        "placed at the box the hover is at now"
+    );
+
+    unsafe { hover_film_host::take_down_the_hover_film_host() };
+    assert!(
+        !hover_film_host::a_model_is_kept_warm(),
+        "the engine is let go with its host"
+    );
+    assert!(hover_film_host::hover_film_host().is_none());
+
+    unsafe { put_away_a_window_of_the_suite(source) };
+}
+
+/// **The `Engine → F3D TTL` setting is read on the terms every other kept engine is**: `Away` is the
+/// away timer's, `Never (0 seconds)` lets it go the moment the hover ends, `Indefinitely` never does,
+/// and a number of seconds keeps it that long (see `EngineIdle`).
+#[test]
+fn the_f3d_ttl_lets_a_kept_model_go_on_the_terms_every_other_engine_is_kept_by() {
+    use crate::config::config::EngineIdle;
+
+    assert!(
+        hover_film_host::the_warm_model_may_be_let_go(EngineIdle::Seconds(0), Duration::ZERO),
+        "`Never (0 seconds)` is no kept engine at all"
+    );
+    assert!(
+        !hover_film_host::the_warm_model_may_be_let_go(
+            EngineIdle::Indefinite,
+            Duration::from_secs(86_400)
+        ),
+        "`Indefinitely` keeps it for the rest of the run"
+    );
+    assert!(
+        !hover_film_host::the_warm_model_may_be_let_go(
+            EngineIdle::Seconds(30),
+            Duration::from_secs(29)
+        ),
+        "a time keeps it that long"
+    );
+    assert!(
+        hover_film_host::the_warm_model_may_be_let_go(
+            EngineIdle::Seconds(30),
+            Duration::from_secs(30)
+        ),
+        "and no longer"
+    );
+}
+
+/// **A kept model whose TTL has run out is let go with its host on the tick that notices** — the
+/// process and the window a registration is drawn through, together, so nothing is left standing
+/// behind a hover that has gone (see `hover_film_host::tick_the_warm_model`).
+#[test]
+fn a_kept_model_is_let_go_on_the_tick_its_ttl_runs_out() {
+    use crate::config::config::EngineIdle;
+
+    let _room = the_room_to_itself();
+    let _stand = HoverHostStand::new(true);
+    let pid = unsafe { GetCurrentProcessId() };
+    let path = PathBuf::from("a-hovered-model.glb");
+
+    let host = unsafe { hover_film_host::take_up_the_hover_film_host((0, 0, 320, 180)) }
+        .expect("the host");
+    hover_film_host::note_hover_film_host_player(pid, &path);
+    let source = unsafe { a_source_of_the_host(pid) };
+    VIDEO_PID.store(pid, Ordering::SeqCst);
+    let mut media = video_media();
+    media.media_type = MediaType::Model;
+    media.video_process = Some(PlayerProcess::Noted(pid));
+    kill_player_process(&mut media);
+    assert!(hover_film_host::a_model_is_kept_warm());
+
+    let before = CONFIG
+        .lock()
+        .map(|config| config.f3d_idle)
+        .unwrap_or(EngineIdle::Away);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.f3d_idle = EngineIdle::Seconds(0);
+    }
+    hover_film_host::tick_the_warm_model();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.f3d_idle = before;
+    }
+
+    assert!(
+        !hover_film_host::a_model_is_kept_warm(),
+        "the viewer is ended on the tick its TTL has run out"
+    );
+    assert!(
+        !unsafe { IsWindow(host) }.as_bool(),
+        "and the host goes with it, registration and all"
+    );
+
+    unsafe { put_away_a_window_of_the_suite(source) };
+}
