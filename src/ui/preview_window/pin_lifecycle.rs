@@ -82,6 +82,11 @@ pub(super) unsafe fn take_the_hover_down(
     // `should_start == false` replay rather than a launch of a second f3d, and a hover of anything
     // else sweeps the kept player as a stray (see `hover_film_host::keep_a_model_warm`).
     if hover_film_host::a_model_is_kept_warm() {
+        // **And the kept picture comes off the screen with the hover that showed it.** A hover begun
+        // at a warm model holds no media, so the take-down above stops nothing and has nothing to
+        // hide the host for — the host is hidden by `keep_a_model_warm` only for a hover this app
+        // launched (see `hover_film_host::the_warm_model_is_back`).
+        hover_film_host::hide_the_hover_film_host();
         return;
     }
     *current_video_path = None;
