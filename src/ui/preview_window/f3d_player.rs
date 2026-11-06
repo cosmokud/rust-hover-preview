@@ -192,13 +192,14 @@ pub(super) fn launch(
             // hidden rather than after f3d had shown it.
             let rect = the_window_rect(window).unwrap_or_default();
             note_pin_trace!(
-                "model window {:?} pid {} found at {}x{}+{}+{} (parking {},{} visible {})",
+                "model window {:?} pid {} found at {}x{}+{}+{} class {} parking {},{} visible {}",
                 window,
                 pid,
                 rect.right - rect.left,
                 rect.bottom - rect.top,
                 rect.left,
                 rect.top,
+                the_class_of(window),
                 parking.0,
                 parking.1,
                 unsafe { IsWindowVisible(window) }.as_bool() as u8,
@@ -383,41 +384,61 @@ fn wait_for_the_window(
     }
 }
 
-/// A window of a viewer's, as the pick is made: the handle, where its frame stands on the desktop,
-/// and the size of its client.
-#[derive(Clone, Copy)]
+/// The class the picture window wears, and the one thing that says which of a viewer's windows is
+/// the picture: **f3d's render window is `vtkOpenGL`**, and the helper windows it makes beside it —
+/// measured on 4.0.1, `NVOpenGLPbuffer` at 2564x1020 and the IME/MSCTFIME windows — never are. A
+/// pbuffer is large, unowned and hidden, so the place and the size below cannot tell them apart (see
+/// `the_picture_window`).
+const THE_PICTURE_CLASS: &str = "vtkOpenGL";
+
+/// A window of a viewer's, as the pick is made: the handle, the class it wears, where its frame
+/// stands on the desktop, and the size of its client.
 struct ViewerWindow {
     window: HWND,
+    class: String,
     left: i32,
     top: i32,
     client: (i32, i32),
 }
 
+/// Whether a window of a viewer's can be the picture at all, before either of the pick's two rules is
+/// asked: it wears the picture's class, and its client is a box rather than a line (see
+/// `THE_PICTURE_CLASS` and the transient windows measured in `wait_for_the_window`).
+fn is_a_picture_window(candidate: &ViewerWindow) -> bool {
+    candidate.class.eq_ignore_ascii_case(THE_PICTURE_CLASS)
+        && candidate.client.0 > 0
+        && candidate.client.1 > 0
+}
+
 /// The picture window among the windows a viewer has made, or nothing where it has made none yet.
 ///
-/// **The place is the discriminator**: f3d puts the window it was asked for at the `--position` it
-/// was given — the parking origin, which is past the right edge of every display — and no other
-/// window of the process is there, so a window standing at that origin is the one that was asked
-/// for (see `the_parking_origin`). The size is the fallback for the passes that catch the window
-/// before f3d has moved it: the picture's client is at least half the box's on both axes, and the
-/// transients measured on 4.0.1 — 120x0 and 300x300 — are not, at any box a preview is laid out at.
+/// **The class comes first**, because it is the only exact discriminator a viewer's own windows can
+/// be told apart by (see `THE_PICTURE_CLASS`). Then **the place**: f3d puts the window it was asked
+/// for at the `--position` it was given — the parking origin, which is past the right edge of every
+/// display — and no other window of the process is there. And the size is the fallback for the passes
+/// that catch the window before f3d has moved it: the picture's client is at least half the box's on
+/// both axes, and the transients measured on 4.0.1 — 120x0 and 300x300 — are not, at any box a
+/// preview is laid out at.
 ///
 /// shortcut: a box smaller than twice a transient's size lets one pass the size test, which is what
-/// the place above is for; upgrade this if a viewer ever places two windows at one origin.
+/// the place above is for; upgrade this if a viewer ever places two windows of one class at one
+/// origin.
 fn the_picture_window(
     windows: &[ViewerWindow],
     parking: (i32, i32),
     box_client: (i32, i32),
 ) -> Option<HWND> {
-    if let Some(parked) = windows
+    let pictures = windows
         .iter()
-        .find(|candidate| (candidate.left, candidate.top) == parking)
-    {
+        .filter(|candidate| is_a_picture_window(candidate));
+    let parked = pictures
+        .clone()
+        .find(|candidate| (candidate.left, candidate.top) == parking);
+    if let Some(parked) = parked {
         return Some(parked.window);
     }
 
-    windows
-        .iter()
+    pictures
         .filter(|candidate| {
             candidate.client.0 >= box_client.0 / 2 && candidate.client.1 >= box_client.1 / 2
         })
@@ -475,6 +496,7 @@ unsafe extern "system" fn collect_a_viewers_windows(
     }
     data.windows.push(ViewerWindow {
         window,
+        class: the_class_of(window),
         left: rect.left,
         top: rect.top,
         client: (
@@ -483,6 +505,17 @@ unsafe extern "system" fn collect_a_viewers_windows(
         ),
     });
     windows::Win32::Foundation::BOOL(1)
+}
+
+/// The class a window wears, named rather than numbered: it is what tells one of f3d's windows from
+/// another (see `THE_PICTURE_CLASS`), and what the found line in a trace carries.
+fn the_class_of(window: HWND) -> String {
+    let mut class: [u16; 64] = [0; 64];
+    let named = unsafe { GetClassNameW(window, &mut class) };
+    if named <= 0 {
+        return String::new();
+    }
+    String::from_utf16_lossy(&class[..named as usize])
 }
 
 /// Where a window's frame stands on the desktop, or nothing where it has none to say.
@@ -1179,47 +1212,86 @@ mod tests {
         }
     }
 
-    /// **The picture window is the one parked at the origin the launch asked for**, and the size is
-    /// only the fallback for the passes that catch it before f3d has moved it: the picture's client
-    /// is at least half the box's on both axes, and the transients f3d makes while it starts are not.
-    /// Nothing about the pick asks whether a window is visible — the window it picks is hidden for
-    /// its whole life until this app shows it (see `the_picture_window`).
+    /// A window of a viewer's of the class a picture wears, and one of any other class: what the
+    /// pick is asked about, with the class it is told apart by (see `THE_PICTURE_CLASS`).
+    fn picture(handle: isize, left: i32, top: i32, client: (i32, i32)) -> ViewerWindow {
+        other(THE_PICTURE_CLASS, handle, left, top, client)
+    }
+
+    fn other(class: &str, handle: isize, left: i32, top: i32, client: (i32, i32)) -> ViewerWindow {
+        ViewerWindow {
+            window: HWND(handle as *mut _),
+            class: class.to_string(),
+            left,
+            top,
+            client,
+        }
+    }
+
+    /// **The picture window is the one parked at the origin the launch asked for, of the class a
+    /// picture wears**, and the size is only the fallback for the passes that catch it before f3d has
+    /// moved it: the picture's client is at least half the box's on both axes, and the transients f3d
+    /// makes while it starts are not. Nothing about the pick asks whether a window is visible — the
+    /// window it picks is hidden for its whole life until this app shows it — and nothing about the
+    /// place or the size is enough on its own, because a pbuffer is large, unowned and hidden too
+    /// (see `THE_PICTURE_CLASS` and `the_picture_window`).
     #[test]
     fn the_picture_window_is_the_one_parked_where_the_launch_asked() {
         let parking = (6016, 0);
         let box_client = (800, 600);
-        let window = |handle: isize, left: i32, top: i32, client: (i32, i32)| ViewerWindow {
-            window: HWND(handle as *mut _),
-            left,
-            top,
-            client,
-        };
-        // Measured on 4.0.1: a window of no height, one 300x300, and then the one that was asked for.
-        let flat = window(0x11, 0, 0, (120, 0));
-        let transient = window(0x12, 0, 0, (300, 300));
-        let parked = window(0x13, 6016, 0, (800, 600));
 
+        // Measured on 4.0.1: a window of no height, one 300x300, and then the one that was asked for.
         assert_eq!(
-            the_picture_window(&[flat, transient, parked], parking, box_client),
-            Some(parked.window),
+            the_picture_window(
+                &[
+                    picture(0x11, 0, 0, (120, 0)),
+                    picture(0x12, 0, 0, (300, 300)),
+                    picture(0x13, 6016, 0, (800, 600)),
+                ],
+                parking,
+                box_client,
+            ),
+            Some(HWND(0x13 as *mut _)),
             "the window standing at the parking origin is the one that was asked for"
         );
         assert_eq!(
-            the_picture_window(&[flat, parked, transient], parking, box_client),
-            Some(parked.window),
+            the_picture_window(
+                &[
+                    picture(0x11, 0, 0, (120, 0)),
+                    picture(0x13, 6016, 0, (800, 600)),
+                    picture(0x12, 0, 0, (300, 300)),
+                ],
+                parking,
+                box_client,
+            ),
+            Some(HWND(0x13 as *mut _)),
             "whatever order the desktop hands them over in"
         );
 
         // Before f3d has moved it: the size is all there is to go on, and only one window is big
         // enough to be the picture.
-        let unplaced = window(0x13, 0, 0, (800, 600));
         assert_eq!(
-            the_picture_window(&[flat, transient, unplaced], parking, box_client),
-            Some(unplaced.window),
+            the_picture_window(
+                &[
+                    picture(0x11, 0, 0, (120, 0)),
+                    picture(0x12, 0, 0, (300, 300)),
+                    picture(0x13, 0, 0, (800, 600)),
+                ],
+                parking,
+                box_client,
+            ),
+            Some(HWND(0x13 as *mut _)),
             "the largest window whose client is at least half the box is the picture"
         );
         assert_eq!(
-            the_picture_window(&[flat, transient], parking, box_client),
+            the_picture_window(
+                &[
+                    picture(0x11, 0, 0, (120, 0)),
+                    picture(0x12, 0, 0, (300, 300))
+                ],
+                parking,
+                box_client,
+            ),
             None,
             "and a pass that finds only the transients has found no picture"
         );
@@ -1229,11 +1301,51 @@ mod tests {
             "a viewer that has made no window yet is no window to strip"
         );
 
-        // The place outranks the size: a small window at the origin is still the one asked for.
-        let parked_small = window(0x14, 6016, 0, (300, 300));
+        // **A pbuffer of the same process is never the picture**: measured on 4.0.1, 2564x1020 and
+        // unowned, so it is larger than the box and passes every rule but the class.
         assert_eq!(
-            the_picture_window(&[unplaced, parked_small], parking, box_client),
-            Some(parked_small.window),
+            the_picture_window(
+                &[
+                    other("NVOpenGLPbuffer", 0x15, 0, 0, (2564, 1020)),
+                    picture(0x11, 0, 0, (120, 0)),
+                    picture(0x12, 0, 0, (300, 300)),
+                ],
+                parking,
+                box_client,
+            ),
+            None,
+            "the largest window of the process is no picture when it is not of the class"
+        );
+        assert_eq!(
+            the_picture_window(
+                &[
+                    other("NVOpenGLPbuffer", 0x15, 0, 0, (2564, 1020)),
+                    other("NVOpenGLPbuffer", 0x16, 6016, 0, (2564, 1020)),
+                    picture(0x13, 0, 0, (800, 600)),
+                ],
+                parking,
+                box_client,
+            ),
+            Some(HWND(0x13 as *mut _)),
+            "not even one standing where the launch asked its own window to stand"
+        );
+        assert_eq!(
+            the_picture_window(&[other("IME", 0x17, 0, 0, (800, 600))], parking, box_client),
+            None,
+            "and a window of the process with a client the box's size is still not the picture"
+        );
+
+        // The place outranks the size: a small window at the origin is still the one asked for.
+        assert_eq!(
+            the_picture_window(
+                &[
+                    picture(0x13, 0, 0, (800, 600)),
+                    picture(0x14, 6016, 0, (300, 300)),
+                ],
+                parking,
+                box_client,
+            ),
+            Some(HWND(0x14 as *mut _)),
             "the place is the discriminator, and the size only its fallback"
         );
     }
