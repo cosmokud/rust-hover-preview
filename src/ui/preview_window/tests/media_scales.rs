@@ -42,6 +42,9 @@ fn every_kind_follows_the_one_setting_it_names() {
         (PreviewType::Calibre, "ebook_scale", scales.ebook),
         (PreviewType::Design, "design_scale", scales.design),
         (PreviewType::Vector, "vector_scale", scales.vector),
+        // A model is a picture the engine drew at the box it was asked for, so what it follows is
+        // the picture setting, reduced to the room rather than to a size of its own.
+        (PreviewType::Models, "preview_scale", scales.picture),
         (PreviewType::Fonts, "font_scale", scales.font),
     ] {
         let path = std::env::temp_dir().join(format!("scale-of-kind-{setting}"));

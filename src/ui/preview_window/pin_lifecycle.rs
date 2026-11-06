@@ -77,6 +77,18 @@ pub(super) unsafe fn take_the_hover_down(
         }
         *current = None;
     }
+    // **A model kept warm is still where the hover left it**, so the loop goes on knowing which
+    // file the warm picture is and the box it stands in: the next hover of that file is the
+    // `should_start == false` replay rather than a launch of a second f3d, and a hover of anything
+    // else sweeps the kept player as a stray (see `hover_film_host::keep_a_model_warm`).
+    if hover_film_host::a_model_is_kept_warm() {
+        // **And the kept picture comes off the screen with the hover that showed it.** A hover begun
+        // at a warm model holds no media, so the take-down above stops nothing and has nothing to
+        // hide the host for — the host is hidden by `keep_a_model_warm` only for a hover this app
+        // launched (see `hover_film_host::the_warm_model_is_back`).
+        hover_film_host::hide_the_hover_film_host();
+        return;
+    }
     *current_video_path = None;
     *video_pos = (0, 0, 0, 0);
 
@@ -2869,7 +2881,11 @@ pub(super) fn place_pinned_siblings() {
     let page = engine_page_in_the_band();
 
     match kind {
-        Some(MediaType::Video) => ensure_pinned_sibling_box(content),
+        // **A model is the same kind of thing as a film here** — a picture in a window of the host's,
+        // which is the box the Shell stretches f3d's own window into — so its band is owed the same
+        // placement, and a hand carrying or pulling the pin leaves the picture behind without it (see
+        // `f3d_player`).
+        Some(MediaType::Video) | Some(MediaType::Model) => ensure_pinned_sibling_box(content),
         // A document is the same kind of thing — a window of somebody else's standing in the pin's
         // band — and it is put back where it stands rather than asked for again: a page this
         // engine holds is a window that moves with the box rather than a document to navigate to

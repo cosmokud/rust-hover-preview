@@ -366,6 +366,9 @@ pub const DEFAULT_VIDEO_ENGINE_FALLBACK: bool = true;
 /// It is the only setting that holds a path, which is why it has no shared shape with the
 /// others: what it names is a file on the machine rather than one of this app's own values.
 pub const DEFAULT_MPV_PATH: &str = "";
+/// The `f3d.exe` a model is drawn by, which is nobody's pick until one is written: the first
+/// installation found is the one run (see `f3d_render::program`).
+pub const DEFAULT_F3D_PATH: &str = "";
 /// Whether a film's own subtitle tracks are probed for and copied out at
 /// all: off, so a hover is a read of the film's header and nothing else,
 /// and a film is played without subtitles rather than paid for on every
@@ -414,11 +417,12 @@ pub fn sanitize_tick_ms(value: u64) -> u64 {
     value.clamp(MIN_TICK_MS, MAX_TICK_MS)
 }
 
-/// The picked mpv path as the setting keeps it: trimmed, so a value written with spaces around it
-/// names the path it was meant to rather than a different one. An empty value is nobody's pick and
-/// is kept as it is — it means the first install found, which is the default above (see
-/// `codecs::resolve_mpv`).
-pub fn sanitize_mpv_path(value: &str) -> String {
+/// The picked program path as the setting keeps it — the player's and the model renderer's alike:
+/// trimmed, so a value written with spaces around it names the path it was meant to rather than a
+/// different one. An empty value is nobody's pick and is kept as it is — it means the first
+/// installation found, which is the default above (see `codecs::find_program`, which both are
+/// found by).
+pub fn sanitize_program_path(value: &str) -> String {
     value.trim().to_string()
 }
 

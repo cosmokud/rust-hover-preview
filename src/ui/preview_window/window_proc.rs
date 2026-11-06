@@ -573,6 +573,16 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
+            // The rest of a drag a model's band owns: the window that took the down posts the moves, and
+            // ends it on the level of the button where the release was the engine's (see
+            // `f3d_player::answer_a_models_band`).
+            if pinned() {
+                if let Some(answer) =
+                    unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
+                {
+                    return answer;
+                }
+            }
             let (x, y) = message_point(lparam);
             if pinned() {
                 pinned_mouse_move(hwnd, x, y);
@@ -595,6 +605,16 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            // The release that ends a model's drag is posted on and answered here, whatever window holds
+            // the pointer, so the pin's own arms never see the end of a press it did not take (see
+            // `f3d_player::answer_a_models_band`).
+            if pinned() {
+                if let Some(answer) =
+                    unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
+                {
+                    return answer;
+                }
+            }
             let (x, y) = message_point(lparam);
             // A press the find bar's card answered is released here, before the pin's own arms: the
             // card owns the press from the moment it takes it, and a chevron held down stops where it
@@ -663,6 +683,15 @@ pub(super) unsafe extern "system" fn window_proc(
                 // rather than answered here: what is there is the player's own strip (see
                 // `pin_right_click_page`). A right-click in the text of a pinned page is the
                 // window's own, with the page's two commands above its rows.
+                //
+                // **A model's band is neither**: it is f3d's pointer, so the press, the drag and
+                // the release are the engine's and this window holds no menu there at all (see
+                // `pin_band_is_the_models`). What keeps the menu reachable is the caption above
+                // the picture, which is the chrome's and answers below.
+                if pin_band_is_the_models(y) {
+                    unsafe { f3d_player::press_the_models_band_with(hwnd, x, y, msg) };
+                    return LRESULT(0);
+                }
                 if let Some(page) = pin_right_click_page(y) {
                     open_pin_menu(hwnd, menu_x, menu_y, page);
                 }
@@ -678,9 +707,41 @@ pub(super) unsafe extern "system" fn window_proc(
                 close_pin_menu(hwnd);
                 return LRESULT(0);
             }
+            // **And over a model's band it is the engine's**, as every press there is: f3d's own
+            // style pans by it, and this app answers nothing for a middle press on a picture but
+            // this (see `pin_band_is_the_models`).
+            if pinned() {
+                let (x, y) = message_point(lparam);
+                if pin_band_is_the_models(y) {
+                    unsafe { f3d_player::press_the_models_band_with(hwnd, x, y, msg) };
+                    return LRESULT(0);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_MBUTTONUP => {
+            // The release that ends a middle press on a model's band, on the same road a left one
+            // ends (see `f3d_player::answer_a_models_band`).
+            if pinned() {
+                if let Some(answer) =
+                    unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
+                {
+                    return answer;
+                }
+            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_RBUTTONUP => {
+            // The release that ends a right press on a model's band, which is the engine's own
+            // menu and its own drag rather than this window's (see
+            // `f3d_player::answer_a_models_band`).
+            if pinned() {
+                if let Some(answer) =
+                    unsafe { f3d_player::answer_a_models_band(hwnd, msg, wparam, lparam) }
+                {
+                    return answer;
+                }
+            }
             // The menu is the preview's own, so it opens where it was asked for,
             // and the press that asks for it does not dismiss the preview.
             let (x, y) = message_point(lparam);

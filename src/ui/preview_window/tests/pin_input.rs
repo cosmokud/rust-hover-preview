@@ -366,6 +366,121 @@ fn a_paired_press_on_a_pinned_window_puts_it_in_the_middle_of_its_screen() {
     }
 }
 
+/// **A press on a model's band turns the scene, and the chrome's own rows over it stay the pin's**: a
+/// caption's button, the frame's corner and the transport's play button all answer on a pin standing in a
+/// model as they do on one standing in a picture — a button arms itself, a corner begins a resize — while a
+/// press on the picture itself carries nothing (see `f3d_player::press_the_models_band`).
+///
+/// The rows and the frame are the pin's because they are drawn over the picture, and a model's band is the
+/// whole of its window: a press taken for the scene before the chrome would be a box with no handle left on
+/// it at all.
+#[test]
+fn a_models_band_leaves_the_chrome_and_the_frame_to_the_pin() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    // No player's window and no source, so nothing of a model's press is posted anywhere: what this test
+    // asks is which of the pin's own arms a press is given to (see `f3d_player::the_models_window`).
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    pin_film_thumbnail::forget_the_thumbnail();
+
+    let room = work_area_at(0, 0);
+    let content = (room.left, room.top, room.left + 400, room.top + 300);
+    let caption = pinned_caption_height(96, None);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    // A bar standing over a model is the state a swap leaves behind: a film's transport, with a scene
+    // drawn on the band under it.
+    pin.transport_bar = true;
+    pin.transport_live = true;
+    stand_pin(Some(pin));
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        let mut media = create_loading_media(400, 300);
+        media.media_type = MediaType::Model;
+        *current = Some(media);
+    }
+
+    let hwnd = HWND(0x1000 as *mut _);
+    let dragged = || pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging));
+
+    // The picture itself, which is the scene's: answered, and carrying neither the pin nor its picture.
+    assert!(
+        unsafe { pinned_press(hwnd, 100, caption + 100) },
+        "a press on the picture is answered rather than falling through to the window under it"
+    );
+    assert!(
+        dragged().is_none(),
+        "and a scene is not a box a hand carries"
+    );
+
+    // The caption's own buttons.
+    let (close, close_x) = pin_chrome::button_boxes(400, caption, 96, true)
+        .last()
+        .map(|button| (button.kind, (button.rect.left + button.rect.right) / 2))
+        .expect("a caption this wide carries its buttons");
+    assert!(
+        unsafe { pinned_press(hwnd, close_x, caption / 2) },
+        "a caption's button is the pin's"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.pressed)),
+        Some(close),
+        "and it arms itself rather than turning the model under it"
+    );
+
+    // The frame's corner, which is a resize before it is a title bar.
+    let window = RecordedPinWindow::with(
+        hwnd.0 as isize,
+        Some((content.0 + 2, content.1 + 2)),
+        Some(content),
+    );
+    assert!(
+        unsafe { press_the_pin(hwnd, 2, 2, &window, true) },
+        "the frame is the pin's"
+    );
+    assert!(
+        matches!(
+            dragged().map(|drag| drag.action),
+            Some(PinDragAction::Resize(edge)) if edge.left && edge.top
+        ),
+        "and a corner begins a resize rather than turning the model under it"
+    );
+
+    // The transport's play button.
+    let bar = pinned_transport_geometry().expect("a bar standing on this pin");
+    let (play_x, play_y) = (0..bar.width)
+        .map(|x| (x, bar.top + bar.height / 2))
+        .find(|(x, y)| {
+            pin_chrome::transport_part_at(
+                *x,
+                *y - bar.top,
+                bar.width,
+                bar.height,
+                bar.dpi,
+                bar.live,
+            ) == Some(pin_chrome::TransportPart::Play)
+        })
+        .expect("a live bar draws a play button");
+    assert!(
+        unsafe { pinned_press(hwnd, play_x, play_y) },
+        "the bar over a model's band is the pin's"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.pressed)),
+        Some(pin_chrome::TransportPart::Play),
+        "and it arms the bar's own button"
+    );
+
+    // A drag left latched by a press no release of this test's follows is another test's model turning:
+    // the level of a button nobody is holding ends it (see `f3d_player::settle_a_models_drag`).
+    f3d_player::settle_a_models_drag();
+
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    stand_pin(previous_pin);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}
+
 /// And where the configuration has the size reset on as well, the pair asks the loop for the size
 /// rather than writing one itself: a size is what a media is laid out at rather than a place it is
 /// carried to, so what a press leaves behind is the request and the box it stands in — the box the

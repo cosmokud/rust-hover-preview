@@ -15,7 +15,7 @@ Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. 
 - Supports images, videos, audios, ebooks, Office documents, design documents, text/code, archives, camera raw, vector drawings, fonts, and more.
 - Granular display scaling: Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.
 - Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
-- Plugs into what you have: built-in decoders and Windows codecs cover the basics; ImageMagick, FFmpeg, mpv, LibreOffice, Office, WebView2, PeaZip, Calibre, and the Windows PDF engine extend it where installed — nothing bundled.
+- Plugs into what you have: built-in decoders and Windows codecs cover the basics; ImageMagick, FFmpeg, mpv, LibreOffice, Office, WebView2, PeaZip, Calibre, f3d, and the Windows PDF engine extend it where installed — nothing bundled.
 
 ## Supported Formats
 
@@ -121,6 +121,14 @@ A secret or credential file is never previewed while **Don't Preview Secret File
 | Engine                                                                       | `config.ini` | Default extensions                                 |
 | --- | --- | --- |
 | This app, from the flattened picture each format keeps of the whole document | `[design]`   | ai, fig, kra, ora, procreate, psb, psd, sketch, xd |
+
+
+### 3D Models
+
+
+| Engine                                                     | `config.ini` | Default extensions                                                                                                                                                                                                                                                                                                         |
+| --- | --- | --- |
+| [f3d](#optional-enable-3d-models-f3d), which draws a scene into a window of its own | `[f3d]`      | 210, 3ds, 3mf, abc, amf, bin, bpf, brep, cdf, csd, dae, ex2, exo, fbx, fcstd, glb, gltf, gml, ifc, iges, igs, las, laz, mdl, mha, mhd, nc, ncdf, nhdr, nrrd, obj, off, p21, pic, ply, pts, ptx, qi, sbet, slpk, splat, spz, step, stl, stp, stpnc, usd, usda, usdc, usdz, vdb, vrml, vti, vtk, vtkhdf, vtm, vtp, vtr, vts, vtu, wrl, xbf |
 
 
 ## Installation
@@ -264,6 +272,20 @@ winget install -e --id calibre.calibre
 ```
 
 Or download the official installer from [https://calibre-ebook.com/download_windows](https://calibre-ebook.com/download_windows) and run the suggested file (`calibre-*-64bit.msi`).
+
+### Optional: Enable 3D Models (F3D)
+
+`stl` and everything else in the `[f3d]` list — meshes, CAD exchange files, point clouds and scientific datasets — is drawn by **f3d**, which this app runs where it finds it. Nothing is bundled with the app, and there is nothing to configure: without f3d a model shows no preview at all rather than a broken one. Install it once:
+
+```text
+winget install -e --id f3d-app.f3d
+```
+
+Or download the official Windows build from [https://github.com/f3d-app/f3d/releases](https://github.com/f3d-app/f3d/releases).
+
+The app finds `f3d.exe` beside itself, in your `PATH`, and in the folder its installer writes under Program Files; a copy anywhere else is named by `f3d_path` in `config.ini`, and the `[f3d]` list there is edited like every other engine's.
+
+A pinned model is turned by dragging in it and zoomed by the wheel; a hovered one is under the pointer, so it is turned directly. The picture is the engine's to answer: the middle button pans it and the right one opens f3d's own menu — the pinned window's own menu is on its caption strip. Because that middle press belongs to the scene, a hovered model is pinned with `Space` rather than by the middle button.
 
 > [!WARNING]
 > If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.

@@ -392,6 +392,24 @@ pub(in super::super) fn set_webview_idle(index: u16) {
     }
 }
 
+/// How long the viewer a model was hovered by is kept after that hover ends, from
+/// `Engine → F3D TTL`. `Until away` is the AFK timer and a time is the engine's own
+/// (see `EngineIdle`).
+///
+/// Nothing is rebuilt here either, and nothing has to be: the preview tick reads the setting every
+/// time it asks whether a warm model is due to be let go, so a shorter time applies to the viewer
+/// that is already kept and `Never (0 seconds)` ends it on the next pass (see `hover_film_host`).
+pub(in super::super) fn set_f3d_idle(index: u16) {
+    let Some(idle) = engine_idle_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.f3d_idle = idle;
+        config.save();
+    }
+}
+
 /// How long the LibreOffice engine is kept after the last page it drew, from
 /// `Engine → LibreOffice TTL`. `Until away` is the AFK timer and a time is the engine's own
 /// (see `EngineIdle`).

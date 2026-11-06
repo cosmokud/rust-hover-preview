@@ -300,6 +300,16 @@ pub(super) enum MediaType {
     /// and note that what draws it is this window rather than an engine — there is nothing to wait
     /// for and nothing to keep.
     Comic,
+    /// A model drawn by an installed f3d: a mesh, a CAD exchange document, a point cloud, a
+    /// scientific dataset. Nothing of the scene is a frame of this app's — the picture is f3d's own
+    /// window, shown in-place for a hover and through a host's thumbnail for a pin, the way a film's
+    /// player's window is (see `f3d_player`) — and what this app draws behind it is the box it would
+    /// be drawn in.
+    ///
+    /// It is a kind of its own rather than the picture kind's second half: the switch over it is
+    /// its own, because an engine a user did not install is a setting worth being able to reach,
+    /// and because nothing else here opens a model at all.
+    Model,
     /// A file the pin was shown and its player could not draw, standing as the cross
     /// `pin_chrome::paint_failure_mark` draws. It is a kind of its own because it has to be:
     /// the whole of what it is for is that `pin_media_is_alive` reads it as *there* — a frame
@@ -362,6 +372,9 @@ impl MediaType {
             // switch for books and nothing else.
             Self::Comic => Some(PreviewType::Ebook),
             Self::Vector => Some(PreviewType::Vector),
+            // A model is its own kind in the tray as well as here: what a user turns off is the
+            // switch over the model list, and nothing else of this app's draws one.
+            Self::Model => Some(PreviewType::Models),
             // The mark a failed file stands as is this app's own answer rather than a preview of
             // the file's kind, so it is behind no gate: turning a kind off is a statement about
             // what the pointer is offered, and a window already standing over a file it could not
@@ -410,6 +423,9 @@ impl MediaType {
                 !(pin_is_its_own_window()
                     && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay))
             }
+            // **A model is drawn by f3d on every road there is**: a pin at it shows the renderer's
+            // window through its host, and a hover shows the window itself (see `f3d_player`).
+            Self::Model => true,
             _ => self.is_engine(),
         }
     }

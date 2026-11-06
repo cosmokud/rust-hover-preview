@@ -11,7 +11,7 @@ use crate::config::config::PreviewType;
 use crate::engines::{
     calibre_render, imagemagick_render, libreoffice_render, peazip_render, webview_preview,
 };
-use crate::formats::{codecs, office_formats};
+use crate::formats::{codecs, f3d_render, office_formats};
 use std::path::Path;
 
 /// The readers of a file of this kind that could answer for it, in the order they are asked.
@@ -57,6 +57,9 @@ fn can_answer(reader: Reader, path: &Path) -> bool {
         // machine that cannot list those three (see `peazip_formats::Backend`).
         Reader::PeaZip => peazip_render::available_for(path) && !peazip_render::refused(path),
         Reader::Calibre => calibre_render::available() && !calibre_render::refused(path),
+        // The renderer, which is the only reader of the model kind and is asked by name alone:
+        // what it was measured to open, it opens (see `f3d_render`).
+        Reader::F3d => f3d_render::available() && !f3d_render::refused(path),
 
         // FFmpeg's player, where it is installed: the one reader preferred over the engine
         // Windows has, and the reason a video is a chain rather than a reader (see `codecs`).
@@ -87,6 +90,9 @@ pub enum Reader {
     PeaZip,
     /// The installed ebook converter, which writes a PDF of a book nothing here reads.
     Calibre,
+    /// The installed model renderer, which draws a picture of a scene nothing here can decode —
+    /// the one reader of the `F3d` kind, and the whole of what it has.
+    F3d,
     /// FFmpeg's player, where it is installed: the engine video previews are played by when
     /// it is, and the one engine preferred over the reader Windows has.
     Ffmpeg,

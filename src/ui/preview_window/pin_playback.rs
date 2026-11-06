@@ -1187,8 +1187,20 @@ pub(super) fn begin_the_adopted_film_in_the_host() -> bool {
     if !pin_film_host::the_film_is_shown_in_a_host(&path, None)
         || pin_film_host::film_host().is_none()
         || pin_film_host::the_pinned_player_was_begun_in_the_host()
-        || VIDEO_PID.load(Ordering::SeqCst) == 0
     {
+        return false;
+    }
+
+    // **A model has no frame to freeze and no playhead to carry**, and the pin's viewer is begun
+    // where the band is whether or not a hover left one behind: a viewer that died with its hover
+    // is a process id of nothing, and a pin is the band's own picture either way (see
+    // `f3d_player`).
+    if current_media_type() == Some(MediaType::Model) {
+        restart_pinned_player(&path, content, 0.0, false, RestartReason::Engine);
+        return false;
+    }
+
+    if VIDEO_PID.load(Ordering::SeqCst) == 0 {
         return false;
     }
 

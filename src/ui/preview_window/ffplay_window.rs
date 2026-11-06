@@ -140,6 +140,16 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
         return windows::Win32::Foundation::BOOL(1);
     }
 
+    // **A window too narrow to be the picture is not the picture.** f3d makes transient
+    // `vtkOpenGL` windows of its own while it starts — one of no height, one 300x300 — and only the
+    // last of them is the window it was asked for (see `f3d_player`). Every player of this app's
+    // draws in a window wider than this at any box the preview is laid out at.
+    if video_process_image() == crate::formats::f3d_render::F3D_NAME
+        && width < MIN_A_MODELS_WINDOW_WIDTH
+    {
+        return windows::Win32::Foundation::BOOL(1);
+    }
+
     // Keep the largest candidate; this is typically the player's real output window.
     if area > data.best_area {
         data.best_area = area;
@@ -197,6 +207,10 @@ pub(super) fn player_ex_style_for(current: isize) -> isize {
     style
 }
 
+/// The window the largest-area pick refuses for a model: a viewer's transient windows are the
+/// smaller ones (see `enum_windows_callback`).
+pub(super) const MIN_A_MODELS_WINDOW_WIDTH: i64 = 200;
+
 /// The host this app has recorded as holding the player `pid`, where it has recorded one.
 ///
 /// It is where a player of a film is adopted as the picture, from the window the player made for
@@ -229,6 +243,13 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
 
     // Store the video window HWND for cursor-over-preview detection
     VIDEO_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
+    // **A viewer's frame is asserted off on every pass it is styled.** f3d has no flag for a
+    // chrome-less window (see `f3d_player::strip_the_frame`), and a style a viewer writes back on
+    // itself is a title bar over the preview until the next pass takes it off again.
+    if video_process_image() == crate::formats::f3d_render::F3D_NAME {
+        unsafe { f3d_player::strip_the_frame(hwnd) };
+    }
 
     // The decision this function is the raise half of, asked once so that the style it writes and
     // the raise it holds off are the same answer (see `player_order`).
@@ -1424,6 +1445,14 @@ pub fn kill_stray_video_process() {
     // **The resident is never a stray.** It is the player this app keeps between hovers, and a sweep
     // is for a player that outlived the hover it was begun for (see `mpv_resident`).
     if mpv_resident::holds_the_pid(pid) {
+        return;
+    }
+
+    // **And neither is a model kept warm**, which is that same kind of player read for a viewer: one
+    // that outlived its hover on purpose, bounded by `Engine → F3D TTL` rather than by this sweep —
+    // and this sweep is the one road that runs while nothing is hovered, which is exactly when a
+    // kept model is standing (see `hover_film_host`).
+    if hover_film_host::the_warm_model_is(pid) {
         return;
     }
 

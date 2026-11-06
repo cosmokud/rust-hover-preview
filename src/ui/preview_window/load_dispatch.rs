@@ -246,11 +246,52 @@ pub(super) fn load_media_of_kind(
         // `magick_box`).
         .or_else(|| load_magick_picture(path, max_width, max_height, preview_scale, &cancel)),
 
+        // A model is drawn by an installed f3d into a window of its own, so what is loaded here is
+        // the wait's own frame — the box this app's window would show behind a picture, and nothing
+        // of the scene, which is the renderer's to draw (see `f3d_player`).
+        Some(PreviewType::Models) => load_model_preview(path, max_width, max_height),
+
         // A file whose content named no kind and whose name no list claims is the picture
         // path's, and the caller above has already answered that one — a name no list has ever
         // claimed is the picture it ends up decoded as.
         None => None,
     }
+}
+
+/// The frame a model's preview is loaded with, which is the box and nothing of the file: f3d draws
+/// the scene into a window of its own, and what is behind that window while it starts is this app's
+/// own rectangle at the size the window will be (see `f3d_player`).
+pub(super) fn load_model_preview(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+) -> Option<MediaData> {
+    // An engine that is not installed has no preview to show, which is the same answer a video gets
+    // on a machine with nothing that plays it — and so is a file the engine refused.
+    if !f3d_render::available() || f3d_render::refused(path) {
+        return None;
+    }
+
+    let width = max_width.max(1);
+    let height = max_height.max(1);
+    // The frame a waiting video is loaded with, for the same reason: it is never the picture the
+    // user is looking at, and a rectangle of this app's own is what a viewer's window is revealed
+    // over.
+    let pixels = vec![40u8; width as usize * height as usize * 4];
+
+    Some(MediaData {
+        frames: vec![Arc::new(ImageFrame::new(pixels, width, height, 0))],
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::Model,
+        stream_cancel: None,
+        video_process: None,
+        loading_start: None,
+        text_state: None,
+        audio_scale: None,
+    })
 }
 
 /// The picture path: the animated reader the file's own bytes call for, and everything else as

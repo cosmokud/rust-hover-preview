@@ -24,6 +24,10 @@ windows = { version = "0.58", features = [
     "Win32_Security",
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
+    # `CreatePipe`, which is the one way a child of this app's is handed a stream: a model's viewer
+    # is begun by hand so that its window is hidden from its first instruction, and `Command` has no
+    # `STARTUPINFO` to carry that (see `ui::preview_window::never_shown`).
+    "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
     "Win32_System_JobObjects",
     "Win32_System_Diagnostics_ToolHelp",

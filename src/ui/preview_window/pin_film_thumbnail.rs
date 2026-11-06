@@ -299,6 +299,30 @@ const LATE_NATIVE_EVERY: Duration = Duration::from_millis(64);
 /// same kind of wait.
 const SOURCE_DREW_EVERY: Duration = Duration::from_millis(64);
 
+/// How long a viewer's own `100%` is given before its scene is taken to be in the picture: **three
+/// frames of a 30 Hz render**, and six of a 60 Hz one — the shortest grace that still leaves the
+/// renderer a frame to put a scene in after the file is loaded (see `a_models_loading`).
+const MODEL_LOAD_GRACE: Duration = Duration::from_millis(100);
+
+/// How long a viewer that has said nothing at all is waited for before its pixels are asked
+/// instead: f3d's first loading line is measured at 150 to 200 ms from a cold start, so this is
+/// about eight times the slowest one seen — long enough that a viewer which does report is never
+/// sampled for the grey its first render clears to, and short enough that a build whose viewer says
+/// nothing falls back to the old road rather than never showing (see `a_models_loading`).
+const MODEL_REPORT_WAIT: Duration = Duration::from_millis(1500);
+
+/// How long a viewer that **is** reporting is given to reach its marker: the cap on the one state a
+/// viewer can otherwise sit in forever — `reported` and never `100%`, which is a warning or a
+/// failed-load line on the same stream and no loading progress ever after it (see
+/// `a_models_loading`).
+///
+/// **Eight seconds, and it has to be inside `VIDEO_START_WAIT_SECS`**: that bound ends the hover's
+/// wait and relaunches without a host, so a cap at or past it would never answer at all. It is past
+/// every load this road can argue for — reported progress is a file being read, and the viewer's
+/// own `100%` is 150 to 200 ms out on a small model — while leaving the pixels two seconds of the
+/// bound to be sampled in.
+const MODEL_LOAD_CAP: Duration = Duration::from_secs(8);
+
 /// Whether a source with no pipe has drawn, as a test stands it in: `Some(true)` and `Some(false)` are
 /// a source that drew and one that never does, and `None` reads the source's own pixels (see
 /// `the_source_has_lit_pixels`).
@@ -720,6 +744,18 @@ fn the_picture_is_standing() -> bool {
             .is_some_and(|held| held.registration != 0 && held.registered != 0)
 }
 
+/// Whether the source this road has just adopted **takes the picture over from one that is
+/// standing**, rather than being the picture itself: the question its one placement and its crop are
+/// decided by.
+///
+/// **It is not the same as having a record**, which every source has: the record is where the drawn
+/// answer is kept (see `note_the_source`), and the swap is what a source behind a picture waits for —
+/// a first source has nothing behind it and is registered at its own adoption (see
+/// `the_band_was_placed` and `hand_the_picture_over`).
+fn the_source_is_taking_the_picture_over(source: isize, process: u32) -> bool {
+    the_pending_source_for(source, process).is_some() && the_picture_is_standing()
+}
+
 /// Whether a source adopted to take the picture over is still waiting to be ready, for the player it
 /// belongs to: the question the loop's retirement asks before it ends the player that is still the
 /// picture on screen (see `video_retire::settle_video_retirement`).
@@ -874,14 +910,12 @@ pub(super) fn the_standing_source_process(host: HWND) -> Option<u32> {
 /// a hover is shown through a thumbnail of its own (see `hover_film_host`). One source per live film,
 /// and the destination is whatever host is showing it — the source's box does not depend on which.
 ///
-/// Safety: `source` is a window the caller found by `pid` and this app did not make.
-pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
-    // **A window the still was taken of is not adopted again**: its player is ended the moment the
-    // still is painted, and this pass can arrive in between with the window still a window (see
-    // `STILL_PID`).
-    if STILL_PID.load(Ordering::SeqCst) == pid {
-        return;
-    }
+/// Put the invisibility on a player's own window and nothing else: the style half of
+/// `adopt_the_source`, for the road that has a source to keep off the screen before there is a host
+/// for it to be drawn through (see `f3d_player::show_the_window`).
+///
+/// Safety: `source` is a window of a player this app began, and the two calls only change its style.
+pub(super) unsafe fn make_the_source_invisible(source: HWND) {
     let ex = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
     let invisible = the_source_is_invisible();
     let _ = unsafe { SetWindowLongPtrW(source, GWL_EXSTYLE, source_ex_style(ex, invisible)) };
@@ -889,8 +923,34 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
         // Safety: as above, and the alpha is this app's own to give a window of another process's. The
         // one step from nothing, `LWA_ALPHA`, is what keeps the window drawn (and therefore
         // thumbnailable) while nothing of it reaches the screen.
-        let applied =
-            unsafe { SetLayeredWindowAttributes(source, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA) };
+        //
+        // **And the ask is made again where the window had not taken the style yet.** A style written
+        // behind a window's back is not one it presents with until it is asked to read it, and an alpha
+        // asked for before that is refused: a window left `WS_EX_LAYERED` with no alpha at all is a
+        // window that draws nothing, which the Shell thumbnails as a black band. Measured on a
+        // viewer's own window (f3d 4.0.1), the first ask is refused about as often as it is taken; the
+        // frame change below is what makes the style effective, and the ask after it is the one that
+        // holds.
+        let ask = || unsafe {
+            SetLayeredWindowAttributes(source, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA)
+        };
+        let first = ask();
+        let applied = if first.is_ok() {
+            first
+        } else {
+            let _ = unsafe {
+                SetWindowPos(
+                    source,
+                    HWND::default(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                )
+            };
+            ask()
+        };
         note_pin_trace!(
             "source invisible {:?} layered alpha {} applied ok {} (RHP_THUMBNAIL_INVISIBLE)",
             source,
@@ -903,6 +963,17 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
             source,
         );
     }
+}
+
+/// Safety: `source` is a window the caller found by `pid` and this app did not make.
+pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
+    // **A window the still was taken of is not adopted again**: its player is ended the moment the
+    // still is painted, and this pass can arrive in between with the window still a window (see
+    // `STILL_PID`).
+    if STILL_PID.load(Ordering::SeqCst) == pid {
+        return;
+    }
+    unsafe { make_the_source_invisible(source) };
     lower_the_source(source);
     // **The new source has taken the picture, so the band a step held is the setting's again**:
     // the outgoing film is behind this one from here, and the pin goes back to being the ordinary
@@ -955,9 +1026,14 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
         .and_then(|held| held.source)
         // A shape recorded for another film is not this one's: the placement is this film's first.
         .filter(|shape| shape.belongs_to(source, pid));
-    let native = the_films_native_size(pid).map_or(NativeSize::NotYet, NativeSize::Known);
+    // **A model's picture is a window its renderer draws the scene into, and its client is the whole
+    // of what it draws**: the picture has no size of its own to be asked for, so what it does answer
+    // is the box it stands at, which is the box it was launched with (see `f3d_player`).
+    let native = the_films_native_size(pid)
+        .or_else(|| f3d_player::the_box_of_a_model(pid))
+        .map_or(NativeSize::NotYet, NativeSize::Known);
     let placed = place_the_source(source, host, pid, placed, native);
-    let pending = the_pending_source_for(source.0 as isize, pid).is_some();
+    let pending = the_source_is_taking_the_picture_over(source.0 as isize, pid);
     if let Some(placed) = placed.filter(|_| pending) {
         // **The picture standing keeps drawing**: this source's placement is kept for the swap and not
         // for this pass (see `hand_the_picture_over`).
@@ -1008,46 +1084,49 @@ pub(super) fn note_the_source(source: HWND, pid: u32) {
         return;
     }
 
-    if the_picture_is_standing() {
-        let drawn = THUMBNAIL
-            .lock()
-            .ok()
-            .map(|held| held.registered)
-            .unwrap_or(0);
-        arm_the_pending_source(source, pid);
-        SOURCE.store(number, Ordering::SeqCst);
-        SOURCE_PROCESS.store(pid, Ordering::SeqCst);
-        note_where_the_source_stands(source);
-        if drawn != 0 {
-            note_pin_trace!(
-                "thumbnail source waiting {:?} pid {}: the picture standing is {:?} and draws until it \
-                 is ready",
-                source,
-                pid,
-                HWND(drawn as *mut _),
-            );
-        } else {
-            note_pin_trace!(
-                "thumbnail source waiting {:?} pid {pid}: the still painted for a relaunch draws until \
-                 it is ready",
-                source,
-            );
+    let standing = the_picture_is_standing();
+    let drawn = THUMBNAIL
+        .lock()
+        .ok()
+        .map(|held| held.registered)
+        .unwrap_or(0);
+    if !standing {
+        let registration = THUMBNAIL.lock().ok().map(|held| held.registration);
+        if let Ok(mut held) = THUMBNAIL.lock() {
+            *held = Thumbnail::NOTHING;
         }
-        return;
-    }
-
-    let registration = THUMBNAIL.lock().ok().map(|held| held.registration);
-    if let Ok(mut held) = THUMBNAIL.lock() {
-        *held = Thumbnail::NOTHING;
-    }
-    if let Some(registration) = registration {
-        let_the_registration_go(registration);
+        if let Some(registration) = registration {
+            let_the_registration_go(registration);
+        }
+        REGISTERED_HOST.store(0, Ordering::SeqCst);
     }
     forget_the_pending_source();
-    REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(number, Ordering::SeqCst);
     SOURCE_PROCESS.store(pid, Ordering::SeqCst);
+    // **Every source waits its turn, the first one included**: a registration says the Shell has a
+    // window to draw, never that the player has put a frame in it, and the record is what the pass
+    // that watches the player writes the drawn answer on — which a host's show is gated on (see
+    // `hand_the_picture_over` and `the_picture_is_composed_in`).
+    arm_the_pending_source(source, pid);
     note_where_the_source_stands(source);
+    if !standing {
+        return;
+    }
+    if drawn != 0 {
+        note_pin_trace!(
+            "thumbnail source waiting {:?} pid {}: the picture standing is {:?} and draws until it \
+             is ready",
+            source,
+            pid,
+            HWND(drawn as *mut _),
+        );
+    } else {
+        note_pin_trace!(
+            "thumbnail source waiting {:?} pid {pid}: the still painted for a relaunch draws until \
+             it is ready",
+            source,
+        );
+    }
 }
 
 /// Write where a source this road has just begun to draw stands, as the ask that follows is compared
@@ -1097,6 +1176,77 @@ pub(super) fn the_source_is_up(pid: u32) -> bool {
             owner == pid
         }
     }
+}
+
+// **A fourth knob, and not a setting either: whether the Shell is taken to have composed the
+// picture.** It exists for the suite alone: a registration between two windows of the suite's own
+// says nothing about a compositor the test run has in front of it, and every test that asks whether
+// a host may be shown is asking about the road rather than about this machine's display. Nothing
+// stands in unless a test says so, so the answer a test reads is the real one wherever it can be
+// (see `the_picture_is_composed_in`).
+#[cfg(test)]
+thread_local! {
+    static COMPOSED_STAND_IN: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Stand the composed answer in for this thread, or go back to asking the Shell (see
+/// `the_picture_is_composed_in`).
+#[cfg(test)]
+pub(super) fn stand_the_composed_road_in(answer: Option<bool>) {
+    COMPOSED_STAND_IN.with(|held| held.set(answer));
+}
+
+/// Whether the Shell is drawing this player's picture into `host` **and the source has a frame in
+/// it**: the source adopted for `pid` is still up, the registration standing is that source's and it
+/// is drawn into this very host, and the road that watches the player has seen the source draw (see
+/// `the_source_drew`).
+///
+/// **Never a compositor wait, and never a blocking lock.** A blocking `DwmFlush` may not be called
+/// from the thread that pumps this app's messages: the compositor is waiting on that very pump to
+/// finish the window's own work, so the flush is the pump waiting on the thing it drives — the hang
+/// this road was measured as. It would not answer the question either, because a composed frame says
+/// the Shell has a picture of the source, never that the source had one: the viewer's own blank is
+/// composed as faithfully as its scene. The road's own report is the honest gate, and it is asked
+/// for on the thread that watches the player, never here.
+///
+/// **And the record is never waited on.** The pass that watches the player holds it while it asks
+/// the host for its own origin — a call into this thread — so a wait here is this loop stopped dead
+/// behind the thread it is meant to be driving (see `the_source_is_standing_try`). A record that
+/// cannot be taken at once is a host shown one tick later and nothing else.
+///
+/// A test stands its own answer in where it has no player to draw (see `COMPOSED_STAND_IN`).
+pub(super) fn the_picture_is_composed_in(host: HWND, pid: u32) -> bool {
+    #[cfg(test)]
+    if let Some(answer) = COMPOSED_STAND_IN.with(|held| held.get()) {
+        return answer;
+    }
+    if !the_source_is_up(pid) {
+        return false;
+    }
+    // **And it is the transparent window this road asks for.** With the invisibility on, a source that
+    // has lost its layered bit is f3d's own window standing over the host it is supposed to be drawn
+    // *into* — the rectangle this gate exists to keep off the screen (see
+    // `keep_the_source_invisible`, which is the pass that puts the bit back).
+    if the_source_is_invisible() {
+        let Some(source) = the_source_window() else {
+            return false;
+        };
+        let ex = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
+        if ex & (WS_EX_LAYERED.0 as isize) == 0 {
+            return false;
+        }
+    }
+    let number = SOURCE.load(Ordering::SeqCst);
+    let standing = THUMBNAIL.try_lock().is_ok_and(|held| {
+        held.registration != 0
+            && held.host == host.0 as isize
+            && held.registered == number
+            && held.registered_process == pid
+    });
+    // **And it is a source the road has seen draw**: a registration is made on adoption, before the
+    // player has a frame in its window, and the source is the wait until it does (see
+    // `hand_the_picture_over`, whose pass latches the answer on the record it is still waiting on).
+    standing && the_pending_source_for(number, pid).is_none_or(|pending| pending.drew)
 }
 
 /// Put the invisibility back where something took it off the source: the style monitor's pass over a
@@ -1298,16 +1448,19 @@ pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
         forget_the_late_placement();
         return;
     }
+    // **Asked before the record is taken**, so that nothing here reads a second record under the one
+    // the loop's own readers try for (see `the_source_is_standing_try`).
+    let taking_over = the_source_is_taking_the_picture_over(number, process);
+    let recorded = the_pending_source_for(number, process);
     let Ok(mut held) = THUMBNAIL.lock() else {
         return;
     };
     // **The source this pass is about is the one the road is on**: the source waiting to take the
     // picture over where a swap is waiting, and the standing one otherwise. A source that has its one
     // placement already is left alone.
-    let pending = the_pending_source_for(number, process);
-    let sized = match pending {
-        Some(pending) => pending.placed.is_some(),
-        None => held
+    let sized = match recorded {
+        Some(pending) if taking_over => pending.placed.is_some(),
+        _ => held
             .source
             .is_some_and(|shape| shape.belongs_to(HWND(number as *mut _), process)),
     };
@@ -1343,7 +1496,7 @@ pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
     };
     let placed = place_the_source(source, host, process, None, native);
     if let Some(placed) = placed {
-        if pending.is_some() {
+        if taking_over {
             // The picture standing keeps drawing; this placement is the swap's (see
             // `hand_the_picture_over`).
             note_the_placement_of_a_pending_source(number, process, placed);
@@ -1397,6 +1550,21 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     // Safety: the handle is one a player made and this module adopted, and the question is about it.
     if !unsafe { IsWindow(source) }.as_bool() {
         forget_the_pending_source_of(pending.source, pending.process);
+        return;
+    }
+    // **A source registered the moment it was adopted has nothing to swap to.** The picture was never
+    // taken down for it, so there is no second registration to make and none to let go of — what this
+    // pass owes it is the one question a swap asks of a replacement, whether it has drawn yet (see
+    // `the_source_drew`). Asking it here and swapping it for itself would be the registration under a
+    // pin's picture let go and made again, which is the black band the swap exists to avoid.
+    let already_the_picture = THUMBNAIL
+        .lock()
+        .ok()
+        .is_some_and(|held| held.registration != 0 && held.registered == pending.source);
+    if already_the_picture {
+        if let Some((width, height)) = unsafe { client_size(source) } {
+            let _ = the_source_drew(pending, source, (width.max(1), height.max(1)));
+        }
         return;
     }
     // A source still waiting for its own size has nothing to be ready for yet (see
@@ -1521,6 +1689,12 @@ fn the_source_can_draw(live: Option<(i32, i32)>, shape: SourceShape, process: u3
 /// with. What separates a sized window from a drawn one is what is in it, so a few points inside the
 /// client are read through the window's own DC until one of them is not black.
 ///
+/// **A model's source is answered by its viewer's own loading report instead** (see
+/// `a_models_loading`): a scene clears its surface to the backdrop colour before it is drawn, so a lit
+/// pixel there is the grey rectangle the old gate showed — the black, then grey, then model a cold
+/// hover was seen as — while the report's `100%` is the file loaded and the grace after it is the
+/// renderer's first frame. A viewer that reports nothing at all is sampled exactly as a film is.
+///
 /// **It is paced and it is latched**: the monitor asks every few milliseconds and a read of another
 /// process's window per pass is the per-frame cross-process work this road refuses, so the sample is one
 /// per `SOURCE_DREW_EVERY` and a source that has drawn is never sampled again for its life. A drag holds
@@ -1531,17 +1705,29 @@ fn the_source_can_draw(live: Option<(i32, i32)>, shape: SourceShape, process: u3
 fn the_source_drew(pending: PendingSource, source: HWND, client: (i32, i32)) -> bool {
     // A player that answers over a pipe is asked its own video output instead of its pixels (see
     // `the_source_can_draw`), and a source that has drawn once has drawn.
-    if pending.drew || mpv_ipc::answers_properties(pending.process) {
-        return true;
-    }
+    let answered = pending.drew || mpv_ipc::answers_properties(pending.process);
     let now = Instant::now();
-    if pending
-        .sampled
-        .is_some_and(|sampled| now.duration_since(sampled) < SOURCE_DREW_EVERY)
-    {
-        return false;
-    }
-    let drew = the_source_sample(source, client);
+    // **The answer is latched on the record either way**, because it is what a host's show waits on
+    // and not merely what a swap does (see `the_picture_is_composed_in`).
+    let drew = if answered {
+        true
+    } else {
+        match a_models_loading(f3d_load::the_load_of(pending.process), pending.since, now) {
+            // Nothing is sampled while the report is still coming, and the pacing below is not
+            // spent on it: a model whose file is loading has nothing of its own to show yet.
+            AViewersLoading::Waiting => return false,
+            AViewersLoading::Loaded => true,
+            AViewersLoading::Unreported => {
+                if pending
+                    .sampled
+                    .is_some_and(|sampled| now.duration_since(sampled) < SOURCE_DREW_EVERY)
+                {
+                    return false;
+                }
+                the_source_sample(source, client)
+            }
+        }
+    };
     if let Ok(mut record) = PENDING_SOURCE.lock() {
         if let Some(waiting) = record.as_mut().filter(|waiting| {
             waiting.source == pending.source && waiting.process == pending.process
@@ -1550,13 +1736,71 @@ fn the_source_drew(pending: PendingSource, source: HWND, client: (i32, i32)) -> 
             waiting.drew |= drew;
         }
     }
-    if drew {
+    if drew && !answered {
         note_pin_trace!(
             "thumbnail source drew after {}ms",
             pending.since.elapsed().as_millis(),
         );
     }
     drew
+}
+
+/// What a viewer's own loading report says about whether its source has a scene in it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AViewersLoading {
+    /// The file is loaded and the grace after it has run: the renderer has had its first frame.
+    Loaded,
+    /// The report is still coming, so nothing of the picture is owed yet.
+    Waiting,
+    /// There is no report to wait for — no viewer of this app's at all, one that has said nothing past
+    /// `MODEL_REPORT_WAIT`, one that has reported but never reached its marker by `MODEL_LOAD_CAP`, or
+    /// one whose pipe has closed without a marker. The pixels are the only answer left for those (see
+    /// `the_source_has_lit_pixels`).
+    Unreported,
+}
+
+/// The rule `the_source_drew` decides a model's source by, apart from the machine it reads.
+///
+/// **The grace runs from both ends**: from the marker, because the file being loaded is not the scene
+/// being drawn, and from the placement, because a report that arrived before this app had the window
+/// at the box says nothing about what the window at the box shows. And **a viewer is not waited on
+/// forever**: nothing at all for `MODEL_REPORT_WAIT`, a pipe closed without the marker, or a report
+/// that never reaches the marker by `MODEL_LOAD_CAP` — a warning or a failed load on the same stream
+/// is a viewer reporting and no progress ever after it — falls back to the pixel sample. A format
+/// this build's viewer does not report progress for must still show, even if it shows the old way.
+///
+/// **A marker that lands after the fallback has answered is only an earlier answer than the scene**:
+/// the pixel sample latches `drew` on the record and a source that answered is never sampled again
+/// (see `the_source_drew`), so such a viewer is shown the way it was shown before this gate existed —
+/// the backdrop its first render cleared to, then the model — rather than never.
+fn a_models_loading(
+    load: Option<f3d_load::ModelLoad>,
+    placed: Instant,
+    now: Instant,
+) -> AViewersLoading {
+    let Some(load) = load else {
+        return AViewersLoading::Unreported;
+    };
+    if let Some(loaded) = load.loaded {
+        let its_grace_has_run = now.saturating_duration_since(loaded) >= MODEL_LOAD_GRACE;
+        let the_placements_has_too = now.saturating_duration_since(placed) >= MODEL_LOAD_GRACE;
+        return if its_grace_has_run && the_placements_has_too {
+            AViewersLoading::Loaded
+        } else {
+            AViewersLoading::Waiting
+        };
+    }
+    // A viewer that has said nothing is waited out at `MODEL_REPORT_WAIT`, and one that is reporting is
+    // given `MODEL_LOAD_CAP` for the marker before its pixels are asked instead (see both above).
+    let waited = if load.reported {
+        MODEL_LOAD_CAP
+    } else {
+        MODEL_REPORT_WAIT
+    };
+    if load.ended || now.saturating_duration_since(load.begun) >= waited {
+        return AViewersLoading::Unreported;
+    }
+    AViewersLoading::Waiting
 }
 
 /// The sample itself: the machine's own read of the source's pixels, or the answer a test stood in for
@@ -3172,6 +3416,132 @@ mod tests {
             the_frames_checksum(&frame(0)),
             the_frames_checksum(&frame(0)),
             "and the same picture is the same one"
+        );
+    }
+
+    /// **A model's picture is answered by its viewer's own loading report, and by nothing else.**
+    /// Four questions, and every one of them is a frame the user would otherwise have seen: a source
+    /// with no report at all — a film's player, or none — is the pixel road it always was; a viewer
+    /// that reports but has not reached `100%` has drawn nothing, however lit its backdrop is; a
+    /// `100%` whose grace has not run is still nothing; and a `100%` whose grace has run from the
+    /// marker **and** from the placement is the scene (see `a_models_loading`).
+    #[test]
+    fn a_models_picture_is_its_viewers_loading_report() {
+        let begun = Instant::now();
+        let placed = begun + Duration::from_millis(50);
+        let report = |reported: bool, loaded: Option<Instant>, ended: bool| f3d_load::ModelLoad {
+            reported,
+            loaded,
+            ended,
+            begun,
+        };
+
+        assert_eq!(
+            a_models_loading(None, placed, placed),
+            AViewersLoading::Unreported,
+            "a player of another kind's is no report at all: the pixels answer, as they always did"
+        );
+
+        assert_eq!(
+            a_models_loading(Some(report(false, None, false)), placed, placed + Duration::from_millis(200)),
+            AViewersLoading::Waiting,
+            "a viewer that has only just been begun is waited for: its first line is 150-200 ms out"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(false, None, false)),
+                placed,
+                begun + MODEL_REPORT_WAIT - Duration::from_millis(1)
+            ),
+            AViewersLoading::Waiting,
+            "and the bound is the bound: nothing at all is not yet a viewer that reports nothing"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(false, None, false)),
+                placed,
+                begun + MODEL_REPORT_WAIT
+            ),
+            AViewersLoading::Unreported,
+            "past it, a viewer that has said nothing is sampled the way a film's source is"
+        );
+        assert_eq!(
+            a_models_loading(Some(report(false, None, true)), placed, placed),
+            AViewersLoading::Unreported,
+            "and a pipe that closed without the marker is no wait at all, however recently it began"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, None, false)),
+                placed,
+                begun + MODEL_REPORT_WAIT * 2
+            ),
+            AViewersLoading::Waiting,
+            "a viewer that is reporting is waited for rather than sampled: a big file is still \
+             loading"
+        );
+        const {
+            assert!(
+                MODEL_LOAD_CAP.as_secs() < VIDEO_START_WAIT_SECS,
+                "the cap must answer inside the bound that ends the wait, or it never answers"
+            )
+        };
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, None, false)),
+                placed,
+                begun + MODEL_LOAD_CAP - Duration::from_millis(1)
+            ),
+            AViewersLoading::Waiting,
+            "and it is waited for as long as it keeps reporting, warning lines and all"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, None, false)),
+                placed,
+                begun + MODEL_LOAD_CAP
+            ),
+            AViewersLoading::Unreported,
+            "past the cap a report that never reached its marker has nothing left to wait for: a \
+             viewer that wrote a warning and no progress is sampled the way a film's source is"
+        );
+
+        let loaded = placed + Duration::from_millis(300);
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, Some(loaded), false)),
+                placed,
+                loaded + MODEL_LOAD_GRACE - Duration::from_millis(1)
+            ),
+            AViewersLoading::Waiting,
+            "a marker inside the grace is a file loaded and not yet a scene drawn"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, Some(begun), false)),
+                placed,
+                placed + MODEL_LOAD_GRACE - Duration::from_millis(1)
+            ),
+            AViewersLoading::Waiting,
+            "and a marker from before the placement owes nothing: the grace runs from both ends"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, Some(loaded), false)),
+                placed,
+                loaded + MODEL_LOAD_GRACE
+            ),
+            AViewersLoading::Loaded,
+            "a marker and a placement both a grace old is the scene"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, Some(loaded), true)),
+                placed,
+                loaded + MODEL_LOAD_GRACE
+            ),
+            AViewersLoading::Loaded,
+            "and a report that closed after its marker is answered by the marker"
         );
     }
 
