@@ -113,6 +113,7 @@ mod media_types;
 mod message_utils;
 mod mpv_ipc;
 mod mpv_resident;
+mod never_shown;
 mod paint;
 mod pin_bubble;
 mod pin_chrome_layout;

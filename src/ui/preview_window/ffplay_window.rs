@@ -230,31 +230,6 @@ pub(super) fn host_for_a_hosted_player(pid: u32) -> Option<HWND> {
     None
 }
 
-/// The window belonging to `pid` as it stands right now, found by looking rather than by the
-/// record: the pick `enum_windows_callback` makes, for a caller that has to have the handle before
-/// the monitor's next pass and cannot wait on it (see `f3d_player`).
-///
-/// Safety: the handle is a window of a process this app began, and the question is about it.
-#[cfg(not(test))]
-pub(super) unsafe fn a_players_window_now(pid: u32) -> Option<HWND> {
-    if pid == 0 {
-        return None;
-    }
-    let mut data = EnumWindowsData {
-        target_pid: pid,
-        found_hwnd: HWND::default(),
-        best_area: 0,
-    };
-    let _ = unsafe {
-        EnumWindows(
-            Some(enum_windows_callback),
-            LPARAM(&mut data as *mut EnumWindowsData as isize),
-        )
-    };
-
-    (!data.found_hwnd.is_invalid()).then_some(data.found_hwnd)
-}
-
 /// Style and raise a player's known window.
 pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // **A hosted player's window is not this app's to style or to publish.** It is the source the

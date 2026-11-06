@@ -25,7 +25,6 @@
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::process::ChildStdout;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -109,7 +108,11 @@ pub(super) fn the_load_of(pid: u32) -> Option<ModelLoad> {
 
 /// Read a viewer's report to its end on a thread of its own, and mark the record ended with it (see
 /// the module note).
-pub(super) fn drain_it(report: ChildStdout, pid: u32) {
+///
+/// **The stream is any reader**, because the pipe a viewer's report arrives on is made by the launch
+/// that begins it rather than by a `Command` (see `never_shown`): what this needs of it is `Read`,
+/// to be the only one of it, and to outlive this call by as long as the thread does.
+pub(super) fn drain_it(report: impl Read + Send + 'static, pid: u32) {
     let _ = std::thread::Builder::new()
         .name("model-load".to_string())
         .spawn(move || {
