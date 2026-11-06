@@ -20,7 +20,9 @@
 //! The rest are text whose first line names them — `solid`, `ply`, `OFF`, `NRRD`, `#VRML`,
 //! `#?RADIANCE`, the section letter an IGES writes in column 73, an OBJ statement at the start of a
 //! line — and the check is as strong as such a check can be, which is to say it tells a model
-//! from a document and does not pretend to read the document. A `.pic` is worth naming here: f3d's
+//! from a document and does not pretend to read the document. A header is read as far as the file
+//! stays text: a `.vtk`, a `.vtp`, a `.brep`, a `.mha` and a `.pic` are a line naming the format in
+//! front of a payload that is not text at all, and the payload is no reason to refuse the header. A `.pic` is worth naming here: f3d's
 //! reader for it is the Radiance HDR one rather than the Softimage PIC the extension also stands
 //! for, so `#?RADIANCE` is what its head is asked for.
 //!
@@ -179,6 +181,24 @@ fn text_start(front: &[u8]) -> Option<&str> {
     Some(text.trim_start_matches('\u{feff}').trim_start())
 }
 
+/// The text a front opens with, up to the first byte that is not text, taken off any byte-order
+/// mark and leading whitespace. A header in front of a payload — a VTK's arrays, a BRep's curves,
+/// a Radiance picture's pixels — is still the format's own header, and `as_text` would refuse it
+/// for the bytes behind it. An empty prefix is no text at all.
+fn text_head(front: &[u8]) -> Option<&str> {
+    let text = match std::str::from_utf8(front) {
+        Ok(text) => text,
+        Err(error) => std::str::from_utf8(&front[..error.valid_up_to()]).ok()?,
+    };
+    let cut = text
+        .find(|character: char| character.is_control() && !character.is_whitespace())
+        .unwrap_or(text.len());
+
+    let head = text[..cut].trim_start_matches('\u{feff}').trim_start();
+
+    (!head.is_empty()).then_some(head)
+}
+
 /// A front that is not text: the whole of what a format which declares nothing can be held to.
 fn not_text(front: &[u8], _len: u64) -> bool {
     as_text(front).is_none()
@@ -290,12 +310,12 @@ fn vrml(front: &[u8], len: u64) -> bool {
 
 /// A legacy VTK opens with the line that names the format and its version.
 fn vtk_legacy(front: &[u8], _len: u64) -> bool {
-    text_start(front).is_some_and(|text| text.starts_with("# vtk DataFile"))
+    text_head(front).is_some_and(|text| text.starts_with("# vtk DataFile"))
 }
 
 /// The XML VTK family declares its root element after the declaration it may or may not carry.
 fn xml_vtk(front: &[u8], _len: u64) -> bool {
-    as_text(front).is_some_and(|text| text.contains("<VTKFile"))
+    text_head(front).is_some_and(|text| text.contains("<VTKFile"))
 }
 
 /// A `.vtkhdf` is the XML family's HDF5 spelling.
@@ -310,7 +330,7 @@ fn nrrd(front: &[u8], _len: u64) -> bool {
 
 /// A MetaImage header is a list of `key = value` lines, and these two are in every one of them.
 fn meta_image(front: &[u8], _len: u64) -> bool {
-    as_text(front).is_some_and(|text| text.contains("ObjectType") || text.contains("NDims"))
+    text_head(front).is_some_and(|text| text.contains("ObjectType") || text.contains("NDims"))
 }
 
 /// OpenVDB's magic: a space, the letters every file of the family has, and four zero bytes.
@@ -323,9 +343,11 @@ fn collada(front: &[u8], _len: u64) -> bool {
     as_text(front).is_some_and(|text| text.contains("<COLLADA"))
 }
 
-/// CityGML is the same shape, and a `gml` element is what its documents are made of.
+/// CityGML is the same shape, and a `gml` element is what its documents are made of — named either
+/// by an element or by the namespace its root declares, since the first `<gml:` of a CityGML may
+/// sit past the head window behind the comment and the root's own attributes.
 fn gml(front: &[u8], _len: u64) -> bool {
-    as_text(front).is_some_and(|text| text.contains("<gml"))
+    text_head(front).is_some_and(|text| text.contains("<gml") || text.contains("opengis.net/gml"))
 }
 
 /// An AMF document is XML whose root is `<amf`, and a zip is what a compressed one arrives in.
@@ -350,14 +372,14 @@ fn iges(front: &[u8], _len: u64) -> bool {
 
 /// A BRep is OpenCASCADE's own dump, which names itself on the first line it writes.
 fn brep(front: &[u8], _len: u64) -> bool {
-    as_text(front).is_some_and(|text| {
+    text_head(front).is_some_and(|text| {
         text.contains("DBRep_DrawableShape") || text.contains("CASCADE Topology")
     })
 }
 
 /// A Radiance picture opens by naming the format in its first line.
 fn radiance(front: &[u8], _len: u64) -> bool {
-    text_start(front).is_some_and(|text| text.starts_with("#?RADIANCE"))
+    text_head(front).is_some_and(|text| text.starts_with("#?RADIANCE"))
 }
 
 /// An object file's own name is the first word, which a compressed or a negated spelling extends.
@@ -530,6 +552,46 @@ mod tests {
         assert!(matcher("iges")(&record, record.len() as u64));
         assert!(matcher("igs")(&record, record.len() as u64));
         assert!(!matcher("iges")(&junk(), 4096));
+    }
+
+    /// A header in front of a payload is still the header its format declares: the arrays, the
+    /// curves and the pixels behind it are not text, and a window that carries them is refused by
+    /// `as_text` alone.
+    #[test]
+    fn a_text_header_over_a_binary_payload_is_still_the_format_it_names() {
+        let heads: [(&str, &[u8]); 6] = [
+            (
+                "vtk",
+                b"# vtk DataFile Version 4.2\nvtk output\nBINARY\n\x00\x01\x02\xff",
+            ),
+            (
+                "vtp",
+                b"<VTKFile type=\"PolyData\">\n<AppendedData>\x00\x01\xff",
+            ),
+            ("vtu", b"<VTKFile type=\"UnstructuredGrid\">\n\x01\x00\xff"),
+            (
+                "brep",
+                b"\nOpen CASCADE Topology V4, (c) Open Cascade\n\x01\x00\xff",
+            ),
+            ("pic", b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\x02\x02\xff"),
+            (
+                "gml",
+                b"<?xml version=\"1.0\"?>\n<CityModel xmlns:gml=\"http://www.opengis.net/gml\">\x01\xff",
+            ),
+        ];
+
+        for (name, head) in heads {
+            assert!(
+                matcher(name)(head, head.len() as u64),
+                "`{name}` is the header its format declares, whatever follows it"
+            );
+        }
+
+        // An empty prefix is no text at all, so a picture of one of these names is not a header.
+        assert!(
+            !matcher("vtk")(b"\x89PNG\r\n\x1a\n\x00\x01", 8),
+            "a file that opens with bytes that are not text has no header to read"
+        );
     }
 
     /// The names whose format declares nothing in its front, and which are therefore claimed
