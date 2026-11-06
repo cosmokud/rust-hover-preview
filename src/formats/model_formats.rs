@@ -27,7 +27,7 @@
 //! for, so `#?RADIANCE` is what its head is asked for.
 //!
 //! Four names declare nothing in their front at all — `sbet`, a trajectory of binary records;
-//! `qi`, the QFIT cloud whose only rule is that its length is a multiple of four; `splat`, whose
+//! `qi`, the QFIT cloud whose header holds nothing this side can check; `splat`, whose
 //! files are either PLY or a bare run of gaussian records; and `xbf`, an OpenCASCADE cache — so
 //! nothing is read of a file of one of those names and the name is the whole of the claim: the
 //! viewer is started, and it is the one that answers, exactly as it was before this module
