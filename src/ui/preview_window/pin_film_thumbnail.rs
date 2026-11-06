@@ -311,6 +311,18 @@ const MODEL_LOAD_GRACE: Duration = Duration::from_millis(100);
 /// nothing falls back to the old road rather than never showing (see `a_models_loading`).
 const MODEL_REPORT_WAIT: Duration = Duration::from_millis(1500);
 
+/// How long a viewer that **is** reporting is given to reach its marker: the cap on the one state a
+/// viewer can otherwise sit in forever — `reported` and never `100%`, which is a warning or a
+/// failed-load line on the same stream and no loading progress ever after it (see
+/// `a_models_loading`).
+///
+/// **Eight seconds, and it has to be inside `VIDEO_START_WAIT_SECS`**: that bound ends the hover's
+/// wait and relaunches without a host, so a cap at or past it would never answer at all. It is past
+/// every load this road can argue for — reported progress is a file being read, and the viewer's
+/// own `100%` is 150 to 200 ms out on a small model — while leaving the pixels two seconds of the
+/// bound to be sampled in.
+const MODEL_LOAD_CAP: Duration = Duration::from_secs(8);
+
 /// Whether a source with no pipe has drawn, as a test stands it in: `Some(true)` and `Some(false)` are
 /// a source that drew and one that never does, and `None` reads the source's own pixels (see
 /// `the_source_has_lit_pixels`).
@@ -1740,9 +1752,10 @@ enum AViewersLoading {
     Loaded,
     /// The report is still coming, so nothing of the picture is owed yet.
     Waiting,
-    /// There is no report to wait for — no viewer of this app's at all, or one that has said nothing
-    /// past `MODEL_REPORT_WAIT`, or one whose pipe has closed without a marker. The pixels are the
-    /// only answer left for those (see `the_source_has_lit_pixels`).
+    /// There is no report to wait for — no viewer of this app's at all, one that has said nothing past
+    /// `MODEL_REPORT_WAIT`, one that has reported but never reached its marker by `MODEL_LOAD_CAP`, or
+    /// one whose pipe has closed without a marker. The pixels are the only answer left for those (see
+    /// `the_source_has_lit_pixels`).
     Unreported,
 }
 
@@ -1750,10 +1763,16 @@ enum AViewersLoading {
 ///
 /// **The grace runs from both ends**: from the marker, because the file being loaded is not the scene
 /// being drawn, and from the placement, because a report that arrived before this app had the window
-/// at the box says nothing about what the window at the box shows. And **a silent viewer is not
-/// waited on forever**: nothing at all for `MODEL_REPORT_WAIT`, or a pipe closed without the marker,
-/// falls back to the pixel sample — a format this build's viewer does not report progress for must
-/// still show, even if it shows the old way.
+/// at the box says nothing about what the window at the box shows. And **a viewer is not waited on
+/// forever**: nothing at all for `MODEL_REPORT_WAIT`, a pipe closed without the marker, or a report
+/// that never reaches the marker by `MODEL_LOAD_CAP` — a warning or a failed load on the same stream
+/// is a viewer reporting and no progress ever after it — falls back to the pixel sample. A format
+/// this build's viewer does not report progress for must still show, even if it shows the old way.
+///
+/// **A marker that lands after the fallback has answered is only an earlier answer than the scene**:
+/// the pixel sample latches `drew` on the record and a source that answered is never sampled again
+/// (see `the_source_drew`), so such a viewer is shown the way it was shown before this gate existed —
+/// the backdrop its first render cleared to, then the model — rather than never.
 fn a_models_loading(
     load: Option<f3d_load::ModelLoad>,
     placed: Instant,
@@ -1771,9 +1790,14 @@ fn a_models_loading(
             AViewersLoading::Waiting
         };
     }
-    if load.ended
-        || (!load.reported && now.saturating_duration_since(load.begun) >= MODEL_REPORT_WAIT)
-    {
+    // A viewer that has said nothing is waited out at `MODEL_REPORT_WAIT`, and one that is reporting is
+    // given `MODEL_LOAD_CAP` for the marker before its pixels are asked instead (see both above).
+    let waited = if load.reported {
+        MODEL_LOAD_CAP
+    } else {
+        MODEL_REPORT_WAIT
+    };
+    if load.ended || now.saturating_duration_since(load.begun) >= waited {
         return AViewersLoading::Unreported;
     }
     AViewersLoading::Waiting
@@ -3450,11 +3474,36 @@ mod tests {
             a_models_loading(
                 Some(report(true, None, false)),
                 placed,
-                begun + MODEL_REPORT_WAIT * 10
+                begun + MODEL_REPORT_WAIT * 2
             ),
             AViewersLoading::Waiting,
             "a viewer that is reporting is waited for rather than sampled: a big file is still \
-             loading, and the start bound upstream is what ends that wait"
+             loading"
+        );
+        const {
+            assert!(
+                MODEL_LOAD_CAP.as_secs() < VIDEO_START_WAIT_SECS,
+                "the cap must answer inside the bound that ends the wait, or it never answers"
+            )
+        };
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, None, false)),
+                placed,
+                begun + MODEL_LOAD_CAP - Duration::from_millis(1)
+            ),
+            AViewersLoading::Waiting,
+            "and it is waited for as long as it keeps reporting, warning lines and all"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, None, false)),
+                placed,
+                begun + MODEL_LOAD_CAP
+            ),
+            AViewersLoading::Unreported,
+            "past the cap a report that never reached its marker has nothing left to wait for: a \
+             viewer that wrote a warning and no progress is sampled the way a film's source is"
         );
 
         let loaded = placed + Duration::from_millis(300);
