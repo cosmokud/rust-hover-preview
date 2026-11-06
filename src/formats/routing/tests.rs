@@ -537,6 +537,58 @@ fn the_pictures_windows_decodes_are_the_picture_lists() {
     }
 }
 
+/// **A model's name is half of the claim and the file's own front is the other half.** A `.bin`
+/// is a name the `[f3d]` list carries and a name half this machine's formats share, so a file of
+/// that name which is not a point cloud is not a model at all: it is answered with no kind, which
+/// starts nothing, rather than with the kind that would launch the viewer for it (see
+/// `model_formats`). A mesh is still claimed, because its front says what its name promised.
+#[test]
+fn a_model_is_the_kind_its_own_head_confirms_and_no_other() {
+    let config = crate::config::config::AppConfig::default();
+    let folder = std::env::temp_dir().join("rust-hover-preview-model-route");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    let junk = folder.join("not-a-cloud.bin");
+    std::fs::write(&junk, [0x9Au8, 0x7F, 0x01, 0x00].repeat(64)).expect("a file of junk");
+    assert_eq!(
+        kind_of_name(&junk, &config),
+        Some(PreviewType::Models),
+        "the name is still a model's: that half of the question has not changed"
+    );
+    assert_ne!(
+        kind_of_with_facts(&junk, &config, None),
+        Some(PreviewType::Models),
+        "and the file is not one, so the viewer is never started for it"
+    );
+    let readers = kind_of_with_facts(&junk, &config, None)
+        .map_or_else(Vec::new, |kind| readers_for(kind, &junk));
+    assert!(
+        !readers.contains(&Reader::F3d),
+        "nothing of that route asks the viewer about a file that is not a model"
+    );
+
+    // 56 bytes, version 20020715, identifier 970401: the header of a real TerraScan file.
+    let cloud = folder.join("a-cloud.bin");
+    let mut head = b"8\x00\x00\x00\xeb\x7d\x31\x01\xa1\xce\x0e\x00".to_vec();
+    head.extend_from_slice(&[0u8; 64]);
+    std::fs::write(&cloud, &head).expect("a point cloud");
+    assert_eq!(
+        kind_of_with_facts(&cloud, &config, None),
+        Some(PreviewType::Models),
+        "a file whose header carries PDAL's version and identifier is the point cloud its name promised"
+    );
+
+    let mesh = folder.join("a-mesh.stl");
+    std::fs::write(&mesh, b"solid cube\nendsolid cube\n").expect("an ascii mesh");
+    assert_eq!(
+        kind_of_with_facts(&mesh, &config, None),
+        Some(PreviewType::Models),
+        "an ascii mesh is a model by its name and by its front together"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 /// The walk narrows a chain and never reorders it: what a file can be asked of is what its
 /// kind declares, less whatever this machine cannot answer with, in the order the kind
 /// names them — so the reader asked first is the first of the chain that can answer.

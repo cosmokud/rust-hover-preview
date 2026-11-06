@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **A file whose name is in `[f3d]` is a model only where its own head says it is, so a `.bin` that is not a point cloud no longer starts the viewer for a second only to be turned down with a black window** — the name was the whole of the claim, and `bin` is a name half the machine's own formats share, so a file of that name which was nothing of the sort was handed to f3d anyway, which spent the launch and a window finding out. Every one of the list's names is now held to the front of the file before the kind is claimed: a `.las` to its magic, a `.vtk` to the line that names the format, a `.step` to the header every STEP document opens with, a `.stl` to either its `solid` line or a triangle count that fits its length, a `.3mf`, a `.fcstd` and a `.usdz` to the zip they arrive in, a `.bin` to the two words of the TerraScan header PDAL reads, and four names — a QFIT cloud, an SBET trajectory, a gaussian splat cloud and an OpenCASCADE cache — whose formats declare nothing in their front at all, to nothing at all: their name is the whole of the claim, so the viewer is started and answers. A file that fails the question is not a model: it previews as nothing and starts nothing, which is the answer a name outside every list already had. A name you add to the `[f3d]` list yourself keeps the old answer, since nothing here knows the format it stands for, and so does a head that cannot be read — a file on a cloud volume is asked no question a signature could answer.
+
 ## [0.4.11] - 2026-11-06
 
 ### Added
