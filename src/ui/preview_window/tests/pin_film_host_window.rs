@@ -9474,3 +9474,37 @@ fn a_pin_whose_host_appears_over_an_ordinary_window_is_put_in_front_of_it() {
         config.pin_always_on_top = standing;
     }
 }
+
+/// **A model's band is the host's scene, and never the stand-in frame the loader left in the media.**
+///
+/// A model is the one kind whose band is a window of somebody else's on every road — f3d's, shown
+/// through the pin's host — and what the loader gives the hover to hold while the viewer starts is a
+/// rectangle of this app's own at the box that window will be (see `load_model_preview`). The pin's
+/// window is an *owned* window of the host, so it composites over the scene, and a band painted from
+/// that stand-in is the scene dimmed by a sixth where the backdrop is transparent (measured: 40 of
+/// 255 grey at alpha 40 over it, which is `+6` on every channel of every pixel) and covered
+/// altogether where it is not (see `a_models_band_is_a_hosts_picture`).
+#[test]
+fn a_models_band_is_the_hosts_scene_and_not_the_stand_in_frame() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+
+    // The frame `load_model_preview` loads a model with: the box, and nothing of the scene.
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(static_image_media(
+            Arc::new(ImageFrame::new(vec![40u8; 64 * 48 * 4], 64, 48, 0)),
+            MediaType::Model,
+        ));
+    }
+
+    let (band, top, rows) = the_band_one_paint_left(&film);
+    assert!(rows > 0, "the pin has a band to assert");
+    assert!(
+        band.iter().all(|pixel| *pixel == [1, 1, 1, 1]),
+        "rows {top}..{} of the pin's bitmap are the pin's least claim on the point, so f3d's own \
+         window — which the host draws and this window stands over — is what the band shows, not \
+         the stand-in frame composited over it",
+        top + rows
+    );
+}
