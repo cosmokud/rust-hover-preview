@@ -720,6 +720,18 @@ fn the_picture_is_standing() -> bool {
             .is_some_and(|held| held.registration != 0 && held.registered != 0)
 }
 
+/// Whether the source this road has just adopted **takes the picture over from one that is
+/// standing**, rather than being the picture itself: the question its one placement and its crop are
+/// decided by.
+///
+/// **It is not the same as having a record**, which every source has: the record is where the drawn
+/// answer is kept (see `note_the_source`), and the swap is what a source behind a picture waits for —
+/// a first source has nothing behind it and is registered at its own adoption (see
+/// `the_band_was_placed` and `hand_the_picture_over`).
+fn the_source_is_taking_the_picture_over(source: isize, process: u32) -> bool {
+    the_pending_source_for(source, process).is_some() && the_picture_is_standing()
+}
+
 /// Whether a source adopted to take the picture over is still waiting to be ready, for the player it
 /// belongs to: the question the loop's retirement asks before it ends the player that is still the
 /// picture on screen (see `video_retire::settle_video_retirement`).
@@ -997,7 +1009,7 @@ pub(super) unsafe fn adopt_the_source(source: HWND, pid: u32, host: HWND) {
         .or_else(|| f3d_player::the_box_of_a_model(pid))
         .map_or(NativeSize::NotYet, NativeSize::Known);
     let placed = place_the_source(source, host, pid, placed, native);
-    let pending = the_pending_source_for(source.0 as isize, pid).is_some();
+    let pending = the_source_is_taking_the_picture_over(source.0 as isize, pid);
     if let Some(placed) = placed.filter(|_| pending) {
         // **The picture standing keeps drawing**: this source's placement is kept for the swap and not
         // for this pass (see `hand_the_picture_over`).
@@ -1048,46 +1060,49 @@ pub(super) fn note_the_source(source: HWND, pid: u32) {
         return;
     }
 
-    if the_picture_is_standing() {
-        let drawn = THUMBNAIL
-            .lock()
-            .ok()
-            .map(|held| held.registered)
-            .unwrap_or(0);
-        arm_the_pending_source(source, pid);
-        SOURCE.store(number, Ordering::SeqCst);
-        SOURCE_PROCESS.store(pid, Ordering::SeqCst);
-        note_where_the_source_stands(source);
-        if drawn != 0 {
-            note_pin_trace!(
-                "thumbnail source waiting {:?} pid {}: the picture standing is {:?} and draws until it \
-                 is ready",
-                source,
-                pid,
-                HWND(drawn as *mut _),
-            );
-        } else {
-            note_pin_trace!(
-                "thumbnail source waiting {:?} pid {pid}: the still painted for a relaunch draws until \
-                 it is ready",
-                source,
-            );
+    let standing = the_picture_is_standing();
+    let drawn = THUMBNAIL
+        .lock()
+        .ok()
+        .map(|held| held.registered)
+        .unwrap_or(0);
+    if !standing {
+        let registration = THUMBNAIL.lock().ok().map(|held| held.registration);
+        if let Ok(mut held) = THUMBNAIL.lock() {
+            *held = Thumbnail::NOTHING;
         }
-        return;
-    }
-
-    let registration = THUMBNAIL.lock().ok().map(|held| held.registration);
-    if let Ok(mut held) = THUMBNAIL.lock() {
-        *held = Thumbnail::NOTHING;
-    }
-    if let Some(registration) = registration {
-        let_the_registration_go(registration);
+        if let Some(registration) = registration {
+            let_the_registration_go(registration);
+        }
+        REGISTERED_HOST.store(0, Ordering::SeqCst);
     }
     forget_the_pending_source();
-    REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(number, Ordering::SeqCst);
     SOURCE_PROCESS.store(pid, Ordering::SeqCst);
+    // **Every source waits its turn, the first one included**: a registration says the Shell has a
+    // window to draw, never that the player has put a frame in it, and the record is what the pass
+    // that watches the player writes the drawn answer on — which a host's show is gated on (see
+    // `hand_the_picture_over` and `the_picture_is_composed_in`).
+    arm_the_pending_source(source, pid);
     note_where_the_source_stands(source);
+    if !standing {
+        return;
+    }
+    if drawn != 0 {
+        note_pin_trace!(
+            "thumbnail source waiting {:?} pid {}: the picture standing is {:?} and draws until it \
+             is ready",
+            source,
+            pid,
+            HWND(drawn as *mut _),
+        );
+    } else {
+        note_pin_trace!(
+            "thumbnail source waiting {:?} pid {pid}: the still painted for a relaunch draws until \
+             it is ready",
+            source,
+        );
+    }
 }
 
 /// Write where a source this road has just begun to draw stands, as the ask that follows is compared
@@ -1157,20 +1172,25 @@ pub(super) fn stand_the_composed_road_in(answer: Option<bool>) {
     COMPOSED_STAND_IN.with(|held| held.set(answer));
 }
 
-/// Whether the Shell is drawing this player's picture into `host` and **has composed it**: the source
-/// adopted for `pid` is still up, the registration standing is that source's and it is drawn into
-/// this very host, and one composition has been waited for.
+/// Whether the Shell is drawing this player's picture into `host` **and the source has a frame in
+/// it**: the source adopted for `pid` is still up, the registration standing is that source's and it
+/// is drawn into this very host, and the road that watches the player has seen the source draw (see
+/// `the_source_drew`).
 ///
-/// **The registration is the picture, so the wait is for the Shell rather than for a tick.** A host
-/// is black until the Shell composes the thumbnail into it (see `pin_film_host`), so a host shown on
-/// the tick the registration is made shows its own erase for the frame the Shell takes to compose —
-/// the black rectangle a cold model's hover was seen as. `DwmFlush` is the call that says that frame
-/// has been composed, and it is asked here rather than the reveal deferred a tick because a tick is
-/// fifteen milliseconds of black, which is exactly the flash.
+/// **Never a compositor wait, and never a blocking lock.** A blocking `DwmFlush` may not be called
+/// from the thread that pumps this app's messages: the compositor is waiting on that very pump to
+/// finish the window's own work, so the flush is the pump waiting on the thing it drives — the hang
+/// this road was measured as. It would not answer the question either, because a composed frame says
+/// the Shell has a picture of the source, never that the source had one: the viewer's own blank is
+/// composed as faithfully as its scene. The road's own report is the honest gate, and it is asked
+/// for on the thread that watches the player, never here.
 ///
-/// Nothing is stood in for a test: the registration a test's own adoption makes is a real one
-/// between real windows, and `DwmFlush` is a read of the compositor that a session without one
-/// answers with an error this function does not act on.
+/// **And the record is never waited on.** The pass that watches the player holds it while it asks
+/// the host for its own origin — a call into this thread — so a wait here is this loop stopped dead
+/// behind the thread it is meant to be driving (see `the_source_is_standing_try`). A record that
+/// cannot be taken at once is a host shown one tick later and nothing else.
+///
+/// A test stands its own answer in where it has no player to draw (see `COMPOSED_STAND_IN`).
 pub(super) fn the_picture_is_composed_in(host: HWND, pid: u32) -> bool {
     #[cfg(test)]
     if let Some(answer) = COMPOSED_STAND_IN.with(|held| held.get()) {
@@ -1192,19 +1212,17 @@ pub(super) fn the_picture_is_composed_in(host: HWND, pid: u32) -> bool {
             return false;
         }
     }
-    let drawn = THUMBNAIL.lock().is_ok_and(|held| {
+    let number = SOURCE.load(Ordering::SeqCst);
+    let standing = THUMBNAIL.try_lock().is_ok_and(|held| {
         held.registration != 0
             && held.host == host.0 as isize
-            && held.registered == SOURCE.load(Ordering::SeqCst)
+            && held.registered == number
             && held.registered_process == pid
     });
-    if !drawn {
-        return false;
-    }
-    // Safety: no handle of anyone's is passed — the call waits for the Shell's next frame and
-    // answers whether that wait was taken.
-    let _ = unsafe { windows::Win32::Graphics::Dwm::DwmFlush() };
-    true
+    // **And it is a source the road has seen draw**: a registration is made on adoption, before the
+    // player has a frame in its window, and the source is the wait until it does (see
+    // `hand_the_picture_over`, whose pass latches the answer on the record it is still waiting on).
+    standing && the_pending_source_for(number, pid).is_none_or(|pending| pending.drew)
 }
 
 /// Put the invisibility back where something took it off the source: the style monitor's pass over a
@@ -1406,16 +1424,19 @@ pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
         forget_the_late_placement();
         return;
     }
+    // **Asked before the record is taken**, so that nothing here reads a second record under the one
+    // the loop's own readers try for (see `the_source_is_standing_try`).
+    let taking_over = the_source_is_taking_the_picture_over(number, process);
+    let recorded = the_pending_source_for(number, process);
     let Ok(mut held) = THUMBNAIL.lock() else {
         return;
     };
     // **The source this pass is about is the one the road is on**: the source waiting to take the
     // picture over where a swap is waiting, and the standing one otherwise. A source that has its one
     // placement already is left alone.
-    let pending = the_pending_source_for(number, process);
-    let sized = match pending {
-        Some(pending) => pending.placed.is_some(),
-        None => held
+    let sized = match recorded {
+        Some(pending) if taking_over => pending.placed.is_some(),
+        _ => held
             .source
             .is_some_and(|shape| shape.belongs_to(HWND(number as *mut _), process)),
     };
@@ -1451,7 +1472,7 @@ pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
     };
     let placed = place_the_source(source, host, process, None, native);
     if let Some(placed) = placed {
-        if pending.is_some() {
+        if taking_over {
             // The picture standing keeps drawing; this placement is the swap's (see
             // `hand_the_picture_over`).
             note_the_placement_of_a_pending_source(number, process, placed);
@@ -1505,6 +1526,21 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     // Safety: the handle is one a player made and this module adopted, and the question is about it.
     if !unsafe { IsWindow(source) }.as_bool() {
         forget_the_pending_source_of(pending.source, pending.process);
+        return;
+    }
+    // **A source registered the moment it was adopted has nothing to swap to.** The picture was never
+    // taken down for it, so there is no second registration to make and none to let go of — what this
+    // pass owes it is the one question a swap asks of a replacement, whether it has drawn yet (see
+    // `the_source_drew`). Asking it here and swapping it for itself would be the registration under a
+    // pin's picture let go and made again, which is the black band the swap exists to avoid.
+    let already_the_picture = THUMBNAIL
+        .lock()
+        .ok()
+        .is_some_and(|held| held.registration != 0 && held.registered == pending.source);
+    if already_the_picture {
+        if let Some((width, height)) = unsafe { client_size(source) } {
+            let _ = the_source_drew(pending, source, (width.max(1), height.max(1)));
+        }
         return;
     }
     // A source still waiting for its own size has nothing to be ready for yet (see
@@ -1639,17 +1675,21 @@ fn the_source_can_draw(live: Option<(i32, i32)>, shape: SourceShape, process: u3
 fn the_source_drew(pending: PendingSource, source: HWND, client: (i32, i32)) -> bool {
     // A player that answers over a pipe is asked its own video output instead of its pixels (see
     // `the_source_can_draw`), and a source that has drawn once has drawn.
-    if pending.drew || mpv_ipc::answers_properties(pending.process) {
-        return true;
-    }
+    let answered = pending.drew || mpv_ipc::answers_properties(pending.process);
     let now = Instant::now();
-    if pending
-        .sampled
-        .is_some_and(|sampled| now.duration_since(sampled) < SOURCE_DREW_EVERY)
-    {
-        return false;
-    }
-    let drew = the_source_sample(source, client);
+    // **The answer is latched on the record either way**, because it is what a host's show waits on
+    // and not merely what a swap does (see `the_picture_is_composed_in`).
+    let drew = if answered {
+        true
+    } else {
+        if pending
+            .sampled
+            .is_some_and(|sampled| now.duration_since(sampled) < SOURCE_DREW_EVERY)
+        {
+            return false;
+        }
+        the_source_sample(source, client)
+    };
     if let Ok(mut record) = PENDING_SOURCE.lock() {
         if let Some(waiting) = record.as_mut().filter(|waiting| {
             waiting.source == pending.source && waiting.process == pending.process
@@ -1658,7 +1698,7 @@ fn the_source_drew(pending: PendingSource, source: HWND, client: (i32, i32)) -> 
             waiting.drew |= drew;
         }
     }
-    if drew {
+    if drew && !answered {
         note_pin_trace!(
             "thumbnail source drew after {}ms",
             pending.since.elapsed().as_millis(),

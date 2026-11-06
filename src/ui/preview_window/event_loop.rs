@@ -4539,15 +4539,11 @@ pub fn run_preview_window() {
                                 let _ = ShowWindow(hwnd, SW_HIDE);
                             }
 
-                            let process_running = is_video_process_running()
-                                // **A kept model is a running player this app still holds**, whose
-                                // process is out of the media the hover dropped and in the warm record
-                                // (see `hover_film_host::keep_a_model_warm`).
-                                || hover_film_host::the_warm_model_holds(
-                                    VIDEO_PID.load(Ordering::SeqCst),
-                                );
-                            let should_start =
-                                current_video_path.as_ref() != Some(&path) || !process_running;
+                            let should_start = hover_film_host::should_start_a_hover_player(
+                                &path,
+                                current_video_path.as_deref(),
+                                is_video_process_running(),
+                            );
 
                             if should_start {
                                 if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
@@ -4652,7 +4648,7 @@ pub fn run_preview_window() {
                                 // `hover_film_host::the_warm_model_is_back`).
                                 let back = show_is_model
                                     && hover_film_host::the_warm_model_is_back(
-                                        VIDEO_PID.load(Ordering::SeqCst),
+                                        &path,
                                         hover_film_host::the_hover_box_as_a_region(video_pos),
                                     );
                                 if back {
