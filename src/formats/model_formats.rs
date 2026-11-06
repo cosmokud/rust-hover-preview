@@ -395,8 +395,10 @@ fn ptx(front: &[u8], _len: u64) -> bool {
     as_text(front).is_some()
 }
 
-/// A triangle mesh is text that begins `solid`, or the binary form whose length is its own count:
-/// eighty header bytes, a triangle count, and fifty bytes a triangle.
+/// A triangle mesh is text that begins `solid`, or the binary form whose declared count fits the
+/// file: eighty header bytes, a triangle count, and fifty bytes a triangle. A count that fits is
+/// taken even where bytes follow the last triangle, because some pipelines leave them there and a
+/// preview refused is a preview lost; a count the file has no room for is not a mesh at all.
 fn stl(front: &[u8], len: u64) -> bool {
     if text_start(front).is_some_and(|text| text.starts_with("solid")) {
         return true;
@@ -409,7 +411,7 @@ fn stl(front: &[u8], len: u64) -> bool {
         front[80], front[81], front[82], front[83],
     ]));
 
-    len == 84 + 50 * triangles
+    len >= 84 + 50 * triangles
 }
 
 #[cfg(test)]
@@ -433,7 +435,7 @@ mod tests {
 
     /// Four kilobytes of junk no model format's front can be: every byte value once, sixteen
     /// times, so it is binary, no magic begins it, and the triangle count its offset 80 is read at
-    /// is not the length of it.
+    /// does not fit in it.
     fn junk() -> Vec<u8> {
         (0..4096).map(|index| (index % 256) as u8).collect()
     }
@@ -542,10 +544,11 @@ mod tests {
         ));
     }
 
-    /// The length rule the binary spelling of a triangle mesh is held to, exactly as its reader
-    /// holds it.
+    /// The count rule the binary spelling of a triangle mesh is held to: the count has to fit the
+    /// file rather than agree with it to the byte, since bytes after the last triangle are still
+    /// the mesh it declares.
     #[test]
-    fn a_binary_mesh_is_its_own_length_and_nothing_else() {
+    fn a_binary_mesh_is_a_count_that_fits_the_file() {
         let mut mesh = vec![0u8; 80];
         mesh.extend_from_slice(&7u32.to_le_bytes());
         mesh.extend_from_slice(&[0; 50 * 7]);
@@ -554,9 +557,19 @@ mod tests {
             matcher("stl")(&mesh, mesh.len() as u64),
             "eighty bytes, a count, and fifty bytes a triangle is the format"
         );
+
+        let mut trailing = mesh.clone();
+        trailing.extend_from_slice(&[0; 4]);
         assert!(
-            !matcher("stl")(&mesh, mesh.len() as u64 + 1),
-            "one byte more and the count no longer describes the file"
+            matcher("stl")(&trailing, trailing.len() as u64),
+            "trailing bytes after the last triangle are still the mesh"
+        );
+
+        let mut overshoot = mesh.clone();
+        overshoot[80..84].copy_from_slice(&8u32.to_le_bytes());
+        assert!(
+            !matcher("stl")(&overshoot, overshoot.len() as u64),
+            "a count the file has no room for is not a mesh"
         );
     }
 
@@ -619,7 +632,7 @@ mod tests {
         std::fs::write(&renamed, junk()).expect("a file that is not a mesh");
         assert!(
             !claims_content(&renamed, None),
-            "and a file of that name which is neither solid nor the length of a binary mesh is not"
+            "and a file of that name which is neither solid nor a mesh whose count fits it is not"
         );
 
         let _ = std::fs::remove_dir_all(&folder);
