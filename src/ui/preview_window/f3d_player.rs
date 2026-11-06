@@ -16,13 +16,17 @@
 //! box becomes its client — which is the rectangle a thumbnail's crop is cut from. And **the window
 //! is waited for**, because a viewer that has made no window is a preview with nothing in it.
 //!
-//! **And the window is never on a screen before this app has it.** f3d shows the window it made
-//! itself, 42 to 182 ms after it is begun, before anything here can have hidden it — so the launch is
-//! **parked** past the right edge of every display rather than placed at the box (see
-//! `the_parking_origin`), and the box is populated only by the step that already owns the window:
-//! strip the frame, hide it, place it at the box, adopt it where a host is drawing it, and show it
-//! (see `show_the_window`). Measured before this, the viewer's own decorated window stood at the box
-//! for as long as the 5 ms poll took to find it, and that was a visible flash of a black client.
+//! **And the window is never on a screen before this app has it.** f3d's window is born visible at
+//! 0,0 — measured on 4.0.1, 300x300 and decorated at 180 ms, moved to `--position`/`--resolution`
+//! about 30 ms later — and no flag of its own asks it not to, so the launch is begun with a
+//! `STARTUPINFO` that says `SW_HIDE` and no window of the process is visible for the whole of its
+//! life (see `never_shown`). On top of that the launch is **parked** past the right edge of every
+//! display rather than placed at the box (see `the_parking_origin`), which is both what a viewer
+//! that ignored the show state would still not be seen at, and the place the picture window is
+//! picked by while it is hidden (see `the_picture_window`). The box is populated only by the step
+//! that already owns the window: strip the frame, hide it, place it at the box, adopt it where a
+//! host is drawing it, and show it (see `show_the_window`) — that show is the first the desktop
+//! ever sees of it.
 //!
 //! **And the pointer is forwarded**, because a pinned model's band is not the model's own window: what a
 //! hand is on there is this app's window, which thumbnails the engine's window through the pin's host (see
@@ -63,13 +67,13 @@ const PARKING_MARGIN: i32 = 4096;
 
 /// Where a viewer's window is begun: **past the right edge of every display there is**.
 ///
-/// f3d shows the window it made the moment it has one — measured on 4.0.1, visible and opaque 42 to
-/// 182 ms after it is begun — and no flag asks it not to. A window begun at the box is therefore a
-/// decorated black rectangle standing at the box for as long as it takes this app to find it, which
-/// is only ever looked for on a poll (`MODEL_WINDOW_POLL`) and dressed a composition frame after
-/// that: the flash the user saw as a titled window over the preview box. Begun here, the same window
-/// stands where no monitor can draw a pixel of it, and the box is only ever populated by a window
-/// this app already holds (see `show_the_window`).
+/// f3d's window is born visible at 0,0 and only moved to `--position` about 30 ms later, and the
+/// launch answers that with a `STARTUPINFO` that hides the window from its first instruction (see
+/// `never_shown`) — so nothing of the viewer's is on a screen at any point of its life. **The place
+/// is kept anyway**, for two reasons that outlive that fix: a viewer that showed its window whatever
+/// `STARTUPINFO` said would then stand where no monitor can draw a pixel of it, and the origin is
+/// what tells this app which of a viewer's windows is the picture while the window is hidden (see
+/// `the_picture_window`). A window begun at the box would leave the pick with only the size to go on.
 ///
 /// **Nothing about the size is changed to do it**: `--resolution` is still the box's client, which is
 /// what a host's thumbnail crop is cut by (see `note_the_box`), and the place is the only thing
@@ -89,8 +93,8 @@ fn the_parking_origin(desktop: ScreenBounds) -> (i32, i32) {
 /// of f3d twice: as the client size it renders at and as where its window goes. The two are the
 /// same rectangle once the frame is off (see `strip_the_frame`), which is what keeps the model's
 /// picture from being a crop of a window larger than the box it is shown in. **The place, though,
-/// is not the box**: the launch is parked off every display (see `the_parking_origin`), because
-/// f3d shows its own window 42-182 ms after it is begun, before this app can have hidden it.
+/// is not the box**: the launch is parked off every display (see `the_parking_origin`), and the
+/// window is begun hidden and stays hidden until this app shows it (see `never_shown`).
 ///
 /// **Where the picture is drawn is asked here, before the window exists**, which is the same
 /// question `start_mpv_video_playback` asks: a pin's model is a source its host thumbnails, and a
@@ -134,22 +138,23 @@ pub(super) fn launch(
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
 
-    let mut player = video_playback::spawn_player(&mut command)?;
+    let mut player = video_playback::spawn_a_player_never_shown(&mut command)?;
     let pid = player.id();
     // **And the pipe its own loading report arrives on is emptied from here on** (see `f3d_load`):
     // the word a host's show is gated on is the viewer's own, and a pipe nobody reads is a viewer
     // blocked on its own writing.
     f3d_load::note_the_launch(pid);
-    if let Some(report) = player.take_log_stream() {
+    if let Some(report) = player.take_the_report_stream() {
         f3d_load::drain_it(report, pid);
     }
     note_the_box(pid, box_);
     // The first line of a model's own trace: the launch, the box it was begun at, where it was
-    // parked and whether a host is to draw it. What follows it is the source's adoption, the
-    // registration and the host's show, in that order (see `show_the_window` and
-    // `hover_film_host`).
+    // parked, whether a host is to draw it, and **the show state it was begun with** — the window is
+    // hidden from its first instruction and this app's own show is the first the desktop sees of it
+    // (see `never_shown` and `show_the_window`). What follows it is the window being found while it
+    // is still hidden, then the source's adoption, the registration and the host's show.
     note_pin_trace!(
-        "model launch pid {pid} box {}x{}+{}+{} parked at {},{} hosted {}",
+        "model launch pid {pid} box {}x{}+{}+{} parked at {},{} hosted {} hidden at birth",
         box_.2 - box_.0,
         box_.3 - box_.1,
         box_.0,
@@ -179,8 +184,25 @@ pub(super) fn launch(
 
     video_playback::note_player_started(f3d_render::F3D_NAME, path, &player, box_, 0.0, false);
 
-    match wait_for_the_window(pid, &mut player) {
+    match wait_for_the_window(pid, &mut player, box_, parking) {
         Some(window) => {
+            // **A window found while it has never been on a screen**, which is what the parking origin
+            // and the hidden launch together buy: the pick is made on a window `IsWindowVisible` is
+            // false for, and the line says so — a run that reads it has proved the window was found
+            // hidden rather than after f3d had shown it.
+            let rect = the_window_rect(window).unwrap_or_default();
+            note_pin_trace!(
+                "model window {:?} pid {} found at {}x{}+{}+{} (parking {},{} visible {})",
+                window,
+                pid,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                rect.left,
+                rect.top,
+                parking.0,
+                parking.1,
+                unsafe { IsWindowVisible(window) }.as_bool() as u8,
+            );
             // **Where a host is drawing this picture, the adoption is made here** rather than left
             // to the monitor's first pass: the window f3d has just shown itself is the one thing
             // that must not be on the screen, and the pass that would take it off one runs a
@@ -213,19 +235,28 @@ pub(super) fn launch(
 ///
 /// **One order, and every step of it buys something measured.** The frame comes off first, so that
 /// no frame of a title bar is ever shown over the box and the box and the client are one rectangle.
-/// The window is **hidden before it is placed**, because a window placed while it is still visible
-/// is the black client standing at the box for at least one composition frame: f3d shows the window
-/// it made itself, 42 to 182 ms after it is begun, and this app only finds it on a poll
-/// (`MODEL_WINDOW_POLL`) — which is the 5 ms race this order ends, since the window was begun parked
-/// (see `the_parking_origin`) and nothing of the viewer's is at the box until the step that adopts
-/// it. And the show comes last, because **a window a host is drawing is never shown on the screen on
-/// any road**: it is the source a DWM thumbnail is cut from, and what the Shell draws into the host
+/// The window is **hidden before it is placed** — belt and braces now: the viewer was begun with
+/// `SW_HIDE` (see `never_shown`), so its window has never been on a screen in its life and this hide
+/// is a state it is already in rather than the race the launch used to lose. It stays because a
+/// window is placed and styled by a road that does not ask what its show state is, and because a
+/// viewer whose own show state changed is a window this app would still have to hide before it
+/// moved it. And the show comes last: **a window a host is drawing is never shown on the screen on
+/// any road** — it is the source a DWM thumbnail is cut from, and what the Shell draws into the host
 /// is the whole of what is seen of it (see `pin_film_thumbnail`).
+///
+/// **This show is the first the desktop ever sees of the window**, which is the whole of what the
+/// hidden launch was for: nothing of the viewer's own is ever drawn at the box, at 0,0, or anywhere
+/// else, and the window arrives on the screen already placed and already styled.
 ///
 /// **The hide and the show stay one call's apart**, which is the other measured invariant: a hidden
 /// source is a thumbnail the Shell stops composing, 18 to 71 ms after the hide (see the module note
 /// there), so `transparent-but-visible` is the state the source is left in — all the placement and
 /// adoption between them are bounded, and neither waits on anything of this app's.
+///
+/// **The parking origin is kept, and it is not the same question as the show state**: the launch is
+/// still parked past every display (see `the_parking_origin`), because a viewer that showed its
+/// window whatever `STARTUPINFO` said would then stand where no monitor draws it, and because the
+/// origin is what the window is picked by while it is hidden (see `the_picture_window`).
 ///
 /// **The non-hosted road gets its reveal from `apply_noactivate_to_hwnd` and not from here.** That
 /// is the one call that styles, raises and shows a player's own window (see it for the raise it
@@ -263,9 +294,9 @@ pub(super) unsafe fn show_the_window(
         return;
     }
     // **The Shell lists a window as it is shown, so a button it has already listed is one the style
-    // below cannot take away.** f3d shows its window itself, before this app has found it, so the
-    // hide above is what makes the show the style is read on — and the show is `SW_SHOWNOACTIVATE`
-    // on a window that already carries `WS_EX_NOACTIVATE` (see
+    // below cannot take away.** A window begun hidden has never been shown, so it is in no list yet
+    // — the show below is `SW_SHOWNOACTIVATE` on a window that already carries `WS_EX_NOACTIVATE`,
+    // and the hide above is what makes the style the one the list is made with (see
     // `give_a_players_window_no_button`, which pays the same price for the one other window of a
     // player's that is shown before this app has styled it). The window is at the box by now: the
     // call below names no box of its own and moves nothing.
@@ -315,23 +346,30 @@ fn take_down(pid: u32, player: &mut video_playback::PlayerProcess) {
 ///
 /// **f3d makes more windows than the one it means, and the first is not the picture.** Measured on
 /// 4.0.1 here: two transient `vtkOpenGL` windows exist while it starts — one of no height at all
-/// and one 300x300 — before the window it was asked for. So the pick is the largest visible window
-/// of the process and it is looked for again on every pass rather than latched (see
-/// `a_players_window_now`), and a process that has ended is a window that is never coming.
-fn wait_for_the_window(pid: u32, player: &mut video_playback::PlayerProcess) -> Option<HWND> {
+/// and one 300x300 — before the window it was asked for. So the pick is made afresh on every pass
+/// rather than latched (see `the_picture_window`), and a process that has ended is a window that is
+/// never coming.
+fn wait_for_the_window(
+    pid: u32,
+    player: &mut video_playback::PlayerProcess,
+    box_: ScreenRegion,
+    parking: (i32, i32),
+) -> Option<HWND> {
     // The test build begins no process, so there is no window to wait for and nothing to strip:
-    // what a test reads back is the launch itself (see `spawn_player`).
+    // what a test reads back is the launch itself (see `spawn_a_player_never_shown`).
     #[cfg(test)]
     {
-        let _ = (pid, player);
+        let _ = (pid, player, box_, parking);
         None
     }
 
     #[cfg(not(test))]
     {
+        let box_client = ((box_.2 - box_.0).max(0), (box_.3 - box_.1).max(0));
         let deadline = Instant::now() + MODEL_START_WAIT;
         loop {
-            if let Some(window) = unsafe { ffplay_window::a_players_window_now(pid) } {
+            let windows = unsafe { a_viewers_windows_now(pid) };
+            if let Some(window) = the_picture_window(&windows, parking, box_client) {
                 return Some(window);
             }
             if matches!(player.try_wait(), Ok(Some(_))) {
@@ -343,6 +381,116 @@ fn wait_for_the_window(pid: u32, player: &mut video_playback::PlayerProcess) -> 
             std::thread::sleep(MODEL_WINDOW_POLL);
         }
     }
+}
+
+/// A window of a viewer's, as the pick is made: the handle, where its frame stands on the desktop,
+/// and the size of its client.
+#[derive(Clone, Copy)]
+struct ViewerWindow {
+    window: HWND,
+    left: i32,
+    top: i32,
+    client: (i32, i32),
+}
+
+/// The picture window among the windows a viewer has made, or nothing where it has made none yet.
+///
+/// **The place is the discriminator**: f3d puts the window it was asked for at the `--position` it
+/// was given — the parking origin, which is past the right edge of every display — and no other
+/// window of the process is there, so a window standing at that origin is the one that was asked
+/// for (see `the_parking_origin`). The size is the fallback for the passes that catch the window
+/// before f3d has moved it: the picture's client is at least half the box's on both axes, and the
+/// transients measured on 4.0.1 — 120x0 and 300x300 — are not, at any box a preview is laid out at.
+///
+/// shortcut: a box smaller than twice a transient's size lets one pass the size test, which is what
+/// the place above is for; upgrade this if a viewer ever places two windows at one origin.
+fn the_picture_window(
+    windows: &[ViewerWindow],
+    parking: (i32, i32),
+    box_client: (i32, i32),
+) -> Option<HWND> {
+    if let Some(parked) = windows
+        .iter()
+        .find(|candidate| (candidate.left, candidate.top) == parking)
+    {
+        return Some(parked.window);
+    }
+
+    windows
+        .iter()
+        .filter(|candidate| {
+            candidate.client.0 >= box_client.0 / 2 && candidate.client.1 >= box_client.1 / 2
+        })
+        .max_by_key(|candidate| candidate.client.0 as i64 * candidate.client.1 as i64)
+        .map(|candidate| candidate.window)
+}
+
+/// Every top-level window of `pid`, as the pick needs them.
+///
+/// **Nothing here asks `IsWindowVisible`**, which is the whole of why this exists beside
+/// `ffplay_window::enum_windows_callback`: a viewer's window is hidden for its whole life until this
+/// app shows it (see `never_shown`), and a pick that filtered on visibility could never find it.
+#[cfg(not(test))]
+unsafe fn a_viewers_windows_now(pid: u32) -> Vec<ViewerWindow> {
+    if pid == 0 {
+        return Vec::new();
+    }
+    let mut data = ViewerWindows {
+        pid,
+        windows: Vec::new(),
+    };
+    let _ = unsafe {
+        EnumWindows(
+            Some(collect_a_viewers_windows),
+            LPARAM(&mut data as *mut ViewerWindows as isize),
+        )
+    };
+    data.windows
+}
+
+/// The pass `a_viewers_windows_now` makes over the desktop's windows.
+#[cfg(not(test))]
+struct ViewerWindows {
+    pid: u32,
+    windows: Vec<ViewerWindow>,
+}
+
+#[cfg(not(test))]
+unsafe extern "system" fn collect_a_viewers_windows(
+    window: HWND,
+    lparam: LPARAM,
+) -> windows::Win32::Foundation::BOOL {
+    let data = unsafe { &mut *(lparam.0 as *mut ViewerWindows) };
+    let mut window_pid: u32 = 0;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut window_pid)) };
+    if window_pid != data.pid {
+        return windows::Win32::Foundation::BOOL(1);
+    }
+    let Some(rect) = the_window_rect(window) else {
+        return windows::Win32::Foundation::BOOL(1);
+    };
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(window, &mut client) }.is_err() {
+        return windows::Win32::Foundation::BOOL(1);
+    }
+    data.windows.push(ViewerWindow {
+        window,
+        left: rect.left,
+        top: rect.top,
+        client: (
+            (client.right - client.left).max(0),
+            (client.bottom - client.top).max(0),
+        ),
+    });
+    windows::Win32::Foundation::BOOL(1)
+}
+
+/// Where a window's frame stands on the desktop, or nothing where it has none to say.
+fn the_window_rect(window: HWND) -> Option<RECT> {
+    let mut rect = RECT::default();
+    unsafe { GetWindowRect(window, &mut rect) }
+        .ok()
+        .map(|_| rect)
 }
 
 /// Take the frame off a decorated window: no title bar, no sizing border, no system menu.
@@ -1029,6 +1177,65 @@ mod tests {
                 "the same desktop is the same place, pass after pass"
             );
         }
+    }
+
+    /// **The picture window is the one parked at the origin the launch asked for**, and the size is
+    /// only the fallback for the passes that catch it before f3d has moved it: the picture's client
+    /// is at least half the box's on both axes, and the transients f3d makes while it starts are not.
+    /// Nothing about the pick asks whether a window is visible — the window it picks is hidden for
+    /// its whole life until this app shows it (see `the_picture_window`).
+    #[test]
+    fn the_picture_window_is_the_one_parked_where_the_launch_asked() {
+        let parking = (6016, 0);
+        let box_client = (800, 600);
+        let window = |handle: isize, left: i32, top: i32, client: (i32, i32)| ViewerWindow {
+            window: HWND(handle as *mut _),
+            left,
+            top,
+            client,
+        };
+        // Measured on 4.0.1: a window of no height, one 300x300, and then the one that was asked for.
+        let flat = window(0x11, 0, 0, (120, 0));
+        let transient = window(0x12, 0, 0, (300, 300));
+        let parked = window(0x13, 6016, 0, (800, 600));
+
+        assert_eq!(
+            the_picture_window(&[flat, transient, parked], parking, box_client),
+            Some(parked.window),
+            "the window standing at the parking origin is the one that was asked for"
+        );
+        assert_eq!(
+            the_picture_window(&[flat, parked, transient], parking, box_client),
+            Some(parked.window),
+            "whatever order the desktop hands them over in"
+        );
+
+        // Before f3d has moved it: the size is all there is to go on, and only one window is big
+        // enough to be the picture.
+        let unplaced = window(0x13, 0, 0, (800, 600));
+        assert_eq!(
+            the_picture_window(&[flat, transient, unplaced], parking, box_client),
+            Some(unplaced.window),
+            "the largest window whose client is at least half the box is the picture"
+        );
+        assert_eq!(
+            the_picture_window(&[flat, transient], parking, box_client),
+            None,
+            "and a pass that finds only the transients has found no picture"
+        );
+        assert_eq!(
+            the_picture_window(&[], parking, box_client),
+            None,
+            "a viewer that has made no window yet is no window to strip"
+        );
+
+        // The place outranks the size: a small window at the origin is still the one asked for.
+        let parked_small = window(0x14, 6016, 0, (300, 300));
+        assert_eq!(
+            the_picture_window(&[unplaced, parked_small], parking, box_client),
+            Some(parked_small.window),
+            "the place is the discriminator, and the size only its fallback"
+        );
     }
 
     /// **A band's point is mapped into the engine's client and clamped at its edges**, and nothing is posted
