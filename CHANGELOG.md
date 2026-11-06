@@ -1,13 +1,37 @@
 # Changelog
 
+## [0.4.11] - 2026-11-06
+
+### Added
+
+- **`Engine → F3D TTL` decides how long a hovered model's viewer is kept, and a repeat hover of that model is a re-show rather than a launch** — the fourth TTL beside `MPV TTL` and the two office engines: `Indefinitely` keeps the viewer for the run, a number of seconds keeps it exactly that long, `Until Away (Default)` keeps it while Explorer can be reached and lets it go once the away timer has run, and `Never (0 seconds)` ends it with the hover that began it (`f3d_idle` in `config.ini`). What is kept is the process, the host window and the Shell's registration drawn into it, so the next hover of the same file is one instant picture with no launch and no spinner — the 200 to 400 ms a cold viewer costs, and the host made and registered again, are the whole of what the row buys. It is only ever that one file: f3d draws the file it was begun with and knows no way to open another, so a hover of a different model lets the kept viewer go and begins its own. The row is greyed on a machine with no f3d, and a kept viewer is one resident process and one window off the screen, with nothing of it drawn anywhere.
+
+- **`Preview Types → 3D` and the `[f3d]` list say which names a model is** — the kind is on by default and closes the graphics group of the tray, and `[f3d]` carries the 58 names f3d 4.0.1 reads that no other kind already claims, from `stl`, `3mf`, `gltf` and `ply` to `step`, `las`, `obj` and `vtk`; `f3d_path` names a copy installed anywhere other than beside the executable, on the `PATH` or under Program Files. A model's box is placed by **Image** scaling and asks **Image Background** for the colour the scene clears to (`0.565` for the checkerboard), and those names route to f3d rather than to the picture reader, which is what makes a `.stl` a model instead of a failed picture. A machine without f3d shows no preview for one rather than a broken one.
+
+### Changed
+
+- **A model's picture is this app's host window drawing the engine's, not the engine's own window standing at the box** — 0.4.10 put f3d's chrome-less window at the hover box, which is a window the Shell cannot be asked to draw into a pin; the picture is a DWM thumbnail of that window in the hover's host now, so what a pin takes up is the picture already on the screen rather than a second f3d, and f3d's own window is never on a screen at all. Under Pin Mode off no host is taken, and the engine's chrome-less window stands at the box as before.
+
+- **A pinned model's band is the scene's, and every button in it is the engine's** — a left drag orbits the model, a middle drag pans it, a right press opens f3d's own menu and the wheel zooms it, all posted to the engine and none of them activating it. The band answers `HTCLIENT`, so a hand on the picture turns the scene instead of carrying the window it is drawn in, and the caption strip is the only chrome this app answers, its own menu opening there. A middle press over a model is the engine's pan and never the pin's put-up, so a model is pinned with `Space` or the pin key.
+
+- **A model's turn is posted one move at a time rather than one per pointer sample** — the engine draws a whole frame for every message it is handed, measured at about 31 ms at 480x360 and 70 ms at 900x700, so a hand reporting a thousand positions a second queued a scene still turning long after it had let go. The moves are coalesced now: the engine is handed the position the hand has reached when it is ready for one, and the turn stops with the hand.
+
+- **Beginning a model's viewer no longer holds the thread that draws until the engine has made its window** — the launch waited for that window on a 5 ms poll, which measured as about 1.2 s of a frozen preview with nothing on the screen and the cursor spinner only coming up afterwards. The wait is off the drawing thread now, so the spinner is up on the first tick after the hover commits and the window is adopted whenever the engine makes it; a window that arrives after the hover or pin that began it has let the player go is ended unseen rather than adopted.
+
+### Fixed
+
+- **Hovering a model no longer flashes a black window, at the preview box or in the corner of the screen** — the engine shows the window it made itself, measured on f3d 4.0.1 at 42 to 182 ms after it is begun, and it makes it at the top-left of the desktop as a 300x300 decorated window some 30 ms before the place it was asked for lands: that was a titled black rectangle over the box, and a second one in the corner of the screen. A model's viewer is begun hidden now — a `STARTUPINFO` asking for `SW_HIDE`, which the engine obeys — and past the right edge of every display, so no window of it is ever on a screen before this app has one. The box is populated only by the step that already holds the window: the frame comes off, the window is hidden, placed at the box, made the transparent layered source a thumbnail is cut from, and shown.
+
+- **The picture opens on the model instead of on the engine's blank** — a scene's first render is not its last: the surface is cleared to the backdrop colour before the file is in it, which is the black, then grey, then model a cold hover was seen as. The host is shown only once the viewer has said the file is loaded — its own `100%` loading line, written to standard output and flushed within 100 to 200 ms — plus three frames of grace for the renderer to put a scene in the picture. A viewer that reports nothing at all is sampled for lit pixels after 1.5 s instead, and one whose report never reaches its marker is capped at 8 s inside the 10 s a start is given, so a format this build does not report on still shows, even if it shows the old way. What is left of a cold hover is the spinner, and then the model.
+
+- **A hover that ends leaves nothing of a model on the screen** — a kept viewer's host is taken off the screen with the hover that showed it, and with it the one picture that used to stand over the listing after the pointer had left; the viewer itself stays behind it, off the screen, until its TTL or the pin that took it up ends it.
+
 ## [0.4.10] - 2026-11-06
 
 ### Added
 
 - **Camera raws and system picture formats decode through Windows natively** — `[image]` handles camera raws (`.raw`, `.nef`, `.cr2`, `.cr3`, `.dng`, etc.) via the Windows Raw Image Extension and system bitmap/cursor formats (`dib`, `rle`, `cur`) with WIC, falling back to ImageMagick only when the native codec is missing.
 - **The pinned sound card context menu configures both hover and pin seek modes** — right-clicking a pinned sound card offers separate `Hover Seek` and `Pin Mode Seek` flyout menus.
-
-### Added
 
 - **3D models, CAD exchange files, point clouds and scientific datasets preview by hovering or pinning them** — a new `3D` kind beside the pictures, drawn by f3d where one is installed and by nothing where it is not: f3d's own chrome-less window stands at the hover box (or, under Pin Mode, the hover's host mirrors it, which is the window a pin promotes), and the `[f3d]` list in `config.ini` names the extensions asked of it — everything f3d 4.0.1's own reader list carries that no other kind already claims, from `.stl` and `.obj` to `.step`, `.gltf`, `.las` and `.vtk`. `f3d_path` names a copy installed anywhere other than the `PATH` or under Program Files, the tray's **Preview Types → 3D** row switches the kind off and on, a pinned model is orbited by dragging in its band and zoomed by the wheel, and a machine without f3d shows no preview for a model rather than a broken one. Models are drawn with f3d's contact shading (ambient occlusion) on, so a mesh that carries no texture of its own reads as a solid rather than a flat grey cut-out. The picture itself is the engine's to answer: dragging turns the scene, the wheel zooms it, the middle button pans it and the right one opens f3d's own menu, while the pinned window's menu stays on its caption strip.
 
