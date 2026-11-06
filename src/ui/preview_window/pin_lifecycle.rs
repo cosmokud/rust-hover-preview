@@ -1866,6 +1866,52 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
 /// listing is ever met that takes longer than this to answer a click.
 pub(super) const PIN_RAISE_GRACE: Duration = Duration::from_millis(250);
 
+/// How long the band a pin's take-up holds may stay held while the press that made it is still down.
+///
+/// The grace above covers a click's activation when the click is over by the time this loop reads it,
+/// and a mouse pin key is not: the press is counted on the button's own edge, and Explorer's answer to
+/// it — the row selected, the listing activated — is dispatched from Explorer's thread whenever that
+/// thread gets to it. So the take-up holds the band while the hand is still on the key and begins the
+/// grace where the hand lets go (see `the_pin_key_is_down`).
+///
+/// **The bound is for the release nothing saw.** The hook clears the button's bit on the release it is
+/// given, and a release Windows never delivers — the caret taken away mid-click, a hook that was
+/// reloaded under the hand — would leave a bit standing and a pin in the topmost band for the rest of
+/// its life, with `Always On Top` off. No hand holds the pin key for this long on purpose, and a pin
+/// that stays over every program the user works in is the fault this whole hold exists to avoid, one
+/// program along.
+pub(super) const A_PRESS_BAND_IS_HELD_FOR: Duration = Duration::from_secs(2);
+
+/// Whether no press is holding the topmost band any more, asked of a debt the loop is carrying.
+///
+/// **The band is what a press holds, and the answer can outlive it**: a debt's `band_until` is the
+/// moment a window of this app's may leave the topmost band, while its `until` is how long a click it
+/// answers can still be chased afterwards. Everything that asks *may this window be demoted* — a
+/// placement's band, the tick's own repair — asks this rather than "is a debt standing", or a band
+/// held for a click would keep the pin over every program the user works in for the whole of the
+/// answer (see `PinFrontOwed`, `band_place` and `give_the_band_back`).
+pub(super) fn the_band_is_nobodys(debt: Option<PinFrontOwed>, now: Instant) -> bool {
+    debt.is_none_or(|owed| now >= owed.band_until)
+}
+
+/// Whether **every** window of the pin stands over `window`: the chrome, and the window that holds the
+/// band where that is another one — a film's host, or a model's.
+///
+/// **The pair is placed one window at a time**, and the two calls are not atomic: a window the Shell
+/// activates between them lands between the pair — the chrome over the listing and the picture under it,
+/// which is a pin the user reads the listing through, with a band of Explorer showing where the film
+/// should be. Asked of the chrome alone, that state answers "the pin is over the listing" and nothing
+/// ever answers for the half that is not (see `pin_film_host::place_the_pin_in_the_band` and
+/// `keep_pin_at_the_front`).
+pub(super) unsafe fn the_pair_stands_over(hwnd: HWND, window: HWND) -> bool {
+    if !unsafe { pin_stands_over(hwnd, window) } {
+        return false;
+    }
+
+    let band_holder = pin_film_host::the_pin_window_that_holds_the_band(hwnd);
+    band_holder == hwnd || unsafe { pin_stands_over(band_holder, window) }
+}
+
 /// Whether an update is what brings a put-away pin back up: `Pin Mode → Update Preview → Move To Top`
 /// says an update brings the pin in front of the listing it follows, and a pin that is away has no
 /// window in any band to bring forward — so the row asks for the pin itself to come back up, and the
@@ -2419,13 +2465,30 @@ pub(super) unsafe fn keep_pin_at_the_front(
     if pin_is_its_own_window() && now >= band_until {
         let band_was_the_desktops = window_holds_the_topmost_band(hwnd);
         give_the_band_back(hwnd, where_the_band_goes_back(foreground, listing));
-        if band_was_the_desktops || pin_stands_over(hwnd, listing) {
+        // **The band's clock and the answer's are two clocks, and the answer's can be the longer one.**
+        // For a pick they are the same moment and nothing here changes. For a pin taken up by a mouse
+        // press they are not: the band is what a click landing before its release cannot undo, and what
+        // is left of the answer is the chase below — a listing Explorer activates *after* the band went
+        // back is a window put over the pin with nothing of this app's standing between them (see
+        // `A_PRESS_BAND_IS_HELD_FOR`). Nothing of it outlives the answer's own clock: `until` ends the
+        // debt two paragraphs down.
+        if now >= until && (band_was_the_desktops || unsafe { the_pair_stands_over(hwnd, listing) })
+        {
             *owed = None;
             return;
         }
     }
 
-    if !pin_stands_over(hwnd, listing) {
+    if !unsafe { the_pair_stands_over(hwnd, listing) } {
+        // The one line that says a click was dispatched late enough to be chased: what the pair is
+        // under, read off the z-order rather than inferred (see `pin_trace::what_is_above`).
+        if pin_trace::wanted() {
+            note_pin_trace!(
+                "chase: pair under the listing above={} listing={}",
+                pin_trace::what_is_above(hwnd),
+                pin_trace::window_name(listing)
+            );
+        }
         raise_pinned_preview(hwnd, PIN_BAND_HELD.load(Ordering::SeqCst));
     }
 }
