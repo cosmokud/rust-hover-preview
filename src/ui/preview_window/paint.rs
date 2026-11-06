@@ -179,6 +179,22 @@ pub(super) fn film_band_is_hit_testable(media: MediaType) -> bool {
     matches!(media, MediaType::Video)
 }
 
+/// Whether a pinned model's band is a window of somebody else's standing in a host of this app's
+/// rather than a frame this window draws — the same band a film's is.
+///
+/// **It is the one kind whose band is a host's picture on every road** (see `f3d_player`), and what
+/// this app holds for it while f3d starts is not that picture at all: it is a stand-in rectangle of
+/// this app's own, the box the viewer's window will be (see `load_model_preview`). Painting it over
+/// the host's picture is a wash of its own colour across the whole of the scene — 40 of 255 grey on
+/// a transparent backdrop is the picture's every pixel dimmed by a sixth and lifted off its blacks,
+/// and on an opaque one it is the scene gone altogether — because the pin's window is an *owned*
+/// window of the host and so composites **over** it (see `pin_film_host`). The band is therefore
+/// answered like a film's: the pin's least claim on the pixel where the host is drawing, and black
+/// where a host taken up at the band has nothing in it yet.
+pub(super) fn a_models_band_is_a_hosts_picture(media: MediaType) -> bool {
+    matches!(media, MediaType::Model)
+}
+
 /// Whether the band of a pinned window is the pin's own claim because the picture in it is a page the
 /// pin *carries* rather than a page the user works in.
 ///
@@ -323,7 +339,12 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
             .ok()
             .and_then(|media| {
                 media.as_ref().map(|media| {
-                    !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video)
+                    !media.media_type.is_engine()
+                        && !matches!(media.media_type, MediaType::Video)
+                        // A model holds a stand-in frame of this app's and shows a picture of f3d's
+                        // through the host, so what is composed here is nothing but the stand-in
+                        // over the scene (see `a_models_band_is_a_hosts_picture`).
+                        && !a_models_band_is_a_hosts_picture(media.media_type)
                 })
             })
             .unwrap_or(false);
@@ -405,13 +426,18 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     // the pixel, and the picture itself is the Shell's thumbnail of the page (see
                     // `a_pages_band_is_hit_testable` and `pin_page_thumbnail`).
                     fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
-                } else if film_band_is_hit_testable(media.media_type) {
+                } else if film_band_is_hit_testable(media.media_type)
+                    || a_models_band_is_a_hosts_picture(media.media_type)
+                {
                     // Nothing is composed into this band — the film is in a window under it — so
                     // what is written here is only ever the pin's own claim on the pixel (see
-                    // `film_band_is_hit_testable`). A hosted film with no first frame in the host
-                    // yet is not a hole to see through: the band stays opaque until the player's
-                    // shown child arrives, so chrome up over an empty host is chrome over black
-                    // rather than over the desktop (see `pin_film_host`).
+                    // `film_band_is_hit_testable`). **A model is the same band and one word
+                    // further on** (see `a_models_band_is_a_hosts_picture`): its picture is f3d's
+                    // window through this same host, and the stand-in frame the loader left in the
+                    // media is not that picture and is never painted over it. A hosted film with
+                    // no first frame in the host yet is not a hole to see through: the band stays
+                    // opaque until the player's shown child arrives, so chrome up over an empty host
+                    // is chrome over black rather than over the desktop (see `pin_film_host`).
                     //
                     // **Except where this app's own cover stands in the host**, which is the frame a
                     // relaunch holds for the whole of the wait: that picture is the host's, drawn
