@@ -29,8 +29,9 @@
 //! Four names declare nothing in their front at all — `sbet`, a trajectory of binary records;
 //! `qi`, the QFIT cloud whose only rule is that its length is a multiple of four; `splat`, whose
 //! files are either PLY or a bare run of gaussian records; and `xbf`, an OpenCASCADE cache — so
-//! those are claimed wherever they are not text, and a binary file of one of those names is still
-//! handed to the viewer to refuse, exactly as it was before this module existed.
+//! nothing is read of a file of one of those names and the name is the whole of the claim: the
+//! viewer is started, and it is the one that answers, exactly as it was before this module
+//! existed.
 //!
 //! Two answers are deliberately the loose ones. **A name a user adds to `[f3d]` themselves is not
 //! in the table and is trusted**: nothing here knows the format it stands for, so nothing here can
@@ -55,6 +56,11 @@ pub(crate) fn claims_content(path: &Path, facts: Option<&Facts>) -> bool {
         return true;
     };
     let Some((_, matches)) = MODEL_FORMATS.iter().find(|(name, _)| *name == extension) else {
+        return true;
+    };
+    // Answered before a head is read: nothing in the front of a format that declares nothing could
+    // say whether the file is that format, so no file is opened on the four names' account.
+    let Some(matches) = matches else {
         return true;
     };
 
@@ -91,69 +97,69 @@ type Matcher = fn(&[u8], u64) -> bool;
 /// and is trusted. Two names may share one matcher, and often do — a `.stp`, a `.p21`, a `.210`
 /// and a `.step` are one format — and the test below holds the rows and
 /// `DEFAULT_F3D_EXTENSIONS` to each other in both directions.
-const MODEL_FORMATS: &[(&str, Matcher)] = &[
-    ("210", step),
-    ("3ds", three_ds),
-    ("3mf", zip),
-    ("abc", ogawa_or_hdf5),
-    ("amf", amf_or_zip),
-    ("bin", terrasolid),
-    ("bpf", bpf),
-    ("brep", brep),
-    ("cdf", netcdf_or_hdf5),
-    ("csd", optech),
-    ("dae", collada),
-    ("ex2", netcdf_or_hdf5),
-    ("exo", netcdf_or_hdf5),
-    ("fbx", fbx),
-    ("fcstd", zip),
-    ("glb", gltf_binary),
-    ("gltf", gltf_json),
-    ("gml", gml),
-    ("ifc", ifc),
-    ("iges", iges),
-    ("igs", iges),
-    ("las", las),
-    ("laz", las),
-    ("mdl", quake_model),
-    ("mha", meta_image),
-    ("mhd", meta_image),
-    ("nc", netcdf_or_hdf5),
-    ("ncdf", netcdf_or_hdf5),
-    ("nhdr", nrrd),
-    ("nrrd", nrrd),
-    ("obj", wavefront),
-    ("off", object_file),
-    ("p21", step),
-    ("pic", radiance),
-    ("ply", ply),
-    ("pts", pts),
-    ("ptx", ptx),
-    ("qi", not_text),
-    ("sbet", not_text),
-    ("slpk", zip),
-    ("splat", splat),
-    ("spz", gzip),
-    ("step", step),
-    ("stl", stl),
-    ("stp", step),
-    ("stpnc", step),
-    ("usd", usd),
-    ("usda", usda),
-    ("usdc", usdc),
-    ("usdz", zip),
-    ("vdb", openvdb),
-    ("vrml", vrml),
-    ("vti", xml_vtk),
-    ("vtk", vtk_legacy),
-    ("vtkhdf", hdf5_or_xml_vtk),
-    ("vtm", xml_vtk),
-    ("vtp", xml_vtk),
-    ("vtr", xml_vtk),
-    ("vts", xml_vtk),
-    ("vtu", xml_vtk),
-    ("wrl", vrml),
-    ("xbf", not_text),
+const MODEL_FORMATS: &[(&str, Option<Matcher>)] = &[
+    ("210", Some(step)),
+    ("3ds", Some(three_ds)),
+    ("3mf", Some(zip)),
+    ("abc", Some(ogawa_or_hdf5)),
+    ("amf", Some(amf_or_zip)),
+    ("bin", Some(terrasolid)),
+    ("bpf", Some(bpf)),
+    ("brep", Some(brep)),
+    ("cdf", Some(netcdf_or_hdf5)),
+    ("csd", Some(optech)),
+    ("dae", Some(collada)),
+    ("ex2", Some(netcdf_or_hdf5)),
+    ("exo", Some(netcdf_or_hdf5)),
+    ("fbx", Some(fbx)),
+    ("fcstd", Some(zip)),
+    ("glb", Some(gltf_binary)),
+    ("gltf", Some(gltf_json)),
+    ("gml", Some(gml)),
+    ("ifc", Some(ifc)),
+    ("iges", Some(iges)),
+    ("igs", Some(iges)),
+    ("las", Some(las)),
+    ("laz", Some(las)),
+    ("mdl", Some(quake_model)),
+    ("mha", Some(meta_image)),
+    ("mhd", Some(meta_image)),
+    ("nc", Some(netcdf_or_hdf5)),
+    ("ncdf", Some(netcdf_or_hdf5)),
+    ("nhdr", Some(nrrd)),
+    ("nrrd", Some(nrrd)),
+    ("obj", Some(wavefront)),
+    ("off", Some(object_file)),
+    ("p21", Some(step)),
+    ("pic", Some(radiance)),
+    ("ply", Some(ply)),
+    ("pts", Some(pts)),
+    ("ptx", Some(ptx)),
+    ("qi", None),
+    ("sbet", None),
+    ("slpk", Some(zip)),
+    ("splat", None),
+    ("spz", Some(gzip)),
+    ("step", Some(step)),
+    ("stl", Some(stl)),
+    ("stp", Some(step)),
+    ("stpnc", Some(step)),
+    ("usd", Some(usd)),
+    ("usda", Some(usda)),
+    ("usdc", Some(usdc)),
+    ("usdz", Some(zip)),
+    ("vdb", Some(openvdb)),
+    ("vrml", Some(vrml)),
+    ("vti", Some(xml_vtk)),
+    ("vtk", Some(vtk_legacy)),
+    ("vtkhdf", Some(hdf5_or_xml_vtk)),
+    ("vtm", Some(xml_vtk)),
+    ("vtp", Some(xml_vtk)),
+    ("vtr", Some(xml_vtk)),
+    ("vts", Some(xml_vtk)),
+    ("vtu", Some(xml_vtk)),
+    ("wrl", Some(vrml)),
+    ("xbf", None),
 ];
 
 /// The front of a text file, where it reads as text at all.
@@ -197,11 +203,6 @@ fn text_head(front: &[u8]) -> Option<&str> {
     let head = text[..cut].trim_start_matches('\u{feff}').trim_start();
 
     (!head.is_empty()).then_some(head)
-}
-
-/// A front that is not text: the whole of what a format which declares nothing can be held to.
-fn not_text(front: &[u8], _len: u64) -> bool {
-    as_text(front).is_none()
 }
 
 /// The three signatures a zip opens with: a local file, a central directory, a spanned archive.
@@ -409,11 +410,6 @@ fn ply(front: &[u8], _len: u64) -> bool {
     front.starts_with(b"ply\n") || front.starts_with(b"ply\r\n")
 }
 
-/// A gaussian splat is either a PLY or a bare run of records, which is not text.
-fn splat(front: &[u8], len: u64) -> bool {
-    ply(front, len) || not_text(front, len)
-}
-
 /// A PTS cloud is a count on the first line and its points behind it.
 fn pts(front: &[u8], _len: u64) -> bool {
     text_start(front).is_some_and(|text| {
@@ -457,13 +453,15 @@ mod tests {
         DEFAULT_F3D_EXTENSIONS.split(',').collect()
     }
 
-    /// The matcher a name is held to, which a name without one does not have.
+    /// The matcher a name is held to. The four names that declare nothing in their front have none,
+    /// and are asked through `claims_content` instead.
     fn matcher(name: &str) -> Matcher {
         MODEL_FORMATS
             .iter()
             .find(|(known, _)| *known == name)
-            .expect("the model list's names all have a matcher")
+            .expect("the model list's names all have a row")
             .1
+            .expect("the name asked of declares a front of its own")
     }
 
     /// Four kilobytes of junk no model format's front can be: every byte value once, sixteen
@@ -594,27 +592,37 @@ mod tests {
         );
     }
 
-    /// The names whose format declares nothing in its front, and which are therefore claimed
-    /// wherever the file is not text: a binary file of one of them is still launched for, exactly
-    /// as it was before this module existed.
+    /// The names whose format declares nothing in its front: no head is read of one, so its name is
+    /// the whole of the claim and the viewer is started — a text file, junk, and a path with nothing
+    /// at it alike.
     #[test]
-    fn the_names_whose_format_declares_nothing_are_claimed_wherever_the_file_is_not_text() {
+    fn the_names_whose_format_declares_nothing_are_claimed_by_their_name_alone() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-model-formats-frontless");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
         for name in ["qi", "sbet", "splat", "xbf"] {
+            let text = folder.join(format!("a-note.{name}"));
+            std::fs::write(&text, b"just a note about the weather\n").expect("a text file");
             assert!(
-                matcher(name)(&junk(), 4096),
-                "`{name}` declares nothing in its front, so a binary file is all it can be held to"
+                claims_content(&text, None),
+                "`{name}` declares nothing in its front, so a text file of that name is claimed"
             );
+
+            let binary = folder.join(format!("junk.{name}"));
+            std::fs::write(&binary, junk()).expect("a binary file");
             assert!(
-                !matcher(name)(b"just a note about the weather\n", 29),
-                "and a text file of that name is not the model the name promises"
+                claims_content(&binary, None),
+                "and so is a binary file of that name"
+            );
+
+            // No head is asked for, so a path with nothing at it is answered all the same.
+            assert!(
+                claims_content(&folder.join(format!("no-such-cloud.{name}")), None),
+                "a name that declares nothing is answered without reading anything"
             );
         }
 
-        // A splat is the one of them that is also a PLY, which its reader does say.
-        assert!(matcher("splat")(
-            b"ply\nformat binary_little_endian 1.0\n",
-            33
-        ));
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     /// The count rule the binary spelling of a triangle mesh is held to: the count has to fit the
