@@ -177,6 +177,12 @@ impl Facts {
     pub(crate) fn is_file(&self) -> bool {
         self.is_file
     }
+
+    /// How long the file was when its entry was read, which is what a format whose signature is
+    /// its own length is held to (see `model_formats`).
+    pub(crate) fn len(&self) -> u64 {
+        self.key.len
+    }
 }
 
 /// The head of the file at `path`, read to the front of it and no further where the front

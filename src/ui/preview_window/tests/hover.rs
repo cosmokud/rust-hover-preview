@@ -1025,8 +1025,10 @@ fn places_the_waiting_spinner_at_the_pointers_own_corner() {
 /// when it reads it** — that answer is what puts the hover on the video's own road rather than on
 /// the path that waits for a frame (see `HoverFacts::is_a_model` and `f3d_player`).
 ///
-/// It is asked of the file's list and of the gate, and of nothing the disk holds: a `.stl` is binary
-/// and its bytes name no kind, so the name is the whole of the question the router's answer needs.
+/// It is asked of the file's list and of the gate, and of the file's own front, which is what the
+/// routing claim holds a model's name to before the kind is answered with (see
+/// `model_formats`): a `.stl` is a model where its head says `solid` or where the length of it is
+/// a triangle count, and a file of that name which is neither is not one.
 #[test]
 fn a_model_is_named_by_its_list_and_gated_by_the_three_d_switch() {
     let folder = std::env::temp_dir().join("rust-hover-preview-model-kind");

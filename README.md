@@ -283,7 +283,7 @@ winget install -e --id f3d-app.f3d
 
 Or download the official Windows build from [https://github.com/f3d-app/f3d/releases](https://github.com/f3d-app/f3d/releases).
 
-The app finds `f3d.exe` beside itself, in your `PATH`, and in the folder its installer writes under Program Files; a copy anywhere else is named by `f3d_path` in `config.ini`, and the `[f3d]` list there is edited like every other engine's.
+The app finds `f3d.exe` beside itself, in your `PATH`, and in the folder its installer writes under Program Files; a copy anywhere else is named by `f3d_path` in `config.ini`, and the `[f3d]` list there is edited like every other engine's. A file whose own head is not the format its `[f3d]` name promises previews as nothing rather than starting the viewer; a name whose format declares nothing in its front is left to the viewer; and a name you add to that list yourself is trusted, since nothing here knows the format it stands for.
 
 > [!WARNING]
 > If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.

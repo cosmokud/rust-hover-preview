@@ -266,6 +266,11 @@ pub fn run_preview_window() {
         // listing is activated then — over the pin (see `PIN_RAISE_GRACE`, `PinFrontOwed` and
         // `keep_pin_at_the_front`).
         let mut pin_front_owed: Option<PinFrontOwed> = None;
+        // How long the band a pin's take-up holds may stay held while the press that made it is still
+        // down: the click that took the pin up is Explorer's, and its activation lands when Explorer
+        // dispatches it rather than when this loop reads the press (see
+        // `A_PRESS_BAND_IS_HELD_FOR`).
+        let mut pin_press_band_until: Option<Instant> = None;
         // The file picked in Explorer while the pin is a bubble: held rather than shown, because a
         // pin that is a bubble has no window to show anything in, and what the user is doing
         // behind it is walking through files. The key is what brings the window back up on it
@@ -3610,10 +3615,32 @@ pub fn run_preview_window() {
             // moment after it: the click is this loop's before it is the listing's, and the window the
             // listing is in is activated after it — which is that window being put over the pin again
             // where the band is not held across it (see `PIN_RAISE_GRACE` and `keep_pin_at_the_front`).
+            //
+            // **A press still under the hand has answered nothing yet**, and that is the take-up's own
+            // case: Explorer selects the row a middle press landed on and activates the listing in its
+            // own time, so the grace this loop would count from the press can be over before the click
+            // it answers has been dispatched — a pin under the listing it was just taken up over, for as
+            // long as the user leaves it there. The hand is the clock while it is on the key, and the
+            // grace begins where it lets go (see `the_pin_key_is_down` and
+            // `A_PRESS_BAND_IS_HELD_FOR`, which bounds a release nothing saw).
+            // One reading of the clock for the grace and for the two demotions below, which ask the same
+            // moment about the same debt (see `the_band_is_nobodys`).
+            let tick_now = Instant::now();
+            match (pin_front_owed.as_mut(), pin_press_band_until) {
+                (Some(owed), Some(until))
+                    if tick_now < until && crate::shell::key_input::the_pin_key_is_down() =>
+                {
+                    // The band's clock only: the answer's is already the long one, and it is the band
+                    // that must not go back under a hand still holding the key (see `PinFrontOwed`).
+                    owed.band_until = tick_now + PIN_RAISE_GRACE;
+                }
+                _ => pin_press_band_until = None,
+            }
+
             keep_pin_at_the_front(
                 pinned_window(),
                 &mut pin_front_owed,
-                Instant::now(),
+                tick_now,
                 GetForegroundWindow(),
             );
 
@@ -3627,7 +3654,14 @@ pub fn run_preview_window() {
             // late — and with `Always On Top` off that band is not the setting's to keep. A pick's
             // grace is left alone: the click it answers may not have activated the listing yet, and
             // the window in front at that moment is the one the user is coming *from*.
-            if pin_front_owed.is_none() && !pin_always_on_top() && pin_holds_the_front() {
+            //
+            // The question asked is the band's and not the debt's: a take-up keeps answering for a
+            // click well past the moment its band goes back, and the pin is nobody's window over
+            // another program for any of it (see `the_band_is_nobodys`).
+            if the_band_is_nobodys(pin_front_owed, tick_now)
+                && !pin_always_on_top()
+                && pin_holds_the_front()
+            {
                 let foreground = GetForegroundWindow();
                 if !foreground.is_invalid()
                     && !foreground_is_ours(foreground)
@@ -3657,7 +3691,7 @@ pub fn run_preview_window() {
             // every program the user works in, with nothing left ticking to look for it (see
             // `PinFrontOwed` and `give_the_band_back`).
             if pinned()
-                && pin_front_owed.is_none()
+                && the_band_is_nobodys(pin_front_owed, tick_now)
                 && !pin_always_on_top()
                 && !pin_holds_the_front()
             {
@@ -4254,6 +4288,41 @@ pub fn run_preview_window() {
 
                         place_pinned_siblings();
                         publish_pointer_hold(pinned_window());
+
+                        // **A pin taken up from a hover by a mouse button wears the press that made
+                        // it, and a press on a file row is Explorer's.** A middle press is a click
+                        // on the item under it — it selects, and it raises the listing — and that
+                        // activation lands *after* the show above, so a pin in the ordinary band is
+                        // put under the listing it was just taken up over and stays there until the
+                        // user presses something. A `Space` is no click and nothing follows it,
+                        // which is why the same take-up from the keyboard stays in front.
+                        //
+                        // So an arriving pin begins the grace a pick's press begins: the topmost
+                        // band is held for the one moment a click can undo this, and given back on
+                        // that clock with the pin placed where the user is (see `PIN_RAISE_GRACE`,
+                        // `PinFrontOwed` and `keep_pin_at_the_front`). Nothing is held past that
+                        // clock, and a pin `Always On Top` owns its band already.
+                        if arriving {
+                            raise_pinned_preview(pinned_window(), true);
+                            let pressed = Instant::now();
+                            pin_press_band_until = Some(pressed + A_PRESS_BAND_IS_HELD_FOR);
+                            // The listing the press landed in, asked rather than read off the
+                            // foreground: see `the_listing_a_take_up_was_pressed_in`.
+                            let listing = the_listing_a_take_up_was_pressed_in(pinned_window());
+                            note_pin_trace!(
+                                "take-up holds the band for one press's grace, listing {}",
+                                pin_trace::window_name(listing)
+                            );
+                            pin_front_owed = Some(PinFrontOwed {
+                                // The answer's clock is the long one: a listing Explorer activates
+                                // after the band is gone is chased from the tick (see
+                                // `A_PRESS_BAND_IS_HELD_FOR`), while the band itself goes back on the
+                                // press's own grace — never moved on by the chase.
+                                until: pressed + A_PRESS_BAND_IS_HELD_FOR,
+                                band_until: pressed + PIN_RAISE_GRACE,
+                                listing,
+                            });
+                        }
                     }
                     // The pinned window was given another box — maximized, restored, resized,
                     // or put back on a display that changed: the media is laid out again at the
