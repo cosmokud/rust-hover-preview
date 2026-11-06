@@ -28,6 +28,13 @@
 //! host is drawing it, and show it (see `show_the_window`) — that show is the first the desktop
 //! ever sees of it.
 //!
+//! **And the launch does not wait for that window.** The wait used to be the preview UI thread's, and
+//! the spinner a hover shows while it begins is built by the tick that thread returns to — so a launch
+//! that waited was a hover with nothing on screen for the whole of the start, and a spinner only
+//! afterwards. A viewer's window is hidden from birth and stays hidden however late it comes, so a
+//! thread of the launch's own watches for it and runs the one pass above the moment it is there (see
+//! `watch_for_the_window`).
+//!
 //! **And the pointer is forwarded**, because a pinned model's band is not the model's own window: what a
 //! hand is on there is this app's window, which thumbnails the engine's window through the pin's host (see
 //! `answer_a_models_band`). The press, the drag, the release and the notch are posted on to f3d in f3d's
@@ -184,52 +191,30 @@ pub(super) fn launch(
 
     video_playback::note_player_started(f3d_render::F3D_NAME, path, &player, box_, 0.0, false);
 
-    match wait_for_the_window(pid, &mut player, box_, parking) {
-        Some(window) => {
-            // **A window found while it has never been on a screen**, which is what the parking origin
-            // and the hidden launch together buy: the pick is made on a window `IsWindowVisible` is
-            // false for, and the line says so — a run that reads it has proved the window was found
-            // hidden rather than after f3d had shown it.
-            let rect = the_window_rect(window).unwrap_or_default();
-            note_pin_trace!(
-                "model window {:?} pid {} found at {}x{}+{}+{} class {} parking {},{} visible {}",
-                window,
-                pid,
-                rect.right - rect.left,
-                rect.bottom - rect.top,
-                rect.left,
-                rect.top,
-                the_class_of(window),
-                parking.0,
-                parking.1,
-                unsafe { IsWindowVisible(window) }.as_bool() as u8,
-            );
-            // **Where a host is drawing this picture, the adoption is made here** rather than left
-            // to the monitor's first pass: the window f3d has just shown itself is the one thing
-            // that must not be on the screen, and the pass that would take it off one runs a
-            // hundred milliseconds later at best (see `show_the_window`).
-            let host = if the_pins_film {
-                pin_film_host::film_host()
-            } else {
-                hover_host
-            };
-            unsafe { show_the_window(window, pid, box_, into_a_host, host) };
-            Some(player)
-        }
-        // A viewer that made no window is no preview: it is ended here rather than left standing
-        // behind a hover that has nothing to show (see `take_down`).
-        None => {
-            // The test build's noted player is no process and no window is expected of one: what a
-            // test reads back is the launch itself (see `spawn_player`).
-            #[cfg(not(test))]
-            {
-                take_down(pid, &mut player);
-                None
-            }
-            #[cfg(test)]
-            Some(player)
-        }
+    // **The launch answers here, before the window exists** (see the module note). What is handed on
+    // is the box the picture belongs at, the origin the window is picked by and the host it is to be
+    // adopted into — asked again when it is found, because a hover or a pin may have let go of this
+    // player by then (see `watch_for_the_window` and `Adoption`).
+    #[cfg(not(test))]
+    {
+        let adoption = if the_pins_film {
+            Adoption::ThePins
+        } else if hover_host.is_some() {
+            Adoption::TheHovers
+        } else {
+            Adoption::OwnWindow
+        };
+        note_pin_trace!(
+            "model launch pid {pid} returned to the tick, window watched for at {},{} into {:?}",
+            parking.0,
+            parking.1,
+            adoption,
+        );
+        watch_for_the_window(pid, box_, parking, adoption);
     }
+    // The test build's noted player is no process and no window is expected of one: what a test
+    // reads back is the launch itself (see `spawn_player`).
+    Some(player)
 }
 
 /// Put a launched model's window on the screen where the box is, and say whether it is there.
@@ -263,6 +248,7 @@ pub(super) fn launch(
 /// is the one call that styles, raises and shows a player's own window (see it for the raise it
 /// holds off), so a model whose picture stands on the desktop by itself is styled by it after this
 /// hide and this placement, and its own show is what brings the window to the box.
+#[cfg(not(test))]
 pub(super) unsafe fn show_the_window(
     window: HWND,
     pid: u32,
@@ -334,54 +320,186 @@ pub(super) fn the_box_of_a_model(pid: u32) -> Option<(i32, i32)> {
         .map(|(_, box_)| box_)
 }
 
-/// End a model this road has begun and found no window for: the process, the record of it, and the
-/// id every window of it would have been found by (see `clear_video_process_state`).
+/// End a model whose window never came, or one nothing holds any more: the process, the record of
+/// it, and the id every window of it would have been found by (see `clear_video_process_state`).
+///
+/// **The kill is the sweep's** — `terminate_player_pid`, verified against the image the id was booked
+/// under — rather than a `Child`'s: the player was handed to the hover that began it, so the handle
+/// that ends one is not this thread's to hold (see `ffplay_window::kill_stray_video_process`).
 #[cfg(not(test))]
-fn take_down(pid: u32, player: &mut video_playback::PlayerProcess) {
-    let _ = player.kill();
+fn take_down(pid: u32) {
+    ffplay_window::terminate_player_pid(pid);
     engine_processes::forget(pid);
     ffplay_window::clear_video_process_state(pid);
 }
 
-/// The window f3d has made for itself, waited for under the process it was begun as.
+/// Which host a launched viewer's window is to be adopted into when it is found.
 ///
-/// **f3d makes more windows than the one it means, and the first is not the picture.** Measured on
-/// 4.0.1 here: two transient `vtkOpenGL` windows exist while it starts — one of no height at all
-/// and one 300x300 — before the window it was asked for. So the pick is made afresh on every pass
-/// rather than latched (see `the_picture_window`), and a process that has ended is a window that is
-/// never coming.
-fn wait_for_the_window(
-    pid: u32,
-    player: &mut video_playback::PlayerProcess,
-    box_: ScreenRegion,
-    parking: (i32, i32),
-) -> Option<HWND> {
-    // The test build begins no process, so there is no window to wait for and nothing to strip:
-    // what a test reads back is the launch itself (see `spawn_a_player_never_shown`).
-    #[cfg(test)]
-    {
-        let _ = (pid, player, box_, parking);
-        None
+/// It is the launch's own fact rather than a host's, and the handle is asked of it when the window is
+/// there: a host a hover or a pin has let go of in the meantime is no host to adopt into, and a pin's
+/// host may not be made yet at the launch (see `show_the_window` and `host`).
+#[cfg(not(test))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Adoption {
+    /// The pin's host, which is the picture on the pin's band.
+    ThePins,
+    /// The hover's host, the one this launch took up.
+    TheHovers,
+    /// None: the picture stands on the desktop by itself (the non-hosted road).
+    OwnWindow,
+}
+
+#[cfg(not(test))]
+impl Adoption {
+    /// Whether the window is a source a host draws rather than a window shown for its own sake.
+    fn into_a_host(self) -> bool {
+        self != Self::OwnWindow
     }
 
-    #[cfg(not(test))]
-    {
-        let box_client = ((box_.2 - box_.0).max(0), (box_.3 - box_.1).max(0));
-        let deadline = Instant::now() + MODEL_START_WAIT;
-        loop {
-            let windows = unsafe { a_viewers_windows_now(pid) };
-            if let Some(window) = the_picture_window(&windows, parking, box_client) {
-                return Some(window);
-            }
-            if matches!(player.try_wait(), Ok(Some(_))) {
-                return None;
-            }
-            if Instant::now() >= deadline {
-                return None;
-            }
-            std::thread::sleep(MODEL_WINDOW_POLL);
+    /// The host to adopt into, as it stands now (see `Adoption`).
+    fn host(self) -> Option<HWND> {
+        match self {
+            Self::ThePins => pin_film_host::film_host(),
+            Self::TheHovers => hover_film_host::hover_film_host(),
+            Self::OwnWindow => None,
         }
     }
+}
+
+/// What one pass of a launched viewer's watch is to do (see `the_watch_stands`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Watched {
+    /// No window yet and no more time than a start is given: look again.
+    Waiting,
+    /// The window is here and still this player's: strip, hide, place, adopt and show it.
+    Adopt(HWND),
+    /// The window is here and nothing holds this player any more: end it unseen.
+    LetGo,
+    /// No window and no process behind it, or no more time than a start is given: the viewer is no
+    /// preview.
+    Never,
+}
+
+/// How a launched viewer's watch stands, out of the four facts one pass has: the picture window, if
+/// one is there, whether this player is still the hover's or the pin's
+/// (see `the_player_is_still_held`), whether the process is still running, and whether the start's
+/// bound has run out.
+///
+/// **A window nobody holds is never adopted**: stripped, placed and shown for a hover that has gone,
+/// it is a scene standing over the desktop that nothing will close — so it is ended unseen instead,
+/// and a viewer that makes no window inside the bound is ended the way it always was.
+fn the_watch_stands(
+    window: Option<HWND>,
+    still_held: bool,
+    alive: bool,
+    out_of_time: bool,
+) -> Watched {
+    if let Some(window) = window {
+        return if still_held {
+            Watched::Adopt(window)
+        } else {
+            Watched::LetGo
+        };
+    }
+    if !alive || out_of_time {
+        return Watched::Never;
+    }
+    Watched::Waiting
+}
+
+/// Whether the player this launch began is still one this app holds: the hover's own record of its
+/// player, the pin's hosted player, or the hover's host's.
+///
+/// It is the question every other road asks before it acts on a player — a hover's hide clears its
+/// own record (`VIDEO_PID`, see `hover_film_host::the_warm_model_is`), a pin's take-down clears its
+/// hosted player, and a host that was taken down clears the player it held (see
+/// `hover_film_host::take_down_the_hover_film_host_if_it_held`) — and any one of the three holding
+/// this player is this player still being somebody's.
+fn the_player_is_still_held(
+    pid: u32,
+    the_hovers: u32,
+    the_pins: Option<u32>,
+    the_hosts: Option<u32>,
+) -> bool {
+    the_hovers == pid || the_pins == Some(pid) || the_hosts == Some(pid)
+}
+
+/// The three records of `the_player_is_still_held`, as they stand now.
+#[cfg(not(test))]
+fn the_player_is_still_held_now(pid: u32) -> bool {
+    the_player_is_still_held(
+        pid,
+        VIDEO_PID.load(Ordering::SeqCst),
+        pin_film_host::hosted_player_pid(),
+        hover_film_host::hover_film_host_player(),
+    )
+}
+
+/// The road that finds a launched viewer's window: a thread of the launch's own, which adopts it the
+/// moment it is there.
+///
+/// **A thread of its own rather than the monitor's pass** (`ffplay_window::ensure_noactivate_monitor`),
+/// because that pass finds a player's window by `IsWindowVisible` and the class a film's player wears:
+/// a model's window is hidden for its whole life until this app shows it, so the pass would never find
+/// it, and the box the launch was begun at, the parking origin the pick is made by and the bound the
+/// whole watch is under are this launch's facts rather than a player's.
+///
+/// **The pick is made afresh on every pass rather than latched**, because **f3d makes more windows than
+/// the one it means and the first is not the picture**: measured on 4.0.1, two transient `vtkOpenGL`
+/// windows exist while it starts — one of no height at all and one 300x300 — before the window it was
+/// asked for (see `the_picture_window`). A process that has ended is a window that is never coming.
+///
+/// **Nothing here waits on the pump**: the whole of what it does to the window is `show_the_window`'s
+/// one pass — strip, hide, place, adopt, show — with no lock taken and no `DwmFlush`, and the hide and
+/// the show inside one call's reach (see `pin_film_thumbnail::the_picture_is_composed_in` for that
+/// hazard, and `show_the_window` for the order).
+#[cfg(not(test))]
+fn watch_for_the_window(pid: u32, box_: ScreenRegion, parking: (i32, i32), adoption: Adoption) {
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + MODEL_START_WAIT;
+        let box_client = ((box_.2 - box_.0).max(0), (box_.3 - box_.1).max(0));
+        loop {
+            let windows = unsafe { a_viewers_windows_now(pid) };
+            let stands = the_watch_stands(
+                the_picture_window(&windows, parking, box_client),
+                the_player_is_still_held_now(pid),
+                engine_processes::is_running(pid),
+                Instant::now() >= deadline,
+            );
+            match stands {
+                Watched::Waiting => std::thread::sleep(MODEL_WINDOW_POLL),
+                Watched::Adopt(window) => {
+                    // **A window found while it has never been on a screen**, which is what the parking
+                    // origin and the hidden launch together buy: the pick is made on a window
+                    // `IsWindowVisible` is false for, and the line says so — a run that reads it has
+                    // proved the window was found hidden rather than after f3d had shown it.
+                    let rect = the_window_rect(window).unwrap_or_default();
+                    note_pin_trace!(
+                        "model window {:?} pid {} found at {}x{}+{}+{} class {} parking {},{} visible {}",
+                        window,
+                        pid,
+                        rect.right - rect.left,
+                        rect.bottom - rect.top,
+                        rect.left,
+                        rect.top,
+                        the_class_of(window),
+                        parking.0,
+                        parking.1,
+                        unsafe { IsWindowVisible(window) }.as_bool() as u8,
+                    );
+                    unsafe {
+                        show_the_window(window, pid, box_, adoption.into_a_host(), adoption.host())
+                    };
+                    return;
+                }
+                other => {
+                    note_pin_trace!("model pid {pid} {other:?}: the viewer is ended unseen");
+                    take_down(pid);
+                    return;
+                }
+            }
+        }
+    });
 }
 
 /// The class the picture window wears, and the one thing that says which of a viewer's windows is
@@ -403,7 +521,7 @@ struct ViewerWindow {
 
 /// Whether a window of a viewer's can be the picture at all, before either of the pick's two rules is
 /// asked: it wears the picture's class, and its client is a box rather than a line (see
-/// `THE_PICTURE_CLASS` and the transient windows measured in `wait_for_the_window`).
+/// `THE_PICTURE_CLASS` and the transient windows measured in `watch_for_the_window`).
 fn is_a_picture_window(candidate: &ViewerWindow) -> bool {
     candidate.class.eq_ignore_ascii_case(THE_PICTURE_CLASS)
         && candidate.client.0 > 0
@@ -509,6 +627,7 @@ unsafe extern "system" fn collect_a_viewers_windows(
 
 /// The class a window wears, named rather than numbered: it is what tells one of f3d's windows from
 /// another (see `THE_PICTURE_CLASS`), and what the found line in a trace carries.
+#[cfg(not(test))]
 fn the_class_of(window: HWND) -> String {
     let mut class: [u16; 64] = [0; 64];
     let named = unsafe { GetClassNameW(window, &mut class) };
@@ -519,6 +638,7 @@ fn the_class_of(window: HWND) -> String {
 }
 
 /// Where a window's frame stands on the desktop, or nothing where it has none to say.
+#[cfg(not(test))]
 fn the_window_rect(window: HWND) -> Option<RECT> {
     let mut rect = RECT::default();
     unsafe { GetWindowRect(window, &mut rect) }
@@ -574,6 +694,7 @@ pub(super) unsafe fn strip_the_frame(window: HWND) {
 /// Put a viewer's window at the box, so that its client is the box exactly.
 ///
 /// Safety: as above — the window is f3d's, and this is a placement and nothing else.
+#[cfg(not(test))]
 unsafe fn place_the_window(window: HWND, box_: ScreenRegion) {
     let (left, top, right, bottom) = box_;
     let _ = unsafe {
@@ -1347,6 +1468,74 @@ mod tests {
             ),
             Some(HWND(0x14 as *mut _)),
             "the place is the discriminator, and the size only its fallback"
+        );
+    }
+
+    /// **A window is adopted only while the hover or the pin that began it still holds it.** The
+    /// viewer is begun before it has a window, so a window that appears after its hover has let the
+    /// player go is a scene nothing would ever close — ended unseen instead, whatever it is (see
+    /// `the_player_is_still_held` and `the_watch_stands`).
+    #[test]
+    fn a_window_the_hover_still_holds_is_adopted_and_one_it_let_go_is_not() {
+        let window = HWND(0x1234 as *mut _);
+        let pid = 42;
+
+        for (the_hovers, the_pins, the_hosts, held) in [
+            (pid, None, None, true),
+            (0, Some(pid), None, true),
+            (0, None, Some(pid), true),
+            (0, Some(9), Some(9), false),
+            (0, None, None, false),
+        ] {
+            assert_eq!(
+                the_player_is_still_held(pid, the_hovers, the_pins, the_hosts),
+                held,
+                "any one of the three records holding this player is this player still being somebody's: {the_hovers} {the_pins:?} {the_hosts:?}"
+            );
+            assert_eq!(
+                the_watch_stands(Some(window), held, true, false),
+                if held {
+                    Watched::Adopt(window)
+                } else {
+                    Watched::LetGo
+                },
+                "and a window found is adopted only while one of them holds it"
+            );
+        }
+
+        assert_eq!(
+            the_watch_stands(None, false, true, false),
+            Watched::Waiting,
+            "a viewer with no window yet is still looked for, held or not"
+        );
+    }
+
+    /// **The bound still ends a viewer that never makes a window**, and a process that ended before it
+    /// made one ends the watch with it: a viewer with no window is no preview, and it is ended here
+    /// rather than left standing behind a hover with nothing to show (see `take_down`). A window that
+    /// is there arrives whether or not the process behind it still answers, which is the one order the
+    /// wait it replaces had.
+    #[test]
+    fn the_bound_ends_a_viewer_that_never_makes_a_window() {
+        assert_eq!(
+            the_watch_stands(None, true, true, false),
+            Watched::Waiting,
+            "inside the bound a viewer with no window yet is a wait that goes on"
+        );
+        assert_eq!(
+            the_watch_stands(None, true, true, true),
+            Watched::Never,
+            "and one that made none in the time a start is given is no preview"
+        );
+        assert_eq!(
+            the_watch_stands(None, true, false, false),
+            Watched::Never,
+            "as is a process that ended before it made one"
+        );
+        assert_eq!(
+            the_watch_stands(Some(HWND(0x1234 as *mut _)), true, false, false),
+            Watched::Adopt(HWND(0x1234 as *mut _)),
+            "a window that is there is the picture, whatever the process behind it says"
         );
     }
 
