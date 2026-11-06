@@ -554,6 +554,21 @@ pub(crate) fn note_mouse_button(vk: i32, down: bool) {
     }
 }
 
+/// Whether a key of the pin's own is down right now — a mouse button it is bound to included.
+///
+/// **The press a pin is taken up by is a hand and not a clock.** Explorer answers a middle press on a
+/// row by selecting that row and activating its window, and when that activation is dispatched is
+/// Explorer's business: it lands after this app's raise as often as before it. A band given back
+/// before it is a pin put under the listing it was just taken up over, which is why the take-up asks
+/// this of the hand rather than of a duration (see `pin_lifecycle::A_PRESS_BAND_IS_HELD_FOR`).
+///
+/// What it reads is the same table the hook counts presses in, so the answer is the edge the hook
+/// itself saw and no desktop call (see `PIN_MAIN_DOWN`). A release the hook never saw leaves a bit
+/// standing, which is why the caller has a bound as well as this.
+pub(crate) fn the_pin_key_is_down() -> bool {
+    PIN_MAIN_DOWN.load(Ordering::Acquire) != 0
+}
+
 /// Record a main key's down or up edge against a chord table, answering whether it is a
 /// press that was counted.
 ///
