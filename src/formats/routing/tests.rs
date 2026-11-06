@@ -567,14 +567,15 @@ fn a_model_is_the_kind_its_own_head_confirms_and_no_other() {
         "nothing of that route asks the viewer about a file that is not a model"
     );
 
+    // 56 bytes, version 20020715, identifier 970401: the header of a real TerraScan file.
     let cloud = folder.join("a-cloud.bin");
-    let mut head = b"970401".to_vec();
+    let mut head = b"8\x00\x00\x00\xeb\x7d\x31\x01\xa1\xce\x0e\x00".to_vec();
     head.extend_from_slice(&[0u8; 64]);
     std::fs::write(&cloud, &head).expect("a point cloud");
     assert_eq!(
         kind_of_with_facts(&cloud, &config, None),
         Some(PreviewType::Models),
-        "a file carrying PDAL's identifier is the point cloud its name promised"
+        "a file whose header carries PDAL's version and identifier is the point cloud its name promised"
     );
 
     let mesh = folder.join("a-mesh.stl");

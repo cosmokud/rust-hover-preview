@@ -8,8 +8,9 @@
 //! is started, which is the answer a name outside every list already had.
 //!
 //! Most of the names have a magic, and it is the format's own rather than a guess: `LASF` opens a
-//! LAS, `BPF!` a BPF, `CSD` an Optech cloud, `970401` a TerraScan BIN, `Ogawa` an Alembic, `# vtk
-//! DataFile` a legacy VTK, `PXR-USDC` a crate USD, `Kaydara FBX Binary` a binary FBX, and
+//! LAS, `BPF!` a BPF, `CSD` an Optech cloud, the dated version word of its header a TerraScan BIN,
+//! `Ogawa` an Alembic, `# vtk DataFile` a legacy VTK, `PXR-USDC` a crate USD, `Kaydara FBX Binary`
+//! a binary FBX, and
 //! `ISO-10303-21;` is the header of every STEP document there is.
 //! Four families are declared by the *box* the file arrives in rather than by the format: a
 //! `.3mf`, a `.fcstd`, a `.slpk` and a `.usdz` are zips, a `.nc`, a `.vtkhdf` and an `.abc` may be
@@ -210,9 +211,19 @@ fn gzip(front: &[u8], _len: u64) -> bool {
     front.starts_with(&[0x1F, 0x8B])
 }
 
-/// PDAL's TerraScan reader checks this identifier and nothing else of the header.
+/// The two words PDAL's TerraScan reader checks of the header it parses: a dated `HdrVersion`
+/// (`TERRASOLID_Format_1`/`_2` of the reader's own struct, at offset 4) and the `RecogVal` 970401
+/// that names the format (offset 8). `HdrSize` before them is not checked because the reader does
+/// not check it.
 fn terrasolid(front: &[u8], _len: u64) -> bool {
-    front.starts_with(b"970401")
+    const TERRASOLID_VERSIONS: [u32; 2] = [20_010_712, 20_020_715];
+    if front.len() < 12 {
+        return false;
+    }
+    let word =
+        |at: usize| u32::from_le_bytes([front[at], front[at + 1], front[at + 2], front[at + 3]]);
+
+    TERRASOLID_VERSIONS.contains(&word(4)) && word(8) == 970_401
 }
 
 /// The four characters every LAS and LAZ opens with, compressed or not.
@@ -449,7 +460,7 @@ mod tests {
             ("nc", b"\x89HDF\r\n\x1a\n\x00\x00\x00\x00"),
             ("cdf", b"CDF\x02\x00\x00\x00\x00"),
             ("exo", b"CDF\x01\x00\x00\x00\x00"),
-            ("bin", b"970401\x00\x00\x00\x00"),
+            ("bin", b"8\x00\x00\x00\xeb\x7d\x31\x01\xa1\xce\x0e\x00"),
             ("las", b"LASF\x00\x00\x00\x00"),
             ("laz", b"LASF\x00\x00\x00\x00"),
             ("bpf", b"BPF!\x00\x00\x00\x00"),
@@ -588,13 +599,31 @@ mod tests {
             "a `.bin` of junk is not a model, so the viewer is never started for it"
         );
 
-        let cloud = folder.join("cloud.bin");
-        let mut head = b"970401".to_vec();
+        // The header of a real file: 56 bytes, version 20020715, identifier 970401.
+        let mut head = b"8\x00\x00\x00\xeb\x7d\x31\x01\xa1\xce\x0e\x00".to_vec();
         head.extend_from_slice(&[0; 64]);
+        let cloud = folder.join("cloud.bin");
         std::fs::write(&cloud, &head).expect("a cloud file");
         assert!(
             claims_content(&cloud, None),
-            "PDAL's own identifier is what a TerraScan BIN opens with"
+            "the two words PDAL's reader checks are what a TerraScan BIN opens with"
+        );
+
+        // The identifier where the old check looked for it, and a version word there that is not
+        // one of the two dated ones: the reader asks both, so this is not the format.
+        let mut misplaced = 970_401u32.to_le_bytes().to_vec();
+        misplaced.extend_from_slice(&[0; 64]);
+        assert!(
+            !matcher("bin")(&misplaced, misplaced.len() as u64),
+            "970401 at four bytes in is not the header PDAL parses"
+        );
+
+        let mut unidentified = 56u32.to_le_bytes().to_vec();
+        unidentified.extend_from_slice(&20_020_715u32.to_le_bytes());
+        unidentified.extend_from_slice(&[0; 64]);
+        assert!(
+            !matcher("bin")(&unidentified, unidentified.len() as u64),
+            "a dated version with a recog value of zero is not a TerraScan header either"
         );
 
         let mut picture = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
