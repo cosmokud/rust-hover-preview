@@ -299,6 +299,18 @@ const LATE_NATIVE_EVERY: Duration = Duration::from_millis(64);
 /// same kind of wait.
 const SOURCE_DREW_EVERY: Duration = Duration::from_millis(64);
 
+/// How long a viewer's own `100%` is given before its scene is taken to be in the picture: **three
+/// frames of a 30 Hz render**, and six of a 60 Hz one — the shortest grace that still leaves the
+/// renderer a frame to put a scene in after the file is loaded (see `a_models_loading`).
+const MODEL_LOAD_GRACE: Duration = Duration::from_millis(100);
+
+/// How long a viewer that has said nothing at all is waited for before its pixels are asked
+/// instead: f3d's first loading line is measured at 150 to 200 ms from a cold start, so this is
+/// about eight times the slowest one seen — long enough that a viewer which does report is never
+/// sampled for the grey its first render clears to, and short enough that a build whose viewer says
+/// nothing falls back to the old road rather than never showing (see `a_models_loading`).
+const MODEL_REPORT_WAIT: Duration = Duration::from_millis(1500);
+
 /// Whether a source with no pipe has drawn, as a test stands it in: `Some(true)` and `Some(false)` are
 /// a source that drew and one that never does, and `None` reads the source's own pixels (see
 /// `the_source_has_lit_pixels`).
@@ -1665,6 +1677,12 @@ fn the_source_can_draw(live: Option<(i32, i32)>, shape: SourceShape, process: u3
 /// with. What separates a sized window from a drawn one is what is in it, so a few points inside the
 /// client are read through the window's own DC until one of them is not black.
 ///
+/// **A model's source is answered by its viewer's own loading report instead** (see
+/// `a_models_loading`): a scene clears its surface to the backdrop colour before it is drawn, so a lit
+/// pixel there is the grey rectangle the old gate showed — the black, then grey, then model a cold
+/// hover was seen as — while the report's `100%` is the file loaded and the grace after it is the
+/// renderer's first frame. A viewer that reports nothing at all is sampled exactly as a film is.
+///
 /// **It is paced and it is latched**: the monitor asks every few milliseconds and a read of another
 /// process's window per pass is the per-frame cross-process work this road refuses, so the sample is one
 /// per `SOURCE_DREW_EVERY` and a source that has drawn is never sampled again for its life. A drag holds
@@ -1682,13 +1700,21 @@ fn the_source_drew(pending: PendingSource, source: HWND, client: (i32, i32)) -> 
     let drew = if answered {
         true
     } else {
-        if pending
-            .sampled
-            .is_some_and(|sampled| now.duration_since(sampled) < SOURCE_DREW_EVERY)
-        {
-            return false;
+        match a_models_loading(f3d_load::the_load_of(pending.process), pending.since, now) {
+            // Nothing is sampled while the report is still coming, and the pacing below is not
+            // spent on it: a model whose file is loading has nothing of its own to show yet.
+            AViewersLoading::Waiting => return false,
+            AViewersLoading::Loaded => true,
+            AViewersLoading::Unreported => {
+                if pending
+                    .sampled
+                    .is_some_and(|sampled| now.duration_since(sampled) < SOURCE_DREW_EVERY)
+                {
+                    return false;
+                }
+                the_source_sample(source, client)
+            }
         }
-        the_source_sample(source, client)
     };
     if let Ok(mut record) = PENDING_SOURCE.lock() {
         if let Some(waiting) = record.as_mut().filter(|waiting| {
@@ -1705,6 +1731,52 @@ fn the_source_drew(pending: PendingSource, source: HWND, client: (i32, i32)) -> 
         );
     }
     drew
+}
+
+/// What a viewer's own loading report says about whether its source has a scene in it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AViewersLoading {
+    /// The file is loaded and the grace after it has run: the renderer has had its first frame.
+    Loaded,
+    /// The report is still coming, so nothing of the picture is owed yet.
+    Waiting,
+    /// There is no report to wait for — no viewer of this app's at all, or one that has said nothing
+    /// past `MODEL_REPORT_WAIT`, or one whose pipe has closed without a marker. The pixels are the
+    /// only answer left for those (see `the_source_has_lit_pixels`).
+    Unreported,
+}
+
+/// The rule `the_source_drew` decides a model's source by, apart from the machine it reads.
+///
+/// **The grace runs from both ends**: from the marker, because the file being loaded is not the scene
+/// being drawn, and from the placement, because a report that arrived before this app had the window
+/// at the box says nothing about what the window at the box shows. And **a silent viewer is not
+/// waited on forever**: nothing at all for `MODEL_REPORT_WAIT`, or a pipe closed without the marker,
+/// falls back to the pixel sample — a format this build's viewer does not report progress for must
+/// still show, even if it shows the old way.
+fn a_models_loading(
+    load: Option<f3d_load::ModelLoad>,
+    placed: Instant,
+    now: Instant,
+) -> AViewersLoading {
+    let Some(load) = load else {
+        return AViewersLoading::Unreported;
+    };
+    if let Some(loaded) = load.loaded {
+        let its_grace_has_run = now.saturating_duration_since(loaded) >= MODEL_LOAD_GRACE;
+        let the_placements_has_too = now.saturating_duration_since(placed) >= MODEL_LOAD_GRACE;
+        return if its_grace_has_run && the_placements_has_too {
+            AViewersLoading::Loaded
+        } else {
+            AViewersLoading::Waiting
+        };
+    }
+    if load.ended
+        || (!load.reported && now.saturating_duration_since(load.begun) >= MODEL_REPORT_WAIT)
+    {
+        return AViewersLoading::Unreported;
+    }
+    AViewersLoading::Waiting
 }
 
 /// The sample itself: the machine's own read of the source's pixels, or the answer a test stood in for
@@ -3320,6 +3392,107 @@ mod tests {
             the_frames_checksum(&frame(0)),
             the_frames_checksum(&frame(0)),
             "and the same picture is the same one"
+        );
+    }
+
+    /// **A model's picture is answered by its viewer's own loading report, and by nothing else.**
+    /// Four questions, and every one of them is a frame the user would otherwise have seen: a source
+    /// with no report at all — a film's player, or none — is the pixel road it always was; a viewer
+    /// that reports but has not reached `100%` has drawn nothing, however lit its backdrop is; a
+    /// `100%` whose grace has not run is still nothing; and a `100%` whose grace has run from the
+    /// marker **and** from the placement is the scene (see `a_models_loading`).
+    #[test]
+    fn a_models_picture_is_its_viewers_loading_report() {
+        let begun = Instant::now();
+        let placed = begun + Duration::from_millis(50);
+        let report = |reported: bool, loaded: Option<Instant>, ended: bool| f3d_load::ModelLoad {
+            reported,
+            loaded,
+            ended,
+            begun,
+        };
+
+        assert_eq!(
+            a_models_loading(None, placed, placed),
+            AViewersLoading::Unreported,
+            "a player of another kind's is no report at all: the pixels answer, as they always did"
+        );
+
+        assert_eq!(
+            a_models_loading(Some(report(false, None, false)), placed, placed + Duration::from_millis(200)),
+            AViewersLoading::Waiting,
+            "a viewer that has only just been begun is waited for: its first line is 150-200 ms out"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(false, None, false)),
+                placed,
+                begun + MODEL_REPORT_WAIT - Duration::from_millis(1)
+            ),
+            AViewersLoading::Waiting,
+            "and the bound is the bound: nothing at all is not yet a viewer that reports nothing"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(false, None, false)),
+                placed,
+                begun + MODEL_REPORT_WAIT
+            ),
+            AViewersLoading::Unreported,
+            "past it, a viewer that has said nothing is sampled the way a film's source is"
+        );
+        assert_eq!(
+            a_models_loading(Some(report(false, None, true)), placed, placed),
+            AViewersLoading::Unreported,
+            "and a pipe that closed without the marker is no wait at all, however recently it began"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, None, false)),
+                placed,
+                begun + MODEL_REPORT_WAIT * 10
+            ),
+            AViewersLoading::Waiting,
+            "a viewer that is reporting is waited for rather than sampled: a big file is still \
+             loading, and the start bound upstream is what ends that wait"
+        );
+
+        let loaded = placed + Duration::from_millis(300);
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, Some(loaded), false)),
+                placed,
+                loaded + MODEL_LOAD_GRACE - Duration::from_millis(1)
+            ),
+            AViewersLoading::Waiting,
+            "a marker inside the grace is a file loaded and not yet a scene drawn"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, Some(begun), false)),
+                placed,
+                placed + MODEL_LOAD_GRACE - Duration::from_millis(1)
+            ),
+            AViewersLoading::Waiting,
+            "and a marker from before the placement owes nothing: the grace runs from both ends"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, Some(loaded), false)),
+                placed,
+                loaded + MODEL_LOAD_GRACE
+            ),
+            AViewersLoading::Loaded,
+            "a marker and a placement both a grace old is the scene"
+        );
+        assert_eq!(
+            a_models_loading(
+                Some(report(true, Some(loaded), true)),
+                placed,
+                loaded + MODEL_LOAD_GRACE
+            ),
+            AViewersLoading::Loaded,
+            "and a report that closed after its marker is answered by the marker"
         );
     }
 

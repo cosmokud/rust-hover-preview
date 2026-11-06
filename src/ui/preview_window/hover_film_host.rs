@@ -288,6 +288,10 @@ pub(super) fn the_hover_box_as_a_region(box_: (i32, i32, i32, i32)) -> ScreenReg
 /// Whether this player's picture is drawn in the hover's host **and the Shell has composed it**: the
 /// question a hosted start's wait is answered with, and the one a warm model is put back on.
 ///
+/// **It is the same gate on both roads, and a model's half of it is the viewer's own loading report**
+/// (`pin_film_thumbnail::the_source_drew`, latched on the record the adoption made): a warm model has
+/// already answered it once and answers it for as long as its record stands, so a re-show of a file
+/// this app kept costs no wait at all (see `keep_a_model_warm` and `the_warm_model_is_back`).
 pub(super) fn the_hover_picture_is_ready(pid: u32) -> bool {
     let Some(host) = hover_film_host() else {
         return false;

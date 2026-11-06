@@ -89,6 +89,12 @@ pub fn background_argument(backdrop: TransparentBackground) -> String {
 /// plain grey mesh reads as a solid again. Tone mapping and anti-aliasing are deliberately *not*
 /// repeated here — the stock configuration already sets both, and a flag that agrees with it is
 /// noise that would have to be kept in step.
+///
+/// **And the one report the launch asks for is f3d's own loading line**, which the stock
+/// configuration already prints and this app used to turn off: `loading-progress=true` puts the
+/// `100%` marker on the viewer's standard output, which is the only honest word that the file is
+/// loaded at all — the alternative being a read of its pixels, which are the backdrop until the
+/// scene is in them (see `f3d_load` and `pin_film_thumbnail::the_source_drew`).
 pub fn launch_args(
     path: &Path,
     box_: (i32, i32, i32, i32),
@@ -115,7 +121,10 @@ pub fn launch_args(
         "filename=false",
         "hdri-filename=false",
         "notifications=false",
-        "loading-progress=false",
+        // Dark and not off, because it is the only honest word there is on when a scene is in the
+        // picture: measured on 4.0.1, the `100%` line is written and flushed to stdout at about
+        // 150-200 ms, and the gate a host's show waits on is that line (see `f3d_load`).
+        "loading-progress=true",
         "animation-progress=none",
         // The one effect this app asks for rather than inherits (see `launch_args`).
         "ambient-occlusion=true",
@@ -232,6 +241,11 @@ mod tests {
             assert!(has(overlay), "{overlay} is turned off: {asked:?}");
         }
         assert!(has("background-color=0.5,0.5,0.5"), "the app's backdrop");
+        assert!(
+            has("loading-progress=true"),
+            "the viewer's own loading report is asked for, which is what a host's show is gated \
+             on: {asked:?}"
+        );
         assert!(
             !has("--no-config"),
             "the per-format camera configs are kept (see `launch_args`)"

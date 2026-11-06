@@ -131,11 +131,18 @@ pub(super) fn launch(
             &f3d_render::background_argument(background),
         ))
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null());
 
     let mut player = video_playback::spawn_player(&mut command)?;
     let pid = player.id();
+    // **And the pipe its own loading report arrives on is emptied from here on** (see `f3d_load`):
+    // the word a host's show is gated on is the viewer's own, and a pipe nobody reads is a viewer
+    // blocked on its own writing.
+    f3d_load::note_the_launch(pid);
+    if let Some(report) = player.take_log_stream() {
+        f3d_load::drain_it(report, pid);
+    }
     note_the_box(pid, box_);
     // The first line of a model's own trace: the launch, the box it was begun at, where it was
     // parked and whether a host is to draw it. What follows it is the source's adoption, the

@@ -98,6 +98,7 @@ mod dimensions;
 mod displays;
 mod engine_render;
 mod event_loop;
+mod f3d_load;
 mod f3d_player;
 mod ffplay_window;
 mod hover_facts;
