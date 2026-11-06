@@ -2357,6 +2357,31 @@ pub(super) fn extend_pin_front_owed(owed: &mut Option<PinFrontOwed>) {
     }
 }
 
+/// The window a pin's take-up was pressed in, as far as Windows will say: the foreground window when that
+/// is somebody else's, and the pin's own when it is not.
+///
+/// **Why the foreground is not read directly.** A take-up's press is read the instant the hook sees it, and
+/// the listing is mid-activation at that instant: a mouse press on a row leaves Explorer with *no*
+/// foreground window at all for a moment, which is a handle nothing can walk from. Armed on that, the debt
+/// the take-up owes is one `keep_pin_at_the_front` drops on its first tick as a listing that is no longer a
+/// window — the band goes back ahead of the very activation it was taken for, and the pin lands under the
+/// listing it was just taken up over. Measured over seven take-ups of one session: the four whose press was
+/// read with no foreground window at all landed behind, and the three whose press was read with
+/// `CabinetWClass` in hand stayed in front — the same file, the same listing, one race.
+///
+/// **The pin's own window stands in for a listing nothing named.** `where_the_band_goes_back` reads it as
+/// nowhere else to go, so the band goes back to the front of the ordinary one — which is where a pin that has
+/// just come up belongs — and the walk has no listing to chase through, so nothing is raised over a window
+/// the press was not made in (see `PinFrontOwed`).
+pub(super) fn the_listing_a_take_up_was_pressed_in(pin: HWND) -> HWND {
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.is_invalid() || unsafe { foreground_is_ours(foreground) } {
+        pin
+    } else {
+        foreground
+    }
+}
+
 /// Answer, on each tick of the grace a pick began, for the front of the pin's band: hold the band a pick's
 /// press took until the grace it began has run out, and leave the pin where the answer belongs when it does
 /// — over the listing the click was made in, or behind the window the user moved to instead (see
