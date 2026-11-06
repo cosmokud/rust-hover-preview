@@ -73,7 +73,11 @@ pub fn background_argument(backdrop: TransparentBackground) -> String {
 ///
 /// `--position` is the **decorated** window's origin and `--resolution` its client size, both
 /// verified: the frame is stripped after the launch (see `f3d_player`), and where the window is
-/// finally placed is this app's to say rather than the player's.
+/// finally placed is this app's to say rather than the player's — which is why the origin is a
+/// caller's argument and is **not the box**: the viewer shows its window itself, so it is begun off
+/// every display and moved to the box once this app holds it (see `f3d_player::the_parking_origin`).
+/// The size is the box's, always: the crop a host's thumbnail is cut from is that client (see
+/// `f3d_player::note_the_box`).
 ///
 /// **One effect is turned on, and it is the one the stock configuration leaves off.** A model that
 /// carries no texture of its own — every `.stl`, most CAD exchanges — is one flat grey material
@@ -85,8 +89,14 @@ pub fn background_argument(backdrop: TransparentBackground) -> String {
 /// plain grey mesh reads as a solid again. Tone mapping and anti-aliasing are deliberately *not*
 /// repeated here — the stock configuration already sets both, and a flag that agrees with it is
 /// noise that would have to be kept in step.
-pub fn launch_args(path: &Path, box_: (i32, i32, i32, i32), background: &str) -> Vec<OsString> {
-    let (x, y, width, height) = box_;
+pub fn launch_args(
+    path: &Path,
+    box_: (i32, i32, i32, i32),
+    position: (i32, i32),
+    background: &str,
+) -> Vec<OsString> {
+    let (_, _, width, height) = box_;
+    let (x, y) = position;
     let mut args: Vec<OsString> = vec![
         "--resolution".into(),
         format!("{},{}", width.max(1), height.max(1)).into(),
@@ -203,7 +213,12 @@ mod tests {
     /// dropped for the per-format camera with it.
     #[test]
     fn the_launch_asks_for_the_box_and_turns_every_overlay_off() {
-        let args = launch_args(Path::new("a-model.stl"), (10, 20, 640, 480), "0.5,0.5,0.5");
+        let args = launch_args(
+            Path::new("a-model.stl"),
+            (10, 20, 640, 480),
+            (10, 20),
+            "0.5,0.5,0.5",
+        );
         let asked: Vec<String> = args
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -228,6 +243,38 @@ mod tests {
         );
     }
 
+    /// **The size is the box's and the place is the caller's**, which are two different numbers on the
+    /// parked launch a hover or a pin is actually begun with (see `f3d_player::the_parking_origin`): a
+    /// viewer's window is begun off every display and moved to the box once this app holds it, so a flag
+    /// read the other way round would put the decorated window back on the screen for a composition
+    /// frame — the flash this road exists to not have.
+    #[test]
+    fn the_parked_launch_takes_the_size_from_the_box_and_the_place_from_the_caller() {
+        let asked: Vec<String> = launch_args(
+            Path::new("a-model.stl"),
+            (10, 20, 640, 480),
+            (12_345, -400),
+            "0",
+        )
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+
+        assert!(
+            asked.iter().any(|arg| arg == "640,480"),
+            "the box's client size is what the viewer renders at: {asked:?}"
+        );
+        assert!(
+            asked.iter().any(|arg| arg == "12345,-400"),
+            "and the place is the parking origin it was handed: {asked:?}"
+        );
+        assert!(
+            !asked.iter().any(|arg| arg == "10,20"),
+            "the box's own origin is never asked for, which is what keeps f3d's window off the \
+             screen: {asked:?}"
+        );
+    }
+
     /// **Depth is the one effect the launch adds**, and it is asked for by the name f3d's own
     /// configuration files use: a plain grey mesh is lit as a near-uniform silhouette without it,
     /// and the shading it buys is the only thing that makes one read as a solid rather than a cut
@@ -235,10 +282,11 @@ mod tests {
     /// agreed with it could drift out of step with the next f3d and would never be noticed.
     #[test]
     fn the_launch_asks_for_depth_as_well_as_the_box() {
-        let asked: Vec<String> = launch_args(Path::new("a-model.stl"), (0, 0, 640, 480), "0")
-            .iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
+        let asked: Vec<String> =
+            launch_args(Path::new("a-model.stl"), (0, 0, 640, 480), (0, 0), "0")
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
 
         assert!(
             asked.iter().any(|arg| arg == "ambient-occlusion=true"),

@@ -181,7 +181,9 @@ impl Desktop {
     }
 
     /// Every display in one rectangle, for the fallback that cannot do better than the primary
-    /// display and find it missing.
+    /// display and find it missing — and for the one question that wants the whole desktop rather
+    /// than may be done in it: where a model viewer's window is parked, past this rectangle's right
+    /// edge and over no monitor at all (see `f3d_player::the_parking_origin`).
     pub(super) fn virtual_screen(&self) -> ScreenBounds {
         unsafe {
             let left = GetSystemMetrics(SM_XVIRTUALSCREEN);

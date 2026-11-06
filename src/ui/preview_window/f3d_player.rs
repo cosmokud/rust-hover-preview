@@ -16,6 +16,14 @@
 //! box becomes its client — which is the rectangle a thumbnail's crop is cut from. And **the window
 //! is waited for**, because a viewer that has made no window is a preview with nothing in it.
 //!
+//! **And the window is never on a screen before this app has it.** f3d shows the window it made
+//! itself, 42 to 182 ms after it is begun, before anything here can have hidden it — so the launch is
+//! **parked** past the right edge of every display rather than placed at the box (see
+//! `the_parking_origin`), and the box is populated only by the step that already owns the window:
+//! strip the frame, hide it, place it at the box, adopt it where a host is drawing it, and show it
+//! (see `show_the_window`). Measured before this, the viewer's own decorated window stood at the box
+//! for as long as the 5 ms poll took to find it, and that was a visible flash of a black client.
+//!
 //! **And the pointer is forwarded**, because a pinned model's band is not the model's own window: what a
 //! hand is on there is this app's window, which thumbnails the engine's window through the pin's host (see
 //! `answer_a_models_band`). The press, the drag, the release and the notch are posted on to f3d in f3d's
@@ -48,13 +56,41 @@ const MODEL_START_WAIT: Duration = Duration::from_secs(VIDEO_START_WAIT_SECS);
 #[cfg(not(test))]
 const MODEL_WINDOW_POLL: Duration = Duration::from_millis(5);
 
+/// How far beyond the desktop's right edge a viewer's window is begun: **wider than any display
+/// there is**, so that no monitor draws a pixel of the box or of the frame it still wears (see
+/// `the_parking_origin`).
+const PARKING_MARGIN: i32 = 4096;
+
+/// Where a viewer's window is begun: **past the right edge of every display there is**.
+///
+/// f3d shows the window it made the moment it has one — measured on 4.0.1, visible and opaque 42 to
+/// 182 ms after it is begun — and no flag asks it not to. A window begun at the box is therefore a
+/// decorated black rectangle standing at the box for as long as it takes this app to find it, which
+/// is only ever looked for on a poll (`MODEL_WINDOW_POLL`) and dressed a composition frame after
+/// that: the flash the user saw as a titled window over the preview box. Begun here, the same window
+/// stands where no monitor can draw a pixel of it, and the box is only ever populated by a window
+/// this app already holds (see `show_the_window`).
+///
+/// **Nothing about the size is changed to do it**: `--resolution` is still the box's client, which is
+/// what a host's thumbnail crop is cut by (see `note_the_box`), and the place is the only thing
+/// moved. Measured on 4.0.1: `--position` is honoured exactly, however far off the desktop it points.
+///
+/// The desktop is handed in rather than read, so the one question this formula answers can be asked
+/// of any arrangement of displays rather than only of this machine's (see
+/// `a_parked_viewer_stands_off_every_display`).
+fn the_parking_origin(desktop: ScreenBounds) -> (i32, i32) {
+    (desktop.right + PARKING_MARGIN, desktop.top)
+}
+
 /// Begin f3d on `path` at `box_`, where a hover or a pin is to draw it, and answer the process
 /// every road downstream treats as a player's.
 ///
 /// The box is the box the picture stands in — the hover's own, or the pin's band — and it is asked
 /// of f3d twice: as the client size it renders at and as where its window goes. The two are the
 /// same rectangle once the frame is off (see `strip_the_frame`), which is what keeps the model's
-/// picture from being a crop of a window larger than the box it is shown in.
+/// picture from being a crop of a window larger than the box it is shown in. **The place, though,
+/// is not the box**: the launch is parked off every display (see `the_parking_origin`), because
+/// f3d shows its own window 42-182 ms after it is begun, before this app can have hidden it.
 ///
 /// **Where the picture is drawn is asked here, before the window exists**, which is the same
 /// question `start_mpv_video_playback` asks: a pin's model is a source its host thumbnails, and a
@@ -84,10 +120,14 @@ pub(super) fn launch(
     let into_a_host = the_pins_film || hover_host.is_some();
 
     let mut command = engine_processes::hidden_command(program);
+    // **Parked, never placed**: the box's client size at the arguments, and every display's outside
+    // as the place (see `the_parking_origin`).
+    let parking = the_parking_origin(displays::DESKTOPS.virtual_screen());
     command
         .args(f3d_render::launch_args(
             path,
             box_,
+            parking,
             &f3d_render::background_argument(background),
         ))
         .stdin(Stdio::null())
@@ -97,15 +137,18 @@ pub(super) fn launch(
     let mut player = video_playback::spawn_player(&mut command)?;
     let pid = player.id();
     note_the_box(pid, box_);
-    // The first line of a model's own trace: the launch, the box it was begun at and whether a host
-    // is to draw it. What follows it is the source's adoption, the registration and the host's
-    // show, in that order (see `show_the_window` and `hover_film_host`).
+    // The first line of a model's own trace: the launch, the box it was begun at, where it was
+    // parked and whether a host is to draw it. What follows it is the source's adoption, the
+    // registration and the host's show, in that order (see `show_the_window` and
+    // `hover_film_host`).
     note_pin_trace!(
-        "model launch pid {pid} at {}x{}+{}+{} hosted {}",
+        "model launch pid {pid} box {}x{}+{}+{} parked at {},{} hosted {}",
         box_.2 - box_.0,
         box_.3 - box_.1,
         box_.0,
         box_.1,
+        parking.0,
+        parking.1,
         into_a_host as u8,
     );
 
@@ -161,21 +204,26 @@ pub(super) fn launch(
 
 /// Put a launched model's window on the screen where the box is, and say whether it is there.
 ///
-/// Three things, in this order and for one reason each. **The frame comes off** before anything
-/// else, so that no frame of a title bar is ever shown over the box. **The window is placed** at
-/// the box, because `--position` named the decorated window's corner and the client has just moved
-/// by a title bar's height. And **the no-activate road is the one that writes the bits and shows
-/// it** (see `apply_noactivate_to_hwnd`), so a model's window is styled, raised and shown by the
-/// same calls every player's window is.
+/// **One order, and every step of it buys something measured.** The frame comes off first, so that
+/// no frame of a title bar is ever shown over the box and the box and the client are one rectangle.
+/// The window is **hidden before it is placed**, because a window placed while it is still visible
+/// is the black client standing at the box for at least one composition frame: f3d shows the window
+/// it made itself, 42 to 182 ms after it is begun, and this app only finds it on a poll
+/// (`MODEL_WINDOW_POLL`) — which is the 5 ms race this order ends, since the window was begun parked
+/// (see `the_parking_origin`) and nothing of the viewer's is at the box until the step that adopts
+/// it. And the show comes last, because **a window a host is drawing is never shown on the screen on
+/// any road**: it is the source a DWM thumbnail is cut from, and what the Shell draws into the host
+/// is the whole of what is seen of it (see `pin_film_thumbnail`).
 ///
-/// **A window a host is drawing is never shown on the screen on any road**: it is the source a DWM
-/// thumbnail is cut from, and what the Shell draws into the host is the whole of what is seen of it
-/// (see `pin_film_thumbnail`). f3d shows its window itself the moment it has one — that is the grey
-/// rectangle a hovered model used to put up before its scene appeared — so the source is hidden
-/// here and immediately made the invisible `WS_EX_LAYERED` window the host's thumbnail needs (see
-/// `pin_film_thumbnail::adopt_the_source`, which is the style and the adoption in one call), and
-/// shown again transparent: **a hidden source is a thumbnail the Shell stops composing** (see the
-/// module note there), so transparent-but-visible is the state, not hidden.
+/// **The hide and the show stay one call's apart**, which is the other measured invariant: a hidden
+/// source is a thumbnail the Shell stops composing, 18 to 71 ms after the hide (see the module note
+/// there), so `transparent-but-visible` is the state the source is left in — all the placement and
+/// adoption between them are bounded, and neither waits on anything of this app's.
+///
+/// **The non-hosted road gets its reveal from `apply_noactivate_to_hwnd` and not from here.** That
+/// is the one call that styles, raises and shows a player's own window (see it for the raise it
+/// holds off), so a model whose picture stands on the desktop by itself is styled by it after this
+/// hide and this placement, and its own show is what brings the window to the box.
 pub(super) unsafe fn show_the_window(
     window: HWND,
     pid: u32,
@@ -184,9 +232,9 @@ pub(super) unsafe fn show_the_window(
     host: Option<HWND>,
 ) {
     unsafe { strip_the_frame(window) };
+    let _ = unsafe { ShowWindow(window, SW_HIDE) };
     unsafe { place_the_window(window, box_) };
     if into_a_host {
-        let _ = unsafe { ShowWindow(window, SW_HIDE) };
         match host {
             Some(host) => unsafe { pin_film_thumbnail::adopt_the_source(window, pid, host) },
             // **A host that is not in hand yet is still no reason to leave the window opaque**: the
@@ -209,11 +257,11 @@ pub(super) unsafe fn show_the_window(
     }
     // **The Shell lists a window as it is shown, so a button it has already listed is one the style
     // below cannot take away.** f3d shows its window itself, before this app has found it, so the
-    // hide is what makes the show the style is read on — and the show is `SW_SHOWNOACTIVATE` on a
-    // window that already carries `WS_EX_NOACTIVATE` (see `give_a_players_window_no_button`, which
-    // pays the same price for the one other window of a player's that is shown before this app has
-    // styled it).
-    let _ = unsafe { ShowWindow(window, SW_HIDE) };
+    // hide above is what makes the show the style is read on — and the show is `SW_SHOWNOACTIVATE`
+    // on a window that already carries `WS_EX_NOACTIVATE` (see
+    // `give_a_players_window_no_button`, which pays the same price for the one other window of a
+    // player's that is shown before this app has styled it). The window is at the box by now: the
+    // call below names no box of its own and moves nothing.
     unsafe { ffplay_window::apply_noactivate_to_hwnd(window) };
 }
 
@@ -925,6 +973,56 @@ pub(crate) fn post_a_notch_to_the_model(point: POINT, notches: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A parked viewer stands off every display**, whatever shape the desktop is: the place is the
+    /// right edge of the whole virtual screen plus a margin nothing draws in, so a window begun there is
+    /// over no monitor at all — which is what keeps f3d's own opaque window off the screen until this app
+    /// holds it (see `the_parking_origin`). It is a place and not a size: the box the picture is drawn at
+    /// is the launch's other fact.
+    #[test]
+    fn a_parked_viewer_stands_off_every_display() {
+        for desktop in [
+            // One display, the ordinary machine.
+            ScreenBounds {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            // A second display to the left, which moves the origin and not the right edge.
+            ScreenBounds {
+                left: -1920,
+                top: -300,
+                right: 2560,
+                bottom: 1440,
+            },
+            // A taller one above the primary, which is the case the vertical origin is taken from.
+            ScreenBounds {
+                left: 0,
+                top: -2160,
+                right: 3840,
+                bottom: 2160,
+            },
+        ] {
+            let (x, y) = the_parking_origin(desktop);
+
+            assert!(
+                x >= desktop.right,
+                "the window is begun past the right edge of every display: {x} vs {}",
+                desktop.right
+            );
+            assert!(
+                x - desktop.right >= 1920,
+                "with more margin than a display is wide, so no clamp can put it back on one"
+            );
+            assert_eq!(y, desktop.top, "and level with the desktop's own top edge");
+            assert_eq!(
+                the_parking_origin(desktop),
+                (x, y),
+                "the same desktop is the same place, pass after pass"
+            );
+        }
+    }
 
     /// **A band's point is mapped into the engine's client and clamped at its edges**, and nothing is posted
     /// for a source with no client at all. The band and the source are the same rectangle in the ordinary
