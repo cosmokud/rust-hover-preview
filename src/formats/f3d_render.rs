@@ -8,7 +8,13 @@
 //! What is asked of it is the program the installer writes, `f3d.exe`, run the way a user runs it.
 //! Every name it is asked about is one its own reader list declares — see `lists::F3D` and
 //! `DEFAULT_F3D_EXTENSIONS`, which is that list minus the names another kind of this app has
-//! already claimed — so a picture or a document never pays for a launch that could not answer.
+//! already claimed — and every file of one of those names is one whose own front says it is the
+//! format the name promises (see `model_formats`), so a picture or a document never pays for a
+//! launch that could not answer.
+//!
+//! **What that head check answers is not recorded here**, and the refusal below is unchanged by
+//! it: a file whose front is not a model is never claimed, so the engine is never asked, and the
+//! engine's own refusal is still never written down.
 //!
 //! **The command line is this module's, and the window is not.** `launch_args` is the whole of
 //! what f3d is told, and it is a pure function so that the one thing a wrong flag costs — an f3d
