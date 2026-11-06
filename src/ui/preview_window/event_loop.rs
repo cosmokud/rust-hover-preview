@@ -4254,6 +4254,33 @@ pub fn run_preview_window() {
 
                         place_pinned_siblings();
                         publish_pointer_hold(pinned_window());
+
+                        // **A pin taken up from a hover by a mouse button wears the press that made
+                        // it, and a press on a file row is Explorer's.** A middle press is a click
+                        // on the item under it — it selects, and it raises the listing — and that
+                        // activation lands *after* the show above, so a pin in the ordinary band is
+                        // put under the listing it was just taken up over and stays there until the
+                        // user presses something. A `Space` is no click and nothing follows it,
+                        // which is why the same take-up from the keyboard stays in front.
+                        //
+                        // So an arriving pin begins the grace a pick's press begins: the topmost
+                        // band is held for the one moment a click can undo this, and given back on
+                        // that clock with the pin placed where the user is (see `PIN_RAISE_GRACE`,
+                        // `PinFrontOwed` and `keep_pin_at_the_front`). Nothing is held past that
+                        // clock, and a pin `Always On Top` owns its band already.
+                        if arriving {
+                            raise_pinned_preview(pinned_window(), true);
+                            let pressed = Instant::now();
+                            note_pin_trace!("take-up holds the band for one press's grace");
+                            pin_front_owed = Some(PinFrontOwed {
+                                until: pressed + PIN_RAISE_GRACE,
+                                band_until: pressed + PIN_RAISE_GRACE,
+                                // The listing the press was made in, read here because that is the
+                                // window the click's activation names and the one the band goes back
+                                // over (see `where_the_band_goes_back`).
+                                listing: GetForegroundWindow(),
+                            });
+                        }
                     }
                     // The pinned window was given another box — maximized, restored, resized,
                     // or put back on a display that changed: the media is laid out again at the
