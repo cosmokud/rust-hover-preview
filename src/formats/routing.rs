@@ -35,7 +35,7 @@
 
 use crate::config::config::{AppConfig, PreviewType, TransparentBackground};
 use crate::formats::{
-    archive_formats, audio_formats, lists, native_formats::NativeJob, video_formats,
+    archive_formats, audio_formats, lists, model_formats, native_formats::NativeJob, video_formats,
 };
 use crate::readers::pdf_preview;
 use crate::readers::svg_preview;
@@ -871,8 +871,15 @@ pub fn drawing_of(path: &Path) -> Drawing {
     }
 }
 
-/// A model: a name an installed f3d reads that no other list has claimed, which is the whole of
-/// what the kind is — nothing here reads one, so there is no second question to ask about it.
+/// A model: a name an installed f3d reads that no other list has claimed, and a file whose own
+/// front is the model that name promises.
+///
+/// **The name is asked first and the file is asked after it**, because the two answer different
+/// things: the list says a `.bin` is a point cloud, and the front of the file says whether it is
+/// one at all. A file that fails the second question is not a model — a kindless answer, which
+/// starts nothing and shows nothing, rather than a launch of the viewer that could only fail (see
+/// `model_formats` and `f3d_render`). It is not asked of a name the content has already spoken
+/// for: there is no file read there, and `content_type` has settled what the bytes are.
 ///
 /// It is asked before the pictures for the reason the pictures are asked last: the image list is
 /// the master bucket for pictures, and a name in two of them would be drawn as whichever was
@@ -881,12 +888,17 @@ pub fn drawing_of(path: &Path) -> Drawing {
 fn claim_models(
     path: &Path,
     config: &AppConfig,
-    _asked: Asked,
-    _entry: Option<&crate::formats::head::Facts>,
+    asked: Asked,
+    entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    lists::F3D
-        .claims(path, config)
-        .then_some(PreviewType::Models)
+    if !lists::F3D.claims(path, config) {
+        return None;
+    }
+    if asked == Asked::File && !model_formats::claims_content(path, entry) {
+        return None;
+    }
+
+    Some(PreviewType::Models)
 }
 
 /// A picture — and the one entry that can answer with a kind that is not its own.

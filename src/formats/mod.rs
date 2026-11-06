@@ -10,6 +10,7 @@ pub(crate) mod head;
 pub(crate) mod libre_formats;
 pub(crate) mod lists;
 pub(crate) mod magick_formats;
+pub(crate) mod model_formats;
 pub(crate) mod native_formats;
 pub(crate) mod office_formats;
 pub(crate) mod peazip_formats;
