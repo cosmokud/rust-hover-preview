@@ -4306,7 +4306,13 @@ pub fn run_preview_window() {
                             raise_pinned_preview(pinned_window(), true);
                             let pressed = Instant::now();
                             pin_press_band_until = Some(pressed + A_PRESS_BAND_IS_HELD_FOR);
-                            note_pin_trace!("take-up holds the band for one press's grace");
+                            // The listing the press landed in, asked rather than read off the
+                            // foreground: see `the_listing_a_take_up_was_pressed_in`.
+                            let listing = the_listing_a_take_up_was_pressed_in(pinned_window());
+                            note_pin_trace!(
+                                "take-up holds the band for one press's grace, listing {}",
+                                pin_trace::window_name(listing)
+                            );
                             pin_front_owed = Some(PinFrontOwed {
                                 // The answer's clock is the long one: a listing Explorer activates
                                 // after the band is gone is chased from the tick (see
@@ -4314,10 +4320,7 @@ pub fn run_preview_window() {
                                 // press's own grace — never moved on by the chase.
                                 until: pressed + A_PRESS_BAND_IS_HELD_FOR,
                                 band_until: pressed + PIN_RAISE_GRACE,
-                                // The listing the press was made in, read here because that is the
-                                // window the click's activation names and the one the band goes back
-                                // over (see `where_the_band_goes_back`).
-                                listing: GetForegroundWindow(),
+                                listing,
                             });
                         }
                     }
