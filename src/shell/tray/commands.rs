@@ -28,7 +28,7 @@ pub(super) use setters::{
     open_config_file, open_link, reset_lists_from_tray, reset_settings_from_tray, set_afk_timer,
     set_animated_scale, set_audio_scale, set_audio_seek, set_audio_volume, set_avoid_mode,
     set_dds_background, set_decode_budget_gb, set_design_background, set_design_scale,
-    set_document_cache_mb, set_document_scale, set_ebook_scale, set_follow_cursor,
+    set_document_cache_mb, set_document_scale, set_ebook_scale, set_f3d_idle, set_follow_cursor,
     set_font_background, set_font_scale, set_general_disk_cache_mb, set_hover_delay,
     set_html_background, set_image_background, set_image_cache_mb, set_image_disk_cache_mb,
     set_libreoffice_idle, set_markdown_mode, set_mpv_engine_idle, set_mpv_path, set_office_engine,

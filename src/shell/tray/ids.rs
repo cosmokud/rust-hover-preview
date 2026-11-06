@@ -531,6 +531,13 @@ pub(super) const ID_TRAY_TYPE_DESIGN: u16 = 1071;
 /// kind SVG documents have always had — the id is the one this gate carried under that name
 /// — and the metafiles and encapsulated PostScript files the same kind grew to hold.
 pub(super) const ID_TRAY_TYPE_VECTOR: u16 = 1069;
+/// The `3D` gate: the models an installed f3d draws, which are the one kind of preview this app
+/// has no reader of its own for — a scene cannot be decoded into a frame, only rendered.
+///
+/// Its id is the one left in the gap between the text preview's own rows and the block of gates
+/// that begins at 1062: 1061 was where the font sizes began before the gates moved here, and
+/// nothing has claimed it since.
+pub(super) const ID_TRAY_TYPE_MODELS: u16 = 1061;
 /// The `Audio` gate: the sounds this app plays, which are the one kind of preview that is
 /// heard rather than looked at — and the reason `Volume` has two halves (see
 /// `ID_TRAY_AUDIO_VOLUME_BASE`).
@@ -622,16 +629,19 @@ pub(crate) const FONT_SIZE_CHOICES: [(u32, u16); 12] = [
     (80, ID_TRAY_FONT_80),
     (70, ID_TRAY_FONT_70),
 ];
-/// The four `Engine → … TTL` submenus: one command per idle time each offers, in the order
+/// The five `Engine → … TTL` submenus: one command per idle time each offers, in the order
 /// it lists them, nine apiece. They sit past every id the app used to hand out — the pin rows
 /// end at 1679, but for the `Image` anchor's pair at 1716/1717 — so a click on a TTL is never
-/// read as another submenu's row, and the four
+/// read as another submenu's row, and the five
 /// ranges are handed out in the order the submenus are listed: `Microsoft Office TTL`,
-/// `LibreOffice TTL`, `WebView2 TTL`, `MPV TTL`.
+/// `LibreOffice TTL`, `WebView2 TTL`, `MPV TTL`, `F3D TTL`.
 pub(super) const ID_TRAY_ENGINE_IDLE_BASE: u16 = 1680;
 pub(super) const ID_TRAY_LIBREOFFICE_IDLE_BASE: u16 = 1689;
 pub(super) const ID_TRAY_WEBVIEW_IDLE_BASE: u16 = 1698;
 pub(super) const ID_TRAY_MPV_IDLE_BASE: u16 = 1707;
+/// The fifth range, which is the first one free past the `Image` anchor's pair: 1680 up to 1717
+/// belongs to the four above and to that pair (see `ID_TRAY_PIN_NAV_IMAGE_ALL`).
+pub(super) const ID_TRAY_F3D_IDLE_BASE: u16 = 1718;
 /// The idle times every `… TTL` submenu offers, in the order it lists them: longest first, the
 /// engine that is never let go at the top, then a time each below it, then the two shortest —
 /// `Never (0 seconds)` second to bottom, and `Away` at the bottom, which is the default an engine

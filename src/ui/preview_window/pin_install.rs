@@ -442,8 +442,14 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 /// left behind by a pin whose player is never begun, which `pin_media_is_alive` reads as a player
 /// still on its way (see `reconcile_swap_take_up`).
 pub(super) fn pinned_player_is_coming(media_type: MediaType, path: &Path) -> bool {
-    media_type == MediaType::Video
-        && matches!(video_route(path), VideoRoute::Ffplay | VideoRoute::Mpv)
+    match media_type {
+        MediaType::Video => matches!(video_route(path), VideoRoute::Ffplay | VideoRoute::Mpv),
+        // A model is drawn by a window of somebody else's on every road, and the pin's host is the
+        // window that shows it — so what decides whether a player is coming is whether there is a
+        // viewer to begin at all (see `f3d_player`).
+        MediaType::Model => f3d_render::available(),
+        _ => false,
+    }
 }
 
 /// Whether FFmpeg's player is on this machine, the half of [`pinned_player_is_coming`] that is

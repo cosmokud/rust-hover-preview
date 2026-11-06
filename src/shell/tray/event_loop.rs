@@ -15,7 +15,7 @@ use super::commands::{
     open_config_file, reset_lists_from_tray, reset_settings_from_tray, set_afk_timer,
     set_animated_scale, set_audio_scale, set_audio_seek, set_audio_volume, set_avoid_mode,
     set_dds_background, set_decode_budget_gb, set_design_background, set_design_scale,
-    set_document_cache_mb, set_document_scale, set_ebook_scale, set_follow_cursor,
+    set_document_cache_mb, set_document_scale, set_ebook_scale, set_f3d_idle, set_follow_cursor,
     set_font_background, set_font_scale, set_general_disk_cache_mb, set_hover_delay,
     set_html_background, set_image_background, set_image_cache_mb, set_image_disk_cache_mb,
     set_libreoffice_idle, set_markdown_mode, set_mpv_engine_idle, set_mpv_path, set_office_engine,
@@ -45,10 +45,10 @@ use super::ids::{
     ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
     ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
     ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
-    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_EXIT, ID_TRAY_FONT_100,
-    ID_TRAY_FONT_110, ID_TRAY_FONT_125, ID_TRAY_FONT_150, ID_TRAY_FONT_175, ID_TRAY_FONT_200,
-    ID_TRAY_FONT_250, ID_TRAY_FONT_300, ID_TRAY_FONT_400, ID_TRAY_FONT_70, ID_TRAY_FONT_80,
-    ID_TRAY_FONT_90, ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE,
+    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE,
+    ID_TRAY_FONT_100, ID_TRAY_FONT_110, ID_TRAY_FONT_125, ID_TRAY_FONT_150, ID_TRAY_FONT_175,
+    ID_TRAY_FONT_200, ID_TRAY_FONT_250, ID_TRAY_FONT_300, ID_TRAY_FONT_400, ID_TRAY_FONT_70,
+    ID_TRAY_FONT_80, ID_TRAY_FONT_90, ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE,
     ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE,
     ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE,
     ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
@@ -69,8 +69,8 @@ use super::ids::{
     ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE, ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE,
     ID_TRAY_TRIGGER_ENABLE, ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO,
     ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS,
-    ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
-    ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
+    ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_MODELS, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR,
+    ID_TRAY_TYPE_VIDEOS, ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
     ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
     ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
@@ -458,6 +458,7 @@ unsafe extern "system" fn tray_window_proc(
                     ID_TRAY_TYPE_FONTS => toggle_preview_type(PreviewType::Fonts),
                     ID_TRAY_TYPE_DESIGN => toggle_preview_type(PreviewType::Design),
                     ID_TRAY_TYPE_VECTOR => toggle_preview_type(PreviewType::Vector),
+                    ID_TRAY_TYPE_MODELS => toggle_preview_type(PreviewType::Models),
                     // An engine's TTL, by the position it was listed at: the player, then the
                     // three engines this app keeps warm between documents.
                     cmd if (ID_TRAY_MPV_IDLE_BASE
@@ -486,6 +487,14 @@ unsafe extern "system" fn tray_window_proc(
                         .contains(&cmd) =>
                     {
                         set_libreoffice_idle(cmd - ID_TRAY_LIBREOFFICE_IDLE_BASE)
+                    }
+                    // And the viewer a model is drawn by, which is the one kept engine with a
+                    // window of its own in the range beside it.
+                    cmd if (ID_TRAY_F3D_IDLE_BASE
+                        ..ID_TRAY_F3D_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_f3d_idle(cmd - ID_TRAY_F3D_IDLE_BASE)
                     }
                     // An away time for the `Away Timer`, by the position it was listed at.
                     cmd if (ID_TRAY_AFK_TIMER_BASE

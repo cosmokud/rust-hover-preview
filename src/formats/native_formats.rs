@@ -161,6 +161,7 @@ pub fn job_for(
         | PreviewType::Calibre
         | PreviewType::Document
         | PreviewType::Libre
+        | PreviewType::Models
         | PreviewType::Magick => None,
     }
 }

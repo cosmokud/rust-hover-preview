@@ -7,6 +7,10 @@
 - **Camera raws and system picture formats decode through Windows natively** — `[image]` handles camera raws (`.raw`, `.nef`, `.cr2`, `.cr3`, `.dng`, etc.) via the Windows Raw Image Extension and system bitmap/cursor formats (`dib`, `rle`, `cur`) with WIC, falling back to ImageMagick only when the native codec is missing.
 - **The pinned sound card context menu configures both hover and pin seek modes** — right-clicking a pinned sound card offers separate `Hover Seek` and `Pin Mode Seek` flyout menus.
 
+### Added
+
+- **3D models, CAD exchange files, point clouds and scientific datasets preview by hovering or pinning them** — a new `3D` kind beside the pictures, drawn by f3d where one is installed and by nothing where it is not: f3d's own chrome-less window stands at the hover box (or, under Pin Mode, the hover's host mirrors it, which is the window a pin promotes), and the `[f3d]` list in `config.ini` names the extensions asked of it — everything f3d 4.0.1's own reader list carries that no other kind already claims, from `.stl` and `.obj` to `.step`, `.gltf`, `.las` and `.vtk`. `f3d_path` names a copy installed anywhere other than the `PATH` or under Program Files, the tray's **Preview Types → 3D** row switches the kind off and on, a pinned model is orbited by dragging in its band and zoomed by the wheel, and a machine without f3d shows no preview for a model rather than a broken one. Models are drawn with f3d's contact shading (ambient occlusion) on, so a mesh that carries no texture of its own reads as a solid rather than a flat grey cut-out. The picture itself is the engine's to answer: dragging turns the scene, the wheel zooms it, the middle button pans it and the right one opens f3d's own menu, while the pinned window's menu stays on its caption strip.
+
 ### Changed
 
 - **The `Engine` submenu reads in the order its rows are used** — `Video Engine`, `Office Engine`, a separator, `Away Timer`, a separator, then the four TTLs: `Microsoft Office TTL`, `LibreOffice TTL`, `WebView2 TTL`, `MPV TTL`.

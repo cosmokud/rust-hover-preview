@@ -181,6 +181,12 @@ pub(super) enum PlayerProcess {
     #[cfg_attr(test, allow(dead_code))]
     // The test seam notes a player instead of beginning one.
     Started(Child),
+    /// The player this app began by hand, with a `STARTUPINFO` that says its window is never to be
+    /// shown: the process handle, the id it is booked in under, and the pipe its own loading report
+    /// arrives on (see `never_shown`). A `Child` is what a `Command` hands back, and this road has
+    /// no `Command`: what a model's viewer is begun with is a show state, which `Command` cannot
+    /// carry.
+    NeverShown(never_shown::NeverShown),
     /// The resident that serves this hover: an id, and no process of its own — the resident's
     /// process is held in one place, so nothing here is this handle's to end (see `mpv_resident`).
     #[cfg(not(test))]
@@ -211,6 +217,7 @@ impl PlayerProcess {
     pub(super) fn id(&self) -> u32 {
         match self {
             Self::Started(child) => child.id(),
+            Self::NeverShown(begun) => begun.pid,
             #[cfg(not(test))]
             Self::Served(pid) => *pid,
             #[cfg(test)]
@@ -223,6 +230,7 @@ impl PlayerProcess {
     pub(super) fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         match self {
             Self::Started(child) => child.try_wait(),
+            Self::NeverShown(begun) => begun.try_wait(),
             // The resident holds its own process, and it is the one that says when that has gone.
             #[cfg(not(test))]
             Self::Served(_) => Ok(None),
@@ -240,6 +248,23 @@ impl PlayerProcess {
     pub(super) fn take_log_stream(&mut self) -> Option<std::process::ChildStdout> {
         match self {
             Self::Started(child) => child.stdout.take(),
+            Self::NeverShown(_) => None,
+            #[cfg(not(test))]
+            Self::Served(_) => None,
+            #[cfg(test)]
+            Self::Noted(_) => None,
+        }
+    }
+
+    /// The pipe a hand-begun viewer's own loading report arrives on, where this app made one for it.
+    ///
+    /// It is the same contract as `take_log_stream` — handed over once, read by a thread of its own
+    /// (see `f3d_load`) — and it is a pipe of this app's rather than a `ChildStdout`, because the
+    /// launch that makes it is not a `Command`'s (see `never_shown`).
+    pub(super) fn take_the_report_stream(&mut self) -> Option<std::fs::File> {
+        match self {
+            Self::NeverShown(begun) => begun.report.take(),
+            Self::Started(_) => None,
             #[cfg(not(test))]
             Self::Served(_) => None,
             #[cfg(test)]
@@ -257,6 +282,10 @@ impl PlayerProcess {
             Self::Started(child) => {
                 use std::os::windows::io::AsRawHandle;
                 Some(HANDLE(child.as_raw_handle()))
+            }
+            Self::NeverShown(begun) => {
+                use std::os::windows::io::AsRawHandle;
+                Some(HANDLE(begun.process.as_raw_handle()))
             }
             #[cfg(not(test))]
             Self::Served(_) => None,
@@ -289,6 +318,7 @@ impl PlayerProcess {
     pub(super) fn take_error_stream(&mut self) -> Option<std::process::ChildStderr> {
         match self {
             Self::Started(child) => child.stderr.take(),
+            Self::NeverShown(_) => None,
             #[cfg(not(test))]
             Self::Served(_) => None,
             #[cfg(test)]
@@ -300,6 +330,7 @@ impl PlayerProcess {
     pub(super) fn kill(&mut self) -> std::io::Result<()> {
         match self {
             Self::Started(child) => child.kill(),
+            Self::NeverShown(begun) => begun.kill(),
             // A served hover's film is stopped on the resident and never ended with it (see
             // `mpv_resident::finish`, which is the road this arm is never reached from).
             #[cfg(not(test))]
@@ -344,7 +375,43 @@ pub(super) fn spawn_real_player(real: bool) {
 /// The test build's launch: note a player instead of beginning one (see `spawn_player`).
 #[cfg(test)]
 pub(super) fn spawn_player(command: &mut std::process::Command) -> Option<PlayerProcess> {
-    // What a launch asked for, as the test seam reads it before nothing is begun.
+    note_the_command(command);
+    if SPAWN_REAL_PLAYER.load(Ordering::Acquire) {
+        pin_lifecycle::note_the_foreground_before_a_player();
+        return command.spawn().ok().map(PlayerProcess::Started);
+    }
+    Some(PlayerProcess::Noted(next_noted_pid()))
+}
+
+/// Begin a player whose window is **never shown by the program that makes it**, or — under test —
+/// note that one would have been begun and begin nothing (see `never_shown`).
+///
+/// It is the same contract `spawn_player` has, and the same compile-time split: the release build
+/// begins a process by hand so that the `STARTUPINFO` it is given says the window is hidden from its
+/// first instruction, and the test build records the command the launch built and begins nothing —
+/// what a test reads back is the launch itself, as it is for every other player.
+#[cfg(not(test))]
+pub(super) fn spawn_a_player_never_shown(
+    command: &mut std::process::Command,
+) -> Option<PlayerProcess> {
+    // Nothing of the foreground is noted here: a window that is never shown cannot take it, and
+    // what that note is for is giving back a keyboard a player's own window took (see `spawn_player`).
+    never_shown::spawn(command).map(PlayerProcess::NeverShown)
+}
+
+/// The test build's hand-launch: note the command and begin nothing (see `spawn_a_player_never_shown`).
+#[cfg(test)]
+pub(super) fn spawn_a_player_never_shown(
+    command: &mut std::process::Command,
+) -> Option<PlayerProcess> {
+    note_the_command(command);
+    Some(PlayerProcess::Noted(next_noted_pid()))
+}
+
+/// Record what a test launch asked for, before nothing is begun: the program, the arguments and
+/// the environment the production launch builds (see `LAST_SPAWNED_COMMAND`).
+#[cfg(test)]
+fn note_the_command(command: &std::process::Command) {
     let program = command.get_program().to_string_lossy().into_owned();
     let args = command
         .get_args()
@@ -362,11 +429,6 @@ pub(super) fn spawn_player(command: &mut std::process::Command) -> Option<Player
     if let Ok(mut last) = LAST_SPAWNED_COMMAND.lock() {
         *last = Some(LaunchedCommand { program, args, env });
     }
-    if SPAWN_REAL_PLAYER.load(Ordering::Acquire) {
-        pin_lifecycle::note_the_foreground_before_a_player();
-        return command.spawn().ok().map(PlayerProcess::Started);
-    }
-    Some(PlayerProcess::Noted(next_noted_pid()))
 }
 
 /// The last command a test launch handed the seam, so a test can read the flags and environment
@@ -556,6 +618,20 @@ fn start_video_playback_where(
     // **And where its window goes is asked before either route is, because it is the same question
     // for both** (see `bubble_players_box`).
     let (x, y) = bubble_players_box(x, y, width);
+
+    // **A model is drawn by f3d's own window rather than by either player below**, and the box,
+    // the host road and the no-activate ask are this function's while nothing else of a film's
+    // launch is: the file, the box it stands in and whether it is a hover's or a pin's are the
+    // whole of the launch (see `f3d_player`).
+    if kind == Some(MediaType::Model) {
+        return f3d_player::launch(
+            path,
+            (x, y, x + width, y + height),
+            kind,
+            allow_the_hover_host,
+            for_a_hover,
+        );
+    }
 
     // The soundtrack's own measured gain, where `Normalize` is on for videos and one has been
     // measured. It is read here rather than below because both routes want it, and on the same
@@ -1330,7 +1406,11 @@ fn start_mpv_video_playback(
 /// is a relaunch, and a relaunch has to be told where to put its window — the film is not drawn
 /// into a surface of this app's, so the replacement's window has to be placed rather than laid
 /// out (see `video_loop_action`).
-fn note_player_started(
+///
+/// **A model is booked in through here too**, with no loop and no second of its own: f3d draws a
+/// scene that stands still, and the window, the image name and the record of the process are the
+/// whole of what a viewer owes the rest of this app (see `f3d_player`).
+pub(super) fn note_player_started(
     image: &'static str,
     path: &Path,
     player: &PlayerProcess,
@@ -1554,8 +1634,10 @@ pub(super) fn stop_video_playback(media: &mut MediaData) {
 
     // With no pin up the hover's own host is the film no longer, whatever the media held: it goes
     // down on the preview thread that made it, so no black top-level window outlives the hover
-    // (see `hover_film_host`).
-    if !pinned() {
+    // (see `hover_film_host`). **Except the host a model was kept in**: that one goes off the screen
+    // and stays, with its registration, for the next hover of the same file (see
+    // `hover_film_host::keep_a_model_warm`, which answers by having taken the process).
+    if !pinned() && !hover_film_host::a_model_is_kept_warm() {
         unsafe { hover_film_host::take_down_the_hover_film_host() };
     }
 }
@@ -1580,6 +1662,15 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
             ffplay_window::clear_video_process_state(pid);
             return;
         }
+    }
+
+    // **And a model's viewer is kept rather than ended**, for the same reason read the other way
+    // round: a f3d has drawn a picture of a file nothing has moved, so the next hover of that file
+    // is the same window shown again instead of a launch (see `hover_film_host::keep_a_model_warm`).
+    // It is the model's own road — a film, a pin's player and everything else are killed below.
+    if hover_film_host::keep_a_model_warm(&mut media.video_process, Some(media.media_type)) {
+        VIDEO_HWND.store(0, Ordering::SeqCst);
+        return;
     }
 
     let killed = media.video_process.as_ref().map(|process| process.id());
@@ -2034,10 +2125,19 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // the whole of what the hover is owed; neither the host nor the player's window is enumerated or
     // styled as a top-level window of its own (see `hover_film_host`).
     let hover_pid = VIDEO_PID.load(Ordering::SeqCst);
-    if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid) {
+    // **A model kept warm is not on the screen, and nothing here is to put it back.** This road asks
+    // whether a picture is owed its place in the band, and a warm one is a picture the user has
+    // hovered away from: shown here it would be the hover coming back on a cadence of its own (see
+    // `hover_film_host::keep_a_model_warm`).
+    if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid)
+        && !hover_film_host::the_warm_model_is(hover_pid)
+    {
         unsafe { hover_film_host::place_the_hover_film_host((x, y, x + width, y + height)) };
         let host = hover_film_host::hover_film_host().map_or(0, |host| host.0 as isize);
-        if hover_film_host::the_hover_player_is_drawing(hover_pid) {
+        // **Shown on the picture rather than on the window**: a host is black until the Shell has
+        // composed its registration, and this cadence lands on the same ticks a cold start does (see
+        // `hover_film_host::the_hover_picture_is_ready`).
+        if hover_film_host::the_hover_picture_is_ready(hover_pid) {
             trace_the_raised_film(host, "topmost shown: hover host drawing");
             unsafe { hover_film_host::set_the_hover_film_host_visible(true) };
         } else {
@@ -2239,6 +2339,52 @@ mod tests {
         assert!(
             the_raise_is_new(shown, 0x2000, "topmost shown: pin host drawing"),
             "and so is another window"
+        );
+    }
+
+    /// **A viewer this app began by hand is a player on the terms every other one is**: it is booked
+    /// in under its own id, it is asked whether it has ended without waiting on it, its own report
+    /// arrives on a pipe this app holds, and it is ended by a handle rather than by a note (see
+    /// `PlayerProcess::NeverShown` and `never_shown`).
+    #[test]
+    fn a_hand_begun_player_answers_the_questions_a_player_is_asked() {
+        let mut command = never_shown::a_stand_in_process();
+        let begun = never_shown::spawn(&mut command).expect("a stand-in process this app holds");
+        let mut player = PlayerProcess::NeverShown(begun);
+
+        assert_ne!(player.id(), 0, "the process it began has an id");
+
+        let mut waited = 0;
+        while player.try_wait().expect("the wait is answerable").is_none() {
+            assert!(waited < 100, "a process begun here ends within a moment");
+            std::thread::sleep(Duration::from_millis(20));
+            waited += 1;
+        }
+        let ended = player
+            .try_wait()
+            .expect("the wait is answerable")
+            .expect("and the process has ended");
+        assert_eq!(ended.code(), Some(3), "with the code it was begun to leave");
+        assert_eq!(
+            player.exit_confirmed(),
+            Some(true),
+            "which is the same answer the kill's own observation gives"
+        );
+
+        // The pipe the viewer writes nothing into is at its end once the viewer has gone, and it is
+        // handed over once — a second ask is a stream that does not exist.
+        let mut report = player
+            .take_the_report_stream()
+            .expect("the pipe the report arrives on");
+        let mut bytes = Vec::new();
+        assert_eq!(
+            std::io::Read::read_to_end(&mut report, &mut bytes).expect("a closed pipe reads"),
+            0,
+            "and it closes with the viewer rather than being held open by this app"
+        );
+        assert!(
+            player.take_the_report_stream().is_none(),
+            "the report is handed to one reader"
         );
     }
 }

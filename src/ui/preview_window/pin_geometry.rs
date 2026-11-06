@@ -78,6 +78,15 @@ pub(super) fn current_media_type() -> Option<MediaType> {
         .and_then(|media| media.as_ref().map(|media| media.media_type))
 }
 
+/// The same answer, asked by a road that may not wait for it: `None` while the preview loop holds the
+/// media, which is what a window procedure and the wheel hook ask instead (see `current_media_type`).
+pub(super) fn current_media_type_try() -> Option<MediaType> {
+    CURRENT_MEDIA
+        .try_lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.media_type))
+}
+
 /// The pinned window put back on the display it is on now, after the desktop has been
 /// rearranged or a display's scale has changed: a box the display still has room for is kept
 /// where it is and pulled back into the work area where it does not, and the media is laid out

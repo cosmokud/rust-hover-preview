@@ -1020,3 +1020,34 @@ fn places_the_waiting_spinner_at_the_pointers_own_corner() {
         (980 - gap - side as i32, 300 + gap)
     );
 }
+
+/// **A model is the one kind whose picture is another program's window, so a hover has to know one
+/// when it reads it** — that answer is what puts the hover on the video's own road rather than on
+/// the path that waits for a frame (see `HoverFacts::is_a_model` and `f3d_player`).
+///
+/// It is asked of the file's list and of the gate, and of nothing the disk holds: a `.stl` is binary
+/// and its bytes name no kind, so the name is the whole of the question the router's answer needs.
+#[test]
+fn a_model_is_named_by_its_list_and_gated_by_the_three_d_switch() {
+    let folder = std::env::temp_dir().join("rust-hover-preview-model-kind");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let model = folder.join("a-mesh.stl");
+    std::fs::write(&model, b"solid cube\nendsolid cube\n").expect("a model");
+
+    let hover = HoverFacts::read(&model);
+    assert_eq!(hover.routed_kind(), Some(PreviewType::Models));
+    assert!(hover.is_a_model(), "a model is drawn by the viewer");
+    assert!(!hover.is_video(), "and it is not a film");
+    assert!(!hover.is_text());
+
+    // **And a name of another kind is not one.** The picture list is the master bucket, and a
+    // `.png` under it is a picture whatever the `3D` list would say about its name — which is what
+    // the subtraction in `DEFAULT_F3D_EXTENSIONS` is for (see `claim_models`).
+    let picture = folder.join("a-picture.png");
+    std::fs::write(&picture, b"\x89PNG\r\n\x1a\n").expect("a picture");
+    let hover = HoverFacts::read(&picture);
+    assert_eq!(hover.routed_kind(), Some(PreviewType::Images));
+    assert!(!hover.is_a_model());
+
+    let _ = std::fs::remove_dir_all(&folder);
+}

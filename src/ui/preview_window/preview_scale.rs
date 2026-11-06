@@ -318,6 +318,12 @@ pub(super) fn scale_of_kind(
         // that is, so the share is of the display the way a page's or a specimen's is.
         PreviewType::Design => fit_reduced(scales.design),
 
+        // A model is a picture an engine drew at the box it was asked for, so there is no size of
+        // the file's own to scale from and the share is of the room the way a page's is. The
+        // setting is the picture one, because what is on screen for a model is a picture of it and
+        // there is no scale of the kind's own to turn (see `f3d_render`).
+        PreviewType::Models => fit_reduced(scales.picture),
+
         // Both halves of the drawing kind: what a document costs to draw and what a
         // drawing costs to replay are the same question, and the setting is the same one.
         PreviewType::Vector => fit_reduced(scales.vector),

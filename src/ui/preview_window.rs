@@ -98,6 +98,8 @@ mod dimensions;
 mod displays;
 mod engine_render;
 mod event_loop;
+mod f3d_load;
+mod f3d_player;
 mod ffplay_window;
 mod hover_facts;
 mod hover_film_host;
@@ -111,6 +113,7 @@ mod media_types;
 mod message_utils;
 mod mpv_ipc;
 mod mpv_resident;
+mod never_shown;
 mod paint;
 mod pin_bubble;
 mod pin_chrome_layout;
@@ -189,6 +192,7 @@ use crate::engines::webview_preview;
 use crate::formats::audio_formats;
 use crate::formats::calibre_formats;
 use crate::formats::codecs;
+use crate::formats::f3d_render;
 use crate::formats::libre_formats;
 use crate::formats::magick_formats;
 use crate::formats::native_formats;
@@ -291,9 +295,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
     TPM_TOPALIGN, ULW_ALPHA, WA_ACTIVE, WA_CLICKACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CHAR,
     WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOVE, WM_POWERBROADCAST, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_WINDOWPOSCHANGED, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOVE, WM_POWERBROADCAST, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_WINDOWPOSCHANGED,
+    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 #[cfg(test)]
@@ -314,6 +319,7 @@ use pin_window::{
 // What the rest of the crate asks for by name.
 pub(crate) use dimensions::monitor_dpi_from_point;
 pub(crate) use event_loop::run_preview_window;
+pub(crate) use f3d_player::post_a_notch_to_the_model;
 pub(crate) use ffplay_window::kill_stray_video_process;
 pub(crate) use hover_facts::cursor_preview_hover;
 pub(crate) use hover_facts::PreviewCursorHover;
@@ -330,6 +336,7 @@ pub(crate) use pin_lifecycle::PinCommand;
 pub(crate) use pin_menu_window::PIN_MENU_HWND;
 pub(crate) use pin_model::pin_is_focused;
 pub(crate) use pin_model::pin_zoom_keep_alive_try;
+pub(crate) use pin_model::the_models_band;
 pub(crate) use pin_walk::PinPlanned;
 pub(crate) use pin_walk::PinStep;
 pub(crate) use pixels::rgba_to_bgra;

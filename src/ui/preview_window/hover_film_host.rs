@@ -23,9 +23,19 @@
 //! `pin_film_host::promote_the_hover_film_host`).
 //!
 //! The host belongs to the hover, not to the player: a hover that replaces this one takes the same
-//! host when the old player is still in it, and every road that ends the hover destroys it (see
-//! `kill_player_process`, `hide_preview`, and the loop's `Hide`). A host a pin took up belongs to
+//! host when the old player is still in it, and every road that ends the hover takes the host with it
+//! (see `kill_player_process`, `hide_preview`, and the loop's `Hide`). A host a pin took up belongs to
 //! the pin from then on (see `pin_film_host`).
+//!
+//! **A model's host outlives its hover, which is the one exception and the whole of `F3D TTL`.** f3d
+//! is launched with the file it draws and knows no way to open another, so a kept viewer is only ever
+//! the *same* model hovered again — and what that buys is the launch, which is the 200–400 ms a cold
+//! viewer takes to put a scene up. So the hover going away hides the host, keeps the player running
+//! and the registration in the window, and shows the same host again for the next hover of that file;
+//! the kept engine is bounded by `Engine → F3D TTL` and let go with its host, which is the only window
+//! it is ever ended through (see `keep_a_model_warm`, `the_warm_model_is_back` and
+//! `tick_the_warm_model`). A film keeps the road it always had: mpv's resident keeps the *player*, and
+//! the host is made again for the next film.
 
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::Once;
@@ -42,7 +52,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
+use super::pin_trace::note_pin_trace;
 use super::*;
+use crate::config::config::EngineIdle;
 
 /// The class a hover's film host is made from. A class of its own rather than the pin host's: the
 /// two hosts have different parents, different styles and different owners, and only the pin's
@@ -102,19 +114,51 @@ pub(super) fn the_hover_players_file(pid: u32) -> Option<PathBuf> {
 }
 
 /// Record the player begun into the hover's host, before it has a window of its own in there.
+///
+/// **A model kept warm is let go here**, because this is the one moment a *different* player takes the
+/// host: the window and its registration are reused rather than made again, and the process behind
+/// them is a picture of another file (see `keep_a_model_warm`).
 pub(super) fn note_hover_film_host_player(pid: u32, path: &Path) {
+    let taken_over = {
+        let Ok(mut held) = WARM_MODEL.lock() else {
+            return;
+        };
+        match held.as_ref().map(|warm| warm.pid) {
+            Some(warm) if warm != pid => held.take(),
+            _ => None,
+        }
+    };
+    // The record names the new player *before* the old one is ended, so that the kill's own
+    // bookkeeping (`clear_video_process_state`) finds a host that is no longer the old player's and
+    // leaves this one standing — the host is reused, not replaced, and blowing it up here would be
+    // the black rectangle of a window with no registration in it.
     HOVER_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
     if let Ok(mut held) = HOVER_FILM_HOST_PATH.lock() {
         *held = Some(path.to_path_buf());
+    }
+    if let Some(mut warm) = taken_over {
+        note_pin_trace!(
+            "warm model let go pid {}: another player takes the host",
+            warm.pid
+        );
+        let _ = warm.player.kill();
+        engine_processes::forget(warm.pid);
+        ffplay_window::clear_video_process_state(warm.pid);
     }
 }
 
 /// The hover's host, where this player is the one begun into it for this file and is already
 /// drawing there: the host a pin can move into its own window instead of beginning a second player.
 pub(super) fn the_hover_film_to_adopt(path: &Path) -> Option<HWND> {
-    if current_media_type() != Some(MediaType::Video)
-        || !matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
-    {
+    // A film whichever player draws it, and a model if a viewer is here to draw one: the two kinds
+    // whose picture is a window of somebody else's, which is the only thing a host can hold (see
+    // `the_hover_film_is_kept_in_a_host`).
+    let hostable = match current_media_type() {
+        Some(MediaType::Video) => matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay),
+        Some(MediaType::Model) => f3d_render::available(),
+        _ => false,
+    };
+    if !hostable {
         return None;
     }
 
@@ -141,6 +185,12 @@ pub(super) fn forget_the_hover_film_host_that_was_handed_over(host: HWND) {
     if hover_film_host() != Some(host) {
         return;
     }
+    // **A warm model a pin took up is the pin's the same way the host is**: the process and the
+    // registration go with the window, so nothing here ends it — only the record that it was a
+    // hover's (see `pin_film_host::promote_the_hover_film_host`).
+    if let Ok(mut held) = WARM_MODEL.lock() {
+        *held = None;
+    }
     HOVER_FILM_HOST.store(0, Ordering::SeqCst);
     HOVER_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
     HOVER_FILM_HOST_THREAD.store(0, Ordering::SeqCst);
@@ -158,7 +208,10 @@ pub(super) fn forget_the_hover_film_host_that_was_handed_over(host: HWND) {
 /// player through `start_audio_player` and never asks here (see `the_hover_film_to_adopt` for the
 /// media-type gate every take-up asks, where the media on screen is the one that decides).
 pub(super) fn the_hover_film_is_kept_in_a_host(path: &Path) -> bool {
-    !pinned() && pin_enabled() && matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
+    !pinned()
+        && pin_enabled()
+        && (matches!(video_route(path), VideoRoute::Mpv | VideoRoute::Ffplay)
+            || (f3d_render::available() && named_as(path, PreviewType::Models)))
 }
 
 /// Whether the player this app is holding was begun into the hover's host.
@@ -232,14 +285,265 @@ pub(super) fn the_hover_box_as_a_region(box_: (i32, i32, i32, i32)) -> ScreenReg
     (x, y, x + width, y + height)
 }
 
-/// Put the host at `rect` and show it, where this player is the one begun into it and has a child
-/// of its own drawing: the hover's first real frame, on the tick the start wait ends.
-pub(super) unsafe fn reveal_the_hover_film_host(pid: u32, rect: ScreenRegion) {
-    if !the_hover_player_is_drawing(pid) {
+/// Whether this player's picture is drawn in the hover's host **and the Shell has composed it**: the
+/// question a hosted start's wait is answered with, and the one a warm model is put back on.
+///
+/// **It is the same gate on both roads, and a model's half of it is the viewer's own loading report**
+/// (`pin_film_thumbnail::the_source_drew`, latched on the record the adoption made): a warm model has
+/// already answered it once and answers it for as long as its record stands, so a re-show of a file
+/// this app kept costs no wait at all (see `keep_a_model_warm` and `the_warm_model_is_back`).
+pub(super) fn the_hover_picture_is_ready(pid: u32) -> bool {
+    let Some(host) = hover_film_host() else {
+        return false;
+    };
+    the_hover_player_is_drawing(pid) && pin_film_thumbnail::the_picture_is_composed_in(host, pid)
+}
+
+/// **A model kept warm**: the file its scene is of, the f3d whose picture is still in the host, the
+/// process it is drawn by, and the clock `Engine → F3D TTL` runs on.
+///
+/// **The file is what the record is asked by**, because the hover's own record of the player is gone
+/// the moment it hides (`current_video_path` is cleared and `VIDEO_PID` is the sweep's): a re-show of
+/// the same file has to find this viewer by the one thing that is still true of both.
+///
+/// The process handle is here rather than in the media the hover dropped because a kept engine is
+/// not on screen and is not a hover's any more — but it is still this app's to end, and the handle
+/// is what ends it without asking a pid to prove which image it is running.
+struct WarmModel {
+    path: PathBuf,
+    pid: u32,
+    player: video_playback::PlayerProcess,
+    since: Instant,
+}
+
+static WARM_MODEL: Mutex<Option<WarmModel>> = Mutex::new(None);
+
+/// How long a warm model is kept: the tray's `Engine → F3D TTL` (`config::config::EngineIdle`).
+fn the_ttl() -> EngineIdle {
+    CONFIG
+        .lock()
+        .map(|config| config.f3d_idle)
+        .unwrap_or(EngineIdle::Away)
+}
+
+/// Whether a model kept `idle_for` is to be let go, which is the same question every other engine's
+/// TTL answers: `Away` is the away timer's, `Never (0 seconds)` lets it go the moment the hover ends,
+/// `Indefinitely` never does, and a number of seconds keeps it that long (see `EngineIdle`).
+pub(super) fn the_warm_model_may_be_let_go(idle: EngineIdle, idle_for: Duration) -> bool {
+    idle.has_expired(idle_for)
+}
+
+/// Whether a model is held warm at all: the one question the hover's take-down asks before it
+/// destroys the host, because the host *is* the kept picture (see `keep_a_model_warm`).
+pub(super) fn a_model_is_kept_warm() -> bool {
+    WARM_MODEL.lock().ok().is_some_and(|held| held.is_some())
+}
+
+/// Whether this player is the model kept warm, which is what the sweeps that run while nothing is
+/// hovered ask before they end a process nobody began for them.
+pub(super) fn the_warm_model_is(pid: u32) -> bool {
+    pid != 0
+        && WARM_MODEL
+            .lock()
+            .ok()
+            .and_then(|held| held.as_ref().map(|warm| warm.pid))
+            == Some(pid)
+}
+
+/// **Whether this file is the model kept warm**, which is what makes the second hover of it no launch
+/// at all: the hover's hide clears its own record of the player (`current_video_path`, `VIDEO_PID`),
+/// so a re-show asks this rather than reading a pid that is no longer the hover's (see
+/// `should_start_a_hover_player` and `the_warm_model_is_back`).
+pub(super) fn the_warm_model_holds(path: &Path) -> bool {
+    WARM_MODEL
+        .lock()
+        .ok()
+        .and_then(|held| held.as_ref().map(|warm| warm.path == path))
+        .unwrap_or(false)
+}
+
+/// **Whether this hover needs a player begun for it at all**, which is the question the launch is
+/// made on: a file the hover has no player for, or one whose player has gone.
+///
+/// **A file a kept model is holding needs none**, whatever the hover's own record says. The hide that
+/// ended the last hover clears `current_video_path` and the media the player was in (see
+/// `hide_preview`), so the pid the hover road used to ask this by is exactly the thing that is gone —
+/// and the answer was a second cold f3d for a file that was already drawn on the screen behind it: two
+/// launches and two host shows for one hover, measured (see `keep_a_model_warm`).
+pub(super) fn should_start_a_hover_player(
+    path: &Path,
+    current: Option<&Path>,
+    process_running: bool,
+) -> bool {
+    // Asked before the two hover facts are read: the record's own lock is never held across a
+    // question about another record (see `WARM_MODEL`).
+    let warm = the_warm_model_holds(path);
+    !warm && (current != Some(path) || !process_running)
+}
+
+/// **Keep a model's f3d rather than end it**: the whole of what makes a repeat hover of a model one
+/// instant transition rather than another cold launch.
+///
+/// A hover that goes away ends its player (see `kill_player_process`), and for a film that is right:
+/// the film is over. A model is a *picture* — a scene drawn into a window nothing moves — so the
+/// same f3d can show the same file again for free, and what a repeat hover costs without this is
+/// the 200–400 ms a cold viewer takes to come up plus a host made again, which reads as a second
+/// hover of a file the user never left.
+///
+/// **Only a model, only a picture composed, and never under a pin**: a film keeps the road it has
+/// (mpv's resident keeps the player, and the media engine has no process at all), and a hosted
+/// player a pin has taken up is the pin's — its host is the pin's host by then, and this app no
+/// longer holds the window (see `forget_the_hover_film_host_that_was_handed_over`).
+pub(super) fn keep_a_model_warm(
+    player: &mut Option<video_playback::PlayerProcess>,
+    kind: Option<MediaType>,
+) -> bool {
+    if kind != Some(MediaType::Model) || pinned() {
+        return false;
+    }
+    let Some(pid) = player.as_ref().map(video_playback::PlayerProcess::id) else {
+        return false;
+    };
+    // **The file is the record's own key**, so a viewer held for one is never served to a hover of
+    // another: a f3d draws the file it was launched with and knows no way to open a second (see
+    // `the_warm_model_holds`). Read before the record is taken, and before the process leaves the media.
+    let Some(path) = the_hover_players_file(pid) else {
+        return false;
+    };
+    if !the_hover_picture_is_ready(pid) {
+        return false;
+    }
+    let Some(kept) = player.take() else {
+        return false;
+    };
+    // The host goes off the screen and stays: its registration is what the next hover is shown
+    // through, and a host destroyed here is a thumbnail registration to make again.
+    hide_the_hover_film_host();
+    if let Ok(mut slot) = WARM_MODEL.lock() {
+        *slot = Some(WarmModel {
+            path,
+            pid,
+            player: kept,
+            since: Instant::now(),
+        });
+    }
+    note_pin_trace!(
+        "model kept warm pid {pid}: host {:?} off the screen",
+        hover_film_host()
+    );
+    true
+}
+
+/// Take the hover's host off the screen, **posted rather than sent where this is not the thread that
+/// made it**: this road runs on the Explorer hook's thread as often as the loop's (see
+/// `hide_preview`), and a synchronous `ShowWindow` there is the hook waiting on the loop that owns the
+/// window.
+pub(super) fn hide_the_hover_film_host() {
+    let Some(host) = hover_film_host() else {
         return;
+    };
+    if HOVER_FILM_HOST_THREAD.load(Ordering::SeqCst) == unsafe { GetCurrentThreadId() } {
+        let _ = unsafe { ShowWindow(host, SW_HIDE) };
+    } else {
+        let _ = unsafe { ShowWindowAsync(host, SW_HIDE) };
+    }
+}
+
+/// Put a warm model back at the hover's box and show it: the one transition a repeat hover of a
+/// model is. Nothing is launched, nothing is adopted and nothing is made — the picture is the one
+/// the Shell has been composing all along.
+pub(super) unsafe fn the_warm_model_is_back(path: &Path, rect: ScreenRegion) -> bool {
+    let Some(pid) = WARM_MODEL.lock().ok().and_then(|held| {
+        held.as_ref()
+            .filter(|warm| warm.path == path)
+            .map(|warm| warm.pid)
+    }) else {
+        return false;
+    };
+    if !the_hover_picture_is_ready(pid) {
+        return false;
     }
     unsafe { place_the_hover_film_host(rect) };
     unsafe { set_the_hover_film_host_visible(true) };
+    note_pin_trace!(
+        "warm model shown pid {pid} at {}x{}+{}+{}",
+        rect.2 - rect.0,
+        rect.3 - rect.1,
+        rect.0,
+        rect.1,
+    );
+    true
+}
+
+/// One pass of the tick's own work on a warm model: the clock `Engine → F3D TTL` runs on, and a
+/// player that ended on its own. It is the same road every other kept engine is let go on, and the
+/// take-down is the host's own — the process, its record and the registration go together (see
+/// `take_down_the_hover_film_host`).
+pub(super) fn tick_the_warm_model() {
+    // Read before the record is taken: the setting is a lock of its own, and a kept engine's clock is
+    // not a reason to hold two (see `keep_a_model_warm`).
+    let ttl = the_ttl();
+    let let_go = {
+        let Ok(mut slot) = WARM_MODEL.lock() else {
+            return;
+        };
+        let Some(warm) = slot.as_mut() else {
+            return;
+        };
+        // A player that came apart is not a picture the next hover can be served by, and one whose
+        // TTL has run out is the setting's to end — the two answers the resident's own TTL is read
+        // with, asked of the same `EngineIdle`.
+        if !matches!(warm.player.try_wait(), Ok(Some(_)))
+            && !the_warm_model_may_be_let_go(ttl, warm.since.elapsed())
+        {
+            return;
+        }
+        slot.take()
+    };
+    let Some(mut warm) = let_go else {
+        return;
+    };
+    note_pin_trace!("warm model let go pid {}", warm.pid);
+    let _ = warm.player.kill();
+    engine_processes::forget(warm.pid);
+    // The host goes last, so that the registration it holds is let go with the window rather than
+    // before it: a host left standing with no player behind it is a black rectangle on the desktop
+    // the moment anything shows it (see `take_down_the_hover_film_host`).
+    unsafe { take_down_the_hover_film_host() };
+}
+
+/// Put the host at `rect` and show it, where this player is the one begun into it and **the Shell
+/// has the picture composed in it**: the hover's first real frame, on the tick the start wait ends.
+///
+/// It answers whether the host is on the screen, and that answer is the whole of what the tick does
+/// with a picture that is not ready yet: a host shown with nothing composed in it is its own black
+/// erase (see `paint_the_host_behind_the_film`), which is the rectangle a model's hover used to be
+/// shown as. The wait it is not.
+pub(super) unsafe fn reveal_the_hover_film_host(pid: u32, rect: ScreenRegion) -> bool {
+    let Some(host) = hover_film_host() else {
+        return false;
+    };
+    // **Adopted for this player and composed, not merely a window that exists.** The source is a
+    // window of the player's own whose thumbnail the Shell draws, and a registration the Shell has
+    // not composed yet is a host that would be shown empty (see
+    // `pin_film_thumbnail::the_picture_is_composed_in`).
+    if !the_hover_player_is_drawing(pid)
+        || !pin_film_thumbnail::the_picture_is_composed_in(host, pid)
+    {
+        return false;
+    }
+    unsafe { place_the_hover_film_host(rect) };
+    unsafe { set_the_hover_film_host_visible(true) };
+    note_pin_trace!(
+        "hover host shown {:?} pid {} at {}x{}+{}+{}",
+        host,
+        pid,
+        rect.2 - rect.0,
+        rect.3 - rect.1,
+        rect.0,
+        rect.1,
+    );
+    true
 }
 
 /// Destroy the hover's host and forget the player it held. The player's own window outlives the host,
@@ -263,6 +567,20 @@ pub(super) unsafe fn take_down_the_hover_film_host() {
         return;
     }
     if let Some(host) = hover_film_host() {
+        // **A model kept warm goes with its host**, which is the one window the engine is let go
+        // through: the TTL, another player taking the host, a pin's take-up and the app ending all
+        // arrive here (see `keep_a_model_warm` and `tick_the_warm_model`). It is taken out of the
+        // record and the player forgotten *before* the window goes, so that the kill's own
+        // bookkeeping (`clear_video_process_state`) finds no host for the player and cannot come
+        // back through this function.
+        let warm = WARM_MODEL.lock().ok().and_then(|mut held| held.take());
+        HOVER_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);
+        if let Some(mut warm) = warm {
+            let _ = warm.player.kill();
+            engine_processes::forget(warm.pid);
+            ffplay_window::clear_video_process_state(warm.pid);
+            note_pin_trace!("warm model let go with its host pid {}", warm.pid);
+        }
         let _ = DestroyWindow(host);
         // A registration the Shell is drawing into this window goes with it, where this road ever
         // had one: a host of a hover's is a thumbnail destination on no road this prototype takes,

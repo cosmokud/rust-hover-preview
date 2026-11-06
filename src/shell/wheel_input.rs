@@ -272,6 +272,21 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
             }
         }
 
+        // **A pinned model's notch is its own scene's**, and it is asked before the pictures' zoom below:
+        // f3d's wheel is its camera's and not a picture of this app's, so the notch is posted to the
+        // engine's window and swallowed here — the kinds a notch zooms are refused there rather than here
+        // (see `pin_zoom_view`), and no notch falls through to the listing under the pin.
+        if wparam.0 == WM_MOUSEWHEEL as usize {
+            if let Some(region) = crate::ui::preview_window::the_models_band() {
+                if point_in_region(info.pt, region) && preview_takes_the_wheel() {
+                    if notches != 0 {
+                        crate::ui::preview_window::post_a_notch_to_the_model(info.pt, notches);
+                    }
+                    return LRESULT(1);
+                }
+            }
+        }
+
         // And the same answer for a pinned picture, which is a window the keyboard is not in for
         // the same reason: a hover the user pinned is a window nobody has pressed, so Explorer
         // would take the notch and scroll the list under it — and the whole of what a pin does not
