@@ -285,8 +285,6 @@ Or download the official Windows build from [https://github.com/f3d-app/f3d/rele
 
 The app finds `f3d.exe` beside itself, in your `PATH`, and in the folder its installer writes under Program Files; a copy anywhere else is named by `f3d_path` in `config.ini`, and the `[f3d]` list there is edited like every other engine's.
 
-A pinned model is turned by dragging in it and zoomed by the wheel; a hovered one is under the pointer, so it is turned directly. The picture is the engine's to answer: the middle button pans it and the right one opens f3d's own menu — the pinned window's own menu is on its caption strip. Because that middle press belongs to the scene, a hovered model is pinned with `Space` rather than by the middle button.
-
 > [!WARNING]
 > If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
 >
