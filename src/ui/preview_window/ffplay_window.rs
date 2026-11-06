@@ -1477,7 +1477,7 @@ pub fn kill_stray_video_process() {
     // that outlived its hover on purpose, bounded by `Engine → F3D TTL` rather than by this sweep —
     // and this sweep is the one road that runs while nothing is hovered, which is exactly when a
     // kept model is standing (see `hover_film_host`).
-    if hover_film_host::the_warm_model_holds(pid) {
+    if hover_film_host::the_warm_model_is(pid) {
         return;
     }
 

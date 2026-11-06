@@ -295,13 +295,18 @@ pub(super) fn the_hover_picture_is_ready(pid: u32) -> bool {
     the_hover_player_is_drawing(pid) && pin_film_thumbnail::the_picture_is_composed_in(host, pid)
 }
 
-/// **A model kept warm**: the f3d whose picture is still in the host, the process it is drawn by,
-/// and the clock `Engine → F3D TTL` runs on.
+/// **A model kept warm**: the file its scene is of, the f3d whose picture is still in the host, the
+/// process it is drawn by, and the clock `Engine → F3D TTL` runs on.
+///
+/// **The file is what the record is asked by**, because the hover's own record of the player is gone
+/// the moment it hides (`current_video_path` is cleared and `VIDEO_PID` is the sweep's): a re-show of
+/// the same file has to find this viewer by the one thing that is still true of both.
 ///
 /// The process handle is here rather than in the media the hover dropped because a kept engine is
 /// not on screen and is not a hover's any more — but it is still this app's to end, and the handle
 /// is what ends it without asking a pid to prove which image it is running.
 struct WarmModel {
+    path: PathBuf,
     pid: u32,
     player: video_playback::PlayerProcess,
     since: Instant,
@@ -330,15 +335,46 @@ pub(super) fn a_model_is_kept_warm() -> bool {
     WARM_MODEL.lock().ok().is_some_and(|held| held.is_some())
 }
 
-/// Whether this player is the model kept warm, which is what a hover of the same file is served by
-/// instead of beginning a second f3d.
-pub(super) fn the_warm_model_holds(pid: u32) -> bool {
+/// Whether this player is the model kept warm, which is what the sweeps that run while nothing is
+/// hovered ask before they end a process nobody began for them.
+pub(super) fn the_warm_model_is(pid: u32) -> bool {
     pid != 0
         && WARM_MODEL
             .lock()
             .ok()
             .and_then(|held| held.as_ref().map(|warm| warm.pid))
             == Some(pid)
+}
+
+/// **Whether this file is the model kept warm**, which is what makes the second hover of it no launch
+/// at all: the hover's hide clears its own record of the player (`current_video_path`, `VIDEO_PID`),
+/// so a re-show asks this rather than reading a pid that is no longer the hover's (see
+/// `should_start_a_hover_player` and `the_warm_model_is_back`).
+pub(super) fn the_warm_model_holds(path: &Path) -> bool {
+    WARM_MODEL
+        .lock()
+        .ok()
+        .and_then(|held| held.as_ref().map(|warm| warm.path == path))
+        .unwrap_or(false)
+}
+
+/// **Whether this hover needs a player begun for it at all**, which is the question the launch is
+/// made on: a file the hover has no player for, or one whose player has gone.
+///
+/// **A file a kept model is holding needs none**, whatever the hover's own record says. The hide that
+/// ended the last hover clears `current_video_path` and the media the player was in (see
+/// `hide_preview`), so the pid the hover road used to ask this by is exactly the thing that is gone —
+/// and the answer was a second cold f3d for a file that was already drawn on the screen behind it: two
+/// launches and two host shows for one hover, measured (see `keep_a_model_warm`).
+pub(super) fn should_start_a_hover_player(
+    path: &Path,
+    current: Option<&Path>,
+    process_running: bool,
+) -> bool {
+    // Asked before the two hover facts are read: the record's own lock is never held across a
+    // question about another record (see `WARM_MODEL`).
+    let warm = the_warm_model_holds(path);
+    !warm && (current != Some(path) || !process_running)
 }
 
 /// **Keep a model's f3d rather than end it**: the whole of what makes a repeat hover of a model one
@@ -364,6 +400,12 @@ pub(super) fn keep_a_model_warm(
     let Some(pid) = player.as_ref().map(video_playback::PlayerProcess::id) else {
         return false;
     };
+    // **The file is the record's own key**, so a viewer held for one is never served to a hover of
+    // another: a f3d draws the file it was launched with and knows no way to open a second (see
+    // `the_warm_model_holds`). Read before the record is taken, and before the process leaves the media.
+    let Some(path) = the_hover_players_file(pid) else {
+        return false;
+    };
     if !the_hover_picture_is_ready(pid) {
         return false;
     }
@@ -372,9 +414,10 @@ pub(super) fn keep_a_model_warm(
     };
     // The host goes off the screen and stays: its registration is what the next hover is shown
     // through, and a host destroyed here is a thumbnail registration to make again.
-    unsafe { set_the_hover_film_host_visible(false) };
+    hide_the_hover_film_host();
     if let Ok(mut slot) = WARM_MODEL.lock() {
         *slot = Some(WarmModel {
+            path,
             pid,
             player: kept,
             since: Instant::now(),
@@ -387,11 +430,33 @@ pub(super) fn keep_a_model_warm(
     true
 }
 
+/// Take the hover's host off the screen, **posted rather than sent where this is not the thread that
+/// made it**: this road runs on the Explorer hook's thread as often as the loop's (see
+/// `hide_preview`), and a synchronous `ShowWindow` there is the hook waiting on the loop that owns the
+/// window.
+pub(super) fn hide_the_hover_film_host() {
+    let Some(host) = hover_film_host() else {
+        return;
+    };
+    if HOVER_FILM_HOST_THREAD.load(Ordering::SeqCst) == unsafe { GetCurrentThreadId() } {
+        let _ = unsafe { ShowWindow(host, SW_HIDE) };
+    } else {
+        let _ = unsafe { ShowWindowAsync(host, SW_HIDE) };
+    }
+}
+
 /// Put a warm model back at the hover's box and show it: the one transition a repeat hover of a
 /// model is. Nothing is launched, nothing is adopted and nothing is made — the picture is the one
 /// the Shell has been composing all along.
-pub(super) unsafe fn the_warm_model_is_back(pid: u32, rect: ScreenRegion) -> bool {
-    if !the_warm_model_holds(pid) || !the_hover_picture_is_ready(pid) {
+pub(super) unsafe fn the_warm_model_is_back(path: &Path, rect: ScreenRegion) -> bool {
+    let Some(pid) = WARM_MODEL.lock().ok().and_then(|held| {
+        held.as_ref()
+            .filter(|warm| warm.path == path)
+            .map(|warm| warm.pid)
+    }) else {
+        return false;
+    };
+    if !the_hover_picture_is_ready(pid) {
         return false;
     }
     unsafe { place_the_hover_film_host(rect) };
@@ -411,6 +476,9 @@ pub(super) unsafe fn the_warm_model_is_back(pid: u32, rect: ScreenRegion) -> boo
 /// take-down is the host's own — the process, its record and the registration go together (see
 /// `take_down_the_hover_film_host`).
 pub(super) fn tick_the_warm_model() {
+    // Read before the record is taken: the setting is a lock of its own, and a kept engine's clock is
+    // not a reason to hold two (see `keep_a_model_warm`).
+    let ttl = the_ttl();
     let let_go = {
         let Ok(mut slot) = WARM_MODEL.lock() else {
             return;
@@ -422,7 +490,7 @@ pub(super) fn tick_the_warm_model() {
         // TTL has run out is the setting's to end — the two answers the resident's own TTL is read
         // with, asked of the same `EngineIdle`.
         if !matches!(warm.player.try_wait(), Ok(Some(_)))
-            && !the_warm_model_may_be_let_go(the_ttl(), warm.since.elapsed())
+            && !the_warm_model_may_be_let_go(ttl, warm.since.elapsed())
         {
             return;
         }

@@ -2068,7 +2068,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // hovered away from: shown here it would be the hover coming back on a cadence of its own (see
     // `hover_film_host::keep_a_model_warm`).
     if hover_film_host::the_hover_player_was_begun_in_the_host(hover_pid)
-        && !hover_film_host::the_warm_model_holds(hover_pid)
+        && !hover_film_host::the_warm_model_is(hover_pid)
     {
         unsafe { hover_film_host::place_the_hover_film_host((x, y, x + width, y + height)) };
         let host = hover_film_host::hover_film_host().map_or(0, |host| host.0 as isize);

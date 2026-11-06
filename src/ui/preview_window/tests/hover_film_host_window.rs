@@ -104,6 +104,10 @@ unsafe fn a_source_of_the_host(pid: u32) -> HWND {
     };
     let host = hover_film_host::hover_film_host().expect("the hover's host to adopt into");
     unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
+    // **And the pass that watches the player answers whether it has drawn**, which is what a host's
+    // show waits on: the adoption is the registration, and the drawn answer is the road's own (see
+    // `pin_film_thumbnail::hand_the_picture_over` and `the_picture_is_composed_in`).
+    pin_film_thumbnail::hand_the_picture_over(host);
     source
 }
 
@@ -770,11 +774,13 @@ fn the_host_is_shown_on_a_composed_picture_and_never_on_a_window_that_exists() {
         "and the spinner is what stays on the screen"
     );
 
-    // The adoption is what makes the source a picture, and the registration is what the Shell draws.
+    // The adoption is what makes the source a picture, the registration is what the Shell draws, and
+    // the pass that watches the player is the answer that it has drawn in it.
     unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
+    pin_film_thumbnail::hand_the_picture_over(host);
     assert!(
         unsafe { hover_film_host::reveal_the_hover_film_host(pid, box_) },
-        "once the registration is composed in it the host is the picture"
+        "once the source has drawn into the registration the host is the picture"
     );
     assert!(unsafe { IsWindowVisible(host) }.as_bool());
 
@@ -818,8 +824,29 @@ fn a_model_is_kept_warm_and_a_repeat_hover_puts_the_same_host_back() {
         "and still a window, with the registration the Shell draws through"
     );
 
+    // **The road the run measured, replayed**: the hide cleared the hover's own record of the player
+    // (`current_video_path` is nothing here, as it is after `hide_preview`), and the same file is shown
+    // again. A kept model makes that no launch on its own — the pid the hover road used to ask by is
+    // exactly what the hide took away.
     assert!(
-        unsafe { hover_film_host::the_warm_model_is_back(pid, moved) },
+        hover_film_host::the_warm_model_holds(&path),
+        "the record is found by the file, which is the one thing the hide left standing"
+    );
+    assert!(
+        !hover_film_host::should_start_a_hover_player(&path, None, false),
+        "the same file shown again begins no second f3d, whatever the hover's own record says"
+    );
+    assert!(
+        hover_film_host::should_start_a_hover_player(
+            &PathBuf::from("another-model.glb"),
+            None,
+            false
+        ),
+        "and a file no viewer is kept for is begun as it always was"
+    );
+
+    assert!(
+        unsafe { hover_film_host::the_warm_model_is_back(&path, moved) },
         "the repeat hover is that same host, shown again"
     );
     assert!(unsafe { IsWindowVisible(host) }.as_bool());
